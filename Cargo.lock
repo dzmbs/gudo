@@ -697,6 +697,7 @@ version = "0.0.0"
 dependencies = [
  "brand",
  "daemon",
+ "drawing",
  "getrandom 0.4.3",
  "ghostty-vt",
  "grants",
@@ -950,6 +951,7 @@ dependencies = [
  "brand",
  "client-core",
  "data-encoding",
+ "drawing",
  "getrandom 0.4.3",
  "ghostty-vt",
  "grants",
@@ -1142,6 +1144,15 @@ dependencies = [
  "libc",
  "once_cell",
  "winapi",
+]
+
+[[package]]
+name = "drawing"
+version = "0.0.0"
+dependencies = [
+ "data-encoding",
+ "flate2",
+ "proto",
 ]
 
 [[package]]
@@ -4975,6 +4986,7 @@ dependencies = [
  "brand",
  "clap",
  "client-core",
+ "data-encoding",
  "qrcode",
  "rustix",
  "tokio",

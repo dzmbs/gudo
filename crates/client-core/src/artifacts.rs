@@ -1,0 +1,541 @@
+//! in step with the daemon.
+//!
+//! - Requests are `async` and return the daemon's answer or an [`ArtifactError`].
+//! - Pushes go to an [`ArtifactListener`] ([`Client::set_artifact_listener`]), separate from
+//!   [`ClientListener`](crate::ClientListener) so existing event handling is untouched.
+//! - The client keeps a [`drawing::Scene`] for every artifact of the attached session it has
+//!   seen: batches pushed by the daemon apply in version order; a gap, a new artifact, or a
+//!   reconnect fetches what is missing (`Get { since }`) and reports
+//!   [`ArtifactUpdate::Synced`]. [`Client::artifact_scene`] reads the cache.
+//! - Blobs (images, rendered PNGs) move on their own streams at bulk priority.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use drawing::Scene;
+use proto::{
+    AnchorRequest, ArtifactCreate, ArtifactError, ArtifactEvent, ArtifactId, ArtifactInfo,
+    ArtifactRequest, ArtifactResponse, ArtifactScene, ArtifactSend, BlobHash, BlobHeader,
+    BlobReply, CanvasPane, ClientCtl, DrawOp, ExportFormat, Exported, ImageRef, InkLive, PaneId,
+    PngSource, Sent, ServerCtl, SessionId, StreamHeader,
+};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::{Client, Inner, lock};
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Something an [`ArtifactListener`] hears.
+#[derive(Debug, Clone)]
+pub enum ArtifactUpdate {
+    /// A push from the daemon (created, changed, info, deleted, live ink, canvas panes).
+    Event(Box<ArtifactEvent>),
+    /// The cached scene of an artifact was (re)fetched and is now at `version`: after a gap,
+    /// a reconnect, or for an artifact first seen.
+    Synced {
+        /// The artifact.
+        artifact_id: ArtifactId,
+        /// Its version now.
+        version: u64,
+    },
+}
+
+/// Receives [`ArtifactUpdate`]s. Must return quickly; it runs on the network threads.
+pub trait ArtifactListener: Send + Sync {
+    /// Called once per update, in order.
+    fn on_artifact(&self, update: ArtifactUpdate);
+}
+
+/// An [`ArtifactListener`] that queues updates for async Rust consumers (`un`, tests).
+pub struct ArtifactEventQueue {
+    tx: mpsc::UnboundedSender<ArtifactUpdate>,
+}
+
+impl ArtifactEventQueue {
+    /// Returns the listener and the receiving end.
+    pub fn channel() -> (
+        Arc<dyn ArtifactListener>,
+        mpsc::UnboundedReceiver<ArtifactUpdate>,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Arc::new(Self { tx }), rx)
+    }
+}
+
+impl ArtifactListener for ArtifactEventQueue {
+    fn on_artifact(&self, update: ArtifactUpdate) {
+        let _ = self.tx.send(update);
+    }
+}
+
+type Pending = oneshot::Sender<Result<ArtifactResponse, ArtifactError>>;
+
+struct Cached {
+    info: ArtifactInfo,
+    scene: Scene,
+}
+
+/// Artifact state kept by the client.
+#[derive(Default)]
+pub(crate) struct ArtState {
+    pending: Mutex<HashMap<u64, Pending>>,
+    /// Internal `Get`s the cache issued.
+    resync: Mutex<HashSet<u64>>,
+    listener: Mutex<Option<Arc<dyn ArtifactListener>>>,
+    cache: Mutex<HashMap<ArtifactId, Cached>>,
+    canvases: Mutex<HashMap<SessionId, Vec<CanvasPane>>>,
+}
+
+impl ArtState {
+    fn notify(&self, update: ArtifactUpdate) {
+        let listener = lock(&self.listener).clone();
+        if let Some(l) = listener {
+            l.on_artifact(update);
+        }
+    }
+
+    /// Applies a scene answer to the cache; returns the version if it changed the cache.
+    fn absorb(&self, scene: &ArtifactScene) -> Option<u64> {
+        let mut cache = lock(&self.cache);
+        let id = scene.info.artifact_id;
+        let entry = cache.entry(id).or_insert_with(|| Cached {
+            info: scene.info.clone(),
+            scene: Scene::new(),
+        });
+        entry.info = scene.info.clone();
+        if let Some(elements) = &scene.elements {
+            entry.scene = Scene::from_elements(scene.info.version, elements.clone());
+        } else {
+            for batch in &scene.batches {
+                if batch.version == entry.scene.version + 1 {
+                    let _ = entry.scene.apply(batch);
+                }
+            }
+        }
+        Some(entry.scene.version)
+    }
+
+    /// Handles an artifact message from `ctl`; returns it back if it is not one.
+    pub(crate) fn dispatch(&self, inner: &Inner, msg: ServerCtl) -> Option<ServerCtl> {
+        match msg {
+            ServerCtl::ArtifactResult { req_id, result } => {
+                if let Ok(ArtifactResponse::Scene(scene)) = &result
+                    && let Some(version) = self.absorb(scene)
+                {
+                    let internal = lock(&self.resync).remove(&req_id);
+                    if internal {
+                        self.notify(ArtifactUpdate::Synced {
+                            artifact_id: scene.info.artifact_id,
+                            version,
+                        });
+                    }
+                } else {
+                    lock(&self.resync).remove(&req_id);
+                }
+                if let Some(tx) = lock(&self.pending).remove(&req_id) {
+                    let _ = tx.send(result);
+                }
+                None
+            }
+            ServerCtl::Artifact(event) => {
+                self.track(inner, &event);
+                self.notify(ArtifactUpdate::Event(Box::new(event)));
+                None
+            }
+            other => Some(other),
+        }
+    }
+
+    fn track(&self, inner: &Inner, event: &ArtifactEvent) {
+        match event {
+            ArtifactEvent::Created(info) => {
+                let fetch = {
+                    let mut cache = lock(&self.cache);
+                    let fresh = !cache.contains_key(&info.artifact_id);
+                    cache.entry(info.artifact_id).or_insert_with(|| Cached {
+                        info: info.clone(),
+                        scene: Scene::new(),
+                    });
+                    fresh && info.version > 0
+                };
+                if fetch {
+                    self.fetch(inner, info.artifact_id, 0);
+                }
+            }
+            ArtifactEvent::Changed { info, batch } => {
+                let gap = {
+                    let mut cache = lock(&self.cache);
+                    let entry = cache.entry(info.artifact_id).or_insert_with(|| Cached {
+                        info: info.clone(),
+                        scene: Scene::new(),
+                    });
+                    entry.info = info.clone();
+                    if batch.version <= entry.scene.version {
+                        None
+                    } else {
+                        entry.scene.apply(batch).err().map(|_| entry.scene.version)
+                    }
+                };
+                if let Some(have) = gap {
+                    self.fetch(inner, info.artifact_id, have);
+                }
+            }
+            ArtifactEvent::Info(info) => {
+                if let Some(c) = lock(&self.cache).get_mut(&info.artifact_id) {
+                    c.info = info.clone();
+                }
+            }
+            ArtifactEvent::Deleted { artifact_id, .. } => {
+                lock(&self.cache).remove(artifact_id);
+            }
+            ArtifactEvent::Canvases {
+                session_id,
+                canvases,
+            } => {
+                lock(&self.canvases).insert(*session_id, canvases.clone());
+            }
+            ArtifactEvent::Ink(_) => {}
+        }
+    }
+
+    /// Asks for everything after `since` for the cache.
+    fn fetch(&self, inner: &Inner, artifact_id: ArtifactId, since: u64) {
+        let req_id = inner
+            .next_op
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        lock(&self.resync).insert(req_id);
+        inner.send(ClientCtl::Artifact {
+            req_id,
+            req: ArtifactRequest::Get { artifact_id, since },
+        });
+    }
+
+    /// After (re)connecting: catch every cached scene up.
+    pub(crate) fn on_connected(&self, inner: &Inner) {
+        let wanted: Vec<(ArtifactId, u64)> = lock(&self.cache)
+            .iter()
+            .map(|(id, c)| (*id, c.scene.version))
+            .collect();
+        for (id, version) in wanted {
+            self.fetch(inner, id, version);
+        }
+    }
+
+    /// The connection dropped: requests in flight will not be answered.
+    pub(crate) fn fail_pending(&self) {
+        lock(&self.resync).clear();
+        for (_, tx) in lock(&self.pending).drain() {
+            let _ = tx.send(Err(ArtifactError::Disconnected));
+        }
+    }
+}
+
+fn failed(e: impl std::fmt::Display) -> ArtifactError {
+    ArtifactError::Failed(e.to_string())
+}
+
+macro_rules! expect {
+    ($resp:expr, $pat:pat => $out:expr) => {
+        match $resp {
+            $pat => Ok($out),
+            other => Err(ArtifactError::Failed(format!(
+                "unexpected answer {other:?}"
+            ))),
+        }
+    };
+}
+
+impl Client {
+    /// Sets the receiver of [`ArtifactUpdate`]s (replacing any previous one).
+    pub fn set_artifact_listener(&self, listener: Arc<dyn ArtifactListener>) {
+        *lock(&self.inner.art.listener) = Some(listener);
+    }
+
+    /// Sends any artifact request and waits for the answer.
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`ArtifactError`], or [`ArtifactError::Disconnected`] if the connection
+    /// dropped (or nothing came back within two minutes).
+    pub async fn artifact(&self, req: ArtifactRequest) -> Result<ArtifactResponse, ArtifactError> {
+        let req_id = self
+            .inner
+            .next_op
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        lock(&self.inner.art.pending).insert(req_id, tx);
+        self.inner.send(ClientCtl::Artifact { req_id, req });
+        let inner = Arc::clone(&self.inner);
+        self.handle
+            .spawn(async move {
+                match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                    Ok(Ok(result)) => result,
+                    _ => {
+                        lock(&inner.art.pending).remove(&req_id);
+                        Err(ArtifactError::Disconnected)
+                    }
+                }
+            })
+            .await
+            .unwrap_or(Err(ArtifactError::Disconnected))
+    }
+
+    /// A session's artifacts.
+    pub async fn artifacts(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<ArtifactInfo>, ArtifactError> {
+        expect!(self.artifact(ArtifactRequest::List { session_id }).await?,
+            ArtifactResponse::List(l) => l)
+    }
+
+    /// Creates a drawing or image.
+    pub async fn artifact_create(
+        &self,
+        create: ArtifactCreate,
+    ) -> Result<ArtifactInfo, ArtifactError> {
+        let info = expect!(self.artifact(ArtifactRequest::Create(create)).await?,
+            ArtifactResponse::Created(i) => i)?;
+        if info.version > 0 {
+            // Bring the cache up to the initial ops.
+            let _ = self.artifact_get(info.artifact_id, 0).await;
+        } else {
+            lock(&self.inner.art.cache).insert(
+                info.artifact_id,
+                Cached {
+                    info: info.clone(),
+                    scene: Scene::new(),
+                },
+            );
+        }
+        Ok(info)
+    }
+
+    /// Batches after `since` (or every element); the cache is updated too.
+    pub async fn artifact_get(
+        &self,
+        artifact_id: ArtifactId,
+        since: u64,
+    ) -> Result<ArtifactScene, ArtifactError> {
+        expect!(self.artifact(ArtifactRequest::Get { artifact_id, since }).await?,
+            ArtifactResponse::Scene(s) => s)
+    }
+
+    /// Commits ops as one batch; returns the new version. The batch also arrives as an
+    /// [`ArtifactEvent::Changed`] push, which updates the cache.
+    pub async fn artifact_apply(
+        &self,
+        artifact_id: ArtifactId,
+        base: u64,
+        ops: Vec<DrawOp>,
+    ) -> Result<u64, ArtifactError> {
+        expect!(self.artifact(ArtifactRequest::Apply { artifact_id, base, ops }).await?,
+            ArtifactResponse::Applied { version, .. } => version)
+    }
+
+    /// Deletes an artifact (its canvas panes close).
+    pub async fn artifact_delete(&self, artifact_id: ArtifactId) -> Result<(), ArtifactError> {
+        expect!(self.artifact(ArtifactRequest::Delete { artifact_id }).await?,
+            ArtifactResponse::Done => ())
+    }
+
+    /// Anchors a drawing to a terminal row (`None` unanchors it).
+    pub async fn artifact_set_anchor(
+        &self,
+        artifact_id: ArtifactId,
+        anchor: Option<AnchorRequest>,
+    ) -> Result<ArtifactInfo, ArtifactError> {
+        expect!(self.artifact(ArtifactRequest::SetAnchor { artifact_id, anchor }).await?,
+            ArtifactResponse::Info(i) => i)
+    }
+
+    /// Uploads this device's PNG render of a drawing version as its preview.
+    pub async fn artifact_set_preview(
+        &self,
+        artifact_id: ArtifactId,
+        version: u64,
+        png: Vec<u8>,
+    ) -> Result<ArtifactInfo, ArtifactError> {
+        let session = self.artifact_session(artifact_id).await?;
+        let image = self.blob_upload(session, png).await?;
+        expect!(self.artifact(ArtifactRequest::SetPreview { artifact_id, version, png: image.hash }).await?,
+            ArtifactResponse::Info(i) => i)
+    }
+
+    /// Exports PNG (the image, or the drawing's preview / the daemon's render) or SVG;
+    /// returns the bytes (downloaded when large) and the version they show.
+    pub async fn artifact_export(
+        &self,
+        artifact_id: ArtifactId,
+        version: Option<u64>,
+        format: ExportFormat,
+    ) -> Result<(u64, Vec<u8>), ArtifactError> {
+        let Exported {
+            version,
+            data,
+            blob,
+            ..
+        } = expect!(self
+            .artifact(ArtifactRequest::Export { artifact_id, version, format })
+            .await?, ArtifactResponse::Exported(e) => e)?;
+        match blob {
+            Some(hash) => Ok((version, self.blob_download(hash).await?.1)),
+            None => Ok((version, data)),
+        }
+    }
+
+    /// "Send to agent": the daemon writes the PNG on the host and pastes its path into the
+    /// agent pane (no Enter), where Claude Code and Codex attach it as `[Image #N]`.
+    ///
+    /// `png`: this device's render (sent inline up to 1 MiB, else uploaded first), or `None`
+    /// to use the artifact's own image / preview / the daemon's render. With no
+    /// `artifact_id`, `png` is a bare image (a photo, a screenshot) and is kept as an image
+    /// artifact.
+    pub async fn send_to_agent(
+        &self,
+        pane_id: PaneId,
+        artifact_id: Option<ArtifactId>,
+        version: Option<u64>,
+        png: Option<Vec<u8>>,
+    ) -> Result<Sent, ArtifactError> {
+        let png = match png {
+            None => PngSource::Artifact,
+            Some(bytes) if bytes.len() <= 1 << 20 => PngSource::Inline(bytes),
+            Some(bytes) => {
+                let session = match artifact_id {
+                    Some(id) => self.artifact_session(id).await?,
+                    None => self.session_of(pane_id)?,
+                };
+                PngSource::Blob(self.blob_upload(session, bytes).await?.hash)
+            }
+        };
+        expect!(self.artifact(ArtifactRequest::Send(ArtifactSend { pane_id, artifact_id, version, png })).await?,
+            ArtifactResponse::Sent(s) => s)
+    }
+
+    /// Streams points of a stroke being drawn to the session's other clients (fire and
+    /// forget; send about every 16 ms, new points only).
+    pub fn ink_live(&self, ink: InkLive) {
+        self.inner.send(ClientCtl::InkLive(ink));
+    }
+
+    /// The cached info and scene of an artifact.
+    pub fn artifact_scene(&self, artifact_id: ArtifactId) -> Option<(ArtifactInfo, Scene)> {
+        lock(&self.inner.art.cache)
+            .get(&artifact_id)
+            .map(|c| (c.info.clone(), c.scene.clone()))
+    }
+
+    /// The canvas panes of a session, as last pushed.
+    pub fn canvas_panes(&self, session_id: SessionId) -> Vec<CanvasPane> {
+        lock(&self.inner.art.canvases)
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    async fn artifact_session(&self, artifact_id: ArtifactId) -> Result<SessionId, ArtifactError> {
+        if let Some(c) = lock(&self.inner.art.cache).get(&artifact_id) {
+            return Ok(c.info.session_id);
+        }
+        Ok(self
+            .artifact_get(artifact_id, u64::MAX)
+            .await?
+            .info
+            .session_id)
+    }
+
+    fn session_of(&self, _pane: PaneId) -> Result<SessionId, ArtifactError> {
+        lock(&self.inner.wanted)
+            .session
+            .ok_or_else(|| ArtifactError::Invalid("attach to a session first".into()))
+    }
+
+    /// Stores an image (PNG or JPEG) on the host; returns its reference.
+    pub async fn blob_upload(
+        &self,
+        session_id: SessionId,
+        bytes: Vec<u8>,
+    ) -> Result<ImageRef, ArtifactError> {
+        let media = drawing::sniff(&bytes)
+            .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?
+            .0;
+        let inner = Arc::clone(&self.inner);
+        self.handle
+            .spawn(async move {
+                let conn = connection(&inner).await;
+                let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
+                let _ = send.set_priority(1);
+                let header = BlobHeader::Put {
+                    session_id,
+                    size: bytes.len() as u64,
+                    media,
+                };
+                crate::conn::send(&mut send, &StreamHeader::Blob(header))
+                    .await
+                    .map_err(failed)?;
+                match crate::conn::recv::<BlobReply>(&mut recv)
+                    .await
+                    .map_err(failed)?
+                {
+                    Some(BlobReply::Ready) => {}
+                    Some(BlobReply::Failed(e)) => return Err(e),
+                    other => return Err(failed(format!("unexpected {other:?}"))),
+                }
+                // QUIC flow control paces the upload.
+                send.write_all(&bytes).await.map_err(failed)?;
+                let _ = send.finish();
+                match crate::conn::recv::<BlobReply>(&mut recv)
+                    .await
+                    .map_err(failed)?
+                {
+                    Some(BlobReply::Stored(image)) => Ok(image),
+                    Some(BlobReply::Failed(e)) => Err(e),
+                    other => Err(failed(format!("unexpected {other:?}"))),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| Err(failed(e)))
+    }
+
+    /// Reads an image blob from the host.
+    pub async fn blob_download(
+        &self,
+        hash: BlobHash,
+    ) -> Result<(ImageRef, Vec<u8>), ArtifactError> {
+        let inner = Arc::clone(&self.inner);
+        self.handle
+            .spawn(async move {
+                let conn = connection(&inner).await;
+                let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
+                let _ = send.set_priority(1);
+                crate::conn::send(&mut send, &StreamHeader::Blob(BlobHeader::Get { hash }))
+                    .await
+                    .map_err(failed)?;
+                let _ = send.finish();
+                let image = match crate::conn::recv::<BlobReply>(&mut recv)
+                    .await
+                    .map_err(failed)?
+                {
+                    Some(BlobReply::Found(image)) => image,
+                    Some(BlobReply::Failed(e)) => return Err(e),
+                    other => return Err(failed(format!("unexpected {other:?}"))),
+                };
+                let mut bytes = vec![0; image.size as usize];
+                recv.read_exact(&mut bytes).await.map_err(failed)?;
+                Ok((image, bytes))
+            })
+            .await
+            .unwrap_or_else(|e| Err(failed(e)))
+    }
+}
+
+async fn connection(inner: &Inner) -> iroh::endpoint::Connection {
+    loop {
+        if let Some(c) = lock(&inner.connection).clone() {
+            return c;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

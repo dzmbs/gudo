@@ -3,7 +3,7 @@
 Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
 (key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
 roles enforced on every request, control lease, presence, signed approvals, audit log,
-revocation).
+anchors, send to agent).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -266,6 +266,8 @@ un git status [path] | diff [--staged|--index|--rev R|--merge-base B] [--stat] [
 un turns [--diff N] [--stat]      un review --pane P --note 'path:L[-L]:text' [--submit]
 un worktree create [--repo R] [--branch B] [--base B] | list | remove <path> [--force]
             [--delete-branch] | launch <path> [--agent claude|codex]
+un draw list | show <id> [--mode kitty|ascii] | export <id> --format png|svg [-o F]
+        | send <id> | --file img.png [--pane P] [--version V]
 un fs ls <dir> [-a] | stat | cat | put <local> <remote> [--if-match V] [--new] | get <remote>
       <local> | mkdir [-p] | mv <a> <b> [--force] | rm <path> [--permanent] [-r] | watch <dir>
 #   --no-relay for direct-only; --ticket to override the saved one
@@ -679,6 +681,13 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | Streams: `PortForward`, `Forward`, `Upload`, `Download` | driver | host |
 | `RegisterGrant` | owner, or the chain's leaf issuer | — |
 | `ListGrants`, `ListDevices`, `Revoke`, `Audit` | **owner** | daemon |
+| `Artifact`: `List`, `Get`, `Export`; blob download | any role | artifact visible (below) |
+| `Artifact`: `Create`, `Apply`, `Delete`, `SetAnchor`, `SetPreview`; `InkLive`; blob upload | **prompter or driver** | artifact visible; anchor pane / session in scope |
+| `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |
+| `Op` `Split`/`NewTab` with `PaneLaunch::Canvas` | driver (as any split) | session of the pane |
+
+An artifact is visible to daemon- and session-wide grants in its session; tab- and
+pane-scoped guests see only ink anchored to, or canvases shown in, panes inside their scope.
 
 Pushes are filtered the same way: layout (a tab-scoped guest sees only its tab, a pane-scoped
 guest a one-pane layout), pane meta, agent events, echo hints, command marks, decisions,
@@ -779,7 +788,109 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 - Unit tests: prompt sanitizer, audit chain (reopen, edit detection).
 - `proto` goldens for every new message and variant; invite text round trip.
 
-## 7. Known gaps / follow-ups
+
+`proto::artifact` (wire), `crates/drawing` (model shared with client-core and `un`: packed
+ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/src/art/`
+(store, send, blob streams), `crates/daemon/src/anchor.rs` (row anchors),
+`crates/client-core/src/artifacts.rs`, `crates/un/src/draw.rs`.
+
+### 7.1 Model
+
+- An **artifact** belongs to a session: a **drawing** (elements: strokes with packed points,
+  rect/ellipse/line/arrow shapes, text, placed images; canvas units or terminal cells) or an
+  **image** (one blob). `ArtifactInfo` carries kind, title, coordinate space, creator, times,
+  `version`, element count, the image, a `preview` PNG (a client's render of one version), the
+  `anchor` and the canvas panes showing it.
+- **Op log**: every `Apply` is one `OpBatch{version, actor, at, ops}` (add/replace, move,
+  restyle, z, delete, clear, title). The daemon orders batches; `Scene::apply` takes exactly
+  `version + 1`, so all clients converge. Elements are add-wins (an existing id is replaced),
+  fields last-writer-wins.
+- **Blobs**: SHA-256 content addressed, PNG or JPEG only (sniffed from the header), shared by
+  all sessions, garbage-collected when no image artifact, preview or image element refers to
+  them (after a grace period, so an upload waiting for its `Create` survives).
+
+### 7.2 Protocol
+
+`ClientCtl::Artifact{req_id, ArtifactRequest}` → `ServerCtl::ArtifactResult{req_id,
+Result<ArtifactResponse, ArtifactError>}`: `List{session}`, `Create`, `Get{id, since}` (the
+batches after `since`, else every element), `Apply{id, base, ops}`, `Delete`, `SetAnchor`,
+`SetPreview{id, version, png}`, `Export{id, version, Png|Svg}`, `Send`. Pushes to the clients
+attached to the session (`ServerCtl::Artifact`): `Created`, `Changed{info, batch}`,
+`Info` (anchor detached, preview, canvas panes), `Deleted`, `Ink` (others' live strokes) and
+`Canvases{session, [pane → artifact]}` (also sent on `Attach`). `ClientCtl::InkLive` streams
+live points; the daemon stamps the actor and relays it to everyone else in the session.
+Blobs move on bidirectional streams at bulk priority, `StreamHeader::Blob(Put{session, size,
+media} | Get{hash})` → `BlobReply::{Ready, Stored, Found, Failed}`; QUIC flow control is the
+backpressure. `Caps::ARTIFACTS` marks clients that understand all this. Goldens for every new
+message in `crates/proto/tests/golden.rs`.
+
+**Canvas panes** are ordinary `LayoutNode::Leaf`s created by `Split`/`NewTab` with
+`PaneLaunch::Canvas{artifact: None}` (the daemon creates the drawing) or `Some(id)`. They run
+no process; `Canvases` says which leaves they are. Not a new `LayoutNode` variant on purpose:
+an old client would fail to decode the whole layout; this way it shows an empty pane.
+Closing the pane keeps the drawing; deleting the drawing closes its canvas panes.
+
+### 7.3 Ink anchors
+
+`Create`/`SetAnchor` with `AnchorRequest{pane, at_seq, from_bottom}`: the daemon pins the row
+on its VT (accounting for rows scrolled since `at_seq`), answers `RowAnchor{screen, at_seq,
+from_bottom, command_id, state}` and clients track the row in their own VT. Anchors detach
+(`RowGone` after eviction or `clear`, `AltScreenExited`, `PaneClosed`, `DaemonRestart`) and a
+
+### 7.4 Send to agent
+
+`Send{pane, artifact?, version?, png: Inline | Blob | Artifact}`: the pane must run an agent
+(launched, detected or reporting hooks) or the answer is `NotAgentPane`. The PNG is the
+client's render (inline ≤ 1 MiB, else an uploaded blob), or for `Artifact` the image, the
+preview of that version, or the daemon's own rasterisation. It is written to
+`<state>/artifacts/<session>/send/<artifact>@<version>.png` (atomically) and the path is pasted
+character outside `[A-Za-z0-9_./@:-]`, e.g. `Application\ Support`), never followed by Enter.
+The answer (`Sent{path, pasted, bracketed}`) comes 120 ms after the paste so the client's next
+keystroke cannot overtake Claude's asynchronous attach. A bare image (no artifact) is kept as
+an image artifact. Each send is audited (`Prompt` kind, path only).
+
+### 7.5 Export
+
+`Png`: passthrough of the image blob or of the preview at the asked version; with no preview
+the daemon rasterises (`drawing::rasterize`: anti-aliased pressure strokes, shapes; text and
+images as outlines) and keeps that as the preview. `Svg`: `drawing::to_svg`, deterministic
+(golden-tested), images inlined as data URIs up to 8 MiB each. Results over 1 MiB come back as
+a blob hash to download.
+
+### 7.6 Storage and caps
+
+`<state>/artifacts/`: `index.bin` (next id, canvas panes), `<session>/<id>/info.bin`,
+`<session>/<id>/ops.log` (length-prefixed postcard batches, appended and `fdatasync`ed per
+batch; a torn last frame is dropped on load), `blobs/<sha256>`, `<session>/send/`. Closing a
+session deletes its artifacts. Caps (`Config::artifacts`): blob 32 MiB, whole store 1 GiB,
+one drawing's log 8 MiB, one batch 1 MiB, 1000 artifacts per session, 20 000 elements per
+drawing, 16 KiB per text and per ink chunk; over a cap → `TooLarge`.
+
+### 7.7 Client core and CLI
+
+`Client::artifacts / artifact_create / artifact_get / artifact_apply / artifact_delete /
+artifact_set_anchor / artifact_set_preview / artifact_export / send_to_agent / blob_upload /
+blob_download / ink_live`; pushes go to an `ArtifactListener` (`ArtifactUpdate::Event` or
+`Synced`). The client caches a `drawing::Scene` per artifact it has seen: pushed batches apply
+in order, a gap or a reconnect fetches `Get{since}` (resync), `artifact_scene(id)` reads it.
+`un draw list | show | export | send` (show: kitty graphics when the terminal supports it,
+from the environment or an `a=q` query; else a braille render and a summary).
+
+### 7.8 Tests
+
+`cargo test -p daemon --test it artifacts` (macOS and Linux): two clients — live ink fan-out
+(200 chunks, latency printed, no echo to the sender), batches from both converge, the second
+client suspended while the first draws resyncs to the same scene on reconnect, an anchor
+detaches after `clear`; a viewer lists, reads and exports but cannot create, apply, delete,
+send, upload or ink (and its ink never reaches the owner); send-to-agent into a fake agent
+(`cat -v` behind bracketed paste) from a state dir containing a space: escaped bracketed path,
+no Enter, file bytes, `NotAgentPane` for a shell, bare images and daemon renders; canvas pane,
+image blob, preview, PNG/SVG export, blob download, then a daemon restart keeps artifacts,
+versions, scenes, blobs and the canvas pane; caps. Unit/golden: `crates/drawing` (packing,
+simplification, scene convergence, SVG golden, rasteriser, PNG), anchors
+(`daemon::anchor`, `ghostty-vt` `anchors`), paste escaping, proto goldens.
+
+## 8. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
@@ -813,6 +924,10 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
   run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
   untested against a real browser; no transfer resume by offset for uploads (downloads take an
   offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
+  `.excalidraw` import/export, no ASCII export of shapes; kitty graphics *inside* panes is
+  phase 2 (snapshots do not carry image state); live ink is relayed without per-connection
+  rate limiting; a session's artifacts are deleted with it; anchors detach on daemon restart;
+  the daemon's raster render draws text and images as outlines only.
 - `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
   leased). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.

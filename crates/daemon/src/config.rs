@@ -137,6 +137,35 @@ pub struct Config {
     pub push: PushConfig,
     /// A pane's control lease moves to someone who asked for it once the holder has not typed
     pub lease_idle: Duration,
+    pub artifacts: ArtifactLimits,
+}
+
+/// Size caps for the artifact store (drawings, images, op logs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactLimits {
+    /// Largest blob (image, PNG) in bytes. Claude Code refuses sources over 128 MB and
+    /// downscales anything over 2000 px, so 32 MiB is plenty.
+    pub blob_max: u64,
+    /// Everything stored (blobs and op logs) per daemon, in bytes.
+    pub total_max: u64,
+    /// One drawing's op log, in bytes (postcard).
+    pub log_max: u64,
+    /// One committed batch, in bytes.
+    pub batch_max: u64,
+    /// Artifacts per session.
+    pub per_session: usize,
+}
+
+impl Default for ArtifactLimits {
+    fn default() -> Self {
+        Self {
+            blob_max: 32 << 20,
+            total_max: 1 << 30,
+            log_max: 8 << 20,
+            batch_max: 1 << 20,
+            per_session: 1000,
+        }
+    }
 }
 
 impl Config {
@@ -164,6 +193,7 @@ impl Config {
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
+            artifacts: ArtifactLimits::default(),
         }
     }
 

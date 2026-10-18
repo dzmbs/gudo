@@ -25,6 +25,8 @@
 //! ```
 
 mod agent;
+mod anchor;
+mod art;
 mod codex_session;
 mod commands;
 mod config;
@@ -59,7 +61,7 @@ use proto::{DaemonId, Ticket};
 use tokio::task::JoinHandle;
 
 pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT};
-pub use config::{Config, RelayMode, default_state_dir};
+pub use config::{ArtifactLimits, Config, RelayMode, default_state_dir};
 pub use config::{CustomRelays, PushConfig};
 pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
@@ -134,6 +136,7 @@ impl Daemon {
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(notifier::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(mp::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(art::run(Arc::clone(&core))));
         core.ws.tunnel.autostart(&core.cfg);
         core.mark_dirty();
         Ok(Self {

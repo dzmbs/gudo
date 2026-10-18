@@ -61,6 +61,12 @@ pub(crate) enum Event {
     Presence(proto::Presence),
     /// A pane's control lease changed.
     Lease(proto::Lease),
+    /// A drawing or image of `session` changed, or live ink (not echoed to `from`).
+    Artifact {
+        session: SessionId,
+        event: Arc<proto::ArtifactEvent>,
+        from: Option<ConnId>,
+    },
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -134,6 +140,7 @@ pub(crate) struct Core {
     pub push: crate::notifier::Push,
     /// Multiplayer: grants, leases, presence, audit.
     pub mp: crate::mp::Mp,
+    pub art: crate::art::Art,
     connected: AtomicUsize,
 }
 
@@ -164,6 +171,7 @@ impl Core {
             ws,
             push: crate::notifier::Push::load(&cfg.state_dir),
             mp,
+            art: crate::art::Art::open(&cfg.state_dir, cfg.artifacts),
             cfg,
             connected: AtomicUsize::new(0),
         })
@@ -204,6 +212,33 @@ impl Core {
 
     pub fn emit(&self, event: Event) {
         let _ = self.events.send(event);
+    }
+
+    /// Broadcasts an artifact event to the session's clients (except `from`).
+    pub fn emit_artifact(
+        &self,
+        session: SessionId,
+        event: proto::ArtifactEvent,
+        from: Option<ConnId>,
+    ) {
+        self.emit(Event::Artifact {
+            session,
+            event: Arc::new(event),
+            from,
+        });
+    }
+
+    /// Broadcasts a session's canvas panes.
+    pub fn emit_canvases(&self, session: SessionId) {
+        let canvases = self.art.canvases(session);
+        self.emit_artifact(
+            session,
+            proto::ArtifactEvent::Canvases {
+                session_id: session,
+                canvases,
+            },
+            None,
+        );
     }
 
     pub fn mark_dirty(&self) {
@@ -570,6 +605,9 @@ impl Core {
 
     fn after_removal(&self, session: Option<SessionId>, removed: Removed) {
         self.kill_panes(&removed.panes);
+        if let Some(closed) = removed.session {
+            self.art.delete_session(closed);
+        }
         match (removed.session, session) {
             (Some(_), _) => self.emit(Event::Sessions),
             (None, Some(s)) => self.emit(Event::Layout(s)),
@@ -581,6 +619,16 @@ impl Core {
 
     pub fn kill_panes(&self, panes: &[PaneId]) {
         for id in panes {
+            if let Some(info) = self.art.remove_canvas(*id) {
+                self.emit(Event::PaneClosed(*id));
+                self.emit_artifact(
+                    info.session_id,
+                    proto::ArtifactEvent::Info(info.clone()),
+                    None,
+                );
+                self.emit_canvases(info.session_id);
+                continue;
+            }
             let entry = lock(&self.panes).remove(id);
             if let Some(entry) = entry {
                 if let Some(task) = lock(&entry.task).take() {
@@ -622,6 +670,25 @@ impl Core {
             PaneLaunch::Shell { cwd }
             | PaneLaunch::Command { cwd, .. }
             | PaneLaunch::Agent { cwd, .. } => cwd.clone(),
+            PaneLaunch::Canvas { artifact_id } => {
+                let artifact = artifact_id.ok_or((
+                    OpError::Invalid,
+                    "a canvas pane needs its drawing (the daemon creates one for Split and \
+                     NewTab)"
+                        .to_owned(),
+                ))?;
+                let info = self
+                    .art
+                    .add_canvas(id, artifact)
+                    .map_err(|e| (OpError::NotFound, e.to_string()))?;
+                self.emit_artifact(
+                    info.session_id,
+                    proto::ArtifactEvent::Info(info.clone()),
+                    None,
+                );
+                self.emit_canvases(info.session_id);
+                return Ok(());
+            }
         };
         let cwd = launch_cwd
             .or(cwd_hint)
@@ -718,6 +785,7 @@ impl Core {
                     AgentRuntime::new(*kind, id, adapter, restored),
                 ));
             }
+            PaneLaunch::Canvas { .. } => unreachable!("canvas panes returned above"),
         }
         let worktree =
             self.ws
@@ -1186,6 +1254,10 @@ pub(crate) fn restore(core: &Arc<Core>, panes: HashMap<PaneId, PaneRecord>) {
     let ids = lock(&core.layout).all_panes();
     let mut failed = Vec::new();
     for id in ids {
+        // Canvas panes run nothing; the artifact store remembers them.
+        if core.art.is_canvas(id) {
+            continue;
+        }
         let Some(record) = panes.get(&id).cloned() else {
             failed.push(id);
             continue;

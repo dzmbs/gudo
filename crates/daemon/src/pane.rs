@@ -21,6 +21,7 @@ use proto::{
 use pty::{EchoState, PtyActor, ReadError, SpawnOptions, Subscriber, WinSize};
 use tokio::sync::{mpsc, watch};
 
+use crate::anchor::{AnchorPos, Anchors, ScrollLog};
 use crate::commands::{CommandLog, CommandUpdate};
 use crate::osc::{Osc, OscScanner};
 use crate::scan::{self, LinkCollector, ScreenText};
@@ -74,6 +75,9 @@ struct Vt {
     keys: KeyEncoder,
     mouse: MouseEncoder,
     events: mpsc::UnboundedSender<VtEvent>,
+    /// Rows scrolled per output chunk, for resolving client row positions.
+    scroll: ScrollLog,
+    anchors: Anchors,
 }
 
 impl Vt {
@@ -98,6 +102,7 @@ impl Vt {
             self.alt = alt;
             let _ = self.events.send(VtEvent::AltScreen);
         }
+        self.scroll.observe(&mut self.term, self.seq);
         let now = Instant::now();
         if self
             .last_activity
@@ -210,6 +215,8 @@ impl Pane {
             keys: KeyEncoder::new().map_err(io::Error::other)?,
             mouse: MouseEncoder::new().map_err(io::Error::other)?,
             events,
+            scroll: ScrollLog::default(),
+            anchors: Anchors::default(),
         }));
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
@@ -565,6 +572,47 @@ impl Pane {
             self.pty.write(data).await?;
         }
         Ok(at)
+    }
+
+    /// Anchors ink `key` to the row `from_bottom` rows above the bottom at `at_seq`; also
+    /// returns the shell-integration command whose block holds the row.
+    pub fn anchor_create(
+        &self,
+        key: u64,
+        at_seq: Seq,
+        from_bottom: u64,
+    ) -> Result<(AnchorPos, Option<u64>), String> {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        let pos = vt
+            .anchors
+            .create(&mut vt.term, &vt.scroll, vt.seq, key, at_seq, from_bottom)?;
+        let command = match pos {
+            AnchorPos::Live { y: Some(y), .. } if !vt.alt => vt
+                .commands
+                .list(&vt.term)
+                .into_iter()
+                .filter(|c| c.rows.prompt.is_some_and(|p| p <= u64::from(y)))
+                .filter(|c| c.rows.end.is_none_or(|e| e >= u64::from(y)))
+                .map(|c| c.mark.command_id)
+                .next_back(),
+            _ => None,
+        };
+        Ok((pos, command))
+    }
+
+    /// Where anchor `key` is now (`None`: unknown, or detached and already reported).
+    pub fn anchor_position(&self, key: u64) -> Option<AnchorPos> {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        vt.anchors.position(&mut vt.term, vt.seq, key)
+    }
+
+    /// Forgets anchor `key`.
+    pub fn anchor_remove(&self, key: u64) {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        vt.anchors.remove(&mut vt.term, key);
     }
 
     /// Hangs up the child's session.
