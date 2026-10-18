@@ -6,13 +6,20 @@ One multiplatform SwiftUI app (iPhone, iPad, Mac; iOS/iPadOS/macOS 26+) over thr
 |---|---|
 | `App/Sources` | The app: `Workspace` (one window: layout + live panes), split/tab views, menu commands, iOS key bar, pane backends |
 | `App/UITests` | Hardware-keyboard UI tests (splits, zoom, focus, tabs, key bar) |
+| `Packages/HostKit` | Data/control layer: hosts, pairing, daemon and plain-SSH connections, `DaemonLayoutStore`, pane backends, lifecycle (docs/APP-ARCHITECTURE.md) |
+| `Packages/UnnamedCore` | The Rust core (UniFFI): `cargo xtask build-xcframework` (docs/APPLE-FFI.md) |
 | `Packages/PaneLayout` | Layout model shared in spirit with the daemon: Session → Tab → split tree, `LayoutOp`, `LayoutStore` |
 | `Packages/TerminalKit` | libghostty-vt wrapper (`TerminalCore`), Metal renderer + AppKit/UIKit `TerminalView` (`TerminalRenderer`), `LocalPTY` (macOS) |
 | `Brand.xcconfig` | Product name and bundle id prefix; nothing else hard-codes them |
 | `project.yml` | XcodeGen spec; `App.xcodeproj` is generated and not committed |
 
-Pane I/O goes through `PaneBackend`: a login shell on a local PTY on macOS, and a local echo on iOS until
-the daemon connection exists. The layout goes through `LayoutStore` (`LocalLayoutStore` for now).
+Pane I/O goes through `PaneBackend` (HostKit): a login shell on a local PTY on macOS, a local echo on
+iOS (the scratch workspace), and for remote hosts `DaemonPaneBackend` / `SshPaneBackend`. The layout
+goes through `LayoutStore`: `DaemonLayoutStore` for paired daemons, `LocalLayoutStore` otherwise. The
+Hosts button (⇧⌘H) opens the hosts list: just ssh, pairing, ssh_config import.
+
+Before building the app: `cargo xtask build-xcframework` (the core) and `cargo xtask build-hostd-linux`
+(the daemons "Install helper" uploads, bundled from `build/hostd/`).
 
 ## Setup
 
@@ -56,6 +63,11 @@ Or open `App.xcodeproj` in Xcode and run the `App` scheme on "My Mac" or a simul
 (cd Packages/TerminalKit && swift test)   # renderer and key encoding
 xcodebuild -project App.xcodeproj -scheme App -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/DerivedData test
 ```
+
+Remote hosts: `(cd Packages/HostKit && swift test)` (needs `cargo build -p hostd`),
+`scripts/daemon-ui-test.sh <udid>` (iPad UI test against a local daemon that is killed and restarted
+mid-test), and `RealHostUITests` with `TEST_RUNNER_SSH_TARGET` / `TEST_RUNNER_SSH_KEY`
+(docs/APP-ARCHITECTURE.md §7).
 
 The scheme's test action runs the layout tests and the UI tests (iPad: shortcuts, splits, zoom, focus,
 tabs; key bar and sticky Ctrl over the software keyboard; divider drag, ⌃⌘ resize and rotation while

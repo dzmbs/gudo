@@ -55,3 +55,32 @@ private func send(_ pty: PTY, _ text: String) {
     #expect(output.waitFor("jobs-5"))
     #expect(output.waitFor("Stopped") || output.waitFor("Suspended"))
 }
+
+private func running(_ pattern: String) -> Bool {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    process.arguments = ["-f", "^\(pattern)$"]
+    process.standardOutput = FileHandle.nullDevice
+    try? process.run()
+    process.waitUntilExit()
+    return process.terminationStatus == 0
+}
+
+/// Closing a tab (`terminate`) ends the shell and its jobs, foreground and background, as the
+/// app's login shell runs them (zsh with job control).
+@Test func terminateEndsTheShellAndItsJobs() throws {
+    let marker = Int.random(in: 40000...49999)
+    let pty = try PTY(argv: ["/bin/zsh", "-f"], environment: ["PATH": "/usr/bin:/bin", "PS1": "$ "], cols: 80, rows: 24)
+    let output = Output()
+    pty.start(onOutput: { output.append($0) }, onExit: {})
+    send(pty, "sleep \(marker + 1) &\nsleep \(marker)\n")
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline, !(running("sleep \(marker)") && running("sleep \(marker + 1)")) { usleep(50_000) }
+    #expect(running("sleep \(marker)"), "foreground job runs")
+    #expect(running("sleep \(marker + 1)"), "background job runs")
+    pty.terminate()
+    let gone = Date().addingTimeInterval(5)
+    while Date() < gone, running("sleep \(marker)") || running("sleep \(marker + 1)") { usleep(50_000) }
+    #expect(!running("sleep \(marker)"), "foreground job ended with the tab")
+    #expect(!running("sleep \(marker + 1)"), "background job ended with the tab")
+}

@@ -146,6 +146,23 @@ nonisolated final class LocalDaemon {
         Array("echo second-$((1+1))\r".utf8).withUnsafeBytes { second.write($0) }
         try await eventually("second pane echo", timeout: .seconds(10)) { secondSink.output.contains("second-2") }
 
+        // Ctrl-C reaches the remote foreground job.
+        Array("sleep 100\r".utf8).withUnsafeBytes { second.write($0) }
+        try await Task.sleep(for: .milliseconds(500))
+        Array("\u{03}echo int-$?\r".utf8).withUnsafeBytes { second.write($0) }
+        try await eventually("ctrl-c", timeout: .seconds(10)) { secondSink.output.contains("int-130") }
+
+        // ⌘W on the new pane: the daemon closes it and ends its process.
+        let marker = Int.random(in: 40000...49999)
+        Array("sleep \(marker)\r".utf8).withUnsafeBytes { second.write($0) }
+        try await eventually("job runs", timeout: .seconds(10)) { pgrep("sleep \(marker)") }
+        connection.layout.apply(.close(newPane))
+        try await eventually("closed", timeout: .seconds(10)) { connection.layout.session.panes.count == 1 }
+        try await eventually("job ended with the pane", timeout: .seconds(10)) { !pgrep("sleep \(marker)") }
+        second.terminate()
+        connection.layout.apply(.split(pane, .horizontal))
+        try await eventually("split again", timeout: .seconds(10)) { connection.layout.session.panes.count == 2 }
+
         // Restart the daemon: panes go stale (content kept), then live again, and the layout
         // (restored by the daemon with the same ids) is still there.
         daemon.kill()

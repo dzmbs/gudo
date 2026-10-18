@@ -140,3 +140,33 @@ disabled`; `-testMirror YES` (core VT mirror for pane text).
 | `apple/scripts/daemon-ui-test.sh [udid]` | `DaemonUITests` on the iPad simulator against a local daemon, killed and restarted mid-test |
 | `TEST_RUNNER_SSH_TARGET=… TEST_RUNNER_SSH_KEY=… xcodebuild … -only-testing:AppUITests/RealHostUITests test` | just ssh → Install helper → daemon pane: ls, vim, Ctrl-C, htop, screenshots |
 | `MacDogfoodUITests` | Ctrl-C, Ctrl-Z, vim, resize during output, closing a tab kills its process (pgrep), local and daemon |
+
+## 8. Measurements (2026-10-18, M5 Max, iPad Pro 13" simulator iOS 27.0, debug builds)
+
+| | Local daemon (loopback, relays off) | Hetzner x86_64, Helsinki (ping 53.6 ms avg) |
+|---|---|---|
+| SSH connect + auth (just ssh, key) | — | 577–920 ms |
+| Bootstrap ("Install helper") | — | `Upgraded` 6.3 s (upload + restart), `Reused` 0.55 s |
+| iroh connect after the ticket (pair) | 0.27–0.31 s (app), 38–56 ms (HostKit test) | 0.34–0.55 s |
+| Dial → first paint (snapshot on screen) | 53–83 ms | 0.58–0.80 s |
+| Keystroke → echo | 0.4–0.6 ms (input→ack) | p50 65.6 ms, min 55, max 72 (20 keys) |
+| Daemon restart → pane live again | ≈1.0 s | — |
+| Suspend → resume (foreground) | 10–15 ms | — |
+
+`ipad-hetzner-{1-plain-ssh,2-installing,3-daemon-pane,4-ls,5-vim,6-ctrl-c,7-htop,8-done}.png`.
+
+## 9. Gaps
+
+- macOS UI automation needs an interactive authentication approval for the ad-hoc signed test
+  runner; `MacDogfoodUITests` is written but was not run here. The same behaviours are covered
+  below the UI: LocalPTY tests (Ctrl-C, Ctrl-Z, terminate ends foreground and background jobs)
+  and HostKit integration (Ctrl-C and close-kills-process on a daemon pane).
+- Keychain on ad-hoc signed Mac builds: no entitlement, so secrets fall back to owner-only files.
+- QR scanning is untested (no camera in the simulator). Tailscale hints are not implemented.
+- The daemon does not report the foreground program, so key-bar profiles use the title.
+- `RealHostUITests` passes but takes ≈14 min: XCUITest waits for the app to idle between
+  synthesized keys; the app-side timings above are from os_log, not the test's duration.
+- Plain-SSH panes cannot be suspended on iOS (no serialized state); they reconnect instead.
+- Switching a host from SSH to daemon replaces the window's workspace (same window, same host):
+  the plain-SSH shell is closed once the daemon's layout is ready, so its scrollback is not
+  carried over.
