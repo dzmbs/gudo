@@ -38,7 +38,7 @@ public final class Terminal: @unchecked Sendable {
     }
 
     /// Receives bytes the terminal itself must send back to the PTY (DA/DSR replies, mode reports).
-    private final class Effects: Sendable {
+    final class Effects: Sendable {
         let writePty: @Sendable (UnsafeRawBufferPointer) -> Void
 
         init(writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
@@ -46,11 +46,16 @@ public final class Terminal: @unchecked Sendable {
         }
     }
 
-    private let lock = Mutex(())
-    private let terminal: GhosttyTerminal
+    let lock = Mutex(())
+    /// Replaced (under `lock`) when a snapshot is restored; see `Terminal+Snapshot.swift`.
+    var terminal: GhosttyTerminal
     private let keyEncoder: GhosttyKeyEncoder
     private let keyEvent: GhosttyKeyEvent
-    private let effects: Effects
+    let effects: Effects
+    let configuration: Configuration
+    /// The decoder of the last restored snapshot while its history is still arriving (guarded by
+    /// `lock`); see `Terminal+Snapshot.swift`.
+    var restoreState: SnapshotRestore?
 
     /// - Parameter writePty: called synchronously from `write(_:)` (on the writer's thread) with
     ///   query replies. Must not call back into this terminal.
@@ -70,6 +75,17 @@ public final class Terminal: @unchecked Sendable {
         else { fatalError("libghostty-vt allocation failed") }
 
         effects = Effects(writePty: writePty)
+        self.configuration = configuration
+        Self.configure(terminal, effects: effects, configuration: configuration)
+
+        self.terminal = terminal
+        keyEncoder = encoder
+        keyEvent = event
+    }
+
+    /// Applies the callbacks and options every terminal handle of this `Terminal` carries (the
+    /// initial one and any restored from a snapshot).
+    static func configure(_ terminal: GhosttyTerminal, effects: Effects, configuration: Configuration) {
         let userdata = Unmanaged.passUnretained(effects).toOpaque()
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA, userdata)
         let onWritePty: GhosttyTerminalWritePtyFn = { _, userdata, data, len in
@@ -89,13 +105,10 @@ public final class Terminal: @unchecked Sendable {
         // sequences, flags and skin tones occupy one (wide) cell.
         var graphemeClusters = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &graphemeClusters)
-
-        self.terminal = terminal
-        keyEncoder = encoder
-        keyEvent = event
     }
 
     deinit {
+        restoreState?.free()
         ghostty_key_event_free(keyEvent)
         ghostty_key_encoder_free(keyEncoder)
         ghostty_terminal_free(terminal)

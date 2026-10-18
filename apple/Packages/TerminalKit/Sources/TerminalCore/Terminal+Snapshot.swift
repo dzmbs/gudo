@@ -1,0 +1,232 @@
+import Foundation
+import GhosttyVt
+
+/// What a remote pane needs from the client VT beyond raw bytes (docs/DAEMON.md "Output" and
+/// "Scrollback history paging"): replace the terminal with a daemon snapshot's READY section,
+/// prepend history records as they arrive, and read text and scroll position.
+///
+/// This is the Swift twin of `ghostty_vt::StreamingRestore` (crates/ghostty-vt/src/history.rs).
+extension Terminal {
+    public enum SnapshotError: Error, Equatable {
+        /// libghostty-vt rejected the bytes (`GhosttyResult` code).
+        case invalid(Int32)
+    }
+
+    /// Replaces the whole terminal state (screens, modes, cursor, unfinished parser input) with
+    /// a Ghostty snapshot's READY section. Scrollback older than READY can then be added with
+    /// `appendHistory(_:)`. Callbacks and colors of this `Terminal` carry over; the size is the
+    /// snapshot's (the remote PTY's).
+    public func restore(snapshot ready: UnsafeRawBufferPointer) throws(SnapshotError) {
+        let restore = SnapshotRestore(ready: ready)
+        let result = restore.ready()
+        guard result.code == GHOSTTY_SUCCESS, let handle = result.terminal else {
+            restore.free()
+            throw .invalid(Int32(result.code.rawValue))
+        }
+        Self.configure(handle, effects: effects, configuration: configuration)
+        lock.withLock { _ in
+            restoreState?.free()
+            let old = terminal
+            terminal = handle
+            restoreState = restore
+            ghostty_terminal_free(old)
+        }
+    }
+
+    public func restore(snapshot ready: Data) throws(SnapshotError) {
+        var failure: SnapshotError?
+        ready.withUnsafeBytes { bytes in
+            do throws(SnapshotError) { try restore(snapshot: bytes) } catch { failure = error }
+        }
+        if let failure { throw failure }
+    }
+
+    /// Prepends scrollback from history records of the last restored snapshot (whole records
+    /// cut after a page or at FINISH, as the daemon's `bulk` stream sends them). Returns the
+    /// number of pages applied; 0 if nothing is being restored.
+    @discardableResult
+    public func appendHistory(_ records: Data) throws(SnapshotError) -> Int {
+        let (code, pages): (GhosttyResult, Int) = lock.withLock { _ in
+            guard let restoreState else { return (GHOSTTY_SUCCESS, 0) }
+            let result = restoreState.push(records)
+            if result.code != GHOSTTY_SUCCESS || restoreState.finished {
+                restoreState.free()
+                self.restoreState = nil
+            }
+            return result
+        }
+        guard code == GHOSTTY_SUCCESS else { throw .invalid(Int32(code.rawValue)) }
+        return pages
+    }
+
+    /// The scrollable area in rows and where the viewport is in it (`offset` 0 = the oldest
+    /// row on top).
+    public var scrollbar: (total: UInt64, offset: UInt64, visible: UInt64) {
+        withHandle { handle in
+            var bar = GhosttyTerminalScrollbar()
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar)
+            return (bar.total, bar.offset, bar.len)
+        }
+    }
+
+    /// Plain text of the whole screen, scrollback included, soft wraps joined and trailing
+    /// blanks trimmed (diagnostics, accessibility, tests).
+    public func plainText() -> String {
+        withHandle { handle in
+            var options = GhosttyFormatterTerminalOptions()
+            options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
+            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
+            options.unwrap = true
+            options.trim = true
+            options.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
+            options.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
+            var formatter: GhosttyFormatter?
+            guard ghostty_formatter_terminal_new(nil, &formatter, handle, options) == GHOSTTY_SUCCESS,
+                  let formatter
+            else { return "" }
+            defer { ghostty_formatter_free(formatter) }
+            var pointer: UnsafeMutablePointer<UInt8>?
+            var length = 0
+            guard ghostty_formatter_format_alloc(formatter, nil, &pointer, &length) == GHOSTTY_SUCCESS,
+                  let pointer
+            else { return "" }
+            defer { ghostty_free(nil, pointer, length) }
+            return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
+        }
+    }
+
+    /// A complete snapshot of this terminal (tests and diagnostics; the daemon encodes the real
+    /// ones).
+    public func encodeSnapshot() -> Data? {
+        withHandle { handle in
+            var pointer: UnsafeMutablePointer<UInt8>?
+            var length = 0
+            guard ghostty_snapshot_encode_alloc(handle, nil, &pointer, &length) == GHOSTTY_SUCCESS,
+                  let pointer
+            else { return nil }
+            defer { ghostty_free(nil, pointer, length) }
+            return Data(bytes: pointer, count: length)
+        }
+    }
+}
+
+/// A snapshot decoder kept after READY so history pages can be prepended later. Owned by its
+/// `Terminal` and only used under the terminal's lock.
+final class SnapshotRestore {
+    private static let headerLength = 10
+    private static let tagReady: UInt16 = 5
+    private static let tagPage: UInt16 = 3
+    private static let tagFinish: UInt16 = 6
+
+    /// Bytes the decoder reads, with its read cursor; the reader callback's userdata.
+    final class Source {
+        var data: [UInt8]
+        var position = 0
+
+        init(_ data: [UInt8]) {
+            self.data = data
+        }
+    }
+
+    private var decoder: GhosttySnapshotDecoder?
+    private let source: Source
+    private var scanned = 0
+    private var pendingPages = 0
+    private var finishSeen = false
+    private(set) var finished = false
+
+    init(ready: UnsafeRawBufferPointer) {
+        source = Source(Array(ready))
+        let reader = GhosttyReader(
+            read: { userdata, buffer, capacity, read in
+                guard let userdata, let buffer, let read else { return false }
+                let source = Unmanaged<Source>.fromOpaque(userdata).takeUnretainedValue()
+                let count = min(capacity, source.data.count - source.position)
+                source.data.withUnsafeBufferPointer {
+                    buffer.update(from: $0.baseAddress! + source.position, count: count)
+                }
+                source.position += count
+                read.pointee = count
+                return true
+            },
+            userdata: Unmanaged.passUnretained(source).toOpaque())
+        var decoder: GhosttySnapshotDecoder?
+        guard ghostty_snapshot_decoder_new(nil, &decoder, reader) == GHOSTTY_SUCCESS else { return }
+        var yes = true
+        ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY, &yes)
+        self.decoder = decoder
+    }
+
+    /// Decodes READY into a new terminal handle, owned by the caller.
+    func ready() -> (code: GhosttyResult, terminal: GhosttyTerminal?) {
+        guard let decoder else { return (GHOSTTY_OUT_OF_MEMORY, nil) }
+        var terminal: GhosttyTerminal?
+        let code = ghostty_snapshot_decoder_ready(decoder, &terminal)
+        scanned = source.position
+        return (code, terminal)
+    }
+
+    /// Adds records and decodes every page they complete (see `StreamingRestore::push`).
+    func push(_ records: Data) -> (code: GhosttyResult, pages: Int) {
+        guard let decoder, !finished else { return (GHOSTTY_SUCCESS, 0) }
+        let consumed = source.position
+        source.data.removeFirst(consumed)
+        source.position = 0
+        scanned -= consumed
+        source.data.append(contentsOf: records)
+
+        let data = source.data
+        while scanned + Self.headerLength <= data.count {
+            let tag = UInt16(data[scanned]) | UInt16(data[scanned + 1]) << 8
+            let length = (0..<4).reduce(0) { $0 | Int(data[scanned + 2 + $1]) << (8 * $1) }
+            let end = scanned + Self.headerLength + length
+            guard end <= data.count else { break }
+            scanned = end
+            if tag == Self.tagPage { pendingPages += 1 }
+            if tag == Self.tagFinish { finishSeen = true }
+        }
+        var pages = 0
+        while pendingPages > 0 {
+            pendingPages -= 1
+            let code = ghostty_snapshot_decoder_next(decoder)
+            guard code == GHOSTTY_SUCCESS else { return (code == GHOSTTY_NO_VALUE ? GHOSTTY_INVALID_VALUE : code, pages) }
+            pages += 1
+        }
+        if finishSeen {
+            let code = ghostty_snapshot_decoder_next(decoder)
+            guard code == GHOSTTY_NO_VALUE else { return (code == GHOSTTY_SUCCESS ? GHOSTTY_INVALID_VALUE : code, pages) }
+            finished = true
+        }
+        return (GHOSTTY_SUCCESS, pages)
+    }
+
+    /// Frees the decoder (before the terminal it refers to).
+    func free() {
+        if let decoder { ghostty_snapshot_decoder_free(decoder) }
+        decoder = nil
+    }
+
+    /// Length of the READY prefix of a complete snapshot: through the READY record (tests).
+    static func readyLength(of snapshot: Data) -> Int? {
+        let bytes = [UInt8](snapshot)
+        // "GHOSTSNP", format version u16, then records.
+        guard bytes.starts(with: Array("GHOSTSNP".utf8)) else { return nil }
+        var offset = 10
+        while offset + headerLength <= bytes.count {
+            let tag = UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
+            let length = (0..<4).reduce(0) { $0 | Int(bytes[offset + 2 + $1]) << (8 * $1) }
+            offset += headerLength + length
+            if tag == tagReady { return offset }
+        }
+        return nil
+    }
+}
+
+extension Terminal {
+    /// Splits a complete snapshot into its READY prefix and the history records after it, the
+    /// way the daemon sends them (tests and diagnostics).
+    public static func splitSnapshot(_ snapshot: Data) -> (ready: Data, history: Data)? {
+        guard let length = SnapshotRestore.readyLength(of: snapshot) else { return nil }
+        return (snapshot.prefix(length), snapshot.dropFirst(length))
+    }
+}

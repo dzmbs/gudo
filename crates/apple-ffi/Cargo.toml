@@ -20,6 +20,7 @@ ssh.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
 tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 uniffi.workspace = true
 
 [dev-dependencies]

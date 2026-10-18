@@ -65,6 +65,14 @@ public struct Session: Hashable, Sendable, Codable {
         apply(.newTab)
     }
 
+    /// A session as another source of truth has it (the daemon's layout). Ids it allocates
+    /// later (local ops) continue after the largest id in `tabs`.
+    public init(tabs: [Tab], activeTabId: TabId?) {
+        self.tabs = tabs
+        self.activeTabId = activeTabId ?? tabs.first?.id
+        lastId = tabs.flatMap { [$0.id.rawValue] + $0.root.panes.map(\.rawValue) }.max() ?? 0
+    }
+
     public var activeTab: Tab? {
         tabs.first { $0.id == activeTabId }
     }

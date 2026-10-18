@@ -24,6 +24,9 @@ public final class TerminalSurface {
     public let stats = FrameStats()
     /// Called when the cell grid changes size, e.g. to send TIOCSWINSZ to the PTY.
     public var onGridChange: ((Grid) -> Void)?
+    /// Called after the user scrolled the viewport (negative = towards history), e.g. to fetch
+    /// older scrollback from a remote host when the top is reached.
+    public var onScroll: ((Int) -> Void)?
     public private(set) var grid: Grid?
     /// The cursor cell in view points as of the last rendered frame (IME candidate window and
     /// preedit placement); nil when the cursor is hidden or scrolled out of the viewport.
@@ -125,6 +128,7 @@ public final class TerminalSurface {
         guard rows != 0 else { return }
         terminal.scrollViewport(by: rows)
         setNeedsRender()
+        onScroll?(rows)
     }
 
     /// Encodes a key press for the PTY and snaps the viewport back to the bottom, as Ghostty does.

@@ -8,6 +8,8 @@
 //!   [`SshSession::bootstrap`] installs the daemon and returns a ticket.
 //! - [`SshConfigFile`], [`KnownHostsStore`], [`generate_ed25519_key`]: config, host keys
 //!   and keys, with persistence left to the app.
+//! - [`inspect_pair_ticket`], [`install_log_sink`]: read a ticket offline; core logs to
+//!   the app's logger.
 //!
 //! # Threading
 //!
@@ -23,6 +25,7 @@
 
 mod bytes;
 mod client;
+mod extras;
 mod ssh_api;
 mod types;
 
@@ -35,6 +38,7 @@ pub use client::{
     ClientConfig, ClientError, ClientEvent, ClientEventListener, ClientStats, DaemonClient,
     PaneBytesBench, RelayMode, bench_pane_bytes, generate_device_key,
 };
+pub use extras::{LogLevel, LogSink, PairTicketInfo, inspect_pair_ticket, install_log_sink};
 pub use ssh_api::{
     BootstrapListener, BootstrapReport, BootstrapStep, EnvVar, GeneratedSshKey, HostKeyDelegate,
     HostKeyInfo, HostKeyPolicy, HostKeyStatus, HostPlatform, HostdBinaries, HostdBinary,
