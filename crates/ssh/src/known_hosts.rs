@@ -51,6 +51,25 @@ impl HostKeyInfo {
 pub trait HostKeyPrompt: Send + Sync {
     /// `true` trusts and records the key.
     fn trust_new_host(&self, key: HostKeyInfo) -> bool;
+
+    /// The host presented `key`, but other keys are on record for it (`expected`, their
+    /// `SHA256:` fingerprints): the server was reinstalled, or someone is in the middle.
+    /// `true` replaces the recorded keys with `key` ([`KnownHosts::replace`]) and continues.
+    ///
+    /// Called like [`trust_new_host`](Self::trust_new_host), only under
+    /// [`HostKeyPolicy::Ask`] and never for pinned keys. The default refuses, which fails
+    /// the connection with [`SshError::HostKeyMismatch`] (OpenSSH's behaviour).
+    fn trust_changed_host(&self, key: HostKeyInfo, expected: Vec<String>) -> bool {
+        let _ = (key, expected);
+        false
+    }
+}
+
+/// Told about every change to a [`KnownHosts`] store, so a store the app keeps (in the
+/// Keychain, say) can be saved. Runs on the thread that changed it; return quickly.
+pub trait KnownHostsListener: Send + Sync {
+    /// The store changed; `text` is its new [`to_text`](KnownHosts::to_text).
+    fn changed(&self, text: String);
 }
 
 /// What to do with a host that has no recorded key.
@@ -109,11 +128,29 @@ struct Entry {
     line: String,
 }
 
+/// A key the user has to decide on, found by [`KnownHosts::verify`].
+#[derive(Debug, Clone)]
+pub(crate) struct Undecided {
+    pub info: HostKeyInfo,
+    /// Fingerprints on record when the host's key changed; `None` for a new host.
+    pub expected: Option<Vec<String>>,
+}
+
 /// A known_hosts store, optionally backed by a file that new keys are appended to.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct KnownHosts {
     entries: Mutex<Vec<Entry>>,
     path: Option<PathBuf>,
+    listener: Option<Arc<dyn KnownHostsListener>>,
+}
+
+impl std::fmt::Debug for KnownHosts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KnownHosts")
+            .field("entries", &self.lock().len())
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl KnownHosts {
@@ -126,8 +163,15 @@ impl KnownHosts {
     pub fn from_text(text: &str) -> Self {
         Self {
             entries: Mutex::new(text.lines().filter_map(parse_line).collect()),
-            path: None,
+            ..Self::default()
         }
+    }
+
+    /// Reports every later change to `listener`.
+    #[must_use]
+    pub fn with_listener(mut self, listener: Arc<dyn KnownHostsListener>) -> Self {
+        self.listener = Some(listener);
+        self
     }
 
     /// Opens a known_hosts file (created on the first new key).
@@ -226,6 +270,41 @@ impl KnownHosts {
         self.insert(host, port, &key, true)
     }
 
+    /// Forgets the keys recorded for exactly `host:port`: plain entries naming only it, and
+    /// hashed entries for it. Entries that also cover other hosts (`a,b`, wildcards) and
+    /// `@revoked` lines stay. Returns how many entries were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SshError::Io`] if the backing file cannot be rewritten.
+    pub fn remove(&self, host: &str, port: u16) -> Result<usize, SshError> {
+        let name = host_name(host, port).to_ascii_lowercase();
+        let removed = {
+            let mut entries = self.lock();
+            let before = entries.len();
+            entries.retain(|e| !(e.marker == Marker::None && e.hosts.is_exactly(&name)));
+            before - entries.len()
+        };
+        if removed > 0 {
+            if let Some(path) = &self.path {
+                write_file(path, &self.to_text())?;
+            }
+            self.notify();
+        }
+        Ok(removed)
+    }
+
+    /// Records `key` as the only key for exactly `host:port` ([`remove`](Self::remove), then
+    /// [`add`](Self::add)): what accepting a changed host key does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SshError::Io`] if the backing file cannot be written.
+    pub fn replace(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), SshError> {
+        self.remove(host, port)?;
+        self.add(host, port, key)
+    }
+
     fn insert(&self, host: &str, port: u16, key: &PublicKey, pinned: bool) -> Result<(), SshError> {
         let name = host_name(host, port);
         let line = format!("{name} {}", openssh_line(key));
@@ -239,20 +318,27 @@ impl KnownHosts {
             pinned,
             line,
         });
+        self.notify();
         Ok(())
+    }
+
+    fn notify(&self) {
+        if let Some(listener) = &self.listener {
+            listener.changed(self.to_text());
+        }
     }
 
     /// Decides whether `key`, presented by `spec`'s host, may be used.
     ///
-    /// Returns `Ok(None)` when the key is trusted, `Ok(Some(info))` when it is new and
-    /// `policy` asks the user (the caller prompts after the key exchange), and an error for
-    /// mismatched, revoked or refused keys.
+    /// Returns `Ok(None)` when the key is trusted, `Ok(Some(_))` when it is new (or changed,
+    /// and not pinned) and `policy` asks the user (the caller prompts after the key
+    /// exchange), and an error for mismatched, revoked or refused keys.
     pub(crate) fn verify(
         &self,
         spec: &HostSpec,
         key: &PublicKey,
         policy: &HostKeyPolicy,
-    ) -> Result<Option<HostKeyInfo>, SshError> {
+    ) -> Result<Option<Undecided>, SshError> {
         let host = spec.key_host();
         let info = || HostKeyInfo::new(host_name(host, spec.port), key);
         match self.check(host, spec.port, key) {
@@ -261,6 +347,14 @@ impl KnownHosts {
                 host: host_name(host, spec.port),
                 fingerprint: format!("{} (revoked)", fingerprint(key)),
             }),
+            HostKeyStatus::Mismatch(expected)
+                if matches!(policy, HostKeyPolicy::Ask(_)) && !self.is_pinned(host, spec.port) =>
+            {
+                Ok(Some(Undecided {
+                    info: info(),
+                    expected: Some(expected),
+                }))
+            }
             HostKeyStatus::Mismatch(expected) => Err(SshError::HostKeyMismatch {
                 host: host_name(host, spec.port),
                 expected,
@@ -275,9 +369,19 @@ impl KnownHosts {
                     self.add(host, spec.port, key)?;
                     Ok(None)
                 }
-                HostKeyPolicy::Ask(_) => Ok(Some(info())),
+                HostKeyPolicy::Ask(_) => Ok(Some(Undecided {
+                    info: info(),
+                    expected: None,
+                })),
             },
         }
+    }
+
+    fn is_pinned(&self, host: &str, port: u16) -> bool {
+        let name = host_name(host, port);
+        self.lock()
+            .iter()
+            .any(|e| e.pinned && e.hosts.matches(&name))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Entry>> {
@@ -286,6 +390,16 @@ impl KnownHosts {
 }
 
 impl Hosts {
+    /// Whether the entry names `name` (lowercase) and nothing else.
+    fn is_exactly(&self, name: &str) -> bool {
+        match self {
+            Self::Patterns(patterns) => {
+                matches!(patterns.as_slice(), [(false, glob)] if glob.eq_ignore_ascii_case(name))
+            }
+            Self::Hashed { .. } => self.matches(name),
+        }
+    }
+
     fn matches(&self, name: &str) -> bool {
         let name = name.to_ascii_lowercase();
         match self {
@@ -395,6 +509,10 @@ fn append_line(path: &Path, line: &str) -> Result<(), SshError> {
     file.write_all(text.as_bytes()).map_err(io)
 }
 
+fn write_file(path: &Path, text: &str) -> Result<(), SshError> {
+    std::fs::write(path, text).map_err(|e| SshError::io(format!("writing {}", path.display()), e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,10 +602,12 @@ mod tests {
                 true
             }
         }
-        let info = kh
+        let undecided = kh
             .verify(&spec, &key(ED), &HostKeyPolicy::Ask(Arc::new(Yes)))
             .unwrap()
             .unwrap();
+        assert_eq!(undecided.expected, None);
+        let info = undecided.info;
         assert_eq!(info.host, "new");
         assert_eq!(info.algorithm, "ssh-ed25519");
         assert_eq!(info.public_key, ED);
@@ -508,6 +628,52 @@ mod tests {
             kh.check("box", 22, &key(ED)),
             HostKeyStatus::Mismatch(vec![fingerprint(&key(ED2))])
         );
+    }
+
+    #[test]
+    fn changed_keys_are_asked_about_unless_pinned() {
+        struct Yes;
+        impl HostKeyPrompt for Yes {
+            fn trust_new_host(&self, _: HostKeyInfo) -> bool {
+                true
+            }
+        }
+        let ask = HostKeyPolicy::Ask(Arc::new(Yes));
+        let spec = HostSpec::new("box", "me");
+        let kh = KnownHosts::from_text(&format!("box {ED}\n"));
+        let undecided = kh.verify(&spec, &key(ED2), &ask).unwrap().unwrap();
+        assert_eq!(undecided.expected, Some(vec![fingerprint(&key(ED))]));
+        kh.pin("box", 22, ED).unwrap();
+        assert!(matches!(
+            kh.verify(&spec, &key(ED2), &ask),
+            Err(SshError::HostKeyMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn replace_and_remove_touch_only_that_host() {
+        struct Saved(Mutex<Vec<String>>);
+        impl KnownHostsListener for Saved {
+            fn changed(&self, text: String) {
+                self.0.lock().unwrap().push(text);
+            }
+        }
+        let saved = Arc::new(Saved(Mutex::new(Vec::new())));
+        let kh = KnownHosts::from_text(&format!(
+            "box {ED}\n{} {ED}\nbox,other {ED}\n[box]:2222 {ED}\n",
+            hashed("box", b"0123456789abcdef0123")
+        ))
+        .with_listener(saved.clone());
+        kh.replace("box", 22, &key(ED2)).unwrap();
+        assert_eq!(kh.check("box", 22, &key(ED2)), HostKeyStatus::Trusted);
+        assert_eq!(
+            kh.to_text(),
+            format!("box,other {ED}\n[box]:2222 {ED}\nbox {ED2}\n")
+        );
+        assert_eq!(saved.0.lock().unwrap().last(), Some(&kh.to_text()));
+        assert_eq!(kh.remove("box", 2222).unwrap(), 1);
+        assert_eq!(kh.check("box", 2222, &key(ED)), HostKeyStatus::Unknown);
+        assert_eq!(saved.0.lock().unwrap().len(), 3);
     }
 
     #[test]

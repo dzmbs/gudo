@@ -1,0 +1,670 @@
+//! The daemon client ([`DaemonClient`]) and the event interface shared with SSH panes.
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use client_core::proto::{self, OptionId, PaneId, RequestId, SessionId};
+
+use crate::bytes::Bytes;
+use crate::runtime;
+use crate::types::{
+    AgentKind, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent, LayoutOp, Links,
+    MouseEvent, OpOutcome, PaneMeta, PaneSize, RpcError, SearchPage, SearchQuery, SessionLayout,
+    SessionSummary,
+};
+
+/// Errors from [`DaemonClient`].
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum ClientError {
+    /// The ticket could not be parsed.
+    #[error("bad ticket: {message}")]
+    Ticket {
+        /// Why.
+        message: String,
+    },
+    /// The device key is not 32 bytes.
+    #[error("the device key must be 32 bytes")]
+    Key,
+    /// A local I/O error (binding a forwarded port).
+    #[error("{message}")]
+    Io {
+        /// Why.
+        message: String,
+    },
+}
+
+impl From<client_core::ClientError> for ClientError {
+    fn from(e: client_core::ClientError) -> Self {
+        match e {
+            client_core::ClientError::Ticket(e) => Self::Ticket {
+                message: e.to_string(),
+            },
+            client_core::ClientError::Key => Self::Key,
+            client_core::ClientError::Io(e) => Self::Io {
+                message: e.to_string(),
+            },
+        }
+    }
+}
+
+/// Which relays the client may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RelayMode {
+    /// n0's relays and address lookup.
+    Default,
+    /// Direct addresses only (tests, local-only mode).
+    Disabled,
+}
+
+/// [`DaemonClient`] settings.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ClientConfig {
+    /// The device's Ed25519 secret key (32 bytes, [`generate_device_key`]); keep it in the
+    /// Keychain. It identifies this device to every daemon it pairs with.
+    pub secret_key: Bytes,
+    /// Relay usage.
+    pub relay: RelayMode,
+    /// Keep a libghostty-vt mirror per followed pane in Rust (for `pane_text`,
+    /// `pane_snapshot`, history paging into the mirror). An app that feeds its own VT can
+    /// turn it off; seq/ack and resume work either way.
+    #[uniffi(default = true)]
+    pub mirror_vt: bool,
+}
+
+/// A fresh random 32-byte device key for [`ClientConfig::secret_key`].
+#[uniffi::export]
+pub fn generate_device_key() -> Bytes {
+    client_core::ClientConfig::generate_key().into()
+}
+
+/// Something the UI should know about, from a daemon connection or an SSH pane.
+///
+/// Delivered in order, one call at a time per client or pane, on a Rust runtime thread (see
+/// [`ClientEventListener`]).
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum ClientEvent {
+    /// Connected (or reconnected) and authenticated; for an SSH pane, a shell is open.
+    Connected {
+        /// Daemon run (SSH pane: shell count); a change means resume state was invalid.
+        epoch: u64,
+        /// Whether this is a reconnect.
+        resumed: bool,
+    },
+    /// The connection dropped; redialling.
+    Disconnected {
+        /// Why.
+        reason: String,
+    },
+    /// Refused (bad grant, version mismatch; SSH: auth or host key needs the user). No
+    /// redial until `reconnect` (SSH: `SshSession::reconnect_now`).
+    Refused {
+        /// Why.
+        reason: String,
+    },
+    /// The session list.
+    Sessions {
+        /// Sessions.
+        sessions: Vec<SessionSummary>,
+    },
+    /// Attached to a session.
+    Attached {
+        /// The session.
+        session_id: u64,
+    },
+    /// The attached session's layout.
+    Layout {
+        /// The layout.
+        layout: SessionLayout,
+    },
+    /// A pane's metadata.
+    PaneMeta {
+        /// The metadata.
+        meta: PaneMeta,
+    },
+    /// A pane closed.
+    PaneClosed {
+        /// The pane.
+        pane_id: u64,
+    },
+    /// Raw output to feed the pane's VT, continuing from the previous event.
+    PaneBytes {
+        /// The pane.
+        pane_id: u64,
+        /// Offset of `data[0]`.
+        seq: u64,
+        /// The bytes.
+        data: Bytes,
+    },
+    /// Replace the pane's VT with this Ghostty snapshot (READY section, decompressed).
+    PaneSnapshot {
+        /// The pane.
+        pane_id: u64,
+        /// Offset the snapshot reflects.
+        seq: u64,
+        /// The snapshot.
+        data: Bytes,
+    },
+    /// Resize the pane's VT at this point of the stream.
+    PaneResized {
+        /// The pane.
+        pane_id: u64,
+        /// Offset of the resize.
+        seq: u64,
+        /// New size.
+        size: PaneSize,
+    },
+    /// Input `input_seq` is reflected at or after output offset `at_seq`.
+    InputAck {
+        /// The pane.
+        pane_id: u64,
+        /// The input.
+        input_seq: u64,
+        /// Output offset.
+        at_seq: u64,
+    },
+    /// Echo prediction facts.
+    EchoHint {
+        /// The hint.
+        hint: EchoHint,
+    },
+    AgentEvent {
+        /// The pane.
+        pane_id: u64,
+        /// The event.
+        json: String,
+    },
+    /// The result of [`DaemonClient::op`].
+    OpResult {
+        /// The id `op` returned.
+        op_id: u64,
+        /// What happened.
+        outcome: OpOutcome,
+    },
+    /// Older scrollback (Ghostty snapshot history records) from
+    /// [`DaemonClient::fetch_history`].
+    PaneHistory {
+        /// The pane.
+        pane_id: u64,
+        /// `seq` of the snapshot the records extend.
+        snapshot_seq: u64,
+        /// The records, decompressed.
+        data: Bytes,
+        /// Rows the Rust mirror gained (0 without a mirror).
+        rows: u64,
+        /// No older history.
+        done: bool,
+    },
+    /// The daemon dropped the history of the pane's snapshot; fetch again after the next.
+    PaneHistoryGone {
+        /// The pane.
+        pane_id: u64,
+    },
+    /// A command started or finished in the attached session.
+    CommandMark {
+        /// The mark.
+        mark: CommandMark,
+    },
+    /// A long command finished while no client showed its pane.
+    CommandFinishedUnseen {
+        /// The mark.
+        mark: CommandMark,
+    },
+    /// The answer to [`DaemonClient::search`]: `page` or `error`.
+    SearchResult {
+        /// The id `search` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: u64,
+        /// Matches.
+        page: Option<SearchPage>,
+        /// Failure.
+        error: Option<RpcError>,
+    },
+    /// The answer to [`DaemonClient::links`]: `links` or `error`.
+    Links {
+        /// The id `links` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: u64,
+        /// What was found.
+        links: Option<Links>,
+        /// Failure.
+        error: Option<RpcError>,
+    },
+    /// The answer to [`DaemonClient::commands`]: `commands` or `error`.
+    Commands {
+        /// The id `commands` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: u64,
+        /// The commands.
+        commands: Option<CommandList>,
+        /// Failure.
+        error: Option<RpcError>,
+    },
+    /// The answer to [`DaemonClient::command_output`]: `output` or `error`.
+    CommandOutput {
+        /// The id `command_output` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: u64,
+        /// The output.
+        output: Option<CommandOutput>,
+        /// Failure.
+        error: Option<RpcError>,
+    },
+}
+
+fn split<T, U: From<T>>(r: Result<T, proto::RpcError>) -> (Option<U>, Option<RpcError>) {
+    match r {
+        Ok(v) => (Some(v.into()), None),
+        Err(e) => (None, Some(e.into())),
+    }
+}
+
+impl From<client_core::ClientEvent> for ClientEvent {
+    fn from(e: client_core::ClientEvent) -> Self {
+        use client_core::ClientEvent as E;
+        match e {
+            E::Connected { epoch, resumed } => Self::Connected { epoch, resumed },
+            E::Disconnected { reason } => Self::Disconnected { reason },
+            E::Refused { reason } => Self::Refused { reason },
+            E::Sessions { sessions } => Self::Sessions {
+                sessions: sessions.into_iter().map(Into::into).collect(),
+            },
+            E::Attached { session_id } => Self::Attached {
+                session_id: session_id.0,
+            },
+            E::Layout { layout } => Self::Layout {
+                layout: layout.into(),
+            },
+            E::PaneMeta { meta } => Self::PaneMeta { meta: meta.into() },
+            E::PaneClosed { pane_id } => Self::PaneClosed { pane_id: pane_id.0 },
+            E::PaneBytes { pane_id, seq, data } => Self::PaneBytes {
+                pane_id: pane_id.0,
+                seq,
+                data: data.into(),
+            },
+            E::PaneSnapshot { pane_id, seq, data } => Self::PaneSnapshot {
+                pane_id: pane_id.0,
+                seq,
+                data: data.into(),
+            },
+            E::PaneResized { pane_id, seq, size } => Self::PaneResized {
+                pane_id: pane_id.0,
+                seq,
+                size: size.into(),
+            },
+            E::InputAck {
+                pane_id,
+                input_seq,
+                at_seq,
+            } => Self::InputAck {
+                pane_id: pane_id.0,
+                input_seq,
+                at_seq,
+            },
+            E::EchoHint { hint } => Self::EchoHint { hint: hint.into() },
+            E::AgentEvent { pane_id, json } => Self::AgentEvent {
+                pane_id: pane_id.0,
+                json,
+            },
+            E::OpResult { op_id, outcome } => Self::OpResult {
+                op_id,
+                outcome: outcome.into(),
+            },
+            E::PaneHistory {
+                pane_id,
+                snapshot_seq,
+                data,
+                rows,
+                done,
+            } => Self::PaneHistory {
+                pane_id: pane_id.0,
+                snapshot_seq,
+                data: data.into(),
+                rows,
+                done,
+            },
+            E::PaneHistoryGone { pane_id } => Self::PaneHistoryGone { pane_id: pane_id.0 },
+            E::CommandMark { mark } => Self::CommandMark { mark: mark.into() },
+            E::CommandFinishedUnseen { mark } => Self::CommandFinishedUnseen { mark: mark.into() },
+            E::SearchResult {
+                req_id,
+                pane_id,
+                result,
+            } => {
+                let (page, error) = split(result);
+                Self::SearchResult {
+                    req_id,
+                    pane_id: pane_id.0,
+                    page,
+                    error,
+                }
+            }
+            E::Links {
+                req_id,
+                pane_id,
+                result,
+            } => {
+                let (links, error) = split(result);
+                Self::Links {
+                    req_id,
+                    pane_id: pane_id.0,
+                    links,
+                    error,
+                }
+            }
+            E::Commands {
+                req_id,
+                pane_id,
+                result,
+            } => {
+                let (commands, error) = split(result);
+                Self::Commands {
+                    req_id,
+                    pane_id: pane_id.0,
+                    commands,
+                    error,
+                }
+            }
+            E::CommandOutput {
+                req_id,
+                pane_id,
+                result,
+            } => {
+                let (output, error) = split(result);
+                Self::CommandOutput {
+                    req_id,
+                    pane_id: pane_id.0,
+                    output,
+                    error,
+                }
+            }
+        }
+    }
+}
+
+/// Receives [`ClientEvent`]s; implemented in Swift.
+///
+/// Called on a Rust runtime thread (named `unnamed-core`), never the main thread, one event
+/// at a time and in order per client or pane. Return quickly: hand the event to the main
+/// actor or a renderer queue and return. Blocking here stalls the connection.
+#[uniffi::export(foreign)]
+pub trait ClientEventListener: Send + Sync {
+    /// One event.
+    fn on_event(&self, event: ClientEvent);
+}
+
+/// Adapts the Swift listener to client-core's.
+pub(crate) struct Forward(pub Arc<dyn ClientEventListener>);
+
+impl client_core::ClientListener for Forward {
+    fn on_event(&self, event: client_core::ClientEvent) {
+        self.0.on_event(event.into());
+    }
+}
+
+/// Counters, for diagnostics and tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ClientStats {
+    /// Successful connections, the first included.
+    pub connections: u64,
+    /// Snapshots received.
+    pub snapshots: u64,
+    /// `Bytes` frames received.
+    pub byte_frames: u64,
+}
+
+/// A connection to one daemon, kept up for the object's lifetime (redials with backoff,
+/// resumes followed panes). Releasing the last reference disconnects.
+///
+/// Every method returns at once and is safe to call from the main thread: requests are
+/// queued for the network task, and answers arrive as [`ClientEvent`]s.
+#[derive(uniffi::Object)]
+pub struct DaemonClient {
+    inner: client_core::Client,
+}
+
+#[uniffi::export]
+impl DaemonClient {
+    /// Starts connecting to the daemon named by `ticket` (`unnamed://pair/…`); progress
+    /// arrives as [`ClientEvent::Connected`] and friends.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Ticket`] for an unparsable ticket, [`ClientError::Key`] for a key that
+    /// is not 32 bytes.
+    #[uniffi::constructor]
+    pub fn connect(
+        ticket: String,
+        config: ClientConfig,
+        listener: Arc<dyn ClientEventListener>,
+    ) -> Result<Arc<Self>, ClientError> {
+        let config = client_core::ClientConfig {
+            secret_key: config.secret_key.into(),
+            relay: match config.relay {
+                RelayMode::Default => client_core::RelayMode::Default,
+                RelayMode::Disabled => client_core::RelayMode::Disabled,
+            },
+            mirror_vt: config.mirror_vt,
+        };
+        let inner = client_core::Client::connect_on(
+            runtime().handle(),
+            &ticket,
+            config,
+            Arc::new(Forward(listener)),
+        )?;
+        Ok(Arc::new(Self { inner }))
+    }
+
+    /// Attaches to a session (`nil`: the most recent, created if none). Kept across
+    /// reconnects.
+    pub fn attach(&self, session_id: Option<u64>) {
+        self.inner.attach(session_id.map(SessionId));
+    }
+
+    /// Asks for the session list ([`ClientEvent::Sessions`]).
+    pub fn list_sessions(&self) {
+        self.inner.list_sessions();
+    }
+
+    /// Sends a layout operation; returns the id its [`ClientEvent::OpResult`] carries.
+    pub fn op(&self, op: LayoutOp) -> u64 {
+        self.inner.op(op.into())
+    }
+
+    /// Starts following a pane's output. Kept across reconnects.
+    pub fn subscribe(&self, pane_id: u64) {
+        self.inner.subscribe(PaneId(pane_id));
+    }
+
+    /// Stops following a pane.
+    pub fn unsubscribe(&self, pane_id: u64) {
+        self.inner.unsubscribe(PaneId(pane_id));
+    }
+
+    /// Tells the daemon what is on screen (stream priorities and budgets).
+    pub fn set_view(&self, focused: Option<u64>, visible: Vec<u64>) {
+        self.inner.set_view(
+            focused.map(PaneId),
+            visible.into_iter().map(PaneId).collect(),
+        );
+    }
+
+    /// This client's size for a pane; the PTY takes it when this client types.
+    pub fn resize(&self, pane_id: u64, size: PaneSize) {
+        self.inner.resize(PaneId(pane_id), size.into());
+    }
+
+    /// Sends raw input bytes (borrowed from Swift without a copy across the boundary).
+    /// Queued while disconnected.
+    pub fn send_input(&self, pane_id: u64, data: &[u8]) {
+        self.inner.send_input(PaneId(pane_id), data.to_vec());
+    }
+
+    /// Sends a key event, encoded by the daemon for the program's keyboard modes.
+    pub fn send_key(&self, pane_id: u64, key: KeyEvent) {
+        self.inner.send_key(PaneId(pane_id), key.into());
+    }
+
+    /// Sends a mouse event, encoded by the daemon for the program's mouse mode.
+    pub fn send_mouse(&self, pane_id: u64, event: MouseEvent) {
+        self.inner.send_mouse(PaneId(pane_id), event.into());
+    }
+
+    /// Pastes text (bracketed if the program asked for it; control bytes neutralised).
+    pub fn send_paste(&self, pane_id: u64, text: String) {
+        self.inner.send_paste(PaneId(pane_id), text);
+    }
+
+    /// Searches a pane's scrollback; returns the id of the [`ClientEvent::SearchResult`].
+    /// Pass the previous page's `next` as `cursor` for the next page.
+    pub fn search(&self, pane_id: u64, query: SearchQuery, cursor: u32, limit: u32) -> u64 {
+        self.inner
+            .search(PaneId(pane_id), query.into(), cursor, limit)
+    }
+
+    /// Asks for links and paths on screen and in the last `commands` commands' output.
+    pub fn links(&self, pane_id: u64, commands: u16) -> u64 {
+        self.inner.links(PaneId(pane_id), commands)
+    }
+
+    /// Asks for a pane's shell-integration commands.
+    pub fn commands(&self, pane_id: u64) -> u64 {
+        self.inner.commands(PaneId(pane_id))
+    }
+
+    /// Asks for a command's output (`nil`: the last finished command).
+    pub fn command_output(&self, pane_id: u64, command_id: Option<u64>) -> u64 {
+        self.inner.command_output(PaneId(pane_id), command_id)
+    }
+
+    /// Fetches the next page (about `max_bytes`) of scrollback older than the pane's
+    /// snapshot ([`ClientEvent::PaneHistory`]). `false` when there is nothing to fetch.
+    pub fn fetch_history(&self, pane_id: u64, max_bytes: u32) -> bool {
+        self.inner.fetch_history(PaneId(pane_id), max_bytes)
+    }
+
+    /// Launches a coding agent in a new pane split off `pane_id`; returns the op id.
+    pub fn launch_agent(&self, pane_id: u64, agent: AgentKind, axis: Axis) -> u64 {
+        self.inner
+            .launch_agent(PaneId(pane_id), agent.into(), axis.into())
+    }
+
+    /// Answers an agent's approval request.
+    pub fn decide(&self, request_id: u64, option_id: u32) {
+        self.inner
+            .decide(RequestId(request_id), OptionId(option_id));
+    }
+
+    /// Visible text of a followed pane (needs the Rust mirror).
+    pub fn pane_text(&self, pane_id: u64) -> Option<String> {
+        self.inner.pane_text(PaneId(pane_id))
+    }
+
+    /// Text of a followed pane including the scrollback the mirror holds.
+    pub fn pane_text_all(&self, pane_id: u64) -> Option<String> {
+        self.inner.pane_text_all(PaneId(pane_id))
+    }
+
+    /// Scrollback rows the mirror holds.
+    pub fn pane_scrollback_rows(&self, pane_id: u64) -> Option<u64> {
+        self.inner
+            .pane_scrollback_rows(PaneId(pane_id))
+            .map(|n| n as u64)
+    }
+
+    /// A Ghostty snapshot of the mirror, to paint before the network is up.
+    pub fn pane_snapshot(&self, pane_id: u64) -> Option<Bytes> {
+        self.inner.pane_snapshot(PaneId(pane_id)).map(Into::into)
+    }
+
+    /// The mirror as VT sequences that redraw the visible screen.
+    pub fn pane_vt(&self, pane_id: u64) -> Option<String> {
+        self.inner.pane_vt(PaneId(pane_id))
+    }
+
+    /// Output applied so far for a pane.
+    pub fn pane_seq(&self, pane_id: u64) -> Option<u64> {
+        self.inner.pane_seq(PaneId(pane_id))
+    }
+
+    /// Drops the connection and redials now (network change, app foregrounded).
+    pub fn reconnect(&self) {
+        self.inner.reconnect();
+    }
+
+    /// Drops the connection and stays offline until [`reconnect`](Self::reconnect),
+    /// keeping all resume state (app suspended).
+    pub fn suspend(&self) {
+        self.inner.suspend();
+    }
+
+    /// Forwards `127.0.0.1:local_port` here to `localhost:remote_port` on the daemon's
+    /// host; returns the bound port (`0` picks one).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Io`] if the port cannot be bound.
+    pub fn forward_port(&self, local_port: u16, remote_port: u16) -> Result<u16, ClientError> {
+        Ok(self.inner.forward_port(local_port, remote_port)?)
+    }
+
+    /// Counters.
+    pub fn stats(&self) -> ClientStats {
+        let s = self.inner.stats();
+        ClientStats {
+            connections: s.connections,
+            snapshots: s.snapshots,
+            byte_frames: s.byte_frames,
+        }
+    }
+}
+
+/// Timings from [`bench_pane_bytes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct PaneBytesBench {
+    /// Events delivered.
+    pub events: u32,
+    /// Nanoseconds to deliver them all through the listener: payload allocation and copy,
+    /// conversion, the call into Swift and whatever the listener does.
+    pub ffi_ns: u64,
+    /// Nanoseconds for the same work without the listener call (allocation, copy and
+    /// conversion only), to subtract.
+    pub rust_ns: u64,
+}
+
+/// Diagnostics: delivers `count` synthetic `PaneBytes` events of `size` bytes each to
+/// `listener` on the calling thread, the way a connection does, and times it. Measures the
+/// per-event cost of the FFI boundary (docs/APPLE-FFI.md).
+#[uniffi::export]
+pub fn bench_pane_bytes(
+    listener: Arc<dyn ClientEventListener>,
+    count: u32,
+    size: u32,
+) -> PaneBytesBench {
+    let template = vec![b'x'; size as usize];
+    let event = |seq: u64| client_core::ClientEvent::PaneBytes {
+        pane_id: PaneId(1),
+        seq,
+        data: template.clone(),
+    };
+    let start = Instant::now();
+    for seq in 0..u64::from(count) {
+        std::hint::black_box(ClientEvent::from(event(seq)));
+    }
+    let rust = start.elapsed();
+    let forward = Forward(listener);
+    let start = Instant::now();
+    for seq in 0..u64::from(count) {
+        client_core::ClientListener::on_event(&forward, event(seq));
+    }
+    let ffi = start.elapsed();
+    let ns = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+    PaneBytesBench {
+        events: count,
+        ffi_ns: ns(ffi),
+        rust_ns: ns(rust),
+    }
+}

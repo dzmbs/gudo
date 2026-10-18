@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "xtask"]
 
 [workspace.package]
 edition = "2024"
@@ -26,7 +26,9 @@ serde = { version = "1.0.229", default-features = false, features = ["derive", "
 serde_json = "1"
 toml = "1"
 bytes = "1.12"
-libc = "0.2.189"
+# Pinned: libc 0.2.190+ declares `in6_ifreq` for macOS only, and netdev 0.46 (iroh → netwatch)
+# uses it on every Darwin target, so iOS stops compiling. Lift once netdev adapts.
+libc = "=0.2.189"
 proptest = "1"
 rustix = { version = "1", features = ["event", "fs", "pipe", "process", "pty", "termios"] }
 thiserror = "2"
@@ -38,6 +40,12 @@ qrcode = { version = "0.14.1", default-features = false }
 clap = { version = "4.6.7", features = ["derive"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tempfile = "3.27.0"
+
+# Apple FFI (crates/apple-ffi): proc-macro UniFFI, no UDL. xtask generates the Swift bindings
+# with uniffi_bindgen's library mode, so the app build never runs a Rust binary.
+uniffi = { version = "0.32.2", default-features = false }
+uniffi_bindgen = "0.32.2"
+camino = "1"
 
 # iroh per 07 §7: no default features; ring as the single TLS provider; the Apple fast
 # datapath because iOS/macOS are the targets.

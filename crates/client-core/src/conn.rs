@@ -654,12 +654,15 @@ pub(crate) async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, r
             return;
         }
     };
+    // Splices live in this set, so stopping this task (dropping the client) ends them too.
+    let mut splices = JoinSet::new();
     loop {
         let Ok((tcp, _)) = listener.accept().await else {
             continue;
         };
+        while splices.try_join_next().is_some() {}
         let inner = Arc::clone(&inner);
-        tokio::spawn(async move {
+        splices.spawn(async move {
             if let Err(e) = forward_one(&inner, tcp, remote_port).await {
                 tracing::debug!("port forward: {e}");
             }
