@@ -93,7 +93,8 @@ struct WindowRoot: View {
             app.hosts.foreground()
             if let hooked = await app.runLaunchHooks() {
                 show(hooked)
-            } else if let storedTarget, let data = storedTarget.data(using: .utf8),
+            } else if UserDefaults.standard.object(forKey: "restoreLastTarget") == nil || UserDefaults.standard.bool(forKey: "restoreLastTarget"),
+                      let storedTarget, let data = storedTarget.data(using: .utf8),
                       let saved = try? JSONDecoder().decode(WorkspaceTarget.self, from: data),
                       case .host(let id) = saved, app.hosts.record(id) != nil
             {

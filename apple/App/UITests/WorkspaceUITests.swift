@@ -11,6 +11,7 @@ final class WorkspaceUITests: XCTestCase {
     @MainActor
     func testShortcutsSplitZoomAndSwitchTabs() throws {
         let app = XCUIApplication()
+        app.launchArguments += ["-restoreLastTarget", "NO"]
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))
@@ -68,6 +69,7 @@ final class WorkspaceUITests: XCTestCase {
     func testRotationAndDividerResize() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
+        app.launchArguments += ["-restoreLastTarget", "NO"]
         app.launch()
         let pane1 = element(app, "pane-1")
         let pane3 = element(app, "pane-3")
@@ -111,6 +113,7 @@ final class WorkspaceUITests: XCTestCase {
         let app = XCUIApplication()
         // The simulator reports the Mac's keyboard, which collapses the bar to its slim strip.
         app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "YES"]
+        app.launchArguments += ["-restoreLastTarget", "NO"]
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))
