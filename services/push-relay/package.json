@@ -1,0 +1,22 @@
+{
+  "name": "push-relay",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The push relay (ARCHITECTURE D16): forwards E2E-sealed notifications from host daemons to APNs. See docs/PUSH.md.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --env dev",
+    "fake-apns": "node scripts/fake-apns.mjs",
+    "gen-dev-vars": "node scripts/gen-dev-vars.mjs",
+    "test": "tsc --noEmit && vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.4",
+    "@cloudflare/workers-types": "5.20261018.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12",
+    "wrangler": "4.151.1"
+  }
+}

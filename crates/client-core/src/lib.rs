@@ -29,6 +29,8 @@
 
 mod conn;
 mod mirror;
+mod mp;
+pub mod push;
 mod ssh_pane;
 pub mod vscode;
 mod workspace;
@@ -49,6 +51,8 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::mirror::Mirror;
 
+pub use grants::{self, GrantSpec};
+pub use mp::{MultiplayerEvent, MultiplayerEventQueue, MultiplayerListener, now_millis};
 pub use proto;
 pub use ssh;
 pub use ssh_pane::{RESTART_MARKER, SshPane, SshPaneOptions, ssh_runtime};
@@ -94,6 +98,15 @@ impl ClientConfig {
         getrandom::fill(&mut key).expect("the OS random source is available");
         key
     }
+}
+
+/// Connection settings beyond [`ClientConfig`] (kept separate so that struct stays as the
+/// FFI layer builds it).
+#[derive(Debug, Clone, Default)]
+pub struct ConnectOptions {
+    /// Extra CA certificates (DER) to trust for the daemon's self-hosted relays, e.g. a
+    /// private CA. The usual web roots stay trusted.
+    pub relay_ca_der: Vec<Vec<u8>>,
 }
 
 /// Errors from the client API.
@@ -341,6 +354,9 @@ pub(crate) enum Outgoing {
 
 pub(crate) struct Inner {
     pub ticket: Ticket,
+    /// The daemon's relays, from the ticket's extras (self-hosted, none, or the default).
+    pub relays: proto::TicketRelays,
+    pub options: ConnectOptions,
     pub config: ClientConfig,
     pub listener: Arc<dyn ClientListener>,
     pub wanted: Mutex<Wanted>,
@@ -358,6 +374,14 @@ pub(crate) struct Inner {
     pub stats: Mutex<ClientStats>,
     /// Workspace requests in flight, pushes, forwards.
     pub ws: workspace::WsState,
+    /// Multiplayer requests in flight, pushes, and the invite a guest joined with.
+    pub mp: mp::MpState,
+}
+
+/// How a client authenticates: as a paired device (pairing ticket) or a guest (invite).
+pub(crate) enum Dial {
+    Ticket(Ticket, proto::TicketRelays),
+    Invite(proto::Invite),
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -422,13 +446,89 @@ impl Client {
         config: ClientConfig,
         listener: Arc<dyn ClientListener>,
     ) -> Result<Self, ClientError> {
-        let ticket: Ticket = ticket.parse()?;
+        Self::connect_on_with(runtime, ticket, config, ConnectOptions::default(), listener)
+    }
+
+    /// Like [`connect`](Self::connect), with [`ConnectOptions`].
+    ///
+    /// # Errors
+    ///
+    /// As [`connect`](Self::connect).
+    pub fn connect_with(
+        ticket: &str,
+        config: ClientConfig,
+        options: ConnectOptions,
+        listener: Arc<dyn ClientListener>,
+    ) -> Result<Self, ClientError> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("client-core")
+            .enable_all()
+            .build()?;
+        let mut client =
+            Self::connect_on_with(runtime.handle(), ticket, config, options, listener)?;
+        client.runtime = Some(runtime);
+        Ok(client)
+    }
+
+    /// Like [`connect_on`](Self::connect_on), with [`ConnectOptions`].
+    ///
+    /// The ticket's relay extras ([`proto::TicketExtras`]) decide how the daemon is dialled
+    /// when `config.relay` is [`RelayMode::Default`]: through the product's relays, only
+    /// through the daemon's self-hosted relays, or directly (local-only daemons).
+    ///
+    /// # Errors
+    ///
+    /// As [`connect_on`](Self::connect_on).
+    pub fn connect_on_with(
+        runtime: &tokio::runtime::Handle,
+        ticket: &str,
+        config: ClientConfig,
+        options: ConnectOptions,
+        listener: Arc<dyn ClientListener>,
+    ) -> Result<Self, ClientError> {
+        let (ticket, extras) = Ticket::parse_with_extras(ticket)?;
+        Self::start(
+            runtime,
+            Dial::Ticket(ticket, extras.relays),
+            config,
+            options,
+            listener,
+        )
+    }
+
+    pub(crate) fn start(
+        runtime: &tokio::runtime::Handle,
+        dial: Dial,
+        config: ClientConfig,
+        options: ConnectOptions,
+        listener: Arc<dyn ClientListener>,
+    ) -> Result<Self, ClientError> {
         if config.secret_key.len() != 32 {
             return Err(ClientError::Key);
         }
+        let (ticket, relays, invite) = match dial {
+            Dial::Ticket(ticket, relays) => (ticket, relays, None),
+            Dial::Invite(invite) => {
+                // A guest dials like a paired device; its principal comes from its key and
+                // its authority from the invite's grant chain.
+                let ticket = Ticket {
+                    v: Ticket::VERSION,
+                    daemon_id: invite.daemon_id,
+                    addrs: invite.addrs.clone(),
+                    relay_url: invite.relay_url.clone(),
+                    principal: grants::guest_principal(device_id(&config)),
+                    secret: proto::PairingSecret([0; 16]),
+                    expires: proto::UnixMillis(0),
+                };
+                (ticket, proto::TicketRelays::default(), Some(invite))
+            }
+        };
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
             ticket,
+            relays,
+            options,
             config,
             listener,
             wanted: Mutex::new(Wanted::default()),
@@ -445,6 +545,7 @@ impl Client {
             next_op: AtomicU64::new(1),
             stats: Mutex::new(ClientStats::default()),
             ws: workspace::WsState::default(),
+            mp: mp::MpState::with_invite(invite),
         });
         let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {
@@ -649,18 +750,18 @@ impl Client {
         })
     }
 
-    /// Answers an agent approval request.
+    /// Answers an agent approval request, signed with this device's key so the daemon's
     pub fn decide(&self, request_id: proto::RequestId, option_id: proto::OptionId) {
-        let actor = proto::Actor {
-            principal: self.inner.ticket.principal,
-            device: device_id(&self.inner.config),
-        };
-        self.inner.send(ClientCtl::Decide(Decide {
+        let mut decide = Decide {
             request_id,
             option_id,
-            actor,
+            actor: self.actor(),
             sig: Vec::new(),
-        }));
+        };
+        if let Ok(key) = grants::DeviceKey::from_seed(&self.inner.config.secret_key) {
+            grants::sign_approval(&key, self.inner.ticket.daemon_id, &mut decide);
+        }
+        self.inner.send(ClientCtl::Decide(decide));
     }
 
     /// Plain text of a followed pane's visible screen, from the VT mirror.

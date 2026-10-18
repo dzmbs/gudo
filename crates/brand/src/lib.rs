@@ -40,3 +40,7 @@ pub const CLI_BIN: &str = "un";
 
 /// Reverse-DNS label for per-user services (the macOS LaunchAgent).
 pub const SERVICE_LABEL: &str = "dev.unnamed.hostd";
+
+/// The push relay (a Cloudflare Worker, D16) daemons send sealed notifications to, unless
+/// `push.relay` in the daemon's `config.toml` names another. See `docs/PUSH.md`.
+pub const PUSH_RELAY_URL: &str = "https://push.unnamed.dev";

@@ -17,6 +17,7 @@ anyhow.workspace = true
 brand.workspace = true
 clap.workspace = true
 client-core.workspace = true
+qrcode.workspace = true
 rustix = { workspace = true, features = ["stdio"] }
 tokio = { workspace = true, features = ["io-std", "io-util", "signal"] }
 

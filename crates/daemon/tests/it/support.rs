@@ -7,7 +7,10 @@ use std::time::{Duration, Instant};
 use client_core::proto::{
     LayoutNode, LayoutOp, OpOutcome, PaneId, PaneSize, SessionLayout, TabLayout,
 };
-use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
+use client_core::{
+    Client, ClientConfig, ClientEvent, EventQueue, MultiplayerEvent, MultiplayerEventQueue,
+    RelayMode,
+};
 use daemon::{Config, Daemon};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -69,14 +72,44 @@ pub struct TestClient {
     pub history_gone: u32,
     pub metas: HashMap<PaneId, client_core::proto::PaneMeta>,
     pub log: Vec<String>,
+    /// Refusals (`ClientEvent::Refused` reasons).
+    pub refused: Vec<String>,
+    mp_events: UnboundedReceiver<MultiplayerEvent>,
+    /// Multiplayer pushes received so far.
+    pub mp: Vec<MultiplayerEvent>,
 }
 
 impl TestClient {
     pub fn connect(ticket: &str, key: Vec<u8>) -> Self {
+        let mut config = ClientConfig::new(key);
+        config.relay = RelayMode::Disabled;
+        Self::connect_with(ticket, config, client_core::ConnectOptions::default())
+    }
+
+    /// A client with its own relay settings (relays from the ticket, extra CA roots).
+    pub fn connect_with(
+        ticket: &str,
+        config: ClientConfig,
+        options: client_core::ConnectOptions,
+    ) -> Self {
+        let (listener, events) = EventQueue::channel();
+        let client =
+            Client::connect_with(ticket, config, options, listener).expect("client starts");
+        Self::wrap(client, events)
+    }
+
+    /// A guest joining with an invite.
+    pub fn join(invite: &str, key: Vec<u8>) -> Self {
         let (listener, events) = EventQueue::channel();
         let mut config = ClientConfig::new(key);
         config.relay = RelayMode::Disabled;
-        let client = Client::connect(ticket, config, listener).expect("client starts");
+        let client = Client::join(invite, config, listener).expect("client starts");
+        Self::wrap(client, events)
+    }
+
+    fn wrap(client: Client, events: UnboundedReceiver<ClientEvent>) -> Self {
+        let (mp_listener, mp_events) = MultiplayerEventQueue::channel();
+        client.set_multiplayer_listener(mp_listener);
         Self {
             client,
             events,
@@ -94,6 +127,9 @@ impl TestClient {
             history_gone: 0,
             metas: HashMap::new(),
             log: Vec::new(),
+            refused: Vec::new(),
+            mp_events,
+            mp: Vec::new(),
         }
     }
 
@@ -129,6 +165,7 @@ impl TestClient {
             ClientEvent::PaneMeta { meta } => {
                 self.metas.insert(meta.pane_id, meta);
             }
+            ClientEvent::Refused { reason } => self.refused.push(reason),
             _ => {}
         }
     }
@@ -152,6 +189,11 @@ impl TestClient {
                 while let Ok(event) = self.events.try_recv() {
                     self.apply(event);
                 }
+            }
+            while let Ok(event) = self.mp_events.try_recv() {
+                self.log
+                    .push(format!("{event:?}").chars().take(120).collect());
+                self.mp.push(event);
             }
         }
     }

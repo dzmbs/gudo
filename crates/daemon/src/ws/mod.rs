@@ -77,6 +77,8 @@ impl Ws {
 pub(crate) struct ConnCtx {
     pub ctl: mpsc::UnboundedSender<ServerCtl>,
     pub watches: Arc<Mutex<HashMap<u64, Watch>>>,
+    /// Who is asking (push registration and notification actions are per device).
+    pub actor: proto::Actor,
 }
 
 /// Runs `f` on the blocking pool.
@@ -345,6 +347,12 @@ pub(crate) async fn handle(
                 .open(&folder, &path, open.line, open.column)
                 .await
                 .map(A::VsCodeTunnelOpened)
+        }
+        R::PushRegister(reg) => Ok(A::Push(crate::notifier::register(core, conn.actor, reg)?)),
+        R::PushUnregister => Ok(A::Push(crate::notifier::unregister(core, conn.actor))),
+        R::PushStatus => Ok(A::Push(crate::notifier::status(core, conn.actor.device))),
+        R::PushAction(action) => {
+            crate::notifier::action(core, conn.actor, &action).map(A::PushDecided)
         }
         R::AttentionList => Ok(A::Attention(ws.attention.list())),
         R::AttentionSeen(seen) => {

@@ -4,15 +4,77 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Which relays the daemon's iroh endpoint uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Which relays the daemon's iroh endpoint uses. Pairing tickets carry the choice, so paired
+/// devices dial the same way (`proto::TicketRelays`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RelayMode {
     /// n0's public relays and address lookup (`presets::N0`): works across NATs with no open
     /// inbound ports.
     #[default]
     Default,
-    /// No relays and no address lookup: direct addresses only (LAN, Tailscale, tests).
+    /// No relays and no address lookup: direct addresses only ("local only": LAN, Tailscale,
+    /// a VPN, tests).
     Disabled,
+    /// Self-hosted `iroh-relay` servers only, no third-party address lookup (docs/RELAYS.md).
+    Custom(CustomRelays),
+}
+
+/// Self-hosted relays (`[relay]` in `config.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CustomRelays {
+    /// Relay URLs, `https://relay.example.com`.
+    pub urls: Vec<String>,
+    /// A shared access token the relays require (`iroh-relay`'s token access mode).
+    pub auth_token: Option<String>,
+    /// PEM files with extra CA certificates to trust for the relays' TLS (a private CA). The
+    /// usual web roots stay trusted.
+    pub ca_files: Vec<PathBuf>,
+}
+
+impl RelayMode {
+    /// What a pairing ticket says about these relays.
+    pub fn ticket_relays(&self) -> proto::TicketRelays {
+        match self {
+            Self::Default => proto::TicketRelays::Default,
+            Self::Disabled => proto::TicketRelays::Disabled,
+            Self::Custom(c) => proto::TicketRelays::Custom {
+                urls: c.urls.clone(),
+                auth_token: c.auth_token.clone(),
+            },
+        }
+    }
+}
+
+/// Push notifications through the push relay (`[push]` in `config.toml`, docs/PUSH.md).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushConfig {
+    /// Send pushes at all (`push.enabled`, default on). Off, registrations are kept but
+    /// nothing leaves the host.
+    pub enabled: bool,
+    /// The relay to POST to when a device's registration names none (`push.relay`).
+    pub relay_url: String,
+    /// How long an attention item must stay unseen before it is pushed (`push.delay_ms`). A
+    /// client focusing the pane in that window, or a newer item for the same pane, cancels it.
+    pub delay: Duration,
+    /// Lifetime of the Approve / Deny token in an approval notification.
+    pub action_ttl: Duration,
+    /// Delivery attempts per push (transient failures only).
+    pub attempts: u32,
+    /// First retry delay; doubled each attempt.
+    pub backoff: Duration,
+}
+
+impl Default for PushConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            relay_url: brand::PUSH_RELAY_URL.to_owned(),
+            delay: Duration::from_secs(3),
+            action_ttl: Duration::from_secs(60 * 60),
+            attempts: 5,
+            backoff: Duration::from_secs(1),
+        }
+    }
 }
 
 /// Daemon settings.
@@ -71,6 +133,10 @@ pub struct Config {
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
+    /// Push notifications.
+    pub push: PushConfig,
+    /// A pane's control lease moves to someone who asked for it once the holder has not typed
+    pub lease_idle: Duration,
 }
 
 impl Config {
@@ -96,6 +162,8 @@ impl Config {
             code_cli: None,
             openvscode_dir: None,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
+            push: PushConfig::default(),
+            lease_idle: Duration::from_secs(5),
         }
     }
 
@@ -112,7 +180,23 @@ impl Config {
     /// [editor]
     /// code = "/usr/local/bin/code"
     /// openvscode = "/opt/openvscode-server"
+    ///
+    /// [relay]                      # docs/RELAYS.md
+    /// mode = "custom"              # "default" | "custom" | "local-only"
+    /// urls = ["https://relay.example.com"]
+    /// auth_token = "…"             # if the relays require one
+    /// ca_file = "/etc/ssl/my-ca.pem"   # a private CA, besides the web roots
+    ///
+    /// [push]                       # docs/PUSH.md
+    /// enabled = true
+    /// relay = "https://push.example.com"
+    /// delay_ms = 3000
+    ///
+    /// [multiplayer]
+    /// lease_idle_secs = 5
     /// ```
+    ///
+    /// A relay mode set before this runs (`hostd run --no-relay`) wins over the file's.
     ///
     /// # Errors
     ///
@@ -138,6 +222,24 @@ impl Config {
         }
         if let Some(dir) = file.editor.openvscode {
             self.openvscode_dir = Some(dir);
+        }
+        if self.relay == RelayMode::Default {
+            self.relay = file
+                .relay
+                .mode()
+                .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))?;
+        }
+        if let Some(enabled) = file.push.enabled {
+            self.push.enabled = enabled;
+        }
+        if let Some(relay) = file.push.relay {
+            self.push.relay_url = relay;
+        }
+        if let Some(ms) = file.push.delay_ms {
+            self.push.delay = Duration::from_millis(ms);
+        }
+        if let Some(secs) = file.multiplayer.lease_idle_secs {
+            self.lease_idle = Duration::from_secs(secs);
         }
         Ok(())
     }
@@ -203,6 +305,64 @@ struct UserFile {
     files: FilesSection,
     worktrees: WorktreesSection,
     editor: EditorSection,
+    relay: RelaySection,
+    push: PushSection,
+    multiplayer: MultiplayerSection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RelaySection {
+    mode: Option<String>,
+    urls: Vec<String>,
+    auth_token: Option<String>,
+    ca_file: Option<PathBuf>,
+}
+
+impl RelaySection {
+    fn mode(self) -> Result<RelayMode, String> {
+        let mode = self.mode.as_deref().unwrap_or(if self.urls.is_empty() {
+            "default"
+        } else {
+            "custom"
+        });
+        match mode {
+            "default" => Ok(RelayMode::Default),
+            "local-only" | "disabled" | "none" => Ok(RelayMode::Disabled),
+            "custom" if self.urls.is_empty() => {
+                Err("relay.mode = \"custom\" needs relay.urls".into())
+            }
+            "custom" => {
+                for url in &self.urls {
+                    if !(url.starts_with("https://") || url.starts_with("http://")) {
+                        return Err(format!("relay url {url:?} is not an http(s) URL"));
+                    }
+                }
+                Ok(RelayMode::Custom(CustomRelays {
+                    urls: self.urls,
+                    auth_token: self.auth_token,
+                    ca_files: self.ca_file.into_iter().collect(),
+                }))
+            }
+            other => Err(format!(
+                "relay.mode {other:?}: expected \"default\", \"custom\" or \"local-only\""
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PushSection {
+    enabled: Option<bool>,
+    relay: Option<String>,
+    delay_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct MultiplayerSection {
+    lease_idle_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

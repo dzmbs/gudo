@@ -24,7 +24,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 const ACK_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Debug, thiserror::Error)]
-enum ConnError {
+pub(crate) enum ConnError {
     #[error("{0}")]
     Net(String),
     #[error("refused: {0:?}")]
@@ -35,12 +35,14 @@ fn net(e: impl std::fmt::Display) -> ConnError {
     ConnError::Net(e.to_string())
 }
 
-async fn send<T: Serialize>(stream: &mut SendStream, msg: &T) -> Result<(), ConnError> {
+pub(crate) async fn send<T: Serialize>(stream: &mut SendStream, msg: &T) -> Result<(), ConnError> {
     let buf = proto::frame::to_vec(msg).map_err(net)?;
     stream.write_all(&buf).await.map_err(net)
 }
 
-async fn recv<T: DeserializeOwned>(stream: &mut RecvStream) -> Result<Option<T>, ConnError> {
+pub(crate) async fn recv<T: DeserializeOwned>(
+    stream: &mut RecvStream,
+) -> Result<Option<T>, ConnError> {
     let mut prefix = [0; proto::frame::LEN_PREFIX];
     match stream.read_exact(&mut prefix).await {
         Ok(()) => {}
@@ -55,31 +57,73 @@ async fn recv<T: DeserializeOwned>(stream: &mut RecvStream) -> Result<Option<T>,
 
 async fn bind(inner: &Inner) -> Result<Endpoint, ConnError> {
     let key: [u8; 32] = inner.config.secret_key.as_slice().try_into().map_err(net)?;
-    let builder = match inner.config.relay {
-        RelayMode::Default => Endpoint::builder(presets::N0),
-        RelayMode::Disabled => Endpoint::builder(presets::Minimal),
-    };
-    builder
+    endpoint_builder(inner.config.relay, &inner.relays, &inner.options)?
         .secret_key(iroh::SecretKey::from_bytes(&key))
         .bind()
         .await
         .map_err(net)
 }
 
+/// An endpoint builder for dialling a daemon whose ticket says `relays`. The client's own
+/// `Disabled` wins (the app's local-only switch); otherwise the daemon's choice does.
+pub(crate) fn endpoint_builder(
+    mode: RelayMode,
+    relays: &proto::TicketRelays,
+    options: &crate::ConnectOptions,
+) -> Result<iroh::endpoint::Builder, ConnError> {
+    use proto::TicketRelays;
+    let mut builder = match (mode, relays) {
+        (RelayMode::Disabled, _) | (_, TicketRelays::Disabled) => {
+            Endpoint::builder(presets::Minimal)
+        }
+        (RelayMode::Default, TicketRelays::Default) => Endpoint::builder(presets::N0),
+        (RelayMode::Default, TicketRelays::Custom { urls, auth_token }) => {
+            let map = iroh::RelayMap::try_from_iter(urls.iter().map(String::as_str))
+                .map_err(|e| ConnError::Net(format!("relay urls in the ticket: {e}")))?;
+            let map = match auth_token {
+                Some(token) => map.with_auth_token(token.clone()),
+                None => map,
+            };
+            Endpoint::builder(presets::Minimal).relay_mode(iroh::RelayMode::Custom(map))
+        }
+    };
+    if !options.relay_ca_der.is_empty() {
+        let roots = options
+            .relay_ca_der
+            .iter()
+            .map(|der| rustls_pki_types::CertificateDer::from(der.clone()));
+        builder = builder.ca_tls_config(iroh::tls::CaTlsConfig::embedded().with_extra_roots(roots));
+    }
+    Ok(builder)
+}
+
 fn daemon_addr(inner: &Inner) -> Result<EndpointAddr, ConnError> {
-    let ticket = &inner.ticket;
+    ticket_addr(&inner.ticket, inner.config.relay, &inner.relays)
+}
+
+/// Where to dial the ticket's daemon: its direct addresses, plus its home relay (and, for
+/// self-hosted relays, the others it may move to) unless relays are off.
+pub(crate) fn ticket_addr(
+    ticket: &proto::Ticket,
+    mode: RelayMode,
+    relays: &proto::TicketRelays,
+) -> Result<EndpointAddr, ConnError> {
     let id = EndpointId::from_bytes(&ticket.daemon_id.0).map_err(net)?;
     let mut addr = EndpointAddr::new(id);
     for a in &ticket.addrs {
         addr = addr.with_ip_addr(*a);
     }
-    if inner.config.relay == RelayMode::Default
-        && let Some(url) = ticket
-            .relay_url
-            .as_deref()
-            .and_then(|u| RelayUrl::from_str(u).ok())
-    {
-        addr = addr.with_relay_url(url);
+    if mode == RelayMode::Disabled || *relays == proto::TicketRelays::Disabled {
+        return Ok(addr);
+    }
+    let mut urls: Vec<&str> = ticket.relay_url.as_deref().into_iter().collect();
+    if let proto::TicketRelays::Custom { urls: custom, .. } = relays {
+        urls.extend(custom.iter().map(String::as_str));
+    }
+    for url in urls {
+        if let Ok(url) = RelayUrl::from_str(url) {
+            addr = addr.with_relay_url(url);
+        }
     }
     Ok(addr)
 }
@@ -110,6 +154,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 let reason = run(&inner, conn).await;
                 *lock(&inner.connection) = None;
                 inner.ws.fail_pending();
+                inner.mp.fail_pending();
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -147,7 +192,9 @@ async fn connect_once(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, C
     let addr = daemon_addr(inner)?;
     // Try as a paired device first; fall back to the ticket's one-time secret.
     let paired = *lock(&inner.paired);
-    let grants: &[u16] = if paired {
+    let grants: &[u16] = if crate::mp::is_guest(inner) {
+        &[SignedGrant::CHAIN]
+    } else if paired {
         &[SignedGrant::DEVICE]
     } else {
         &[SignedGrant::DEVICE, SignedGrant::PAIRING]
@@ -175,20 +222,16 @@ async fn connect_once(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, C
 async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live, ConnError> {
     let (mut ctl_tx, mut ctl_rx) = conn.open_bi().await.map_err(net)?;
     let _ = ctl_tx.set_priority(100);
-    let token = if v == SignedGrant::PAIRING {
-        inner.ticket.secret.0.to_vec()
-    } else {
-        Vec::new()
+    let (token, grant_id) = match (&inner.mp.invite, v) {
+        (Some(invite), SignedGrant::CHAIN) => (invite.chain.to_token(), invite.chain.grant_id()),
+        (_, SignedGrant::PAIRING) => (inner.ticket.secret.0.to_vec(), proto::GrantId([0; 16])),
+        _ => (Vec::new(), proto::GrantId([0; 16])),
     };
     let resume = resume_points(inner);
     let hello = Hello {
         device_id: device_id(&inner.config),
         principal_id: inner.ticket.principal,
-        grant: SignedGrant {
-            v,
-            grant_id: proto::GrantId([0; 16]),
-            token,
-        },
+        grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
         caps: Caps::ECHO_PREDICTION,
@@ -375,6 +418,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             Err(e) => return e.to_string(),
         };
         let Some(msg) = inner.ws.dispatch(msg) else {
+            continue;
+        };
+        let Some(msg) = inner.mp.dispatch(msg) else {
             continue;
         };
         let event = match msg {

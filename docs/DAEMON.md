@@ -2,7 +2,8 @@
 
 Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
 (key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
-attention feed).
+roles enforced on every request, control lease, presence, signed approvals, audit log,
+revocation).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -187,7 +188,8 @@ policy is always `LastInput` for now.
 - `Hello.grant.v = PAIRING` presents the secret; success allowlists the device key (proven by the
   QUIC handshake). Later connections use `v = DEVICE`. `client-core` tries `DEVICE` first, then
   the ticket's secret. Principal ≠ device, input carries the principal and is rejected if it is
-  not the connection's (`InputRejected{Role}`), roles are a bitset (MVP issues `OWNER`).
+  not the connection's (`InputRejected{Role}`). Paired devices are `Owner` on the whole
+  daemon; guests join with signed grants (`v = CHAIN`, §6).
 
 ### Agents
 
@@ -351,6 +353,7 @@ code = "/usr/local/bin/code"     # default: PATH + usual app bundle locations
 openvscode = "/opt/openvscode-server"   # instead of the pinned download
 ```
 
+driver with a daemon- or session-wide grant; editor and tunnel launches need the owner.
 
 ### 5.1 Port forwarding
 
@@ -573,7 +576,210 @@ attention (blocked → seen when work resumes, done with the last message, unsee
 on focus, mark all). Unit tests cover the porcelain/worktree/hunk parsers, path policy,
 atomic writes, URL detection, the review formatter, trash dates and the attention store.
 
-## 6. Known gaps / follow-ups
+
+Attention items that stay unseen for `push.delay` (3 s) are sealed to each registered device
+that wants that kind and is not looking at this host, and posted to the push relay with the
+daemon's signature; approvals carry a daemon-signed action token that the app returns with
+`PushAction` from the lock screen. Registrations (`PushRegister` / `PushUnregister` /
+`PushStatus`, per device) live in `<state>/push.json`. Details, formats and the Worker:
+`docs/PUSH.md`. Relay modes (`[relay]` in `config.toml`: default, self-hosted `iroh-relay`
+URLs with token and private CA, local-only) and how pairing tickets carry them:
+`docs/RELAYS.md`. Tests: `cargo test -p daemon --test it notify relays`.
+
+
+Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
+hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, end to end
+encrypted, with no account: an invite is a link or QR code, roles are per person, a pane has
+Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
+`crates/daemon/src/mp/` (grant table, policy, leases, presence, audit),
+`crates/client-core/src/mp.rs`, `crates/un/src/mp.rs`. Tests: `crates/grants/tests/props.rs`,
+`crates/daemon/tests/it/multiplayer.rs`.
+
+### 6.1 Grants and invites
+
+- A **grant** (`proto::Grant`) names the daemon, its `issuer` device key, `roles`
+  (Viewer / Prompter / Driver / Approver / Owner, a bitset; Owner implies all), a `scope`
+  (`Daemon`, `Session(id)`, `Tab(id)`, `Pane(id)`), `expires`, `max_uses`, an optional `bind`
+  (guest device key), `delegate` and a `label` (the guest's display name). The issuer signs
+  `"grant-v1\0" ‖ postcard(grant)` with Ed25519 (ring). Device keys are the iroh keys, so
+  `bind` names the key the QUIC handshake proves.
+- A **chain** is a root grant followed by attenuated children. The root must be signed by a
+  paired owner device (or the daemon key). Each child is signed by the device holding its
+  parent (the parent's `bind`, or a device the daemon bound it to on first use), requires
+  `delegate` on the parent, and may only narrow: roles ⊆ parent's, scope inside the parent's
+  (checked against the live layout), expiry ≤ parent's, uses ≤ parent's, same daemon. Depth
+  ≤ 8. Delegation is offline: a guest signs a child with its own key, no daemon round trip
+  (`Client::create_invite` caps expiry and uses at the parent's; wider roles or scope are an
+  error).
+- **Redemption.** `Hello.grant = SignedGrant{v: CHAIN, grant_id: leaf, token: postcard(chain)}`
+  and `Hello.principal_id = grants::guest_principal(device)` (SHA-256 of the key, so guests
+  never share a principal and need no round trip). The daemon verifies every link (signature,
+  version, daemon, expiry, revocation of the grant and of every issuer/bound device, holder,
+  narrowing); an unbound leaf is bound to the device on first use, refused once `max_uses`
+  distinct devices hold it; the same device may reconnect any time. Refusals are
+  `RefuseReason::InvalidGrant` or `Revoked`, and audited.
+- **Invite** = iroh dial info + chain: `proto::Invite{daemon_id, addrs, relay_url, inviter,
+  chain}`, text `<scheme>://join/<base32>` (`brand::URL_SCHEME`; `#` in place of the last `/`
+  also parses, for a URL fragment). `un invite` prints a QR code (upper-cased, alphanumeric
+  mode) and the link; an invite with one link is about 380 characters.
+- Paired owner devices (pairing ticket, `devices.json`) keep working unchanged as `Owner` on
+  `Daemon` scope; every connection (owner or guest) is told who it is with
+  `ServerCtl::Joined(JoinInfo)` right after `Welcome`, whose `roles` now reflect the grant and
+  whose `panes` are filtered by scope.
+- State: `<state>/grants.json` (registered chains with their bound devices, revoked grants and
+  devices, guest devices). `RegisterGrant` (owner, or the grant's own issuer) records a chain
+  before first use so it can be listed and revoked.
+
+### 6.2 Live checks and revocation
+
+- Every inbound ctl message and every input frame first re-checks the connection's grant
+  against the live table: expiry, any link revoked, device revoked (`Mp::still_valid`, a few
+  hash lookups). Failure sends `ServerCtl::Revoked` and closes the connection 150 ms later.
+  A 500 ms tick also disconnects expired grants without traffic.
+- `Revoke(Grant | Device | Principal)` (owner, daemon scope) records the revocation, unpairs a
+  revoked owner device, closes every affected connection at once (descendant grants are
+  covered because every link id is checked), and answers with what it hit. A device cannot
+  revoke itself. Re-dials are refused (`RefuseReason::Revoked`).
+- Not undone by revocation (as Amp's docs warn): processes a guest started and files it
+  changed.
+
+### 6.3 Enforcement table
+
+Checked in the daemon on every request (`crates/daemon/src/mp/policy.rs`). "In scope" means
+the pane, tab or session lies inside the grant's scope; "host" means a daemon- or
+session-wide grant (a pane- or tab-scoped guest never touches the host beyond its pane).
+Refused ctl messages get `ServerCtl::Forbidden{what, reason}` naming the missing role; requests
+with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied`,
+`MpError::Forbidden`, `InputRejected{Role|NoLease|UnknownPane}`).
+
+| Request | Needs | Target |
+|---|---|---|
+| `Subscribe`, `FetchHistory`, `Search`, `Links`, `Commands`, `CommandOutput`, `Focus`, `Visible`, `Ack` | any role | pane in scope |
+| `Attach`, `ListSessions`, `Ping`, `Bye`, `Presence`, `WhoAmI`, `Participants`, `Leases`, `SetName` | any role | sessions/panes filtered to scope |
+| `Resize` | any role (stored); **driver** and lease (or no lease) to size the PTY | pane in scope |
+| Input `Bytes`, `Key`, `KeyFull`, `Paste`, `Mouse` | **driver** + holding the pane's lease | pane in scope |
+| `MpRequest::Prompt` (composer path) | prompter, driver or approver; **agent pane only**; sanitizer | pane in scope |
+| `Decide` | **approver**; valid Ed25519 signature by the deciding device | the request's pane in scope |
+| `LeaseRequest{Ask}`, `TakeControl` | driver | pane in scope |
+| `LeaseRequest{Force}`, `TakeControl{force}` | **owner** | pane in scope |
+| `AnswerControl`, `ReleaseControl` | the lease holder | — |
+| `GiveControl` | the holder, or owner; the recipient must be a connected driver | pane in scope |
+| `Op`: `Focus`, `Resize` (divider), `ToggleZoom` | driver | pane in scope |
+| `Op`: `FocusDirection`, `SelectTab`, `MoveTab`, `RenameTab` | driver | tab in scope |
+| `Op`: `Split` | driver | the pane's whole session in scope |
+| `Op`: `NewTab`, `RenameSession` | driver | session in scope |
+| `Op`: `ClosePane`, `CloseTab`, `CloseSession` | **owner** | in scope |
+| `Op`: `CreateSession`; `Attach` that would create a session | **owner** | daemon |
+| `Workspace`: `ListPorts`, `AttentionList`, `AttentionSeen` | any role | answers filtered to scope |
+| `Workspace`: `ListTurns`, `TurnDiff` | prompter, driver or approver | pane in scope |
+| `Workspace`: `SendReview` | prompter, driver or approver (non-drivers: agent panes only) | pane in scope |
+| `Workspace`: git, `Fs*` (read, write, watch), worktrees, `EditorStatus`, `EditorOpen`, `VsCodeTunnelStatus`, `VsCodeTunnelOpen` | driver | host |
+| `Workspace`: `WorktreeLaunch` | driver | the pane's session |
+| `Workspace`: `EditorLaunch`, `EditorStop`, `VsCodeCliInstall`, `VsCodeTunnelStart`, `VsCodeTunnelStop` | **owner** | daemon |
+| Streams: `PortForward`, `Forward`, `Upload`, `Download` | driver | host |
+| `RegisterGrant` | owner, or the chain's leaf issuer | — |
+| `ListGrants`, `ListDevices`, `Revoke`, `Audit` | **owner** | daemon |
+
+Pushes are filtered the same way: layout (a tab-scoped guest sees only its tab, a pane-scoped
+guest a one-pane layout), pane meta, agent events, echo hints, command marks, decisions,
+leases, presence focus/cursor, ports and attention items outside the scope are not sent; the
+VS Code tunnel status goes to host-level drivers only.
+
+The **prompter sanitizer** (`mp/prompt.rs`): text only (newline and tab allowed, every other
+control character refused, so no ESC, `^C`, CR or bracketed-paste terminator), at most
+16 KiB, no leading `!` (Claude's bash mode), `#` (memory) or `/` command outside
+`/help /cost /context /status`. The prompt is written as the pane's paste (bracketed when the
+agent enabled it), then Enter after 80 ms. Prompts are not leased (they interleave per
+message, never per keystroke); the audit log keeps length and SHA-256 prefix, not the text.
+
+### 6.4 Control lease
+
+- One lease per pane, held by a principal (all its devices may type). Raw input from a driver
+  takes a free lease (or one whose holder left) implicitly; input from anyone else while a
+  connected holder has it is refused `InputRejected{NoLease}` plus the current
+  `ServerCtl::Lease`, so the client can say who is driving. Every change is broadcast as
+  `ServerCtl::Lease{pane, holder, since, mode: Leased|Free}` to everyone who can see the pane
+  and sent on `Attach`; `MpRequest::Leases` lists them.
+- `TakeControl{pane}`: granted at once if the lease is free, ours, its holder left, or the
+  holder has not typed for `lease_idle` (default 5 s; `[multiplayer] lease_idle_secs`).
+  Otherwise the holder gets `ServerCtl::LeaseRequested{pane, by, name}` and the answer is
+  `Pending{holder}`; the holder answers `AnswerControl{give}` (`Kept` is sent to the asker),
+  and if the holder stays idle for `lease_idle` the lease moves anyway (500 ms tick). An owner
+  may `force`. `GiveControl{to}` (holder or owner), `ReleaseControl`. A holder's last device
+  leaving frees the lease.
+- Sizing follows the lease: only the holder (or anyone while it is free) sizes the PTY.
+- Every move is audited (`Lease`).
+
+### 6.5 Presence
+
+`ServerCtl::Participants{participants}` (one entry per connected device: actor, name, roles,
+scope, grant, since, state, focused pane, typing, cursor) is pushed whole on join, leave,
+rename and focus change. Clients send `ClientCtl::Presence` (typing, cursor, viewport; at most
+10 Hz per connection, typing changes always pass); the daemon stamps the actor and the focus it
+knows and fans `ServerCtl::Presence` out to the others, hiding panes outside each recipient's
+scope. `Client::set_typing(pane, bool)` is the composer's typing indicator.
+
+### 6.6 Signed approvals and the audit log
+
+- `Client::decide` signs `"approval-v1\0" ‖ postcard(daemon_id, request_id, option_id, actor)`
+  with the device key (`Decide.sig`). The daemon requires the approver role on the request's
+  pane and a valid signature by `actor.device` (= the connection's key), then the first valid
+  decision wins (`Decided` to everyone in scope, `AlreadyDecided{by}` to the late one).
+- `<state>/audit/audit.jsonl` (mode 0600), append-only, one JSON object per line, hex ids:
+  `{seq, at, kind, actor{principal, device}, grant, pane, detail, approval?, prev_hash,
+  hash}`, `hash = SHA-256("audit-v1\0" ‖ prev_hash ‖ postcard(record without hash))`.
+  Kinds: `Join`, `Leave`, `Paired`, `GrantRegistered`, `GrantRedeemed`, `Revoked`, `Lease`,
+  `Prompt`, `Approval`, `Denied` (refused joins, bad decision signatures). An approval record
+  carries the request id, the agent's own request id for the tool call (the arbiter's id,
+  e.g. the hook's tool-use id), option id and label, tool, summary, the signed bytes and the
+  approver's signature; approvals are fsynced, and written before the agent's hook is
+  answered or anyone is told. Raw keystrokes are never logged.
+- `MpRequest::Audit{after, limit}` (owner) returns records oldest first plus `chain_ok`: the
+  file on disk re-verified (every hash and every approval signature). An edited line breaks
+  it (tested).
+
+### 6.7 CLI
+
+```sh
+un invite --role driver+approver --scope session --ttl 24h --uses 1 --name bob [--delegate]
+un join 'unnamed://join/…'        # saves the invite (used when no pairing ticket is saved)
+un who [--watch]                  # participants, roles, scope, focus, typing
+un take-control [--pane P] [--force] [--wait]     un release-control
+un prompt 'fix the failing test' [--pane P] [--no-submit]
+un grants [--devices]             un revoke <grant-id-prefix> | --device KEY | --principal ID
+un audit [--limit N] [--after SEQ]
+```
+
+`un invite` from a guest signs a narrower child of its own grant (needs `--delegate` on the
+parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
+
+### 6.8 Tests
+
+- `cargo test -p grants`: property tests (64 cases each) — narrowing chains of up to 6 links
+  verify with roles never above the root's; any flipped signature byte or edited field is
+  refused; wider roles, later or missing expiry, more uses or a wider scope are refused both by
+  `attenuate` and, hand-signed, by `verify`; expiry, revocation of any link or issuer, a wrong
+  presenter, a wrong daemon, an untrusted root, a non-holder signer and a non-delegable parent
+  are refused; approvals verify only for their daemon and option; ring and iroh derive the
+  same public key.
+- `cargo test -p daemon --test it multiplayer` (macOS and the Linux VM): owner + driver +
+  viewer on one daemon (viewer's keys refused and never written; owner takes the free lease;
+  driver refused without it; take control asked, given; owner refused; owner forces; handoff
+  after idle; release; typing indicator; viewer cannot split, take control, list files or
+  grants; driver can list files); prompter (raw keys refused; composer prompt arrives; shell
+  panes, `!`, `/permissions`, ESC, `^C`, `#` refused; viewer cannot prompt; audit keeps length
+  only); approvals (viewer's decision refused and the hook stays pending; approver's signed
+  decision answers the hook; late decision loses; audit record's signature verifies and its
+  signed bytes match); revocation (delegated viewer link, wider delegation refused, revoking
+  the parent kicks both guests at once and re-dials are refused; device revocation; no
+  self-revocation); bad grants (expired, foreign root, tampered, hand-escalated child, pane →
+  daemon widening, second device on a single-use grant refused while the first reconnects;
+  all audited as denials); a pane-scoped guest sees a one-pane layout and cannot subscribe to,
+  or type into, another pane or reach host files.
+- Unit tests: prompt sanitizer, audit chain (reopen, edit detection).
+- `proto` goldens for every new message and variant; invite text round trip.
+
+## 7. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
@@ -592,7 +798,14 @@ atomic writes, URL detection, the review formatter, trash dates and the attentio
   macOS's `/bin/bash` 3.2 gets no automatic integration (as in Ghostty).
 - A Codex started by hand in a shell pane is detected for status but its session id is not
   captured (only launched agents are restored).
-- Grants are an allowlist placeholder (no signed grants, revocation UI, leases, presence).
+- Multiplayer (§6), not built yet: knock-to-join (owner approves a redemption), approval
+  policies (`owner_only`, `two_person`, `claim`), `approve_max_risk`, `history: since_join`
+  snapshot trimming, short PAKE codes, guest push registration, per-pane redaction, the
+  structured lane for prompters (today prompts are sanitized keystrokes into the TUI), the
+  App Clip; the app UI (share sheet, avatars, take-control button, revoke sheet) is the Swift
+  side's. Presence `Away` grace periods are not tracked (a leaving device just disappears).
+  Grants are checked against the live layout, so a pane-scoped grant dies with its pane.
+  Audit records stay in memory up to 10 000 for queries; older ones only on disk.
 - Snapshots are encoded in full then truncated at READY (libghostty has no READY-only encode).
   `size` test fails its "typical < 50 KB" assertion there: 148 KB for colored logs); zstd keeps
   the wire size small, but the cause (page layout) needs a look.
@@ -600,5 +813,6 @@ atomic writes, URL detection, the review formatter, trash dates and the attentio
   run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
   untested against a real browser; no transfer resume by offset for uploads (downloads take an
   offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
-- `SetSizePolicy` is ignored (only `LastInput`). The ticket's relay URL is the one known at
+- `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
+  leased). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.

@@ -102,6 +102,13 @@ pub(crate) fn new_uuid() -> String {
 
 static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 
+/// A dialog's approving and refusing options, with labels (for push notification actions).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ApprovalButtons {
+    pub approve: Option<(OptionId, String)>,
+    pub deny: Option<(OptionId, String)>,
+}
+
 /// The agent side of one pane.
 pub(crate) struct AgentRuntime {
     kind: AgentKind,
@@ -271,6 +278,30 @@ impl AgentRuntime {
             .map(|b| b.request_id.clone())
     }
 
+    /// For a notification's Approve / Deny buttons: the options of the dialog `id` that allow
+    /// this one request and that refuse it, with their labels. `None` unless the agent is
+    /// blocked on `id` now.
+    pub fn approval_options(&self, id: RequestId) -> Option<ApprovalButtons> {
+        let request = self.requests.iter().find(|(w, _)| *w == id)?.1.clone();
+        let blocked = self
+            .arbiter
+            .status()
+            .blocked()
+            .filter(|b| b.request_id == request)?;
+        let find = |choice: ApprovalChoice| {
+            blocked
+                .blocker
+                .options
+                .iter()
+                .position(|o| o.id == choice)
+                .map(|i| (OptionId(i as u32), blocked.blocker.options[i].label.clone()))
+        };
+        Some(ApprovalButtons {
+            approve: find(ApprovalChoice::AllowOnce),
+            deny: find(ApprovalChoice::Deny),
+        })
+    }
+
     pub fn knows_request(&self, id: RequestId) -> bool {
         self.requests.iter().any(|(w, _)| *w == id)
     }
@@ -282,7 +313,7 @@ impl AgentRuntime {
         id: RequestId,
         option: OptionId,
         actor: Actor,
-    ) -> Result<(ApprovalChoice, agents::RequestId), Option<Actor>> {
+    ) -> Result<DecidedRequest, Option<Actor>> {
         if let Some((done, by)) = self.last_decided
             && done == id
         {
@@ -294,28 +325,55 @@ impl AgentRuntime {
             .find(|(w, _)| *w == id)
             .map(|(_, r)| r.clone())
             .ok_or(None)?;
-        let choice = self
+        let blocked = self
             .arbiter
             .status()
             .blocked()
             .filter(|b| b.request_id == request)
-            .and_then(|b| b.blocker.options.get(option.0 as usize))
-            .map(|o| o.id)
+            .cloned()
             .ok_or(None)?;
+        let chosen = blocked.blocker.options.get(option.0 as usize).ok_or(None)?;
+        let choice = chosen.id;
+        let details = DecidedRequest {
+            choice,
+            request: request.clone(),
+            option: chosen.label.clone(),
+            tool: blocked.blocker.tool.clone(),
+            summary: blocked
+                .blocker
+                .summary
+                .clone()
+                .or(blocked.blocker.tool.clone())
+                .unwrap_or_default(),
+        };
         let decision = Decision {
-            request_id: request.clone(),
+            request_id: request,
             choice,
             actor: agents::ActorId::new(fsutil::hex(&actor.principal.0)),
         };
         match self.arbiter.decide(decision, now()) {
             Ok(_) => {
                 self.last_decided = Some((id, actor));
-                Ok((choice, request))
+                Ok(details)
             }
             Err(DecisionError::AlreadyDecided { .. }) => Err(self.last_decided.map(|(_, a)| a)),
             Err(_) => Err(None),
         }
     }
+}
+
+/// An accepted decision, with what the audit log records about it.
+pub(crate) struct DecidedRequest {
+    /// The answer for the hook.
+    pub choice: ApprovalChoice,
+    /// The arbiter's id for the blocked tool call (the agent event's request id).
+    pub request: agents::RequestId,
+    /// The chosen option's label.
+    pub option: String,
+    /// The tool asking.
+    pub tool: Option<String>,
+    /// What it wanted to do.
+    pub summary: String,
 }
 
 struct Pending {

@@ -61,6 +61,9 @@ pub struct EndpointInfo {
     pub addrs: Vec<SocketAddr>,
     /// Home relay, if any.
     pub relay_url: Option<String>,
+    /// The relays the daemon uses (default, self-hosted or none), for pairing tickets.
+    #[serde(default)]
+    pub relays: proto::TicketRelays,
     /// Process id of the daemon.
     pub pid: u32,
     /// When it started.
@@ -172,6 +175,59 @@ impl Identity {
     pub fn device_count(&self) -> usize {
         self.devices.lock().expect("devices lock").len()
     }
+
+    /// The daemon key as a device id: it may sign root grants (`unnamed-hostd invite`).
+    pub fn daemon_device(&self) -> DeviceId {
+        DeviceId(self.daemon_id().0)
+    }
+
+    /// Re-reads `devices.json` so pairings and unpairings by other processes apply.
+    fn refresh(&self) {
+        if let Ok(Some(fresh)) = read_json::<Vec<DeviceEntry>>(&self.dir.join(DEVICES_FILE)) {
+            *self.devices.lock().expect("devices lock") = fresh;
+        }
+    }
+
+    /// Whether `device` is a paired owner device (it may sign root grants).
+    pub fn is_owner_device(&self, device: DeviceId) -> bool {
+        let hex_id = hex(&device.0);
+        self.devices
+            .lock()
+            .expect("devices lock")
+            .iter()
+            .any(|d| d.device == hex_id)
+    }
+
+    /// Paired devices: key, principal and when they paired.
+    pub fn paired(&self) -> Vec<(DeviceId, PrincipalId, UnixMillis)> {
+        self.refresh();
+        self.devices
+            .lock()
+            .expect("devices lock")
+            .iter()
+            .filter_map(|d| {
+                Some((
+                    DeviceId(unhex(&d.device)?),
+                    PrincipalId(unhex(&d.principal)?),
+                    UnixMillis(d.paired_at),
+                ))
+            })
+            .collect()
+    }
+
+    /// Removes a paired device. Returns whether it was paired.
+    pub fn unpair(&self, device: DeviceId) -> bool {
+        self.refresh();
+        let hex_id = hex(&device.0);
+        let mut devices = self.devices.lock().expect("devices lock");
+        let before = devices.len();
+        devices.retain(|d| d.device != hex_id);
+        let removed = devices.len() != before;
+        if removed && let Err(e) = write_json(&self.dir.join(DEVICES_FILE), &*devices) {
+            tracing::warn!("saving paired devices: {e}");
+        }
+        removed
+    }
 }
 
 fn load_or_create_key(dir: &Path) -> io::Result<iroh::SecretKey> {
@@ -276,6 +332,23 @@ pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
         secret,
         expires: UnixMillis(expires),
     })
+}
+
+/// [`mint_ticket`] as text, with the running daemon's relay choice appended
+/// ([`proto::TicketExtras`]) so the app dials through the same self-hosted relays, or none.
+///
+/// # Errors
+///
+/// As [`mint_ticket`].
+pub fn mint_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
+    let ticket = mint_ticket(state_dir, ttl)?;
+    let relays = endpoint_info(state_dir)?
+        .map(|info| info.relays)
+        .unwrap_or_default();
+    Ok(ticket.to_string_with(&proto::TicketExtras {
+        v: proto::TicketExtras::VERSION,
+        relays,
+    }))
 }
 
 /// Number of devices on the allowlist.

@@ -116,24 +116,138 @@ impl FromStr for Ticket {
     /// Parses the URL form, or the bare base32 payload. Whitespace and case are ignored, so a
     /// ticket survives being retyped or wrapped by a terminal.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim();
-        let prefix = format!("{}://pair/", brand::URL_SCHEME);
-        let payload = match s.get(..prefix.len()) {
-            Some(head) if head.eq_ignore_ascii_case(&prefix) => &s[prefix.len()..],
-            _ => s,
-        };
-        let cleaned: String = payload
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .map(|c| c.to_ascii_uppercase())
-            .collect();
-        let bytes = BASE32_NOPAD
-            .decode(cleaned.as_bytes())
-            .map_err(|_| TicketError::Encoding)?;
+        let bytes = ticket_bytes(s)?;
         let (v, _) = postcard::take_from_bytes::<u16>(&bytes).map_err(TicketError::Decode)?;
         if v != Self::VERSION {
             return Err(TicketError::Version(v));
         }
         postcard::from_bytes(&bytes).map_err(TicketError::Decode)
+    }
+}
+
+/// The base32 payload of a ticket's text, decoded.
+fn ticket_bytes(s: &str) -> Result<Vec<u8>, TicketError> {
+    let s = s.trim();
+    let prefix = format!("{}://pair/", brand::URL_SCHEME);
+    let payload = match s.get(..prefix.len()) {
+        Some(head) if head.eq_ignore_ascii_case(&prefix) => &s[prefix.len()..],
+        _ => s,
+    };
+    let cleaned: String = payload
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    BASE32_NOPAD
+        .decode(cleaned.as_bytes())
+        .map_err(|_| TicketError::Encoding)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Extensions (appended after the ticket; readers that predate them ignore them)
+// ---------------------------------------------------------------------------------------------
+
+/// Which relays a daemon uses, so the paired device dials it the same way (self-hosted relays,
+/// local-only mode). Travels in [`TicketExtras`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TicketRelays {
+    /// The product's default relays (and address lookup); [`Ticket::relay_url`] is the
+    /// daemon's home relay among them.
+    #[default]
+    Default,
+    /// Only these `iroh-relay` servers, no third-party address lookup.
+    Custom {
+        /// Relay URLs (`https://relay.example.com`).
+        urls: Vec<String>,
+        /// Shared access token the relays require, if any.
+        auth_token: Option<String>,
+    },
+    /// No relays at all: direct addresses only (LAN, Tailscale, a VPN).
+    Disabled,
+}
+
+/// Optional additions to a [`Ticket`], encoded after it in the same base32 payload as
+/// `EXTRAS_MAGIC || postcard(TicketExtras)`. `postcard::from_bytes` ignores trailing bytes, so
+/// a [`Ticket::from_str`] that predates them still reads the ticket (and dials through
+/// `relay_url`, which a daemon with custom relays sets to its home relay).
+///
+/// # Examples
+///
+/// ```
+/// use proto::{DaemonId, PairingSecret, PrincipalId, Ticket, TicketExtras, TicketRelays, UnixMillis};
+///
+/// let ticket = Ticket {
+///     v: Ticket::VERSION,
+///     daemon_id: DaemonId([7; 32]),
+///     addrs: vec![],
+///     relay_url: Some("https://relay.example.com./".into()),
+///     principal: PrincipalId([1; 16]),
+///     secret: PairingSecret([2; 16]),
+///     expires: UnixMillis(1_800_000_000_000),
+/// };
+/// let extras = TicketExtras {
+///     v: TicketExtras::VERSION,
+///     relays: TicketRelays::Custom {
+///         urls: vec!["https://relay.example.com".into()],
+///         auth_token: None,
+///     },
+/// };
+/// let text = ticket.to_string_with(&extras);
+/// assert_eq!(Ticket::parse_with_extras(&text)?, (ticket.clone(), extras));
+/// // Older readers still get the ticket.
+/// assert_eq!(text.parse::<Ticket>()?, ticket);
+/// # Ok::<(), proto::TicketError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TicketExtras {
+    /// [`TicketExtras::VERSION`].
+    pub v: u16,
+    /// The daemon's relays.
+    pub relays: TicketRelays,
+}
+
+impl TicketExtras {
+    /// The extension version this crate writes.
+    pub const VERSION: u16 = 1;
+}
+
+/// Marks the start of [`TicketExtras`] after the ticket.
+const EXTRAS_MAGIC: u8 = 0xE7;
+
+impl Ticket {
+    /// The text form with `extras` appended (plain [`Display`](fmt::Display) when the relays
+    /// are the default, so ordinary tickets stay as short as before).
+    pub fn to_string_with(&self, extras: &TicketExtras) -> String {
+        if extras.relays == TicketRelays::Default {
+            return self.to_string();
+        }
+        let mut bytes = postcard::to_stdvec(self).expect("tickets always encode");
+        bytes.push(EXTRAS_MAGIC);
+        bytes.extend(postcard::to_stdvec(extras).expect("extras always encode"));
+        format!(
+            "{}://pair/{}",
+            brand::URL_SCHEME,
+            BASE32_NOPAD.encode(&bytes)
+        )
+    }
+
+    /// Parses a ticket and its extras (the defaults when there are none, or when they come
+    /// from a newer writer this build cannot read).
+    ///
+    /// # Errors
+    ///
+    /// As [`Ticket::from_str`].
+    pub fn parse_with_extras(s: &str) -> Result<(Self, TicketExtras), TicketError> {
+        let ticket: Self = s.parse()?;
+        let bytes = ticket_bytes(s)?;
+        let (_, rest) = postcard::take_from_bytes::<Self>(&bytes).map_err(TicketError::Decode)?;
+        let extras = match rest.split_first() {
+            Some((&EXTRAS_MAGIC, ext)) => postcard::from_bytes::<TicketExtras>(ext)
+                .ok()
+                .filter(|e| e.v == TicketExtras::VERSION)
+                .unwrap_or_default(),
+            _ => TicketExtras::default(),
+        };
+        Ok((ticket, extras))
     }
 }
