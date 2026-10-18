@@ -142,6 +142,65 @@ pub enum ClientCtl {
         /// The change.
         op: LayoutOp,
     },
+    /// Asks for scrollback older than a snapshot's READY marker. The daemon answers on its
+    /// `bulk` stream with one [`Bulk::HistoryPage`] (or [`Bulk::HistoryGone`]).
+    ///
+    /// History is served newest first, as the snapshot's records are ordered. The client starts
+    /// at the length of the READY section it decoded and continues from each page's
+    /// `next_offset`.
+    FetchHistory {
+        /// The pane.
+        pane_id: PaneId,
+        /// `seq` of the snapshot whose history is wanted.
+        snapshot_seq: Seq,
+        /// Byte offset into that snapshot where the page starts (the cursor).
+        offset: u64,
+        /// Upper bound on the page's uncompressed size. At least one history page record is
+        /// always sent, whatever its size.
+        max_bytes: u32,
+    },
+    /// Searches a pane's whole scrollback, answered by [`ServerCtl::SearchResult`].
+    Search {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// What to look for.
+        query: SearchQuery,
+        /// Matches to skip, newest first: `0` for the first page, then the previous page's
+        /// [`SearchPage::next`].
+        cursor: u32,
+        /// Matches per page.
+        limit: u32,
+    },
+    /// Hyperlinks, URLs and file paths on screen and in recent command output, answered by
+    /// [`ServerCtl::LinksResult`].
+    Links {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// How many of the most recent finished commands' output to scan besides the screen.
+        commands: u16,
+    },
+    /// The pane's shell-integration command history, answered by
+    /// [`ServerCtl::CommandsResult`].
+    Commands {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+    },
+    /// The output of one command (OSC 133 C..D), answered by
+    /// [`ServerCtl::CommandOutputResult`].
+    CommandOutput {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// The command, or `None` for the most recent finished one.
+        command_id: Option<u64>,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -340,6 +399,48 @@ pub enum ServerCtl {
     /// corrected S6 rule and the output offset they apply from. Supersedes
     /// [`ServerCtl::EchoHint`].
     EchoHintAt(EchoHintAt),
+    /// A shell-integration command started or finished in a pane of the attached session.
+    CommandMark(CommandMark),
+    /// A command that ran at least the daemon's threshold (default 10 s) finished while no
+    /// client was showing its pane. Sent to every client, whatever session it is attached to,
+    /// so it can notify.
+    CommandFinishedUnseen(CommandMark),
+    /// Answers [`ClientCtl::Search`].
+    SearchResult {
+        /// The request's id.
+        req_id: u64,
+        /// The pane searched.
+        pane_id: PaneId,
+        /// One page of matches.
+        result: Result<SearchPage, RpcError>,
+    },
+    /// Answers [`ClientCtl::Links`].
+    LinksResult {
+        /// The request's id.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// What was found.
+        result: Result<Links, RpcError>,
+    },
+    /// Answers [`ClientCtl::Commands`].
+    CommandsResult {
+        /// The request's id.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// The commands still in scrollback, oldest first.
+        result: Result<CommandList, RpcError>,
+    },
+    /// Answers [`ClientCtl::CommandOutput`].
+    CommandOutputResult {
+        /// The request's id.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// The output.
+        result: Result<CommandOutput, RpcError>,
+    },
 }
 
 /// The daemon's answer to a successful `Hello`.
@@ -683,6 +784,31 @@ pub enum InputPayload {
     Paste(String),
     /// A mouse event the daemon encodes for the pane's mouse mode.
     Mouse(MouseEvent),
+    /// A key event with everything the kitty keyboard protocol needs; supersedes
+    /// [`InputPayload::Key`].
+    KeyFull(FullKeyEvent),
+}
+
+/// A key event as libghostty-vt's key encoder takes it (`include/ghostty/vt/key/event.h`).
+///
+/// The daemon encodes it for the pane's current modes: legacy, cursor-key and keypad
+/// application modes, modifyOtherKeys, or the kitty keyboard protocol flags the program pushed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FullKeyEvent {
+    /// Physical key, as a Ghostty `GhosttyKey` value (US layout positions).
+    pub key: u32,
+    /// Modifiers held, Ghostty `GhosttyMods` layout.
+    pub mods: u16,
+    /// Modifiers the layout consumed to produce `text` (for example shift for `A`).
+    pub consumed_mods: u16,
+    /// Press, repeat or release.
+    pub action: KeyAction,
+    /// Text the key produced under the current layout, if any.
+    pub text: Option<String>,
+    /// The codepoint the key produces with no modifiers (kitty's base key), if known.
+    pub unshifted_codepoint: Option<u32>,
+    /// An input method is composing; nothing is sent for the key.
+    pub composing: bool,
 }
 
 /// A key event.
@@ -826,5 +952,250 @@ pub enum Bulk {
         /// Ghostty snapshot history records.
         #[serde(with = "crate::serde_bytes")]
         data: Vec<u8>,
+    },
+    /// Answers [`ClientCtl::FetchHistory`]: whole snapshot records ending after a page record
+    /// or at FINISH, so a streaming decoder can apply every page in it.
+    HistoryPage {
+        /// The pane.
+        pane_id: PaneId,
+        /// The snapshot these records belong to.
+        snapshot_seq: Seq,
+        /// Offset of the first record in the snapshot (the request's cursor).
+        offset: u64,
+        /// Offset to request next.
+        next_offset: u64,
+        /// Size of the whole snapshot, for progress.
+        total_len: u64,
+        /// Length of `data` decompressed.
+        raw_len: u32,
+        /// History page records in `data`.
+        pages: u32,
+        /// The snapshot's FINISH record is included: there is no more history.
+        done: bool,
+        /// One zstd frame holding the records.
+        #[serde(with = "crate::serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// The daemon no longer holds that snapshot (a newer one replaced it, or the daemon
+    /// restarted). History is available again from the pane's next snapshot.
+    HistoryGone {
+        /// The pane.
+        pane_id: PaneId,
+        /// The snapshot asked for.
+        snapshot_seq: Seq,
+    },
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shell integration, search, links (ctl requests)
+// ---------------------------------------------------------------------------------------------
+
+/// Why a ctl request failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RpcError {
+    /// The pane does not exist or is outside the grant's scope.
+    UnknownPane,
+    /// The request was malformed (for example an invalid regex); the text says why.
+    BadRequest(String),
+    /// Nothing to answer with (no such command, no shell integration yet).
+    NotFound,
+    /// The daemon failed; the text says why.
+    Internal(String),
+}
+
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownPane => f.write_str("no such pane"),
+            Self::BadRequest(why) => write!(f, "bad request: {why}"),
+            Self::NotFound => f.write_str("not found"),
+            Self::Internal(why) => write!(f, "daemon error: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for RpcError {}
+
+/// A command reported by shell integration (OSC 133).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandMark {
+    /// The pane.
+    pub pane_id: PaneId,
+    /// Per-pane command number, from 1, never reused while the pane lives.
+    pub command_id: u64,
+    /// The command line, if the shell sent it or it could be read off the screen.
+    pub command: Option<String>,
+    /// Working directory when it started (OSC 7).
+    pub cwd: Option<String>,
+    /// When it started (OSC 133;C).
+    pub started_at: UnixMillis,
+    /// Output offset at which the mark's event (start, or end once finished) happened.
+    pub at_seq: Seq,
+    /// `None` while it runs.
+    pub finished: Option<CommandEnd>,
+}
+
+/// How a command ended (OSC 133;D).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandEnd {
+    /// Exit status, if the shell reported it.
+    pub exit: Option<i32>,
+    /// Wall time from 133;C to 133;D.
+    pub duration_ms: u64,
+}
+
+/// Where a command sits on the pane's primary screen, in screen rows (row 0 is the oldest
+/// retained scrollback row) at [`CommandList::at_seq`]. `None` once the row left scrollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandRows {
+    /// Row of the prompt start.
+    pub prompt: Option<u64>,
+    /// Row where output started.
+    pub output: Option<u64>,
+    /// Row of the command end.
+    pub end: Option<u64>,
+}
+
+/// One command in a [`CommandList`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    /// The mark.
+    pub mark: CommandMark,
+    /// Its rows.
+    pub rows: CommandRows,
+}
+
+/// Answer to [`ClientCtl::Commands`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandList {
+    /// Output offset the rows refer to.
+    pub at_seq: Seq,
+    /// Rows on the primary screen (scrollback and active area).
+    pub total_rows: u64,
+    /// Commands the daemon remembers, oldest first.
+    pub commands: Vec<CommandInfo>,
+}
+
+/// Answer to [`ClientCtl::CommandOutput`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandOutput {
+    /// The command.
+    pub mark: CommandMark,
+    /// Its output as plain text, soft-wrapped lines joined.
+    pub text: String,
+    /// The text was cut at the daemon's limit, or its start already left scrollback.
+    pub truncated: bool,
+}
+
+/// What a [`ClientCtl::Search`] looks for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchQuery {
+    /// Text or pattern.
+    pub pattern: String,
+    /// How `pattern` is interpreted.
+    pub mode: SearchMode,
+    /// Case handling.
+    pub case: CaseMode,
+}
+
+/// How a search pattern is interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchMode {
+    /// Literal text.
+    Plain,
+    /// A regular expression (Rust `regex` syntax: no look-around or backreferences).
+    Regex,
+}
+
+/// Case handling for a search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaseMode {
+    /// Exact case.
+    Sensitive,
+    /// Ignore case.
+    Insensitive,
+    /// Ignore case unless the pattern has an uppercase letter.
+    Smart,
+}
+
+/// One page of search matches, newest (bottom of the screen) first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchPage {
+    /// Output offset the positions refer to.
+    pub at_seq: Seq,
+    /// Rows on the searched screen. `total_rows - row` is a match's distance from the bottom,
+    /// which a client VT at the same `at_seq` shares even when it holds less scrollback.
+    pub total_rows: u64,
+    /// Matches in the whole scrollback.
+    pub total: u32,
+    /// This page.
+    pub matches: Vec<SearchMatch>,
+    /// Cursor for the next page, `None` after the last.
+    pub next: Option<u32>,
+}
+
+/// One match. Matches may span soft-wrapped rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchMatch {
+    /// Screen row of the first cell (row 0 is the oldest retained scrollback row).
+    pub row: u64,
+    /// Column of the first cell.
+    pub col: u16,
+    /// Screen row of the last cell.
+    pub end_row: u64,
+    /// Column of the last cell (inclusive).
+    pub end_col: u16,
+    /// The logical line containing the match (soft wraps joined), for a result list.
+    pub line: String,
+}
+
+/// Answer to [`ClientCtl::Links`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Links {
+    /// The directory relative paths were resolved against.
+    pub cwd: Option<String>,
+    /// Unique targets: the screen first (bottom up), then command output (newest first).
+    pub links: Vec<Link>,
+}
+
+/// A tappable target found in a pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Link {
+    /// What was found.
+    pub kind: LinkKind,
+    /// The text as shown.
+    pub text: String,
+    /// The URL, or the absolute path for a file path.
+    pub target: String,
+    /// Line from a `path:line[:col]` suffix.
+    pub line: Option<u32>,
+    /// Column from a `path:line:col` suffix.
+    pub column: Option<u32>,
+    /// Whether a path exists on the daemon's host; `None` for URLs and hyperlinks.
+    pub exists: Option<bool>,
+    /// Where it was found.
+    pub source: LinkSource,
+}
+
+/// Kinds of [`Link`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LinkKind {
+    /// An OSC 8 hyperlink.
+    Hyperlink,
+    /// A URL detected in the text.
+    Url,
+    /// A file path detected in the text.
+    Path,
+}
+
+/// Where a [`Link`] was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LinkSource {
+    /// The visible screen.
+    Screen,
+    /// The output of a command.
+    Command {
+        /// Its id.
+        command_id: u64,
     },
 }

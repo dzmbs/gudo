@@ -1,4 +1,5 @@
-//! Safe wrapper over the pinned libghostty-vt: terminal state, plain text and snapshots.
+//! Safe wrapper over the pinned libghostty-vt: terminal state, text, snapshots, input encoding
+//! (keys, mouse, paste) and shell-integration marks.
 //!
 //! The daemon keeps one [`Terminal`] per pane as the source of truth and feeds it raw PTY
 //! bytes. When a client falls behind or resumes, the daemon sends
@@ -34,9 +35,19 @@
 // `crates/ghostty-vt/src/lib.rs`, Copyright herdr contributors, licensed under Apache-2.0.
 
 mod error;
+mod history;
+mod input;
 mod snapshot;
 mod terminal;
 
 pub use error::Error;
+pub use history::{StreamingRestore, count_pages, history_chunk, history_chunks};
+pub use input::{
+    Key, KeyAction, KeyEncoder, KeyEvent, Mods, MouseAction, MouseButton, MouseEncoder, MouseEvent,
+    char_width, encode_paste, paste_is_safe,
+};
 pub use snapshot::{HistoryPage, Restore, SnapshotDecoder, ready_len, snapshot_format};
-pub use terminal::{CONTINUATION_MAX_BYTES, Cursor, ReplySink, Screen, Terminal, TextRegion};
+pub use terminal::{
+    CONTINUATION_MAX_BYTES, Cursor, Mode, PinId, Point, PromptKind, ReplySink, Screen,
+    SemanticPrompt, SemanticPromptKind, Terminal, TextRegion, Wrap,
+};

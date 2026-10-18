@@ -10,6 +10,8 @@
 //! un tab new|close|next|prev|select <n>|move <n>|rename <name>
 //! un session new <name>|rename <name>|close
 //! un forward <remote-port> [--local <port>]
+//! un search <pattern> [-e] [--case sensitive|insensitive|smart]
+//! un links [--commands N]      un marks      un output [--command N]
 //! ```
 
 use std::io::Write;
@@ -19,8 +21,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use client_core::proto::{
-    AgentKind, Axis, Direction, LayoutNode, LayoutOp, OpOutcome, PaneId, PaneLaunch, PaneSize,
-    SessionId, SessionLayout, SessionSummary, TabLayout,
+    AgentKind, Axis, CaseMode, Direction, LayoutNode, LayoutOp, LinkSource, OpOutcome, PaneId,
+    PaneLaunch, PaneSize, SearchMode, SearchQuery, SessionId, SessionLayout, SessionSummary,
+    TabLayout,
 };
 use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
 use tokio::io::AsyncReadExt;
@@ -114,6 +117,50 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         local: u16,
     },
+    /// Search a pane's whole scrollback on the daemon (newest match first).
+    Search {
+        pattern: String,
+        /// Treat the pattern as a regular expression.
+        #[arg(long, short = 'e')]
+        regex: bool,
+        /// Case handling.
+        #[arg(long, value_enum, default_value_t = Case::Smart)]
+        case: Case,
+        /// Matches to show.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// Pane to search (default: focused).
+        #[arg(long)]
+        pane: Option<u64>,
+    },
+    /// Hyperlinks, URLs and file paths on screen and in recent command output.
+    Links {
+        /// Recent commands whose output to scan.
+        #[arg(long, default_value_t = 3)]
+        commands: u16,
+        #[arg(long)]
+        pane: Option<u64>,
+    },
+    /// Shell-integration commands: exit status, duration, directory.
+    Marks {
+        #[arg(long)]
+        pane: Option<u64>,
+    },
+    /// Print a command's output (default: the last finished command).
+    Output {
+        /// Command number from `marks`.
+        #[arg(long)]
+        command: Option<u64>,
+        #[arg(long)]
+        pane: Option<u64>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Case {
+    Sensitive,
+    Insensitive,
+    Smart,
 }
 
 #[derive(Subcommand)]
@@ -270,6 +317,19 @@ impl Conn {
             .context("session has no tabs")
     }
 
+    /// Waits for the event `pick` accepts and returns what it extracted.
+    async fn answer<T>(&mut self, mut pick: impl FnMut(ClientEvent) -> Option<T>) -> Result<T> {
+        tokio::time::timeout(TIMEOUT, async {
+            loop {
+                if let Some(answer) = pick(self.next().await?) {
+                    return anyhow::Ok(answer);
+                }
+            }
+        })
+        .await
+        .context("timed out waiting for the daemon")?
+    }
+
     async fn op(&mut self, op: LayoutOp) -> Result<OpOutcome> {
         let id = self.client.op(op);
         let outcome = tokio::time::timeout(TIMEOUT, async {
@@ -310,6 +370,122 @@ async fn run(cli: Cli) -> Result<()> {
     let outcome = match cli.command {
         Cmd::Pair { .. } => unreachable!("handled above"),
         Cmd::Attach => return attach(conn).await,
+        Cmd::Search {
+            pattern,
+            regex,
+            case,
+            limit,
+            pane,
+        } => {
+            let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
+            let query = SearchQuery {
+                pattern,
+                mode: if regex {
+                    SearchMode::Regex
+                } else {
+                    SearchMode::Plain
+                },
+                case: match case {
+                    Case::Sensitive => CaseMode::Sensitive,
+                    Case::Insensitive => CaseMode::Insensitive,
+                    Case::Smart => CaseMode::Smart,
+                },
+            };
+            let id = conn.client.search(pane_id, query, 0, limit);
+            let page = conn
+                .answer(|e| match e {
+                    ClientEvent::SearchResult { req_id, result, .. } if req_id == id => {
+                        Some(result)
+                    }
+                    _ => None,
+                })
+                .await??;
+            println!(
+                "{} matches in {} rows (row 0 = oldest scrollback)",
+                page.total, page.total_rows
+            );
+            for m in &page.matches {
+                println!("{:>7}:{:<4} {}", m.row, m.col, m.line.trim_end());
+            }
+            return Ok(());
+        }
+        Cmd::Links { commands, pane } => {
+            let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
+            let id = conn.client.links(pane_id, commands);
+            let links = conn
+                .answer(|e| match e {
+                    ClientEvent::Links { req_id, result, .. } if req_id == id => Some(result),
+                    _ => None,
+                })
+                .await??;
+            for link in &links.links {
+                let place = match link.source {
+                    LinkSource::Screen => "screen".to_owned(),
+                    LinkSource::Command { command_id } => format!("cmd {command_id}"),
+                };
+                let mut target = link.target.clone();
+                if let Some(line) = link.line {
+                    target += &format!(":{line}");
+                }
+                if let Some(col) = link.column {
+                    target += &format!(":{col}");
+                }
+                let missing = if link.exists == Some(false) {
+                    " (missing)"
+                } else {
+                    ""
+                };
+                println!(
+                    "{:<9} {:<8} {target}{missing}",
+                    format!("{:?}", link.kind),
+                    place
+                );
+            }
+            return Ok(());
+        }
+        Cmd::Marks { pane } => {
+            let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
+            let id = conn.client.commands(pane_id);
+            let list = conn
+                .answer(|e| match e {
+                    ClientEvent::Commands { req_id, result, .. } if req_id == id => Some(result),
+                    _ => None,
+                })
+                .await??;
+            for c in &list.commands {
+                let m = &c.mark;
+                let status = match m.finished {
+                    None => "running".to_owned(),
+                    Some(f) => format!(
+                        "exit {} in {:.1}s",
+                        f.exit.map_or("?".into(), |e| e.to_string()),
+                        f.duration_ms as f64 / 1000.0
+                    ),
+                };
+                println!(
+                    "{:>4}  {:<22} {}  [{}]",
+                    m.command_id,
+                    status,
+                    m.command.as_deref().unwrap_or("?"),
+                    m.cwd.as_deref().unwrap_or("")
+                );
+            }
+            return Ok(());
+        }
+        Cmd::Output { command, pane } => {
+            let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
+            let id = conn.client.command_output(pane_id, command);
+            let out = conn
+                .answer(|e| match e {
+                    ClientEvent::CommandOutput { req_id, result, .. } if req_id == id => {
+                        Some(result)
+                    }
+                    _ => None,
+                })
+                .await??;
+            println!("{}", out.text);
+            return Ok(());
+        }
         Cmd::Ls => {
             conn.client.list_sessions();
             conn.wait("session list", |c| !c.sessions.is_empty())

@@ -517,11 +517,236 @@ fn every_message_matches_its_frozen_bytes() {
         },
         "0a0000000104ac027828a00bc007",
     );
+    terminal_completeness(&mut c);
 
     assert!(
         c.failures.is_empty(),
         "wire format changed:\n{}",
         c.failures.join("\n")
+    );
+}
+
+fn mark(finished: bool) -> CommandMark {
+    CommandMark {
+        pane_id: PANE,
+        command_id: 4,
+        command: Some("make".into()),
+        cwd: Some("/w".into()),
+        started_at: UnixMillis(1000),
+        at_seq: Seq(300),
+        finished: finished.then_some(CommandEnd {
+            exit: Some(2),
+            duration_ms: 12_000,
+        }),
+    }
+}
+
+/// Messages added for key/mouse/paste, history paging, shell integration, search and links.
+fn terminal_completeness(c: &mut Checker) {
+    c.check(
+        "InputPayload::KeyFull",
+        ClientInput::Input(Input {
+            pane_id: PANE,
+            input_seq: InputSeq(9),
+            principal: PRINCIPAL,
+            payload: InputPayload::KeyFull(FullKeyEvent {
+                key: 20,
+                mods: 1,
+                consumed_mods: 1,
+                action: KeyAction::Repeat,
+                text: Some("A".into()),
+                unshifted_codepoint: Some(u32::from('a')),
+                composing: false,
+            }),
+        }),
+        "1f00000001000309111111111111111111111111111111110414010101010141016100",
+    );
+    c.check(
+        "ClientCtl::FetchHistory",
+        ClientCtl::FetchHistory {
+            pane_id: PANE,
+            snapshot_seq: Seq(300),
+            offset: 5000,
+            max_bytes: 1 << 20,
+        },
+        "0a000000011003ac028827808040",
+    );
+    c.check(
+        "ClientCtl::Search",
+        ClientCtl::Search {
+            req_id: 7,
+            pane_id: PANE,
+            query: SearchQuery {
+                pattern: "err".into(),
+                mode: SearchMode::Regex,
+                case: CaseMode::Smart,
+            },
+            cursor: 50,
+            limit: 25,
+        },
+        "0c000000011107030365727201023219",
+    );
+    c.check(
+        "ClientCtl::Links",
+        ClientCtl::Links {
+            req_id: 7,
+            pane_id: PANE,
+            commands: 3,
+        },
+        "050000000112070303",
+    );
+    c.check(
+        "ClientCtl::Commands",
+        ClientCtl::Commands {
+            req_id: 7,
+            pane_id: PANE,
+        },
+        "0400000001130703",
+    );
+    c.check(
+        "ClientCtl::CommandOutput",
+        ClientCtl::CommandOutput {
+            req_id: 7,
+            pane_id: PANE,
+            command_id: Some(4),
+        },
+        "06000000011407030104",
+    );
+    c.check(
+        "ServerCtl::CommandMark",
+        ServerCtl::CommandMark(mark(false)),
+        "130000000112030401046d616b6501022f77e807ac0200",
+    );
+    c.check(
+        "ServerCtl::CommandFinishedUnseen",
+        ServerCtl::CommandFinishedUnseen(mark(true)),
+        "170000000113030401046d616b6501022f77e807ac02010104e05d",
+    );
+    c.check(
+        "ServerCtl::SearchResult",
+        ServerCtl::SearchResult {
+            req_id: 7,
+            pane_id: PANE,
+            result: Ok(SearchPage {
+                at_seq: Seq(300),
+                total_rows: 1000,
+                total: 2,
+                matches: vec![SearchMatch {
+                    row: 990,
+                    col: 4,
+                    end_row: 991,
+                    end_col: 1,
+                    line: "an error".into(),
+                }],
+                next: Some(1),
+            }),
+        },
+        "1c0000000114070300ac02e8070201de0704df070108616e206572726f720101",
+    );
+    c.check(
+        "ServerCtl::SearchResult(Err)",
+        ServerCtl::SearchResult {
+            req_id: 7,
+            pane_id: PANE,
+            result: Err(RpcError::BadRequest("(".into())),
+        },
+        "080000000114070301010128",
+    );
+    c.check(
+        "ServerCtl::LinksResult",
+        ServerCtl::LinksResult {
+            req_id: 7,
+            pane_id: PANE,
+            result: Ok(Links {
+                cwd: Some("/w".into()),
+                links: vec![
+                    Link {
+                        kind: LinkKind::Path,
+                        text: "src/a.rs:3:4".into(),
+                        target: "/w/src/a.rs".into(),
+                        line: Some(3),
+                        column: Some(4),
+                        exists: Some(true),
+                        source: LinkSource::Command { command_id: 4 },
+                    },
+                    Link {
+                        kind: LinkKind::Hyperlink,
+                        text: "docs".into(),
+                        target: "https://x.y".into(),
+                        line: None,
+                        column: None,
+                        exists: None,
+                        source: LinkSource::Screen,
+                    },
+                ],
+            }),
+        },
+        "42000000011507030001022f7702020c7372632f612e72733a333a340b2f772f7372632f612e727301030104010101040004646f63730b68747470733a2f2f782e7900000000",
+    );
+    c.check(
+        "ServerCtl::CommandsResult",
+        ServerCtl::CommandsResult {
+            req_id: 7,
+            pane_id: PANE,
+            result: Ok(CommandList {
+                at_seq: Seq(300),
+                total_rows: 1000,
+                commands: vec![CommandInfo {
+                    mark: mark(true),
+                    rows: CommandRows {
+                        prompt: Some(10),
+                        output: Some(11),
+                        end: None,
+                    },
+                }],
+            }),
+        },
+        "240000000116070300ac02e80701030401046d616b6501022f77e807ac02010104e05d010a010b00",
+    );
+    c.check(
+        "ServerCtl::CommandOutputResult",
+        ServerCtl::CommandOutputResult {
+            req_id: 7,
+            pane_id: PANE,
+            result: Ok(CommandOutput {
+                mark: mark(true),
+                text: "ok".into(),
+                truncated: false,
+            }),
+        },
+        "1e0000000117070300030401046d616b6501022f77e807ac02010104e05d026f6b00",
+    );
+    c.check(
+        "ServerCtl::CommandOutputResult(Err)",
+        ServerCtl::CommandOutputResult {
+            req_id: 7,
+            pane_id: PANE,
+            result: Err(RpcError::NotFound),
+        },
+        "06000000011707030102",
+    );
+    c.check(
+        "Bulk::HistoryPage",
+        Bulk::HistoryPage {
+            pane_id: PANE,
+            snapshot_seq: Seq(300),
+            offset: 5000,
+            next_offset: 9000,
+            total_len: 20_000,
+            raw_len: 4000,
+            pages: 2,
+            done: false,
+            data: vec![0xee; 3],
+        },
+        "14000000010103ac028827a846a09c01a01f020003eeeeee",
+    );
+    c.check(
+        "Bulk::HistoryGone",
+        Bulk::HistoryGone {
+            pane_id: PANE,
+            snapshot_seq: Seq(300),
+        },
+        "05000000010203ac02",
     );
 }
 

@@ -33,10 +33,15 @@ pub fn config(state_dir: &Path) -> Config {
 }
 
 pub async fn start(state_dir: &Path) -> Daemon {
+    start_with(state_dir, |_| {}).await
+}
+
+/// Starts a daemon with the test configuration as changed by `edit`.
+pub async fn start_with(state_dir: &Path, edit: impl FnOnce(&mut Config)) -> Daemon {
     init_tracing();
-    Daemon::start(config(state_dir))
-        .await
-        .expect("daemon starts")
+    let mut config = config(state_dir);
+    edit(&mut config);
+    Daemon::start(config).await.expect("daemon starts")
 }
 
 pub fn ticket(daemon: &Daemon) -> String {
@@ -56,6 +61,12 @@ pub struct TestClient {
     pub snapshot_events: u32,
     pub byte_events: u32,
     pub agent_events: Vec<String>,
+    pub marks: Vec<client_core::proto::CommandMark>,
+    pub unseen: Vec<client_core::proto::CommandMark>,
+    pub hints: Vec<client_core::proto::EchoHintAt>,
+    pub answers: HashMap<u64, ClientEvent>,
+    pub history: Vec<(u64, bool)>,
+    pub history_gone: u32,
     pub metas: HashMap<PaneId, client_core::proto::PaneMeta>,
     pub log: Vec<String>,
 }
@@ -75,6 +86,12 @@ impl TestClient {
             snapshot_events: 0,
             byte_events: 0,
             agent_events: Vec::new(),
+            marks: Vec::new(),
+            unseen: Vec::new(),
+            hints: Vec::new(),
+            answers: HashMap::new(),
+            history: Vec::new(),
+            history_gone: 0,
             metas: HashMap::new(),
             log: Vec::new(),
         }
@@ -98,6 +115,17 @@ impl TestClient {
             ClientEvent::PaneSnapshot { .. } => self.snapshot_events += 1,
             ClientEvent::PaneBytes { .. } => self.byte_events += 1,
             ClientEvent::AgentEvent { json, .. } => self.agent_events.push(json),
+            ClientEvent::CommandMark { mark } => self.marks.push(mark),
+            ClientEvent::CommandFinishedUnseen { mark } => self.unseen.push(mark),
+            ClientEvent::EchoHint { hint } => self.hints.push(hint),
+            ClientEvent::PaneHistory { rows, done, .. } => self.history.push((rows, done)),
+            ClientEvent::PaneHistoryGone { .. } => self.history_gone += 1,
+            ClientEvent::SearchResult { req_id, .. }
+            | ClientEvent::Links { req_id, .. }
+            | ClientEvent::Commands { req_id, .. }
+            | ClientEvent::CommandOutput { req_id, .. } => {
+                self.answers.insert(req_id, event);
+            }
             ClientEvent::PaneMeta { meta } => {
                 self.metas.insert(meta.pane_id, meta);
             }
@@ -126,6 +154,24 @@ impl TestClient {
                 }
             }
         }
+    }
+
+    /// Waits for the answer to request `id`.
+    pub async fn answer(&mut self, id: u64) -> ClientEvent {
+        self.until("request answer", |c| c.answers.contains_key(&id))
+            .await;
+        self.answers.remove(&id).expect("present")
+    }
+
+    /// The visible screen with soft wraps removed (rows concatenated).
+    pub fn flat_text(&self, pane: PaneId) -> String {
+        self.text(pane).replace('\n', "")
+    }
+
+    pub async fn wait_flat(&mut self, pane: PaneId, needle: &str) {
+        let what = format!("{needle:?} in pane {pane}");
+        self.until(&what, |c| c.flat_text(pane).contains(needle))
+            .await;
     }
 
     pub async fn op(&mut self, op: LayoutOp) -> OpOutcome {

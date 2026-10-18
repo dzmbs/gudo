@@ -1,5 +1,6 @@
 //! A streaming OSC extractor for the facts the daemon tracks outside libghostty-vt: titles,
-//! working directory, shell-integration prompt marks and agent reports.
+//! working directory and agent reports. Shell-integration marks (OSC 133) come from
+//! libghostty-vt itself, with cursor positions (see `commands`).
 //!
 //! It only recognises `ESC ] … (BEL | ESC \)`; everything else passes through untouched (the
 //! VT parser sees every byte regardless). Bodies longer than [`MAX_BODY`] are dropped.
@@ -13,10 +14,8 @@ const MAX_BODY: usize = 8 * 1024;
 pub(crate) enum Osc {
     /// OSC 0 or 2.
     Title(String),
-    /// OSC 7, with the `file://host` prefix removed.
+    /// OSC 7, as a path (see [`file_url_path`]).
     Cwd(String),
-    /// OSC 133: `A` prompt start, `B` input start, `C` command output start, `D` command end.
-    Prompt(char),
     /// OSC 9 body after `9;` (Codex notifications, progress reports).
     Notify(String),
     /// OSC 7501 body after `7501;` (program status).
@@ -98,10 +97,6 @@ impl OscScanner {
         let osc = match code {
             "0" | "2" => Osc::Title(rest.to_owned()),
             "7" => Osc::Cwd(file_url_path(rest)),
-            "133" => match rest.chars().next() {
-                Some(c @ ('A' | 'B' | 'C' | 'D')) => Osc::Prompt(c),
-                _ => return,
-            },
             "9" => Osc::Notify(rest.to_owned()),
             "7501" => Osc::ProgramStatus(rest.to_owned()),
             _ => return,
@@ -110,8 +105,13 @@ impl OscScanner {
     }
 }
 
-/// `file://host/path` → `/path` (percent-decoded); anything else unchanged.
-fn file_url_path(url: &str) -> String {
+/// The path of an OSC 7 working-directory URL: `file://host/path` (percent-decoded) or the
+/// `kitty-shell-cwd://host/path` form Ghostty's shell integration sends (taken verbatim);
+/// anything else unchanged.
+pub(crate) fn file_url_path(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("kitty-shell-cwd://") {
+        return rest.find('/').map_or("/", |i| &rest[i..]).to_owned();
+    }
     let Some(rest) = url.strip_prefix("file://") else {
         return url.to_owned();
     };
@@ -155,15 +155,16 @@ mod tests {
             b"hi\x1b]0;ti",
             b"tle\x07\x1b]7;file://mac/Users/a%20b\x1b",
             b"\\\x1b]133;B\x07\x1b]9;4;1;50\x07\x1b]7501;working\x1b\\\x1b]52;c;xx\x07",
+            b"\x1b]7;kitty-shell-cwd://mac/Users/a%20b\x07",
         ]);
         assert_eq!(
             got,
             [
                 Osc::Title("title".into()),
                 Osc::Cwd("/Users/a b".into()),
-                Osc::Prompt('B'),
                 Osc::Notify("4;1;50".into()),
                 Osc::ProgramStatus("working".into()),
+                Osc::Cwd("/Users/a%20b".into()),
             ]
         );
     }
