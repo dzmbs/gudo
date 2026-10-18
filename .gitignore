@@ -6,3 +6,4 @@ zig-out
 *.xcframework
 xcuserdata/
 /.claude/worktrees
+node_modules/
