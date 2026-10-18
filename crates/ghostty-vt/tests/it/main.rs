@@ -1,6 +1,7 @@
 //!
 //! Run `cargo test -p ghostty-vt --test it -- --nocapture` to see the size table.
 
+mod anchors;
 mod continuation;
 mod size;
 

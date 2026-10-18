@@ -260,5 +260,7 @@ bitset! {
         KITTY_GRAPHICS = 1;
         /// Runs local echo prediction and wants `EchoHint`.
         ECHO_PREDICTION = 2;
+        /// Understands drawings and images (`ServerCtl::Artifact`, canvas panes).
+        ARTIFACTS = 3;
     }
 }

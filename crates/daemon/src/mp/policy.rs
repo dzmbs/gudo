@@ -13,6 +13,7 @@ pub(crate) enum Need {
     View,
     /// Send prompts to agent panes through the composer path.
     Prompt,
+    Draw,
     /// Raw input, layout changes, host files and forwards.
     Drive,
     /// Answer agent approval requests.
@@ -27,6 +28,7 @@ impl Need {
         match self {
             Self::View => Roles::ALL,
             Self::Prompt => Roles::PROMPTER | Roles::DRIVER | Roles::APPROVER,
+            Self::Draw => Roles::PROMPTER | Roles::DRIVER,
             Self::Drive => Roles::DRIVER,
             Self::Approve => Roles::APPROVER,
             Self::Own => Roles::OWNER,
@@ -37,6 +39,7 @@ impl Need {
         match self {
             Self::View => "any role",
             Self::Prompt => "the prompter, driver or approver role",
+            Self::Draw => "the prompter or driver role",
             Self::Drive => "the driver role",
             Self::Approve => "the approver role",
             Self::Own => "the owner role",
@@ -116,6 +119,30 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
         O::CloseTab { tab_id } => (Need::Own, Target::Tab(*tab_id)),
         O::CloseSession { session_id } => (Need::Own, Target::Session(*session_id)),
         O::CreateSession { .. } => (Need::Own, Target::Daemon),
+    }
+}
+
+/// edits and sends to agents. The artifact itself must also be visible to the scope
+/// (checked by the caller, which knows where it is anchored).
+pub(crate) fn artifact(req: &proto::ArtifactRequest) -> (Need, Target) {
+    use proto::ArtifactRequest as R;
+    match req {
+        R::List { .. } | R::Get { .. } | R::Export { .. } => (Need::View, Target::Any),
+        R::Create(c) => match c.anchor {
+            Some(a) => (Need::Draw, Target::Pane(a.pane_id)),
+            None => (Need::Draw, Target::Session(c.session_id)),
+        },
+        R::Apply { .. } | R::Delete { .. } | R::SetPreview { .. } => (Need::Draw, Target::Any),
+        R::SetAnchor { anchor, .. } => match anchor {
+            Some(a) => (Need::Draw, Target::Pane(a.pane_id)),
+            None => (Need::Draw, Target::Any),
+        },
+        R::Send(s) => (Need::Draw, Target::Pane(s.pane_id)),
+        R::ExcalidrawGet { .. } => (Need::View, Target::Any),
+        R::ExcalidrawPut(_) | R::Unplace { .. } => (Need::Draw, Target::Any),
+        R::Place(p) => (Need::Draw, Target::Pane(p.pane_id)),
+        R::Import(i) => (Need::Draw, Target::Pane(i.pane_id)),
+        R::Placements { pane_id } => (Need::View, Target::Pane(*pane_id)),
     }
 }
 

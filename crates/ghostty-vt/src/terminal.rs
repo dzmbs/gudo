@@ -595,6 +595,24 @@ impl Terminal {
         Ok(self.adopt_pin(raw))
     }
 
+    /// Tracks the cell at `at` in screen coordinates (row 0 = the oldest retained row) of the
+    /// screen active now. The pin stays on that screen's page list (an alternate-screen pin
+    /// does not move to the primary screen).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for a point outside the screen, [`Error::OutOfMemory`] if
+    /// allocation fails.
+    pub fn pin_at(&mut self, at: Point) -> Result<PinId, Error> {
+        let raw = track_tagged(
+            self.as_raw(),
+            ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN,
+            at.x,
+            at.y,
+        )?;
+        Ok(self.adopt_pin(raw))
+    }
+
     /// Where a pin is now, in screen coordinates; `None` once its row left scrollback, or
     /// for an unknown id.
     pub fn pin_point(&self, pin: PinId) -> Option<Point> {
@@ -858,15 +876,26 @@ fn track(
     x: u16,
     y: u32,
 ) -> Result<NonNull<ffi::GhosttyTrackedGridRefImpl>, Error> {
+    track_tagged(
+        terminal,
+        ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_ACTIVE,
+        x,
+        y,
+    )
+}
+
+/// Tracks cell `(x, y)` of `terminal` in the coordinate space `tag`.
+fn track_tagged(
+    terminal: ffi::GhosttyTerminal,
+    tag: ffi::GhosttyPointTag,
+    x: u16,
+    y: u32,
+) -> Result<NonNull<ffi::GhosttyTrackedGridRefImpl>, Error> {
     let mut raw = ptr::null_mut();
     // SAFETY: the caller passes a live terminal with access serialized; `raw` is a valid out
     // pointer.
     Error::check(unsafe {
-        ffi::ghostty_terminal_grid_ref_track(
-            terminal,
-            point(ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_ACTIVE, x, y),
-            &mut raw,
-        )
+        ffi::ghostty_terminal_grid_ref_track(terminal, point(tag, x, y), &mut raw)
     })?;
     NonNull::new(raw).ok_or(Error::InvalidValue)
 }

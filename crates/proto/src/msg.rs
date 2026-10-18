@@ -4,6 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::{
+    ArtifactError, ArtifactEvent, ArtifactRequest, ArtifactResponse, BlobHeader, InkLive,
+};
 use crate::ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
     ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
@@ -54,6 +57,9 @@ pub enum StreamHeader {
     Upload(UploadHeader),
     /// Client → daemon, bidirectional, bulk priority: read a file. See [`TransferReply`](crate::TransferReply).
     Download(DownloadHeader),
+    /// Client → daemon, bidirectional, bulk priority: store or fetch an artifact blob. See
+    /// [`BlobReply`](crate::BlobReply).
+    Blob(BlobHeader),
 }
 
 /// The daemon's answer on a [`StreamHeader::PortForward`] stream.
@@ -234,6 +240,16 @@ pub enum ClientCtl {
         /// The request.
         req: MpRequest,
     },
+    /// A drawing or image request, answered by [`ServerCtl::ArtifactResult`].
+    Artifact {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: ArtifactRequest,
+    },
+    /// Points of a stroke being drawn; fanned out to the session's other clients as
+    /// [`ArtifactEvent::Ink`](crate::ArtifactEvent::Ink).
+    InkLive(InkLive),
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -533,6 +549,15 @@ pub enum ServerCtl {
         /// Why, naming the role needed.
         reason: String,
     },
+    /// Answers [`ClientCtl::Artifact`].
+    ArtifactResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<ArtifactResponse, ArtifactError>,
+    },
+    /// A drawing or image in the attached session changed (or live ink from someone else).
+    Artifact(ArtifactEvent),
 }
 
 /// The daemon's answer to a successful `Hello`.

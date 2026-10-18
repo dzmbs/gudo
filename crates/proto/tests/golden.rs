@@ -520,6 +520,8 @@ fn every_message_matches_its_frozen_bytes() {
     terminal_completeness(&mut c);
     workspace_messages(&mut c);
     multiplayer_messages(&mut c);
+    artifact_messages(&mut c);
+    artifact_messages_2(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -2208,4 +2210,710 @@ fn vscodium_editor_messages_match_their_frozen_bytes() {
         "wire format changed:\n{}",
         c.failures.join("\n")
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+
+const HASH: BlobHash = BlobHash([0x55; 32]);
+
+fn image_ref() -> ImageRef {
+    ImageRef {
+        hash: HASH,
+        media: MediaType::Png,
+        size: 1000,
+        width: 640,
+        height: 480,
+    }
+}
+
+fn element() -> Element {
+    Element {
+        id: ElementId(7),
+        z: -1,
+        style: Style {
+            color: 0xff00_00ff,
+            width: 2.5,
+        },
+        kind: ElementKind::Stroke(Stroke {
+            tool: Tool::Pen,
+            points: PackedPoints(vec![1, 2, 4, 128, 255, 0, 8]),
+        }),
+    }
+}
+
+fn row_anchor() -> RowAnchor {
+    RowAnchor {
+        pane_id: PANE,
+        screen: AnchorScreen::Primary,
+        at_seq: Seq(900),
+        from_bottom: 12,
+        command_id: Some(4),
+        state: AnchorState::Live,
+    }
+}
+
+fn artifact_info() -> ArtifactInfo {
+    ArtifactInfo {
+        artifact_id: ArtifactId(5),
+        session_id: SessionId(2),
+        kind: ArtifactKind::Drawing,
+        title: "t".into(),
+        space: CoordSpace::Cells,
+        created_by: ACTOR,
+        created_at: UnixMillis(10),
+        updated_at: UnixMillis(20),
+        version: 3,
+        elements: 2,
+        image: None,
+        preview: Some(Preview {
+            image: image_ref(),
+            version: 3,
+        }),
+        anchor: Some(row_anchor()),
+        canvas_panes: vec![PaneId(9)],
+    }
+}
+
+fn op_batch() -> OpBatch {
+    OpBatch {
+        version: 3,
+        actor: ACTOR,
+        at: UnixMillis(20),
+        ops: vec![
+            DrawOp::Add(element()),
+            DrawOp::Move {
+                id: ElementId(7),
+                dx: 1.0,
+                dy: -1.0,
+            },
+            DrawOp::Delete { id: ElementId(8) },
+        ],
+    }
+}
+
+fn ink() -> InkLive {
+    InkLive {
+        artifact_id: ArtifactId(5),
+        stroke_id: ElementId(99),
+        actor: ACTOR,
+        chunk: 2,
+        tool: Tool::Highlighter,
+        style: Style {
+            color: 0xffff_0080,
+            width: 8.0,
+        },
+        points: PackedPoints(vec![1, 0, 0, 255, 255, 0, 4]),
+        done: false,
+    }
+}
+
+fn artifact_messages(c: &mut Checker) {
+    let req = |req: ArtifactRequest| ClientCtl::Artifact { req_id: 6, req };
+    let anchor_req = AnchorRequest {
+        pane_id: PANE,
+        at_seq: Seq(800),
+        from_bottom: 3,
+    };
+    for (name, msg, golden) in [
+        (
+            "ClientCtl::Artifact(List)",
+            req(ArtifactRequest::List {
+                session_id: SessionId(2),
+            }),
+            "050000000117060002",
+        ),
+        (
+            "ClientCtl::Artifact(Create)",
+            req(ArtifactRequest::Create(ArtifactCreate {
+                session_id: SessionId(2),
+                kind: ArtifactKind::Drawing,
+                title: "t".into(),
+                space: CoordSpace::Cells,
+                anchor: Some(anchor_req),
+                image: None,
+                ops: vec![DrawOp::Add(element())],
+            })),
+            "260000000117060102000174010103a006030001000701ff8180f80f0000204000000701020480ff0008",
+        ),
+        (
+            "ClientCtl::Artifact(Get)",
+            req(ArtifactRequest::Get {
+                artifact_id: ArtifactId(5),
+                since: 2,
+            }),
+            "06000000011706020502",
+        ),
+        (
+            "ClientCtl::Artifact(Apply)",
+            req(ArtifactRequest::Apply {
+                artifact_id: ArtifactId(5),
+                base: 2,
+                ops: vec![
+                    DrawOp::Restyle {
+                        id: ElementId(7),
+                        style: Style {
+                            color: 1,
+                            width: 1.0,
+                        },
+                    },
+                    DrawOp::SetZ {
+                        id: ElementId(7),
+                        z: 3,
+                    },
+                    DrawOp::Clear,
+                    DrawOp::SetTitle("x".into()),
+                ],
+            }),
+            "15000000011706030502040207010000803f03070605060178",
+        ),
+        (
+            "ClientCtl::Artifact(Delete)",
+            req(ArtifactRequest::Delete {
+                artifact_id: ArtifactId(5),
+            }),
+            "050000000117060405",
+        ),
+        (
+            "ClientCtl::Artifact(SetAnchor)",
+            req(ArtifactRequest::SetAnchor {
+                artifact_id: ArtifactId(5),
+                anchor: Some(anchor_req),
+            }),
+            "0a00000001170605050103a00603",
+        ),
+        (
+            "ClientCtl::Artifact(SetPreview)",
+            req(ArtifactRequest::SetPreview {
+                artifact_id: ArtifactId(5),
+                version: 3,
+                png: HASH,
+            }),
+            "260000000117060605035555555555555555555555555555555555555555555555555555555555555555",
+        ),
+        (
+            "ClientCtl::Artifact(Export)",
+            req(ArtifactRequest::Export {
+                artifact_id: ArtifactId(5),
+                version: Some(2),
+                format: ExportFormat::Svg,
+            }),
+            "080000000117060705010201",
+        ),
+        (
+            "ClientCtl::Artifact(Send)",
+            req(ArtifactRequest::Send(ArtifactSend {
+                pane_id: PANE,
+                artifact_id: Some(ArtifactId(5)),
+                version: None,
+                png: PngSource::Inline(vec![0x89, 0x50]),
+            })),
+            "0c000000011706080301050000028950",
+        ),
+        (
+            "ClientCtl::Artifact(Send blob)",
+            req(ArtifactRequest::Send(ArtifactSend {
+                pane_id: PANE,
+                artifact_id: None,
+                version: Some(1),
+                png: PngSource::Blob(HASH),
+            })),
+            "290000000117060803000101015555555555555555555555555555555555555555555555555555555555555555",
+        ),
+        (
+            "ClientCtl::Artifact(Send render)",
+            req(ArtifactRequest::Send(ArtifactSend {
+                pane_id: PANE,
+                artifact_id: Some(ArtifactId(5)),
+                version: None,
+                png: PngSource::Artifact,
+            })),
+            "09000000011706080301050002",
+        ),
+        (
+            "ClientCtl::InkLive",
+            ClientCtl::InkLive(ink()),
+            "480000000118056311111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202018081fcff0f0000004107010000ffff000400",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
+
+    let res = |result: Result<ArtifactResponse, ArtifactError>| ServerCtl::ArtifactResult {
+        req_id: 6,
+        result,
+    };
+    for (name, msg, golden) in [
+        (
+            "ServerCtl::ArtifactResult(List)",
+            res(Ok(ArtifactResponse::List(vec![artifact_info()]))),
+            "750000000122060000010502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Created)",
+            res(Ok(ArtifactResponse::Created(artifact_info()))),
+            "7400000001220600010502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Scene)",
+            res(Ok(ArtifactResponse::Scene(ArtifactScene {
+                info: artifact_info(),
+                elements: Some(vec![element()]),
+                batches: vec![op_batch()],
+            }))),
+            "e100000001220600020502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c010400010901010701ff8180f80f0000204000000701020480ff000801031111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221403000701ff8180f80f0000204000000701020480ff000801070000803f000080bf0408",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Applied)",
+            res(Ok(ArtifactResponse::Applied {
+                artifact_id: ArtifactId(5),
+                version: 4,
+            })),
+            "0700000001220600030504",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Info)",
+            res(Ok(ArtifactResponse::Info(artifact_info()))),
+            "7400000001220600040502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Exported)",
+            res(Ok(ArtifactResponse::Exported(Exported {
+                format: ExportFormat::Png,
+                version: 3,
+                data: vec![],
+                blob: Some(HASH),
+            }))),
+            "290000000122060005000300015555555555555555555555555555555555555555555555555555555555555555",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Sent)",
+            res(Ok(ArtifactResponse::Sent(Sent {
+                artifact_id: ArtifactId(5),
+                version: 3,
+                path: "/a b/5@3.png".into(),
+                pasted: "/a\\ b/5@3.png".into(),
+                bracketed: true,
+            }))),
+            "23000000012206000605030c2f6120622f3540332e706e670d2f615c20622f3540332e706e6701",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Done)",
+            res(Ok(ArtifactResponse::Done)),
+            "050000000122060007",
+        ),
+        (
+            "ArtifactError::NotFound",
+            res(Err(ArtifactError::NotFound("x".into()))),
+            "0700000001220601000178",
+        ),
+        (
+            "ArtifactError::Forbidden",
+            res(Err(ArtifactError::Forbidden("x".into()))),
+            "0700000001220601010178",
+        ),
+        (
+            "ArtifactError::TooLarge",
+            res(Err(ArtifactError::TooLarge("x".into()))),
+            "0700000001220601020178",
+        ),
+        (
+            "ArtifactError::Invalid",
+            res(Err(ArtifactError::Invalid("x".into()))),
+            "0700000001220601030178",
+        ),
+        (
+            "ArtifactError::NotAgentPane",
+            res(Err(ArtifactError::NotAgentPane)),
+            "050000000122060104",
+        ),
+        (
+            "ArtifactError::Failed",
+            res(Err(ArtifactError::Failed("x".into()))),
+            "0700000001220601050178",
+        ),
+        (
+            "ArtifactError::Disconnected",
+            res(Err(ArtifactError::Disconnected)),
+            "050000000122060106",
+        ),
+        (
+            "ServerCtl::Artifact(Created)",
+            ServerCtl::Artifact(ArtifactEvent::Created(artifact_info())),
+            "720000000123000502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
+        ),
+        (
+            "ServerCtl::Artifact(Changed)",
+            ServerCtl::Artifact(ArtifactEvent::Changed {
+                info: artifact_info(),
+                batch: op_batch(),
+            }),
+            "c70000000123010502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109031111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221403000701ff8180f80f0000204000000701020480ff000801070000803f000080bf0408",
+        ),
+        (
+            "ServerCtl::Artifact(Info)",
+            ServerCtl::Artifact(ArtifactEvent::Info(artifact_info())),
+            "720000000123020502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c0104000109",
+        ),
+        (
+            "ServerCtl::Artifact(Deleted)",
+            ServerCtl::Artifact(ArtifactEvent::Deleted {
+                session_id: SessionId(2),
+                artifact_id: ArtifactId(5),
+            }),
+            "050000000123030205",
+        ),
+        (
+            "ServerCtl::Artifact(Ink)",
+            ServerCtl::Artifact(ArtifactEvent::Ink(ink())),
+            "49000000012304056311111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202018081fcff0f0000004107010000ffff000400",
+        ),
+        (
+            "ServerCtl::Artifact(Canvases)",
+            ServerCtl::Artifact(ArtifactEvent::Canvases {
+                session_id: SessionId(2),
+                canvases: vec![CanvasPane {
+                    pane_id: PaneId(9),
+                    artifact_id: ArtifactId(5),
+                }],
+            }),
+            "0700000001230502010905",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
+
+    for (name, msg, golden) in [
+        (
+            "StreamHeader::Blob(Put)",
+            StreamHeader::Blob(BlobHeader::Put {
+                session_id: SessionId(2),
+                size: 300,
+                media: MediaType::Jpeg,
+            }),
+            "0700000001070002ac0201",
+        ),
+        (
+            "StreamHeader::Blob(Get)",
+            StreamHeader::Blob(BlobHeader::Get { hash: HASH }),
+            "230000000107015555555555555555555555555555555555555555555555555555555555555555",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
+    for (name, msg, golden) in [
+        ("BlobReply::Ready", BlobReply::Ready, "020000000100"),
+        (
+            "BlobReply::Stored",
+            BlobReply::Stored(image_ref()),
+            "290000000101555555555555555555555555555555555555555555555555555555555555555500e8078005e003",
+        ),
+        (
+            "BlobReply::Found",
+            BlobReply::Found(image_ref()),
+            "290000000102555555555555555555555555555555555555555555555555555555555555555500e8078005e003",
+        ),
+        (
+            "BlobReply::Failed",
+            BlobReply::Failed(ArtifactError::TooLarge("big".into())),
+            "0700000001030203626967",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
+    let shapes = vec![
+        ElementKind::Shape {
+            shape: ShapeKind::Rect,
+            from: Pt { x: 0.0, y: 0.0 },
+            to: Pt { x: 1.0, y: 1.0 },
+            filled: true,
+        },
+        ElementKind::Shape {
+            shape: ShapeKind::Ellipse,
+            from: Pt { x: 0.0, y: 0.0 },
+            to: Pt { x: 1.0, y: 1.0 },
+            filled: false,
+        },
+        ElementKind::Shape {
+            shape: ShapeKind::Line,
+            from: Pt { x: 0.0, y: 0.0 },
+            to: Pt { x: 1.0, y: 1.0 },
+            filled: false,
+        },
+        ElementKind::Shape {
+            shape: ShapeKind::Arrow,
+            from: Pt { x: 0.0, y: 0.0 },
+            to: Pt { x: 1.0, y: 1.0 },
+            filled: false,
+        },
+        ElementKind::Text {
+            at: Pt { x: 1.0, y: 2.0 },
+            text: "hi".into(),
+            size: 12.0,
+        },
+        ElementKind::Image {
+            image: image_ref(),
+            from: Pt { x: 0.0, y: 0.0 },
+            to: Pt { x: 4.0, y: 3.0 },
+        },
+        ElementKind::Stroke(Stroke {
+            tool: Tool::Marker,
+            points: PackedPoints(vec![]),
+        }),
+    ];
+    let goldens = [
+        "1400000001010000000000000000000000803f0000803f01",
+        "1400000001010100000000000000000000803f0000803f00",
+        "1400000001010200000000000000000000803f0000803f00",
+        "1400000001010300000000000000000000803f0000803f00",
+        "1100000001020000803f0000004002686900004041",
+        "390000000103555555555555555555555555555555555555555555555555555555555555555500e8078005e00300000000000000000000804000004040",
+        "0400000001000200",
+    ];
+    for (i, (kind, golden)) in shapes.into_iter().zip(goldens).enumerate() {
+        c.check(&format!("ElementKind#{i}"), kind, golden);
+    }
+    for (name, msg, golden) in [
+        (
+            "RowAnchor(Detached)",
+            RowAnchor {
+                screen: AnchorScreen::Alternate,
+                state: AnchorState::Detached(DetachReason::AltScreenExited),
+                ..row_anchor()
+            },
+            "0a00000001030184070c01040101",
+        ),
+        (
+            "RowAnchor(RowGone)",
+            RowAnchor {
+                state: AnchorState::Detached(DetachReason::RowGone),
+                ..row_anchor()
+            },
+            "0a00000001030084070c01040100",
+        ),
+        (
+            "RowAnchor(PaneClosed)",
+            RowAnchor {
+                state: AnchorState::Detached(DetachReason::PaneClosed),
+                ..row_anchor()
+            },
+            "0a00000001030084070c01040102",
+        ),
+        (
+            "RowAnchor(DaemonRestart)",
+            RowAnchor {
+                state: AnchorState::Detached(DetachReason::DaemonRestart),
+                ..row_anchor()
+            },
+            "0a00000001030084070c01040103",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
+    c.check(
+        "ArtifactInfo(Image)",
+        ArtifactInfo {
+            kind: ArtifactKind::Image,
+            space: CoordSpace::Canvas,
+            image: Some(image_ref()),
+            preview: None,
+            anchor: None,
+            canvas_panes: vec![],
+            ..artifact_info()
+        },
+        "66000000010502010174001111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a14030201555555555555555555555555555555555555555555555555555555555555555500e8078005e003000000",
+    );
+    c.check(
+        "LayoutOp::Split(Canvas)",
+        LayoutOp::Split {
+            pane_id: PANE,
+            axis: Axis::Horizontal,
+            launch: PaneLaunch::Canvas {
+                artifact_id: Some(ArtifactId(5)),
+            },
+        },
+        "0700000001000300030105",
+    );
+    c.check(
+        "PaneLaunch::Canvas(None)",
+        PaneLaunch::Canvas { artifact_id: None },
+        "03000000010300",
+    );
+    c.check("Caps::ARTIFACTS", Caps::ARTIFACTS, "020000000108");
+}
+
+
+fn ex_element() -> ExElement {
+    ExElement {
+        id: "r1".into(),
+        version: 4,
+        version_nonce: 77,
+        deleted: false,
+        json: r#"{"id":"r1"}"#.into(),
+    }
+}
+
+fn ex_file() -> ExFile {
+    ExFile {
+        file_id: "f1".into(),
+        image: image_ref(),
+    }
+}
+
+fn placement() -> Placement {
+    Placement {
+        placement_id: 8,
+        pane_id: PANE,
+        artifact_id: ArtifactId(5),
+        version: 3,
+        image: image_ref(),
+        anchor: row_anchor(),
+        col: 2,
+        cols: 40,
+        rows: 12,
+        source: PlacementSource::User,
+        at: UnixMillis(30),
+    }
+}
+
+fn artifact_messages_2(c: &mut Checker) {
+    let req = |req: ArtifactRequest| ClientCtl::Artifact { req_id: 6, req };
+    let res = |result: Result<ArtifactResponse, ArtifactError>| ServerCtl::ArtifactResult {
+        req_id: 6,
+        result,
+    };
+    for (name, msg, golden) in [
+        (
+            "ClientCtl::Artifact(Export Ascii)",
+            req(ArtifactRequest::Export {
+                artifact_id: ArtifactId(5),
+                version: None,
+                format: ExportFormat::Ascii,
+            }),
+            "0700000001170607050002",
+        ),
+        (
+            "ClientCtl::Artifact(ExcalidrawGet)",
+            req(ArtifactRequest::ExcalidrawGet {
+                artifact_id: ArtifactId(5),
+                since: 9,
+            }),
+            "06000000011706090509",
+        ),
+        (
+            "ClientCtl::Artifact(ExcalidrawPut)",
+            req(ArtifactRequest::ExcalidrawPut(ExcalidrawPut {
+                artifact_id: ArtifactId(5),
+                base: 9,
+                elements: vec![ex_element()],
+                app_state: Some("{}".into()),
+                files: vec![ex_file()],
+            })),
+            "480000000117060a050901027231044d000b7b226964223a227231227d01027b7d01026631555555555555555555555555555555555555555555555555555555555555555500e8078005e003",
+        ),
+        (
+            "ClientCtl::Artifact(Place)",
+            req(ArtifactRequest::Place(PlaceRequest {
+                pane_id: PANE,
+                artifact_id: ArtifactId(5),
+                version: Some(3),
+                anchor: Some(AnchorRequest {
+                    pane_id: PANE,
+                    at_seq: Seq(800),
+                    from_bottom: 3,
+                }),
+                col: 2,
+                cols: 0,
+                rows: 0,
+                png: Some(HASH),
+                replace: Some(7),
+            })),
+            "330000000117060b030501030103a006030200000155555555555555555555555555555555555555555555555555555555555555550107",
+        ),
+        (
+            "ClientCtl::Artifact(Unplace)",
+            req(ArtifactRequest::Unplace { placement_id: 8 }),
+            "050000000117060c08",
+        ),
+        (
+            "ClientCtl::Artifact(Placements)",
+            req(ArtifactRequest::Placements { pane_id: PANE }),
+            "050000000117060d03",
+        ),
+        (
+            "ClientCtl::Artifact(Import)",
+            req(ArtifactRequest::Import(ImportRequest {
+                pane_id: PANE,
+                name: "a.excalidraw".into(),
+                data: b"{}".to_vec(),
+                blob: None,
+            })),
+            "160000000117060e030c612e657863616c6964726177027b7d00",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
+    for (name, msg, golden) in [
+        (
+            "ServerCtl::ArtifactResult(Excalidraw)",
+            res(Ok(ArtifactResponse::Excalidraw(ExcalidrawScene {
+                info: ArtifactInfo {
+                    kind: ArtifactKind::Excalidraw,
+                    ..artifact_info()
+                },
+                elements: vec![ex_element()],
+                app_state: None,
+                files: vec![ex_file()],
+            }))),
+            "b300000001220600080502020174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c010400010901027231044d000b7b226964223a227231227d0001026631555555555555555555555555555555555555555555555555555555555555555500e8078005e003",
+        ),
+        (
+            "ServerCtl::ArtifactResult(ExcalidrawApplied)",
+            res(Ok(ArtifactResponse::ExcalidrawApplied {
+                artifact_id: ArtifactId(5),
+                version: 10,
+                rejected: vec![ex_element()],
+            })),
+            "1a0000000122060009050a01027231044d000b7b226964223a227231227d",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Placed)",
+            res(Ok(ArtifactResponse::Placed(placement()))),
+            "3d000000012206000a08030503555555555555555555555555555555555555555555555555555555555555555500e8078005e003030084070c01040002280c001e",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Placements)",
+            res(Ok(ArtifactResponse::Placements(vec![Placement {
+                source: PlacementSource::Kitty,
+                ..placement()
+            }]))),
+            "3e000000012206000b0108030503555555555555555555555555555555555555555555555555555555555555555500e8078005e003030084070c01040002280c011e",
+        ),
+        (
+            "ServerCtl::Artifact(Excalidraw)",
+            ServerCtl::Artifact(ArtifactEvent::Excalidraw {
+                artifact_id: ArtifactId(5),
+                version: 10,
+                elements: vec![ex_element()],
+                app_state: Some("{}".into()),
+                files: vec![],
+            }),
+            "1d000000012306050a01027231044d000b7b226964223a227231227d01027b7d00",
+        ),
+        (
+            "ServerCtl::Artifact(Placed)",
+            ServerCtl::Artifact(ArtifactEvent::Placed(placement())),
+            "3b00000001230708030503555555555555555555555555555555555555555555555555555555555555555500e8078005e003030084070c01040002280c001e",
+        ),
+        (
+            "ServerCtl::Artifact(Unplaced)",
+            ServerCtl::Artifact(ArtifactEvent::Unplaced {
+                pane_id: PANE,
+                placement_id: 8,
+            }),
+            "050000000123080308",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
 }

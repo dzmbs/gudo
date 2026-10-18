@@ -1,0 +1,17 @@
+[package]
+name = "drawing"
+version = "0.0.0"
+description = "Drawing model shared by daemon, client core and CLI: packed ink points, op application, SVG export, a small rasteriser and PNG encoding"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+proto.workspace = true
+flate2.workspace = true
+data-encoding.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -3,7 +3,7 @@
 Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
 (key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
 roles enforced on every request, control lease, presence, signed approvals, audit log,
-revocation).
+anchors, send to agent).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -266,6 +266,9 @@ un git status [path] | diff [--staged|--index|--rev R|--merge-base B] [--stat] [
 un turns [--diff N] [--stat]      un review --pane P --note 'path:L[-L]:text' [--submit]
 un worktree create [--repo R] [--branch B] [--base B] | list | remove <path> [--force]
             [--delete-branch] | launch <path> [--agent claude|codex]
+un draw list | show <id> [--mode kitty|ascii] | export <id> --format png|svg|ascii [-o F]
+        | send <id> | --file img.png [--pane P] [--version V]
+        | place <id> [--pane P] | import <file.png|.excalidraw> [--pane P]
 un fs ls <dir> [-a] | stat | cat | put <local> <remote> [--if-match V] [--new] | get <remote>
       <local> | mkdir [-p] | mv <a> <b> [--force] | rm <path> [--permanent] [-r] | watch <dir>
 #   --no-relay for direct-only; --ticket to override the saved one
@@ -729,6 +732,13 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | Streams: `PortForward`, `Forward`, `Upload`, `Download` | driver | host |
 | `RegisterGrant` | owner, or the chain's leaf issuer | — |
 | `ListGrants`, `ListDevices`, `Revoke`, `Audit` | **owner** | daemon |
+| `Artifact`: `List`, `Get`, `Export`; blob download | any role | artifact visible (below) |
+| `Artifact`: `Create`, `Apply`, `Delete`, `SetAnchor`, `SetPreview`; `InkLive`; blob upload | **prompter or driver** | artifact visible; anchor pane / session in scope |
+| `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |
+| `Op` `Split`/`NewTab` with `PaneLaunch::Canvas` | driver (as any split) | session of the pane |
+
+An artifact is visible to daemon- and session-wide grants in its session; tab- and
+pane-scoped guests see only ink anchored to, or canvases shown in, panes inside their scope.
 
 Pushes are filtered the same way: layout (a tab-scoped guest sees only its tab, a pane-scoped
 guest a one-pane layout), pane meta, agent events, echo hints, command marks, decisions,
@@ -829,7 +839,222 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 - Unit tests: prompt sanitizer, audit chain (reopen, edit detection).
 - `proto` goldens for every new message and variant; invite text round trip.
 
-## 7. Known gaps / follow-ups
+
+`proto::artifact` (wire), `crates/drawing` (model shared with client-core and `un`: packed
+ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/src/art/`
+(store, send, blob streams), `crates/daemon/src/anchor.rs` (row anchors),
+`crates/client-core/src/artifacts.rs`, `crates/un/src/draw.rs`.
+
+### 7.1 Model
+
+- An **artifact** belongs to a session: a **drawing** (elements: strokes with packed points,
+  rect/ellipse/line/arrow shapes, text, placed images; canvas units or terminal cells), an
+  **Excalidraw scene** (§7.9) or an **image** (one blob). `ArtifactInfo` carries kind, title, coordinate space, creator, times,
+  `version`, element count, the image, a `preview` PNG (a client's render of one version), the
+  `anchor` and the canvas panes showing it.
+- **Op log**: every `Apply` is one `OpBatch{version, actor, at, ops}` (add/replace, move,
+  restyle, z, delete, clear, title). The daemon orders batches; `Scene::apply` takes exactly
+  `version + 1`, so all clients converge. Elements are add-wins (an existing id is replaced),
+  fields last-writer-wins.
+- **Blobs**: SHA-256 content addressed, PNG or JPEG only (sniffed from the header), shared by
+  all sessions, garbage-collected when no image artifact, preview or image element refers to
+  them (after a grace period, so an upload waiting for its `Create` survives).
+
+### 7.2 Protocol
+
+`ClientCtl::Artifact{req_id, ArtifactRequest}` → `ServerCtl::ArtifactResult{req_id,
+Result<ArtifactResponse, ArtifactError>}`: `List{session}`, `Create`, `Get{id, since}` (the
+batches after `since`, else every element), `Apply{id, base, ops}`, `Delete`, `SetAnchor`,
+`SetPreview{id, version, png}`, `Export{id, version, Png|Svg}`, `Send`. Pushes to the clients
+attached to the session (`ServerCtl::Artifact`): `Created`, `Changed{info, batch}`,
+`Info` (anchor detached, preview, canvas panes), `Deleted`, `Ink` (others' live strokes) and
+`Canvases{session, [pane → artifact]}` (also sent on `Attach`). `ClientCtl::InkLive` streams
+live points; the daemon stamps the actor and relays it to everyone else in the session.
+Blobs move on bidirectional streams at bulk priority, `StreamHeader::Blob(Put{session, size,
+media} | Get{hash})` → `BlobReply::{Ready, Stored, Found, Failed}`; QUIC flow control is the
+backpressure. `Caps::ARTIFACTS` marks clients that understand all this. Goldens for every new
+message in `crates/proto/tests/golden.rs`.
+
+**Canvas panes** are ordinary `LayoutNode::Leaf`s created by `Split`/`NewTab` with
+`PaneLaunch::Canvas{artifact: None}` (the daemon creates an Excalidraw scene) or `Some(id)`
+(a drawing or scene). They run
+no process; `Canvases` says which leaves they are. Not a new `LayoutNode` variant on purpose:
+an old client would fail to decode the whole layout; this way it shows an empty pane.
+Closing the pane keeps the drawing; deleting the drawing closes its canvas panes.
+
+### 7.3 Ink anchors
+
+`Create`/`SetAnchor` with `AnchorRequest{pane, at_seq, from_bottom}`: the daemon pins the row
+on its VT (accounting for rows scrolled since `at_seq`), answers `RowAnchor{screen, at_seq,
+from_bottom, command_id, state}` and clients track the row in their own VT. Anchors detach
+(`RowGone` after eviction or `clear`, `AltScreenExited`, `PaneClosed`, `DaemonRestart`) and a
+
+### 7.4 Send to agent
+
+`Send{pane, artifact?, version?, png: Inline | Blob | Artifact}`: the pane must run an agent
+(launched, detected or reporting hooks) or the answer is `NotAgentPane`. The PNG is the
+client's render (inline ≤ 1 MiB, else an uploaded blob), or for `Artifact` the image, the
+preview of that version, or the daemon's own rasterisation. It is written to
+`<state>/artifacts/<session>/send/<artifact>@<version>.png` (atomically) and the path is pasted
+character outside `[A-Za-z0-9_./@:-]`, e.g. `Application\ Support`), never followed by Enter.
+The answer (`Sent{path, pasted, bracketed}`) comes 120 ms after the paste so the client's next
+keystroke cannot overtake Claude's asynchronous attach. A bare image (no artifact) is kept as
+an image artifact. Each send is audited (`Prompt` kind, path only).
+
+### 7.5 Export
+
+`Ascii`: `drawing::to_ascii` — box glyphs (`┌─┐`, `├`, `┼`) with junctions where lines
+meet, arrows as orthogonal elbows ending in `▶◀▲▼`, ellipses `╭╮╰╯`, text in place, ink as
+dots; Excalidraw scenes map 10 × 20 scene px to a character. `Png`: passthrough of the image blob or of the preview at the asked version; with no preview
+the daemon rasterises (`drawing::rasterize`: anti-aliased pressure strokes, shapes; text and
+images as outlines) and keeps that as the preview. `Svg`: `drawing::to_svg`, deterministic
+(golden-tested), images inlined as data URIs up to 8 MiB each. Results over 1 MiB come back as
+a blob hash to download.
+
+### 7.6 Storage and caps
+
+`<state>/artifacts/`: `index.bin` (next id, canvas panes), `<session>/<id>/info.bin`,
+`<session>/<id>/ops.log` (length-prefixed postcard batches, appended and `fdatasync`ed per
+batch; a torn last frame is dropped on load), `blobs/<sha256>`, `<session>/send/`. Closing a
+session deletes its artifacts. Caps (`Config::artifacts`): blob 32 MiB, whole store 1 GiB,
+one drawing's log 8 MiB, one batch 1 MiB, 1000 artifacts per session, 20 000 elements per
+drawing, 16 KiB per text and per ink chunk; over a cap → `TooLarge`.
+
+### 7.7 Client core and CLI
+
+`Client::artifacts / artifact_create / artifact_get / artifact_apply / artifact_delete /
+artifact_set_anchor / artifact_set_preview / artifact_export / send_to_agent / blob_upload /
+blob_download / ink_live`; pushes go to an `ArtifactListener` (`ArtifactUpdate::Event` or
+`Synced`). The client caches a `drawing::Scene` per artifact it has seen: pushed batches apply
+in order, a gap or a reconnect fetches `Get{since}` (resync), `artifact_scene(id)` reads it.
+`un draw list | show | export | send` (show: kitty graphics when the terminal supports it,
+from the environment or an `a=q` query; else a braille render and a summary).
+
+### 7.8 Tests
+
+`cargo test -p daemon --test it artifacts` (macOS and Linux): Excalidraw scenes (a canvas pane
+creates one; concurrent puts reconcile with the version / nonce rule on both clients and the
+daemon, stale offers come back as winners, deletions, resync after a reconnect, ASCII/SVG/PNG
+export, a viewer reads but cannot put or import); inline placements (placed at the cursor
+row, followed through 40 lines of output, sent to a client attaching later, replaced after
+an edit, a kitty PNG printed by a program in the pane captured as an image artifact and
+placement with its `c`/`r` size, a dropped `.excalidraw` file and photo imported and placed,
+detached by `clear`, removed, kept detached after a restart with the scene intact); two
+clients — live ink fan-out
+(200 chunks, latency printed, no echo to the sender), batches from both converge, the second
+client suspended while the first draws resyncs to the same scene on reconnect, an anchor
+detaches after `clear`; a viewer lists, reads and exports but cannot create, apply, delete,
+send, upload or ink (and its ink never reaches the owner); send-to-agent into a fake agent
+(`cat -v` behind bracketed paste) from a state dir containing a space: escaped bracketed path,
+no Enter, file bytes, `NotAgentPane` for a shell, bare images and daemon renders; canvas pane,
+image blob, preview, PNG/SVG export, blob download, then a daemon restart keeps artifacts,
+versions, scenes, blobs and the canvas pane; caps. Unit/golden: `crates/drawing` (packing,
+simplification, scene convergence, SVG golden, rasteriser, PNG), anchors
+(`daemon::anchor`, `ghostty-vt` `anchors`), paste escaping, proto goldens.
+
+### 7.9 Excalidraw scenes
+
+The non-Pencil editor (finger, mouse, trackpad) is Excalidraw (MIT), bundled offline in a
+WKWebView; the daemon is its sync and persistence backend. Elements stay Excalidraw's JSON
+(`ExElement{id, version, version_nonce, deleted, json}`; the daemon checks the fields
+against the JSON). `ExcalidrawPut` reconciles each element with Excalidraw's own rule —
+higher `version` wins, a tie goes to the lower `versionNonce`, deletions are tombstones — and
+answers `ExcalidrawApplied{version, rejected}` (the stored winners for offers that lost); the
+winners go to everyone else as `ArtifactEvent::Excalidraw`. `ExcalidrawGet{since}` returns the
+elements changed after a revision (every element at 0), app state and files. Images are blobs
+(`ExFile{file_id, image}`), so a scene never carries data URLs over the wire. Scenes are
+written to `excalidraw.bin` once a second when changed and on shutdown; the whole scene is
+capped by `log_max`, an element by 512 KiB. client-core caches every scene it has seen
+(`excalidraw_scene`), applies pushes with the same rule and catches up after a reconnect.
+Export (SVG, PNG, ASCII) converts elements to vectors (rectangles, ellipses, diamonds, arrows
+and lines, freedraw with pressure, text, images); the hand-drawn look is the app's (its PNG
+render, uploaded as preview or with `Place`/`Send`).
+
+### 7.10 Inline placements ("never leave the terminal")
+
+A **placement** shows an artifact inside a terminal pane: a `cols × rows` cell box at column
+`col` of an anchored row, drawn by clients over the cells like kitty graphics, scrolling with
+the output (the anchor is a tracked pin, §7.3). The daemon owns image and placement state
+because Ghostty snapshots carry no images: placements are sent on every `Attach` (resume,
+reattach, a new device) and as `ArtifactEvent::Placed` / `Unplaced`, and persisted in
+`index.bin` (detached after a restart). Three ways in:
+
+- **Place** (`PlaceRequest{pane, artifact, version, anchor | cursor row, col, cols, rows,
+  png, replace}`): the overlay's "done". `png` is the device's render, else the image, the
+  preview or the daemon's render; sizes default from the image (pane cell pixels if known,
+  else 2× renders of 9 × 18 pt cells) clamped to the pane's width; `replace` swaps the
+  placement the overlay was re-opened from.
+- **Import** (`ImportRequest{pane, name, data | blob}`): a pasted or dropped image or
+  `.excalidraw` file becomes an artifact placed at the cursor row.
+- **kitty graphics in the output**: the output scanner (`kitty.rs`) recognises PNG images a
+  program displays with the kitty protocol (`a=T,f=100`, direct, chunked or not; `c`/`r`
+  sizes), pins the cursor row at the exact byte where the sequence ends (the VT write is split
+  there), and keeps the PNG as an image artifact plus a `Kitty` placement. So `un draw show`,
+  `kitten icat` or an agent printing an image inside our pane shows inline on every client
+  and survives snapshots. Not handled: transmit-then-place (`a=t` + `a=p`), raw RGB data,
+  file/shm transmission, animation, deletes. The daemon's and clients' VTs keep kitty storage
+  off, so both ignore the sequence identically.
+
+Roles: `Place`, `Unplace`, `Import` need the draw role on the pane; `Placements` any role.
+
+### 7.11 App-side contract (for the Swift app)
+
+**Draw mode on a terminal pane (the primary UX).**
+1. Enter with a Pencil touch on the pane (iPad, `drawingPolicy = .pencilOnly`), a
+   two-finger long press, or a key (key bar button / ⌘⇧D). Fingers keep scrolling and
+   selecting while Pencil inks.
+2. The overlay is a transparent layer over the pane, anchored to the row under the first
+   touch: `AnchorRequest{pane, at_seq: the VT's applied seq, from_bottom}`. It scrolls with
+   the output (pin that row in the app's own VT once it has applied `at_seq`).
+3. The overlay holds one **Excalidraw scene** (`artifact_create(kind: Excalidraw, anchor)`):
+   shapes, connected arrows and text from the embedded editor in transparent mode, and Pencil
+   strokes converted from `PKStroke` to Excalidraw `freedraw` elements (points + pressures).
+   Overlay scene units: **10 scene px = one column, 20 = one row**, origin at the anchor
+   row's left edge — the app maps to points with its own cell size, so ink stays on the text
+   across fonts and devices, and the ASCII export lines up with cells. While the pen moves,
+   stream `ink_live` every ~16 ms (peers draw it in the author's presence colour); commit
+   with `excalidraw_put`.
+4. **Done**: render the overlay (Excalidraw `exportToBlob` + ink) to PNG and
+   `place_png(PlaceRequest{anchor: same row, col, cols/rows: the covered cells,
+   replace: the placement it was re-opened from})`. The diagram is now part of the pane's
+   output for every client and device.
+5. **Tap a placement** to reopen the overlay in place: `excalidraw_get(placement.artifact_id)`
+   at `placement.anchor`, then Done again with `replace`.
+6. **Send to agent** from the overlay or a placement's menu:
+   `send_to_agent(pane, Some(id), Some(version), Some(png))`.
+
+**Rendering placements.** `Client::placements(pane)` (pushed on attach and on change). For
+each `Live` placement: once the VT has applied `anchor.at_seq`, pin the row `from_bottom`
+above the bottom; draw `image` (fetch with `blob_download`, cache by hash) as a quad over
+`cols × rows` cells from column `col`, in the "above text" layer (the same pass as kitty
+images and ink). `Detached` placements leave the grid and go to the pane's loose tray.
+
+**Canvas pane (secondary).** A `Canvas` leaf (`ArtifactEvent::Canvases`) hosts the same
+Excalidraw editor full-size, free scene units.
+
+**Paste / drop onto a pane.** Images and `.excalidraw` files → `import_to_pane(pane, name,
+bytes)`; with the "send" modifier onto an agent pane → `send_to_agent(pane, None, None,
+Some(png))`.
+
+**Excalidraw in WKWebView: the JS bridge.** The bundle (`@excalidraw/excalidraw`, MIT,
+fonts included) loads from app resources over a custom scheme (`<brand>-canvas://`), no
+network. Swift → JS calls `window.canvas.<fn>(json)` through `evaluateJavaScript`; JS → Swift
+posts to `window.webkit.messageHandlers.canvas.postMessage(msg)`:
+
+| Direction | Message | Meaning |
+|---|---|---|
+| JS → Swift | `{type: "ready", version}` | editor mounted |
+| Swift → JS | `load({elements, appState, files, mode: "overlay"\|"canvas", readOnly, theme, cell: {w, h}})` | initial scene from `excalidraw_get(id, 0)`; `files` are `{id, mimeType, dataURL}` built from blobs; `readOnly` for viewers (`viewModeEnabled`); overlay mode = transparent background, no grid, no menu |
+| JS → Swift | `{type: "change", elements: [changed], appState: {viewBackgroundColor, gridSize}}` | from `onChange`, only elements whose `version` grew since the last post, throttled to 50 ms (Excalidraw's collab cadence); Swift → `excalidraw_put` |
+| Swift → JS | `applyRemote({elements, files})` | pushes and `rejected` winners; JS runs `reconcileElements(local, remote, appState)` and `updateScene({elements, captureUpdate: NEVER})` so remote edits never enter the local undo stack |
+| JS → Swift | `{type: "files", files: [{id, mimeType, dataURL}]}` | images added in the editor; Swift decodes, `blob_upload`s, and sends `ExFile{file_id, image}` with the next put |
+| Swift → JS | `exportImage({requestId, format: "png"\|"svg", scale, exportPadding})` | JS answers `{type: "export", requestId, data: base64}` (`exportToBlob` / `exportToSvg`) for Done, `Send`, previews |
+| JS → Swift | `{type: "pointer", x, y, tool}` | optional, ≤ 10 Hz, for presence cursors |
+| JS → Swift | `{type: "done"}` / `{type: "cancel"}` | overlay toolbar buttons |
+
+Viewers get `readOnly`; the daemon refuses their puts anyway (`Forbidden`).
+
+## 8. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
@@ -863,6 +1088,10 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
   run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
   untested against a real browser; no transfer resume by offset for uploads (downloads take an
   offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
+  `.excalidraw` export (import works); kitty capture covers displayed PNGs only (§7.10);
+  Excalidraw scenes keep no history (only the current revision exports); live ink is relayed without per-connection
+  rate limiting; a session's artifacts are deleted with it; anchors detach on daemon restart;
+  the daemon's raster render draws text and images as outlines only.
 - `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
   leased). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.
