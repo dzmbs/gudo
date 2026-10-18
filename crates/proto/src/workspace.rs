@@ -364,13 +364,18 @@ pub enum EditorKind {
     VsCode,
     /// Gitpod's openvscode-server (MIT, Open VSX), downloaded on demand and SHA-256 pinned.
     OpenVsCode,
+    /// VSCodium's Web Host (`vscodium-reh-web`, MIT, Open VSX extensions), downloaded on
+    /// demand from VSCodium's GitHub releases and SHA-256 pinned. No licence prompt and no
+    /// sign-in.
+    Vscodium,
 }
 
 /// Which editor a launch should use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditorChoice {
-    /// `code serve-web` if the `code` CLI exists and its licence was accepted, else
-    /// openvscode-server.
+    /// The host's configured default (`[editor] default` in the daemon's `config.toml`):
+    /// `code serve-web` (needs the `code` CLI and the licence accepted; the default) or
+    /// VSCodium. Never falls back to another editor.
     Auto,
     /// Exactly this one.
     Only(EditorKind),

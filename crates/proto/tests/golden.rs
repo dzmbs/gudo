@@ -2165,3 +2165,47 @@ fn roles_parse_and_print() {
     assert!(!r.covers(Roles::OWNER));
     assert!("root".parse::<Roles>().is_err());
 }
+
+/// `EditorKind::Vscodium` (appended): a launch choosing it and its availability entry.
+#[test]
+fn vscodium_editor_messages_match_their_frozen_bytes() {
+    let mut c = Checker {
+        print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
+        failures: Vec::new(),
+    };
+    c.check(
+        "ClientCtl::Workspace(EditorLaunch Vscodium)",
+        ClientCtl::Workspace {
+            req_id: 5,
+            req: WorkspaceRequest::EditorLaunch(EditorLaunch {
+                folder: "~/p".into(),
+                choice: EditorChoice::Only(EditorKind::Vscodium),
+                accept_vscode_license: false,
+            }),
+        },
+        "0b00000001150502037e2f70010200",
+    );
+    c.check(
+        "ServerCtl::WorkspaceResult(Editors Vscodium)",
+        ServerCtl::WorkspaceResult {
+            req_id: 5,
+            result: Ok(WorkspaceResponse::Editors(EditorList {
+                available: vec![EditorAvailability {
+                    kind: EditorKind::Vscodium,
+                    installed: false,
+                    downloadable: true,
+                    path: None,
+                    version: Some("1.140.06880".into()),
+                    note: None,
+                }],
+                running: vec![],
+            })),
+        },
+        "1900000001180500020102000100010b312e3134302e30363838300000",
+    );
+    assert!(
+        c.failures.is_empty(),
+        "wire format changed:\n{}",
+        c.failures.join("\n")
+    );
+}

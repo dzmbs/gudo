@@ -92,6 +92,11 @@ fn s(p: &Path) -> String {
 
 impl Host {
     fn start() -> Self {
+        Self::start_with(|_| {})
+    }
+
+    /// A host whose daemon config `f` adjusts last.
+    fn start_with(f: impl FnOnce(&mut daemon::Config)) -> Self {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (state_dir, state) = canonical_tempdir();
         let (home_dir, home) = canonical_tempdir();
@@ -108,6 +113,7 @@ impl Host {
             config.fs_allow.push(home.clone());
             // No user `code` CLI, whatever this machine has installed.
             config.code_cli = Some(state.join("no-such-code"));
+            f(&mut config);
             daemon::Daemon::start(config).await.unwrap()
         });
         Self {
@@ -581,6 +587,183 @@ fn editor_without_code_cli_is_a_clear_error() {
     assert!(client.forwards().is_empty());
     let tunnel = host.block_on(client.vscode_tunnel_status()).unwrap();
     assert!(tunnel.cli.is_none());
+}
+
+/// A stand-in `codium-server`: records its arguments, serves `200` with the token, `403`
+/// without.
+const FAKE_CODIUM: &str = r#"#!/usr/bin/env python3
+import http.server, sys, os
+args = sys.argv[1:]
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "args.txt"), "w") as f:
+    f.write(" ".join(args))
+port = int(args[args.index("--port") + 1])
+token = args[args.index("--connection-token") + 1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if ("tkn=" + token) in self.path else 403)
+        self.end_headers()
+        self.wfile.write(b"fake codium")
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+"#;
+
+fn install_fake_codium(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("bin/codium-server");
+    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    std::fs::write(&bin, FAKE_CODIUM).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn open_editor_with_vscodium_needs_no_licence() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: python3 not installed");
+        return;
+    }
+    let codium = tempfile::tempdir().unwrap();
+    install_fake_codium(codium.path());
+    let dir = codium.path().to_owned();
+    let host = Host::start_with(move |c| c.vscodium_dir = Some(dir));
+    let (client, _events) = host.client();
+
+    // No `code` CLI and no licence accepted: VSCodium still opens, and nothing is installed.
+    let session = host
+        .block_on(client.open_editor_with(s(&host.home), false, Some(EditorKind::Vscodium)))
+        .unwrap();
+    assert_eq!(session.instance.kind, EditorKind::Vscodium);
+    assert!(!session.installed_cli);
+    assert!(
+        session
+            .url
+            .contains(&format!("tkn={}", session.instance.token)),
+        "{}",
+        session.url
+    );
+    let args = std::fs::read_to_string(codium.path().join("bin/args.txt")).unwrap();
+    assert!(args.contains("--host 127.0.0.1"), "{args}");
+    assert!(!args.contains("license"), "{args}");
+    let tunnel = host.block_on(client.vscode_tunnel_status()).unwrap();
+    assert!(tunnel.cli.is_none(), "the code CLI was installed");
+
+    // The page is served through the forward, with the token only.
+    let path = session
+        .url
+        .trim_start_matches(&format!("http://localhost:{}", session.local_port));
+    let get = |path: &str| {
+        let mut tcp = TcpStream::connect(("127.0.0.1", session.local_port)).unwrap();
+        write!(tcp, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").unwrap();
+        let mut out = String::new();
+        tcp.read_to_string(&mut out).unwrap();
+        out
+    };
+    assert!(get(path).starts_with("HTTP/1.0 200"));
+    assert!(get("/").starts_with("HTTP/1.0 403"));
+
+    // Asking for VS Code explicitly still needs the licence.
+    host.block_on(client.close_editor(session, true)).unwrap();
+    let err = host
+        .block_on(client.open_editor_with(s(&host.home), false, Some(EditorKind::VsCode)))
+        .unwrap_err();
+    assert!(matches!(err, WorkspaceError::Unavailable { .. }), "{err:?}");
+}
+
+#[test]
+fn open_editor_follows_the_configured_default() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: python3 not installed");
+        return;
+    }
+    let codium = tempfile::tempdir().unwrap();
+    install_fake_codium(codium.path());
+    let dir = codium.path().to_owned();
+    let host = Host::start_with(move |c| {
+        c.vscodium_dir = Some(dir);
+        c.editor_default = client_core::proto::EditorKind::Vscodium;
+    });
+    let (client, _events) = host.client();
+    let session = host
+        .block_on(client.open_editor(s(&host.home), false))
+        .unwrap();
+    assert_eq!(session.instance.kind, EditorKind::Vscodium);
+    let status = host.block_on(client.editor_status()).unwrap();
+    let codium = status
+        .available
+        .iter()
+        .find(|a| a.kind == EditorKind::Vscodium)
+        .unwrap();
+    assert!(codium.installed);
+    assert_eq!(status.running.len(), 1);
+}
+
+/// `openEditor(folder:)` falls back to VSCodium, without a prompt, when Microsoft's CLI
+/// cannot be obtained (the download fails) or cannot run on the host.
+#[test]
+fn open_editor_falls_back_to_vscodium_when_vscode_cannot_be_had() {
+    use std::os::unix::fs::PermissionsExt;
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: python3 not installed");
+        return;
+    }
+    let codium = tempfile::tempdir().unwrap();
+    install_fake_codium(codium.path());
+
+    // 1. No CLI, and Microsoft's update service unreachable.
+    let dir = codium.path().to_owned();
+    let blocked = codium.path().join("no-such-update-service");
+    let host = Host::start_with(move |c| {
+        c.vscodium_dir = Some(dir);
+        c.vscode_update_url = format!("file://{}", blocked.display());
+    });
+    let (client, _events) = host.client();
+    // Without the licence accepted nothing changes: the typed licence error, no fallback.
+    assert!(matches!(
+        host.block_on(client.open_editor(s(&host.home), false)),
+        Err(WorkspaceError::Unavailable { .. })
+    ));
+    let session = host
+        .block_on(client.open_editor(s(&host.home), true))
+        .unwrap();
+    assert_eq!(session.instance.kind, EditorKind::Vscodium);
+    assert!(!session.installed_cli);
+    assert!(session.fallback_reason.is_some(), "{session:?}");
+    drop(client);
+    drop(host);
+
+    // 2. A `code` CLI that cannot run here (wrong libc, say).
+    let broken = tempfile::tempdir().unwrap();
+    let code = broken.path().join("code");
+    std::fs::write(
+        &code,
+        "#!/bin/sh\necho 'code: not found (musl loader)' >&2\nexit 127\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&code, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = codium.path().to_owned();
+    let host = Host::start_with(move |c| {
+        c.vscodium_dir = Some(dir);
+        c.code_cli = Some(code);
+    });
+    let (client, _events) = host.client();
+    let session = host
+        .block_on(client.open_editor(s(&host.home), true))
+        .unwrap();
+    assert_eq!(session.instance.kind, EditorKind::Vscodium);
+    let reason = session.fallback_reason.unwrap();
+    assert!(reason.contains("musl loader"), "{reason}");
 }
 
 #[test]
