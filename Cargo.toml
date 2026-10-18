@@ -11,6 +11,15 @@ publish = false
 [workspace.dependencies]
 brand = { path = "crates/brand" }
 ghostty-vt-sys = { path = "crates/ghostty-vt-sys" }
+pty = { path = "crates/pty" }
+
+bytes = "1.12"
+libc = "0.2.189"
+proptest = "1"
+rustix = { version = "1", features = ["event", "fs", "pipe", "process", "pty", "termios"] }
+thiserror = "2"
+tokio = { version = "1.53", features = ["sync"] }
+tracing = "0.1.44"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
