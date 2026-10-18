@@ -125,6 +125,18 @@ extension Terminal {
         }
     }
 
+    /// Whether a cell of the active area holds the first half of a wide character.
+    public func isWide(atActive point: GridPoint) -> Bool {
+        withHandle { t in
+            guard var ref = Self.gridRef(t, point, GHOSTTY_POINT_TAG_ACTIVE) else { return false }
+            var cell: GhosttyCell = 0
+            guard ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS else { return false }
+            var wide = GHOSTTY_CELL_WIDE_NARROW
+            ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide)
+            return wide == GHOSTTY_CELL_WIDE_WIDE
+        }
+    }
+
     static func gridRef(_ t: GhosttyTerminal, _ point: GridPoint, _ tag: GhosttyPointTag) -> GhosttyGridRef? {
         guard point.x >= 0, point.y >= 0 else { return nil }
         var ref = GhosttyGridRef()

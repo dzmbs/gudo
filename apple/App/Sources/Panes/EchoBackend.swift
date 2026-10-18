@@ -1,7 +1,9 @@
 #if !os(macOS)
 import Dispatch
+import Foundation
 import PaneLayout
 import Synchronization
+import TerminalCore
 
 /// Stand-in for a remote shell on iOS until the daemon connection exists: a line editor that
 /// echoes input and answers each line, so the renderer, keyboard and key bar can be exercised.
@@ -15,11 +17,18 @@ nonisolated final class EchoBackend: PaneBackend {
     private let pane: PaneId
     private let state = Mutex(State())
     private let queue = DispatchQueue(label: "echo-backend", qos: .userInteractive)
+    /// Simulated one-way network delay (the `echoLatencyMs` default, e.g. `-echoLatencyMs 150` as a
+    /// launch argument), to exercise echo prediction without a daemon.
+    private let latency: Double
+    private let predictionFeed = Mutex<(@Sendable (PredictionUpdate) -> Void)?>(nil)
 
     private static let prompt = "\u{1b}[1;32m~\u{1b}[0m \u{1b}[1;34m❯\u{1b}[0m "
+    /// The line editor is like zsh's ZLE at a prompt: raw mode, echo off, between OSC 133 B and C.
+    private static let hint = EchoHint(echo: false, canonical: false, atPrompt: true, altScreen: false)
 
     init(pane: PaneId) {
         self.pane = pane
+        latency = Double(UserDefaults.standard.integer(forKey: "echoLatencyMs")) / 1000
     }
 
     func start(
@@ -32,8 +41,20 @@ nonisolated final class EchoBackend: PaneBackend {
     }
 
     func write(_ bytes: UnsafeRawBufferPointer) {
+        writeInput(bytes, inputSeq: nil)
+    }
+
+    private func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64?) {
         let input = Array(bytes)
-        queue.async { self.handle(input) }
+        // Input travels one way, the echo back the other: the round trip is twice the latency.
+        queue.asyncAfter(deadline: .now() + latency) {
+            self.handle(input)
+            guard let inputSeq else { return }
+            // After the echo (which `emit` delays by the same latency).
+            self.queue.asyncAfter(deadline: .now() + self.latency + 0.001) {
+                self.predictionFeed.withLock { $0 }?(.acknowledged(upTo: inputSeq, hint: Self.hint))
+            }
+        }
     }
 
     func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {}
@@ -77,8 +98,24 @@ nonisolated final class EchoBackend: PaneBackend {
     }
 
     private func emit(_ bytes: [UInt8]) {
-        guard !bytes.isEmpty, let onOutput = state.withLock({ $0.onOutput }) else { return }
-        bytes.withUnsafeBytes(onOutput)
+        guard !bytes.isEmpty else { return }
+        let deliver = { [state] in
+            guard let onOutput = state.withLock({ $0.onOutput }) else { return }
+            bytes.withUnsafeBytes(onOutput)
+        }
+        if latency > 0 { queue.asyncAfter(deadline: .now() + latency, execute: deliver) } else { deliver() }
+    }
+}
+
+extension EchoBackend: PredictionFeed {
+    func startPredictionFeed(_ onUpdate: @escaping @Sendable (PredictionUpdate) -> Void) {
+        predictionFeed.withLock { $0 = onUpdate }
+        onUpdate(.rtt(max(2 * latency, 0.001)))
+        onUpdate(.hint(Self.hint))
+    }
+
+    func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
+        writeInput(bytes, inputSeq: Optional(inputSeq))
     }
 }
 #endif

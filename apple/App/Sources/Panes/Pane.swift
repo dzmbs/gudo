@@ -32,11 +32,11 @@ final class Pane {
     /// frame (04-mobile-ux C3).
     private static let resizeDebounce = Duration.milliseconds(80)
 
-    init(id: PaneId, backend: any PaneBackend, onExit: @escaping @Sendable () -> Void) throws {
+    init(id: PaneId, backend: any PaneBackend, appearance: TerminalAppearance = .init(), onExit: @escaping @Sendable () -> Void) throws {
         self.id = id
         self.backend = backend
-        let terminal = Terminal(cols: 80, rows: 24) { backend.write($0) }
-        let surface = try TerminalSurface(terminal: terminal)
+        let terminal = Terminal(cols: 80, rows: 24, configuration: appearance.terminalConfiguration) { backend.write($0) }
+        let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
         view = TerminalView(surface: surface)
         view.onInput = { bytes in bytes.withUnsafeBytes { backend.write($0) } }
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
@@ -44,13 +44,34 @@ final class Pane {
         var events = Terminal.Events()
         events.titleChanged = { [weak self] in Task { @MainActor in self?.refreshTitle() } }
         events.pwdChanged = { [weak self] in Task { @MainActor in self?.refreshWorkingDirectory() } }
+        events.bell = { [weak view] in Task { @MainActor in view?.ringBell() } }
         terminal.setEvents(events)
+
+        if let feed = backend as? any PredictionFeed {
+            // Keystrokes carry the predictor's input sequence number, which the backend acks.
+            surface.enablePrediction()
+            view.onInput = { [weak surface] bytes in
+                let seq = surface?.predictor?.lastInputSeq ?? 0
+                bytes.withUnsafeBytes { feed.writeInput($0, inputSeq: seq) }
+            }
+            feed.startPredictionFeed { [weak surface] update in
+                Task { @MainActor in surface?.applyPrediction(update) }
+            }
+        }
         backend.start(
             onOutput: { bytes in
                 terminal.write(bytes)
-                surface.setNeedsRender()
+                surface.outputArrived()
             },
             onExit: onExit)
+        if let program = backend as? any ForegroundProgramReporting {
+            program.onForegroundProgramChange { [weak self] name in
+                Task { @MainActor in
+                    self?.foregroundProgram = name
+                    self?.onContextChange?()
+                }
+            }
+        }
     }
 
     func terminate() {
