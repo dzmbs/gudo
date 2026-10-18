@@ -135,6 +135,8 @@ pub struct Config {
     pub vscode_update_url: String,
     /// Push notifications.
     pub push: PushConfig,
+    /// A pane's control lease moves to someone who asked for it once the holder has not typed
+    pub lease_idle: Duration,
 }
 
 impl Config {
@@ -161,6 +163,7 @@ impl Config {
             openvscode_dir: None,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
+            lease_idle: Duration::from_secs(5),
         }
     }
 
@@ -188,6 +191,9 @@ impl Config {
     /// enabled = true
     /// relay = "https://push.example.com"
     /// delay_ms = 3000
+    ///
+    /// [multiplayer]
+    /// lease_idle_secs = 5
     /// ```
     ///
     /// A relay mode set before this runs (`hostd run --no-relay`) wins over the file's.
@@ -231,6 +237,9 @@ impl Config {
         }
         if let Some(ms) = file.push.delay_ms {
             self.push.delay = Duration::from_millis(ms);
+        }
+        if let Some(secs) = file.multiplayer.lease_idle_secs {
+            self.lease_idle = Duration::from_secs(secs);
         }
         Ok(())
     }
@@ -298,6 +307,7 @@ struct UserFile {
     editor: EditorSection,
     relay: RelaySection,
     push: PushSection,
+    multiplayer: MultiplayerSection,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -347,6 +357,12 @@ struct PushSection {
     enabled: Option<bool>,
     relay: Option<String>,
     delay_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct MultiplayerSection {
+    lease_idle_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

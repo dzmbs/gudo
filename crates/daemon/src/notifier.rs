@@ -218,6 +218,37 @@ pub(crate) fn action(
         push::Decision::Deny => token.deny,
     }
     .ok_or_else(|| WsError::Invalid("the request has no such option".into()))?;
+    // The same signed audit record as an in-app approval: the device signed
+    // `DECISION_DOMAIN || token || decision`, which the audit log re-verifies.
+    let signed = [
+        push::DECISION_DOMAIN,
+        &push::decision_message(&req.token, decision),
+    ]
+    .concat();
+    let record = |decided: &Decided, details: &crate::agent::DecidedRequest| {
+        core.mp.audit.append(
+            proto::AuditKind::Approval,
+            crate::mp::AuditEntry {
+                actor: Some(actor),
+                pane_id: Some(decided.pane_id),
+                detail: format!(
+                    "chose {:?} for {} from a notification",
+                    details.option, details.summary
+                ),
+                approval: Some(proto::ApprovalAudit {
+                    request_id: token.request,
+                    agent_request: details.request.to_string(),
+                    option_id: option,
+                    option: details.option.clone(),
+                    tool: details.tool.clone(),
+                    summary: details.summary.clone(),
+                    signed,
+                    sig: req.sig.clone(),
+                }),
+                ..crate::mp::AuditEntry::default()
+            },
+        );
+    };
     let decided = core
         .decide(
             actor,
@@ -227,6 +258,7 @@ pub(crate) fn action(
                 actor,
                 sig: req.sig.clone(),
             },
+            record,
         )
         .map_err(|by| match by {
             Some(by) => WsError::Conflict(format!(

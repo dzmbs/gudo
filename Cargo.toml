@@ -14,6 +14,7 @@ ghostty-vt = { path = "crates/ghostty-vt" }
 ghostty-vt-sys = { path = "crates/ghostty-vt-sys" }
 agents = { path = "crates/agents" }
 proto = { path = "crates/proto" }
+grants = { path = "crates/grants" }
 pty = { path = "crates/pty" }
 daemon = { path = "crates/daemon" }
 client-core = { path = "crates/client-core" }

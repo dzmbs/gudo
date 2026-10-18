@@ -355,6 +355,21 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
     );
     let list = a.client.client.attention_list().await.unwrap();
     assert!(list.items.iter().all(|i| i.seen), "{list:#?}");
+    // The lock-screen approval is in the signed audit log like an in-app one.
+    let page = a.client.client.audit(None, 100).await.unwrap();
+    assert!(page.chain_ok);
+    let record = page
+        .records
+        .iter()
+        .find(|r| r.kind == proto::AuditKind::Approval)
+        .expect("approval audited");
+    let approval = record.approval.as_ref().unwrap();
+    assert_eq!(record.actor.unwrap().device.0.to_vec(), device_id(&a.key));
+    assert!(grants::verify_signature(
+        record.actor.unwrap().device,
+        &approval.signed,
+        &approval.sig
+    ));
     drop((a, b, c));
     daemon.shutdown().await;
 }

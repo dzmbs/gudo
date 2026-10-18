@@ -1,0 +1,21 @@
+[package]
+name = "grants"
+version = "0.0.0"
+description = "Signing and verification of attenuable capability grants and signed approvals (multiplayer, 08 §3)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+proto.workspace = true
+ring.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+iroh.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -698,6 +698,7 @@ dependencies = [
  "daemon",
  "getrandom 0.4.3",
  "ghostty-vt",
+ "grants",
  "iroh",
  "proto",
  "push",
@@ -950,10 +951,12 @@ dependencies = [
  "data-encoding",
  "getrandom 0.4.3",
  "ghostty-vt",
+ "grants",
  "iroh",
  "iroh-relay",
  "libc",
  "notify",
+ "postcard",
  "proto",
  "pty",
  "push",
@@ -1569,6 +1572,18 @@ dependencies = [
  "log",
  "plain",
  "scroll",
+]
+
+[[package]]
+name = "grants"
+version = "0.0.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "iroh",
+ "proptest",
+ "proto",
+ "ring",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4959,6 +4974,7 @@ dependencies = [
  "brand",
  "clap",
  "client-core",
+ "qrcode",
  "rustix",
  "tokio",
 ]

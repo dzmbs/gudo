@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime};
 use agents::LaunchMode;
 use proto::{
     Actor, AgentKind, CommandMark, Decide, Decided, EchoHint, EchoHintAt, LayoutOp, OpError,
-    OpOutcome, PaneId, PaneLaunch, PaneMeta, PaneSize, Prediction, PrincipalId, ServerCtl,
-    SessionEpoch, SessionId, SizePolicy, SnapGen,
+    OpOutcome, PaneId, PaneLaunch, PaneMeta, PaneSize, Prediction, PrincipalId, Scope, ServerCtl,
+    SessionEpoch, SessionId, SessionLayout, SizePolicy, SnapGen,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, broadcast, mpsc};
@@ -55,6 +55,12 @@ pub(crate) enum Event {
     Attention(proto::AttentionUpdate),
     /// The VS Code tunnel changed state.
     VsCodeTunnel(proto::VsCodeTunnelStatus),
+    /// Someone joined, left, renamed or changed focus (read the list from `mp`).
+    Participants,
+    /// A participant's presence (typing, cursor).
+    Presence(proto::Presence),
+    /// A pane's control lease changed.
+    Lease(proto::Lease),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -126,6 +132,8 @@ pub(crate) struct Core {
     pub ws: crate::ws::Ws,
     /// Push registrations and delivery (docs/PUSH.md).
     pub push: crate::notifier::Push,
+    /// Multiplayer: grants, leases, presence, audit.
+    pub mp: crate::mp::Mp,
     connected: AtomicUsize,
 }
 
@@ -136,6 +144,7 @@ impl Core {
         layout: Layout,
         hooks: HookServer,
         shell: Option<ShellIntegration>,
+        mp: crate::mp::Mp,
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
         let ws = crate::ws::Ws::new(&cfg, events.clone());
@@ -154,6 +163,7 @@ impl Core {
             views: Mutex::new(HashMap::new()),
             ws,
             push: crate::notifier::Push::load(&cfg.state_dir),
+            mp,
             cfg,
             connected: AtomicUsize::new(0),
         })
@@ -237,11 +247,99 @@ impl Core {
         }
     }
 
-    pub fn sessions_message(&self) -> ServerCtl {
+    pub fn sessions_message(&self, scope: Scope) -> ServerCtl {
         let attached = lock(&self.attached).clone();
-        let sessions =
+        let all =
             lock(&self.layout).summaries(|s| attached.values().filter(|&&a| a == s).count() as u32);
+        // Filtered after the layout lock is released: `session_visible` takes it again.
+        let sessions = all
+            .into_iter()
+            .filter(|s| self.session_visible(s.session_id, scope))
+            .collect();
         ServerCtl::Sessions { sessions }
+    }
+
+    // --- scopes (multiplayer) ---------------------------------------------------------------
+
+    /// Whether `inner` lies within `outer` in the current layout.
+    pub fn scope_within(&self, inner: Scope, outer: Scope) -> bool {
+        if inner == outer || outer == Scope::Daemon {
+            return true;
+        }
+        let layout = lock(&self.layout);
+        match (inner, outer) {
+            (Scope::Tab(t), Scope::Session(s)) => layout.session_of_tab(t) == Some(s),
+            (Scope::Pane(p), Scope::Session(s)) => layout.session_of_pane(p) == Some(s),
+            (Scope::Pane(p), Scope::Tab(t)) => layout.tab_of_pane(p) == Some(t),
+            _ => false,
+        }
+    }
+
+    /// Whether a session holds anything a `scope` covers.
+    pub fn session_visible(&self, session: SessionId, scope: Scope) -> bool {
+        let layout = lock(&self.layout);
+        match scope {
+            Scope::Daemon => true,
+            Scope::Session(s) => s == session,
+            Scope::Tab(t) => layout.session_of_tab(t) == Some(session),
+            Scope::Pane(p) => layout.session_of_pane(p) == Some(session),
+        }
+    }
+
+    /// The most recently used session a `scope` can see.
+    pub fn recent_session_in(&self, scope: Scope) -> Option<SessionId> {
+        let layout = lock(&self.layout);
+        match scope {
+            Scope::Daemon => layout.most_recent(),
+            Scope::Session(s) => layout.session(s).map(|_| s),
+            Scope::Tab(t) => layout.session_of_tab(t),
+            Scope::Pane(p) => layout.session_of_pane(p),
+        }
+    }
+
+    /// A session's layout cut down to `scope`: a tab-scoped guest sees only its tab, a
+    pub fn layout_for(&self, session: SessionId, scope: Scope) -> Option<SessionLayout> {
+        let mut layout = lock(&self.layout).snapshot(session)?;
+        match scope {
+            Scope::Daemon | Scope::Session(_) => {}
+            Scope::Tab(t) => {
+                layout.tabs.retain(|tab| tab.tab_id == t);
+                layout.active_tab = layout.tabs.first().map(|tab| tab.tab_id);
+            }
+            Scope::Pane(p) => {
+                layout
+                    .tabs
+                    .retain(|tab| crate::layout::leaves(&tab.root).any(|leaf| leaf == p));
+                for tab in &mut layout.tabs {
+                    tab.root = proto::LayoutNode::Leaf(p);
+                    tab.focused = p;
+                    tab.zoomed = None;
+                }
+                layout.active_tab = layout.tabs.first().map(|tab| tab.tab_id);
+            }
+        }
+        Some(layout)
+    }
+
+    pub fn session_of_pane(&self, pane: PaneId) -> Option<SessionId> {
+        lock(&self.layout).session_of_pane(pane)
+    }
+
+    /// The pane whose agent asked approval request `id`.
+    pub fn request_pane(&self, id: proto::RequestId) -> Option<PaneId> {
+        self.pane_entries().into_iter().find_map(|(pane, entry)| {
+            lock(&entry.agent)
+                .as_ref()
+                .is_some_and(|rt| rt.knows_request(id))
+                .then_some(pane)
+        })
+    }
+
+    /// Whether an agent runs (or ran) in the pane.
+    pub fn is_agent_pane(&self, pane: PaneId) -> bool {
+        self.pane(pane).is_some_and(|e| {
+            lock(&e.agent).is_some() || matches!(lock(&e.record).launch, PaneLaunch::Agent { .. })
+        })
     }
 
     // --- pane metadata ----------------------------------------------------------------------
@@ -443,10 +541,6 @@ impl Core {
         Ok((session, tab, pane))
     }
 
-    fn session_of_pane(&self, pane: PaneId) -> Option<SessionId> {
-        lock(&self.layout).session_of_pane(pane)
-    }
-
     fn session_of_tab(&self, tab: proto::TabId) -> Option<SessionId> {
         lock(&self.layout).session_of_tab(tab)
     }
@@ -494,6 +588,7 @@ impl Core {
                 }
                 self.hooks.cancel_pending(*id);
                 self.ws.forget_pane(*id);
+                self.mp.forget_pane(*id);
                 entry.pane.hang_up();
                 self.emit(Event::PaneClosed(*id));
             }
@@ -801,8 +896,17 @@ impl Core {
         }
     }
 
-    /// Applies a client's decision on an approval request.
-    pub fn decide(&self, actor: Actor, decide: &Decide) -> Result<Decided, Option<Actor>> {
+    /// Applies a client's decision on an approval request; returns the broadcast and what
+    /// was decided, for the audit log.
+    ///
+    /// `record` runs once the decision is accepted and before the hook is answered or anyone
+    /// is told, so the audit log never lags behind what the agent did.
+    pub fn decide(
+        &self,
+        actor: Actor,
+        decide: &Decide,
+        record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
+    ) -> Result<Decided, Option<Actor>> {
         for (id, entry) in self.pane_entries() {
             let mut agent = lock(&entry.agent);
             let Some(rt) = agent.as_mut() else {
@@ -814,8 +918,7 @@ impl Core {
             let outcome = rt.decide(decide.request_id, decide.option_id, actor);
             drop(agent);
             return match outcome {
-                Ok((choice, request)) => {
-                    self.hooks.resolve(id, &request, choice);
+                Ok(details) => {
                     let decided = Decided {
                         pane_id: id,
                         request_id: decide.request_id,
@@ -823,6 +926,8 @@ impl Core {
                         decided_by: actor,
                         at: proto::UnixMillis(crate::identity::now_millis()),
                     };
+                    record(&decided, &details);
+                    self.hooks.resolve(id, &details.request, details.choice);
                     self.emit(Event::Decided(decided));
                     self.emit(Event::PaneMeta(id));
                     Ok(decided)

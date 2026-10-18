@@ -29,6 +29,7 @@
 
 mod conn;
 mod mirror;
+mod mp;
 pub mod push;
 mod ssh_pane;
 pub mod vscode;
@@ -50,6 +51,8 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::mirror::Mirror;
 
+pub use grants::{self, GrantSpec};
+pub use mp::{MultiplayerEvent, MultiplayerEventQueue, MultiplayerListener, now_millis};
 pub use proto;
 pub use ssh;
 pub use ssh_pane::{RESTART_MARKER, SshPane, SshPaneOptions, ssh_runtime};
@@ -371,6 +374,14 @@ pub(crate) struct Inner {
     pub stats: Mutex<ClientStats>,
     /// Workspace requests in flight, pushes, forwards.
     pub ws: workspace::WsState,
+    /// Multiplayer requests in flight, pushes, and the invite a guest joined with.
+    pub mp: mp::MpState,
+}
+
+/// How a client authenticates: as a paired device (pairing ticket) or a guest (invite).
+pub(crate) enum Dial {
+    Ticket(Ticket, proto::TicketRelays),
+    Invite(proto::Invite),
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -477,13 +488,46 @@ impl Client {
         listener: Arc<dyn ClientListener>,
     ) -> Result<Self, ClientError> {
         let (ticket, extras) = Ticket::parse_with_extras(ticket)?;
+        Self::start(
+            runtime,
+            Dial::Ticket(ticket, extras.relays),
+            config,
+            options,
+            listener,
+        )
+    }
+
+    pub(crate) fn start(
+        runtime: &tokio::runtime::Handle,
+        dial: Dial,
+        config: ClientConfig,
+        options: ConnectOptions,
+        listener: Arc<dyn ClientListener>,
+    ) -> Result<Self, ClientError> {
         if config.secret_key.len() != 32 {
             return Err(ClientError::Key);
         }
+        let (ticket, relays, invite) = match dial {
+            Dial::Ticket(ticket, relays) => (ticket, relays, None),
+            Dial::Invite(invite) => {
+                // A guest dials like a paired device; its principal comes from its key and
+                // its authority from the invite's grant chain.
+                let ticket = Ticket {
+                    v: Ticket::VERSION,
+                    daemon_id: invite.daemon_id,
+                    addrs: invite.addrs.clone(),
+                    relay_url: invite.relay_url.clone(),
+                    principal: grants::guest_principal(device_id(&config)),
+                    secret: proto::PairingSecret([0; 16]),
+                    expires: proto::UnixMillis(0),
+                };
+                (ticket, proto::TicketRelays::default(), Some(invite))
+            }
+        };
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
             ticket,
-            relays: extras.relays,
+            relays,
             options,
             config,
             listener,
@@ -501,6 +545,7 @@ impl Client {
             next_op: AtomicU64::new(1),
             stats: Mutex::new(ClientStats::default()),
             ws: workspace::WsState::default(),
+            mp: mp::MpState::with_invite(invite),
         });
         let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {
@@ -705,18 +750,18 @@ impl Client {
         })
     }
 
-    /// Answers an agent approval request.
+    /// Answers an agent approval request, signed with this device's key so the daemon's
     pub fn decide(&self, request_id: proto::RequestId, option_id: proto::OptionId) {
-        let actor = proto::Actor {
-            principal: self.inner.ticket.principal,
-            device: device_id(&self.inner.config),
-        };
-        self.inner.send(ClientCtl::Decide(Decide {
+        let mut decide = Decide {
             request_id,
             option_id,
-            actor,
+            actor: self.actor(),
             sig: Vec::new(),
-        }));
+        };
+        if let Ok(key) = grants::DeviceKey::from_seed(&self.inner.config.secret_key) {
+            grants::sign_approval(&key, self.inner.ticket.daemon_id, &mut decide);
+        }
+        self.inner.send(ClientCtl::Decide(decide));
     }
 
     /// Plain text of a followed pane's visible screen, from the VT mirror.

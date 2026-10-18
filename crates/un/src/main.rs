@@ -18,6 +18,10 @@
 //! un fs ls|stat|cat|put|get|mkdir|mv|rm|watch
 //! un search <pattern> [-e] [--case sensitive|insensitive|smart]
 //! un links [--commands N]      un marks      un output [--command N]
+//! un invite [--role R+R] [--scope daemon|session|tab|pane[:ID]] [--ttl 24h] [--uses N]
+//!           [--name N] [--delegate]           un join <invite>
+//! un who [--watch]            un take-control [--force] [--wait]   un release-control
+//! un prompt <text>            un grants [--devices]   un revoke <grant>|--device K   un audit
 //! ```
 
 use std::io::Write;
@@ -35,6 +39,7 @@ use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+mod mp;
 mod ws;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -64,6 +69,10 @@ struct Cli {
     /// Pairing ticket; defaults to the one saved by `pair`.
     #[arg(long, global = true)]
     ticket: Option<String>,
+    /// Invite to connect with as a guest; defaults to the one saved by `join` (used when no
+    /// ticket is saved).
+    #[arg(long, global = true, conflicts_with = "ticket")]
+    invite: Option<String>,
     /// Session name; defaults to the most recently used one.
     #[arg(long, short = 's', global = true)]
     session: Option<String>,
@@ -78,6 +87,8 @@ struct Cli {
 enum Cmd {
     /// Save a pairing ticket and pair this machine with the daemon.
     Pair { ticket: String },
+    /// Save an invite and join the daemon as a guest under its grant.
+    Join { invite: String },
     /// Show the focused pane in this terminal; follows focus changes. Ctrl-] detaches.
     Attach,
     /// List sessions, and the attached session's tabs and panes.
@@ -138,6 +149,8 @@ enum Cmd {
     },
     #[command(flatten)]
     Ws(ws::WsCmd),
+    #[command(flatten)]
+    Mp(mp::MpCmd),
     /// Search a pane's whole scrollback on the daemon (newest match first).
     Search {
         pattern: String,
@@ -238,6 +251,27 @@ fn device_key() -> Result<Vec<u8>> {
     Ok(key)
 }
 
+/// How to dial: a pairing ticket (owner device) or an invite (guest).
+enum Dial {
+    Ticket(String),
+    Invite(String),
+}
+
+fn dial(cli: &Cli) -> Result<Dial> {
+    if let Some(t) = &cli.ticket {
+        return Ok(Dial::Ticket(t.clone()));
+    }
+    if let Some(i) = &cli.invite {
+        return Ok(Dial::Invite(i.clone()));
+    }
+    match saved_ticket() {
+        Ok(t) => Ok(Dial::Ticket(t)),
+        Err(e) => std::fs::read_to_string(config_dir().join("un.invite"))
+            .map(|i| Dial::Invite(i.trim().to_owned()))
+            .map_err(|_| e),
+    }
+}
+
 fn saved_ticket() -> Result<String> {
     std::fs::read_to_string(config_dir().join("un.ticket"))
         .map(|t| t.trim().to_owned())
@@ -264,16 +298,15 @@ struct Conn {
 
 impl Conn {
     async fn open(cli: &Cli) -> Result<Self> {
-        let ticket = match &cli.ticket {
-            Some(t) => t.clone(),
-            None => saved_ticket()?,
-        };
         let (listener, events) = EventQueue::channel();
         let mut config = ClientConfig::new(device_key()?);
         if cli.no_relay {
             config.relay = RelayMode::Disabled;
         }
-        let client = Client::connect(&ticket, config, listener)?;
+        let client = match dial(cli)? {
+            Dial::Ticket(ticket) => Client::connect(&ticket, config, listener)?,
+            Dial::Invite(invite) => Client::join(&invite, config, listener)?,
+        };
         let mut conn = Self {
             client,
             events,
@@ -394,10 +427,32 @@ async fn run(cli: Cli) -> Result<()> {
         println!("paired; attached to session {:?}", conn.layout().name);
         return Ok(());
     }
+    if let Cmd::Join { invite } = &cli.command {
+        let parsed: client_core::proto::Invite = invite.parse().context("not an invite")?;
+        std::fs::create_dir_all(config_dir())?;
+        std::fs::write(config_dir().join("un.invite"), invite)?;
+        let cli = Cli {
+            ticket: None,
+            invite: Some(invite.clone()),
+            ..cli
+        };
+        let conn = Conn::open(&cli).await?;
+        let me = conn.client.who_am_i().await?;
+        println!(
+            "joined {}'s daemon as {} ({} on {}); attached to session {:?}",
+            parsed.inviter,
+            me.name,
+            me.roles.names(),
+            me.scope,
+            conn.layout().name
+        );
+        return Ok(());
+    }
     let mut conn = Conn::open(&cli).await?;
     let shell = PaneLaunch::Shell { cwd: None };
     let outcome = match cli.command {
-        Cmd::Pair { .. } => unreachable!("handled above"),
+        Cmd::Pair { .. } | Cmd::Join { .. } => unreachable!("handled above"),
+        Cmd::Mp(cmd) => return mp::run(&mut conn, cmd).await,
         Cmd::Attach => return attach(conn).await,
         Cmd::SshProxy { port } => {
             conn.client

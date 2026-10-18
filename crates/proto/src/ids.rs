@@ -173,6 +173,84 @@ bitset! {
     }
 }
 
+impl Roles {
+    /// Every role.
+    pub const ALL: Self = Self(0b1_1111);
+
+    /// The roles in force: [`Roles::OWNER`] implies every other role.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use proto::Roles;
+    ///
+    /// assert!(Roles::OWNER.effective().contains(Roles::DRIVER));
+    /// assert_eq!(Roles::VIEWER.effective(), Roles::VIEWER);
+    /// ```
+    pub const fn effective(self) -> Self {
+        if self.0 & Self::OWNER.0 != 0 {
+            Self::ALL
+        } else {
+            Self(self.0 & Self::ALL.0)
+        }
+    }
+
+    /// Whether these roles confer any of `any` (after [`effective`](Self::effective)).
+    pub const fn allows_any(self, any: Self) -> bool {
+        self.effective().0 & any.0 != 0
+    }
+
+    /// Whether every role in `other` is conferred by `self` (after
+    /// [`effective`](Self::effective) on both sides): `other` is no wider than `self`.
+    pub const fn covers(self, other: Self) -> bool {
+        self.effective().contains(other.effective())
+    }
+
+    /// Lower-case role names joined by `+` (`"driver+approver"`).
+    pub fn names(self) -> String {
+        const NAMES: [(Roles, &str); 5] = [
+            (Roles::OWNER, "owner"),
+            (Roles::APPROVER, "approver"),
+            (Roles::DRIVER, "driver"),
+            (Roles::PROMPTER, "prompter"),
+            (Roles::VIEWER, "viewer"),
+        ];
+        let names: Vec<&str> = NAMES
+            .iter()
+            .filter(|(r, _)| self.contains(*r))
+            .map(|(_, n)| *n)
+            .collect();
+        if names.is_empty() {
+            "none".into()
+        } else {
+            names.join("+")
+        }
+    }
+}
+
+impl std::str::FromStr for Roles {
+    type Err = String;
+
+    /// Parses role names joined by `+` or `,` (`"driver+approver"`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut roles = Self::EMPTY;
+        for name in s.split(['+', ',']).map(str::trim).filter(|n| !n.is_empty()) {
+            roles |= match name.to_ascii_lowercase().as_str() {
+                "viewer" => Self::VIEWER,
+                "prompter" => Self::PROMPTER,
+                "driver" => Self::DRIVER,
+                "approver" => Self::APPROVER,
+                "owner" => Self::OWNER,
+                other => return Err(format!("unknown role {other:?}")),
+            };
+        }
+        if roles == Self::EMPTY {
+            return Err("no role given".into());
+        }
+        Ok(roles)
+    }
+}
+
 bitset! {
     /// Optional client capabilities announced in `Hello`.
     Caps: u32 {
