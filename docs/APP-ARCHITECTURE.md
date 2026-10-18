@@ -170,3 +170,8 @@ disabled`; `-testMirror YES` (core VT mirror for pane text).
 - Switching a host from SSH to daemon replaces the window's workspace (same window, same host):
   the plain-SSH shell is closed once the daemon's layout is ready, so its scrollback is not
   carried over.
+- `TerminalInputUITests.testMultilinePasteAsksForConfirmation` fails on the dedicated iOS 27.0
+  simulator used here, also with the window root reduced to a bare `WorkspaceView`, so it is not
+  caused by the host wiring; not yet checked on main or on iOS 27.1. All other iOS UI tests pass.
+- macOS remote host: the app paired with a local daemon by `-testTicket` and attached (hosts.json,
+  session 1); typing into it on macOS was not driven (no UI automation, see above).
