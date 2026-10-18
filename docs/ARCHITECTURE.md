@@ -120,4 +120,6 @@ the safe *Prompter* role possible),  kitty graphics, foldable layouts, external 
 ## 9. Things to verify (claims from research not yet checked)
 
 - iroh 1.0 (2026-06-15) / 1.3.0 versions and the iOS 26 Network.framework migration crash report — 05.
-- Claude `--settings` hooks merge with (not replace) user hooks — 06 risk #1.
+- ~~Claude `--settings` hooks merge with (not replace) user hooks — 06 risk #1.~~ **Verified 2026-10-18** on
+  Claude Code 2.1.302: project hooks and `--settings` hooks both fired; `--session-id` honoured. Real payloads
+  saved in `crates/agents/tests/fixtures/claude/captured-2.1.302/`.

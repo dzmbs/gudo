@@ -1,0 +1,25 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "07c3ab34-c641-4bee-b34e-eb6b20c434c0",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo hi",
+    "description": "Print hi"
+  },
+  "tool_response": {
+    "stdout": "hi",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01EJnFPRkbVpBNKa9UrASBr1",
+  "duration_ms": 88
+}

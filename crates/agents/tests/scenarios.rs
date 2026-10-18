@@ -218,3 +218,22 @@ fn codex_opt_in_hooks_are_authoritative_for_blocking() {
     assert_eq!(pane.arbiter.status(), &Status::Idle);
     assert_eq!(pane.log.last().unwrap().0, EventKind::Interrupted);
 }
+
+#[test]
+fn captured_claude_2_1_302_payloads_parse() {
+    let cases = [
+        ("session_start", Some(EventKind::SessionStarted)),
+        ("user_prompt_submit", Some(EventKind::TurnStarted)),
+        ("pre_tool_use", Some(EventKind::ToolStarted)),
+        ("post_tool_use", None),
+        ("stop", Some(EventKind::TurnEnded)),
+        ("session_end", Some(EventKind::SessionEnded)),
+    ];
+    for (name, expected) in cases {
+        let payload = fixture("claude", &format!("captured-2.1.302/{name}"));
+        let signal = ClaudeCode::default()
+            .parse_hook(&payload, Seq(1))
+            .unwrap_or_else(|err| panic!("{name}: {err}"));
+        assert_eq!(signal.map(|s| s.kind), expected, "{name}");
+    }
+}

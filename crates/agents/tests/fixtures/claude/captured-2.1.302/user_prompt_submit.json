@@ -1,0 +1,9 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "07c3ab34-c641-4bee-b34e-eb6b20c434c0",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Run the shell command 'echo hi' with the Bash tool, then reply with just: done"
+}
