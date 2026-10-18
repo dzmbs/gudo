@@ -186,10 +186,13 @@ fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))
     };
     let (f, t) = (c(from)?, c(to)?);
+    // The raw syscall: the static musl builds (zig's musl) have no `renameat2` wrapper.
     #[cfg(target_os = "linux")]
-    // SAFETY: both arguments are valid NUL-terminated paths for the duration of the call.
+    // SAFETY: both arguments are valid NUL-terminated paths for the duration of the call, and
+    // renameat2 takes (int, const char *, int, const char *, unsigned int).
     let ret = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             libc::AT_FDCWD,
             f.as_ptr(),
             libc::AT_FDCWD,
