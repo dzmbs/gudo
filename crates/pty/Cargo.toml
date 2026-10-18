@@ -1,0 +1,27 @@
+[package]
+name = "pty"
+version = "0.0.0"
+description = "Host daemon PTY layer: spawn, I/O actor, seq-addressed output ring, echo hints"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+libc.workspace = true
+rustix.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[lints]
+workspace = true

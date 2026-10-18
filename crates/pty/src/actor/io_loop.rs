@@ -1,0 +1,251 @@
+//! The I/O thread: one `poll(2)` loop per PTY over the master and a wake pipe.
+
+use std::collections::VecDeque;
+use std::os::fd::OwnedFd;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use bytes::{Buf, Bytes};
+use rustix::event::{PollFd, PollFlags, Timespec};
+use rustix::io::Errno;
+use tokio::sync::mpsc::{self, error::TryRecvError};
+
+use super::{OutputHook, Shared};
+use crate::termios::EchoState;
+
+const READ_BUF: usize = 64 * 1024;
+/// Most bytes read per loop iteration, so a flooding child cannot starve input.
+const READ_BUDGET: usize = 1024 * 1024;
+/// After output or input, re-check the echo flags this often...
+const ACTIVE_POLL: Duration = Duration::from_millis(25);
+/// ...for this long...
+const ACTIVE_WINDOW: Duration = Duration::from_millis(500);
+/// ...and then this often until the next activity.
+const IDLE_POLL: Duration = Duration::from_secs(1);
+
+/// The write end of the self-pipe that interrupts the I/O thread's `poll`.
+pub(super) struct Waker(OwnedFd);
+
+impl Waker {
+    pub(super) fn wake(&self) {
+        // A full pipe already guarantees a wake-up, so EAGAIN (and anything else) is ignorable.
+        let _ = rustix::io::write(&self.0, &[1]);
+    }
+}
+
+pub(super) fn wake_pipe() -> std::io::Result<(Waker, OwnedFd)> {
+    let (read, write) = rustix::pipe::pipe()?;
+    for fd in [&read, &write] {
+        rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::CLOEXEC)?;
+        rustix::fs::fcntl_setfl(fd, rustix::fs::OFlags::NONBLOCK)?;
+    }
+    Ok((Waker(write), read))
+}
+
+enum ReadOutcome {
+    /// Some bytes were read (or none were ready).
+    Open { read_any: bool },
+    /// The slave side is gone and everything has been read.
+    Eof,
+}
+
+pub(super) struct IoLoop {
+    master: Arc<OwnedFd>,
+    wake: OwnedFd,
+    input: mpsc::Receiver<Bytes>,
+    shared: Arc<Shared>,
+    hook: Option<OutputHook>,
+    pending: VecDeque<Bytes>,
+}
+
+impl IoLoop {
+    pub(super) fn new(
+        master: Arc<OwnedFd>,
+        wake: OwnedFd,
+        input: mpsc::Receiver<Bytes>,
+        shared: Arc<Shared>,
+        hook: Option<OutputHook>,
+    ) -> Self {
+        Self {
+            master,
+            wake,
+            input,
+            shared,
+            hook,
+            pending: VecDeque::new(),
+        }
+    }
+
+    pub(super) fn run(mut self) {
+        let mut buf = vec![0u8; READ_BUF];
+        let mut last_activity = Instant::now();
+        loop {
+            if self.shared.shutdown.load(Ordering::Acquire) || !self.take_input() {
+                break;
+            }
+            if !self.pending.is_empty() {
+                last_activity = Instant::now();
+                self.flush_input();
+            }
+            self.refresh_echo();
+
+            let timeout = if last_activity.elapsed() < ACTIVE_WINDOW {
+                ACTIVE_POLL
+            } else {
+                IDLE_POLL
+            };
+            let ready = match self.poll(timeout) {
+                Ok(ready) => ready,
+                Err(err) => {
+                    tracing::warn!(%err, "pty poll failed; closing");
+                    break;
+                }
+            };
+            if ready.wake {
+                drain(&self.wake);
+            }
+            if ready.writable {
+                self.flush_input();
+            }
+            if ready.readable || ready.hangup {
+                match self.read_output(&mut buf, ready.hangup) {
+                    ReadOutcome::Open { read_any } => {
+                        if read_any {
+                            last_activity = Instant::now();
+                        }
+                    }
+                    ReadOutcome::Eof => {
+                        self.refresh_echo();
+                        break;
+                    }
+                }
+            }
+        }
+        // Refuse further writes before announcing the end, so that anyone who has seen the end
+        // also sees writes fail.
+        self.input.close();
+        self.shared.output.send_modify(|state| state.closed = true);
+    }
+
+    /// Moves queued input into `pending`. Returns `false` once the actor handle is gone.
+    fn take_input(&mut self) -> bool {
+        loop {
+            match self.input.try_recv() {
+                Ok(data) => self.pending.push_back(data),
+                Err(TryRecvError::Empty) => return true,
+                Err(TryRecvError::Disconnected) => return false,
+            }
+        }
+    }
+
+    fn flush_input(&mut self) {
+        while let Some(front) = self.pending.front_mut() {
+            match rustix::io::write(&*self.master, front) {
+                Ok(n) => {
+                    front.advance(n);
+                    if front.is_empty() {
+                        self.pending.pop_front();
+                    }
+                }
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => return,
+                Err(err) => {
+                    // Typically EIO once the child side is gone; output EOF follows.
+                    tracing::debug!(%err, "pty write failed; dropping queued input");
+                    self.pending.clear();
+                    return;
+                }
+            }
+        }
+    }
+
+    fn read_output(&mut self, buf: &mut [u8], hangup: bool) -> ReadOutcome {
+        let mut total = 0;
+        while total < READ_BUDGET {
+            match rustix::io::read(&*self.master, &mut *buf) {
+                // Linux reports a closed slave as EIO, macOS as a 0-byte read.
+                Ok(0) | Err(Errno::IO) => return ReadOutcome::Eof,
+                Ok(n) => {
+                    self.publish(&buf[..n]);
+                    total += n;
+                }
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) if hangup && total == 0 => return ReadOutcome::Eof,
+                Err(Errno::AGAIN) => break,
+                Err(err) => {
+                    tracing::warn!(%err, "pty read failed; closing");
+                    return ReadOutcome::Eof;
+                }
+            }
+        }
+        ReadOutcome::Open {
+            read_any: total > 0,
+        }
+    }
+
+    fn publish(&mut self, data: &[u8]) {
+        let head = {
+            let mut ring = self.shared.ring();
+            if let Some(hook) = &mut self.hook {
+                // Called under the ring lock so that a hook consumer (the daemon's VT) and the
+                // ring agree on `head` for anyone who holds the lock, e.g. to take a snapshot.
+                hook(ring.head(), data);
+            }
+            ring.push(data);
+            ring.head()
+        };
+        self.shared.output.send_modify(|state| state.head = head);
+    }
+
+    fn refresh_echo(&self) {
+        let Ok(now) = EchoState::read(&*self.master) else {
+            return;
+        };
+        self.shared.echo.send_if_modified(|echo| {
+            let changed = *echo != now;
+            *echo = now;
+            changed
+        });
+    }
+
+    fn poll(&self, timeout: Duration) -> rustix::io::Result<Ready> {
+        let mut master_events = PollFlags::IN;
+        if !self.pending.is_empty() {
+            master_events |= PollFlags::OUT;
+        }
+        let mut fds = [
+            PollFd::new(&*self.master, master_events),
+            PollFd::new(&self.wake, PollFlags::IN),
+        ];
+        let timeout = Timespec::try_from(timeout).expect("constant timeouts fit in a timespec");
+        match rustix::event::poll(&mut fds, Some(&timeout)) {
+            Ok(_) => {}
+            Err(Errno::INTR) => return Ok(Ready::default()),
+            Err(err) => return Err(err),
+        }
+        let master = fds[0].revents();
+        if master.contains(PollFlags::NVAL) {
+            return Err(Errno::BADF);
+        }
+        Ok(Ready {
+            readable: master.contains(PollFlags::IN),
+            writable: master.contains(PollFlags::OUT),
+            hangup: master.intersects(PollFlags::HUP | PollFlags::ERR),
+            wake: !fds[1].revents().is_empty(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct Ready {
+    readable: bool,
+    writable: bool,
+    hangup: bool,
+    wake: bool,
+}
+
+fn drain(fd: &OwnedFd) {
+    let mut buf = [0u8; 64];
+    while matches!(rustix::io::read(fd, &mut buf), Ok(n) if n > 0) {}
+}
