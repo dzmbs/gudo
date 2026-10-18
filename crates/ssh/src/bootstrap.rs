@@ -322,7 +322,12 @@ pub async fn bootstrap(
             ServiceMode::Detached
         }
     };
-    if !platform.is_macos() && service == ServiceMode::Service && probe.linger == Some(false) {
+    let user_service = matches!(service, ServiceMode::Service | ServiceMode::AlreadyRunning);
+    if !platform.is_macos()
+        && user_service
+        && probe.linger == Some(false)
+        && !enable_linger(conn).await?
+    {
         notes.push(
             "Lingering is off, so the daemon stops when you log out. Run once: \
              sudo loginctl enable-linger \"$USER\""
@@ -412,6 +417,22 @@ fn parse_probe(text: &str) -> Probe {
         }
     }
     p
+}
+
+/// Without lingering, systemd stops a user's services (the daemon) when their last session
+/// ends, which is the SSH session that installed it. Most distributions' polkit rules let a
+/// user enable lingering for themselves without a password, so try that before falling back
+/// to a note (`--no-ask-password`: never prompt). Returns whether lingering is now on.
+async fn enable_linger(conn: &Connection) -> Result<bool, SshError> {
+    let out = conn
+        .exec(&sh_command(
+            "loginctl --no-ask-password enable-linger \"$(id -un)\" >/dev/null 2>&1; \
+             loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null",
+        ))
+        .await?;
+    let on = out.stdout_text().trim() == "yes";
+    tracing::info!(on, "enabling lingering");
+    Ok(on)
 }
 
 #[cfg(test)]

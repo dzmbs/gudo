@@ -145,8 +145,8 @@ public final class DaemonConnection: HostConnection {
 
     public func background() {
         guard let client else { return }
+        router.suspend()
         client.suspend()
-        router.broadcast(.stale(reason: "Paused"))
         status = .suspended
     }
 

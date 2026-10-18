@@ -33,6 +33,9 @@ public final class HostsModel {
     public internal(set) var connections: [String: any HostConnection] = [:]
     /// Helper installs in progress, by host id.
     public private(set) var installs: [String: InstallProgress] = [:]
+    /// What the last helper install said the user may want to know (e.g. lingering is off), by
+    /// host id; cleared with `dismissNotes`.
+    public private(set) var installNotes: [String: [String]] = [:]
     public let keys: KeyStore
     public let hostKeyPrompts = HostKeyPrompts()
     public let network = NetworkMonitor()
@@ -283,6 +286,7 @@ public final class HostsModel {
             binaries: configuration.hostdBinaries(), ticketMinutes: nil, waitSecs: nil, listener: listener)
         Self.log.info("bootstrap host=\(id, privacy: .public) action=\(String(describing: report.action), privacy: .public) in \((ContinuousClock.now - started) / .milliseconds(1), format: .fixed(precision: 0)) ms")
         installs[id]?.report = report
+        installNotes[id] = report.notes.isEmpty ? nil : report.notes
         let ticket = try PairingTicket(report.ticket)
         try await pair(ticket, replacing: id)
         ssh.close()
@@ -314,6 +318,10 @@ public final class HostsModel {
                 user: host.user ?? NSUserName(), host: host.hostName, port: host.port, alias: host.alias, identity: identity)
             upsert(HostRecord(name: host.alias, kind: .ssh, ssh: endpoint))
         }
+    }
+
+    public func dismissNotes(_ id: String) {
+        installNotes[id] = nil
     }
 
     /// Dismisses the import list.

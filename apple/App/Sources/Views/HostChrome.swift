@@ -56,6 +56,15 @@ struct ConnectionBanner: View {
             if let hostId, host is SshConnection {
                 InstallHelperRow(hostId: hostId)
             }
+            if let hostId, let notes = app.hosts.installNotes[hostId] {
+                HStack(alignment: .top) {
+                    Image(systemName: "info.circle")
+                    Text(notes.joined(separator: "\n")).textSelection(.enabled)
+                    Spacer()
+                    Button("OK") { app.hosts.dismissNotes(hostId) }
+                }
+                .bannerStyle()
+            }
             if app.hosts.network.isOffline {
                 Label("No network. Panes resume when it is back.", systemImage: "wifi.slash")
                     .bannerStyle()

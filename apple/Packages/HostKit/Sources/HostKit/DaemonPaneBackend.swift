@@ -33,6 +33,8 @@ nonisolated final class PaneRouter: Sendable {
     private let routes = Mutex<[UInt64: Route]>([:])
     /// The last connection state, replayed to panes that register later.
     private let connection = Mutex(PaneConnection.stale(reason: "Connecting…"))
+    /// Set by `suspend`: the disconnect the suspension causes keeps the "Paused" reason.
+    private let suspended = Mutex(false)
     /// Keystroke-to-echo round trips (for the host's latency readout).
     let onEchoRoundTrip: @Sendable (Duration) -> Void
     /// How long an ack waits for the echo it implies before it is delivered anyway (input that
@@ -125,15 +127,22 @@ nonisolated final class PaneRouter: Sendable {
         case .paneHistoryGone:
             break
         case .connected:
+            suspended.withLock { $0 = false }
             broadcast(.live)
             return false
         case .disconnected(let reason), .refused(let reason):
-            broadcast(.stale(reason: reason))
+            if !suspended.withLock({ $0 }) { broadcast(.stale(reason: reason)) }
             return false
         default:
             return false
         }
         return true
+    }
+
+    /// The app suspended the connection (iOS background): panes show "Paused" until it is back.
+    func suspend() {
+        suspended.withLock { $0 = true }
+        broadcast(.stale(reason: "Paused"))
     }
 
     /// Marks every pane live or stale (suspend, connection state). While stale nothing is
