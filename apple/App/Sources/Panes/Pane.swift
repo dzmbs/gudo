@@ -23,6 +23,8 @@ final class Pane {
     private(set) var foregroundProgram: String?
     /// Called on the main actor after `title` or `foregroundProgram` change.
     @ObservationIgnored var onContextChange: (() -> Void)?
+    /// The cell size in points after a layout (split sizes snap to it).
+    @ObservationIgnored var onCellSize: ((CGSize) -> Void)?
 
     @ObservationIgnored private let backend: any PaneBackend
     @ObservationIgnored private var appliedGrid: TerminalSurface.Grid?
@@ -92,6 +94,7 @@ final class Pane {
     }
 
     private func gridChanged(_ grid: TerminalSurface.Grid) {
+        if let size = view.surface.cellSize { onCellSize?(size) }
         resizeTask?.cancel()
         // The first layout applies at once, so the shell starts at the real size.
         guard appliedGrid != nil else { return applyGrid(grid) }

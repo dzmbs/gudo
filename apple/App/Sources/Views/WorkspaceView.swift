@@ -1,5 +1,6 @@
 import PaneLayout
 import SwiftUI
+import TerminalCore
 
 /// Where tabs are listed in regular-width windows.
 enum TabStyle: String {
@@ -103,9 +104,33 @@ struct PaneMenu: View {
             ForEach([WorkspaceAction.splitRight, .splitDown, .toggleZoom, .closePane], id: \.self) { action in
                 Button(action.title) { action.perform(on: workspace) }
             }
+            Divider()
+            KeyboardSettingsMenu()
         }
         .disabled(workspace.focusedPane == nil)
         .accessibilityIdentifier("pane-menu")
+    }
+}
+
+/// Option-as-Meta (Ghostty's `macos-option-as-alt`) and, on iOS, the ASCII-capable keyboard.
+struct KeyboardSettingsMenu: View {
+    @AppStorage(KeyboardSettings.optionAsMeta) private var optionAsMeta = OptionAsMeta.none.rawValue
+    #if os(iOS)
+    @AppStorage(KeyboardSettings.asciiKeyboard) private var asciiKeyboard = false
+    #endif
+
+    var body: some View {
+        Menu("Keyboard", systemImage: "keyboard") {
+            Picker("Option as Meta", selection: $optionAsMeta) {
+                Text("Off").tag(OptionAsMeta.none.rawValue)
+                Text("Left Option").tag(OptionAsMeta.left.rawValue)
+                Text("Right Option").tag(OptionAsMeta.right.rawValue)
+                Text("Both").tag(OptionAsMeta.both.rawValue)
+            }
+            #if os(iOS)
+            Toggle("ASCII Keyboard", isOn: $asciiKeyboard)
+            #endif
+        }
     }
 }
 

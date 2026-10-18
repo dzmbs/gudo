@@ -142,6 +142,34 @@ public final class TerminalView: UIView {
         onInput?(bytes)
     }
 
+    // MARK: Accessibility
+
+    /// The terminal screen as one element (identifier `<view id>-screen`; its value reports IME
+    /// composition), next to the selection handles while they show.
+    private lazy var screenElement: UIAccessibilityElement = {
+        let element = UIAccessibilityElement(accessibilityContainer: self)
+        element.accessibilityLabel = "Terminal"
+        element.accessibilityTraits = .allowsDirectInteraction
+        return element
+    }()
+
+    override public var accessibilityIdentifier: String? {
+        didSet { screenElement.accessibilityIdentifier = accessibilityIdentifier.map { "\($0)-screen" } }
+    }
+
+    override public var isAccessibilityElement: Bool {
+        get { false }
+        set {}
+    }
+
+    override public var accessibilityElements: [Any]? {
+        get {
+            screenElement.accessibilityFrameInContainerSpace = bounds
+            return [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
+        }
+        set {}
+    }
+
     // MARK: Bell
 
     /// BEL: a short flash and, on iPhone/iPad, a warning haptic.
@@ -686,6 +714,7 @@ extension TerminalView: UITextInput {
         self.markedText = markedText?.isEmpty == false ? markedText : nil
         markedSelection = selectedRange
         surface.preedit = self.markedText.map { TerminalSurface.Preedit(text: $0) }
+        screenElement.accessibilityValue = self.markedText.map { "composing \($0)" }
     }
 
     public func unmarkText() {

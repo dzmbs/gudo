@@ -35,7 +35,10 @@ private struct SplitContainer: View {
     var body: some View {
         GeometryReader { geometry in
             let extent = axis == .horizontal ? geometry.size.width : geometry.size.height
-            let firstLength = ((extent - Self.dividerThickness) * ratio).rounded()
+            let firstLength = SplitSnapping.firstLength(
+                available: extent - Self.dividerThickness, ratio: ratio,
+                cell: workspace.cellSize.map { axis == .horizontal ? $0.width : $0.height },
+                padding: workspace.appearance.padding)
             if axis == .horizontal {
                 HStack(spacing: 0) {
                     SplitTreeView(node: first, workspace: workspace, showsFocus: true).frame(width: firstLength)
@@ -88,6 +91,19 @@ private struct SplitContainer: View {
     }
 }
 
+/// Sizes the leading side of a split to a whole number of terminal cells plus the pane padding,
+/// so it shows no partial cell; the trailing side takes the rest (its remainder becomes padding).
+enum SplitSnapping {
+    static func firstLength(available: CGFloat, ratio: Double, cell: CGFloat?, padding: CGFloat) -> CGFloat {
+        let raw = (available * ratio).rounded()
+        guard let cell, cell > 0 else { return raw }
+        let minimum = 2 * padding + cell
+        guard available >= 2 * minimum else { return raw }
+        let snapped = 2 * padding + ((raw - 2 * padding) / cell).rounded() * cell
+        return min(max(snapped, minimum), available - minimum)
+    }
+}
+
 /// One pane in the tree: the terminal, or why it failed to start.
 struct PaneSlot: View {
     let id: PaneId
@@ -111,7 +127,7 @@ struct PaneSlot: View {
                 if focused {
                     Rectangle().strokeBorder(.tint, lineWidth: 2).allowsHitTesting(false)
                 } else {
-                    Color.black.opacity(0.3).allowsHitTesting(false)
+                    Color.black.opacity(1 - workspace.appearance.unfocusedSplitOpacity).allowsHitTesting(false)
                 }
             }
         }

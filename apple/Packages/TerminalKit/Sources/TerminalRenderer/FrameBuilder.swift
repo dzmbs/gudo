@@ -193,7 +193,9 @@ final class FrameBuilder {
             defer { x += 1 }
             guard x < cols else { return }
             let count = cell.graphemeCount
-            infos[x].scalars = count == 0 ? [] : count == 1 ? [cell.codepoint] : cell.graphemes
+            // Reuse each slot's array storage: no allocation per cell on the common path.
+            infos[x].scalars.removeAll(keepingCapacity: true)
+            if count == 1 { infos[x].scalars.append(cell.codepoint) } else if count > 1 { infos[x].scalars.append(contentsOf: cell.graphemes) }
             infos[x].style = cell.style
             infos[x].width = cell.width
             infos[x].fg = cell.foreground

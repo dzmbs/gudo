@@ -4,6 +4,7 @@ import Foundation
 import PaneLayout
 import Synchronization
 import TerminalCore
+import TerminalRenderer
 
 /// Stand-in for a remote shell on iOS until the daemon connection exists: a line editor that
 /// echoes input and answers each line, so the renderer, keyboard and key bar can be exercised.
@@ -36,7 +37,9 @@ nonisolated final class EchoBackend: PaneBackend {
         onExit: @escaping @Sendable () -> Void
     ) {
         state.withLock { $0.onOutput = onOutput }
-        let banner = "\u{1b}[1m\(Brand.name)\u{1b}[0m \u{1b}[2m· \(pane) · local echo (the host daemon connection comes later)\u{1b}[0m\r\n\r\n"
+        var banner = "\u{1b}[1m\(Brand.name)\u{1b}[0m \u{1b}[2m· \(pane) · local echo (the host daemon connection comes later)\u{1b}[0m\r\n\r\n"
+        // `-echoFixture glyphs` (launch argument) prints the renderer's glyph test screen first.
+        if UserDefaults.standard.string(forKey: "echoFixture") == "glyphs" { banner = GlyphFixture.text + "\r\n" }
         emit(Array((banner + Self.prompt).utf8))
     }
 

@@ -155,6 +155,25 @@ final class FontGrid {
     ///     that is not a symbol; nil means `span`.
     func glyph(for scalars: [UInt32], style: FontStyle, span: Int, maxSpan: Int? = nil) -> RenderedGlyph? {
         guard let base = scalars.first else { return nil }
+        // Hot path: one codepoint, already resolved and rasterized (no String key to build).
+        let fastKey = scalars.count == 1
+            ? FastKey(codepoint: base, style: style, span: span, maxSpan: maxSpan ?? 1) : nil
+        if let fastKey, let cached = fastGlyphs[fastKey] { return cached }
+        let result = slowGlyph(for: scalars, base: base, style: style, span: span, maxSpan: maxSpan)
+        if let fastKey { fastGlyphs[fastKey] = result }
+        return result
+    }
+
+    private struct FastKey: Hashable {
+        var codepoint: UInt32
+        var style: FontStyle
+        var span: Int
+        var maxSpan: Int
+    }
+
+    private var fastGlyphs: [FastKey: RenderedGlyph?] = [:]
+
+    private func slowGlyph(for scalars: [UInt32], base: UInt32, style: FontStyle, span: Int, maxSpan: Int?) -> RenderedGlyph? {
         if scalars.count == 1, SpriteFace.covers(base) {
             return spriteGlyph(base, span: span)
         }

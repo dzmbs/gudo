@@ -52,6 +52,33 @@ final class Bench {
 
     /// A full screen of box drawing, blocks, braille and Powerline that changes on every frame
     /// (a btop/htop-like dashboard redraw): every row rebuilt, every glyph a sprite.
+    /// A full screen of text with a selection drag growing and shrinking one cell per frame (each
+    /// selection change makes libghostty-vt report the whole viewport dirty), plus a moving
+    /// prediction/preedit-style overlay: the worst case for selection rendering.
+    func selectionDrag(frames: Int) {
+        let grid = surface.grid!
+        let cols = Int(grid.cols), rows = Int(grid.rows)
+        var screen = "\u{1b}[H"
+        for row in 0..<rows {
+            var line = ""
+            while line.count < cols { line += "selection \u{1b}[1mheavy\u{1b}[0m \u{1b}[4mscreen\u{1b}[0m \u{1b}[38;5;\(row % 200)mrow\(row) " }
+            screen += line + (row + 1 < rows ? "\r\n" : "")
+        }
+        terminal.write(Array(screen.utf8))
+        surface.renderIfDirty(offscreen: true)
+        _ = surface.stats.drain()
+        let top = terminal.screenPoint(fromViewport: GridPoint(x: 0, y: 0))!
+        for frame in 0..<frames {
+            let cells = (frame * 37) % (cols * rows)
+            let head = GridPoint(x: cells % cols, y: top.y + cells / cols)
+            terminal.setSelection(Selection(anchor: top, head: head, rectangle: frame % 60 >= 30))
+            surface.renderIfDirty(offscreen: true)
+            pace()
+        }
+        terminal.clearSelection()
+        report("selection drag (full-screen selection change/frame)")
+    }
+
     func spriteScreen(frames: Int) {
         let grid = surface.grid!
         let cols = Int(grid.cols), rows = Int(grid.rows)
@@ -202,6 +229,7 @@ let bench = try Bench()
 bench.showcase(png: png)
 bench.typing(frames: 240)
 bench.spriteScreen(frames: 240)
+bench.selectionDrag(frames: 240)
 if let glyphsPng { bench.glyphs(png: glyphsPng) }
 if let file {
     try baselineThroughput(file)

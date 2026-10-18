@@ -62,6 +62,36 @@ tabs; key bar and sticky Ctrl over the software keyboard; divider drag, ⌃⌘ r
 split). Set `TEST_RUNNER_HOLD_SECONDS=30` to keep a UI test's final screen up for
 `xcrun simctl io "$DEVICE" screenshot`.
 
+## Terminal view
+
+
+| Area | Where | Notes |
+|---|---|---|
+| Sprite glyphs | `TerminalRenderer/Sprite/*` | Box drawing, blocks, braille, Powerline (incl. rounded/extended), branch drawing, legacy computing (+ supplement, octants): drawn procedurally like Ghostty so they join at any cell size. `--glyphs-png` in TerminalBench; `-echoFixture glyphs` shows `GlyphFixture` in the iOS app |
+| Nerd Font / fallback | `NerdFontConstraint`, `NerdFontTables`, `FontGrid` | Ghostty's per-range icon constraints; icons grow into a following blank cell; emoji and CJK fallback scaled to their cells |
+| Decorations | `FrameBuilder` | Underline single/double/curly/dotted/dashed with SGR 58 color, overline, strikethrough, faint, inverse, invisible, SGR 5 blink; cursor blink (DECSCUSR, focus), hollow when unfocused |
+| Selection | `TerminalCore/Selection.swift` | Terminal-owned (tracked through scrolling/reflow). Ghostty's selection gesture (double/triple click, ⌥ block, edge auto-scroll). Copy is plain text with soft wraps joined |
+| Paste | `TerminalCore/Paste.swift` | `ghostty_terminal_paste`: bracketed when DECSET 2004, else asks before a multi-line paste |
+| Mouse | `TerminalCore/Mouse.swift`, `TerminalSurface.mouse/wheel` | libghostty-vt encoder (SGR etc.); ⇧ selects instead; wheel → reports, alt-screen arrows (DECSET 1007), or scrollback |
+| IME | `UITextInput` / `NSTextInputClient` | Marked text drawn inline at the cursor, underlined, never sent; candidate window at the cursor |
+| Links | OSC 8 | Underlined on hover; tap (iOS) / ⌘-click (Mac) opens after confirmation |
+| Echo prediction | `TerminalCore/Prediction/*` | 05 §5.5 with the S6 rule. Backends adopt `PredictionFeed` (hints, acks, RTT); the iOS echo backend simulates latency with `-echoLatencyMs 150` |
+| Appearance | `TerminalAppearance` | Font family/size, palette, colors, cursor, selection colors, padding, unfocused-split opacity — configuration, not constants |
+
+iOS gestures: tap focuses (or clicks in mouse mode, or opens a link); double/triple tap and long-press
+select with drag handles and the edit menu; one finger scrolls with momentum (arrows on the alt screen,
+drags in mouse mode); two fingers send the wheel. iPad pointer: click-drag selects, ⇧-click extends,
+hover underlines links and reports motion in any-event mode. Hardware keys: full HID map incl.
+function keys, Option-as-Meta per side (Pane menu ▸ Keyboard), ⌘ chords go to the app.
+
+Backend hooks (additive, in `App/Sources/Panes/PaneBackend.swift`): `PredictionFeed` and
+`ForegroundProgramReporting` (picks the key bar profile; the title stands in until the daemon reports
+the program).
+
+Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typing 0.10 ms/frame build;
+sprite screen full redraw 1.08 ms avg / 1.45 ms p99; selection drag (whole viewport dirty every frame)
+2.33 ms avg / 5.47 ms p99.
+
 ## Shortcuts (Ghostty defaults)
 
 | | |

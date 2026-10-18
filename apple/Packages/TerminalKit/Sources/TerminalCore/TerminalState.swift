@@ -157,6 +157,28 @@ extension Terminal {
         return s
     }
 
+    /// The viewport as plain text, one line per row with trailing blanks trimmed (accessibility).
+    public func visibleText() -> String {
+        withHandle { t in
+            var cols: UInt16 = 0, rows: UInt16 = 0
+            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLS, &cols)
+            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_ROWS, &rows)
+            var lines: [String] = []
+            for y in 0..<Int(rows) {
+                var line = ""
+                for x in 0..<Int(cols) {
+                    guard let ref = Self.gridRef(t, GridPoint(x: x, y: y), GHOSTTY_POINT_TAG_VIEWPORT) else { continue }
+                    let g = Self.graphemes(ref)
+                    line += g.isEmpty ? " " : g
+                }
+                while line.last == " " { line.removeLast() }
+                lines.append(line)
+            }
+            while lines.last?.isEmpty == true { lines.removeLast() }
+            return lines.joined(separator: "\n")
+        }
+    }
+
     /// The OSC 8 hyperlink URI of a viewport cell, if any.
     public func hyperlink(atViewport point: GridPoint) -> String? {
         withHandle { t in
