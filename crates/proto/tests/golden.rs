@@ -518,6 +518,7 @@ fn every_message_matches_its_frozen_bytes() {
         "0a0000000104ac027828a00bc007",
     );
     terminal_completeness(&mut c);
+    workspace_messages(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -525,6 +526,518 @@ fn every_message_matches_its_frozen_bytes() {
         c.failures.join("\n")
     );
 }
+
+fn workspace_messages(c: &mut Checker) {
+    let stat = || FileStat {
+        path: "/h/f".into(),
+        name: "f".into(),
+        kind: FileKind::File,
+        size: 5,
+        modified: UnixMillis(1000),
+        mode: 0o644,
+        hidden: false,
+        link_target: None,
+        target_kind: None,
+        version: "1-5-9".into(),
+    };
+    let target = WriteTarget {
+        path: "~/f".into(),
+        if_match: Some("1-5-9".into()),
+        create_new: false,
+        mkdirs: true,
+        mode: Some(0o600),
+    };
+    c.check(
+        "StreamHeader::Forward(Tcp)",
+        StreamHeader::Forward {
+            target: ForwardTarget::Tcp { port: 3000 },
+        },
+        "05000000010400b817",
+    );
+    c.check(
+        "StreamHeader::Forward(Unix)",
+        StreamHeader::Forward {
+            target: ForwardTarget::Unix { path: "/s".into() },
+        },
+        "06000000010401022f73",
+    );
+    c.check(
+        "StreamHeader::Upload",
+        StreamHeader::Upload(UploadHeader {
+            target: target.clone(),
+            size: 70_000,
+        }),
+        "150000000105037e2f660105312d352d390001018003f0a204",
+    );
+    c.check(
+        "StreamHeader::Download",
+        StreamHeader::Download(DownloadHeader {
+            path: "/h/f".into(),
+            offset: 10,
+            len: None,
+        }),
+        "090000000106042f682f660a00",
+    );
+    c.check(
+        "TransferReply::Ready",
+        TransferReply::Ready {
+            stat: Some(stat()),
+            len: 5,
+        },
+        "1a000000010001042f682f6601660005e807a40300000005312d352d3905",
+    );
+    c.check(
+        "TransferReply::Done",
+        TransferReply::Done(stat()),
+        "180000000101042f682f6601660005e807a40300000005312d352d39",
+    );
+    c.check(
+        "TransferReply::Failed",
+        TransferReply::Failed(WsError::Conflict("x".into())),
+        "050000000102020178",
+    );
+
+    let requests: Vec<(&str, WorkspaceRequest)> = vec![
+        ("ListPorts", WorkspaceRequest::ListPorts),
+        ("EditorStatus", WorkspaceRequest::EditorStatus),
+        (
+            "EditorLaunch",
+            WorkspaceRequest::EditorLaunch(EditorLaunch {
+                folder: "~/p".into(),
+                choice: EditorChoice::Only(EditorKind::OpenVsCode),
+                accept_vscode_license: true,
+            }),
+        ),
+        (
+            "EditorStop",
+            WorkspaceRequest::EditorStop {
+                folder: "~/p".into(),
+            },
+        ),
+        (
+            "EditorOpen",
+            WorkspaceRequest::EditorOpen {
+                folder: None,
+                path: "~/p/a.rs".into(),
+                line: Some(3),
+                column: None,
+            },
+        ),
+        (
+            "GitStatus",
+            WorkspaceRequest::GitStatus { path: "~/p".into() },
+        ),
+        (
+            "GitDiff",
+            WorkspaceRequest::GitDiff(GitDiffRequest {
+                path: "~/p".into(),
+                base: DiffBase::MergeBase("main".into()),
+                files: vec!["a".into()],
+                context: 3,
+                hunks: true,
+            }),
+        ),
+        ("ListTurns", WorkspaceRequest::ListTurns { pane_id: PANE }),
+        (
+            "TurnDiff",
+            WorkspaceRequest::TurnDiff {
+                pane_id: PANE,
+                turn: Some(2),
+                context: 3,
+                hunks: false,
+            },
+        ),
+        (
+            "SendReview",
+            WorkspaceRequest::SendReview(ReviewRequest {
+                pane_id: PANE,
+                preamble: None,
+                notes: vec![ReviewNote {
+                    path: "a".into(),
+                    start_line: 1,
+                    end_line: 2,
+                    old_side: false,
+                    quote: Some("q".into()),
+                    note: "n".into(),
+                }],
+                submit: true,
+            }),
+        ),
+        (
+            "WorktreeCreate",
+            WorkspaceRequest::WorktreeCreate(WorktreeCreate {
+                repo: "~/p".into(),
+                branch: Some("b".into()),
+                base: None,
+                path: None,
+            }),
+        ),
+        (
+            "WorktreeList",
+            WorkspaceRequest::WorktreeList { repo: "~/p".into() },
+        ),
+        (
+            "WorktreeRemove",
+            WorkspaceRequest::WorktreeRemove {
+                path: "~/w".into(),
+                force: false,
+                delete_branch: true,
+            },
+        ),
+        (
+            "WorktreeLaunch",
+            WorkspaceRequest::WorktreeLaunch {
+                path: "~/w".into(),
+                split_from: PANE,
+                axis: Axis::Vertical,
+                agent: Some(AgentKind::Codex),
+            },
+        ),
+        (
+            "FsList",
+            WorkspaceRequest::FsList {
+                path: "~".into(),
+                show_hidden: true,
+            },
+        ),
+        ("FsStat", WorkspaceRequest::FsStat { path: "~".into() }),
+        (
+            "FsRead",
+            WorkspaceRequest::FsRead {
+                path: "~/f".into(),
+                offset: 1,
+                len: 4096,
+            },
+        ),
+        (
+            "FsMkdir",
+            WorkspaceRequest::FsMkdir {
+                path: "~/d".into(),
+                parents: true,
+            },
+        ),
+        (
+            "FsRename",
+            WorkspaceRequest::FsRename {
+                from: "~/a".into(),
+                to: "~/b".into(),
+                overwrite: false,
+            },
+        ),
+        (
+            "FsDelete",
+            WorkspaceRequest::FsDelete {
+                path: "~/a".into(),
+                mode: DeleteMode::Trash,
+                recursive: true,
+            },
+        ),
+        ("FsWatch", WorkspaceRequest::FsWatch { path: "~".into() }),
+        ("FsUnwatch", WorkspaceRequest::FsUnwatch { watch_id: 7 }),
+        ("AttentionList", WorkspaceRequest::AttentionList),
+        (
+            "AttentionSeen",
+            WorkspaceRequest::AttentionSeen(AttentionSeen {
+                ids: vec![4],
+                up_to: Some(9),
+                pane_id: Some(PANE),
+            }),
+        ),
+        (
+            "FsWrite",
+            WorkspaceRequest::FsWrite {
+                target: target.clone(),
+                data: vec![0xab; 2],
+            },
+        ),
+    ];
+    for (name, req) in requests {
+        let goldens = WORKSPACE_REQUEST_GOLDENS;
+        let golden = goldens
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or("missing golden", |(_, g)| *g);
+        c.check(
+            &format!("ClientCtl::Workspace({name})"),
+            ClientCtl::Workspace { req_id: 5, req },
+            golden,
+        );
+    }
+
+    let instance = EditorInstance {
+        kind: EditorKind::VsCode,
+        folder: "/p".into(),
+        port: 40000,
+        token: "t".into(),
+        url_path: "/?tkn=t".into(),
+        pid: 77,
+        started_at: UnixMillis(1000),
+    };
+    let item = AttentionItem {
+        id: 3,
+        at: UnixMillis(1000),
+        pane_id: PANE,
+        session_id: Some(SessionId(1)),
+        kind: AttentionKind::AgentBlocked {
+            agent: "claude".into(),
+            request_id: Some(RequestId(9)),
+        },
+        title: "t".into(),
+        body: "b".into(),
+        seen: false,
+        while_viewed: false,
+    };
+    let responses: Vec<(&str, Result<WorkspaceResponse, WsError>)> = vec![
+        ("Done", Ok(WorkspaceResponse::Done)),
+        (
+            "Ports",
+            Ok(WorkspaceResponse::Ports(vec![PortInfo {
+                port: 5173,
+                loopback_only: true,
+                pane_id: Some(PANE),
+                pid: 42,
+                process: "node".into(),
+                kind: PortKind::Http,
+                url: Some("http://localhost:5173/".into()),
+            }])),
+        ),
+        (
+            "Editors",
+            Ok(WorkspaceResponse::Editors(EditorList {
+                available: vec![EditorAvailability {
+                    kind: EditorKind::OpenVsCode,
+                    installed: false,
+                    downloadable: true,
+                    path: None,
+                    version: Some("v1".into()),
+                    note: None,
+                }],
+                running: vec![instance.clone()],
+            })),
+        ),
+        (
+            "EditorOpened",
+            Ok(WorkspaceResponse::EditorOpened(EditorOpened {
+                instance,
+                in_window: false,
+                url_path: "/?p".into(),
+            })),
+        ),
+        (
+            "GitStatus",
+            Ok(WorkspaceResponse::GitStatus(GitStatus {
+                root: "/r".into(),
+                branch: Some("main".into()),
+                head: Some("abc".into()),
+                upstream: None,
+                ahead: 1,
+                behind: 0,
+                files: vec![GitFileStatus {
+                    path: "b".into(),
+                    orig_path: Some("a".into()),
+                    staged: FileChange::Renamed,
+                    unstaged: FileChange::Untracked,
+                }],
+            })),
+        ),
+        (
+            "GitDiff",
+            Ok(WorkspaceResponse::GitDiff(GitDiff {
+                root: "/r".into(),
+                from: "t1".into(),
+                to: "t2".into(),
+                files: vec![FileDiff {
+                    path: "a".into(),
+                    old_path: None,
+                    change: FileChange::Modified,
+                    binary: false,
+                    additions: 1,
+                    deletions: 1,
+                    hunks: vec![Hunk {
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 1,
+                        new_lines: 1,
+                        header: "fn".into(),
+                        lines: vec![
+                            DiffLine {
+                                kind: LineKind::Removed,
+                                text: "x".into(),
+                            },
+                            DiffLine {
+                                kind: LineKind::Added,
+                                text: "y".into(),
+                            },
+                        ],
+                    }],
+                    hunks_omitted: false,
+                }],
+                truncated: false,
+            })),
+        ),
+        (
+            "Turns",
+            Ok(WorkspaceResponse::Turns(vec![TurnInfo {
+                turn: 1,
+                root: "/r".into(),
+                started_at: UnixMillis(1),
+                ended_at: None,
+                start_tree: "t".into(),
+                end_tree: None,
+            }])),
+        ),
+        (
+            "Worktrees",
+            Ok(WorkspaceResponse::Worktrees(vec![WorktreeInfo {
+                path: "/w".into(),
+                branch: Some("b".into()),
+                head: None,
+                main: false,
+                locked: false,
+                prunable: false,
+                port: Some(4100),
+            }])),
+        ),
+        (
+            "Dir",
+            Ok(WorkspaceResponse::Dir(DirListing {
+                path: "/h".into(),
+                entries: vec![stat()],
+                truncated: false,
+            })),
+        ),
+        (
+            "FileData",
+            Ok(WorkspaceResponse::FileData(FileChunk {
+                stat: stat(),
+                offset: 0,
+                data: b"hi".to_vec(),
+                eof: true,
+            })),
+        ),
+        (
+            "Attention",
+            Ok(WorkspaceResponse::Attention(AttentionList {
+                items: vec![item.clone()],
+                unseen: 1,
+            })),
+        ),
+        ("Denied", Err(WsError::Denied("no".into()))),
+        ("Disconnected", Err(WsError::Disconnected)),
+    ];
+    for (name, result) in responses {
+        let golden = WORKSPACE_RESPONSE_GOLDENS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or("missing golden", |(_, g)| *g);
+        c.check(
+            &format!("ServerCtl::WorkspaceResult({name})"),
+            ServerCtl::WorkspaceResult { req_id: 5, result },
+            golden,
+        );
+    }
+
+    c.check(
+        "ServerCtl::PortsChanged",
+        ServerCtl::PortsChanged { ports: vec![] },
+        "03000000011900",
+    );
+    c.check(
+        "ServerCtl::FsChanged",
+        ServerCtl::FsChanged(FsChange {
+            watch_id: 2,
+            paths: vec!["/h/x".into()],
+            rescan: false,
+        }),
+        "0a000000011a0201042f682f7800",
+    );
+    c.check(
+        "ServerCtl::Attention(Added)",
+        ServerCtl::Attention(AttentionUpdate::Added { item, unseen: 1 }),
+        "1a000000011b0003e8070301010006636c61756465010901740162000001",
+    );
+    c.check(
+        "ServerCtl::Attention(Seen)",
+        ServerCtl::Attention(AttentionUpdate::Seen {
+            ids: vec![3],
+            unseen: 0,
+        }),
+        "06000000011b01010300",
+    );
+}
+
+const WORKSPACE_REQUEST_GOLDENS: &[(&str, &str)] = &[
+    ("ListPorts", "0400000001150500"),
+    ("EditorStatus", "0400000001150501"),
+    ("EditorLaunch", "0b00000001150502037e2f70010101"),
+    ("EditorStop", "0800000001150503037e2f70"),
+    ("EditorOpen", "110000000115050400087e2f702f612e7273010300"),
+    ("GitStatus", "0800000001150505037e2f70"),
+    ("GitDiff", "1300000001150506037e2f7004046d61696e0101610301"),
+    ("ListTurns", "050000000115050703"),
+    ("TurnDiff", "09000000011505080301020300"),
+    ("SendReview", "12000000011505090300010161010200010171016e01"),
+    ("WorktreeCreate", "0d0000000115050a037e2f700101620000"),
+    ("WorktreeList", "080000000115050b037e2f70"),
+    ("WorktreeRemove", "0a0000000115050c037e2f770001"),
+    ("WorktreeLaunch", "0c0000000115050d037e2f7703010101"),
+    ("FsList", "070000000115050e017e01"),
+    ("FsStat", "060000000115050f017e"),
+    ("FsRead", "0b00000001150510037e2f66018020"),
+    ("FsMkdir", "0900000001150511037e2f6401"),
+    ("FsRename", "0d00000001150512037e2f61037e2f6200"),
+    ("FsDelete", "0a00000001150513037e2f610001"),
+    ("FsWatch", "0600000001150514017e"),
+    ("FsUnwatch", "050000000115051507"),
+    ("AttentionList", "0400000001150516"),
+    ("AttentionSeen", "0a00000001150517010401090103"),
+    (
+        "FsWrite",
+        "1700000001150518037e2f660105312d352d39000101800302abab",
+    ),
+];
+const WORKSPACE_RESPONSE_GOLDENS: &[(&str, &str)] = &[
+    ("Done", "050000000118050000"),
+    (
+        "Ports",
+        "2a000000011805000101b5280101032a046e6f6465000116687474703a2f2f6c6f63616c686f73743a353137332f",
+    ),
+    (
+        "Editors",
+        "240000000118050002010100010001027631000100022f70c0b8020174072f3f746b6e3d744de807",
+    ),
+    (
+        "EditorOpened",
+        "1e000000011805000400022f70c0b8020174072f3f746b6e3d744de80700032f3f70",
+    ),
+    (
+        "GitStatus",
+        "1e0000000118050005022f7201046d61696e01036162630001000101620101610408",
+    ),
+    (
+        "GitDiff",
+        "270000000118050006022f720274310274320101610001000101010101010102666e020201780101790000",
+    ),
+    ("Turns", "0f00000001180500070101022f720100017400"),
+    (
+        "Worktrees",
+        "13000000011805000a01022f7701016200000000018420",
+    ),
+    (
+        "Dir",
+        "20000000011805000c022f6801042f682f6601660005e807a40300000005312d352d3900",
+    ),
+    (
+        "FileData",
+        "20000000011805000e042f682f6601660005e807a40300000005312d352d390002686901",
+    ),
+    (
+        "Attention",
+        "1d00000001180500100103e8070301010006636c61756465010901740162000001",
+    ),
+    ("Denied", "080000000118050100026e6f"),
+    ("Disconnected", "050000000118050106"),
+];
 
 fn mark(finished: bool) -> CommandMark {
     CommandMark {

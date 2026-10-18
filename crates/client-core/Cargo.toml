@@ -16,7 +16,7 @@ proto.workspace = true
 serde.workspace = true
 ssh.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "io-util"] }
+tokio = { workspace = true, features = ["net", "io-util", "fs"] }
 tracing.workspace = true
 zstd.workspace = true
 

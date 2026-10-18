@@ -55,6 +55,8 @@ struct Client {
     state: Mutex<ConnState>,
     /// The connection's `bulk` stream, opened on first use.
     bulk: tokio::sync::Mutex<Option<SendStream>>,
+    /// Directory watches and the push channel for workspace requests.
+    ws: crate::ws::ConnCtx,
 }
 
 /// Serves one accepted connection until it closes.
@@ -98,6 +100,10 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     net::send(&mut ctl_tx, &ServerCtl::Welcome(welcome)).await?;
 
     let (ctl, ctl_out) = mpsc::unbounded_channel();
+    let ws = crate::ws::ConnCtx {
+        ctl: ctl.clone(),
+        watches: Arc::default(),
+    };
     let client = Arc::new(Client {
         id: core.next_conn_id(),
         core: Arc::clone(&core),
@@ -106,7 +112,9 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         ctl,
         state: Mutex::new(ConnState::default()),
         bulk: tokio::sync::Mutex::new(None),
+        ws,
     });
+    core.client_connected(true);
     let mut tasks = JoinSet::new();
     tasks.spawn(write_ctl(ctl_tx, ctl_out));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
@@ -133,6 +141,8 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         sub.task.abort();
     }
     core.detach(client.id);
+    core.client_connected(false);
+    lock(&client.ws.watches).clear();
     result
 }
 
@@ -215,6 +225,20 @@ async fn accept_bi(client: Arc<Client>) {
         match net::recv::<StreamHeader>(&mut recv).await {
             Ok(Some(StreamHeader::PortForward { port })) => {
                 tokio::spawn(forward::serve(port, send, recv));
+            }
+            Ok(Some(StreamHeader::Forward { target })) => {
+                let policy = client.core.ws.policy.clone();
+                tokio::spawn(forward::serve_target(target, policy, send, recv));
+            }
+            Ok(Some(StreamHeader::Upload(header))) => {
+                let _ = send.set_priority(crate::stream::priority::BULK);
+                let policy = client.core.ws.policy.clone();
+                tokio::spawn(crate::ws::serve_upload(policy, header, send, recv));
+            }
+            Ok(Some(StreamHeader::Download(header))) => {
+                let _ = send.set_priority(crate::stream::priority::BULK);
+                let policy = client.core.ws.policy.clone();
+                tokio::spawn(crate::ws::serve_download(policy, header, send));
             }
             other => tracing::debug!("unexpected bidi stream header: {other:?}"),
         }
@@ -315,6 +339,10 @@ impl Client {
                 }
             }
             Event::CommandUnseen(mark) => self.send(ServerCtl::CommandFinishedUnseen(mark)),
+            Event::Ports => self.send(ServerCtl::PortsChanged {
+                ports: self.core.ws.ports.current(),
+            }),
+            Event::Attention(update) => self.send(ServerCtl::Attention(update)),
         }
     }
 
@@ -425,6 +453,9 @@ impl Client {
                 self.view_changed();
             }
             ClientCtl::Focus { pane_id } => {
+                if let Some(pane) = pane_id {
+                    crate::ws::pane_focused(&self.core, pane);
+                }
                 lock(&self.state).focus = pane_id;
                 self.reclassify();
                 self.view_changed();
@@ -523,6 +554,13 @@ impl Client {
             ClientCtl::Bye { .. } => {}
             ClientCtl::ListSessions => self.send(self.core.sessions_message()),
             ClientCtl::Attach { session_id } => self.attach(session_id),
+            ClientCtl::Workspace { req_id, req } => {
+                let client = Arc::clone(self);
+                tokio::spawn(async move {
+                    let result = crate::ws::handle(&client.core, &client.ws, req).await;
+                    client.send(ServerCtl::WorkspaceResult { req_id, result });
+                });
+            }
             ClientCtl::Op { op_id, op } => {
                 let core = Arc::clone(&self.core);
                 let outcome = core.apply_op(op);

@@ -1,7 +1,8 @@
 # Host daemon (`unnamed-hostd`) and client core
 
 Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
-(key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume).
+(key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
+attention feed).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -69,7 +70,8 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
 | `input` uni | client | 90 | `Input{pane, input_seq, principal, payload}` (bytes, key, mouse, paste), one write per frame |
 | `pane/<id>` uni | daemon per subscription | 80 focused / 50 visible / 10 other | `Bytes`, `SnapshotZstd`, `Resized`, `InputAck` |
 | `bulk` uni | daemon, on first history request | 1 | `HistoryPage` / `HistoryGone` |
-| forward bidi | client | default | `StreamHeader::PortForward{port}` → `ForwardReply` → raw bytes |
+| forward bidi | client | 40 | `StreamHeader::PortForward{port}` or `Forward{Tcp\|Unix}` → `ForwardReply` → raw bytes |
+| transfer bidi | client | 1 (bulk) | `StreamHeader::Upload` / `Download` → `TransferReply` and raw bytes (§5.7) |
 
 ### Input encoding
 
@@ -219,9 +221,8 @@ aside, never overwritten.
 
 ### Port forwarding
 
-`Client::forward_port(local, remote)` listens on `127.0.0.1:local` on the device and opens one
-forward stream per accepted TCP connection; the daemon connects to `localhost:remote`
-(IPv4, then IPv6) and splices both directions with half-close. Only loopback targets exist.
+See §5.1. `Client::forward_port(local, remote)` (the original API) still works;
+`Client::forward(local, ForwardTarget)` adds Unix-socket targets and `stop_forward`.
 
 ## 3. Running it
 
@@ -252,6 +253,16 @@ un search <pattern> [-e] [--case sensitive|insensitive|smart] [--limit N] [--pan
 un links [--commands N]           # hyperlinks, URLs, paths (screen + last N commands' output)
 un marks                          # shell-integration commands: exit, duration, cwd
 un output [--command N]           # a command's output (default: the last one)
+un forward 3000 | --unix ~/x.sock [--local N]
+un ports [--watch]                un inbox [--seen] [--watch]
+un editor status | launch [folder] [--kind vscode|openvscode] [--accept-license] | stop <folder>
+          | open <path[:line[:col]]>
+un git status [path] | diff [--staged|--index|--rev R|--merge-base B] [--stat] [-U n] [files…]
+un turns [--diff N] [--stat]      un review --pane P --note 'path:L[-L]:text' [--submit]
+un worktree create [--repo R] [--branch B] [--base B] | list | remove <path> [--force]
+            [--delete-branch] | launch <path> [--agent claude|codex]
+un fs ls <dir> [-a] | stat | cat | put <local> <remote> [--if-match V] [--new] | get <remote>
+      <local> | mkdir [-p] | mv <a> <b> [--force] | rm <path> [--permanent] [-r] | watch <dir>
 #   --no-relay for direct-only; --ticket to override the saved one
 ```
 
@@ -306,7 +317,203 @@ Loopback, release build, M5 Max, 3 runs each (Linux: OrbStack Ubuntu 24.04 arm64
 Cross-host (Mac ↔ OrbStack Linux VM, both directions) and relay-only (ticket stripped of direct
 addresses, n0 relay, ~1.8 s to pair including relay setup) were exercised by hand with `un`.
 
-## 5. Known gaps / follow-ups
+
+All requests are one ctl message pair: `ClientCtl::Workspace{req_id, WorkspaceRequest}` →
+`ServerCtl::WorkspaceResult{req_id, Result<WorkspaceResponse, WsError>}` (types in
+`proto::workspace`; goldens added, nothing existing changed). Pushes: `PortsChanged`,
+`FsChanged` (only to the watching connection) and `Attention` (every client). In client-core
+the requests are `async` methods on `Client` (`git_status`, `fs_list`, `editor_launch`, …,
+awaitable from any executor; the work runs on the client's runtime, a dropped connection
+answers `WsError::Disconnected`) and pushes go to a separate `WorkspaceListener`
+(`Client::set_workspace_listener`), so `ClientEvent` and the existing listener are untouched.
+Code: `crates/daemon/src/ws/`, `crates/client-core/src/workspace.rs`, `crates/un/src/ws.rs`.
+
+### 5.0 Path policy and configuration
+
+Every path in a request (files, git, worktrees, editor folders, Unix forward targets) must be
+absolute or `~/…`, contain no `..`, and resolve inside an allowed root: `$HOME` plus
+`files.allow`. The existing ancestors are checked through their real paths, so a symlink out of
+the root is refused (`~/link-to-/etc/passwd` → `Denied`); a final symlink is listed and deleted
+as the link itself, while reads and writes follow it and check the target too. Optional
+`<state_dir>/config.toml`:
+
+```toml
+[files]
+allow = ["/srv/projects"]        # besides $HOME
+[worktrees]
+root = "/home/me/worktrees"      # default ~/.unnamed/worktrees
+port_base = 4100                 # first PORT handed to a worktree
+[editor]
+code = "/usr/local/bin/code"     # default: PATH + usual app bundle locations
+openvscode = "/opt/openvscode-server"   # instead of the pinned download
+```
+
+
+### 5.1 Port forwarding
+
+The device listens on `127.0.0.1:local` (0 picks; the bound port is returned) and opens one
+bidirectional QUIC stream per accepted TCP connection (priority 40: under a focused pane, over
+bulk) with `StreamHeader::Forward{Tcp{port} | Unix{path}}`. The daemon connects to
+`localhost:port` (IPv4, then IPv6) or the Unix socket (path policy applies) and answers
+`ForwardReply`. Each direction copies through a 64 KiB buffer and only reads again after the
+previous write finished, so a stalled reader stops the writer via the TCP window / QUIC flow
+control (test: a server that does not read holds a 256 MiB writer back, then receives every
+byte). EOF on one side finishes only that direction (half-close; test: a server that answers
+after the client's `shutdown(Write)`), a reset maps to a stream reset. Forwards survive
+reconnects (new connections wait for the link); `stop_forward` closes the listener. 64
+concurrent connections through one forward are tested.
+
+Loopback, one connection, 128 MiB, release build (`forward_throughput_and_latency`):
+
+| | macOS 26 (M5 Max) | Linux (OrbStack VM) |
+|---|---|---|
+| throughput | 80–110 MB/s | 690–780 MB/s |
+| 1-byte RTT direct / forwarded, p50 | 0.08 / 0.23 ms | 0.004 / 0.057 ms |
+| p99 | 0.17 / 0.31 ms | 0.014 / 0.097 ms |
+
+macOS is bounded by iroh's UDP path there (no GSO/GRO on loopback; the same gap shows in §4's
+attach times), not by the forward. Debug builds run several times slower.
+
+### 5.2 Port detection
+
+Listening sockets are attributed exactly, by process tree: Linux reads `/proc/net/tcp{,6}`
+(state `0A`) and maps socket inodes through `/proc/<pid>/fd`; macOS walks
+`proc_pidinfo(PROC_PIDLISTFDS)` and `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)` (no `lsof`; struct
+offsets checked against the SDK). A port belongs to the pane whose shell is its ancestor. The
+kind is `Http`/`Https` from a printed URL, else one `HEAD /` probe per (pid, port) (`HTTP/` →
+HTTP, a TLS record → HTTPS; well-known database/mail ports are never probed). Printed URLs are
+found in the pane's screen text at each 500 ms tick (loopback, `0.0.0.0` → `localhost`,
+`*.localhost`, private and Tailscale ranges; the first URL per port wins, a loopback one
+replaces a LAN one). Scans run every 2 s while any client is connected, at once when a pane
+prints a new URL or a command starts/ends, never with no client; the whole list is pushed when
+it changes. Gap: a URL that scrolls off within one tick is missed (the listener still is).
+
+### 5.3 Editor (`code serve-web` / openvscode-server)
+
+- `EditorLaunch{folder, choice: Auto|Only(kind), accept_vscode_license}`. Auto picks
+  `code serve-web` only when the `code` CLI exists *and* the user accepted Microsoft's licence
+  in the app, else openvscode-server. One server per folder, reused; bound to `127.0.0.1` on a
+  free port with a random 128-bit `--connection-token`; own process group, killed on
+  `EditorStop` and daemon shutdown; logs in `<state>/editors/`. Returns port, token and
+  `url_path` (`/?tkn=…&folder=…`; the server answers with the token cookie and a redirect).
+- openvscode-server **v1.109.5** is downloaded on first use (curl, else wget) from the GitHub
+  release, checked against pinned SHA-256s (linux-x64 `b433bf4f…`, linux-arm64 `36d9c140…`),
+  unpacked to `<state>/editors/`. Verified end to end in the Linux VM (download + verify +
+  start 8.9 s, token redirect, workbench page via a forward: ignored test
+  `real_openvscode_server_downloads_and_serves`). **Gitpod publishes no macOS build**, so on a
+  Mac host the editor is `code serve-web` (VS Code installed) or a configured `editor.openvscode`.
+- `EditorOpen{path, line, col}`: first through the editor's own CLI channel — the extension
+  host of a connected window exports `VSCODE_IPC_HOOK_CLI`; the daemon reads it from the
+  server's process tree (Linux `/proc/<pid>/environ`, macOS `KERN_PROCARGS2`) and runs the
+  server's bundled `bin/remote-cli/*  --goto path:line:col` (`in_window: true`). Otherwise it
+  returns a `url_path` with `payload=[["openFile","vscode-remote://localhost:<port>/path:L:C"],
+  ["gotoLineMode","true"]]` for the app to load (the authority assumes the in-app proxy keeps
+  in tests); this is S-ED1 territory.
+- Licences (ARCHITECTURE §9): Microsoft's VS Code Server licence
+  (<https://code.visualstudio.com/license/server>, read 2026-10-18) allows use "with Microsoft
+  Visual Studio Code" on the user's devices and internal network, and forbids hosting,
+  sharing, publishing, redistributing, or "provide the software as a stand-alone offering or
+  combine it with any of your applications for others to use" (§5.4–5.5). So: we never ship or
+  download it (the user's `code` CLI does), never run it on our infrastructure, launch it only
+  after the user accepted that licence in the app, and only for that user's own use. Whether a
+  third-party app driving it counts as "combine it with your applications" needs a legal read
+  before launch; openvscode-server (MIT, Open VSX extensions only — the Microsoft Marketplace
+  terms forbid non-Microsoft products from using it) is the default that avoids the question.
+
+### 5.4 Git, diffs, agent turns, review notes
+
+- Git CLI only, `LC_ALL=C`, `GIT_OPTIONAL_LOCKS=0`, `core.quotePath=false`. Status from
+  `status --porcelain=v2 --branch -z` (branch, oid, upstream, ahead/behind, staged/unstaged per
+  path, renames with their old path, unmerged, untracked).
+- Every diff is between two **trees**. The worktree is turned into a tree with a throwaway copy
+  of the index (`GIT_INDEX_FILE=tmp git add -A && git write-tree`): untracked, non-ignored
+  files are included and the user's index and stash are never touched (tested). Bases: `Head`
+  (HEAD vs worktree, staged + unstaged + new), `Index`, `Staged`, `Rev(r)`, `MergeBase(branch)`.
+  Files from `diff-tree -r -M -z --raw` and `--numstat` (renames, binary = `-`), hunks from
+  `diff-tree -p` matched in order; caps: 1 MiB patch per file (counts kept,
+  `hunks_omitted`), 8 MiB per diff (later files lose hunks, `truncated`); `hunks: false` gives
+  the file list with counts. Revisions starting with `-` are refused.
+- **What this turn changed**: on an agent `TurnStarted` (hooks, OSC, or screen) the daemon
+  snapshots the worktree tree of the agent's directory (hook `cwd`, else the pane's); on
+  `TurnEnded`/`Interrupted`/`Error`/`SessionEnded` it snapshots again. Snapshots run on one
+  worker in order. `ListTurns{pane}`, `TurnDiff{pane, turn?}` (a running turn diffs against
+  now). The last 50 turns per pane, in memory (lost on daemon restart); snapshots write blobs
+  into the repo's object store (`git gc` prunes them).
+- **Review notes → prompt**: `SendReview{pane, notes[{path, lines, old_side, quote?, note}],
+  submit}` formats a numbered prompt (`1. path:L-L`, quoted lines as `> …`, the note) and
+  writes it to the pane as a bracketed paste, then Enter if `submit`.
+
+### 5.5 Worktrees and `PORT`
+
+`WorktreeCreate{repo, branch?, base?, path?}` runs `git worktree add -b` into
+`<root>/<repo>/<branch with / → ->`; a missing branch name becomes `unnamed/<word>-<hex>`
+the main worktree and, unless `force`, any worktree with changes or untracked files (`Conflict`
+with the count), and can `branch -d` the branch. Each worktree gets a stable `PORT` from
+`port_base` up (skipping ports held by other worktrees or bound now), kept in
+`<state>/worktrees.json` across restarts. Every pane whose directory is inside a registered
+worktree is started with `PORT` and `UN_WORKTREE`, recorded in `layout.json`
+(`worktree: {path, port}`). `WorktreeLaunch{path, split_from, axis, agent?}` splits a pane into
+run yet.
+
+### 5.6 Files
+
+`FsList` (lstat, directories and links to directories first, hidden flag, link target and its
+kind, at most 10 000 entries), `FsStat`, `FsRead{offset, len ≤ 1 MiB}`, `FsWrite` (≤ 1 MiB),
+`FsMkdir`, `FsRename` (no replace unless `overwrite`: `renameat2(RENAME_NOREPLACE)` /
+`renamex_np(RENAME_EXCL)`), `FsDelete{Trash|Permanent, recursive}` (trash: `~/.Trash` on macOS,
+the XDG trash with `.trashinfo` on Linux; `$HOME` itself is refused), `FsWatch`/`FsUnwatch`
+(`notify`: FSEvents/inotify, not recursive, 100 ms debounce, paths reported under the
+requested spelling, many changes → `rescan`; watches end with the connection). Versions are
+`inode-size-mtime_ns`; writes take `if_match` and `create_new`.
+
+### 5.7 Upload and download streams
+
+One bidirectional stream per transfer at bulk priority, so QUIC flow control is the
+backpressure and transfers never delay ctl or keystrokes. Upload: `StreamHeader::Upload{target,
+size}` → `TransferReply::Ready` (preconditions checked first) → exactly `size` bytes, FIN →
+`Done(stat)` or `Failed`. The daemon writes from a blocking thread fed through a 4-chunk
+channel (a slow disk slows the stream), into `.<name>.unnamed-upload-<hex>` next to the
+target, fsyncs, re-checks `if_match`, renames (or hard-links for `create_new`), fsyncs the
+directory; an interrupted upload leaves nothing behind. Download: `Download{path, offset, len?}`
+→ `Ready{stat, len}` → bytes → FIN (reset on a read error); client-core writes to a temporary
+file and renames. 20 MiB, release, loopback: macOS 28 MB/s up / 39 MB/s down (with other tests
+running), Linux 705 / 393 MB/s.
+
+### 5.8 Attention feed
+
+One feed per daemon for local notifications and the inbox: `AgentBlocked{agent, request_id}`,
+`AgentDone`, `AgentFailed` (from the arbiter's own notification decisions, which the daemon
+previously dropped) and `CommandFinished(mark)` (the long command finished unseen; also still
+sent as `CommandFinishedUnseen`). Items carry pane, session, title, body (last assistant
+message, blocker summary), `seen` and `while_viewed` (a client showed the pane: no
+notification needed; such items start seen). `seen` is shared by all devices: set by
+`AttentionSeen{ids, up_to, pane_id}`, by any client focusing the pane, and for blocked items
+when the agent leaves the blocked state. Every change is pushed as `Attention(Added{item,
+unseen} | Seen{ids, unseen})`, so `unseen` is the per-host badge; the app sums hosts. The last
+500 items are kept in memory (not across daemon restarts). Gap (agents crate): a turn that goes
+straight from blocked to idle (approval answered in the terminal, no tool hook in between)
+produces no `Done`.
+
+### 5.9 Tests
+
+`cargo test -p daemon --test it workspace` (macOS and Linux): forwards (64 concurrent
+connections, half-close, backpressure, Unix socket, policy refusal, stop) and the throughput /
+latency numbers above; ports (python `http.server` with and without a printed URL, loopback vs
+all interfaces, kind probe, removal when the pane closes); git (status, HEAD diff with rename,
+delete, untracked, binary and the 1 MiB cap, staged diff, index untouched, turn snapshots
+driven by real hook requests, a later edit outside the turn, review prompt typed into the pane,
+bad revisions); worktrees (two ports, conflicting branch, list, `PORT` in a launched shell and
+in `layout.json`, dirty refusal, forced removal with branch delete, main refused, port stable
+across a daemon restart); files (listing order and symlinks, `~`, ranged read, traversal /
+outside / symlink escapes, versions and conflicts, mode kept, 20 MiB upload and download and a
+range, no temp files left, watch, rename without overwrite, trash, recursive delete, `$HOME`
+refused); editor (fake `code` and openvscode scripts: licence refusal, Auto fallback, args,
+reuse, token check through a forward, open-file URL, switch to serve-web, stop on shutdown);
+attention (blocked → seen when work resumes, done with the last message, unseen counts, seen
+on focus, mark all). Unit tests cover the porcelain/worktree/hunk parsers, path policy,
+atomic writes, URL detection, the review formatter, trash dates and the attention store.
+
+## 6. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
@@ -329,5 +536,9 @@ addresses, n0 relay, ~1.8 s to pair including relay setup) were exercised by han
 - Snapshots are encoded in full then truncated at READY (libghostty has no READY-only encode).
   `size` test fails its "typical < 50 KB" assertion there: 148 KB for colored logs); zstd keeps
   the wire size small, but the cause (page layout) needs a look.
+  and editor servers live in memory and end with the daemon; worktree setup scripts are not
+  run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
+  untested against a real browser; no transfer resume by offset for uploads (downloads take an
+  offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
 - `SetSizePolicy` is ignored (only `LastInput`). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.
