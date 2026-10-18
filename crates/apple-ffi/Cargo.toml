@@ -1,0 +1,30 @@
+[package]
+name = "apple-ffi"
+version = "0.0.0"
+description = "UniFFI surface over client-core and ssh for the Swift app (UnnamedCore.xcframework)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The Swift module is `UnnamedCore` (uniffi.toml); the Rust library name only shows up in
+# the static archive's file name, libunnamed_core.a.
+name = "unnamed_core"
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+client-core.workspace = true
+flate2.workspace = true
+ssh.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tracing.workspace = true
+uniffi.workspace = true
+
+[dev-dependencies]
+daemon.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -69,7 +69,7 @@ import TerminalCore
 
         terminal.write(Array("hello\r\nworld".utf8))
         state.update(from: terminal)
-        var stats = builder.build(state, fonts: fonts, focused: true, into: &frame)
+        var stats = builder.build(state, fonts: fonts, overlay: FrameOverlay(), into: &frame)
         state.markClean()
         #expect(stats.rowsRebuilt == 10 && stats.rowsReused == 0)
         #expect(frame.bgCells.count == 400)
@@ -80,7 +80,7 @@ import TerminalCore
 
         terminal.write(Array("!".utf8))
         state.update(from: terminal)
-        stats = builder.build(state, fonts: fonts, focused: true, into: &frame)
+        stats = builder.build(state, fonts: fonts, overlay: FrameOverlay(), into: &frame)
         #expect(stats.rowsRebuilt == 1 && stats.rowsReused == 9)
         #expect(frame.text.filter { $0.gridPos.y == 1 && $0.flags == 0 }.count == 6)
     }
@@ -92,7 +92,7 @@ import TerminalCore
         var frame = FrameContents()
         terminal.write(Array("\u{1b}[41mA\u{1b}[0;7mB".utf8))
         state.update(from: terminal)
-        _ = builder.build(state, fonts: FontGrid(pixelSize: 26), focused: false, into: &frame)
+        _ = builder.build(state, fonts: FontGrid(pixelSize: 26), overlay: FrameOverlay(focused: false), into: &frame)
         #expect(frame.bgCells[0].w == 255 && frame.bgCells[0].x > frame.bgCells[0].y)  // red
         #expect(frame.bgCells[1] == SIMD4(255, 255, 255, 255))  // inverse: default fg as bg
         #expect(frame.bgCells[2].w == 0)  // default background

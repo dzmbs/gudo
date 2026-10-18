@@ -9,6 +9,10 @@ use crate::ids::{
     ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
 };
 use crate::layout::{LayoutOp, OpOutcome, SessionLayout, SessionSummary};
+use crate::workspace::{
+    AttentionUpdate, DownloadHeader, ForwardTarget, FsChange, PortInfo, UploadHeader,
+    WorkspaceRequest, WorkspaceResponse, WsError,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Stream headers
@@ -37,6 +41,18 @@ pub enum StreamHeader {
         /// TCP port on the daemon host's loopback interface.
         port: u16,
     },
+    /// Client → daemon, bidirectional: like [`StreamHeader::PortForward`], to a TCP port or a
+    /// Unix socket on the daemon's host. Answered by [`ForwardReply`], then raw bytes; each
+    /// side finishes its half when its peer closes that direction (half-close).
+    Forward {
+        /// Where to connect.
+        target: ForwardTarget,
+    },
+    /// Client → daemon, bidirectional, bulk priority: write a file atomically. See
+    /// [`TransferReply`].
+    Upload(UploadHeader),
+    /// Client → daemon, bidirectional, bulk priority: read a file. See [`TransferReply`](crate::TransferReply).
+    Download(DownloadHeader),
 }
 
 /// The daemon's answer on a [`StreamHeader::PortForward`] stream.
@@ -200,6 +216,14 @@ pub enum ClientCtl {
         pane_id: PaneId,
         /// The command, or `None` for the most recent finished one.
         command_id: Option<u64>,
+    },
+    /// A developer-workflow request (ports, editor, git, worktrees, files, attention),
+    /// answered by [`ServerCtl::WorkspaceResult`].
+    Workspace {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: WorkspaceRequest,
     },
 }
 
@@ -441,6 +465,23 @@ pub enum ServerCtl {
         /// The output.
         result: Result<CommandOutput, RpcError>,
     },
+    /// Answers [`ClientCtl::Workspace`].
+    WorkspaceResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<WorkspaceResponse, WsError>,
+    },
+    /// The listening ports in panes changed (the whole list; sent to every client).
+    PortsChanged {
+        /// Every detected port.
+        ports: Vec<PortInfo>,
+    },
+    /// A directory this connection watches changed.
+    FsChanged(FsChange),
+    /// The attention feed changed (sent to every client, whatever session it is attached
+    /// to).
+    Attention(AttentionUpdate),
 }
 
 /// The daemon's answer to a successful `Hello`.

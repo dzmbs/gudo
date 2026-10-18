@@ -3,3 +3,7 @@
 [target.aarch64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[alias]
+# Build automation lives in xtask/ (docs/APPLE-FFI.md).
+xtask = "run --package xtask --"

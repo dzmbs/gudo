@@ -1,5 +1,6 @@
 import DesignSystem
 import SwiftUI
+import TerminalCore
 
 /// Ghostty's config surfaced as native settings. Each control shows the Ghostty key it mirrors, so
 /// a Ghostty user can map their config file; the values are the same names and defaults.
@@ -166,20 +167,22 @@ private struct SplitsSection: View {
 }
 
 private struct KeyboardSection: View {
-    @AppStorage(TerminalPreferences.Key.optionAsAlt) private var optionAsAlt = TerminalPreferences.OptionAsAlt.both
-    @AppStorage(TerminalPreferences.Key.keyBarWithHardwareKeyboard) private var keyBarWithHardware = true
+    // The terminal reads these two keys (Workspace.applyKeyboardSettings).
+    @AppStorage(KeyboardSettings.optionAsMeta) private var optionAsMeta = OptionAsMeta.none.rawValue
+    @AppStorage(KeyboardSettings.asciiKeyboard) private var asciiKeyboard = false
 
     var body: some View {
         Section {
-            Picker(selection: $optionAsAlt) {
-                ForEach(TerminalPreferences.OptionAsAlt.allCases) { Text($0.title).tag($0) }
+            Picker(selection: $optionAsMeta) {
+                Text("Off").tag(OptionAsMeta.none.rawValue)
+                Text("Left Option").tag(OptionAsMeta.left.rawValue)
+                Text("Right Option").tag(OptionAsMeta.right.rawValue)
+                Text("Both").tag(OptionAsMeta.both.rawValue)
             } label: {
                 ConfigLabel("Option Sends Meta", key: "macos-option-as-alt")
             }
             #if os(iOS)
-            Toggle(isOn: $keyBarWithHardware) {
-                ConfigLabel("Key Bar with Hardware Keyboard", key: "key-bar-with-hardware-keyboard")
-            }
+            Toggle("ASCII Keyboard", isOn: $asciiKeyboard)
             NavigationLink("Key Bar Profiles") { KeyBarProfilesView() }
             #endif
         } header: {
@@ -315,28 +318,22 @@ private struct ThemeSwatch: View {
 
 // MARK: - Key bar profiles
 
-/// lands with the key bar profile work.
+/// Editing lands with custom profiles.
 private struct KeyBarProfilesView: View {
-    private let profiles: [(String, String, [String])] = [
-        ("Shell", "zsh, bash, fish", ["esc", "tab", "ctrl", "↑", "↓", "←", "→", "^C", "^R", "^D", "~/", "|", "-", "/"]),
-        ("Claude Code", "claude", ["esc", "⇧tab", "↑", "↓", "↩", "1", "2", "3", "/", "@", "^C", "^R"]),
-        ("Codex", "codex", ["esc", "↑", "↓", "↩", "y", "n", "/", "@", "^C", "^J"]),
-        ("Vim", "vim, nvim", ["esc", ":", "ctrl", "↑", "↓", "←", "→", "u", "^R", "/", "^W"]),
-        ("Pager", "less, man, htop", ["q", "space", "b", "/", "n", "pgup", "pgdn"]),
-    ]
-
     var body: some View {
         List {
-            ForEach(profiles, id: \.0) { name, trigger, keys in
+            ForEach(KeyBarProfile.builtIn) { profile in
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     HStack {
-                        Text(name).font(DS.Font.rowTitleEmphasis)
+                        Text(profile.name).font(DS.Font.rowTitleEmphasis)
                         Spacer()
-                        Text(trigger).font(DS.Font.literalSmall).foregroundStyle(.secondary)
+                        Text(profile.programs.sorted().prefix(3).joined(separator: ", "))
+                            .font(DS.Font.literalSmall)
+                            .foregroundStyle(.secondary)
                     }
                     ScrollView(.horizontal) {
                         HStack(spacing: DS.Space.xs) {
-                            ForEach(Array(keys.enumerated()), id: \.offset) { _, key in KeyCap(key) }
+                            ForEach(Array(caps(profile).enumerated()), id: \.offset) { _, cap in cap }
                         }
                     }
                     .scrollIndicators(.hidden)
@@ -345,6 +342,18 @@ private struct KeyBarProfilesView: View {
             }
         }
         .navigationTitle("Key Bar Profiles")
+    }
+
+    private func caps(_ profile: KeyBarProfile) -> [AnyView] {
+        var caps = profile.keys.map { key -> AnyView in
+            if let title = key.title { return AnyView(KeyCap(title)) }
+            return AnyView(Image(systemName: key.symbol ?? "questionmark").font(.caption.weight(.medium))
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(.background.secondary, in: .rect(cornerRadius: DS.Radius.chip))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5)))
+        }
+        if profile.showsCtrl { caps.insert(AnyView(KeyCap("ctrl")), at: min(profile.ctrlPosition, caps.count)) }
+        return caps
     }
 }
 

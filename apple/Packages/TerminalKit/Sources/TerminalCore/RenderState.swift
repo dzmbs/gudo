@@ -33,6 +33,8 @@ public final class RenderState {
         public var foreground: RGB
         /// Set by OSC 12; nil means "use the foreground".
         public var cursor: RGB?
+        /// The 256-color palette (for resolving palette underline colors).
+        public var palette: [RGB]
     }
 
     private let state: GhosttyRenderState
@@ -92,10 +94,14 @@ public final class RenderState {
         var colors = GhosttyRenderStateColors()
         colors.size = MemoryLayout<GhosttyRenderStateColors>.size
         ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_COLORS, &colors)
+        let palette = withUnsafeBytes(of: colors.palette) { raw in
+            raw.bindMemory(to: GhosttyColorRgb.self).map(RGB.init)
+        }
         return Colors(
             background: RGB(colors.background),
             foreground: RGB(colors.foreground),
-            cursor: colors.cursor_has_value ? RGB(colors.cursor) : nil
+            cursor: colors.cursor_has_value ? RGB(colors.cursor) : nil,
+            palette: palette
         )
     }
 
@@ -152,6 +158,15 @@ public struct Row {
         return dirty
     }
 
+    /// The selected columns of this row (inclusive), or nil when the selection misses it.
+    public var selection: ClosedRange<Int>? {
+        var s = GhosttyRenderStateRowSelection()
+        s.size = MemoryLayout<GhosttyRenderStateRowSelection>.size
+        guard ghostty_render_state_row_get(iterator, GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION, &s) == GHOSTTY_SUCCESS,
+              s.start_x <= s.end_x else { return nil }
+        return Int(s.start_x)...Int(s.end_x)
+    }
+
     /// Position relative to the top of the viewport (negative for overscan rows above it).
     public var viewportY: Int32 {
         var y: Int32 = 0
@@ -181,6 +196,17 @@ public struct Cell {
         case spacerHead
     }
 
+    public enum Underline: Sendable, Equatable {
+        case none, single, double, curly, dotted, dashed
+    }
+
+    /// An SGR 58 underline color: unset (use the text color), a palette index or RGB.
+    public enum StyleColor: Sendable, Equatable {
+        case none
+        case palette(UInt8)
+        case rgb(RGB)
+    }
+
     public struct Style: Sendable {
         public var bold: Bool
         public var italic: Bool
@@ -188,7 +214,11 @@ public struct Cell {
         public var inverse: Bool
         public var invisible: Bool
         public var strikethrough: Bool
-        public var underline: Bool
+        public var underline: Underline
+        public var underlineColor: StyleColor
+        public var overline: Bool
+        /// SGR 5/6: text blinks.
+        public var blink: Bool
     }
 
     fileprivate let cells: GhosttyRenderStateRowCells
@@ -243,10 +273,31 @@ public struct Cell {
         var s = GhosttyStyle()
         s.size = MemoryLayout<GhosttyStyle>.size
         ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &s)
+        let underline: Underline = switch s.underline {
+        case Int32(GHOSTTY_SGR_UNDERLINE_SINGLE.rawValue): .single
+        case Int32(GHOSTTY_SGR_UNDERLINE_DOUBLE.rawValue): .double
+        case Int32(GHOSTTY_SGR_UNDERLINE_CURLY.rawValue): .curly
+        case Int32(GHOSTTY_SGR_UNDERLINE_DOTTED.rawValue): .dotted
+        case Int32(GHOSTTY_SGR_UNDERLINE_DASHED.rawValue): .dashed
+        default: .none
+        }
+        let underlineColor: StyleColor = switch s.underline_color.tag {
+        case GHOSTTY_STYLE_COLOR_PALETTE: .palette(s.underline_color.value.palette)
+        case GHOSTTY_STYLE_COLOR_RGB: .rgb(RGB(s.underline_color.value.rgb))
+        default: .none
+        }
         return Style(
             bold: s.bold, italic: s.italic, faint: s.faint, inverse: s.inverse,
-            invisible: s.invisible, strikethrough: s.strikethrough, underline: s.underline != 0
+            invisible: s.invisible, strikethrough: s.strikethrough, underline: underline,
+            underlineColor: underlineColor, overline: s.overline, blink: s.blink
         )
+    }
+
+    /// The cell carries an OSC 8 hyperlink.
+    public var hasHyperlink: Bool {
+        var value = false
+        ghostty_cell_get(raw, GHOSTTY_CELL_DATA_HAS_HYPERLINK, &value)
+        return value
     }
 
     /// Explicit foreground (palette already resolved), or nil for the default foreground.

@@ -8,7 +8,7 @@ import UIKit
 /// the keyboard's own key height and corner radius, SF Pro labels at the keyboard's size, the
 /// latched modifier as prominent (tinted) glass. Keys are grouped (escape and tab · modifiers ·
 /// arrows · symbols) with wider gaps between groups than inside them.
-public enum KeyBarStyle {
+public enum KeyBarLook {
     public static func barHeight(isPad: Bool) -> CGFloat { isPad ? DS.Size.keyBarPad : DS.Size.keyBarPhone }
     public static func keyHeight(isPad: Bool) -> CGFloat { isPad ? 40 : 34 }
     public static func minKeyWidth(isPad: Bool) -> CGFloat { isPad ? 52 : 40 }

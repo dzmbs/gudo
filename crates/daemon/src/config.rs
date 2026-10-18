@@ -51,6 +51,23 @@ pub struct Config {
     /// A command running at least this long that finishes while no client shows its pane is
     /// announced with `CommandFinishedUnseen`.
     pub long_command: Duration,
+    /// Directories file, git, worktree and editor requests may touch, besides `$HOME` (which
+    /// is always allowed). `files.allow` in `<state_dir>/config.toml` adds to it.
+    pub fs_allow: Vec<PathBuf>,
+    /// Where new worktrees go: `<root>/<repo>/<branch slug>`. `~/.<product>/worktrees` when
+    /// `None` (`worktrees.root` in `config.toml`).
+    pub worktree_root: Option<PathBuf>,
+    /// First `PORT` handed to a worktree; each worktree gets the next free one
+    /// (`worktrees.port_base` in `config.toml`).
+    pub worktree_port_base: u16,
+    /// How often listening ports are rescanned while a client is connected.
+    pub port_scan_interval: Duration,
+    /// The VS Code CLI for `code serve-web`; found on `PATH` (and in the usual app bundle
+    /// locations) when `None` (`editor.code` in `config.toml`).
+    pub code_cli: Option<PathBuf>,
+    /// An openvscode-server to use instead of the pinned download: a directory containing
+    /// `bin/openvscode-server` (`editor.openvscode` in `config.toml`).
+    pub openvscode_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -69,7 +86,63 @@ impl Config {
             hook_bin: None,
             shell_integration: true,
             long_command: Duration::from_secs(10),
+            fs_allow: Vec::new(),
+            worktree_root: None,
+            worktree_port_base: 4100,
+            port_scan_interval: Duration::from_secs(2),
+            code_cli: None,
+            openvscode_dir: None,
         }
+    }
+
+    /// Applies `<state_dir>/config.toml`, if present:
+    ///
+    /// ```toml
+    /// [files]
+    /// allow = ["/srv/projects", "/tmp"]   # besides $HOME
+    ///
+    /// [worktrees]
+    /// root = "/home/me/worktrees"
+    /// port_base = 4100
+    ///
+    /// [editor]
+    /// code = "/usr/local/bin/code"
+    /// openvscode = "/opt/openvscode-server"
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub fn apply_user_file(&mut self) -> std::io::Result<()> {
+        let path = self.state_dir.join("config.toml");
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let file: UserFile = toml::from_str(&text)
+            .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))?;
+        self.fs_allow.extend(file.files.allow);
+        if let Some(root) = file.worktrees.root {
+            self.worktree_root = Some(root);
+        }
+        if let Some(base) = file.worktrees.port_base {
+            self.worktree_port_base = base;
+        }
+        if let Some(code) = file.editor.code {
+            self.code_cli = Some(code);
+        }
+        if let Some(dir) = file.editor.openvscode {
+            self.openvscode_dir = Some(dir);
+        }
+        Ok(())
+    }
+
+    /// `$HOME` of the daemon's user (pane environment first).
+    pub(crate) fn home(&self) -> PathBuf {
+        self.pane_var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"))
     }
 
     /// The value of `name` in a pane's environment: the configured pane environment first,
@@ -118,4 +191,32 @@ pub fn default_state_dir() -> PathBuf {
     } else {
         home.join(".local/state").join(brand::DIR_NAME)
     }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct UserFile {
+    files: FilesSection,
+    worktrees: WorktreesSection,
+    editor: EditorSection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FilesSection {
+    allow: Vec<PathBuf>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WorktreesSection {
+    root: Option<PathBuf>,
+    port_base: Option<u16>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct EditorSection {
+    code: Option<PathBuf>,
+    openvscode: Option<PathBuf>,
 }

@@ -38,7 +38,12 @@ private struct SplitContainer: View {
     var body: some View {
         GeometryReader { geometry in
             let extent = axis == .horizontal ? geometry.size.width : geometry.size.height
-            let firstLength = ((extent - gap) * ratio).rounded()
+            // Whole cells per pane; in a vertical split each side also carries its pane header.
+            let header: CGFloat = axis == .vertical ? PaneHeader.height : 0
+            let firstLength = header + SplitSnapping.firstLength(
+                available: extent - gap - 2 * header, ratio: ratio,
+                cell: workspace.cellSize.map { axis == .horizontal ? $0.width : $0.height },
+                padding: workspace.appearance.padding)
             if axis == .horizontal {
                 HStack(spacing: 0) {
                     SplitTreeView(node: first, workspace: workspace, isSplit: true).frame(width: firstLength)
@@ -113,6 +118,20 @@ private struct SplitContainer: View {
     }
 }
 
+/// Sizes the leading side of a split to a whole number of terminal cells plus the pane padding,
+/// so it shows no partial cell; the trailing side takes the rest (its remainder becomes padding).
+enum SplitSnapping {
+    static func firstLength(available: CGFloat, ratio: Double, cell: CGFloat?, padding: CGFloat) -> CGFloat {
+        let raw = (available * ratio).rounded()
+        guard let cell, cell > 0 else { return raw }
+        let minimum = 2 * padding + cell
+        guard available >= 2 * minimum else { return raw }
+        let snapped = 2 * padding + ((raw - 2 * padding) / cell).rounded() * cell
+        return min(max(snapped, minimum), available - minimum)
+    }
+}
+
+/// One pane in the tree: the terminal, or why it failed to start.
 /// One pane in the tree: its header in splits, the terminal (or why it failed to start), and
 /// Ghostty's surface overlays.
 struct PaneSlot: View {
@@ -185,6 +204,8 @@ struct PaneSlot: View {
 
 /// It sits on the terminal background so the pane still reads as one surface.
 private struct PaneHeader: View {
+    static let height: CGFloat = 24
+
     let id: PaneId
     let workspace: Workspace
     let isFocused: Bool
@@ -227,7 +248,7 @@ private struct PaneHeader: View {
         }
         .padding(.leading, DS.Space.s)
         .padding(.trailing, DS.Space.xxs)
-        .frame(height: 24)
+        .frame(height: Self.height)
         .background(theme.background)
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.splitDivider).frame(height: 1)

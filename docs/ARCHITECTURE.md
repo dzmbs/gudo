@@ -125,3 +125,9 @@ the safe *Prompter* role possible),  kitty graphics, foldable layouts, external 
 - ~~Claude `--settings` hooks merge with (not replace) user hooks — 06 risk #1.~~ **Verified 2026-10-18** on
   Claude Code 2.1.302: project hooks and `--settings` hooks both fired; `--session-id` honoured. Real payloads
   saved in `crates/agents/tests/fixtures/claude/captured-2.1.302/`.
+  (https://code.visualstudio.com/license/server): use "with Microsoft Visual Studio Code" on your
+  own devices / internal network is allowed; hosting, sharing, redistributing, or "combine it
+  with any of your applications for others to use" is not (§5.4–5.5). Decision (DAEMON.md §5.3):
+  never ship or download it ourselves, launch `code serve-web` only from the user's own `code`
+  CLI after an in-app licence accept, default to openvscode-server (MIT; Linux builds only — no
+  macOS release exists). Still needs a legal read before launch.

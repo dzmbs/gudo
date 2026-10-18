@@ -1,6 +1,8 @@
 import DesignSystem
 import PaneLayout
+import TerminalRenderer
 import SwiftUI
+import TerminalCore
 
 /// Where tabs are listed in regular-width windows.
 enum TabStyle: String {
@@ -53,6 +55,11 @@ struct WorkspaceView: View {
             .focusedSceneValue(model)
             .preferredColorScheme(preferredScheme)
             .renameTabPrompt(workspace)
+            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+                // Settings write UserDefaults; the terminals follow through `TerminalAppearance`.
+                let appearance = TerminalAppearance.fromPreferences()
+                if appearance != workspace.appearance { workspace.appearance = appearance }
+            }
             .task {
                 DesignFixtures.apply(LaunchOptions.screen, workspace: workspace, model: model)
                 if LaunchOptions.screen == "toggle" {
