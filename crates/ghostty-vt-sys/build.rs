@@ -30,12 +30,7 @@ fn main() {
     for input in ["build.zig", "build.zig.zon", "include", "pkg", "src"] {
         println!("cargo:rerun-if-changed={}", ghostty.join(input).display());
     }
-    for var in [
-        "ZIG",
-        "LIBGHOSTTY_VT_OPTIMIZE",
-        "LIBGHOSTTY_VT_ALLOW_PARTIAL",
-        "SDKROOT",
-    ] {
+    for var in ["ZIG", "LIBGHOSTTY_VT_OPTIMIZE", "SDKROOT"] {
         println!("cargo:rerun-if-env-changed={var}");
     }
 
@@ -58,17 +53,10 @@ fn main() {
         .unwrap_or_else(|err| {
             panic!("failed to run {zig:?} (Zig 0.16.x required; set ZIG to override): {err}")
         });
-    let static_lib = prefix.join("lib/libghostty-vt.a");
-    // TEMPORARY escape hatch for Command-Line-Tools-only Macs, where Ghostty's unused dylib
-    // link step fails against a newer SDK while the static archive installs fine.
-    let allow_partial = env::var_os("LIBGHOSTTY_VT_ALLOW_PARTIAL").is_some();
-    if !status.success() {
-        assert!(
-            allow_partial && static_lib.exists(),
-            "zig build of libghostty-vt failed: {status}"
-        );
-        println!("cargo:warning=zig build failed ({status}); using the static archive anyway");
-    }
+    assert!(
+        status.success(),
+        "zig build of libghostty-vt failed: {status}"
+    );
 
     let mut lib_dir = prefix.join("lib");
     if target.contains("-apple-") {
