@@ -462,7 +462,14 @@ async fn run(cli: Cli) -> Result<()> {
     };
     match outcome {
         OpOutcome::PaneCreated { pane_id } => println!("pane {pane_id}"),
-        OpOutcome::TabCreated { tab_id, pane_id } => println!("tab {tab_id}, pane {pane_id}"),
+        OpOutcome::TabCreated { tab_id, pane_id } => {
+            // Print the tab's position, which is what `tab select` takes, not its internal id.
+            let has_tab = |c: &Conn| c.layout().tabs.iter().any(|t| t.tab_id == tab_id);
+            conn.wait("the new tab", has_tab).await?;
+            let tabs = &conn.layout().tabs;
+            let position = tabs.iter().position(|t| t.tab_id == tab_id).unwrap_or(0) + 1;
+            println!("tab {position} of {}, pane {pane_id}", tabs.len());
+        }
         OpOutcome::SessionCreated {
             session_id,
             tab_id,
@@ -654,6 +661,13 @@ async fn attach(mut conn: Conn) -> Result<()> {
         }
     }
     write_out(RESTORE_MODES);
+    // The outer terminal may still send the detach key's release event; swallow it rather than
+    // leak it into the user's shell.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let _ = rustix::termios::tcflush(
+        rustix::stdio::stdin(),
+        rustix::termios::QueueSelector::IFlush,
+    );
     drop(_raw);
     println!("\r\n[detached]");
     Ok(())
