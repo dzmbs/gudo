@@ -17,7 +17,8 @@ use proto::{
     AttentionList, AttentionSeen, AttentionUpdate, Axis, DeleteMode, DirListing, DownloadHeader,
     EditorInstance, EditorLaunch, EditorList, EditorOpened, FileChunk, FileStat, ForwardReply,
     ForwardTarget, FsChange, GitDiff, GitDiffRequest, GitStatus, PaneId, PortInfo, ReviewRequest,
-    ServerCtl, StreamHeader, TransferReply, TurnInfo, UploadHeader, WorkspaceRequest,
+    ServerCtl, StreamHeader, TransferReply, TurnInfo, UploadHeader, VsCodeCliInstall,
+    VsCodeTunnelOpen, VsCodeTunnelOpened, VsCodeTunnelStart, VsCodeTunnelStatus, WorkspaceRequest,
     WorkspaceResponse, WorktreeCreate, WorktreeInfo, WriteTarget, WsError,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -49,6 +50,12 @@ pub enum WorkspaceEvent {
     Attention {
         /// The change.
         update: AttentionUpdate,
+    },
+    /// The host's VS Code tunnel changed state: show a device code
+    /// ([`TunnelState::NeedsLogin`](proto::TunnelState::NeedsLogin)), connected, failed.
+    VsCodeTunnel {
+        /// The whole status.
+        status: VsCodeTunnelStatus,
     },
 }
 
@@ -111,6 +118,7 @@ impl WsState {
             }
             ServerCtl::FsChanged(change) => WorkspaceEvent::FsChanged { change },
             ServerCtl::Attention(update) => WorkspaceEvent::Attention { update },
+            ServerCtl::VsCodeTunnel(status) => WorkspaceEvent::VsCodeTunnel { status },
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
@@ -220,6 +228,26 @@ impl Client {
             .is_some()
     }
 
+    /// Splices one connection to `target` on the daemon's host onto `reader`/`writer` (for
+    /// example stdin/stdout, as an SSH `ProxyCommand` to the host's sshd over this link).
+    /// Returns when both directions are done.
+    ///
+    /// # Errors
+    ///
+    /// [`WsError::Failed`] if the daemon refused the target or the stream broke.
+    pub async fn forward_io(
+        &self,
+        target: ForwardTarget,
+        reader: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+        writer: impl tokio::io::AsyncWrite + Unpin + Send + 'static,
+    ) -> Result<(), WsError> {
+        let inner = Arc::clone(&self.inner);
+        self.handle
+            .spawn(async move { forward_stream(&inner, target, reader, writer).await })
+            .await
+            .unwrap_or(Err(WsError::Disconnected))
+    }
+
     /// Forwards started with [`forward`](Self::forward): `(local port, target)`.
     pub fn forwards(&self) -> Vec<(u16, ForwardTarget)> {
         lock(&self.inner.ws.forwards)
@@ -264,6 +292,51 @@ impl Client {
             column,
         };
         expect!(self.workspace(req).await?, WorkspaceResponse::EditorOpened(o) => o)
+    }
+
+
+    /// The host's VS Code tunnel and `code` CLI.
+    pub async fn vscode_tunnel_status(&self) -> Result<VsCodeTunnelStatus, WsError> {
+        expect!(self.workspace(WorkspaceRequest::VsCodeTunnelStatus).await?,
+            WorkspaceResponse::VsCodeTunnel(s) => s)
+    }
+
+    /// Has the daemon download Microsoft's `code` CLI from Microsoft's update service. Show
+    /// [`VSCODE_LICENSE_URL`](proto::VSCODE_LICENSE_URL) first; `accept_license` records that
+    /// the user accepted it (refused with [`WsError::Denied`] otherwise).
+    pub async fn vscode_cli_install(
+        &self,
+        accept_license: bool,
+    ) -> Result<VsCodeTunnelStatus, WsError> {
+        let req = WorkspaceRequest::VsCodeCliInstall(VsCodeCliInstall { accept_license });
+        expect!(self.workspace(req).await?, WorkspaceResponse::VsCodeTunnel(s) => s)
+    }
+
+    /// Starts (or reuses) the host's tunnel. Show
+    /// [`VSCODE_SERVER_LICENSE_URL`](proto::VSCODE_SERVER_LICENSE_URL) and the privacy
+    /// statement first. A device code to show arrives as [`WorkspaceEvent::VsCodeTunnel`].
+    pub async fn vscode_tunnel_start(
+        &self,
+        start: VsCodeTunnelStart,
+    ) -> Result<VsCodeTunnelStatus, WsError> {
+        expect!(self.workspace(WorkspaceRequest::VsCodeTunnelStart(start)).await?,
+            WorkspaceResponse::VsCodeTunnel(s) => s)
+    }
+
+    /// Stops the tunnel the daemon runs.
+    pub async fn vscode_tunnel_stop(&self) -> Result<VsCodeTunnelStatus, WsError> {
+        expect!(self.workspace(WorkspaceRequest::VsCodeTunnelStop).await?,
+            WorkspaceResponse::VsCodeTunnel(s) => s)
+    }
+
+    /// The vscode.dev URL and desktop URI for a folder or `path` at a line; opens the file in
+    /// an already connected window when there is one.
+    pub async fn vscode_tunnel_open(
+        &self,
+        open: VsCodeTunnelOpen,
+    ) -> Result<VsCodeTunnelOpened, WsError> {
+        expect!(self.workspace(WorkspaceRequest::VsCodeTunnelOpen(open)).await?,
+            WorkspaceResponse::VsCodeTunnelOpened(o) => o)
     }
 
     // --- git ------------------------------------------------------------------------------
@@ -572,6 +645,19 @@ async fn forward_one(
     tcp: tokio::net::TcpStream,
     target: ForwardTarget,
 ) -> Result<(), WsError> {
+    let _ = tcp.set_nodelay(true);
+    let (tcp_r, tcp_w) = tcp.into_split();
+    forward_stream(inner, target, tcp_r, tcp_w).await
+}
+
+/// Opens one forward stream to `target` and copies `tcp_r` into it and it into `tcp_w`
+/// until both directions finish.
+async fn forward_stream(
+    inner: &Inner,
+    target: ForwardTarget,
+    mut tcp_r: impl tokio::io::AsyncRead + Unpin,
+    mut tcp_w: impl tokio::io::AsyncWrite + Unpin,
+) -> Result<(), WsError> {
     let conn = connection(inner).await;
     let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
     let _ = send.set_priority(40);
@@ -581,8 +667,6 @@ async fn forward_one(
         Some(ForwardReply::Refused { reason }) => return Err(WsError::Failed(reason)),
         None => return Err(WsError::Failed("forward stream closed".into())),
     }
-    let _ = tcp.set_nodelay(true);
-    let (mut tcp_r, mut tcp_w) = tcp.into_split();
     // Half-close both ways; each direction only reads after the previous write completed, so
     // a slow side throttles the other (QUIC flow control / TCP window).
     let up = async {

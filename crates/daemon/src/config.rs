@@ -68,6 +68,9 @@ pub struct Config {
     /// An openvscode-server to use instead of the pinned download: a directory containing
     /// `bin/openvscode-server` (`editor.openvscode` in `config.toml`).
     pub openvscode_dir: Option<PathBuf>,
+    /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
+    /// request (tests point it at a local `file://` tree).
+    pub vscode_update_url: String,
 }
 
 impl Config {
@@ -92,6 +95,7 @@ impl Config {
             port_scan_interval: Duration::from_secs(2),
             code_cli: None,
             openvscode_dir: None,
+            vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
         }
     }
 

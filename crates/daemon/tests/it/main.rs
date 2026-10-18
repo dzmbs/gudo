@@ -6,4 +6,5 @@ mod e2e;
 mod shell;
 mod support;
 mod terminal;
+mod vscode;
 mod workspace;

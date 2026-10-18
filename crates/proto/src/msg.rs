@@ -11,7 +11,7 @@ use crate::ids::{
 use crate::layout::{LayoutOp, OpOutcome, SessionLayout, SessionSummary};
 use crate::workspace::{
     AttentionUpdate, DownloadHeader, ForwardTarget, FsChange, PortInfo, UploadHeader,
-    WorkspaceRequest, WorkspaceResponse, WsError,
+    VsCodeTunnelStatus, WorkspaceRequest, WorkspaceResponse, WsError,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -482,6 +482,9 @@ pub enum ServerCtl {
     /// The attention feed changed (sent to every client, whatever session it is attached
     /// to).
     Attention(AttentionUpdate),
+    /// The VS Code tunnel changed state: a device code to show, connected, failed (sent to
+    /// every client).
+    VsCodeTunnel(VsCodeTunnelStatus),
 }
 
 /// The daemon's answer to a successful `Hello`.

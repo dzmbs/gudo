@@ -92,6 +92,72 @@ pub(crate) enum EditorCmd {
     Stop { folder: String },
     /// Open `path[:line[:col]]` in the running editor.
     Open { target: String },
+    /// Real VS Code through Microsoft's Remote Tunnels (vscode.dev or desktop).
+    Tunnel {
+        #[command(subcommand)]
+        action: TunnelCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TunnelCmd {
+    /// The CLI and the tunnel.
+    Status,
+    /// Download Microsoft's `code` CLI onto the host (https://code.visualstudio.com/license).
+    Install {
+        #[arg(long)]
+        accept_license: bool,
+    },
+    /// Start the tunnel and follow it until it is connected (shows the sign-in code).
+    Start {
+        /// Accept the VS Code Server licence (https://aka.ms/vscode-server-license) and the
+        /// Microsoft Privacy Statement.
+        #[arg(long)]
+        accept_license: bool,
+        /// Sign in with a Microsoft account instead of GitHub.
+        #[arg(long)]
+        microsoft: bool,
+        /// Machine name on vscode.dev.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Stop the tunnel.
+    Stop,
+    /// Print the vscode.dev URL and desktop link for `path[:line[:col]]`.
+    Open { target: String },
+}
+
+fn print_tunnel(s: &client_core::proto::VsCodeTunnelStatus) {
+    use client_core::proto::TunnelState;
+    match &s.cli {
+        Some(c) => println!(
+            "cli: {} {} {}{}",
+            c.path,
+            c.version.as_deref().unwrap_or("?"),
+            c.commit.as_deref().unwrap_or(""),
+            if c.managed {
+                " (installed by the daemon)"
+            } else {
+                ""
+            }
+        ),
+        None => println!("cli: not installed (downloadable: {})", s.cli_downloadable),
+    }
+    match &s.state {
+        TunnelState::NeedsLogin(l) => println!(
+            "sign in ({:?}): open {} and enter {}",
+            l.provider, l.verification_url, l.user_code
+        ),
+        TunnelState::Running {
+            name,
+            web_url,
+            adopted,
+        } => println!(
+            "running: {name} {web_url}{}",
+            if *adopted { " (adopted)" } else { "" }
+        ),
+        other => println!("tunnel: {other:?}"),
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -375,6 +441,69 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                 tokio::signal::ctrl_c().await?;
             }
             EditorCmd::Stop { folder } => c.editor_stop(folder).await?,
+            EditorCmd::Tunnel { action } => match action {
+                TunnelCmd::Status => print_tunnel(&c.vscode_tunnel_status().await?),
+                TunnelCmd::Install { accept_license } => {
+                    print_tunnel(&c.vscode_cli_install(accept_license).await?);
+                }
+                TunnelCmd::Start {
+                    accept_license,
+                    microsoft,
+                    name,
+                } => {
+                    use client_core::proto::{TunnelProvider, TunnelState, VsCodeTunnelStart};
+                    let (listener, mut events) = WorkspaceEventQueue::channel();
+                    c.set_workspace_listener(listener);
+                    let provider = if microsoft {
+                        TunnelProvider::Microsoft
+                    } else {
+                        TunnelProvider::GitHub
+                    };
+                    let mut status = c
+                        .vscode_tunnel_start(VsCodeTunnelStart {
+                            accept_server_license: accept_license,
+                            provider,
+                            name,
+                        })
+                        .await?;
+                    loop {
+                        print_tunnel(&status);
+                        if matches!(
+                            status.state,
+                            TunnelState::Running { .. }
+                                | TunnelState::Stopped
+                                | TunnelState::Failed {
+                                    retrying: false,
+                                    ..
+                                }
+                        ) {
+                            break;
+                        }
+                        match events.recv().await {
+                            Some(WorkspaceEvent::VsCodeTunnel { status: s }) => status = s,
+                            Some(_) => continue,
+                            None => break,
+                        }
+                    }
+                }
+                TunnelCmd::Stop => print_tunnel(&c.vscode_tunnel_stop().await?),
+                TunnelCmd::Open { target } => {
+                    let (path, line, column) = split_target(&target);
+                    let o = c
+                        .vscode_tunnel_open(client_core::proto::VsCodeTunnelOpen {
+                            folder: None,
+                            path,
+                            line,
+                            column,
+                        })
+                        .await?;
+                    println!("web:     {}", o.web_url);
+                    println!("desktop: {}", o.desktop_uri);
+                    if o.in_window {
+                        println!("opened in the connected window");
+                    }
+                }
+            },
             EditorCmd::Open { target } => {
                 let (path, line, col) = split_target(&target);
                 let opened = c.editor_open(None, path, line, col).await?;
