@@ -1,0 +1,7 @@
+/target
+/reference
+.DS_Store
+.zig-cache
+zig-out
+*.xcframework
+xcuserdata/

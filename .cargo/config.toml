@@ -1,0 +1,5 @@
+# macOS: intentionally no linker override; Apple's ld-prime is the fastest option here.
+
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

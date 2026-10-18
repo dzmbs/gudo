@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+brand = { path = "crates/brand" }
+ghostty-vt-sys = { path = "crates/ghostty-vt-sys" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# profile's whole cache, so treat these as settled.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 1
+
+[profile.dev.build-override]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+[profile.debugging.package."*"]
+debug = true
+
+[profile.release]
+debug = "line-tables-only"
+lto = "thin"
+
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
