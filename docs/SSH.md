@@ -12,15 +12,15 @@ export them as async functions and callback interfaces without wrappers.
 
 | | |
 |---|---|
-| `SshConfig::{parse, load, load_default}` → `resolve(alias)`, `target(dest, user)` | `~/.ssh/config` with OpenSSH semantics: `Host` (`*`, `?`, `!`), `Match host/originalhost/user/all`, `Include` (globs, scoped like OpenSSH), first value wins; `HostName` (`%h`), `User`, `Port`, `IdentityFile` (accumulates, `~`/`%d %u %h %r %p`), `ProxyJump` (chains, `none`), `ServerAliveInterval`, `ServerAliveCountMax`, `ConnectTimeout`, `HostKeyAlias`, `ForwardAgent`, `SetEnv`. Unknown keys are listed in `HostConfig::ignored` |
+| `SshConfig::{parse, load, load_default}` → `resolve(alias)`, `target(dest, user)`, `host_aliases()` (for import), `with_home` | `~/.ssh/config` with OpenSSH semantics: `Host` (`*`, `?`, `!`), `Match host/originalhost/user/all`, `Include` (globs, scoped like OpenSSH), first value wins; `HostName` (`%h`), `User`, `Port`, `IdentityFile` (accumulates, `~`/`%d %u %h %r %p`), `ProxyJump` (chains, `none`), `ServerAliveInterval`, `ServerAliveCountMax`, `ConnectTimeout`, `HostKeyAlias`, `ForwardAgent`, `SetEnv`. Unknown keys are listed in `HostConfig::ignored` |
 | `Destination` | `[ssh://][user@]host[:port]`, `[v6]:port` (the "just ssh" field) |
 | `Target { jumps, host: HostSpec }` | route, outermost jump first |
 | `Credentials` of `AuthMethod`s, tried in order | `Agent(path or $SSH_AUTH_SOCK)`, `Key(SecretKey)`, `External(Arc<dyn ExternalSigner>)`, `Password` (then keyboard-interactive answering password prompts: macOS/PAM), `Interactive(responder)` (OTP, Tailscale check mode). `Credentials::openssh_defaults(files)` mimics `ssh` on a desktop |
 | `SecretKey::{decode, load, is_encrypted}` | OpenSSH/PKCS#8/PKCS#1/SEC1 PEM; ed25519, ecdsa P-256/384/521, rsa (rsa-sha2-512/256 per server-sig-algs); passphrases |
 | `generate_ed25519(comment)` → `GeneratedKey` | private PEM, `authorized_keys` line, `SHA256:` fingerprint |
 | `ExternalSigner` | `public_key()` (OpenSSH line) + `sign(data)` → raw signature (`r‖s` as CryptoKit gives, or DER; 64 bytes for Ed25519). Runs on a blocking thread, so it may wait for Face ID. A failing signer skips that method |
-| `KnownHosts::{in_memory, from_text, open}` | OpenSSH known_hosts: patterns, `[host]:port`, hashed `\|1\|` entries, `@revoked`; `check`, `add`, `pin`, `to_text` |
-| `HostKeyPolicy::{Strict, AcceptNew, Ask(prompt)}` | `Ask` calls `HostKeyPrompt::trust_new_host(HostKeyInfo)` after the key exchange and before any credential is sent |
+| `KnownHosts::{in_memory, from_text, open}` | OpenSSH known_hosts: patterns, `[host]:port`, hashed `\|1\|` entries, `@revoked`; `check`, `add`, `pin`, `replace`, `remove`, `to_text`; `with_listener(KnownHostsListener)` reports every change (the app persists the text) |
+| `HostKeyPolicy::{Strict, AcceptNew, Ask(prompt)}` | `Ask` calls `HostKeyPrompt::trust_new_host(HostKeyInfo)` after the key exchange and before any credential is sent; for a changed (unpinned) key it calls `trust_changed_host(info, expected)` (default: refuse, i.e. `HostKeyMismatch`; `true` replaces the record) |
 | `Connection::connect(&Target, &ConnectOptions)` | one live, authenticated connection; clones share it |
 | `conn.exec / exec_with_input` → `ExecOutput` | stdout, stderr, exit status or signal; `check()` turns failure into `SshError::Remote` |
 | `conn.open_shell(&PtyRequest)` → `(Shell, ShellOutput)` | PTY (`TERM`, size, `IUTF8`), env, optional command; `Shell::{write, resize, close}`, `ShellOutput::next()` → `Data`/`Stderr`/`Exit` |
@@ -31,7 +31,7 @@ export them as async functions and callback interfaces without wrappers.
 | `client_core::SshPane::open(session, SshPaneOptions, listener)` | §4 |
 
 Host keys: a host with keys on record must present one of them, else `HostKeyMismatch {
-host, expected: [SHA256:…], actual }` (never retried, never prompts). Connections offer the
+host, expected: [SHA256:…], actual }` (never retried; prompts only through `HostKeyPrompt::trust_changed_host`, whose default refuses). Connections offer the
 key types on record first, so a host with several keys presents the one we know. Pins
 (`KnownHosts::pin`, e.g. a key the paired daemon attests over iroh, 05 §6.5) override all
 other entries for that host.

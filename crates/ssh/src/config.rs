@@ -156,9 +156,42 @@ impl SshConfig {
         self
     }
 
+    /// Sets the home directory `~` and `%d` expand to (for text from [`parse`](Self::parse),
+    /// which has none).
+    #[must_use]
+    pub fn with_home(mut self, home: impl Into<PathBuf>) -> Self {
+        self.home = Some(home.into());
+        self
+    }
+
     /// Problems found while parsing (unfollowed or unreadable includes).
     pub fn warnings(&self) -> &[String] {
         &self.warnings
+    }
+
+    /// The concrete host aliases named on `Host` lines (no wildcards, no negations), in
+    /// file order without duplicates: the hosts to offer when importing the config.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ssh::SshConfig::parse("Host box db *.corp !evil\nHost box\n").unwrap();
+    /// assert_eq!(config.host_aliases(), ["box", "db"]);
+    /// ```
+    pub fn host_aliases(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for condition in &self.conditions {
+            let Condition::Host(patterns) = condition else {
+                continue;
+            };
+            for p in patterns {
+                let concrete = !p.negated && !p.glob.contains(['*', '?']);
+                if concrete && !out.contains(&p.glob) {
+                    out.push(p.glob.clone());
+                }
+            }
+        }
+        out
     }
 
     fn read_text(

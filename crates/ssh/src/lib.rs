@@ -60,7 +60,8 @@ pub use config::{HostConfig, SshConfig};
 pub use error::SshError;
 pub use keys::{ExternalSigner, GeneratedKey, SecretKey, SignerError, generate_ed25519};
 pub use known_hosts::{
-    HostKeyInfo, HostKeyPolicy, HostKeyPrompt, HostKeyStatus, KnownHosts, fingerprint, host_name,
+    HostKeyInfo, HostKeyPolicy, HostKeyPrompt, HostKeyStatus, KnownHosts, KnownHostsListener,
+    fingerprint, host_name,
 };
 pub use session::{ConnectionState, ReconnectPolicy, Session, SessionListener};
 pub use target::{DEFAULT_PORT, Destination, HostSpec, Target};
