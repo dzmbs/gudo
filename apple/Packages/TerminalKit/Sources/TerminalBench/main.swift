@@ -9,7 +9,7 @@ import TerminalRenderer
 /// with frames paced at 120 Hz by a sleep loop instead of a display link (so it runs with the
 /// screen locked or in CI), and writes a rendered PNG. `cat` runs as a real child process on a PTY.
 ///
-///     swift run -c release TerminalBench [--file <big file>] [--png <out.png>]
+///     swift run -c release TerminalBench [--file <big file>] [--png <out.png>] [--glyphs-png <out.png>]
 @MainActor
 final class Bench {
     static let frameInterval = 1.0 / 120
@@ -34,6 +34,58 @@ final class Bench {
         CGImageDestinationFinalize(destination)
         print("wrote \(png.path) atlas=\(surface.atlasSizes)")
         _ = surface.stats.drain()
+    }
+
+    /// Renders `GlyphFixture` (sprites, Nerd Font icons, emoji, CJK) on a cleared screen and writes
+    /// it as a PNG.
+    func glyphs(png: URL) {
+        terminal.write(Array(("\u{1b}[H\u{1b}[2J" + GlyphFixture.text).utf8))
+        surface.renderIfDirty(offscreen: true)
+        guard let image = surface.snapshot(),
+              let destination = CGImageDestinationCreateWithURL(png as CFURL, "public.png" as CFString, 1, nil)
+        else { return print("snapshot failed") }
+        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationFinalize(destination)
+        print("wrote \(png.path) atlas=\(surface.atlasSizes)")
+        _ = surface.stats.drain()
+    }
+
+    /// A full screen of box drawing, blocks, braille and Powerline that changes on every frame
+    /// (a btop/htop-like dashboard redraw): every row rebuilt, every glyph a sprite.
+    func spriteScreen(frames: Int) {
+        let grid = surface.grid!
+        let cols = Int(grid.cols), rows = Int(grid.rows)
+        let ramp = Array("▁▂▃▄▅▆▇█")
+        let boxes = Array("─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬━┃┏┓┗┛╭╮╯╰")
+        for frame in 0..<frames {
+            var screen = "\u{1b}[H"
+            for row in 0..<rows {
+                var line = "\u{1b}[38;5;\(16 + (row * 7 + frame) % 216)m"
+                switch row % 4 {
+                case 0:
+                    // Braille graph scrolling one dot column per frame.
+                    for col in 0..<cols {
+                        let a = Int((sin(Double(col * 2 + frame) / 5) + 1) * 1.99)
+                        let b = Int((sin(Double(col * 2 + 1 + frame) / 5) + 1) * 1.99)
+                        let left: [UInt32] = [0x40, 0x04, 0x02, 0x01], right: [UInt32] = [0x80, 0x20, 0x10, 0x08]
+                        line.unicodeScalars.append(Unicode.Scalar(0x2800 + left[a] + right[b])!)
+                    }
+                case 1:
+                    for col in 0..<cols { line.append(ramp[(col + frame) % ramp.count]) }
+                case 2:
+                    for col in 0..<cols { line.append(boxes[(col * 3 + row + frame) % boxes.count]) }
+                default:
+                    var segments = ""
+                    while segments.count < cols { segments += " cpu \u{E0B0}\u{E0B1}▓▒░ " }
+                    line += "\u{1b}[44m" + String(segments.prefix(cols))
+                }
+                screen += line + "\u{1b}[0m" + (row + 1 < rows ? "\r\n" : "")
+            }
+            terminal.write(Array(screen.utf8))
+            surface.renderIfDirty(offscreen: true)
+            pace()
+        }
+        report("sprite screen (full redraw/frame)")
     }
 
     /// One character per frame: the partial-dirty path (one row rebuilt, the rest reused).
@@ -136,10 +188,12 @@ func baselineThroughput(_ file: URL) throws {
 var args = CommandLine.arguments.dropFirst().makeIterator()
 var file: URL?
 var png = URL(fileURLWithPath: "spike-a-render.png")
+var glyphsPng: URL?
 while let arg = args.next() {
     switch arg {
     case "--file": file = args.next().map { URL(fileURLWithPath: $0) }
     case "--png": png = URL(fileURLWithPath: args.next() ?? png.path)
+    case "--glyphs-png": glyphsPng = args.next().map { URL(fileURLWithPath: $0) }
     default: print("unknown argument \(arg)")
     }
 }
@@ -147,6 +201,8 @@ while let arg = args.next() {
 let bench = try Bench()
 bench.showcase(png: png)
 bench.typing(frames: 240)
+bench.spriteScreen(frames: 240)
+if let glyphsPng { bench.glyphs(png: glyphsPng) }
 if let file {
     try baselineThroughput(file)
     try bench.cat(file, render: false, label: "cat without rendering")

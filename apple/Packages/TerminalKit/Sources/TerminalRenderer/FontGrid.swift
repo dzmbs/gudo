@@ -14,9 +14,27 @@ struct CellMetrics: Equatable {
     /// From the top of the cell.
     var strikethroughPosition: Int
     var strikethroughThickness: Int
+    /// From the top of the cell (Ghostty: 0).
+    var overlinePosition = 0
+    var overlineThickness = 1
+    /// Base line thickness for box drawing and other sprites (the underline thickness).
+    var boxThickness = 1
     var cursorThickness: Int
     /// Unrounded advance of the primary face; glyphs are centred on the rounded cell width.
     var faceWidth: Double
+    /// Unrounded line height of the primary face.
+    var faceHeight: Double = 0
+    /// Offset from the bottom of the cell to the bottom of the face's line box.
+    var faceY: Double = 0
+    /// Nerd Font icon heights for multi-cell and single-cell constraints.
+    var iconHeight: Double = 0
+    var iconHeightSingle: Double = 0
+
+    var constraintMetrics: NerdFontConstraint.Metrics {
+        .init(
+            cellWidth: Double(cellWidth), cellHeight: Double(cellHeight), faceWidth: faceWidth,
+            faceHeight: faceHeight, faceY: faceY, iconHeight: iconHeight, iconHeightSingle: iconHeightSingle)
+    }
 }
 
 /// A glyph placed in one of the atlases, with Ghostty's bearing conventions: `offsetX` from the
@@ -41,17 +59,13 @@ enum FontStyle: Int, CaseIterable {
     }
 }
 
-/// Procedurally drawn glyphs (Ghostty's `font/sprite`): cursor shapes and text decorations.
-enum Sprite: Hashable {
-    case cursorRect, cursorHollowRect, cursorBar, cursorUnderline, underline, strikethrough
-}
-
 /// Fonts, cell metrics, glyph rasterization and the two glyph atlases.
 ///
-/// Mirrors Ghostty's CoreText backend (`font/face/coretext.zig`): bundled JetBrains Mono
-/// (Nerd Font build) for the four styles, per-codepoint CoreText fallback (Apple Color Emoji for
-/// emoji), grayscale coverage in linear gray, color glyphs in Display P3. Shaping is 1 cell ->
-/// 1 glyph; grapheme clusters are shaped as a unit with CTLine.
+/// Mirrors Ghostty's CoreText backend (`font/face/coretext.zig`): a primary family for the four
+/// styles (bundled JetBrains Mono Nerd Font by default), per-codepoint CoreText fallback (Apple
+/// Color Emoji, CJK faces), grayscale coverage in linear gray, color glyphs in Display P3, the
+/// sprite face for box drawing and friends, and Ghostty's glyph constraints (Nerd Font icons,
+/// symbols, emoji). Shaping is 1 cell -> 1 glyph; grapheme clusters are shaped as a unit with CTLine.
 final class FontGrid {
     let metrics: CellMetrics
     /// Written by rasterization; the renderer drains their pending uploads each frame.
@@ -62,6 +76,7 @@ final class FontGrid {
     private var faceIndexByName: [String: Int] = [:]
     private var resolved: [ResolveKey: (face: Int, glyph: CGGlyph)?] = [:]
     private var glyphs: [GlyphKey: RenderedGlyph?] = [:]
+    private var spriteGlyphs: [SpriteGlyphKey: RenderedGlyph?] = [:]
     private var sprites: [SpriteKey: RenderedGlyph] = [:]
 
     private struct ResolveKey: Hashable {
@@ -72,6 +87,14 @@ final class FontGrid {
     private struct GlyphKey: Hashable {
         var face: Int
         var glyph: CGGlyph
+        var span: Int
+        /// Cells the glyph may grow into and the constraint applied (both shape the bitmap).
+        var constraintWidth: Int
+        var codepoint: UInt32
+    }
+
+    private struct SpriteGlyphKey: Hashable {
+        var codepoint: UInt32
         var span: Int
     }
 
@@ -87,27 +110,55 @@ final class FontGrid {
         .boldItalic: "JetBrainsMonoNerdFont-BoldItalic",
     ]
 
-    /// - Parameter pixelSize: font size in device pixels (points x display scale).
-    init(pixelSize: CGFloat) {
-        faces = FontStyle.allCases.map { style in
-            guard let url = Bundle.module.url(forResource: Self.fontFiles[style], withExtension: "ttf", subdirectory: "Fonts"),
-                  let data = try? Data(contentsOf: url),
-                  let descriptors = CTFontManagerCreateFontDescriptorsFromData(data as CFData) as? [CTFontDescriptor],
-                  let descriptor = descriptors.first
-            else { fatalError("missing bundled font \(style)") }
-            return CTFontCreateWithFontDescriptor(descriptor, pixelSize, nil)
-        }
+    /// - Parameters:
+    ///   - pixelSize: font size in device pixels (points x display scale).
+    ///   - family: a font family installed on the system, or nil for the bundled JetBrains Mono
+    ///     Nerd Font. An unknown family falls back to the bundled font.
+    init(pixelSize: CGFloat, family: String? = nil) {
+        faces = family.flatMap { Self.systemFaces(family: $0, pixelSize: pixelSize) } ?? Self.bundledFaces(pixelSize: pixelSize)
         for (i, face) in faces.enumerated() {
             faceIndexByName[CTFontCopyPostScriptName(face) as String] = i
         }
         metrics = Self.computeMetrics(faces[FontStyle.regular.rawValue])
     }
 
+    private static func bundledFaces(pixelSize: CGFloat) -> [CTFont] {
+        FontStyle.allCases.map { style in
+            guard let url = Bundle.module.url(forResource: fontFiles[style], withExtension: "ttf", subdirectory: "Fonts"),
+                  let data = try? Data(contentsOf: url),
+                  let descriptors = CTFontManagerCreateFontDescriptorsFromData(data as CFData) as? [CTFontDescriptor],
+                  let descriptor = descriptors.first
+            else { fatalError("missing bundled font \(style)") }
+            return CTFontCreateWithFontDescriptor(descriptor, pixelSize, nil)
+        }
+    }
+
+    /// The four styles of an installed family, or nil if CoreText does not know it (it would
+    /// otherwise silently substitute another family).
+    private static func systemFaces(family: String, pixelSize: CGFloat) -> [CTFont]? {
+        let descriptor = CTFontDescriptorCreateWithAttributes([kCTFontFamilyNameAttribute: family] as CFDictionary)
+        let regular = CTFontCreateWithFontDescriptor(descriptor, pixelSize, nil)
+        guard (CTFontCopyFamilyName(regular) as String).caseInsensitiveCompare(family) == .orderedSame else { return nil }
+        func styled(_ traits: CTFontSymbolicTraits) -> CTFont {
+            CTFontCreateCopyWithSymbolicTraits(regular, pixelSize, nil, traits, traits) ?? regular
+        }
+        return [regular, styled(.traitBold), styled(.traitItalic), styled([.traitBold, .traitItalic])]
+    }
+
     // MARK: Glyph lookup
 
     /// The glyph for a cell's grapheme cluster, or nil when it draws nothing (space, missing).
-    /// - Parameter span: number of cells the character occupies (2 for wide characters).
-    func glyph(for scalars: [UInt32], style: FontStyle, span: Int) -> RenderedGlyph? {
+    /// - Parameters:
+    ///   - span: number of cells the character occupies (2 for wide characters).
+    ///   - maxSpan: cells a narrow symbol may grow into (Ghostty's constraint width; 2 when the
+    ///     next cell is blank, see `NerdFontConstraint.constraintWidth`). Ignored for anything
+    ///     that is not a symbol; nil means `span`.
+    func glyph(for scalars: [UInt32], style: FontStyle, span: Int, maxSpan: Int? = nil) -> RenderedGlyph? {
+        guard let base = scalars.first else { return nil }
+        if scalars.count == 1, SpriteFace.covers(base) {
+            return spriteGlyph(base, span: span)
+        }
+
         var text = ""
         text.unicodeScalars.append(contentsOf: scalars.compactMap(Unicode.Scalar.init))
         let key = ResolveKey(text: text, style: style)
@@ -119,9 +170,13 @@ final class FontGrid {
             resolved[key] = hit
         }
         guard let hit else { return nil }
-        let glyphKey = GlyphKey(face: hit.face, glyph: hit.glyph, span: span)
+
+        let constraintWidth = span >= 2 ? span : NerdFontConstraint.isSymbol(base) ? max(1, min(2, maxSpan ?? 1)) : 1
+        let glyphKey = GlyphKey(face: hit.face, glyph: hit.glyph, span: span, constraintWidth: constraintWidth, codepoint: base)
         if let cached = glyphs[glyphKey] { return cached }
-        let rendered = render(glyph: hit.glyph, face: faces[hit.face], span: span)
+        let rendered = render(
+            glyph: hit.glyph, face: faces[hit.face], isFallback: hit.face >= FontStyle.allCases.count,
+            codepoint: base, constraintWidth: constraintWidth)
         glyphs[glyphKey] = rendered
         return rendered
     }
@@ -129,9 +184,25 @@ final class FontGrid {
     func sprite(_ sprite: Sprite, span: Int) -> RenderedGlyph {
         let key = SpriteKey(sprite: sprite, span: span)
         if let cached = sprites[key] { return cached }
-        let rendered = renderSprite(sprite, span: span)
+        // Decoration sprites always draw something.
+        let rendered = place(SpriteFace.render(sprite, metrics: metrics, span: span))!
         sprites[key] = rendered
         return rendered
+    }
+
+    private func spriteGlyph(_ cp: UInt32, span: Int) -> RenderedGlyph? {
+        let key = SpriteGlyphKey(codepoint: cp, span: span)
+        if let cached = spriteGlyphs[key] { return cached }
+        let rendered = SpriteFace.render(cp, metrics: metrics, span: span).flatMap(place)
+        spriteGlyphs[key] = rendered
+        return rendered
+    }
+
+    /// Copies a drawn sprite into the grayscale atlas.
+    private func place(_ canvas: SpriteCanvas) -> RenderedGlyph? {
+        guard let bitmap = canvas.export() else { return nil }
+        let region = bitmap.pixels.withUnsafeBytes { grayscale.insert(width: bitmap.width, height: bitmap.height, data: $0) }
+        return RenderedGlyph(atlas: .grayscale, region: region, offsetX: bitmap.offsetX, offsetY: bitmap.offsetY)
     }
 
     private func resolve(_ text: String, style: FontStyle) -> (face: Int, glyph: CGGlyph)? {
@@ -173,35 +244,39 @@ final class FontGrid {
 
     // MARK: Rasterization
 
-    private func render(glyph: CGGlyph, face: CTFont, span: Int) -> RenderedGlyph? {
+    /// Rasterizes a font glyph like Ghostty's `coretext.zig` `renderGlyph`: constrain the bounding
+    /// box (Nerd Font rules, symbols, emoji), centre on the rounded cell, keep the subpixel
+    /// position in the bitmap.
+    private func render(glyph: CGGlyph, face: CTFont, isFallback: Bool, codepoint: UInt32, constraintWidth: Int) -> RenderedGlyph? {
         var cgGlyph = glyph
         let rect = CTFontGetBoundingRectsForGlyphs(face, .horizontal, &cgGlyph, nil, 1)
         guard rect.width >= 0.25, rect.height >= 0.25 else { return nil }
 
         let isColor = CTFontGetSymbolicTraits(face).contains(.traitColorGlyphs)
-        let cellWidth = Double(metrics.cellWidth)
-        var x = rect.origin.x
-        var y = rect.origin.y + Double(metrics.cellBaseline)
-        var width = rect.width
-        var height = rect.height
+        var constraint = isColor ? NerdFontConstraint.emoji : NerdFontConstraint.forCodepoint(codepoint)
+        // Fallback text faces (CJK, other scripts) are sized for their own metrics; make sure an
+        // oversized one at least fits its cells instead of spilling into the neighbours.
+        if !constraint.doesAnything, isFallback { constraint = .symbol }
 
-        if isColor {
-            // Ghostty constrains emoji to fit their cells; scale down to the available box and
-            // centre it.
-            let boxWidth = cellWidth * Double(span)
-            let boxHeight = Double(metrics.cellHeight)
-            let scale = min(1, boxWidth / width, boxHeight / height)
-            width *= scale
-            height *= scale
-            x = ((boxWidth - width) / 2).rounded()
-            y = ((boxHeight - height) / 2).rounded()
-            width = width.rounded()
-            height = height.rounded()
-        } else {
-            // Centre the face's advance within the rounded cell width (coretext.zig).
+        let cellWidth = Double(metrics.cellWidth)
+        let cellHeight = Double(metrics.cellHeight)
+        let box = constraint.constrain(
+            GlyphBox(width: rect.width, height: rect.height, x: rect.origin.x, y: rect.origin.y + Double(metrics.cellBaseline)),
+            metrics: metrics.constraintMetrics, constraintWidth: constraintWidth)
+        var x = box.x, y = box.y, width = box.width, height = box.height
+
+        if constraint.size != .stretch {
+            // Centre the face's advance within the rounded cell width.
             let dx = (cellWidth - metrics.faceWidth) / 2
             x += dx
             if dx < 0 { x -= dx.rounded(.towardZero) }
+        }
+        if isColor {
+            // Bitmap (sbix) glyphs render in whole pixels; quantize to avoid blur.
+            width = cellWidth * Double(constraintWidth) - (cellWidth * Double(constraintWidth) - width - x).rounded() - x.rounded()
+            height = cellHeight - (cellHeight - height - y).rounded() - y.rounded()
+            x = x.rounded()
+            y = y.rounded()
         }
 
         let pxX = Int(x.rounded(.down))
@@ -210,6 +285,7 @@ final class FontGrid {
         let fracY = y - y.rounded(.down)
         let pxWidth = Int((width + fracX).rounded(.up))
         let pxHeight = Int((height + fracY).rounded(.up))
+        guard pxWidth > 0, pxHeight > 0 else { return nil }
         let depth = isColor ? 4 : 1
 
         var buffer = [UInt8](repeating: 0, count: pxWidth * pxHeight * depth)
@@ -258,49 +334,9 @@ final class FontGrid {
         )
     }
 
-    /// Draws a sprite as filled rectangles into a coverage bitmap, like Ghostty's sprite canvas.
-    private func renderSprite(_ sprite: Sprite, span: Int) -> RenderedGlyph {
-        let m = metrics
-        let width = m.cellWidth * span
-        let height = m.cellHeight
-        let underlineY = min(m.underlinePosition, height - m.underlineThickness)
-
-        // Rectangles in cell coordinates (y down from the top of the cell); the bitmap is cropped
-        // to their bounding box so decorations stay tiny in the atlas.
-        let rects: [(x: Int, y: Int, w: Int, h: Int, on: Bool)] = switch sprite {
-        case .cursorRect:
-            [(0, 0, width, height, true)]
-        case .cursorHollowRect:
-            [(0, 0, width, height, true),
-             (m.cursorThickness, m.cursorThickness, width - 2 * m.cursorThickness, height - 2 * m.cursorThickness, false)]
-        case .cursorBar:
-            [(-((m.cursorThickness + 1) / 2), 0, m.cursorThickness, height, true)]
-        case .cursorUnderline:
-            [(0, underlineY, width, m.cursorThickness, true)]
-        case .underline:
-            [(0, underlineY, width, m.underlineThickness, true)]
-        case .strikethrough:
-            [(0, m.strikethroughPosition, width, m.strikethroughThickness, true)]
-        }
-
-        let minX = rects.map(\.x).min()!, minY = rects.map(\.y).min()!
-        let maxX = rects.map { $0.x + $0.w }.max()!, maxY = rects.map { $0.y + $0.h }.max()!
-        let bw = maxX - minX, bh = maxY - minY
-        var bitmap = [UInt8](repeating: 0, count: bw * bh)
-        for r in rects {
-            for row in (r.y - minY)..<(r.y - minY + r.h) {
-                for col in (r.x - minX)..<(r.x - minX + r.w) {
-                    bitmap[row * bw + col] = r.on ? 255 : 0
-                }
-            }
-        }
-        let region = bitmap.withUnsafeBytes { grayscale.insert(width: bw, height: bh, data: $0) }
-        return RenderedGlyph(atlas: .grayscale, region: region, offsetX: minX, offsetY: height - minY)
-    }
-
     // MARK: Metrics
 
-    private static func computeMetrics(_ font: CTFont) -> CellMetrics {
+    static func computeMetrics(_ font: CTFont) -> CellMetrics {
         // Advance: the widest printable ASCII glyph (all equal in a monospace face).
         let ascii = (32..<127).map { UInt16($0) }
         var glyphs = [CGGlyph](repeating: 0, count: ascii.count)
@@ -325,6 +361,7 @@ final class FontGrid {
         let (strikePosition, strikeSize) = strikeout(font) ?? (CTFontGetXHeight(font) / 2, underlineThickness)
         let strikethroughThickness = max(1, strikeSize.rounded(.up))
         let strikethroughPosition = (topToBaseline - strikePosition).rounded()
+        let capHeight = CTFontGetCapHeight(font)
 
         return CellMetrics(
             cellWidth: Int(cellWidth),
@@ -334,8 +371,15 @@ final class FontGrid {
             underlineThickness: Int(underlineThickness),
             strikethroughPosition: Int(strikethroughPosition),
             strikethroughThickness: Int(strikethroughThickness),
+            overlinePosition: 0,
+            overlineThickness: Int(underlineThickness),
+            boxThickness: Int(underlineThickness),
             cursorThickness: 1,
-            faceWidth: faceWidth
+            faceWidth: faceWidth,
+            faceHeight: faceHeight,
+            faceY: cellBaseline - faceBaseline,
+            iconHeight: faceHeight,
+            iconHeightSingle: (2 * capHeight + faceHeight) / 3
         )
     }
 
