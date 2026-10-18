@@ -1,0 +1,13 @@
+{
+  "session_id": "0199a213-81c0-7800-8aa1-bbab2a035a53",
+  "transcript_path": "/Users/me/.codex/sessions/2026/10/18/rollout-2026-10-18T12-00-00-0199a213-81c0-7800-8aa1-bbab2a035a53.jsonl",
+  "cwd": "/Users/me/src/app",
+  "model": "gpt-5.5-codex",
+  "permission_mode": "default",
+  "hook_event_name": "PermissionRequest",
+  "turn_id": "turn-3",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cargo publish --dry-run"
+  }
+}
