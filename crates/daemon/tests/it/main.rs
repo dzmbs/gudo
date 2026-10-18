@@ -3,6 +3,8 @@
 mod agents;
 mod codex;
 mod e2e;
+mod notify;
+mod relays;
 mod shell;
 mod support;
 mod terminal;

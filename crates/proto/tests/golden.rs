@@ -775,6 +775,29 @@ fn workspace_messages(c: &mut Checker) {
                 column: None,
             }),
         ),
+        (
+            "PushRegister",
+            WorkspaceRequest::PushRegister(PushRegistration {
+                cap: "c".into(),
+                seal_key: [0x66; 32],
+                relay_url: Some("https://p".into()),
+                prefs: PushPrefs {
+                    done: false,
+                    ..PushPrefs::default()
+                },
+                activity_cap: None,
+            }),
+        ),
+        ("PushUnregister", WorkspaceRequest::PushUnregister),
+        ("PushStatus", WorkspaceRequest::PushStatus),
+        (
+            "PushAction",
+            WorkspaceRequest::PushAction(PushActionRequest {
+                token: vec![1, 2],
+                approve: true,
+                sig: vec![3],
+            }),
+        ),
     ];
     for (name, req) in requests {
         let goldens = WORKSPACE_REQUEST_GOLDENS;
@@ -963,6 +986,26 @@ fn workspace_messages(c: &mut Checker) {
                 in_window: true,
             })),
         ),
+        (
+            "Push",
+            Ok(WorkspaceResponse::Push(PushStatus {
+                enabled: true,
+                relay_url: "https://p".into(),
+                registered: Some(PushPrefs::default()),
+                devices: 1,
+                last_error: None,
+            })),
+        ),
+        (
+            "PushDecided",
+            Ok(WorkspaceResponse::PushDecided(Decided {
+                pane_id: PANE,
+                request_id: RequestId(9),
+                option_id: OptionId(0),
+                decided_by: ACTOR,
+                at: UnixMillis(1000),
+            })),
+        ),
     ];
     for (name, result) in responses {
         let golden = WORKSPACE_RESPONSE_GOLDENS
@@ -1101,6 +1144,13 @@ const WORKSPACE_REQUEST_GOLDENS: &[(&str, &str)] = &[
     ("VsCodeTunnelStart", "0b0000000115051b01010103626f78"),
     ("VsCodeTunnelStop", "040000000115051c"),
     ("VsCodeTunnelOpen", "0f0000000115051d00067e2f612e7273010300"),
+    (
+        "PushRegister",
+        "370000000115051e01636666666666666666666666666666666666666666666666666666666666666666010968747470733a2f2f70010100010100",
+    ),
+    ("PushUnregister", "040000000115051f"),
+    ("PushStatus", "0400000001150520"),
+    ("PushAction", "0a00000001150521020102010103"),
 ];
 const WORKSPACE_RESPONSE_GOLDENS: &[(&str, &str)] = &[
     ("Done", "050000000118050000"),
@@ -1150,6 +1200,14 @@ const WORKSPACE_RESPONSE_GOLDENS: &[(&str, &str)] = &[
     (
         "VsCodeTunnelOpened",
         "58000000011805001203626f78022f701f68747470733a2f2f7673636f64652e6465762f74756e6e656c2f626f782f702a7673636f64653a2f2f7673636f64652d72656d6f74652f74756e6e656c2b626f782f702f612e72733a3301",
+    ),
+    (
+        "Push",
+        "180000000118050013010968747470733a2f2f700101010101010100",
+    ),
+    (
+        "PushDecided",
+        "3a0000000118050014030900111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222e807",
     ),
 ];
 
@@ -1554,6 +1612,69 @@ fn ticket_round_trips_through_text() {
     let mangled = format!("  {}\n{} ", payload[..10].to_lowercase(), &payload[10..]);
     assert_eq!(mangled.parse::<Ticket>().unwrap(), ticket);
     assert!("garbage!".parse::<Ticket>().is_err());
+}
+
+#[test]
+fn ticket_extras_carry_relays_and_stay_readable_by_old_parsers() {
+    let ticket = Ticket {
+        v: Ticket::VERSION,
+        daemon_id: DaemonId([0x44; 32]),
+        addrs: vec!["10.0.0.2:4433".parse().unwrap()],
+        relay_url: Some("https://relay.example./".into()),
+        principal: PRINCIPAL,
+        secret: PairingSecret([0x55; 16]),
+        expires: UnixMillis(1_760_000_000_000),
+    };
+    // Default relays: the plain ticket, byte for byte.
+    assert_eq!(
+        ticket.to_string_with(&TicketExtras::default()),
+        ticket.to_string()
+    );
+    assert_eq!(
+        Ticket::parse_with_extras(&ticket.to_string()).unwrap().1,
+        TicketExtras::default()
+    );
+    for relays in [
+        TicketRelays::Disabled,
+        TicketRelays::Custom {
+            urls: vec!["https://relay.example".into(), "https://r2.example".into()],
+            auth_token: Some("tok".into()),
+        },
+    ] {
+        let extras = TicketExtras {
+            v: TicketExtras::VERSION,
+            relays,
+        };
+        let text = ticket.to_string_with(&extras);
+        assert_ne!(text, ticket.to_string());
+        assert_eq!(
+            Ticket::parse_with_extras(&text).unwrap(),
+            (ticket.clone(), extras)
+        );
+        assert_eq!(text.parse::<Ticket>().unwrap(), ticket, "old readers");
+        // Extras survive the QR's upper-casing.
+        assert_eq!(
+            Ticket::parse_with_extras(&text.to_ascii_uppercase())
+                .unwrap()
+                .0,
+            ticket
+        );
+    }
+    // Frozen: the extension's bytes after the ticket.
+    let extras = TicketExtras {
+        v: TicketExtras::VERSION,
+        relays: TicketRelays::Disabled,
+    };
+    let text = ticket.to_string_with(&extras);
+    let payload = text.rsplit('/').next().unwrap();
+    let bytes = data_encoding::BASE32_NOPAD
+        .decode(payload.as_bytes())
+        .unwrap();
+    let hex: String = bytes[bytes.len() - 3..]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(hex, "e70102");
 }
 
 #[test]

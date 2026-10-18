@@ -73,10 +73,20 @@ pub struct TestClient {
 
 impl TestClient {
     pub fn connect(ticket: &str, key: Vec<u8>) -> Self {
-        let (listener, events) = EventQueue::channel();
         let mut config = ClientConfig::new(key);
         config.relay = RelayMode::Disabled;
-        let client = Client::connect(ticket, config, listener).expect("client starts");
+        Self::connect_with(ticket, config, client_core::ConnectOptions::default())
+    }
+
+    /// A client with its own relay settings (relays from the ticket, extra CA roots).
+    pub fn connect_with(
+        ticket: &str,
+        config: ClientConfig,
+        options: client_core::ConnectOptions,
+    ) -> Self {
+        let (listener, events) = EventQueue::channel();
+        let client =
+            Client::connect_with(ticket, config, options, listener).expect("client starts");
         Self {
             client,
             events,

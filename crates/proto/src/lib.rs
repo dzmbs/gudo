@@ -65,7 +65,7 @@ pub use layout::{
     SessionLayout, SessionSummary, TabLayout,
 };
 pub use msg::*;
-pub use ticket::{PairingSecret, Ticket, TicketError};
+pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
 pub use workspace::*;
 
 /// QUIC ALPN identifier this crate's messages are spoken under.

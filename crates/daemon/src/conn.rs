@@ -103,6 +103,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     let ws = crate::ws::ConnCtx {
         ctl: ctl.clone(),
         watches: Arc::default(),
+        actor: Actor { principal, device },
     };
     let client = Arc::new(Client {
         id: core.next_conn_id(),
@@ -354,7 +355,7 @@ impl Client {
             panes.extend(state.focus);
             panes
         };
-        self.core.set_view(self.id, panes);
+        self.core.set_view(self.id, self.actor.device, panes);
     }
 
     /// Runs a pane query off the async threads and sends its answer.

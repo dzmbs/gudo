@@ -1,0 +1,42 @@
+// The push relay Worker (docs/PUSH.md). No secrets here: APNS_PRIVATE_KEY and PUSH_CAP_KEY are
+// set with `wrangler secret put` (production) or in the gitignored `.dev.vars` (local dev,
+// `npm run gen-dev-vars`).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "push-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  // Owner: set your zone and hostname (must match `brand::PUSH_RELAY_URL`), then deploy.
+  "routes": [{ "pattern": "push.unnamed.dev", "custom_domain": true }],
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "vars": {
+    // Owner: fill in from the Apple Developer account (Keys → the APNs key).
+    "APNS_TEAM_ID": "TEAMID0000",
+    "APNS_KEY_ID": "KEYID00000",
+    // The app's bundle id (`apple/Brand.xcconfig`: $(BRAND_BUNDLE_ID_PREFIX).app).
+    "APNS_TOPIC": "dev.unnamed.app",
+    "CAP_TTL_DAYS": "180"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LIMITER", "class_name": "RateLimiter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }],
+  "env": {
+    // `npm run dev`: wrangler dev against the fake APNs (`npm run fake-apns`).
+    "dev": {
+      "workers_dev": true,
+      "routes": [],
+      "vars": {
+        "APNS_TEAM_ID": "DEVTEAM000",
+        "APNS_KEY_ID": "DEVKEY0000",
+        "APNS_TOPIC": "dev.unnamed.app",
+        "APNS_ORIGIN": "http://127.0.0.1:8790",
+        "CAP_TTL_DAYS": "180"
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "LIMITER", "class_name": "RateLimiter" }]
+      }
+    }
+  }
+}

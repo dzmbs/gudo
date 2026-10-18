@@ -573,6 +573,16 @@ attention (blocked → seen when work resumes, done with the last message, unsee
 on focus, mark all). Unit tests cover the porcelain/worktree/hunk parsers, path policy,
 atomic writes, URL detection, the review formatter, trash dates and the attention store.
 
+
+Attention items that stay unseen for `push.delay` (3 s) are sealed to each registered device
+that wants that kind and is not looking at this host, and posted to the push relay with the
+daemon's signature; approvals carry a daemon-signed action token that the app returns with
+`PushAction` from the lock screen. Registrations (`PushRegister` / `PushUnregister` /
+`PushStatus`, per device) live in `<state>/push.json`. Details, formats and the Worker:
+`docs/PUSH.md`. Relay modes (`[relay]` in `config.toml`: default, self-hosted `iroh-relay`
+URLs with token and private CA, local-only) and how pairing tickets carry them:
+`docs/RELAYS.md`. Tests: `cargo test -p daemon --test it notify relays`.
+
 ## 6. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last

@@ -36,6 +36,7 @@ mod identity;
 mod input;
 mod layout;
 mod net;
+mod notifier;
 mod osc;
 mod pane;
 mod persist;
@@ -58,7 +59,10 @@ use tokio::task::JoinHandle;
 
 pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT};
 pub use config::{Config, RelayMode, default_state_dir};
-pub use identity::{EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, paired_devices};
+pub use config::{CustomRelays, PushConfig};
+pub use identity::{
+    EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
+};
 
 use crate::agent::HookServer;
 use crate::core::Core;
@@ -107,7 +111,7 @@ impl Daemon {
         core::restore(&core, records);
 
         let endpoint = bind(&core).await?;
-        let info = endpoint_info_of(&endpoint);
+        let info = endpoint_info_of(&endpoint, &core.cfg.relay);
         identity::write_endpoint_info(&core.cfg.state_dir, &info)?;
         tracing::info!(
             daemon = %endpoint.id(),
@@ -126,6 +130,7 @@ impl Daemon {
         tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(notifier::run(Arc::clone(&core))));
         core.ws.tunnel.autostart(&core.cfg);
         core.mark_dirty();
         Ok(Self {
@@ -153,9 +158,9 @@ impl Daemon {
     /// Waits (at most `timeout`) until the endpoint has a home relay, so a ticket minted next
     /// works across NATs. Returns at once with relays disabled.
     pub async fn wait_online(&self, timeout: Duration) {
-        if self.core.cfg.relay == RelayMode::Default {
+        if self.core.cfg.relay != RelayMode::Disabled {
             let _ = tokio::time::timeout(timeout, self.endpoint.online()).await;
-            let info = endpoint_info_of(&self.endpoint);
+            let info = endpoint_info_of(&self.endpoint, &self.core.cfg.relay);
             if let Err(e) = identity::write_endpoint_info(&self.core.cfg.state_dir, &info) {
                 tracing::warn!("recording endpoint: {e}");
             }
@@ -169,6 +174,16 @@ impl Daemon {
     /// Returns an error if the pairing state cannot be written.
     pub fn pairing_ticket(&self, ttl: Duration) -> io::Result<Ticket> {
         mint_ticket(&self.core.cfg.state_dir, ttl)
+    }
+
+    /// Mints a one-time pairing ticket valid for `ttl` and returns its text, with the
+    /// daemon's relay choice (self-hosted relays, local-only) appended for the app.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pairing state cannot be written.
+    pub fn pairing_link(&self, ttl: Duration) -> io::Result<String> {
+        mint_ticket_text(&self.core.cfg.state_dir, ttl)
     }
 
     /// Number of paired devices.
@@ -200,9 +215,28 @@ impl Daemon {
 }
 
 async fn bind(core: &Core) -> Result<Endpoint, StartError> {
-    let builder = match core.cfg.relay {
+    let builder = match &core.cfg.relay {
         RelayMode::Default => Endpoint::builder(presets::N0),
         RelayMode::Disabled => Endpoint::builder(presets::Minimal),
+        RelayMode::Custom(custom) => {
+            let map = iroh::RelayMap::try_from_iter(custom.urls.iter().map(String::as_str))
+                .map_err(|e| StartError::Bind(format!("relay urls: {e}")))?;
+            let map = match &custom.auth_token {
+                Some(token) => map.with_auth_token(token.clone()),
+                None => map,
+            };
+            let mut builder =
+                Endpoint::builder(presets::Minimal).relay_mode(iroh::RelayMode::Custom(map));
+            if !custom.ca_files.is_empty() {
+                let mut roots = Vec::new();
+                for file in &custom.ca_files {
+                    roots.extend(read_pem_certs(file)?);
+                }
+                builder = builder
+                    .ca_tls_config(iroh::tls::CaTlsConfig::embedded().with_extra_roots(roots));
+            }
+            builder
+        }
     };
     let mut builder = builder
         .secret_key(core.identity.secret.clone())
@@ -219,13 +253,30 @@ async fn bind(core: &Core) -> Result<Endpoint, StartError> {
         .map_err(|e| StartError::Bind(e.to_string()))
 }
 
+/// The certificates in a PEM file.
+fn read_pem_certs(
+    path: &std::path::Path,
+) -> Result<Vec<rustls_pki_types::CertificateDer<'static>>, StartError> {
+    use rustls_pki_types::pem::PemObject;
+    let certs = rustls_pki_types::CertificateDer::pem_file_iter(path)
+        .and_then(|it| it.collect::<Result<Vec<_>, _>>())
+        .map_err(|e| StartError::Bind(format!("relay CA file {}: {e}", path.display())))?;
+    if certs.is_empty() {
+        return Err(StartError::Bind(format!(
+            "relay CA file {} has no certificates",
+            path.display()
+        )));
+    }
+    Ok(certs)
+}
+
 /// Keeps `endpoint.json` current as iroh learns addresses and picks a home relay, so tickets
 /// minted by `hostd pair` carry what works now.
 async fn track_addresses(core: Arc<Core>, endpoint: Endpoint) {
     use iroh::Watcher;
     let mut watcher = endpoint.watch_addr();
     while watcher.updated().await.is_ok() {
-        let info = endpoint_info_of(&endpoint);
+        let info = endpoint_info_of(&endpoint, &core.cfg.relay);
         tracing::debug!(addrs = ?info.addrs, relay = ?info.relay_url, "endpoint address changed");
         if let Err(e) = identity::write_endpoint_info(&core.cfg.state_dir, &info) {
             tracing::warn!("recording endpoint: {e}");
@@ -233,7 +284,7 @@ async fn track_addresses(core: Arc<Core>, endpoint: Endpoint) {
     }
 }
 
-fn endpoint_info_of(endpoint: &Endpoint) -> EndpointInfo {
+fn endpoint_info_of(endpoint: &Endpoint, relays: &RelayMode) -> EndpointInfo {
     let addr = endpoint.addr();
     let mut addrs: Vec<SocketAddr> = addr.ip_addrs().copied().collect();
     if addrs.is_empty() {
@@ -252,6 +303,7 @@ fn endpoint_info_of(endpoint: &Endpoint) -> EndpointInfo {
         daemon_id: fsutil::hex(endpoint.id().as_bytes()),
         addrs,
         relay_url: addr.relay_urls().next().map(ToString::to_string),
+        relays: relays.ticket_relays(),
         pid: std::process::id(),
         started_at: identity::now_millis(),
     }

@@ -79,6 +79,20 @@ impl Attention {
         }
     }
 
+    /// One item, if still kept.
+    pub fn get(&self, id: u64) -> Option<AttentionItem> {
+        lock(&self.inner).items.iter().find(|i| i.id == id).cloned()
+    }
+
+    /// Whether an unseen item newer than `id` exists for the same pane (a push for `id` would
+    /// be superseded by that one's).
+    pub fn superseded(&self, id: u64, pane: PaneId) -> bool {
+        lock(&self.inner)
+            .items
+            .iter()
+            .any(|i| i.id > id && i.pane_id == pane && !i.seen)
+    }
+
     /// Marks matching unseen items seen; `None` if nothing changed.
     pub fn mark(&self, which: &AttentionSeen) -> Option<AttentionUpdate> {
         self.mark_where(|item| {

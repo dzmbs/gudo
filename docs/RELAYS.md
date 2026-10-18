@@ -1,0 +1,117 @@
+# Relays: default, self-hosted, local-only
+
+iroh dials daemons by key. Direct UDP paths (LAN, Tailscale, hole punching) come first; a relay
+carries the first packets and any traffic that cannot go direct. ARCHITECTURE D16: the
+default is a managed relay set (Iroh Services); power users can run their own `iroh-relay`, or
+switch relays off entirely.
+
+## 1. Modes
+
+| Daemon `config.toml` | iroh endpoint | Pairing ticket says | App dials |
+|---|---|---|---|
+| *(nothing)* / `mode = "default"` | n0 preset: default relays + address lookup | nothing extra (classic ticket) | default relays + the daemon's home relay |
+| `urls = [...]` / `mode = "custom"` | only these relays, no third-party lookup | `Custom { urls, auth_token }` | only those relays |
+| `mode = "local-only"` (or `hostd run --no-relay`) | no relays, no lookup | `Disabled` | direct addresses only |
+
+```toml
+# <state>/config.toml   (state dir: `unnamed-hostd status`)
+[relay]
+mode = "custom"                         # "default" | "custom" | "local-only"
+urls = ["https://relay.example.com"]    # one or more iroh-relay servers
+auth_token = "long-random-token"        # if the relays use access.shared_token
+ca_file = "/etc/ssl/private-ca.pem"     # only for a private CA; web roots stay trusted
+```
+
+`hostd run --no-relay` wins over the file. Restart the daemon after editing, then pair again
+(`unnamed-hostd pair`): the relay choice travels **in the pairing ticket**, so the phone needs no
+settings. `unnamed-hostd status` prints the mode.
+
+### How the ticket carries it
+
+`proto::TicketExtras { v, relays: TicketRelays }` is appended to the ticket's postcard bytes
+after a marker byte (`0xE7`), inside the same base32 `unnamed://pair/…` payload. Parsers that
+predate it ignore trailing bytes, so older apps still pair (through `relay_url`, which a
+custom-relay daemon sets to its home relay among its own). With default relays nothing is
+appended and the ticket is byte-identical to before. Extras of a newer version are ignored.
+
+On the app side `client_core::Client::connect*` reads the extras: if the app's own
+`RelayMode` is `Disabled` (a "local only" switch in the app) that wins; otherwise the daemon's
+choice is used. `ConnectOptions::relay_ca_der` adds trust roots for a private-CA relay.
+
+### Local-only (LAN / Tailscale / VPN)
+
+No relay, no address lookup, no third party at all. Works when the phone can reach one of the
+daemon's direct addresses: same LAN, a Tailscale `100.x` address, or any VPN. The ticket lists
+the addresses the daemon saw at pairing time; if they change (DHCP), pair again or reconnect
+while on the same network. Push notifications still need the push relay (docs/PUSH.md) unless
+`[push] enabled = false`.
+
+## 2. Run your own iroh-relay on a VPS (Docker)
+
+Needs: a VPS with a public IPv4 (and ideally IPv6), a DNS name, ports **80/tcp, 443/tcp,
+7842/udp** open. 1 vCPU / 1 GB is plenty for a household; bandwidth is the cost driver
+
+1. DNS: `A` (and `AAAA`) record `relay.example.com` → the VPS.
+2. On the VPS:
+
+   ```sh
+   mkdir -p ~/iroh-relay && cd ~/iroh-relay
+   # copy services/iroh-relay/{docker-compose.yml,iroh-relay.toml} from this repo here
+   openssl rand -base64 32   # a token
+   $EDITOR iroh-relay.toml   # hostname, contact email, access.shared_token = ["<token>"]
+   docker compose up -d
+   docker compose logs -f    # watch the Let's Encrypt certificate arrive
+   curl -fsS https://relay.example.com/healthz
+   ```
+
+   The image tag must match the iroh version the app and daemon use (`iroh = "1.3.0"` in
+   `Cargo.toml` → `n0computer/iroh-relay:v1.3.0`); bump them together.
+3. On each host, `<state>/config.toml`:
+
+   ```toml
+   [relay]
+   urls = ["https://relay.example.com"]
+   auth_token = "<token>"
+   ```
+
+   then restart the daemon (`unnamed-hostd service install` re-installs and restarts it, or
+   restart the service) and `unnamed-hostd pair` to give the phone a ticket with the relay.
+4. Several regions: run one relay per region and list them all in `urls`; iroh picks the
+   lowest-latency one as the daemon's home relay.
+
+Access control options (`iroh-relay.toml` `access`): `"everyone"` (open relay; not
+recommended), `allowlist = [endpoint ids]`, `denylist`, `http` (a callback URL answering `true`)
+and `shared_token` (above). The token is sent as `Authorization: Bearer` by both the daemon and
+the app (`RelayMap::with_auth_token`).
+
+Without Docker: `cargo install iroh-relay --version 1.3.0 --features server` and run
+`iroh-relay --config-path iroh-relay.toml` under systemd. For a quick LAN experiment,
+`iroh-relay --dev` serves plain HTTP on port 3340 (use `urls = ["http://host:3340"]`).
+
+## 3. Tests
+
+`cargo test -p daemon --test it relays`:
+
+- `daemon_and_client_connect_through_a_self_hosted_relay` — spawns an `iroh-relay` server in
+  process (self-signed certificate for 127.0.0.1), starts a daemon with `RelayMode::Custom` and
+  the certificate as `ca_files`, mints a pairing link, **strips the direct addresses** from
+  the ticket, and connects a default-mode client with the certificate in
+  `ConnectOptions::relay_ca_der`; the client attaches and round-trips a shell command, which is
+  only possible through the relay.
+- `local_only_daemons_hand_out_direct_tickets` — a relay-less daemon's link carries
+  `TicketRelays::Disabled` and a default-mode client follows it and connects directly.
+- `relay_settings_come_from_config_toml` — parsing, validation and the `--no-relay`
+  precedence.
+
+`cargo test -p proto --test golden ticket_extras` freezes the extension bytes and checks old
+parsers still read extended tickets.
+
+## 4. Not done
+
+- The managed default (Iroh Services behind `relays.<domain>`) still uses n0's public relays
+- A daemon whose home relay changes while no client is connected relies on the app redialling
+- The app has no UI yet for its own "local only" switch or for importing a private CA (both
+  exist in client-core: `RelayMode::Disabled`, `ConnectOptions`); apple-ffi does not expose
+  `ConnectOptions` yet.
+- The Docker setup was written against the iroh-relay 1.3.0 config schema but not run on a
+  real VPS here.
