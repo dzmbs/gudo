@@ -239,12 +239,34 @@ impl Client {
         config: crate::ClientConfig,
         listener: Arc<dyn crate::ClientListener>,
     ) -> Result<Self, crate::ClientError> {
+        Self::join_on_with(
+            runtime,
+            invite,
+            config,
+            crate::ConnectOptions::default(),
+            listener,
+        )
+    }
+
+    /// Like [`join_on`](Self::join_on), with [`ConnectOptions`](crate::ConnectOptions)
+    /// (extra relay CAs).
+    ///
+    /// # Errors
+    ///
+    /// An unparsable invite or a bad key.
+    pub fn join_on_with(
+        runtime: &tokio::runtime::Handle,
+        invite: &str,
+        config: crate::ClientConfig,
+        options: crate::ConnectOptions,
+        listener: Arc<dyn crate::ClientListener>,
+    ) -> Result<Self, crate::ClientError> {
         let invite: Invite = invite.parse()?;
         Self::start(
             runtime,
             crate::Dial::Invite(invite),
             config,
-            crate::ConnectOptions::default(),
+            options,
             listener,
         )
     }

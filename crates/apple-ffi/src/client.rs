@@ -1,17 +1,20 @@
 //! The daemon client ([`DaemonClient`]) and the event interface shared with SSH panes.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use client_core::proto::{self, OptionId, PaneId, RequestId, SessionId};
+use tokio::sync::oneshot;
 
 use crate::bytes::Bytes;
-use crate::runtime;
 use crate::types::{
     AgentKind, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent, LayoutOp, Links,
     MouseEvent, OpOutcome, PaneMeta, PaneSize, RpcError, SearchPage, SearchQuery, SessionLayout,
     SessionSummary,
 };
+use crate::ws_types::{ForwardInfo, ForwardTarget, WorkspaceError};
+use crate::{on_runtime, runtime};
 
 /// Errors from [`DaemonClient`].
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -405,6 +408,53 @@ impl client_core::ClientListener for Forward {
     }
 }
 
+/// [`Forward`] for a [`DaemonClient`], which also watches the events its `async` helpers wait
+/// for: op results ([`DaemonClient::perform`]) and agent states
+/// ([`DaemonClient::launch_agent_pane`]). Every event still reaches Swift.
+pub(crate) struct Tap {
+    listener: Arc<dyn ClientEventListener>,
+    /// Op ids someone awaits. Locked around sending the op, so the answer cannot overtake
+    /// the registration.
+    pub(crate) ops: Mutex<HashMap<u64, oneshot::Sender<OpOutcome>>>,
+    /// The last agent status per pane (`None`: the pane runs no agent).
+    pub(crate) agents: Mutex<HashMap<u64, Option<proto::AgentStatus>>>,
+    /// Woken on every `PaneMeta`.
+    pub(crate) meta_changed: tokio::sync::Notify,
+}
+
+impl Tap {
+    fn new(listener: Arc<dyn ClientEventListener>) -> Arc<Self> {
+        Arc::new(Self {
+            listener,
+            ops: Mutex::new(HashMap::new()),
+            agents: Mutex::new(HashMap::new()),
+            meta_changed: tokio::sync::Notify::new(),
+        })
+    }
+}
+
+impl client_core::ClientListener for Tap {
+    fn on_event(&self, event: client_core::ClientEvent) {
+        match &event {
+            client_core::ClientEvent::OpResult { op_id, outcome } => {
+                if let Some(tx) = lock(&self.ops).remove(op_id) {
+                    let _ = tx.send(outcome.clone().into());
+                }
+            }
+            client_core::ClientEvent::PaneMeta { meta } => {
+                lock(&self.agents).insert(meta.pane_id.0, meta.agent.clone());
+                self.meta_changed.notify_waiters();
+            }
+            _ => {}
+        }
+        self.listener.on_event(event.into());
+    }
+}
+
+pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Counters, for diagnostics and tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct ClientStats {
@@ -423,8 +473,85 @@ pub struct ClientStats {
 /// queued for the network task, and answers arrive as [`ClientEvent`]s.
 #[derive(uniffi::Object)]
 pub struct DaemonClient {
-    inner: client_core::Client,
+    pub(crate) inner: Arc<client_core::Client>,
+    pub(crate) tap: Arc<Tap>,
 }
+
+/// Connection settings beyond [`ClientConfig`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+pub struct ConnectOptions {
+    /// Extra CA certificates (DER) to trust for the daemon's self-hosted relays (a private
+    /// CA; docs/RELAYS.md). The usual web roots stay trusted. Which relays to use comes from
+    /// the ticket (`PairTicketInfo.relays`).
+    #[uniffi(default = [])]
+    pub relay_ca_der: Vec<Bytes>,
+}
+
+impl From<ConnectOptions> for client_core::ConnectOptions {
+    fn from(o: ConnectOptions) -> Self {
+        Self {
+            relay_ca_der: o.relay_ca_der.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ClientConfig> for client_core::ClientConfig {
+    fn from(config: ClientConfig) -> Self {
+        Self {
+            secret_key: config.secret_key.into(),
+            relay: match config.relay {
+                RelayMode::Default => client_core::RelayMode::Default,
+                RelayMode::Disabled => client_core::RelayMode::Disabled,
+            },
+            mirror_vt: config.mirror_vt,
+        }
+    }
+}
+
+impl DaemonClient {
+    fn wrap(
+        listener: Arc<dyn ClientEventListener>,
+        start: impl FnOnce(Arc<Tap>) -> Result<client_core::Client, client_core::ClientError>,
+    ) -> Result<Arc<Self>, ClientError> {
+        let tap = Tap::new(listener);
+        let inner = start(Arc::clone(&tap))?;
+        Ok(Arc::new(Self {
+            inner: Arc::new(inner),
+            tap,
+        }))
+    }
+
+    /// The core client, to move into a task on the runtime.
+    pub(crate) fn core(&self) -> Arc<client_core::Client> {
+        Arc::clone(&self.inner)
+    }
+
+    /// Sends `op` and waits (on the runtime) for its [`ClientEvent::OpResult`].
+    pub(crate) async fn await_op(&self, op: proto::LayoutOp) -> Result<OpOutcome, WorkspaceError> {
+        let (tx, rx) = oneshot::channel();
+        let op_id = {
+            // Registered before the op leaves, so the answer cannot overtake it.
+            let mut ops = lock(&self.tap.ops);
+            let op_id = self.inner.op(op);
+            ops.insert(op_id, tx);
+            op_id
+        };
+        let tap = Arc::clone(&self.tap);
+        on_runtime(async move {
+            match tokio::time::timeout(OP_TIMEOUT, rx).await {
+                Ok(Ok(outcome)) => Ok(outcome),
+                _ => {
+                    lock(&tap.ops).remove(&op_id);
+                    Err(WorkspaceError::Disconnected)
+                }
+            }
+        })
+        .await
+    }
+}
+
+/// How long [`DaemonClient::perform`] waits for an op's answer.
+const OP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[uniffi::export]
 impl DaemonClient {
@@ -441,21 +568,69 @@ impl DaemonClient {
         config: ClientConfig,
         listener: Arc<dyn ClientEventListener>,
     ) -> Result<Arc<Self>, ClientError> {
-        let config = client_core::ClientConfig {
-            secret_key: config.secret_key.into(),
-            relay: match config.relay {
-                RelayMode::Default => client_core::RelayMode::Default,
-                RelayMode::Disabled => client_core::RelayMode::Disabled,
-            },
-            mirror_vt: config.mirror_vt,
-        };
-        let inner = client_core::Client::connect_on(
-            runtime().handle(),
-            &ticket,
-            config,
-            Arc::new(Forward(listener)),
-        )?;
-        Ok(Arc::new(Self { inner }))
+        Self::connect_with(ticket, config, ConnectOptions::default(), listener)
+    }
+
+    /// [`connect`](Self::connect) with [`ConnectOptions`] (a private relay CA).
+    ///
+    /// # Errors
+    ///
+    /// As [`connect`](Self::connect).
+    #[uniffi::constructor]
+    pub fn connect_with(
+        ticket: String,
+        config: ClientConfig,
+        options: ConnectOptions,
+        listener: Arc<dyn ClientEventListener>,
+    ) -> Result<Arc<Self>, ClientError> {
+        Self::wrap(listener, |tap| {
+            client_core::Client::connect_on_with(
+                runtime().handle(),
+                &ticket,
+                config.into(),
+                options.into(),
+                tap,
+            )
+        })
+    }
+
+    /// Joins the daemon named by an invite (`unnamed://join/…`, from a link or QR code) as a
+    /// guest under the invite's grant; otherwise like [`connect`](Self::connect). Who this
+    /// connection is arrives as `MultiplayerEvent.joined`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Ticket`] for an unparsable invite, [`ClientError::Key`] for a bad key.
+    #[uniffi::constructor]
+    pub fn join(
+        invite: String,
+        config: ClientConfig,
+        listener: Arc<dyn ClientEventListener>,
+    ) -> Result<Arc<Self>, ClientError> {
+        Self::join_with(invite, config, ConnectOptions::default(), listener)
+    }
+
+    /// [`join`](Self::join) with [`ConnectOptions`].
+    ///
+    /// # Errors
+    ///
+    /// As [`join`](Self::join).
+    #[uniffi::constructor]
+    pub fn join_with(
+        invite: String,
+        config: ClientConfig,
+        options: ConnectOptions,
+        listener: Arc<dyn ClientEventListener>,
+    ) -> Result<Arc<Self>, ClientError> {
+        Self::wrap(listener, |tap| {
+            client_core::Client::join_on_with(
+                runtime().handle(),
+                &invite,
+                config.into(),
+                options.into(),
+                tap,
+            )
+        })
     }
 
     /// Attaches to a session (`nil`: the most recent, created if none). Kept across
@@ -611,6 +786,48 @@ impl DaemonClient {
         Ok(self.inner.forward_port(local_port, remote_port)?)
     }
 
+    /// Listens on `127.0.0.1:local_port` here (`0` picks a port) and tunnels every accepted
+    /// connection, each on its own stream, to `target` on the daemon's host (a TCP port or a
+    /// Unix socket). Returns the bound port. Survives reconnects; stop it with
+    /// [`stop_forward`](Self::stop_forward).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Io`] if the port cannot be bound.
+    pub fn forward(&self, local_port: u16, target: ForwardTarget) -> Result<u16, ClientError> {
+        Ok(self.inner.forward(local_port, target.into())?)
+    }
+
+    /// Stops the forward on `local_port` (open connections run until they close). Returns
+    /// whether there was one.
+    pub fn stop_forward(&self, local_port: u16) -> bool {
+        self.inner.stop_forward(local_port)
+    }
+
+    /// The running forwards (from [`forward`](Self::forward)), by local port.
+    pub fn forwards(&self) -> Vec<ForwardInfo> {
+        let mut all: Vec<_> = self
+            .inner
+            .forwards()
+            .into_iter()
+            .map(|(local_port, target)| ForwardInfo {
+                local_port,
+                target: target.into(),
+            })
+            .collect();
+        all.sort_by_key(|f| f.local_port);
+        all
+    }
+
+    /// Sends a layout operation and waits for its outcome (the [`ClientEvent::OpResult`]
+    /// still reaches the listener).
+    ///
+    /// # Errors
+    ///
+    /// [`WorkspaceError::Disconnected`] if no answer came within a minute.
+    pub async fn perform(&self, op: LayoutOp) -> Result<OpOutcome, WorkspaceError> {
+        self.await_op(op.into()).await
+    }
     /// Counters.
     pub fn stats(&self) -> ClientStats {
         let s = self.inner.stats();

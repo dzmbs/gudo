@@ -91,7 +91,9 @@ final class LocalDaemon {
     let stateDir: URL
     let process = Process()
 
-    init() throws {
+    /// `config` is written as the daemon's `config.toml` first; `{state}` in it is replaced by
+    /// the state directory's path (e.g. `[files] allow = ["{state}"]`).
+    init(config: String? = nil) throws {
         let env = ProcessInfo.processInfo.environment
         binary = env["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
             ?? repoRoot.appending(path: "target/debug/unnamed-hostd")
@@ -100,7 +102,12 @@ final class LocalDaemon {
         }
         stateDir = FileManager.default.temporaryDirectory
             .appending(path: "un-swift-\(UUID().uuidString)")
+            .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        if let config {
+            try config.replacingOccurrences(of: "{state}", with: stateDir.path)
+                .write(to: stateDir.appending(path: "config.toml"), atomically: true, encoding: .utf8)
+        }
         process.executableURL = binary
         process.arguments = [
             "--state-dir", stateDir.path, "run",

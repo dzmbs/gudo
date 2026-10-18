@@ -111,7 +111,7 @@ parsers still read extended tickets.
 - The managed default (Iroh Services behind `relays.<domain>`) still uses n0's public relays
 - A daemon whose home relay changes while no client is connected relies on the app redialling
 - The app has no UI yet for its own "local only" switch or for importing a private CA (both
-  exist in client-core: `RelayMode::Disabled`, `ConnectOptions`); apple-ffi does not expose
-  `ConnectOptions` yet.
+  exist in client-core and apple-ffi: `RelayMode.disabled`, `ConnectOptions(relayCaDer:)` with
+  `DaemonClient.connectWith`, and `inspectPairTicket(…).relays` shows the ticket's choice).
 - The Docker setup was written against the iroh-relay 1.3.0 config schema but not run on a
   real VPS here.
