@@ -1,0 +1,607 @@
+//! The connection supervisor: dial, handshake, replay wanted state, pump streams, redial.
+
+use std::net::TcpListener as StdTcpListener;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use iroh::endpoint::{Connection, ReadExactError, RecvStream, SendStream, presets};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
+use proto::{
+    Caps, ClientCtl, ClientInput, ForwardReply, Hello, Input, InputPayload, InputSeq, LinkClass,
+    PaneId, PaneOutput, ResumePoint, Seq, ServerCtl, SignedGrant, StreamHeader,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::{Notify, mpsc};
+use tokio::task::JoinSet;
+
+use crate::mirror::{Applied, Mirror};
+use crate::{ClientEvent, Inner, Outgoing, RelayMode, device_id, lock};
+
+const MAX_BACKOFF: Duration = Duration::from_secs(5);
+const ACK_INTERVAL: Duration = Duration::from_millis(5);
+
+#[derive(Debug, thiserror::Error)]
+enum ConnError {
+    #[error("{0}")]
+    Net(String),
+    #[error("refused: {0:?}")]
+    Refused(proto::RefuseReason),
+}
+
+fn net(e: impl std::fmt::Display) -> ConnError {
+    ConnError::Net(e.to_string())
+}
+
+async fn send<T: Serialize>(stream: &mut SendStream, msg: &T) -> Result<(), ConnError> {
+    let buf = proto::frame::to_vec(msg).map_err(net)?;
+    stream.write_all(&buf).await.map_err(net)
+}
+
+async fn recv<T: DeserializeOwned>(stream: &mut RecvStream) -> Result<Option<T>, ConnError> {
+    let mut prefix = [0; proto::frame::LEN_PREFIX];
+    match stream.read_exact(&mut prefix).await {
+        Ok(()) => {}
+        Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
+        Err(e) => return Err(net(e)),
+    }
+    let len = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).map_err(net)?;
+    let mut body = vec![0; len];
+    stream.read_exact(&mut body).await.map_err(net)?;
+    proto::frame::decode_body(&body).map(Some).map_err(net)
+}
+
+async fn bind(inner: &Inner) -> Result<Endpoint, ConnError> {
+    let key: [u8; 32] = inner.config.secret_key.as_slice().try_into().map_err(net)?;
+    let builder = match inner.config.relay {
+        RelayMode::Default => Endpoint::builder(presets::N0),
+        RelayMode::Disabled => Endpoint::builder(presets::Minimal),
+    };
+    builder
+        .secret_key(iroh::SecretKey::from_bytes(&key))
+        .bind()
+        .await
+        .map_err(net)
+}
+
+fn daemon_addr(inner: &Inner) -> Result<EndpointAddr, ConnError> {
+    let ticket = &inner.ticket;
+    let id = EndpointId::from_bytes(&ticket.daemon_id.0).map_err(net)?;
+    let mut addr = EndpointAddr::new(id);
+    for a in &ticket.addrs {
+        addr = addr.with_ip_addr(*a);
+    }
+    if inner.config.relay == RelayMode::Default
+        && let Some(url) = ticket
+            .relay_url
+            .as_deref()
+            .and_then(|u| RelayUrl::from_str(u).ok())
+    {
+        addr = addr.with_relay_url(url);
+    }
+    Ok(addr)
+}
+
+/// Keeps a connection up for the client's lifetime.
+pub(crate) async fn supervise(inner: Arc<Inner>) {
+    let endpoint = loop {
+        match bind(&inner).await {
+            Ok(ep) => break ep,
+            Err(e) => {
+                inner.emit(ClientEvent::Disconnected {
+                    reason: format!("binding endpoint: {e}"),
+                });
+                tokio::time::sleep(MAX_BACKOFF).await;
+            }
+        }
+    };
+    *lock(&inner.endpoint) = Some(endpoint.clone());
+    let mut backoff = Duration::from_millis(100);
+    loop {
+        if *lock(&inner.paused) {
+            inner.reconnect.notified().await;
+            continue;
+        }
+        match connect_once(&inner, &endpoint).await {
+            Ok(conn) => {
+                backoff = Duration::from_millis(100);
+                let reason = run(&inner, conn).await;
+                *lock(&inner.connection) = None;
+                inner.emit(ClientEvent::Disconnected { reason });
+                if *lock(&inner.paused) {
+                    continue;
+                }
+                // A dropped connection is retried at once; backoff only applies to failures.
+                continue;
+            }
+            Err(ConnError::Refused(reason)) => {
+                inner.emit(ClientEvent::Refused {
+                    reason: format!("{reason:?}"),
+                });
+                inner.reconnect.notified().await;
+                continue;
+            }
+            Err(e) => {
+                inner.emit(ClientEvent::Disconnected {
+                    reason: e.to_string(),
+                });
+            }
+        }
+        // Wait out the backoff, or less if asked to reconnect now.
+        let _ = tokio::time::timeout(backoff, inner.reconnect.notified()).await;
+        backoff = (backoff * 2).min(MAX_BACKOFF);
+    }
+}
+
+struct Live {
+    conn: Connection,
+    ctl_tx: SendStream,
+    ctl_rx: RecvStream,
+    epoch: u64,
+}
+
+async fn connect_once(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError> {
+    let addr = daemon_addr(inner)?;
+    // Try as a paired device first; fall back to the ticket's one-time secret.
+    let paired = *lock(&inner.paired);
+    let grants: &[u16] = if paired {
+        &[SignedGrant::DEVICE]
+    } else {
+        &[SignedGrant::DEVICE, SignedGrant::PAIRING]
+    };
+    let mut last = ConnError::Net("no grant tried".into());
+    for &v in grants {
+        let conn = endpoint
+            .connect(addr.clone(), proto::ALPN)
+            .await
+            .map_err(net)?;
+        match handshake(inner, conn, v).await {
+            Ok(live) => {
+                *lock(&inner.paired) = true;
+                return Ok(live);
+            }
+            Err(ConnError::Refused(proto::RefuseReason::InvalidGrant)) => {
+                last = ConnError::Refused(proto::RefuseReason::InvalidGrant);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live, ConnError> {
+    let (mut ctl_tx, mut ctl_rx) = conn.open_bi().await.map_err(net)?;
+    let _ = ctl_tx.set_priority(100);
+    let token = if v == SignedGrant::PAIRING {
+        inner.ticket.secret.0.to_vec()
+    } else {
+        Vec::new()
+    };
+    let resume = resume_points(inner);
+    let hello = Hello {
+        device_id: device_id(&inner.config),
+        principal_id: inner.ticket.principal,
+        grant: SignedGrant {
+            v,
+            grant_id: proto::GrantId([0; 16]),
+            token,
+        },
+        snapshot_format: u32::from(ghostty_vt::snapshot_format()),
+        resume,
+        caps: Caps::ECHO_PREDICTION,
+        link: LinkClass::Normal,
+        resume_token: lock(&inner.resume_token).clone(),
+    };
+    send(&mut ctl_tx, &ClientCtl::Hello(hello)).await?;
+    match recv::<ServerCtl>(&mut ctl_rx).await? {
+        Some(ServerCtl::Welcome(welcome)) => {
+            *lock(&inner.resume_token) = Some(welcome.resume_token);
+            Ok(Live {
+                conn,
+                ctl_tx,
+                ctl_rx,
+                epoch: welcome.session_epoch.0,
+            })
+        }
+        Some(ServerCtl::Refused { reason }) => Err(ConnError::Refused(reason)),
+        other => Err(ConnError::Net(format!("expected Welcome, got {other:?}"))),
+    }
+}
+
+/// Resume points for followed panes, focused first.
+fn resume_points(inner: &Inner) -> Vec<ResumePoint> {
+    let wanted = lock(&inner.wanted);
+    let mirrors = lock(&inner.mirrors);
+    let mut panes = wanted.subscribed.clone();
+    panes.sort_by_key(|&p| Some(p) != wanted.focus);
+    panes
+        .into_iter()
+        .filter_map(|p| {
+            mirrors.get(&p).map(|m| ResumePoint {
+                pane_id: p,
+                last_seq: Seq(m.seq()),
+                snap_gen: m.snap_gen,
+            })
+        })
+        .collect()
+}
+
+/// Runs one live connection; returns why it ended.
+async fn run(inner: &Arc<Inner>, live: Live) -> String {
+    let Live {
+        conn,
+        mut ctl_tx,
+        ctl_rx,
+        epoch,
+    } = live;
+    let resumed = {
+        let mut e = lock(&inner.epoch);
+        let resumed = e.is_some();
+        *e = Some(epoch);
+        resumed
+    };
+    lock(&inner.stats).connections += 1;
+    *lock(&inner.connection) = Some(conn.clone());
+    inner.emit(ClientEvent::Connected { epoch, resumed });
+
+    let mut input = match conn.open_uni().await {
+        Ok(s) => s,
+        Err(e) => return e.to_string(),
+    };
+    let _ = input.set_priority(90);
+    if let Err(e) = send(&mut input, &StreamHeader::Input).await {
+        return e.to_string();
+    }
+
+    // Replay what the client wants. Panes in the Hello's resume list are already streaming.
+    let replay: Vec<ClientCtl> = {
+        let wanted = lock(&inner.wanted);
+        let mut msgs = Vec::new();
+        if wanted.attach_requested {
+            msgs.push(ClientCtl::Attach {
+                session_id: wanted.session,
+            });
+        }
+        msgs.push(ClientCtl::Visible {
+            pane_ids: wanted.visible.clone(),
+        });
+        msgs.push(ClientCtl::Focus {
+            pane_id: wanted.focus,
+        });
+        for (&pane_id, &size) in &wanted.sizes {
+            msgs.push(ClientCtl::Resize { pane_id, size });
+        }
+        for &pane_id in &wanted.subscribed {
+            msgs.push(ClientCtl::Subscribe {
+                pane_id,
+                mode: proto::SubscribeMode::Live,
+                rows_hint: 0,
+            });
+        }
+        msgs
+    };
+    for msg in &replay {
+        if let Err(e) = send(&mut ctl_tx, msg).await {
+            return e.to_string();
+        }
+    }
+
+    let (ctl_out, ctl_out_rx) = mpsc::unbounded_channel();
+    let ack_notify = Arc::new(Notify::new());
+    let mut tasks = JoinSet::new();
+    tasks.spawn(write_ctl(ctl_tx, ctl_out_rx));
+    tasks.spawn(read_ctl(Arc::clone(inner), ctl_rx));
+    tasks.spawn(accept_panes(
+        Arc::clone(inner),
+        conn.clone(),
+        Arc::clone(&ack_notify),
+        ctl_out.clone(),
+    ));
+    tasks.spawn(send_acks(Arc::clone(inner), ack_notify, ctl_out.clone()));
+
+    let mut outgoing = inner.outgoing_rx.lock().await;
+    let mut input_seq: u64 = 0;
+    let principal = inner.ticket.principal;
+    let reason = loop {
+        tokio::select! {
+            msg = outgoing.recv() => {
+                let Some(msg) = msg else { break "client dropped".to_owned() };
+                match msg {
+                    Outgoing::Ctl(ctl) => {
+                        let _ = ctl_out.send(ctl);
+                    }
+                    Outgoing::Input { pane_id, data } => {
+                        input_seq += 1;
+                        let frame = ClientInput::Input(Input {
+                            pane_id,
+                            input_seq: InputSeq(input_seq),
+                            principal,
+                            payload: InputPayload::Bytes(data),
+                        });
+                        if let Err(e) = send(&mut input, &frame).await {
+                            break e.to_string();
+                        }
+                    }
+                }
+            }
+            done = tasks.join_next() => {
+                break match done {
+                    Some(Ok(reason)) => reason,
+                    Some(Err(e)) => e.to_string(),
+                    None => "connection tasks ended".to_owned(),
+                };
+            }
+            closed = conn.closed() => break closed.to_string(),
+        }
+    };
+    tasks.abort_all();
+    conn.close(0u32.into(), b"");
+    reason
+}
+
+async fn write_ctl(
+    mut send_stream: SendStream,
+    mut rx: mpsc::UnboundedReceiver<ClientCtl>,
+) -> String {
+    let mut buf = Vec::new();
+    while let Some(msg) = rx.recv().await {
+        buf.clear();
+        let mut next = Some(msg);
+        while let Some(msg) = next {
+            if let Err(e) = proto::frame::encode(&msg, &mut buf) {
+                tracing::warn!("encoding ctl: {e}");
+            }
+            next = rx.try_recv().ok();
+        }
+        if let Err(e) = send_stream.write_all(&buf).await {
+            return e.to_string();
+        }
+    }
+    "ctl writer closed".into()
+}
+
+async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
+    loop {
+        let msg = match recv::<ServerCtl>(&mut rx).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => return "daemon closed ctl".into(),
+            Err(e) => return e.to_string(),
+        };
+        let event = match msg {
+            ServerCtl::Sessions { sessions } => ClientEvent::Sessions { sessions },
+            ServerCtl::Attached { session_id } => {
+                lock(&inner.wanted).session = Some(session_id);
+                ClientEvent::Attached { session_id }
+            }
+            ServerCtl::LayoutChanged(layout) => ClientEvent::Layout { layout },
+            ServerCtl::PaneMeta(meta) => ClientEvent::PaneMeta { meta },
+            ServerCtl::PaneClosed { pane_id } => {
+                lock(&inner.mirrors).remove(&pane_id);
+                lock(&inner.wanted).subscribed.retain(|&p| p != pane_id);
+                ClientEvent::PaneClosed { pane_id }
+            }
+            ServerCtl::EchoHintAt(hint) => ClientEvent::EchoHint { hint },
+            ServerCtl::AgentEvent { pane_id, json } => ClientEvent::AgentEvent { pane_id, json },
+            ServerCtl::OpResult { op_id, outcome } => ClientEvent::OpResult { op_id, outcome },
+            ServerCtl::Refused { reason } => {
+                return format!("refused: {reason:?}");
+            }
+            ServerCtl::Revoked { .. } => return "grant revoked".into(),
+            other => {
+                tracing::trace!("ctl message not surfaced: {other:?}");
+                continue;
+            }
+        };
+        inner.emit(event);
+    }
+}
+
+async fn accept_panes(
+    inner: Arc<Inner>,
+    conn: Connection,
+    acks: Arc<Notify>,
+    ctl: mpsc::UnboundedSender<ClientCtl>,
+) -> String {
+    loop {
+        let mut stream = match conn.accept_uni().await {
+            Ok(s) => s,
+            Err(e) => return e.to_string(),
+        };
+        let inner = Arc::clone(&inner);
+        let acks = Arc::clone(&acks);
+        let ctl = ctl.clone();
+        tokio::spawn(async move {
+            let Ok(Some(StreamHeader::Pane { pane_id })) = recv(&mut stream).await else {
+                return;
+            };
+            while let Ok(Some(out)) = recv::<PaneOutput>(&mut stream).await {
+                apply_output(&inner, pane_id, out, &ctl);
+                acks.notify_one();
+            }
+        });
+    }
+}
+
+fn apply_output(
+    inner: &Inner,
+    pane_id: PaneId,
+    out: PaneOutput,
+    ctl: &mpsc::UnboundedSender<ClientCtl>,
+) {
+    let keep_vt = inner.config.mirror_vt;
+    let event = match out {
+        PaneOutput::Bytes { seq, data } => {
+            lock(&inner.stats).byte_frames += 1;
+            let applied = lock(&inner.mirrors)
+                .get_mut(&pane_id)
+                .map_or(Applied::Gap, |m| m.apply(seq.0, &data));
+            match applied {
+                Applied::New { seq, start } => ClientEvent::PaneBytes {
+                    pane_id,
+                    seq,
+                    data: if start == 0 {
+                        data
+                    } else {
+                        data[start..].to_vec()
+                    },
+                },
+                Applied::Duplicate => return,
+                Applied::Gap => {
+                    // Lost continuity (should not happen on one stream): start over.
+                    tracing::warn!(%pane_id, "output gap; resubscribing");
+                    let _ = ctl.send(ClientCtl::Unsubscribe { pane_id });
+                    let _ = ctl.send(ClientCtl::Subscribe {
+                        pane_id,
+                        mode: proto::SubscribeMode::Live,
+                        rows_hint: 0,
+                    });
+                    return;
+                }
+            }
+        }
+        PaneOutput::SnapshotZstd {
+            seq,
+            snap_gen,
+            raw_len,
+            data,
+        } => match zstd::bulk::decompress(&data, raw_len as usize) {
+            Ok(raw) => snapshot_event(inner, pane_id, seq, snap_gen, raw, keep_vt),
+            Err(e) => {
+                tracing::warn!(%pane_id, "bad snapshot: {e}");
+                return;
+            }
+        },
+        PaneOutput::Snapshot {
+            seq,
+            snap_gen,
+            data,
+        } => snapshot_event(inner, pane_id, seq, snap_gen, data, keep_vt),
+        PaneOutput::Resized { seq, size } => {
+            if let Some(m) = lock(&inner.mirrors).get_mut(&pane_id) {
+                m.resize(size);
+            }
+            ClientEvent::PaneResized {
+                pane_id,
+                seq: seq.0,
+                size,
+            }
+        }
+        PaneOutput::InputAck { input_seq, at_seq } => ClientEvent::InputAck {
+            pane_id,
+            input_seq: input_seq.0,
+            at_seq: at_seq.0,
+        },
+    };
+    inner.emit(event);
+}
+
+fn snapshot_event(
+    inner: &Inner,
+    pane_id: PaneId,
+    seq: Seq,
+    snap_gen: proto::SnapGen,
+    raw: Vec<u8>,
+    keep_vt: bool,
+) -> ClientEvent {
+    lock(&inner.stats).snapshots += 1;
+    let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt);
+    lock(&inner.mirrors).insert(pane_id, mirror);
+    ClientEvent::PaneSnapshot {
+        pane_id,
+        seq: seq.0,
+        data: raw,
+    }
+}
+
+async fn send_acks(
+    inner: Arc<Inner>,
+    notify: Arc<Notify>,
+    ctl: mpsc::UnboundedSender<ClientCtl>,
+) -> String {
+    loop {
+        notify.notified().await;
+        let acks: Vec<(PaneId, u64)> = lock(&inner.mirrors)
+            .iter_mut()
+            .filter(|(_, m)| m.seq() > m.acked)
+            .map(|(&p, m)| {
+                m.acked = m.seq();
+                (p, m.seq())
+            })
+            .collect();
+        for (pane_id, seq) in acks {
+            if ctl
+                .send(ClientCtl::Ack {
+                    pane_id,
+                    seq: Seq(seq),
+                })
+                .is_err()
+            {
+                return "ctl closed".into();
+            }
+        }
+        tokio::time::sleep(ACK_INTERVAL).await;
+    }
+}
+
+/// Accepts local TCP connections and splices each onto a port-forward stream.
+pub(crate) async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, remote_port: u16) {
+    let listener = match tokio::net::TcpListener::from_std(listener) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("port forward listener: {e}");
+            return;
+        }
+    };
+    loop {
+        let Ok((tcp, _)) = listener.accept().await else {
+            continue;
+        };
+        let inner = Arc::clone(&inner);
+        tokio::spawn(async move {
+            if let Err(e) = forward_one(&inner, tcp, remote_port).await {
+                tracing::debug!("port forward: {e}");
+            }
+        });
+    }
+}
+
+async fn forward_one(
+    inner: &Inner,
+    tcp: tokio::net::TcpStream,
+    remote_port: u16,
+) -> Result<(), ConnError> {
+    // Wait for a connection if the client is between reconnects.
+    let conn = loop {
+        if let Some(c) = lock(&inner.connection).clone() {
+            break c;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let (mut send_stream, mut recv_stream) = conn.open_bi().await.map_err(net)?;
+    send(
+        &mut send_stream,
+        &StreamHeader::PortForward { port: remote_port },
+    )
+    .await?;
+    match recv::<ForwardReply>(&mut recv_stream).await? {
+        Some(ForwardReply::Connected) => {}
+        Some(ForwardReply::Refused { reason }) => return Err(ConnError::Net(reason)),
+        None => return Err(ConnError::Net("forward stream closed".into())),
+    }
+    let _ = tcp.set_nodelay(true);
+    let (mut tcp_read, mut tcp_write) = tcp.into_split();
+    let up = async {
+        let r = tokio::io::copy(&mut tcp_read, &mut send_stream).await;
+        let _ = send_stream.finish();
+        r
+    };
+    let down = async {
+        let r = tokio::io::copy(&mut recv_stream, &mut tcp_write).await;
+        let _ = tcp_write.shutdown().await;
+        r
+    };
+    let _ = tokio::join!(up, down);
+    Ok(())
+}

@@ -378,11 +378,347 @@ fn every_message_matches_its_frozen_bytes() {
         "080000000100030203eeeeee",
     );
 
+    // Layout, sessions, port forwarding, compressed snapshots (appended variants).
+    c.check(
+        "StreamHeader::PortForward",
+        StreamHeader::PortForward { port: 8080 },
+        "040000000103903f",
+    );
+    c.check(
+        "ForwardReply::Connected",
+        ForwardReply::Connected,
+        "020000000100",
+    );
+    c.check(
+        "ForwardReply::Refused",
+        ForwardReply::Refused {
+            reason: "no".into(),
+        },
+        "050000000101026e6f",
+    );
+    c.check(
+        "ClientCtl::ListSessions",
+        ClientCtl::ListSessions,
+        "02000000010d",
+    );
+    c.check(
+        "ClientCtl::Attach",
+        ClientCtl::Attach {
+            session_id: Some(SESSION),
+        },
+        "04000000010e0101",
+    );
+    for (name, op, golden) in layout_ops() {
+        c.check(name, ClientCtl::Op { op_id: 77, op }, golden);
+    }
+    c.check(
+        "ServerCtl::Sessions",
+        ServerCtl::Sessions {
+            sessions: vec![SessionSummary {
+                session_id: SESSION,
+                name: "main".into(),
+                tabs: 2,
+                panes: 3,
+                clients: 1,
+            }],
+        },
+        "0c000000010c0101046d61696e020301",
+    );
+    c.check(
+        "ServerCtl::Attached",
+        ServerCtl::Attached {
+            session_id: SESSION,
+        },
+        "03000000010d01",
+    );
+    c.check(
+        "ServerCtl::LayoutChanged",
+        ServerCtl::LayoutChanged(session_layout()),
+        "1b000000010e01046d61696e0501020102017401000000003f000300040400",
+    );
+    let outcomes = [
+        (
+            "ServerCtl::OpResult/Done",
+            OpOutcome::Done,
+            "04000000010f4d00",
+        ),
+        (
+            "ServerCtl::OpResult/PaneCreated",
+            OpOutcome::PaneCreated { pane_id: PANE },
+            "05000000010f4d0103",
+        ),
+        (
+            "ServerCtl::OpResult/TabCreated",
+            OpOutcome::TabCreated {
+                tab_id: TAB,
+                pane_id: PANE,
+            },
+            "06000000010f4d020203",
+        ),
+        (
+            "ServerCtl::OpResult/SessionCreated",
+            OpOutcome::SessionCreated {
+                session_id: SESSION,
+                tab_id: TAB,
+                pane_id: PANE,
+            },
+            "07000000010f4d03010203",
+        ),
+        (
+            "ServerCtl::OpResult/Failed",
+            OpOutcome::Failed {
+                code: OpError::NameTaken,
+                message: "x".into(),
+            },
+            "07000000010f4d04010178",
+        ),
+    ];
+    for (name, outcome, golden) in outcomes {
+        c.check(name, ServerCtl::OpResult { op_id: 77, outcome }, golden);
+    }
+    c.check(
+        "ServerCtl::AgentEvent",
+        ServerCtl::AgentEvent {
+            pane_id: PANE,
+            json: "{}".into(),
+        },
+        "06000000011003027b7d",
+    );
+    c.check(
+        "ServerCtl::EchoHintAt",
+        ServerCtl::EchoHintAt(EchoHintAt {
+            hint: EchoHint {
+                pane_id: PANE,
+                echo: false,
+                icanon: false,
+                alt_screen: false,
+                at_prompt: true,
+            },
+            at_seq: Seq(300),
+            prediction: Prediction::Allow,
+        }),
+        "0a00000001110300000001ac0200",
+    );
+    c.check(
+        "PaneOutput::SnapshotZstd",
+        PaneOutput::SnapshotZstd {
+            seq: Seq(300),
+            snap_gen: SnapGen(2),
+            raw_len: 1000,
+            data: vec![0xee; 3],
+        },
+        "0b0000000103ac0202e80703eeeeee",
+    );
+    c.check(
+        "PaneOutput::Resized",
+        PaneOutput::Resized {
+            seq: Seq(300),
+            size: SIZE,
+        },
+        "0a0000000104ac027828a00bc007",
+    );
+
     assert!(
         c.failures.is_empty(),
         "wire format changed:\n{}",
         c.failures.join("\n")
     );
+}
+
+const SESSION: SessionId = SessionId(1);
+const TAB: TabId = TabId(2);
+
+fn session_layout() -> SessionLayout {
+    SessionLayout {
+        session_id: SESSION,
+        name: "main".into(),
+        revision: 5,
+        active_tab: Some(TAB),
+        tabs: vec![TabLayout {
+            tab_id: TAB,
+            name: "t".into(),
+            root: LayoutNode::Split {
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(PANE)),
+                second: Box::new(LayoutNode::Leaf(PaneId(4))),
+            },
+            focused: PaneId(4),
+            zoomed: None,
+        }],
+    }
+}
+
+fn layout_ops() -> Vec<(&'static str, LayoutOp, &'static str)> {
+    let shell = PaneLaunch::Shell {
+        cwd: Some("/w".into()),
+    };
+    vec![
+        (
+            "LayoutOp::Split/Shell",
+            LayoutOp::Split {
+                pane_id: PANE,
+                axis: Axis::Vertical,
+                launch: shell.clone(),
+            },
+            "0b000000010f4d0003010001022f77",
+        ),
+        (
+            "LayoutOp::Split/Command",
+            LayoutOp::Split {
+                pane_id: PANE,
+                axis: Axis::Horizontal,
+                launch: PaneLaunch::Command {
+                    argv: vec!["top".into()],
+                    cwd: None,
+                },
+            },
+            "0d000000010f4d000300010103746f7000",
+        ),
+        (
+            "LayoutOp::Split/Agent",
+            LayoutOp::Split {
+                pane_id: PANE,
+                axis: Axis::Horizontal,
+                launch: PaneLaunch::Agent {
+                    agent: AgentKind::Codex,
+                    resume: Some("abc".into()),
+                    cwd: None,
+                },
+            },
+            "0e000000010f4d0003000201010361626300",
+        ),
+        (
+            "LayoutOp::ClosePane",
+            LayoutOp::ClosePane { pane_id: PANE },
+            "05000000010f4d0103",
+        ),
+        (
+            "LayoutOp::Focus",
+            LayoutOp::Focus { pane_id: PANE },
+            "05000000010f4d0203",
+        ),
+        (
+            "LayoutOp::FocusDirection",
+            LayoutOp::FocusDirection {
+                tab_id: TAB,
+                direction: Direction::Down,
+            },
+            "06000000010f4d030203",
+        ),
+        (
+            "LayoutOp::Resize",
+            LayoutOp::Resize {
+                pane_id: PANE,
+                axis: Axis::Horizontal,
+                delta: -0.25,
+            },
+            "0a000000010f4d040300000080be",
+        ),
+        (
+            "LayoutOp::ToggleZoom",
+            LayoutOp::ToggleZoom { pane_id: PANE },
+            "05000000010f4d0503",
+        ),
+        (
+            "LayoutOp::NewTab",
+            LayoutOp::NewTab {
+                session_id: SESSION,
+                name: "t".into(),
+                launch: shell.clone(),
+            },
+            "0c000000010f4d060101740001022f77",
+        ),
+        (
+            "LayoutOp::CloseTab",
+            LayoutOp::CloseTab { tab_id: TAB },
+            "05000000010f4d0702",
+        ),
+        (
+            "LayoutOp::MoveTab",
+            LayoutOp::MoveTab {
+                tab_id: TAB,
+                index: 0,
+            },
+            "06000000010f4d080200",
+        ),
+        (
+            "LayoutOp::SelectTab",
+            LayoutOp::SelectTab { tab_id: TAB },
+            "05000000010f4d0902",
+        ),
+        (
+            "LayoutOp::RenameTab",
+            LayoutOp::RenameTab {
+                tab_id: TAB,
+                name: "u".into(),
+            },
+            "07000000010f4d0a020175",
+        ),
+        (
+            "LayoutOp::RenameSession",
+            LayoutOp::RenameSession {
+                session_id: SESSION,
+                name: "w".into(),
+            },
+            "07000000010f4d0b010177",
+        ),
+        (
+            "LayoutOp::CreateSession",
+            LayoutOp::CreateSession {
+                name: "w".into(),
+                launch: shell,
+            },
+            "0b000000010f4d0c01770001022f77",
+        ),
+        (
+            "LayoutOp::CloseSession",
+            LayoutOp::CloseSession {
+                session_id: SESSION,
+            },
+            "05000000010f4d0d01",
+        ),
+    ]
+}
+
+#[test]
+fn ticket_round_trips_through_text() {
+    let ticket = Ticket {
+        v: Ticket::VERSION,
+        daemon_id: DaemonId([0x44; 32]),
+        addrs: vec![
+            "127.0.0.1:4433".parse().unwrap(),
+            "[::1]:9".parse().unwrap(),
+        ],
+        relay_url: Some("https://relay.example".into()),
+        principal: PRINCIPAL,
+        secret: PairingSecret([0x55; 16]),
+        expires: UnixMillis(1_760_000_000_000),
+    };
+    let text = ticket.to_string();
+    assert_eq!(text.parse::<Ticket>().unwrap(), ticket);
+    // Case, whitespace and a missing scheme are tolerated.
+    let payload = text.rsplit('/').next().unwrap();
+    let mangled = format!("  {}\n{} ", payload[..10].to_lowercase(), &payload[10..]);
+    assert_eq!(mangled.parse::<Ticket>().unwrap(), ticket);
+    assert!("garbage!".parse::<Ticket>().is_err());
+}
+
+#[test]
+fn prediction_rule_matches_spike_s6() {
+    // (echo, icanon, alt, at_prompt) -> verdict
+    let cases = [
+        ((false, true, false, true), Prediction::HiddenInput),
+        ((false, true, true, false), Prediction::HiddenInput),
+        ((true, true, true, false), Prediction::AltScreen),
+        ((true, true, false, false), Prediction::Allow),
+        ((false, false, false, true), Prediction::Allow),
+        ((false, false, false, false), Prediction::RawOutsidePrompt),
+        ((true, false, false, false), Prediction::RawOutsidePrompt),
+    ];
+    for ((echo, icanon, alt, prompt), want) in cases {
+        assert_eq!(Prediction::decide(echo, icanon, alt, prompt), want);
+    }
 }
 
 #[test]

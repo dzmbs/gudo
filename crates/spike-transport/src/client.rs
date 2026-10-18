@@ -192,13 +192,14 @@ async fn read_pane(
         while let Some(msg) = decoder.decode::<PaneOutput>()? {
             match msg {
                 PaneOutput::Bytes { seq, data } => state.applied = Seq(seq.0 + data.len() as u64),
-                PaneOutput::Snapshot { seq, .. } => {
+                PaneOutput::Snapshot { seq, .. } | PaneOutput::SnapshotZstd { seq, .. } => {
                     state.applied = seq;
                     state.snapshots += 1;
                 }
                 PaneOutput::InputAck { input_seq, .. } => {
                     let _ = acks.send((input_seq, Instant::now()));
                 }
+                PaneOutput::Resized { .. } => {}
             }
         }
         progress.send_replace(state);
