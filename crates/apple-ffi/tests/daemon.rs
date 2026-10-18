@@ -81,6 +81,13 @@ fn connect_attach_split_echo() {
             height_px: 0,
         },
     );
+    // Subscribing starts with a snapshot; output after it streams as raw `PaneBytes`. Type
+    // only once the snapshot is in, or a fast echo can land inside the snapshot instead.
+    events.wait("snapshot", |all| {
+        all.iter()
+            .any(|e| matches!(e, ClientEvent::PaneSnapshot { .. }))
+            .then_some(())
+    });
     client.send_input(pane, b"echo ffi-$((6*7))\r");
     events.wait("echo", |_| {
         client
