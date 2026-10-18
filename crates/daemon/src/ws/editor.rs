@@ -65,8 +65,13 @@ pub(crate) struct Editors {
     install: tokio::sync::Mutex<()>,
 }
 
-/// Finds the VS Code CLI.
+/// The VS Code CLI: the user's own, else the one the daemon installed from Microsoft.
 fn find_code(cfg: &Config) -> Option<PathBuf> {
+    find_user_code(cfg).or_else(|| super::tunnel::managed_cli(cfg))
+}
+
+/// The user's own VS Code CLI (`editor.code`, `PATH`, the usual install locations).
+pub(crate) fn find_user_code(cfg: &Config) -> Option<PathBuf> {
     if let Some(code) = &cfg.code_cli {
         return code.is_file().then(|| code.clone());
     }
@@ -207,10 +212,18 @@ impl Editors {
             }
         }
         let code = find_code(cfg);
+        // openvscode-server is an explicit fallback only (12-vscode.md): Auto means Microsoft's
+        // VS Code, and says what is missing instead of silently switching editors.
         let kind = match req.choice {
             EditorChoice::Only(k) => k,
-            EditorChoice::Auto if code.is_some() && req.accept_vscode_license => EditorKind::VsCode,
-            EditorChoice::Auto => EditorKind::OpenVsCode,
+            EditorChoice::Auto if code.is_none() => {
+                return Err(WsError::Unavailable(
+                    "the VS Code `code` CLI is not installed: install it (VsCodeCliInstall) \
+                     and use the VS Code tunnel, or choose openvscode-server explicitly"
+                        .into(),
+                ));
+            }
+            EditorChoice::Auto => EditorKind::VsCode,
         };
         let port = free_port()?;
         let token = token();
@@ -418,7 +431,7 @@ fn json_escape(s: &str) -> String {
 
 /// Opens `goto` (`path[:line[:col]]`) in the server's open window through its remote CLI.
 /// Returns whether that worked.
-async fn open_via_cli(server_pid: u32, goto: &str) -> bool {
+pub(crate) async fn open_via_cli(server_pid: u32, goto: &str) -> bool {
     let found = tokio::task::spawn_blocking(move || {
         procinfo::process_tree(server_pid)
             .into_iter()

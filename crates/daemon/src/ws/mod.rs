@@ -10,9 +10,12 @@ mod git;
 mod paths;
 pub(crate) mod ports;
 mod review;
+pub(crate) mod tunnel;
 pub(crate) mod turns;
 mod watch;
 mod worktree;
+
+pub(crate) use tunnel::DEFAULT_UPDATE_URL as VSCODE_UPDATE_URL;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,12 +43,13 @@ pub(crate) struct Ws {
     pub attention: Attention,
     pub turns: turns::Turns,
     pub editors: editor::Editors,
+    pub tunnel: tunnel::Tunnel,
     pub worktrees: worktree::Worktrees,
     worktree_root: PathBuf,
 }
 
 impl Ws {
-    pub fn new(cfg: &Config) -> Self {
+    pub fn new(cfg: &Config, events: tokio::sync::broadcast::Sender<Event>) -> Self {
         let home = cfg.home();
         Self {
             policy: Policy::new(&home, &cfg.fs_allow),
@@ -53,6 +57,7 @@ impl Ws {
             attention: Attention::default(),
             turns: turns::Turns::new(),
             editors: editor::Editors::default(),
+            tunnel: tunnel::Tunnel::new(events),
             worktrees: worktree::Worktrees::load(&cfg.state_dir, cfg.worktree_port_base),
             worktree_root: cfg
                 .worktree_root
@@ -92,6 +97,15 @@ fn existing_dir(policy: &Policy, raw: &str) -> Result<PathBuf, WsError> {
     } else {
         Err(WsError::NotFound(path.display().to_string()))
     }
+}
+
+/// The folder to open a file in: the enclosing git work tree, else the file's directory.
+fn workspace_folder(file: &Path) -> PathBuf {
+    let dir = file.parent().unwrap_or(file);
+    dir.ancestors()
+        .find(|d| d.join(".git").exists())
+        .unwrap_or(dir)
+        .to_owned()
 }
 
 static NEXT_WATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -290,6 +304,48 @@ pub(crate) async fn handle(
             .remove(&watch_id)
             .map(|_| A::Done)
             .ok_or_else(|| WsError::NotFound(format!("watch {watch_id}"))),
+        R::VsCodeTunnelStatus => Ok(A::VsCodeTunnel(ws.tunnel.status(&core.cfg).await)),
+        R::VsCodeCliInstall(install) => {
+            if !install.accept_license {
+                return Err(WsError::Denied(format!(
+                    "installing the VS Code CLI needs Microsoft's licence accepted ({})",
+                    proto::VSCODE_LICENSE_URL
+                )));
+            }
+            ws.tunnel.install_cli(&core.cfg).await.map(A::VsCodeTunnel)
+        }
+        R::VsCodeTunnelStart(start) => {
+            if !start.accept_server_license {
+                return Err(WsError::Denied(format!(
+                    "the VS Code tunnel needs the VS Code Server licence accepted ({})",
+                    proto::VSCODE_SERVER_LICENSE_URL
+                )));
+            }
+            ws.tunnel
+                .start(&core.cfg, &start)
+                .await
+                .map(A::VsCodeTunnel)
+        }
+        R::VsCodeTunnelStop => ws.tunnel.stop(&core.cfg).await.map(A::VsCodeTunnel),
+        R::VsCodeTunnelOpen(open) => {
+            let path = policy.resolve_followed(&open.path)?;
+            let path = path.canonicalize().unwrap_or(path);
+            if !path.exists() {
+                return Err(WsError::NotFound(path.display().to_string()));
+            }
+            let folder = match &open.folder {
+                Some(f) => {
+                    let f = policy.resolve_followed(f)?;
+                    f.canonicalize().unwrap_or(f)
+                }
+                None if path.is_dir() => path.clone(),
+                None => workspace_folder(&path),
+            };
+            ws.tunnel
+                .open(&folder, &path, open.line, open.column)
+                .await
+                .map(A::VsCodeTunnelOpened)
+        }
         R::AttentionList => Ok(A::Attention(ws.attention.list())),
         R::AttentionSeen(seen) => {
             if let Some(update) = ws.attention.mark(&seen) {

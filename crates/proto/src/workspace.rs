@@ -199,6 +199,21 @@ pub enum WorkspaceRequest {
         #[serde(with = "crate::serde_bytes")]
         data: Vec<u8>,
     },
+    /// The VS Code tunnel and the `code` CLI → [`WorkspaceResponse::VsCodeTunnel`].
+    VsCodeTunnelStatus,
+    /// Downloads Microsoft's `code` CLI from Microsoft's update service onto the host →
+    /// [`WorkspaceResponse::VsCodeTunnel`].
+    VsCodeCliInstall(VsCodeCliInstall),
+    /// Starts (or reuses) the host's one VS Code tunnel → [`WorkspaceResponse::VsCodeTunnel`].
+    /// Sign-in and progress arrive as
+    /// [`ServerCtl::VsCodeTunnel`](crate::ServerCtl::VsCodeTunnel).
+    VsCodeTunnelStart(VsCodeTunnelStart),
+    /// Stops the tunnel the daemon runs (and its restart at daemon start) →
+    /// [`WorkspaceResponse::VsCodeTunnel`].
+    VsCodeTunnelStop,
+    /// A folder, or a file at a line, through the running tunnel →
+    /// [`WorkspaceResponse::VsCodeTunnelOpened`].
+    VsCodeTunnelOpen(VsCodeTunnelOpen),
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -247,6 +262,10 @@ pub enum WorkspaceResponse {
     },
     /// The attention feed.
     Attention(AttentionList),
+    /// The VS Code tunnel and CLI.
+    VsCodeTunnel(VsCodeTunnelStatus),
+    /// Where a folder or file opens through the tunnel.
+    VsCodeTunnelOpened(VsCodeTunnelOpened),
 }
 
 /// Why a workspace request failed.
@@ -898,4 +917,146 @@ pub enum AttentionUpdate {
         /// Unseen items now.
         unseen: u32,
     },
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+
+/// The Microsoft Software License Terms for Visual Studio Code, which cover the `code` CLI.
+/// The app shows them before [`WorkspaceRequest::VsCodeCliInstall`].
+pub const VSCODE_LICENSE_URL: &str = "https://code.visualstudio.com/license";
+/// The Visual Studio Code Server licence that `code tunnel` (and `code serve-web`) asks the
+/// user to accept. The app shows it before [`WorkspaceRequest::VsCodeTunnelStart`].
+pub const VSCODE_SERVER_LICENSE_URL: &str = "https://aka.ms/vscode-server-license";
+/// The Microsoft Privacy Statement, shown with the server licence (the CLI's own banner names
+/// both).
+pub const MICROSOFT_PRIVACY_URL: &str = "https://privacy.microsoft.com/en-US/privacystatement";
+
+/// Installs the `code` CLI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VsCodeCliInstall {
+    /// The user read and accepted [`VSCODE_LICENSE_URL`] in the app; refused otherwise.
+    pub accept_license: bool,
+}
+
+/// Which account the tunnel signs in with (always the user's own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TunnelProvider {
+    /// A GitHub account (device code at `github.com/login/device`).
+    GitHub,
+    /// A Microsoft account (device code at `login.microsoft.com/device`).
+    Microsoft,
+}
+
+/// Starts the tunnel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VsCodeTunnelStart {
+    /// The user read and accepted [`VSCODE_SERVER_LICENSE_URL`] and [`MICROSOFT_PRIVACY_URL`]
+    /// in the app; refused otherwise.
+    pub accept_server_license: bool,
+    /// Account to sign in with if the CLI is not signed in yet.
+    pub provider: TunnelProvider,
+    /// Machine name on vscode.dev (at most 20 letters, digits and `-`); when `None` the daemon
+    /// keeps the last one used, else derives one from the host name.
+    pub name: Option<String>,
+}
+
+/// Opens a folder or file through the tunnel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VsCodeTunnelOpen {
+    /// Workspace folder; for a file, `None` picks the enclosing git work tree, else the file's
+    /// directory.
+    pub folder: Option<String>,
+    /// A folder or a file.
+    pub path: String,
+    /// 1-based line.
+    pub line: Option<u32>,
+    /// 1-based column.
+    pub column: Option<u32>,
+}
+
+/// The `code` CLI the tunnel uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VsCodeCli {
+    /// The executable.
+    pub path: String,
+    /// Product version (`1.142.0`), if known.
+    pub version: Option<String>,
+    /// Build commit, if known.
+    pub commit: Option<String>,
+    /// SHA-256 of the archive it was unpacked from (daemon installs only).
+    pub sha256: Option<String>,
+    /// Installed by the daemon from Microsoft's update service, else the user's own.
+    pub managed: bool,
+}
+
+/// A device-code sign-in waiting for the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceLogin {
+    /// The account kind.
+    pub provider: TunnelProvider,
+    /// Where to enter the code (open it in a browser sheet).
+    pub verification_url: String,
+    /// The code to enter.
+    pub user_code: String,
+    /// When the CLI printed it.
+    pub at: UnixMillis,
+}
+
+/// What the tunnel is doing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TunnelState {
+    /// Not running.
+    Stopped,
+    /// Starting: signing in or connecting to the tunnel service.
+    Starting,
+    /// The user has to sign in: show the URL and the code.
+    NeedsLogin(DeviceLogin),
+    /// Connected to Microsoft's tunnel service.
+    Running {
+        /// The machine name.
+        name: String,
+        /// `https://vscode.dev/tunnel/<name>…` as the CLI printed it.
+        web_url: String,
+        /// A tunnel the daemon did not start (the user's own `code tunnel` or its service).
+        adopted: bool,
+    },
+    /// The tunnel failed.
+    Failed {
+        /// Why (the end of the CLI's output).
+        message: String,
+        /// The daemon restarts it after a back-off.
+        retrying: bool,
+    },
+}
+
+/// The VS Code tunnel on this host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VsCodeTunnelStatus {
+    /// The CLI, if one is installed.
+    pub cli: Option<VsCodeCli>,
+    /// Microsoft publishes a CLI build for this host, so
+    /// [`WorkspaceRequest::VsCodeCliInstall`] can fetch it.
+    pub cli_downloadable: bool,
+    /// The tunnel.
+    pub state: TunnelState,
+    /// The account kind last used.
+    pub provider: Option<TunnelProvider>,
+}
+
+/// Where a folder or file opens through the tunnel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VsCodeTunnelOpened {
+    /// The tunnel's machine name.
+    pub name: String,
+    /// The workspace folder.
+    pub folder: String,
+    /// `https://vscode.dev/tunnel/<name>/<folder>`, for the in-app web view.
+    pub web_url: String,
+    /// `vscode://vscode-remote/tunnel+<name>/<path>[:line[:col]]`, for desktop VS Code with
+    /// the Remote - Tunnels extension.
+    pub desktop_uri: String,
+    /// The file was opened at the line in a window already connected to the tunnel (through
+    /// the server's own CLI channel); otherwise load `web_url` and ask again once connected.
+    pub in_window: bool,
 }

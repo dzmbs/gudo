@@ -257,6 +257,9 @@ un forward 3000 | --unix ~/x.sock [--local N]
 un ports [--watch]                un inbox [--seen] [--watch]
 un editor status | launch [folder] [--kind vscode|openvscode] [--accept-license] | stop <folder>
           | open <path[:line[:col]]>
+un editor tunnel status | install --accept-license | start --accept-license [--microsoft]
+          [--name N] | stop | open <path[:line[:col]]>      # real VS Code via vscode.dev
+un ssh-proxy [--port 22]          # ProxyCommand for VS Code Remote-SSH over the daemon link
 un git status [path] | diff [--staged|--index|--rev R|--merge-base B] [--stat] [-U n] [files…]
 un turns [--diff N] [--stat]      un review --pane P --note 'path:L[-L]:text' [--submit]
 un worktree create [--repo R] [--branch B] [--base B] | list | remove <path> [--force]
@@ -388,11 +391,61 @@ replaces a LAN one). Scans run every 2 s while any client is connected, at once 
 prints a new URL or a command starts/ends, never with no client; the whole list is pushed when
 it changes. Gap: a URL that scrolls off within one tick is missed (the listener still is).
 
-### 5.3 Editor (`code serve-web` / openvscode-server)
+### 5.3 Editor (VS Code tunnel; `code serve-web`; openvscode-server as explicit fallback)
 
-- `EditorLaunch{folder, choice: Auto|Only(kind), accept_vscode_license}`. Auto picks
-  `code serve-web` only when the `code` CLI exists *and* the user accepted Microsoft's licence
-  in the app, else openvscode-server. One server per folder, reused; bound to `127.0.0.1` on a
+**Main path since 2026-10-18: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
+their own GitHub or Microsoft account by device code. The app opens
+`https://vscode.dev/tunnel/<name>/<folder>` top-level in a WKWebView (vscode.dev refuses framing), and
+on the Mac it opens `vscode://vscode-remote/tunnel+<name>/<path>:L:C`.
+
+- **`VsCodeCliInstall{accept_license}`.**
+  - Refused unless the user accepted <https://code.visualstudio.com/license> in the app.
+  - Downloads the CLI from Microsoft's update service: `/api/update/<cli-linux-x64|arm64|armhf,
+    cli-alpine-*, cli-darwin-*>/stable/latest` gives `url` and `sha256hash`. curl, else wget.
+  - Checks the SHA-256, unpacks, and checks that `code --version` runs.
+  - Installs to `<state>/vscode/cli/<version>-<commit>/code` and records `install.json` (version, commit,
+    sha256, url, platform).
+  - The user's own `code` (`editor.code`, `PATH`, the app bundle) is always preferred.
+  - `Config::vscode_update_url` points tests at a `file://` tree.
+- **`VsCodeTunnelStart{accept_server_license, provider, name}`.**
+  - Refused unless the user accepted <https://aka.ms/vscode-server-license> and the Microsoft Privacy
+    Statement in the app.
+  - The flow:
+    1. If `code tunnel status` shows a running tunnel, it is **adopted** (the user's own, or its service).
+    2. Else, if `code tunnel user show` fails, it runs `code tunnel user login --provider github|microsoft`.
+       The device-code line is pushed as `TunnelState::NeedsLogin{verification_url, user_code}`.
+    3. It runs `code tunnel --accept-server-license-terms --name <name>` in its own process group. The
+       `vscode.dev/tunnel/<name>` line gives `Running{name, web_url}`.
+  - One tunnel per host.
+  - On exit it reports `Failed{retrying: true}` and restarts with back-off from 1 s doubling to 60 s,
+    reset after 60 s up.
+  - `<state>/vscode/tunnel.json` keeps `enabled`, `name`, `provider` and the time the licence was
+    accepted.
+  - At daemon start it restarts, but never opens a sign-in unattended: if signed out, it reports
+    `Failed{retrying: false}`.
+  - Daemon shutdown kills it. `VsCodeTunnelStop` kills it and disables it.
+  - Every state change is pushed as `ServerCtl::VsCodeTunnel`.
+  - Logs: `<state>/editors/vscode-{tunnel,login}.log`.
+  - The name defaults to the host name: lowercase, `[a-z0-9-]`, at most 20 characters.
+- **`VsCodeTunnelOpen{folder?, path, line?, column?}`.**
+  - The folder defaults to the enclosing git work tree.
+  - It returns `web_url`, `desktop_uri`, and `in_window` (the file was opened at the line through the
+    server's remote CLI in a window already connected, the same mechanism as `EditorOpen` below).
+- **Tests.**
+  - `tests/it/vscode.rs` uses a fake `code`: device code, sign-in, running, crash restart, daemon-restart
+    autostart, stop, adopt, Microsoft code, CLI install with hash mismatch, and `forward_io`.
+  - Real host (Hetzner, 2026-10-18): the managed install from Microsoft took 0.57 s with the hash verified.
+- **Desktop Remote-SSH to iroh-only hosts.**
+  - `Client::forward(<stable port>, Tcp{22})` plus `client_core::vscode::remote_ssh_uri(
+    SshHost::local_forward(user, port), …)`. This uses Remote-SSH's hex-JSON authority.
+  - Or `un ssh-proxy` as `ProxyCommand` (`Client::forward_io`).
+
+The per-folder servers below remain. **`Auto` no longer falls back to openvscode-server**: it means
+`code serve-web` and fails with `Unavailable` (no CLI) or `Denied` (licence not accepted).
+openvscode-server must be asked for with `Only(OpenVsCode)`.
+
+- `EditorLaunch{folder, choice: Auto|Only(kind), accept_vscode_license}`. Auto runs
+  `code serve-web` (the user's CLI, else the managed one) only with the licence accepted. One server per folder, reused; bound to `127.0.0.1` on a
   free port with a random 128-bit `--connection-token`; own process group, killed on
   `EditorStop` and daemon shutdown; logs in `<state>/editors/`. Returns port, token and
   `url_path` (`/?tkn=…&folder=…`; the server answers with the token cookie and a redirect).
@@ -413,12 +466,19 @@ it changes. Gap: a URL that scrolls off within one tick is missed (the listener 
   (<https://code.visualstudio.com/license/server>, read 2026-10-18) allows use "with Microsoft
   Visual Studio Code" on the user's devices and internal network, and forbids hosting,
   sharing, publishing, redistributing, or "provide the software as a stand-alone offering or
-  combine it with any of your applications for others to use" (§5.4–5.5). So: we never ship or
-  download it (the user's `code` CLI does), never run it on our infrastructure, launch it only
-  after the user accepted that licence in the app, and only for that user's own use. Whether a
-  third-party app driving it counts as "combine it with your applications" needs a legal read
-  before launch; openvscode-server (MIT, Open VSX extensions only — the Microsoft Marketplace
-  terms forbid non-Microsoft products from using it) is the default that avoids the question.
+  combine it with any of your applications for others to use" (§5.4–5.5). So:
+  - We never ship, mirror or host it.
+  - The `code` CLI comes from Microsoft's update service only, on the user's request after the
+    VS Code licence is shown.
+  - We never run it on our infrastructure.
+  - We launch it only after the user accepted the Server licence in the app, and only for that
+    user's own use.
+  - The tunnel is the main path because Microsoft's own client (vscode.dev or desktop) is then
+    the client. serve-web through our forward makes our app the client, which is greyer; it
+    stays opt-in.
+  - The Remote FAQ's "cannot build a public or commercial service on top of … VS Code Server"
+  - openvscode-server (MIT, Open VSX extensions only; the Microsoft Marketplace terms forbid
+    non-Microsoft products from using it) is an explicit fallback only.
 
 ### 5.4 Git, diffs, agent turns, review notes
 

@@ -30,6 +30,7 @@
 mod conn;
 mod mirror;
 mod ssh_pane;
+pub mod vscode;
 mod workspace;
 
 use std::collections::HashMap;

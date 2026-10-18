@@ -642,6 +642,7 @@ dependencies = [
  "iroh",
  "proto",
  "serde",
+ "serde_json",
  "ssh",
  "tempfile",
  "thiserror 2.0.21",

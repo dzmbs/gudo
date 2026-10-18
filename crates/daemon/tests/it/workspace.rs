@@ -1063,7 +1063,8 @@ async fn editor_servers_launch_per_folder_and_open_files() {
     let status = c.client.editor_status().await.unwrap();
     assert!(status.available.iter().all(|a| a.installed), "{status:?}");
 
-    // serve-web needs the licence accepted; Auto then falls back to openvscode.
+    // serve-web needs the licence accepted; Auto never falls back to openvscode, which has
+    // to be chosen explicitly.
     let launch = |choice, accept| EditorLaunch {
         folder: s(&project),
         choice,
@@ -1075,9 +1076,16 @@ async fn editor_servers_launch_per_folder_and_open_files() {
             .await,
         Err(WsError::Denied(_))
     ));
+    assert!(matches!(
+        c.client
+            .editor_launch(launch(EditorChoice::Auto, false))
+            .await,
+        Err(WsError::Denied(_))
+    ));
+    let ovs_only = EditorChoice::Only(EditorKind::OpenVsCode);
     let e = c
         .client
-        .editor_launch(launch(EditorChoice::Auto, false))
+        .editor_launch(launch(ovs_only, false))
         .await
         .unwrap();
     assert_eq!(e.kind, EditorKind::OpenVsCode);
@@ -1090,7 +1098,7 @@ async fn editor_servers_launch_per_folder_and_open_files() {
     // Reused for the same folder.
     let again = c
         .client
-        .editor_launch(launch(EditorChoice::Auto, false))
+        .editor_launch(launch(ovs_only, false))
         .await
         .unwrap();
     assert_eq!(again.port, e.port);
