@@ -1,4 +1,5 @@
 #if os(macOS)
+import Darwin
 import Foundation
 import LocalPTY
 
@@ -37,6 +38,20 @@ nonisolated final class LocalPTYBackend: PaneBackend {
 
     func terminate() {
         pty.terminate()
+    }
+
+    /// The terminal's foreground process group leader and its cwd, straight from the kernel.
+    func foreground() -> PaneForeground? {
+        let group = tcgetpgrp(pty.fd)
+        let pid = group > 0 ? group : pty.pid
+        var name = [CChar](repeating: 0, count: Int(MAXCOMLEN) * 2 + 1)
+        guard proc_name(pid, &name, UInt32(name.count)) > 0 else { return nil }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        let directory: String? = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size
+            ? withUnsafeBytes(of: info.pvi_cdir.vip_path) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+            : nil
+        return PaneForeground(program: String(cString: name), directory: directory)
     }
 }
 #endif

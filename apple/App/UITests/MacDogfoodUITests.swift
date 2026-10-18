@@ -14,7 +14,7 @@ final class MacDogfoodUITests: XCTestCase {
 
     func testLocalTab() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         try checklist(app)
     }

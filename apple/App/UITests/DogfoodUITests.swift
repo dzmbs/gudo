@@ -24,7 +24,7 @@ final class DogfoodUITests: XCTestCase {
         let scenario = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
 
         let app = XCUIApplication()
-        app.launchArguments += scenario["iosLaunchArguments"] as? [String] ?? []
+        app.launchArguments += (scenario["iosLaunchArguments"] as? [String] ?? []) + ["-localEcho", "YES"]
         app.launch()
         let pane = app.descendants(matching: .any)["pane-1"].firstMatch
         XCTAssertTrue(pane.waitForExistence(timeout: 10))

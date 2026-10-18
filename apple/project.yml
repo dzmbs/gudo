@@ -29,12 +29,15 @@ packages:
     path: Packages/HostKit
   UnnamedCore:
     path: Packages/UnnamedCore
+  DesignSystem:
+    path: Packages/DesignSystem
 targets:
   App:
     type: application
     supportedDestinations: [iOS, macOS]
     sources:
       - App/Sources
+      - App/Resources
       # The static Linux daemons "Install helper" uploads (`cargo xtask build-hostd-linux`).
       - path: build/hostd/unnamed-hostd-x86_64-linux.gz
         buildPhase: resources
@@ -45,12 +48,19 @@ targets:
     info:
       path: App/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleURLTypes:
           - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER).pair
             CFBundleURLSchemes: [$(BRAND_URL_SCHEME)]
+        # Launch on the terminal background so the first frame never flashes white.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
     settings:
       base:
         PRODUCT_NAME: $(BRAND_NAME)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         PRODUCT_MODULE_NAME: App
         CODE_SIGN_IDENTITY: "-"
         PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app
@@ -62,14 +72,12 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         # Pairing QR codes (VisionKit DataScannerViewController).
         INFOPLIST_KEY_NSCameraUsageDescription: Scan a host's pairing QR code.
         # The daemon is reached over the local network too (direct iroh paths, LAN hosts).
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your hosts on the local network.
         # ProMotion: lets the terminal's display link run at 120 Hz on iPhone too (iPad needs no key).
         INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone: YES
-        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -90,6 +98,8 @@ targets:
         product: HostKit
       - package: UnnamedCore
         product: UnnamedCore
+      - package: DesignSystem
+        product: DesignSystem
   AppUITests:
     type: bundle.ui-testing
     supportedDestinations: [iOS, macOS]
@@ -111,6 +121,7 @@ schemes:
     test:
       targets:
         - package: PaneLayout/PaneLayoutTests
+        - package: DesignSystem/DesignSystemTests
         - AppUITests
     run:
       config: Debug

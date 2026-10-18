@@ -64,13 +64,25 @@ struct TerminalHost {
         coordinator.wasFocused = isFocused
         guard claimsFocus else { return }
         let view = pane.view
-        // The container joins its window after this update, so focus on the next turn.
-        Task { @MainActor in
-            #if os(macOS)
-            if let window = view.window, window.firstResponder !== view { window.makeFirstResponder(view) }
-            #else
-            if view.window != nil, !view.isFirstResponder { view.becomeFirstResponder() }
-            #endif
+        // The container joins its window after this update, so focus on a later turn: when the
+        // split tree changes shape (a pane header appears, a pane moves) the view can take a few
+        // turns to land in a window. Stop if focus moved on meanwhile.
+        Task { @MainActor [workspace] in
+            for attempt in 0..<20 {
+                if attempt > 0 { try? await Task.sleep(for: .milliseconds(16)) }
+                guard workspace.focusedPane == pane.id else { return }
+                #if os(macOS)
+                if let window = view.window {
+                    if window.firstResponder !== view { window.makeFirstResponder(view) }
+                    return
+                }
+                #else
+                if view.window != nil {
+                    if !view.isFirstResponder { view.becomeFirstResponder() }
+                    return
+                }
+                #endif
+            }
         }
     }
 }
@@ -81,9 +93,27 @@ extension Pane {
     func placeView() {
         if let current = view.superview as? TerminalHost.Container, current.window != nil, hosts.contains(current) { return }
         guard let target = hosts.allObjects.first(where: { $0.window != nil }) else { return }
+        // Moving the view resigns first responder; a terminal being typed into keeps the keyboard.
+        #if os(macOS)
+        let hadKeyboard = view.window?.firstResponder === view
+        #else
+        let hadKeyboard = view.isFirstResponder
+        #endif
         view.removeFromSuperview()
         view.frame = target.bounds
         target.addSubview(view)
+        #if os(macOS)
+        // AppKit hands first responder to the window as soon as the old container leaves it, so
+        // the view no longer knows it had the keyboard: the focused pane takes it back whenever
+        // nothing else in the window has it.
+        if let window = target.window,
+           hadKeyboard || (isFocusedPane() && (window.firstResponder == nil || window.firstResponder === window))
+        {
+            window.makeFirstResponder(view)
+        }
+        #else
+        if hadKeyboard { view.becomeFirstResponder() }
+        #endif
         // Assistive technologies cache the element tree; tell them the terminal moved.
         #if os(macOS)
         NSAccessibility.post(element: target, notification: .layoutChanged)

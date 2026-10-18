@@ -11,7 +11,7 @@ final class MacPasteUITests: XCTestCase {
     @MainActor
     func testCommandVAndEditMenuPaste() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane = app.descendants(matching: .any)["pane-1"].firstMatch
         XCTAssertTrue(pane.waitForExistence(timeout: 10))

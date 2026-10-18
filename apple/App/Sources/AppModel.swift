@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import os
+import PaneLayout
 import UnnamedCore
 
 /// What a window shows: the local workspace (macOS shell / iOS scratch echo) or a host.
@@ -45,7 +46,8 @@ final class AppModel {
         switch target {
         case .local:
             if let existing = workspaces[.local] { return existing.workspace }
-            let workspace = Workspace()
+            // No local shell on iOS (only the echo stand-in for tests): an empty session.
+            let workspace = LaunchOptions.hasLocalShell ? Workspace() : Workspace(layout: LocalLayoutStore(session: Session(tabs: [], activeTabId: nil)))
             workspaces[.local] = (workspace, nil)
             return workspace
         case .host(let id):
@@ -62,6 +64,11 @@ final class AppModel {
             workspaces[target] = (workspace, identity)
             return workspace
         }
+    }
+
+    /// The workspace already open for a target, without creating or connecting anything.
+    func existingWorkspace(for target: WorkspaceTarget) -> Workspace? {
+        workspaces[target]?.workspace
     }
 
     /// The gzipped static Linux daemons bundled as resources (project.yml), for "Install helper".

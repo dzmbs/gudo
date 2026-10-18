@@ -24,7 +24,7 @@ final class TerminalInputUITests: XCTestCase {
     @MainActor
     func testLongPressSelectsWordShowsHandlesAndCopies() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane = element(app, "pane-1")
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
@@ -52,7 +52,7 @@ final class TerminalInputUITests: XCTestCase {
     @MainActor
     func testDoubleTapSelectsWordAndTapClears() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane = element(app, "pane-1")
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
@@ -65,7 +65,7 @@ final class TerminalInputUITests: XCTestCase {
     @MainActor
     func testMultilinePasteAsksForConfirmation() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane = element(app, "pane-1")
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
@@ -92,7 +92,7 @@ final class TerminalInputUITests: XCTestCase {
     func testEchoPredictionOnSlowLink() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-echoLatencyMs", "400"]
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane = element(app, "pane-1")
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
@@ -111,7 +111,7 @@ final class TerminalInputUITests: XCTestCase {
     func testMarkedTextIsDrawnInline() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-demoPreedit", "にほんご"]
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane = element(app, "pane-1")
         XCTAssertTrue(pane.waitForExistence(timeout: 10))

@@ -53,7 +53,7 @@ public final class TerminalSurface {
         didSet {
             builder.style = Self.frameStyle(appearance)
             if appearance.fontFamily != oldValue.fontFamily || appearance.fontSize != oldValue.fontSize
-                || appearance.padding != oldValue.padding
+                || appearance.padding != oldValue.padding || appearance.paddingBalance != oldValue.paddingBalance
             {
                 fonts = nil
                 if let lastLayout { layout(size: lastLayout.size, scale: lastLayout.scale) }
@@ -177,11 +177,17 @@ public final class TerminalSurface {
         let pad = Int((appearance.padding * scale).rounded())
         let cols = max(1, (Int(pixelSize.width) - 2 * pad) / m.cellWidth)
         let rows = max(1, (Int(pixelSize.height) - 2 * pad) / m.cellHeight)
+        // `window-padding-balance`: split the space left over after whole cells evenly, so the
+        // grid sits centered instead of hugging the top-left edge.
+        let extraX = Int(pixelSize.width) - 2 * pad - cols * m.cellWidth
+        let extraY = Int(pixelSize.height) - 2 * pad - rows * m.cellHeight
+        let left = appearance.paddingBalance ? pad + extraX / 2 : pad
+        let top = appearance.paddingBalance ? pad + extraY / 2 : pad
         paddingPx = SIMD4(
-            Float(pad),
-            Float(Int(pixelSize.width) - pad - cols * m.cellWidth),
-            Float(Int(pixelSize.height) - pad - rows * m.cellHeight),
-            Float(pad))
+            Float(top),
+            Float(Int(pixelSize.width) - left - cols * m.cellWidth),
+            Float(Int(pixelSize.height) - top - rows * m.cellHeight),
+            Float(left))
 
         let newGrid = Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
         if newGrid != grid {
@@ -202,21 +208,25 @@ public final class TerminalSurface {
 
     /// Fixed (top/left) padding in points.
     public var paddingPoints: CGFloat { CGFloat(paddingPx.x) / layer.contentsScale }
+    /// The grid's origin in points (differs from `paddingPoints` with padding balance).
+    private var gridOrigin: CGPoint {
+        CGPoint(x: CGFloat(paddingPx.w) / layer.contentsScale, y: CGFloat(paddingPx.x) / layer.contentsScale)
+    }
 
     /// The viewport cell under a point in view coordinates, clamped into the grid.
     public func cell(at point: CGPoint) -> GridPoint {
         guard let grid, let size = cellSize else { return GridPoint(x: 0, y: 0) }
-        let pad = paddingPoints
-        let x = Int(((point.x - pad) / size.width).rounded(.down))
-        let y = Int(((point.y - pad) / size.height).rounded(.down))
+        let origin = gridOrigin
+        let x = Int(((point.x - origin.x) / size.width).rounded(.down))
+        let y = Int(((point.y - origin.y) / size.height).rounded(.down))
         return GridPoint(x: min(max(x, 0), Int(grid.cols) - 1), y: min(max(y, 0), Int(grid.rows) - 1))
     }
 
     /// A viewport cell's frame in view points.
     public func rect(for cell: GridPoint, span: Int = 1) -> CGRect {
         guard let size = cellSize else { return .zero }
-        let pad = paddingPoints
-        return CGRect(x: pad + CGFloat(cell.x) * size.width, y: pad + CGFloat(cell.y) * size.height,
+        let origin = gridOrigin
+        return CGRect(x: origin.x + CGFloat(cell.x) * size.width, y: origin.y + CGFloat(cell.y) * size.height,
                       width: size.width * CGFloat(span), height: size.height)
     }
 

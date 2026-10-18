@@ -549,6 +549,11 @@ final class DogfoodRunner {
             let actual = tab.map(workspace.title(of:)) ?? ""
             return (actual == title, "tab title \"\(actual)\", expected \"\(title)\"")
         }
+        if let context = step["tabContext"] as? String {
+            let actual = tab.flatMap(workspace.context(of:)) ?? ""
+            let name = tab.map(workspace.title(of:)) ?? ""
+            return (actual == context && name != context, "tab \"\(name)\" context \"\(actual)\", expected context \"\(context)\"")
+        }
         if let text = step["pasteboard"] as? String {
             let actual = NSPasteboard.general.string(forType: .string) ?? "<none>"
             return (actual == text, "pasteboard \"\(actual)\", expected \"\(text)\"")

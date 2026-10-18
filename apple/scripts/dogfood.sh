@@ -41,7 +41,7 @@ if (( build )); then
   xcodebuild -project $APPLE_DIR/App.xcodeproj -scheme App -configuration Debug -destination 'platform=macOS' \
     -derivedDataPath $APPLE_DIR/build/DerivedData build -quiet 2>&1 | grep -v 'appintentsmetadataprocessor' || true
 fi
-app=$(ls -d $APPLE_DIR/build/DerivedData/Build/Products/Debug/*.app 2>/dev/null | head -1)
+app=$(ls -d $APPLE_DIR/build/DerivedData/Build/Products/Debug/*.app 2>/dev/null | grep -v -- -Runner.app | head -1)
 [[ -n $app ]] || { print -u2 "no Debug build in build/DerivedData"; exit 2 }
 binary=$app/Contents/MacOS/$(defaults read $app/Contents/Info.plist CFBundleExecutable)
 

@@ -66,6 +66,10 @@ nonisolated final class EchoBackend: PaneBackend {
         state.withLock { $0.onOutput = nil }
     }
 
+    func foreground() -> PaneForeground? {
+        PaneForeground(program: "zsh", directory: NSHomeDirectory())
+    }
+
     private func handle(_ input: [UInt8]) {
         // Escape sequences (arrows, function keys) would move the cursor if echoed; a shell's line
         // editor would interpret them, this stand-in ignores them.

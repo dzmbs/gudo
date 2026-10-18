@@ -1,148 +1,156 @@
+import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
 
-// Minimal, functional chrome for remote hosts. The design layer replaces these views; they
-// only bind to HostKit's models (docs/APP-ARCHITECTURE.md).
+// Chrome for remote hosts over the terminal: the plain-SSH upgrade offer, install progress and
+// notes, the offline notice, stale panes, and host-key decisions. The reconnect card itself is
+// the design system's `connectionOverlay` (ActiveTabView). Everything binds to HostKit's models
+// (docs/APP-ARCHITECTURE.md).
 
-/// Opens the hosts list (the window's root decides what that means).
-struct ShowHostsAction {
-    let action: () -> Void
-    func callAsFunction() { action() }
-}
-
-extension EnvironmentValues {
-    @Entry var showHosts: ShowHostsAction?
-}
-
-struct HostsButton: View {
-    @Environment(\.showHosts) private var showHosts
-
-    var body: some View {
-        if let showHosts {
-            Button("Hosts", systemImage: "server.rack") { showHosts() }
-                .keyboardShortcut("h", modifiers: [.command, .shift])
-                .accessibilityIdentifier("hosts-button")
-        }
-    }
-}
-
-/// A thin bar over a remote workspace whenever its connection is not live: what is wrong, in
-/// words, with Retry (04-mobile-ux R8, R9, A22). Also the "Install helper" offer for plain-SSH
-/// hosts and its progress.
-struct ConnectionBanner: View {
-    let host: any HostConnection
-    let hostId: String?
+/// Floating notices for a host window, top-trailing over the terminal like Ghostty's search
+/// bar: small glass panels that never cover more than they must.
+struct HostNotices: View {
+    let workspace: Workspace
+    @Environment(WindowModel.self) private var model
     @Environment(AppModel.self) private var app
+    @State private var offerDismissed = false
 
     var body: some View {
-        VStack(spacing: 4) {
-            if !host.status.isLive {
-                HStack(spacing: 8) {
-                    if case .needsAttention = host.status {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-                    } else {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(host.status.summary).lineLimit(2)
-                    Spacer()
-                    Button("Retry") { host.retry() }
-                        .accessibilityIdentifier("retry-connection")
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("connection-status")
-                .bannerStyle()
-            }
-            if let hostId, host is SshConnection {
-                InstallHelperRow(hostId: hostId)
-            }
-            if let hostId, let notes = app.hosts.installNotes[hostId] {
-                HStack(alignment: .top) {
-                    Image(systemName: "info.circle")
-                    Text(notes.joined(separator: "\n")).textSelection(.enabled)
-                    Spacer()
-                    Button("OK") { app.hosts.dismissNotes(hostId) }
-                }
-                .bannerStyle()
-            }
+        VStack(alignment: .trailing, spacing: DS.Space.s) {
             if app.hosts.network.isOffline {
-                Label("No network. Panes resume when it is back.", systemImage: "wifi.slash")
-                    .bannerStyle()
-                    .accessibilityIdentifier("offline-banner")
+                notice(systemImage: "wifi.slash", tint: DS.Palette.error) {
+                    Text("No network. Panes resume when it's back.")
+                }
+                .accessibilityIdentifier("offline-banner")
+            }
+            if let hostId = workspace.hostId {
+                if let progress = app.hosts.installs[hostId] {
+                    notice(systemImage: nil, tint: nil) {
+                        HStack(spacing: DS.Space.s) {
+                            Spinner(color: DS.Palette.working)
+                                .frame(width: 12, height: 12)
+                            Text(progress.summary)
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .accessibilityIdentifier("install-progress")
+                        }
+                    }
+                } else if workspace.host is SshConnection, !offerDismissed {
+                    InstallHelperOffer(hostId: hostId) { offerDismissed = true }
+                }
+                if let notes = app.hosts.installNotes[hostId] {
+                    notice(systemImage: "info.circle", tint: DS.Palette.info) {
+                        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+                            Text(notes.joined(separator: "\n"))
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Dismiss", systemImage: "xmark") { app.hosts.dismissNotes(hostId) }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.bar)
+                        }
+                    }
+                }
             }
         }
         .font(.callout)
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
+        .frame(maxWidth: 420, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(DS.Space.m)
+        .animation(DS.Motion.panel, value: app.hosts.installs[workspace.hostId ?? ""]?.summary)
+    }
+
+    private func notice(systemImage: String?, tint: Color?, @ViewBuilder _ content: () -> some View) -> some View {
+        HStack(spacing: DS.Space.s) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .foregroundStyle(tint ?? .secondary)
+            }
+            content()
+        }
+        .padding(.horizontal, DS.Space.m + 2)
+        .padding(.vertical, DS.Space.s + 1)
+        .floatingPanel(cornerRadius: DS.Radius.panel)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }
 
-/// "Install helper" on a plain-SSH host: installs or upgrades the daemon, pairs, and the window
-/// switches to it (`HostsModel.installHelper`).
-struct InstallHelperRow: View {
+/// "Install Helper" on a plain-SSH host (04-mobile-ux C1): installs or upgrades the daemon,
+/// pairs, and the window switches to it (`HostsModel.installHelper`).
+private struct InstallHelperOffer: View {
     let hostId: String
-    @Environment(AppModel.self) private var app
+    let onDismiss: () -> Void
+    @Environment(WindowModel.self) private var model
     @State private var error: String?
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let progress = app.hosts.installs[hostId] {
-                ProgressView().controlSize(.small)
-                Text(progress.summary)
-                    .accessibilityIdentifier("install-progress")
-            } else if let error {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-                Text(error).lineLimit(3)
-            } else {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
                 Image(systemName: "bolt.horizontal.circle")
-                Text("Plain SSH. Keep sessions alive when the device sleeps?")
+                    .foregroundStyle(DS.Palette.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Plain SSH")
+                        .font(.callout.weight(.semibold))
+                    Text(error ?? "Install the helper to keep sessions running while this device sleeps.")
+                        .font(.footnote)
+                        .foregroundStyle(error == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(DS.Palette.error))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Spacer()
-            if app.hosts.installs[hostId] == nil {
-                Button("Install helper") {
+            HStack(spacing: DS.Space.s) {
+                Spacer(minLength: 0)
+                Button("Not Now", action: onDismiss)
+                    .buttonStyle(.glass)
+                Button("Install Helper") {
                     error = nil
                     Task {
                         do {
-                            try await app.hosts.installHelper(hostId)
+                            try await model.hosts.installHelper(hostId)
                         } catch {
                             self.error = SshErrorText.describe(error)
                         }
                     }
                 }
+                .buttonStyle(.glassProminent)
                 .accessibilityIdentifier("install-helper")
             }
+            .controlSize(.small)
         }
-        .bannerStyle()
+        .padding(DS.Space.m)
+        .frame(width: 320)
+        .floatingPanel(cornerRadius: DS.Radius.panel)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }
 
-/// Dims a pane whose host is reconnecting; its last content stays visible (never blank).
+/// A pane whose host link dropped keeps its last content (never blank, R12). The window-wide
+/// reconnect card dims the tab; this marks the pane for VoiceOver and tests, and when only this
+/// pane is stale (the host is otherwise live) dims it the same way with its reason.
 struct StalePaneOverlay: View {
     let connection: PaneConnection
     let paneId: PaneId
+    @Environment(WindowModel.self) private var model
 
     var body: some View {
         if case .stale(let reason) = connection {
             ZStack(alignment: .bottomTrailing) {
-                Color.black.opacity(0.45)
-                Label(reason, systemImage: "arrow.triangle.2.circlepath")
-                    .font(.caption)
-                    .padding(6)
-                    .background(.thinMaterial, in: .capsule)
-                    .padding(8)
+                if model.connection.isLive {
+                    Color.black.opacity(0.35)
+                    Label(reason, systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                        .padding(.horizontal, DS.Space.s + 2)
+                        .padding(.vertical, DS.Space.xs + 1)
+                        .floatingCapsule()
+                        .padding(DS.Space.s)
+                } else {
+                    Color.clear
+                }
             }
             .allowsHitTesting(false)
             .accessibilityElement(children: .combine)
+            .accessibilityLabel("Stale: \(reason)")
             .accessibilityIdentifier("stale-\(paneId)")
         }
-    }
-}
-
-extension View {
-    func bannerStyle() -> some View {
-        padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.regularMaterial, in: .rect(cornerRadius: 10))
     }
 }
 
@@ -152,12 +160,12 @@ struct HostKeyPromptModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content.alert(
-            prompts.pending?.isChange == true ? "Host key changed" : "Trust this host?",
+            prompts.pending?.isChange == true ? "Host Key Changed" : "Trust This Host?",
             isPresented: Binding(get: { prompts.pending != nil }, set: { if !$0, prompts.pending != nil { prompts.answer(false) } }),
             presenting: prompts.pending
         ) { prompt in
             if prompt.isChange {
-                Button("Replace key", role: .destructive) { prompts.answer(true) }
+                Button("Replace Key", role: .destructive) { prompts.answer(true) }
             } else {
                 Button("Trust") { prompts.answer(true) }
                     .accessibilityIdentifier("trust-host")
@@ -167,8 +175,18 @@ struct HostKeyPromptModifier: ViewModifier {
             if let expected = prompt.expected {
                 Text("\(prompt.host) now presents \(prompt.algorithm) \(prompt.fingerprint), but \(expected.joined(separator: " or ")) is on record. This can mean someone is intercepting the connection.")
             } else {
-                Text("\(prompt.host)\n\(prompt.algorithm) \(prompt.fingerprint)")
+                Text("First connection to \(prompt.host). Check that its key matches:\n\(prompt.algorithm) \(prompt.fingerprint)")
             }
         }
     }
+}
+
+/// Copies text to the general pasteboard.
+func copy(_ text: String) {
+    #if os(iOS)
+    UIPasteboard.general.string = text
+    #else
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    #endif
 }
