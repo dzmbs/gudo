@@ -109,6 +109,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 backoff = Duration::from_millis(100);
                 let reason = run(&inner, conn).await;
                 *lock(&inner.connection) = None;
+                inner.ws.fail_pending();
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -372,6 +373,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             Ok(Some(msg)) => msg,
             Ok(None) => return "daemon closed ctl".into(),
             Err(e) => return e.to_string(),
+        };
+        let Some(msg) = inner.ws.dispatch(msg) else {
+            continue;
         };
         let event = match msg {
             ServerCtl::Sessions { sessions } => ClientEvent::Sessions { sessions },

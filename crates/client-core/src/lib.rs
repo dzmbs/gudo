@@ -30,6 +30,7 @@
 mod conn;
 mod mirror;
 mod ssh_pane;
+mod workspace;
 
 use std::collections::HashMap;
 use std::net::TcpListener as StdTcpListener;
@@ -50,6 +51,7 @@ use crate::mirror::Mirror;
 pub use proto;
 pub use ssh;
 pub use ssh_pane::{RESTART_MARKER, SshPane, SshPaneOptions, ssh_runtime};
+pub use workspace::{TransferProgress, WorkspaceEvent, WorkspaceEventQueue, WorkspaceListener};
 
 /// Which relays the client's endpoint may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -353,6 +355,8 @@ pub(crate) struct Inner {
     pub paired: Mutex<bool>,
     pub next_op: AtomicU64,
     pub stats: Mutex<ClientStats>,
+    /// Workspace requests in flight, pushes, forwards.
+    pub ws: workspace::WsState,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -416,6 +420,7 @@ impl Client {
             paired: Mutex::new(false),
             next_op: AtomicU64::new(1),
             stats: Mutex::new(ClientStats::default()),
+            ws: workspace::WsState::default(),
         });
         runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {
