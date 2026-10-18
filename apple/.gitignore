@@ -1,0 +1,6 @@
+# Prebuilt libghostty-vt (apple/scripts/build-libghostty-vt.sh)
+/build/
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
