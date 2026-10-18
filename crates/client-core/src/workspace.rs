@@ -168,7 +168,7 @@ impl Client {
         self.inner.send(proto::ClientCtl::Workspace { req_id, req });
         let inner = Arc::clone(&self.inner);
         // The timer runs on the client's runtime, so any executor can await this.
-        self.handle()
+        self.handle
             .spawn(async move {
                 match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
                     Ok(Ok(result)) => result,
@@ -205,7 +205,7 @@ impl Client {
         let port = listener.local_addr()?.port();
         let inner = Arc::clone(&self.inner);
         let task = self
-            .handle()
+            .handle
             .spawn(serve_forward(inner, listener, target.clone()));
         lock(&self.inner.ws.forwards).insert(port, (target, task.abort_handle()));
         Ok(port)
@@ -436,7 +436,7 @@ impl Client {
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<FileStat, WsError> {
         let inner = Arc::clone(&self.inner);
-        self.handle()
+        self.handle
             .spawn(async move {
                 let file = tokio::fs::File::open(&local_path)
                     .await
@@ -456,7 +456,7 @@ impl Client {
     ) -> Result<FileStat, WsError> {
         let inner = Arc::clone(&self.inner);
         let size = data.len() as u64;
-        self.handle()
+        self.handle
             .spawn(
                 async move { upload(&inner, std::io::Cursor::new(data), size, target, None).await },
             )
@@ -475,7 +475,7 @@ impl Client {
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<FileStat, WsError> {
         let inner = Arc::clone(&self.inner);
-        self.handle()
+        self.handle
             .spawn(async move {
                 let header = DownloadHeader {
                     path: remote_path,
