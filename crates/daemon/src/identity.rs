@@ -172,6 +172,59 @@ impl Identity {
     pub fn device_count(&self) -> usize {
         self.devices.lock().expect("devices lock").len()
     }
+
+    /// The daemon key as a device id: it may sign root grants (`unnamed-hostd invite`).
+    pub fn daemon_device(&self) -> DeviceId {
+        DeviceId(self.daemon_id().0)
+    }
+
+    /// Re-reads `devices.json` so pairings and unpairings by other processes apply.
+    fn refresh(&self) {
+        if let Ok(Some(fresh)) = read_json::<Vec<DeviceEntry>>(&self.dir.join(DEVICES_FILE)) {
+            *self.devices.lock().expect("devices lock") = fresh;
+        }
+    }
+
+    /// Whether `device` is a paired owner device (it may sign root grants).
+    pub fn is_owner_device(&self, device: DeviceId) -> bool {
+        let hex_id = hex(&device.0);
+        self.devices
+            .lock()
+            .expect("devices lock")
+            .iter()
+            .any(|d| d.device == hex_id)
+    }
+
+    /// Paired devices: key, principal and when they paired.
+    pub fn paired(&self) -> Vec<(DeviceId, PrincipalId, UnixMillis)> {
+        self.refresh();
+        self.devices
+            .lock()
+            .expect("devices lock")
+            .iter()
+            .filter_map(|d| {
+                Some((
+                    DeviceId(unhex(&d.device)?),
+                    PrincipalId(unhex(&d.principal)?),
+                    UnixMillis(d.paired_at),
+                ))
+            })
+            .collect()
+    }
+
+    /// Removes a paired device. Returns whether it was paired.
+    pub fn unpair(&self, device: DeviceId) -> bool {
+        self.refresh();
+        let hex_id = hex(&device.0);
+        let mut devices = self.devices.lock().expect("devices lock");
+        let before = devices.len();
+        devices.retain(|d| d.device != hex_id);
+        let removed = devices.len() != before;
+        if removed && let Err(e) = write_json(&self.dir.join(DEVICES_FILE), &*devices) {
+            tracing::warn!("saving paired devices: {e}");
+        }
+        removed
+    }
 }
 
 fn load_or_create_key(dir: &Path) -> io::Result<iroh::SecretKey> {

@@ -110,6 +110,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 let reason = run(&inner, conn).await;
                 *lock(&inner.connection) = None;
                 inner.ws.fail_pending();
+                inner.mp.fail_pending();
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -147,7 +148,9 @@ async fn connect_once(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, C
     let addr = daemon_addr(inner)?;
     // Try as a paired device first; fall back to the ticket's one-time secret.
     let paired = *lock(&inner.paired);
-    let grants: &[u16] = if paired {
+    let grants: &[u16] = if crate::mp::is_guest(inner) {
+        &[SignedGrant::CHAIN]
+    } else if paired {
         &[SignedGrant::DEVICE]
     } else {
         &[SignedGrant::DEVICE, SignedGrant::PAIRING]
@@ -175,20 +178,16 @@ async fn connect_once(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, C
 async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live, ConnError> {
     let (mut ctl_tx, mut ctl_rx) = conn.open_bi().await.map_err(net)?;
     let _ = ctl_tx.set_priority(100);
-    let token = if v == SignedGrant::PAIRING {
-        inner.ticket.secret.0.to_vec()
-    } else {
-        Vec::new()
+    let (token, grant_id) = match (&inner.mp.invite, v) {
+        (Some(invite), SignedGrant::CHAIN) => (invite.chain.to_token(), invite.chain.grant_id()),
+        (_, SignedGrant::PAIRING) => (inner.ticket.secret.0.to_vec(), proto::GrantId([0; 16])),
+        _ => (Vec::new(), proto::GrantId([0; 16])),
     };
     let resume = resume_points(inner);
     let hello = Hello {
         device_id: device_id(&inner.config),
         principal_id: inner.ticket.principal,
-        grant: SignedGrant {
-            v,
-            grant_id: proto::GrantId([0; 16]),
-            token,
-        },
+        grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
         caps: Caps::ECHO_PREDICTION,
@@ -375,6 +374,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             Err(e) => return e.to_string(),
         };
         let Some(msg) = inner.ws.dispatch(msg) else {
+            continue;
+        };
+        let Some(msg) = inner.mp.dispatch(msg) else {
             continue;
         };
         let event = match msg {

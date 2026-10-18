@@ -71,6 +71,8 @@ pub struct Config {
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
+    /// A pane's control lease moves to someone who asked for it once the holder has not typed
+    pub lease_idle: Duration,
 }
 
 impl Config {
@@ -96,6 +98,7 @@ impl Config {
             code_cli: None,
             openvscode_dir: None,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
+            lease_idle: Duration::from_secs(5),
         }
     }
 
@@ -112,6 +115,9 @@ impl Config {
     /// [editor]
     /// code = "/usr/local/bin/code"
     /// openvscode = "/opt/openvscode-server"
+    ///
+    /// [multiplayer]
+    /// lease_idle_secs = 5
     /// ```
     ///
     /// # Errors
@@ -138,6 +144,9 @@ impl Config {
         }
         if let Some(dir) = file.editor.openvscode {
             self.openvscode_dir = Some(dir);
+        }
+        if let Some(secs) = file.multiplayer.lease_idle_secs {
+            self.lease_idle = Duration::from_secs(secs);
         }
         Ok(())
     }
@@ -203,6 +212,13 @@ struct UserFile {
     files: FilesSection,
     worktrees: WorktreesSection,
     editor: EditorSection,
+    multiplayer: MultiplayerSection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct MultiplayerSection {
+    lease_idle_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

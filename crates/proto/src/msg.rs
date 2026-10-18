@@ -9,6 +9,7 @@ use crate::ids::{
     ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
 };
 use crate::layout::{LayoutOp, OpOutcome, SessionLayout, SessionSummary};
+use crate::mp::{JoinInfo, MpError, MpRequest, MpResponse, Participant};
 use crate::workspace::{
     AttentionUpdate, DownloadHeader, ForwardTarget, FsChange, PortInfo, UploadHeader,
     VsCodeTunnelStatus, WorkspaceRequest, WorkspaceResponse, WsError,
@@ -225,6 +226,14 @@ pub enum ClientCtl {
         /// The request.
         req: WorkspaceRequest,
     },
+    /// A multiplayer request (grants, revocation, leases, prompts, audit), answered by
+    /// [`ServerCtl::MultiplayerResult`].
+    Multiplayer {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: MpRequest,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -268,8 +277,13 @@ impl SignedGrant {
     /// `token` is a ticket's one-time [`PairingSecret`](crate::PairingSecret); on success the
     /// daemon adds the device to its allowlist for the ticket's principal.
     pub const PAIRING: u16 = 0;
-    /// No token: the device key, proven by the QUIC handshake, is on the daemon's allowlist.
+    /// No token: the device key, proven by the QUIC handshake, is on the daemon's allowlist
+    /// (a paired owner device).
     pub const DEVICE: u16 = 1;
+    /// `token` is the postcard encoding of a [`GrantChain`](crate::GrantChain) and
+    /// `grant_id` its leaf's id (an invite). `Hello.principal_id` must be the guest principal
+    /// derived from the device key (`grants::guest_principal`).
+    pub const CHAIN: u16 = 2;
 }
 
 /// A client's resume point for one pane.
@@ -485,6 +499,40 @@ pub enum ServerCtl {
     /// The VS Code tunnel changed state: a device code to show, connected, failed (sent to
     /// every client).
     VsCodeTunnel(VsCodeTunnelStatus),
+    /// Answers [`ClientCtl::Multiplayer`].
+    MultiplayerResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<MpResponse, MpError>,
+    },
+    /// Who this connection is: sent right after [`ServerCtl::Welcome`].
+    Joined(JoinInfo),
+    /// Everyone connected (sent whole whenever someone joins, leaves, renames or changes
+    /// focus; per-keystroke presence comes as [`ServerCtl::Presence`]).
+    Participants {
+        /// One entry per connected device, within the recipient's scope.
+        participants: Vec<Participant>,
+    },
+    /// Someone asked for the lease this connection's principal holds: answer with
+    /// [`MpRequest::AnswerControl`](crate::MpRequest::AnswerControl). It moves anyway once
+    /// the holder has been idle for the daemon's lease timeout.
+    LeaseRequested {
+        /// The pane.
+        pane_id: PaneId,
+        /// Who asks.
+        by: Actor,
+        /// Their display name.
+        name: String,
+    },
+    /// A ctl message was refused by policy (roles or scope). Requests with an id get their
+    /// error in their own answer instead.
+    Forbidden {
+        /// What was refused ("Subscribe", "Op", "Decide", …).
+        what: String,
+        /// Why, naming the role needed.
+        reason: String,
+    },
 }
 
 /// The daemon's answer to a successful `Hello`.

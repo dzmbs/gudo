@@ -3,6 +3,7 @@
 mod agents;
 mod codex;
 mod e2e;
+mod multiplayer;
 mod shell;
 mod support;
 mod terminal;

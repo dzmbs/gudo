@@ -35,6 +35,7 @@ mod fsutil;
 mod identity;
 mod input;
 mod layout;
+mod mp;
 mod net;
 mod osc;
 mod pane;
@@ -102,7 +103,8 @@ impl Daemon {
                 None
             }
         };
-        let core = Core::new(config, identity, layout, hooks, shell);
+        let mp = mp::Mp::open(&config.state_dir, config.lease_idle)?;
+        let core = Core::new(config, identity, layout, hooks, shell, mp);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records);
 
@@ -126,6 +128,7 @@ impl Daemon {
         tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(mp::run(Arc::clone(&core))));
         core.ws.tunnel.autostart(&core.cfg);
         core.mark_dirty();
         Ok(Self {

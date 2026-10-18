@@ -519,6 +519,7 @@ fn every_message_matches_its_frozen_bytes() {
     );
     terminal_completeness(&mut c);
     workspace_messages(&mut c);
+    multiplayer_messages(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -1576,4 +1577,470 @@ fn prediction_rule_matches_spike_s6() {
 #[test]
 fn alpn_is_the_brand_alpn() {
     assert_eq!(ALPN, brand::ALPN);
+}
+
+const DAEMON: DaemonId = DaemonId([0x44; 32]);
+const LEASE: Lease = Lease {
+    pane_id: PANE,
+    holder: Some(PRINCIPAL),
+    since: UnixMillis(1_760_000_000_000),
+    mode: LeaseMode::Leased,
+};
+
+fn grant() -> Grant {
+    Grant {
+        v: Grant::VERSION,
+        grant_id: GRANT,
+        daemon_id: DAEMON,
+        issuer: DEVICE,
+        roles: Roles::DRIVER | Roles::APPROVER,
+        scope: Scope::Session(SessionId(2)),
+        issued_at: UnixMillis(1_760_000_000_000),
+        expires: Some(UnixMillis(1_760_086_400_000)),
+        max_uses: Some(1),
+        bind: None,
+        delegate: true,
+        label: "bob".into(),
+    }
+}
+
+fn chain() -> GrantChain {
+    GrantChain {
+        links: vec![GrantLink {
+            grant: grant(),
+            sig: vec![0x5a; 4],
+        }],
+    }
+}
+
+fn join_info() -> JoinInfo {
+    JoinInfo {
+        actor: ACTOR,
+        name: "bob".into(),
+        roles: Roles::VIEWER,
+        scope: Scope::Pane(PANE),
+        grant_id: Some(GRANT),
+        expires: Some(UnixMillis(5)),
+    }
+}
+
+fn participant() -> Participant {
+    Participant {
+        actor: ACTOR,
+        name: "bob".into(),
+        roles: Roles::DRIVER,
+        scope: Scope::Daemon,
+        grant_id: Some(GRANT),
+        since: UnixMillis(7),
+        state: PresenceState::Idle,
+        focus: Some(PANE),
+        typing: true,
+        cursor: Some(CursorPos {
+            pane_id: PANE,
+            row: 1,
+            col: 2,
+        }),
+    }
+}
+
+fn audit_record() -> AuditRecord {
+    AuditRecord {
+        seq: 3,
+        at: UnixMillis(9),
+        kind: AuditKind::Approval,
+        actor: Some(ACTOR),
+        grant_id: Some(GRANT),
+        pane_id: Some(PANE),
+        detail: "ok".into(),
+        approval: Some(ApprovalAudit {
+            request_id: RequestId(9),
+            agent_request: "r1".into(),
+            option_id: OptionId(0),
+            option: "Yes".into(),
+            tool: Some("Bash".into()),
+            summary: "rm".into(),
+            signed: vec![1, 2],
+            sig: vec![3, 4],
+        }),
+        prev_hash: vec![0; 2],
+        hash: vec![0xff; 2],
+    }
+}
+
+fn multiplayer_messages(c: &mut Checker) {
+    for (name, scope, golden) in [
+        ("Scope::Daemon", Scope::Daemon, "020000000100"),
+        (
+            "Scope::Session",
+            Scope::Session(SessionId(2)),
+            "03000000010102",
+        ),
+        ("Scope::Tab", Scope::Tab(TabId(4)), "03000000010204"),
+        ("Scope::Pane", Scope::Pane(PANE), "03000000010303"),
+    ] {
+        c.check(name, scope, golden);
+    }
+    c.check("GrantChain", chain(), "7000000001010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62045a5a5a5a");
+    c.check(
+        "Invite",
+        Invite {
+            v: Invite::VERSION,
+            daemon_id: DAEMON,
+            addrs: vec!["127.0.0.1:4433".parse().unwrap()],
+            relay_url: Some("https://r".into()),
+            inviter: "alice".into(),
+            chain: chain(),
+        },
+        "aa0000000101444444444444444444444444444444444444444444444444444444444444444401007f000001d122010968747470733a2f2f7205616c696365010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62045a5a5a5a",
+    );
+    c.check(
+        "Hello(CHAIN)",
+        ClientCtl::Hello(Hello {
+            device_id: DEVICE,
+            principal_id: PRINCIPAL,
+            grant: SignedGrant {
+                v: SignedGrant::CHAIN,
+                grant_id: GRANT,
+                token: chain().to_token(),
+            },
+            snapshot_format: 1,
+            resume: vec![],
+            caps: Caps::EMPTY,
+            link: LinkClass::Normal,
+            resume_token: None,
+        }),
+        "b8000000010022222222222222222222222222222222222222222222222222222222222222221111111111111111111111111111111102333333333333333333333333333333336f010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62045a5a5a5a0100000000",
+    );
+
+    let requests = [
+        ("MpRequest::WhoAmI", MpRequest::WhoAmI, "0400000001160700"),
+        (
+            "MpRequest::Participants",
+            MpRequest::Participants,
+            "0400000001160701",
+        ),
+        (
+            "MpRequest::RegisterGrant",
+            MpRequest::RegisterGrant(chain()),
+            "7300000001160702010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62045a5a5a5a",
+        ),
+        (
+            "MpRequest::ListGrants",
+            MpRequest::ListGrants,
+            "0400000001160703",
+        ),
+        (
+            "MpRequest::ListDevices",
+            MpRequest::ListDevices,
+            "0400000001160704",
+        ),
+        (
+            "MpRequest::Revoke(Grant)",
+            MpRequest::Revoke(RevokeTarget::Grant(GRANT)),
+            "15000000011607050033333333333333333333333333333333",
+        ),
+        (
+            "MpRequest::Revoke(Device)",
+            MpRequest::Revoke(RevokeTarget::Device(DEVICE)),
+            "2500000001160705012222222222222222222222222222222222222222222222222222222222222222",
+        ),
+        (
+            "MpRequest::Revoke(Principal)",
+            MpRequest::Revoke(RevokeTarget::Principal(PRINCIPAL)),
+            "15000000011607050211111111111111111111111111111111",
+        ),
+        (
+            "MpRequest::TakeControl",
+            MpRequest::TakeControl {
+                pane_id: PANE,
+                force: true,
+            },
+            "06000000011607060301",
+        ),
+        (
+            "MpRequest::ReleaseControl",
+            MpRequest::ReleaseControl { pane_id: PANE },
+            "050000000116070703",
+        ),
+        (
+            "MpRequest::AnswerControl",
+            MpRequest::AnswerControl {
+                pane_id: PANE,
+                give: true,
+            },
+            "06000000011607080301",
+        ),
+        (
+            "MpRequest::GiveControl",
+            MpRequest::GiveControl {
+                pane_id: PANE,
+                to: PRINCIPAL,
+            },
+            "15000000011607090311111111111111111111111111111111",
+        ),
+        ("MpRequest::Leases", MpRequest::Leases, "040000000116070a"),
+        (
+            "MpRequest::Prompt",
+            MpRequest::Prompt {
+                pane_id: PANE,
+                text: "fix it".into(),
+                submit: true,
+            },
+            "0d0000000116070b030666697820697401",
+        ),
+        (
+            "MpRequest::Audit",
+            MpRequest::Audit(AuditQuery {
+                after: Some(10),
+                limit: 50,
+            }),
+            "070000000116070c010a32",
+        ),
+        (
+            "MpRequest::SetName",
+            MpRequest::SetName { name: "bo".into() },
+            "070000000116070d02626f",
+        ),
+    ];
+    for (name, req, golden) in requests {
+        c.check(name, ClientCtl::Multiplayer { req_id: 7, req }, golden);
+    }
+
+    let device_info = DeviceInfo {
+        device: DEVICE,
+        principal: PRINCIPAL,
+        kind: DeviceKind::Guest,
+        name: "bob".into(),
+        first_seen: UnixMillis(1),
+        grant_id: Some(GRANT),
+        revoked: false,
+        connected: 2,
+    };
+    let answers: Vec<(&str, Result<MpResponse, MpError>, &str)> = vec![
+        (
+            "MpResponse::Done",
+            Ok(MpResponse::Done),
+            "05000000011d070000",
+        ),
+        (
+            "MpResponse::Me",
+            Ok(MpResponse::Me(join_info())),
+            "4f000000011d07000111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f6201030301333333333333333333333333333333330105",
+        ),
+        (
+            "MpResponse::Participants",
+            Ok(MpResponse::Participants(vec![participant()])),
+            "56000000011d0700020111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f6204000133333333333333333333333333333333070101030101030102",
+        ),
+        (
+            "MpResponse::Grant",
+            Ok(MpResponse::Grant(GrantInfo {
+                grant: grant(),
+                parent: Some(GrantId([0x34; 16])),
+                bound: vec![DEVICE],
+                revoked: true,
+            })),
+            "a1000000011d0700030133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444422222222222222222222222222222222222222222222222222222222222222220c01028080b3c19c330180b8ccea9c330101000103626f62013434343434343434343434343434343401222222222222222222222222222222222222222222222222222222222222222201",
+        ),
+        (
+            "MpResponse::Grants",
+            Ok(MpResponse::Grants(vec![])),
+            "06000000011d07000400",
+        ),
+        (
+            "MpResponse::Devices",
+            Ok(MpResponse::Devices(vec![
+                device_info.clone(),
+                DeviceInfo {
+                    kind: DeviceKind::Owner,
+                    grant_id: None,
+                    ..device_info
+                },
+            ])),
+            "88000000011d070005022222222222222222222222222222222222222222222222222222222222222222111111111111111111111111111111110103626f6201013333333333333333333333333333333300022222222222222222222222222222222222222222222222222222222222222222111111111111111111111111111111110003626f6201000002",
+        ),
+        (
+            "MpResponse::Revoked",
+            Ok(MpResponse::Revoked {
+                grants: vec![GRANT],
+                devices: vec![DEVICE],
+                disconnected: 2,
+            }),
+            "38000000011d070006013333333333333333333333333333333301222222222222222222222222222222222222222222222222222222222222222202",
+        ),
+        (
+            "MpResponse::Lease(Granted)",
+            Ok(MpResponse::Lease(LeaseOutcome::Granted(LEASE))),
+            "1f000000011d070007000301111111111111111111111111111111118080b3c19c3301",
+        ),
+        (
+            "MpResponse::Lease(Pending)",
+            Ok(MpResponse::Lease(LeaseOutcome::Pending {
+                holder: PRINCIPAL,
+            })),
+            "16000000011d0700070111111111111111111111111111111111",
+        ),
+        (
+            "MpResponse::Lease(Kept)",
+            Ok(MpResponse::Lease(LeaseOutcome::Kept(LEASE))),
+            "1f000000011d070007020301111111111111111111111111111111118080b3c19c3301",
+        ),
+        (
+            "MpResponse::Leases",
+            Ok(MpResponse::Leases(vec![LEASE])),
+            "1f000000011d070008010301111111111111111111111111111111118080b3c19c3301",
+        ),
+        (
+            "MpResponse::Prompted",
+            Ok(MpResponse::Prompted { chars: 6 }),
+            "06000000011d07000906",
+        ),
+        (
+            "MpResponse::Audit",
+            Ok(MpResponse::Audit(AuditPage {
+                records: vec![audit_record()],
+                total: 3,
+                chain_ok: true,
+            })),
+            "71000000011d07000a010309080111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222201333333333333333333333333333333330103026f6b0109027231000359657301044261736802726d02010202030402000002ffff0301",
+        ),
+        (
+            "MpError::Forbidden",
+            Err(MpError::Forbidden("r".into())),
+            "07000000011d0701000172",
+        ),
+        (
+            "MpError::NotFound",
+            Err(MpError::NotFound("p".into())),
+            "07000000011d0701010170",
+        ),
+        (
+            "MpError::Invalid",
+            Err(MpError::Invalid("i".into())),
+            "07000000011d0701020169",
+        ),
+        (
+            "MpError::Conflict",
+            Err(MpError::Conflict("c".into())),
+            "07000000011d0701030163",
+        ),
+        (
+            "MpError::Failed",
+            Err(MpError::Failed("f".into())),
+            "07000000011d0701040166",
+        ),
+        (
+            "MpError::Disconnected",
+            Err(MpError::Disconnected),
+            "05000000011d070105",
+        ),
+    ];
+    for (name, result, golden) in answers {
+        c.check(
+            name,
+            ServerCtl::MultiplayerResult { req_id: 7, result },
+            golden,
+        );
+    }
+
+    c.check("ServerCtl::Joined", ServerCtl::Joined(join_info()), "4c000000011e11111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f6201030301333333333333333333333333333333330105");
+    c.check(
+        "ServerCtl::Participants",
+        ServerCtl::Participants {
+            participants: vec![participant()],
+        },
+        "53000000011f0111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f6204000133333333333333333333333333333333070101030101030102",
+    );
+    c.check(
+        "ServerCtl::LeaseRequested",
+        ServerCtl::LeaseRequested {
+            pane_id: PANE,
+            by: ACTOR,
+            name: "bob".into(),
+        },
+        "3700000001200311111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222203626f62",
+    );
+    c.check(
+        "ServerCtl::Forbidden",
+        ServerCtl::Forbidden {
+            what: "Input".into(),
+            reason: "viewer".into(),
+        },
+        "0f000000012105496e70757406766965776572",
+    );
+    for (name, kind, golden) in [
+        ("AuditKind::Join", AuditKind::Join, "020000000100"),
+        ("AuditKind::Leave", AuditKind::Leave, "020000000101"),
+        ("AuditKind::Paired", AuditKind::Paired, "020000000102"),
+        (
+            "AuditKind::GrantRegistered",
+            AuditKind::GrantRegistered,
+            "020000000103",
+        ),
+        (
+            "AuditKind::GrantRedeemed",
+            AuditKind::GrantRedeemed,
+            "020000000104",
+        ),
+        ("AuditKind::Revoked", AuditKind::Revoked, "020000000105"),
+        ("AuditKind::Lease", AuditKind::Lease, "020000000106"),
+        ("AuditKind::Prompt", AuditKind::Prompt, "020000000107"),
+        ("AuditKind::Approval", AuditKind::Approval, "020000000108"),
+        ("AuditKind::Denied", AuditKind::Denied, "020000000109"),
+    ] {
+        c.check(name, kind, golden);
+    }
+}
+
+#[test]
+fn invite_round_trips_through_text() {
+    let invite = Invite {
+        v: Invite::VERSION,
+        daemon_id: DAEMON,
+        addrs: vec!["[::1]:9".parse().unwrap()],
+        relay_url: None,
+        inviter: "alice".into(),
+        chain: chain(),
+    };
+    let text = invite.to_string();
+    assert!(text.starts_with(&format!("{}://join/", brand::URL_SCHEME)));
+    assert_eq!(text.parse::<Invite>().unwrap(), invite);
+    // The fragment form and a lower-cased, wrapped payload parse too.
+    let fragment = text.replacen("join/", "join#", 1);
+    assert_eq!(fragment.parse::<Invite>().unwrap(), invite);
+    let payload = text.rsplit('/').next().unwrap();
+    let mangled = format!(" {}\n{} ", payload[..8].to_lowercase(), &payload[8..]);
+    assert_eq!(mangled.parse::<Invite>().unwrap(), invite);
+    // A pairing ticket is not an invite.
+    assert!(
+        format!("{}://pair/{payload}", brand::URL_SCHEME)
+            .parse::<Invite>()
+            .is_err()
+    );
+}
+
+#[test]
+fn grant_signing_bytes_are_domain_separated() {
+    let g = grant();
+    let bytes = g.signing_bytes();
+    assert!(bytes.starts_with(Grant::SIGNING_CONTEXT));
+    let mut other = g.clone();
+    other.roles = Roles::OWNER;
+    assert_ne!(other.signing_bytes(), bytes);
+    let a = approval_signing_bytes(DAEMON, RequestId(1), OptionId(0), ACTOR);
+    assert!(a.starts_with(b"approval-v1\0"));
+    assert_ne!(
+        a,
+        approval_signing_bytes(DaemonId([0; 32]), RequestId(1), OptionId(0), ACTOR)
+    );
+}
+
+#[test]
+fn roles_parse_and_print() {
+    let r: Roles = "driver+approver".parse().unwrap();
+    assert_eq!(r, Roles::DRIVER | Roles::APPROVER);
+    assert_eq!(r.names(), "approver+driver");
+    assert!(Roles::OWNER.covers(r));
+    assert!(!r.covers(Roles::OWNER));
+    assert!("root".parse::<Roles>().is_err());
 }

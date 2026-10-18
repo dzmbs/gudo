@@ -282,7 +282,7 @@ impl AgentRuntime {
         id: RequestId,
         option: OptionId,
         actor: Actor,
-    ) -> Result<(ApprovalChoice, agents::RequestId), Option<Actor>> {
+    ) -> Result<DecidedRequest, Option<Actor>> {
         if let Some((done, by)) = self.last_decided
             && done == id
         {
@@ -294,28 +294,55 @@ impl AgentRuntime {
             .find(|(w, _)| *w == id)
             .map(|(_, r)| r.clone())
             .ok_or(None)?;
-        let choice = self
+        let blocked = self
             .arbiter
             .status()
             .blocked()
             .filter(|b| b.request_id == request)
-            .and_then(|b| b.blocker.options.get(option.0 as usize))
-            .map(|o| o.id)
+            .cloned()
             .ok_or(None)?;
+        let chosen = blocked.blocker.options.get(option.0 as usize).ok_or(None)?;
+        let choice = chosen.id;
+        let details = DecidedRequest {
+            choice,
+            request: request.clone(),
+            option: chosen.label.clone(),
+            tool: blocked.blocker.tool.clone(),
+            summary: blocked
+                .blocker
+                .summary
+                .clone()
+                .or(blocked.blocker.tool.clone())
+                .unwrap_or_default(),
+        };
         let decision = Decision {
-            request_id: request.clone(),
+            request_id: request,
             choice,
             actor: agents::ActorId::new(fsutil::hex(&actor.principal.0)),
         };
         match self.arbiter.decide(decision, now()) {
             Ok(_) => {
                 self.last_decided = Some((id, actor));
-                Ok((choice, request))
+                Ok(details)
             }
             Err(DecisionError::AlreadyDecided { .. }) => Err(self.last_decided.map(|(_, a)| a)),
             Err(_) => Err(None),
         }
     }
+}
+
+/// An accepted decision, with what the audit log records about it.
+pub(crate) struct DecidedRequest {
+    /// The answer for the hook.
+    pub choice: ApprovalChoice,
+    /// The arbiter's id for the blocked tool call (the agent event's request id).
+    pub request: agents::RequestId,
+    /// The chosen option's label.
+    pub option: String,
+    /// The tool asking.
+    pub tool: Option<String>,
+    /// What it wanted to do.
+    pub summary: String,
 }
 
 struct Pending {

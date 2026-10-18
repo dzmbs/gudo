@@ -119,6 +119,13 @@ impl Layout {
         self.locate(pane).map(|(s, _)| self.sessions[s].id)
     }
 
+    pub fn tab_of_pane(&self, pane: PaneId) -> Option<TabId> {
+        self.sessions
+            .iter()
+            .flat_map(|s| &s.tabs)
+            .find_map(|t| leaves(&t.root).any(|p| p == pane).then_some(t.tab_id))
+    }
+
     pub fn session_of_tab(&self, tab: TabId) -> Option<SessionId> {
         self.locate_tab(tab).map(|(s, _)| self.sessions[s].id)
     }

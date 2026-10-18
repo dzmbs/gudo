@@ -25,6 +25,8 @@
 //!   use, lowest priority) by [`Bulk::HistoryPage`] or [`Bulk::HistoryGone`], keyed by
 //!   `(pane, snapshot_seq, offset)`: the records after a [`PaneOutput::SnapshotZstd`]'s READY
 //!   section, newest page first, ready for a streaming snapshot decoder.
+//! - Multiplayer requests (grants, revocation, leases, prompts, audit) are
+//!   [`ClientCtl::Multiplayer`] → [`ServerCtl::MultiplayerResult`]; see [`mp`].
 //! - Developer-workflow requests (ports, editor, git, worktrees, files, attention) are
 //!   [`ClientCtl::Workspace`] → [`ServerCtl::WorkspaceResult`]; see the [`workspace`] types.
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
@@ -50,6 +52,7 @@
 pub mod frame;
 mod ids;
 mod layout;
+pub mod mp;
 mod msg;
 mod serde_bytes;
 mod ticket;
@@ -64,6 +67,7 @@ pub use layout::{
     AgentKind, Axis, Direction, LayoutNode, LayoutOp, OpError, OpOutcome, PaneLaunch,
     SessionLayout, SessionSummary, TabLayout,
 };
+pub use mp::*;
 pub use msg::*;
 pub use ticket::{PairingSecret, Ticket, TicketError};
 pub use workspace::*;
