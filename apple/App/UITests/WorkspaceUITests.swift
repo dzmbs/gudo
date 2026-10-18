@@ -109,6 +109,8 @@ final class WorkspaceUITests: XCTestCase {
     @MainActor
     func testKeyBarAboveSoftwareKeyboard() throws {
         let app = XCUIApplication()
+        // The simulator reports the Mac's keyboard, which collapses the bar to its slim strip.
+        app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "YES"]
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))

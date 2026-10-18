@@ -76,7 +76,10 @@ nonisolated final class EchoBackend: PaneBackend {
                 switch byte {
                 case 0x0D:
                     output += Array("\r\n".utf8)
-                    if !state.line.isEmpty {
+                    if state.line.starts(with: Array("title ".utf8)) {
+                        // `title <text>` sets the title (OSC 2), like a program would.
+                        output += Array("\u{1b}]2;".utf8) + state.line.dropFirst(6) + [0x07]
+                    } else if !state.line.isEmpty {
                         output += Array("\u{1b}[2mecho:\u{1b}[0m ".utf8) + state.line + Array("\r\n".utf8)
                     }
                     output += Array(Self.prompt.utf8)
