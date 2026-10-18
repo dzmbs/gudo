@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// Selection, paste and IME on the iPad terminal view. Cell geometry: 13 pt JetBrains Mono at 2x
@@ -65,10 +66,12 @@ final class TerminalInputUITests: XCTestCase {
         app.launch()
         let pane = element(app, "pane-1")
         XCTAssertTrue(pane.waitForExistence(timeout: 10))
-        pane.tap()
         UIPasteboard.general.string = "echo one\necho two"
-        sleep(1)
-        app.typeKey("v", modifierFlags: .command)
+        // Through the edit menu: long-press shows it with Paste.
+        cellPoint(pane, x: 3, y: 0).press(forDuration: 0.8)
+        let paste = app.menuItems["Paste"].firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
 
         // iOS may first ask whether the app may read the pasteboard.
         let allow = app.alerts.buttons["Allow Paste"].firstMatch
@@ -101,3 +104,4 @@ private extension XCTAttachment {
         return self
     }
 }
+#endif

@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// Drives the app through hardware-keyboard shortcuts, the way an iPad or Mac user would.
@@ -156,3 +157,4 @@ final class WorkspaceUITests: XCTestCase {
         Thread.sleep(forTimeInterval: seconds)
     }
 }
+#endif
