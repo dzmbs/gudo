@@ -3,6 +3,7 @@ import Foundation
 import PaneLayout
 import Synchronization
 import Testing
+import TerminalCore
 import UnnamedCore
 
 /// The connection state machine and pane routing against a fake client (04-mobile-ux R1–R12).
@@ -55,14 +56,23 @@ import UnnamedCore
         #expect(sink.all.contains(.snapshot(Data("SNAP".utf8))))
         #expect(sink.output == "$ ")
 
-        // Input goes out; its echo and ack give round trips.
-        Array("ls\r".utf8).withUnsafeBytes { backend.write($0) }
-        #expect(client().calls.last == .input(3, Data("ls\r".utf8)))
-        client().send(.paneBytes(paneId: 3, seq: 102, data: Data("ls\r\n".utf8)))
+        // Input goes out; the daemon's ack reaches the predictor after the echo it implies.
+        let predictions = PredictionSink()
+        let feed = try #require(backend as? any PredictionFeed)
+        feed.startPredictionFeed(predictions.handler)
+        #expect(predictions.all == [.hint(nil)], "nothing is predicted before the daemon's first hint")
+        Array("l".utf8).withUnsafeBytes { feed.writeInput($0, inputSeq: 1) }
+        #expect(client().calls.last == .input(3, Data("l".utf8)))
         client().send(.inputAck(paneId: 3, inputSeq: 1, atSeq: 102))
-        guard case .inputAck(102, let rtt)? = sink.all.last else { Issue.record("no ack: \(sink.all)"); return }
-        #expect(rtt != nil)
+        #expect(!predictions.all.contains { if case .acknowledged = $0 { true } else { false } }, "waits for the echo")
+        client().send(.paneBytes(paneId: 3, seq: 102, data: Data("l".utf8)))
+        #expect(predictions.all.last == .acknowledged(upTo: 1, hint: nil))
+        #expect(predictions.all.contains { if case .rtt = $0 { true } else { false } })
         try await eventually("echo rtt") { connection.echoRoundTrip != nil }
+        // Input that prints nothing is acked after a short grace.
+        Array("\u{1b}".utf8).withUnsafeBytes { feed.writeInput($0, inputSeq: 2) }
+        client().send(.inputAck(paneId: 3, inputSeq: 2, atSeq: 103))
+        try await eventually("grace ack") { predictions.all.last == .acknowledged(upTo: 2, hint: nil) }
 
         backend.paste("multi\nline")
         #expect(client().calls.last == .paste(3, "multi\nline"))
@@ -73,9 +83,9 @@ import UnnamedCore
         client().send(.paneHistory(paneId: 3, snapshotSeq: 100, data: Data("page".utf8), rows: 0, done: true))
         #expect(sink.all.filter { if case .history = $0 { true } else { false } } == [.history(Data("page".utf8), done: true)])
 
-        // Echo hints and in-band resizes reach the pane.
-        client().send(.echoHint(hint: EchoHint(paneId: 3, echo: true, icanon: false, altScreen: false, atPrompt: true, atSeq: 104, prediction: .allow)))
-        #expect(sink.all.last == .echo(EchoState(echo: true, canonical: false, alternateScreen: false, atPrompt: true, predict: true, atSeq: 104)))
+        // Echo hints reach the predictor, in-band resizes the pane.
+        client().send(.echoHint(hint: UnnamedCore.EchoHint(paneId: 3, echo: true, icanon: false, altScreen: false, atPrompt: true, atSeq: 104, prediction: .allow)))
+        #expect(predictions.all.last == .hint(TerminalCore.EchoHint(echo: true, canonical: false, atPrompt: true, altScreen: false)))
         client().send(.paneResized(paneId: 3, seq: 105, size: PaneSize(cols: 100, rows: 30, widthPx: 0, heightPx: 0)))
         #expect(sink.all.last == .resized(cols: 100, rows: 30))
 

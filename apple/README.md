@@ -62,6 +62,51 @@ tabs; key bar and sticky Ctrl over the software keyboard; divider drag, ⌃⌘ r
 split). Set `TEST_RUNNER_HOLD_SECONDS=30` to keep a UI test's final screen up for
 `xcrun simctl io "$DEVICE" screenshot`.
 
+`TerminalInputUITests` (iPad) covers long-press/double-tap selection with handles and the edit menu,
+multi-line paste confirmation, IME marked text (`-demoPreedit`, debug builds) and echo prediction
+(`-echoLatencyMs`). Paste reads the pasteboard, so grant it once per simulator:
+`xcrun simctl privacy "$DEVICE" grant pasteboard dev.unnamed.app` (a denied prompt is remembered and
+paste then silently reads nothing). `MacPasteUITests` needs macOS UI-automation approval (Touch ID), so
+the Mac paste path is also covered in process by `AppKitPasteTests` in TerminalKit.
+
+(TerminalBench `--glyphs-png`), `selection-handles-ipad.png`, `ime-preedit-ipad.png`.
+
+## Terminal view
+
+
+| Area | Where | Notes |
+|---|---|---|
+| Sprite glyphs | `TerminalRenderer/Sprite/*` | Box drawing, blocks, braille, Powerline (incl. rounded/extended), branch drawing, legacy computing (+ supplement, octants): drawn procedurally like Ghostty so they join at any cell size. `--glyphs-png` in TerminalBench; `-echoFixture glyphs` shows `GlyphFixture` in the iOS app |
+| Nerd Font / fallback | `NerdFontConstraint`, `NerdFontTables`, `FontGrid` | Ghostty's per-range icon constraints; icons grow into a following blank cell; emoji and CJK fallback scaled to their cells |
+| Decorations | `FrameBuilder` | Underline single/double/curly/dotted/dashed with SGR 58 color, overline, strikethrough, faint, inverse, invisible, SGR 5 blink; cursor blink (DECSCUSR, focus), hollow when unfocused |
+| Selection | `TerminalCore/Selection.swift` | Terminal-owned (tracked through scrolling/reflow). Ghostty's selection gesture (double/triple click, ⌥ block, edge auto-scroll). Copy is plain text with soft wraps joined |
+| Paste | `TerminalCore/Paste.swift` | `ghostty_terminal_paste`: bracketed when DECSET 2004, else asks before a multi-line paste |
+| Mouse | `TerminalCore/Mouse.swift`, `TerminalSurface.mouse/wheel` | libghostty-vt encoder (SGR etc.); ⇧ selects instead; wheel → reports, alt-screen arrows (DECSET 1007), or scrollback |
+| IME | `UITextInput` / `NSTextInputClient` | Marked text drawn inline at the cursor, underlined, never sent; candidate window at the cursor |
+| Links | OSC 8 | Underlined on hover; tap (iOS) / ⌘-click (Mac) opens after confirmation |
+| Echo prediction | `TerminalCore/Prediction/*` | 05 §5.5 with the S6 rule. Backends adopt `PredictionFeed` (hints, acks, RTT); the iOS echo backend simulates latency with `-echoLatencyMs 150` |
+| Appearance | `TerminalAppearance` | Font family/size, palette, colors, cursor, selection colors, padding, unfocused-split opacity — configuration, not constants |
+
+iOS gestures: tap focuses (or clicks in mouse mode, or opens a link); double/triple tap and long-press
+select with drag handles and the edit menu; one finger scrolls with momentum (arrows on the alt screen,
+drags in mouse mode); two fingers send the wheel. iPad pointer: click-drag selects, ⇧-click extends,
+hover underlines links and reports motion in any-event mode. Hardware keys: full HID map incl.
+function keys, Option-as-Meta per side (Pane menu ▸ Keyboard), ⌘ chords go to the app.
+
+Key bar (`App/Sources/KeyBar*`): profiles as data (Shell, Claude Code, Codex, Vim, Pager) picked from
+the foreground program, else the OSC title, with a chip to override; snippets row; composer (multi-line,
+⌘↩ or Send pastes it bracketed then Return; default on for agents, per pane); collapses to a 28 pt strip
+when a hardware keyboard is attached (`-keyBar.fullWithHardwareKeyboard YES` keeps the full row). All
+visuals come from `KeyBarStyle`.
+
+Backend hooks (additive, in `App/Sources/Panes/PaneBackend.swift`): `PredictionFeed` and
+`ForegroundProgramReporting` (picks the key bar profile; the title stands in until the daemon reports
+the program).
+
+Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typing 0.03 ms/frame build;
+sprite screen full redraw 0.61 ms avg / 0.66 ms p99; selection drag (whole viewport dirty every frame)
+0.60 ms avg / 0.67 ms p99; GPU ≤ 0.3 ms avg. All within the ~2 ms budget.
+
 ## Shortcuts (Ghostty defaults)
 
 | | |

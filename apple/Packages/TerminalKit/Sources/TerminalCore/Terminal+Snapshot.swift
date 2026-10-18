@@ -59,16 +59,6 @@ extension Terminal {
         return pages
     }
 
-    /// The scrollable area in rows and where the viewport is in it (`offset` 0 = the oldest
-    /// row on top).
-    public var scrollbar: (total: UInt64, offset: UInt64, visible: UInt64) {
-        withHandle { handle in
-            var bar = GhosttyTerminalScrollbar()
-            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar)
-            return (bar.total, bar.offset, bar.len)
-        }
-    }
-
     /// Plain text of the whole screen, scrollback included, soft wraps joined and trailing
     /// blanks trimmed (diagnostics, accessibility, tests).
     public func plainText() -> String {

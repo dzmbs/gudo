@@ -1,5 +1,6 @@
 import Foundation
 import PaneLayout
+import TerminalCore
 
 /// Where a pane's bytes come from and go to. The UI only talks to this protocol: a local PTY
 /// (macOS), a daemon pane (`DaemonPaneBackend`), a plain-SSH pane (`SshPaneBackend`) or the
@@ -70,9 +71,6 @@ nonisolated public enum PaneEvent: Sendable, Equatable {
     /// Whether the pane is live, or showing stale content while its connection recovers
     /// (dimmed, never blank: 04-mobile-ux C3, R12).
     case connection(PaneConnection)
-    case echo(EchoState)
-    /// Input was written to the remote PTY; `rtt` is the time from sending it.
-    case inputAck(atSeq: UInt64, rtt: Duration?)
     /// The pane's process ended (local backends; remote panes leave the layout instead).
     case exited
 }
@@ -85,36 +83,20 @@ nonisolated public enum PaneConnection: Sendable, Equatable {
     case stale(reason: String)
 }
 
-/// Termios and shell facts the host reports for a pane, tagged with the output offset they
-/// hold from. A prediction engine (TerminalKit's echo prediction) predicts only when
-/// `predict` is true: cooked mode with echo, or raw mode at a shell prompt; never at password
-/// prompts or in full-screen programs.
-nonisolated public struct EchoState: Sendable, Equatable {
-    public var echo: Bool
-    public var canonical: Bool
-    public var alternateScreen: Bool
-    public var atPrompt: Bool
-    public var predict: Bool
-    public var atSeq: UInt64
-
-    public init(echo: Bool, canonical: Bool, alternateScreen: Bool, atPrompt: Bool, predict: Bool, atSeq: UInt64) {
-        self.echo = echo
-        self.canonical = canonical
-        self.alternateScreen = alternateScreen
-        self.atPrompt = atPrompt
-        self.predict = predict
-        self.atSeq = atSeq
-    }
+/// reads ECHO/ICANON from the PTY master, knows the OSC 133 prompt state and the alt screen, acks
+/// inputs and measures RTT. Optional: panes of backends without it never predict.
+nonisolated public protocol PredictionFeed: PaneBackend {
+    /// Starts delivering `.hint`, `.acknowledged` and `.rtt` updates (any thread). An ack for `seq`
+    /// must come after the output produced by that input has been delivered.
+    func startPredictionFeed(_ onUpdate: @escaping @Sendable (PredictionUpdate) -> Void)
+    /// A user keystroke tagged with the predictor's input sequence number (acked later as
+    /// `.acknowledged(upTo:)`). Other writes (query replies, pastes) go through `write(_:)`.
+    func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64)
 }
 
-/// What an echo-prediction engine needs from the data layer. A `Pane` forwards `.echo`,
-/// `.inputAck` and RTT updates here; the TerminalKit prediction engine adopts it (or an
-/// adapter does) when it lands.
-nonisolated public protocol EchoPredictionSink: AnyObject, Sendable {
-    func echoStateChanged(_ state: EchoState)
-    /// The host has written input up to here; predictions older than `atSeq` are confirmed or
-    /// wrong.
-    func inputAcknowledged(atSeq: UInt64)
-    /// Smoothed keystroke round trip to the host (nil while unknown).
-    func roundTripChanged(_ rtt: Duration?)
+/// A backend that knows the pane's foreground program (the daemon's foreground process group on
+/// the PTY master), which picks the key bar profile. Without it the terminal title stands in.
+nonisolated public protocol ForegroundProgramReporting: PaneBackend {
+    /// `onChange` receives the program name (e.g. "vim", "claude"), or nil when unknown; any thread.
+    func onForegroundProgramChange(_ onChange: @escaping @Sendable (String?) -> Void)
 }

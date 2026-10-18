@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 @testable import HostKit
+import TerminalCore
 import UnnamedCore
 
 struct TestError: Error, CustomStringConvertible {
@@ -97,4 +98,11 @@ func sampleLayout(revision: UInt64 = 1, focused: UInt64 = 3, zoomed: UInt64? = n
                 ],
                 focused: focused, zoomed: zoomed),
         ])
+}
+
+/// Collects prediction updates.
+nonisolated final class PredictionSink: Sendable {
+    private let updates = Mutex<[PredictionUpdate]>([])
+    var all: [PredictionUpdate] { updates.withLock { $0 } }
+    var handler: @Sendable (PredictionUpdate) -> Void { { update in self.updates.withLock { $0.append(update) } } }
 }

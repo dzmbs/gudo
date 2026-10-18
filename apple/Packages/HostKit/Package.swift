@@ -12,6 +12,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../PaneLayout"),
+        .package(path: "../TerminalKit"),
         .package(path: "../UnnamedCore"),
     ],
     targets: [
@@ -19,6 +20,8 @@ let package = Package(
             name: "HostKit",
             dependencies: [
                 .product(name: "PaneLayout", package: "PaneLayout"),
+                // Echo-prediction types (`PredictionUpdate`, `EchoHint`) only.
+                .product(name: "TerminalCore", package: "TerminalKit"),
                 .product(name: "UnnamedCore", package: "UnnamedCore"),
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]

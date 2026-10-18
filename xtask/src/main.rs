@@ -192,10 +192,14 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
     let header = format!("{FFI_MODULE}.h");
     let headers = work.join("headers");
     let _ = fs::remove_dir_all(&headers);
-    fs::create_dir_all(&headers)?;
-    fs::copy(bindings.join(&header), headers.join(&header))?;
+    // In a subdirectory named after the module: clang finds `<dir>/<Module>/module.modulemap`,
+    // and SwiftPM copies every binary target's headers into one include directory, where a
+    // top-level module.modulemap would collide with TerminalKit's libghostty-vt xcframework.
+    let module_headers = headers.join(FFI_MODULE);
+    fs::create_dir_all(&module_headers)?;
+    fs::copy(bindings.join(&header), module_headers.join(&header))?;
     fs::write(
-        headers.join("module.modulemap"),
+        module_headers.join("module.modulemap"),
         format!("module {FFI_MODULE} {{\n    header \"{header}\"\n    export *\n}}\n"),
     )?;
 

@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// Drives the app through hardware-keyboard shortcuts, the way an iPad or Mac user would.
@@ -108,6 +109,8 @@ final class WorkspaceUITests: XCTestCase {
     @MainActor
     func testKeyBarAboveSoftwareKeyboard() throws {
         let app = XCUIApplication()
+        // The simulator reports the Mac's keyboard, which collapses the bar to its slim strip.
+        app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "YES"]
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))
@@ -156,3 +159,4 @@ final class WorkspaceUITests: XCTestCase {
         Thread.sleep(forTimeInterval: seconds)
     }
 }
+#endif

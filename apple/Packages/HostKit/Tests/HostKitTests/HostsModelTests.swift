@@ -4,7 +4,7 @@ import PaneLayout
 import Testing
 import UnnamedCore
 
-func temporaryDirectory() -> URL {
+nonisolated func temporaryDirectory() -> URL {
     let url = FileManager.default.temporaryDirectory.appending(path: "hostkit-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url

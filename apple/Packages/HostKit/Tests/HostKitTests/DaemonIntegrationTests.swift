@@ -5,7 +5,7 @@ import Testing
 import UnnamedCore
 
 /// The repository root (this file is apple/Packages/HostKit/Tests/HostKitTests/…).
-let repoRoot = URL(fileURLWithPath: #filePath)
+nonisolated let repoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
@@ -15,6 +15,24 @@ nonisolated final class LocalDaemon {
     let binary: URL
     let stateDir: URL
     private var process: Process?
+    /// Fixed across restarts so the ticket's direct address stays valid (relays are off).
+    let port: UInt16
+
+    static func freePort() throws -> UInt16 {
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0
+            }
+        }
+        guard bound else { throw TestError("no free port") }
+        return UInt16(bigEndian: address.sin_port)
+    }
 
     init() throws {
         binary = ProcessInfo.processInfo.environment["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
@@ -23,6 +41,7 @@ nonisolated final class LocalDaemon {
             throw TestError("no daemon at \(binary.path): run `cargo build -p hostd` first")
         }
         stateDir = temporaryDirectory()
+        port = try Self.freePort()
         try start()
     }
 
@@ -30,7 +49,7 @@ nonisolated final class LocalDaemon {
     func start() throws {
         let process = Process()
         process.executableURL = binary
-        process.arguments = ["--state-dir", stateDir.path, "run", "--no-relay", "--bind", "127.0.0.1:0", "--shell", "/bin/sh"]
+        process.arguments = ["--state-dir", stateDir.path, "run", "--no-relay", "--bind", "127.0.0.1:\(port)", "--shell", "/bin/sh"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
@@ -133,9 +152,7 @@ nonisolated final class LocalDaemon {
         try await eventually("stale", timeout: .seconds(20)) {
             if case .stale = sink.lastConnection { true } else { false }
         }
-        if case .reconnecting = connection.status {} else if case .connecting = connection.status {} else {
-            Issue.record("status while down: \(connection.status)")
-        }
+        try await eventually("status shows the drop", timeout: .seconds(10)) { !connection.status.isLive }
         let outputBefore = sink.output
         try daemon.start()
         connection.networkChanged()  // what the path monitor or foreground would do (R10)

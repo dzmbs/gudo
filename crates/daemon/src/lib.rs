@@ -43,6 +43,7 @@ mod procinfo;
 mod scan;
 mod shell;
 mod stream;
+mod ws;
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -87,7 +88,8 @@ impl Daemon {
     /// # Errors
     ///
     /// Returns [`StartError`] if the state directory is unusable or the endpoint cannot bind.
-    pub async fn start(config: Config) -> Result<Self, StartError> {
+    pub async fn start(mut config: Config) -> Result<Self, StartError> {
+        config.apply_user_file()?;
         let identity = Identity::load_or_create(&config.state_dir)?;
         let (layout, records) = persist::load(&config.state_dir)?
             .map(persist::Saved::into_parts)
@@ -122,6 +124,8 @@ impl Daemon {
             endpoint.clone(),
         )));
         tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
         core.mark_dirty();
         Ok(Self {
             core,
@@ -181,6 +185,7 @@ impl Daemon {
             tracing::warn!("saving layout on shutdown: {e}");
         }
         self.endpoint.close().await;
+        self.core.ws.editors.stop_all().await;
         let panes: Vec<_> = self
             .core
             .pane_entries()

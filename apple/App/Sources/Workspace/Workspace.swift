@@ -1,5 +1,14 @@
-import PaneLayout
+import Foundation
 import Observation
+import PaneLayout
+import TerminalCore
+import TerminalRenderer
+
+/// User-default keys for keyboard behaviour.
+enum KeyboardSettings {
+    static let optionAsMeta = "optionAsMeta"
+    static let asciiKeyboard = "asciiKeyboard"
+}
 #if os(iOS)
 import GameController
 #endif
@@ -15,6 +24,11 @@ final class Workspace {
     private(set) var failures: [PaneId: String] = [:]
     /// The tab whose rename prompt is showing.
     var renamingTab: TabId?
+    /// Terminal appearance for every pane (the design layer may replace it).
+    @ObservationIgnored var appearance = TerminalAppearance()
+    /// One terminal cell in points, once a pane has laid out: split sizes snap to whole cells so
+    /// panes waste no partial cells (the remainder becomes padding).
+    private(set) var cellSize: CGSize?
 
     #if os(iOS)
     /// The key bar shared by this window's panes; it follows the first responder.
@@ -27,6 +41,7 @@ final class Workspace {
         self.layout = layout
         self.makeBackend = makeBackend
         reconcilePanes()
+        _ = settingsObserver
     }
 
     var session: Session { layout.session }
@@ -38,7 +53,10 @@ final class Workspace {
     }
 
     func title(of tab: Tab) -> String {
-        tab.title ?? "Tab \((session.tabs.firstIndex(of: tab) ?? 0) + 1)"
+        // A user rename wins; then the focused pane's OSC 0/2 title, as Ghostty does.
+        if let title = tab.title { return title }
+        if let title = panes[tab.focused]?.title, !title.isEmpty { return title }
+        return "Tab \((session.tabs.firstIndex(of: tab) ?? 0) + 1)"
     }
 
     // MARK: Commands on the focused pane / active tab
@@ -87,6 +105,31 @@ final class Workspace {
         #endif
     }
 
+    // MARK: Keyboard settings
+
+    /// `optionAsMeta` (none/left/right/both) and `asciiKeyboard` (iOS software keyboard type) from
+    /// user defaults, applied to a pane's view; re-applied when the defaults change.
+    private func applyKeyboardSettings(to pane: Pane) {
+        let defaults = UserDefaults.standard
+        pane.view.optionAsMeta = defaults.string(forKey: KeyboardSettings.optionAsMeta).flatMap(OptionAsMeta.init) ?? .none
+        #if os(iOS)
+        let ascii = defaults.bool(forKey: KeyboardSettings.asciiKeyboard)
+        if pane.view.keyboardType != (ascii ? .asciiCapable : .default) {
+            pane.view.keyboardType = ascii ? .asciiCapable : .default
+            if pane.view.isFirstResponder { pane.view.reloadInputViews() }
+        }
+        #endif
+    }
+
+    @ObservationIgnored private lazy var settingsObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+        MainActor.assumeIsolated {
+            guard let self else { return }
+            for pane in self.panes.values { self.applyKeyboardSettings(to: pane) }
+        }
+    }
+
     // MARK: Panes
 
     private func reconcilePanes() {
@@ -106,17 +149,37 @@ final class Workspace {
     }
 
     private func makePane(_ id: PaneId) throws -> Pane {
-        let pane = try Pane(id: id, backend: makeBackend(id)) { [weak self] in
+        let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance) { [weak self] in
             // The process exited: close its pane, as Ghostty does.
             Task { @MainActor in self?.apply(.close(id)) }
         }
+        pane.onCellSize = { [weak self] size in
+            if self?.cellSize != size { self?.cellSize = size }
+        }
+        applyKeyboardSettings(to: pane)
         #if os(iOS)
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
         pane.view.takeLatchedModifiers = { [keyBar] in keyBar.takeLatchedModifiers() }
-        pane.view.onFocus = { [weak self, weak view = pane.view] in
-            self?.keyBar.target = view
-            self?.apply(.focus(id))
+        pane.view.onFocus = { [weak self, weak pane] in
+            guard let self, let pane else { return }
+            keyBar.target = pane.view
+            keyBar.update(context: KeyBarContext(program: pane.foregroundProgram, title: pane.title))
+            apply(.focus(id))
+        }
+        #if DEBUG
+        // `-demoPreedit <text>` shows IME marked text in the first pane, for screenshots and UI
+        // tests (the simulator's software keyboard cannot be switched to an IME from a test).
+        if let preedit = UserDefaults.standard.string(forKey: "demoPreedit"), !preedit.isEmpty, panes.isEmpty {
+            Task { @MainActor [weak pane] in
+                try? await Task.sleep(for: .seconds(1.5))
+                pane?.view.setMarkedText(preedit, selectedRange: NSRange(location: preedit.utf16.count, length: 0))
+            }
+        }
+        #endif
+        pane.onContextChange = { [weak self, weak pane] in
+            guard let self, let pane, keyBar.target === pane.view else { return }
+            keyBar.update(context: KeyBarContext(program: pane.foregroundProgram, title: pane.title))
         }
         #else
         pane.view.setAccessibilityIdentifier(id.description)
