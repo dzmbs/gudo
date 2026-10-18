@@ -1,4 +1,4 @@
-import CGhosttyVt
+import GhosttyVt
 import Synchronization
 
 /// An sRGB color with 8-bit channels.

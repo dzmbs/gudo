@@ -8,8 +8,66 @@ enum RendererError: Error {
     case missingFunction(String)
 }
 
-/// GPU side: Ghostty's Metal pipelines (`bg_color`, `cell_bg`, `cell_text`) driven from
-/// `FrameContents`, with triple-buffered per-frame buffers like `renderer/Metal.zig`.
+/// Device, queue and compiled pipelines, shared by every `TerminalSurface` in the process so a new
+/// pane costs neither a shader compile nor another command queue. Metal devices, queues and
+/// pipeline states are thread-safe.
+final class GPUContext: Sendable {
+    let device: MTLDevice
+    let queue: MTLCommandQueue
+    let bgColorPipeline: MTLRenderPipelineState
+    let cellBgPipeline: MTLRenderPipelineState
+    let cellTextPipeline: MTLRenderPipelineState
+    /// Runtime shader compile time, reported by the demo and the bench.
+    let shaderCompileSeconds: Double
+
+    /// Created on first use. A failure is kept, so every surface reports the same error.
+    static let shared = Result { try GPUContext() }
+
+    private init() throws {
+        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
+            throw RendererError.noDevice
+        }
+        self.device = device
+        self.queue = queue
+
+        let source = try MetalRenderer.shaderSource()
+        let start = CFAbsoluteTimeGetCurrent()
+        let library = try device.makeLibrary(source: source, options: nil)
+        shaderCompileSeconds = CFAbsoluteTimeGetCurrent() - start
+
+        bgColorPipeline = try Self.pipeline(device, library, vertex: "full_screen_vertex", fragment: "bg_color_fragment", blending: false)
+        cellBgPipeline = try Self.pipeline(device, library, vertex: "full_screen_vertex", fragment: "cell_bg_fragment", blending: true)
+        cellTextPipeline = try Self.pipeline(
+            device, library, vertex: "cell_text_vertex", fragment: "cell_text_fragment", blending: true,
+            vertexDescriptor: MetalRenderer.cellTextVertexDescriptor())
+    }
+
+    private static func pipeline(
+        _ device: MTLDevice, _ library: MTLLibrary, vertex: String, fragment: String, blending: Bool,
+        vertexDescriptor: MTLVertexDescriptor? = nil
+    ) throws -> MTLRenderPipelineState {
+        guard let vertexFn = library.makeFunction(name: vertex) else { throw RendererError.missingFunction(vertex) }
+        guard let fragmentFn = library.makeFunction(name: fragment) else { throw RendererError.missingFunction(fragment) }
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = vertexFn
+        descriptor.fragmentFunction = fragmentFn
+        descriptor.vertexDescriptor = vertexDescriptor
+        let attachment = descriptor.colorAttachments[0]!
+        attachment.pixelFormat = MetalRenderer.pixelFormat
+        // Ghostty always blends premultiplied alpha (metal/Pipeline.zig).
+        attachment.isBlendingEnabled = blending
+        attachment.rgbBlendOperation = .add
+        attachment.alphaBlendOperation = .add
+        attachment.sourceRGBBlendFactor = .one
+        attachment.sourceAlphaBlendFactor = .one
+        attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        return try device.makeRenderPipelineState(descriptor: descriptor)
+    }
+}
+
+/// GPU side of one surface: Ghostty's Metal pipelines (`bg_color`, `cell_bg`, `cell_text`) driven
+/// from `FrameContents`, with triple-buffered per-frame buffers like `renderer/Metal.zig`.
 ///
 /// Presentation goes through `CAMetalLayer` drawables (the idiomatic iOS path) instead of Ghostty's
 /// IOSurface layer.
@@ -19,12 +77,9 @@ final class MetalRenderer {
     static let pixelFormat = MTLPixelFormat.bgra8Unorm
     private static let maxFramesInFlight = 3
 
-    let device: MTLDevice
-    private let queue: MTLCommandQueue
-    private let bgColorPipeline: MTLRenderPipelineState
-    private let cellBgPipeline: MTLRenderPipelineState
-    private let cellTextPipeline: MTLRenderPipelineState
-    let shaderCompileSeconds: Double
+    private let gpu: GPUContext
+    var device: MTLDevice { gpu.device }
+    var shaderCompileSeconds: Double { gpu.shaderCompileSeconds }
 
     private struct FrameBuffers {
         var bgCells: MTLBuffer?
@@ -39,22 +94,7 @@ final class MetalRenderer {
     private var colorTexture: MTLTexture?
 
     init() throws {
-        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
-            throw RendererError.noDevice
-        }
-        self.device = device
-        self.queue = queue
-
-        let source = try Self.shaderSource()
-        let start = CFAbsoluteTimeGetCurrent()
-        let library = try device.makeLibrary(source: source, options: nil)
-        shaderCompileSeconds = CFAbsoluteTimeGetCurrent() - start
-
-        bgColorPipeline = try Self.pipeline(device, library, vertex: "full_screen_vertex", fragment: "bg_color_fragment", blending: false)
-        cellBgPipeline = try Self.pipeline(device, library, vertex: "full_screen_vertex", fragment: "cell_bg_fragment", blending: true)
-        cellTextPipeline = try Self.pipeline(
-            device, library, vertex: "cell_text_vertex", fragment: "cell_text_fragment", blending: true,
-            vertexDescriptor: Self.cellTextVertexDescriptor())
+        gpu = try GPUContext.shared.get()
     }
 
     /// Ghostty's shaders.metal, shipped as a resource and compiled at runtime (no offline `metal`).
@@ -72,7 +112,7 @@ final class MetalRenderer {
         onGPUComplete: @escaping @Sendable (Double) -> Void
     ) {
         inFlight.wait()
-        guard let commands = queue.makeCommandBuffer() else {
+        guard let commands = gpu.queue.makeCommandBuffer() else {
             inFlight.signal()
             return
         }
@@ -93,18 +133,18 @@ final class MetalRenderer {
         var uniforms = uniforms
 
         // 1. Background color: full-screen triangle, no blending.
-        encoder.setRenderPipelineState(bgColorPipeline)
+        encoder.setRenderPipelineState(gpu.bgColorPipeline)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         // 2. Cell backgrounds: full-screen fragment shader indexing the flat bg_cells buffer.
-        encoder.setRenderPipelineState(cellBgPipeline)
+        encoder.setRenderPipelineState(gpu.cellBgPipeline)
         encoder.setFragmentBuffer(bgCells, offset: 0, index: 2)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         // 3. Text, decorations and cursor: one instanced quad (triangle strip) per glyph.
         if !frame.text.isEmpty {
-            encoder.setRenderPipelineState(cellTextPipeline)
+            encoder.setRenderPipelineState(gpu.cellTextPipeline)
             encoder.setVertexBuffer(text, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
             encoder.setVertexBuffer(bgCells, offset: 0, index: 2)
@@ -162,29 +202,6 @@ final class MetalRenderer {
             }
         }
         return texture
-    }
-
-    private static func pipeline(
-        _ device: MTLDevice, _ library: MTLLibrary, vertex: String, fragment: String, blending: Bool,
-        vertexDescriptor: MTLVertexDescriptor? = nil
-    ) throws -> MTLRenderPipelineState {
-        guard let vertexFn = library.makeFunction(name: vertex) else { throw RendererError.missingFunction(vertex) }
-        guard let fragmentFn = library.makeFunction(name: fragment) else { throw RendererError.missingFunction(fragment) }
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = vertexFn
-        descriptor.fragmentFunction = fragmentFn
-        descriptor.vertexDescriptor = vertexDescriptor
-        let attachment = descriptor.colorAttachments[0]!
-        attachment.pixelFormat = pixelFormat
-        // Ghostty always blends premultiplied alpha (metal/Pipeline.zig).
-        attachment.isBlendingEnabled = blending
-        attachment.rgbBlendOperation = .add
-        attachment.alphaBlendOperation = .add
-        attachment.sourceRGBBlendFactor = .one
-        attachment.sourceAlphaBlendFactor = .one
-        attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
-        attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        return try device.makeRenderPipelineState(descriptor: descriptor)
     }
 
     /// Attribute layout of `CellTextVertexIn`, stepping once per instance.

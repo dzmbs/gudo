@@ -1,0 +1,6 @@
+// Every product-name-bearing string of the Apple apps is defined here (and in crates/brand for
+// Rust). Renaming the product means editing these two files; nothing else hard-codes the name.
+// Swift code reads the name back from the bundle (CFBundleName).
+
+BRAND_NAME = unnamed
+BRAND_BUNDLE_ID_PREFIX = dev.unnamed

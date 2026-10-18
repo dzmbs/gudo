@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Builds the static libghostty-vt.a (host macOS slice) that TerminalKit's CGhosttyVt target links.
+# Builds ghostty-vt.xcframework (macOS universal, iOS arm64, iOS simulator arm64) from the pinned
+# vendor/ghostty. TerminalKit consumes it as the `GhosttyVt` binary target.
 #
-# Output: apple/build/ghostty-vt/lib/libghostty-vt.a (+ include/ copied by zig).
+# Output: apple/build/ghostty-vt/lib/ghostty-vt.xcframework
 #
-# Requires Zig 0.16.x (Ghostty pins major.minor). Works with only the Command Line Tools: the dylib
-# step may fail to link under CLT, but the static archive is installed first, so a non-zero exit is
-# accepted as long as libghostty-vt.a exists.
+# Requires Zig 0.16.x (Ghostty pins major.minor) and Xcode: xcodebuild assembles the xcframework,
+# and the iOS slices are only emitted when the iOS SDK is installed.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -23,26 +23,23 @@ if [[ "$zig_version" != 0.16.* ]]; then
   echo "error: Zig 0.16.x required, found $zig_version" >&2
   exit 1
 fi
-
-rm -rf "$prefix"
-set +e
-(cd "$ghostty" && "$zig" build \
-  -Demit-lib-vt \
-  -Demit-xcframework=false \
-  -Doptimize="$optimize" \
-  --prefix "$prefix")
-status=$?
-set -e
-
-archive="$prefix/lib/libghostty-vt.a"
-if [[ ! -f "$archive" ]]; then
-  echo "error: zig build exited $status and produced no $archive" >&2
+if ! xcodebuild -version >/dev/null 2>&1; then
+  echo "error: xcodebuild from Xcode (not only the Command Line Tools) is required" >&2
   exit 1
 fi
-if [[ $status -ne 0 ]]; then
-  echo "warning: zig build exited $status (expected under CLT: dylib link); static archive is present" >&2
-fi
 
-# SwiftPM must link the static archive, never a dylib sitting next to it.
-find "$prefix/lib" -maxdepth 1 \( -name '*.dylib' -o -name '*.so*' \) -delete
-echo "built $archive ($(du -h "$archive" | cut -f1))"
+rm -rf "$prefix"
+(cd "$ghostty" && "$zig" build \
+  -Demit-lib-vt \
+  -Demit-xcframework=true \
+  -Doptimize="$optimize" \
+  --prefix "$prefix")
+
+xcframework="$prefix/lib/ghostty-vt.xcframework"
+for slice in macos-arm64_x86_64 ios-arm64 ios-arm64-simulator; do
+  if [[ ! -d "$xcframework/$slice" ]]; then
+    echo "error: $xcframework has no $slice slice" >&2
+    exit 1
+  fi
+done
+echo "built $xcframework ($(du -sh "$xcframework" | cut -f1))"
