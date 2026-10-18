@@ -1,0 +1,27 @@
+{
+  "name": "ios-smoke",
+  "description": "iPad simulator via DogfoodUITests (XCUITest adapter); the iOS panes use the local echo backend until the daemon lands.",
+  "cases": [
+    {
+      "name": "type-echo",
+      "steps": [
+        { "do": "waitText", "text": "local echo" },
+        { "do": "type", "text": "hello dogfood\n" },
+        { "do": "waitText", "text": "echo: hello dogfood" },
+        { "do": "screenshot", "name": "ios-01-type-echo" }
+      ]
+    },
+    {
+      "name": "split-and-type",
+      "steps": [
+        { "do": "shortcut", "keys": "cmd+d" },
+        { "do": "assert", "panes": 2 },
+        { "do": "type", "text": "right pane\n" },
+        { "do": "waitText", "text": "echo: right pane" },
+        { "do": "shortcut", "keys": "cmd+w" },
+        { "do": "assert", "panes": 1 },
+        { "do": "screenshot", "name": "ios-02-split-closed" }
+      ]
+    }
+  ]
+}

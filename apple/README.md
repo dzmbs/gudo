@@ -81,6 +81,10 @@ multi-line paste confirmation, IME marked text (`-demoPreedit`, debug builds) an
 paste then silently reads nothing). `MacPasteUITests` needs macOS UI-automation approval (Touch ID), so
 the Mac paste path is also covered in process by `AppKitPasteTests` in TerminalKit.
 
+End-to-end on the Mac without any permission prompt: `scripts/dogfood.sh [scenario]` builds Debug and
+runs a scenario (`Dogfood/core.json`: the daily-driver checklist) inside the app, which synthesizes
+its own input and writes `report.json` plus PNGs; see `Dogfood/README.md`.
+
 (TerminalBench `--glyphs-png`), `selection-handles-ipad.png`, `ime-preedit-ipad.png`.
 
 ## Terminal view

@@ -4,7 +4,8 @@ import LocalPTY
 
 /// The user's login shell on a local PTY.
 nonisolated final class LocalPTYBackend: PaneBackend {
-    private let pty: PTY
+    /// Internal (not private) so debug tooling can find the shell's pid.
+    let pty: PTY
 
     init() throws {
         var environment = ProcessInfo.processInfo.environment

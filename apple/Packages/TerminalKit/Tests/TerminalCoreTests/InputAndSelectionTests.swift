@@ -239,6 +239,17 @@ private let geometry = MouseGeometry(screenWidth: 200, screenHeight: 100, cellWi
     #expect(gesture.clickCount == 1)
 }
 
+@Test func gestureDragWithPaddingSelectsTheCellsUnderThePointer() {
+    let (terminal, _) = makeTerminal(cols: 20, rows: 3)
+    terminal.write(Array("    alpha beta".utf8))
+    let gesture = SelectionGesture(terminal: terminal)
+    // 8 px of left padding: cell n spans 8 + 16n ..< 8 + 16(n + 1).
+    let geo = SelectionGesture.Geometry(columns: 20, cellWidth: 16, paddingLeft: 8, screenHeight: 60)
+    _ = gesture.press(cell: GridPoint(x: 4, y: 0), x: 8 + 4 * 16 + 1, y: 5, time: 1)
+    _ = gesture.drag(cell: GridPoint(x: 8, y: 0), x: 8 + 9 * 16 - 1, y: 5, rectangle: false, geometry: geo)
+    #expect(terminal.selectionText() == "alpha")
+}
+
 @Test func gestureAutoscrollRequestedWhenDraggingAboveTheView() {
     let (terminal, _) = makeTerminal(cols: 10, rows: 3)
     for i in 0..<10 { terminal.write(Array("row\(i)\r\n".utf8)) }

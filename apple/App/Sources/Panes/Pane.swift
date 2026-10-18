@@ -29,7 +29,7 @@ final class Pane {
     /// The cell size in points after a layout (split sizes snap to it).
     @ObservationIgnored var onCellSize: ((CGSize) -> Void)?
 
-    @ObservationIgnored private let backend: any PaneBackend
+    @ObservationIgnored let backend: any PaneBackend
     @ObservationIgnored private var appliedGrid: TerminalSurface.Grid?
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
 
