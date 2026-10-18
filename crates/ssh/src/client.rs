@@ -13,7 +13,7 @@ use tokio::task::JoinSet;
 
 use crate::SshError;
 use crate::auth::{Credentials, authenticate};
-use crate::known_hosts::{HostKeyInfo, HostKeyPolicy, KnownHosts};
+use crate::known_hosts::{HostKeyPolicy, KnownHosts, Undecided};
 use crate::target::{HostSpec, Target};
 
 /// Liveness settings (docs/SSH.md §2). The defaults follow 04 R1/R2.
@@ -102,7 +102,7 @@ pub(crate) struct ClientHandler {
     known_hosts: Arc<KnownHosts>,
     policy: HostKeyPolicy,
     /// A new host key waiting for the user's verdict after the key exchange.
-    pending: Arc<Mutex<Option<(HostKeyInfo, PublicKey)>>>,
+    pending: Arc<Mutex<Option<(Undecided, PublicKey)>>>,
     dead: Arc<watch::Sender<Option<String>>>,
 }
 
@@ -574,25 +574,41 @@ where
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take();
-    if let Some((info, key)) = new_key {
+    if let Some((Undecided { info, expected }, key)) = new_key {
         let HostKeyPolicy::Ask(prompt) = &options.host_key_policy else {
             unreachable!("only Ask defers a decision");
         };
         let prompt = Arc::clone(prompt);
         let shown = info.clone();
-        let trusted = tokio::task::spawn_blocking(move || prompt.trust_new_host(shown))
-            .await
-            .unwrap_or(false);
+        let changed = expected.clone();
+        let trusted = tokio::task::spawn_blocking(move || match changed {
+            None => prompt.trust_new_host(shown),
+            Some(expected) => prompt.trust_changed_host(shown, expected),
+        })
+        .await
+        .unwrap_or(false);
         if !trusted {
             let _ = handle
                 .disconnect(russh::Disconnect::HostKeyNotVerifiable, "", "en")
                 .await;
-            return Err(SshError::HostKeyRejected {
-                host: info.host,
-                fingerprint: info.fingerprint,
+            return Err(match expected {
+                None => SshError::HostKeyRejected {
+                    host: info.host,
+                    fingerprint: info.fingerprint,
+                },
+                Some(expected) => SshError::HostKeyMismatch {
+                    host: info.host,
+                    expected,
+                    actual: info.fingerprint,
+                },
             });
         }
-        options.known_hosts.add(spec.key_host(), spec.port, &key)?;
+        match expected {
+            None => options.known_hosts.add(spec.key_host(), spec.port, &key)?,
+            Some(_) => options
+                .known_hosts
+                .replace(spec.key_host(), spec.port, &key)?,
+        }
     }
 
     tokio::time::timeout(

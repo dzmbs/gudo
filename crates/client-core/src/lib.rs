@@ -30,6 +30,7 @@
 mod conn;
 mod mirror;
 mod ssh_pane;
+mod workspace;
 
 use std::collections::HashMap;
 use std::net::TcpListener as StdTcpListener;
@@ -50,6 +51,7 @@ use crate::mirror::Mirror;
 pub use proto;
 pub use ssh;
 pub use ssh_pane::{RESTART_MARKER, SshPane, SshPaneOptions, ssh_runtime};
+pub use workspace::{TransferProgress, WorkspaceEvent, WorkspaceEventQueue, WorkspaceListener};
 
 /// Which relays the client's endpoint may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -353,6 +355,8 @@ pub(crate) struct Inner {
     pub paired: Mutex<bool>,
     pub next_op: AtomicU64,
     pub stats: Mutex<ClientStats>,
+    /// Workspace requests in flight, pushes, forwards.
+    pub ws: workspace::WsState,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -372,7 +376,11 @@ impl Inner {
 /// A connection to one daemon. Dropping it disconnects.
 pub struct Client {
     inner: Arc<Inner>,
+    handle: tokio::runtime::Handle,
+    /// The runtime, when the client owns it ([`connect`](Self::connect)).
     runtime: Option<Runtime>,
+    /// Tasks to stop on drop when the runtime is shared ([`connect_on`](Self::connect_on)).
+    tasks: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
 impl Client {
@@ -389,15 +397,34 @@ impl Client {
         config: ClientConfig,
         listener: Arc<dyn ClientListener>,
     ) -> Result<Self, ClientError> {
-        let ticket: Ticket = ticket.parse()?;
-        if config.secret_key.len() != 32 {
-            return Err(ClientError::Key);
-        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("client-core")
             .enable_all()
             .build()?;
+        let mut client = Self::connect_on(runtime.handle(), ticket, config, listener)?;
+        client.runtime = Some(runtime);
+        Ok(client)
+    }
+
+    /// Like [`connect`](Self::connect), but runs on `runtime` (shared with other clients,
+    /// e.g. the app's one FFI runtime) instead of a runtime of its own. Dropping the client
+    /// stops its tasks; the runtime keeps running.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::Ticket`] for an unparsable ticket and [`ClientError::Key`] for
+    /// a key that is not 32 bytes.
+    pub fn connect_on(
+        runtime: &tokio::runtime::Handle,
+        ticket: &str,
+        config: ClientConfig,
+        listener: Arc<dyn ClientListener>,
+    ) -> Result<Self, ClientError> {
+        let ticket: Ticket = ticket.parse()?;
+        if config.secret_key.len() != 32 {
+            return Err(ClientError::Key);
+        }
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
             ticket,
@@ -416,11 +443,14 @@ impl Client {
             paired: Mutex::new(false),
             next_op: AtomicU64::new(1),
             stats: Mutex::new(ClientStats::default()),
+            ws: workspace::WsState::default(),
         });
-        runtime.spawn(conn::supervise(Arc::clone(&inner)));
+        let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {
             inner,
-            runtime: Some(runtime),
+            handle: runtime.clone(),
+            runtime: None,
+            tasks: Mutex::new(vec![supervisor.abort_handle()]),
         })
     }
 
@@ -682,21 +712,16 @@ impl Client {
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let inner = Arc::clone(&self.inner);
-        self.handle()
+        let task = self
+            .handle
             .spawn(conn::serve_forward(inner, listener, remote_port));
+        lock(&self.tasks).push(task.abort_handle());
         Ok(port)
     }
 
     /// Counters.
     pub fn stats(&self) -> ClientStats {
         *lock(&self.inner.stats)
-    }
-
-    fn handle(&self) -> &tokio::runtime::Handle {
-        self.runtime
-            .as_ref()
-            .expect("runtime lives until drop")
-            .handle()
     }
 }
 
@@ -706,21 +731,32 @@ impl Drop for Client {
             conn.close(0u32.into(), b"bye");
         }
         let endpoint = lock(&self.inner.endpoint).take();
-        if let Some(rt) = self.runtime.take() {
-            // Give the close one short chance to reach the daemon, so it releases this
-            // client's attachment now rather than after the idle timeout. A helper thread
-            // keeps this safe to call from inside an async context.
-            if let Some(endpoint) = endpoint {
-                let handle = rt.handle().clone();
-                let _ = std::thread::spawn(move || {
-                    handle.block_on(async {
-                        let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.close()).await;
-                    });
-                })
-                .join();
-            }
-            rt.shutdown_background();
+        for task in lock(&self.tasks).drain(..) {
+            task.abort();
         }
+        let Some(rt) = self.runtime.take() else {
+            // A shared runtime: close in the background, never block the caller (it may be
+            // the app's main thread).
+            if let Some(endpoint) = endpoint {
+                self.handle.spawn(async move {
+                    let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.close()).await;
+                });
+            }
+            return;
+        };
+        // Give the close one short chance to reach the daemon, so it releases this client's
+        // attachment now rather than after the idle timeout. A helper thread keeps this safe
+        // to call from inside an async context.
+        if let Some(endpoint) = endpoint {
+            let handle = rt.handle().clone();
+            let _ = std::thread::spawn(move || {
+                handle.block_on(async {
+                    let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.close()).await;
+                });
+            })
+            .join();
+        }
+        rt.shutdown_background();
     }
 }
 

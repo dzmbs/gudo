@@ -7,7 +7,8 @@
 //! | `input` (uni)     | c → s     | [`StreamHeader::Input`]   | [`ClientInput`]          |
 //! | `pane/<id>` (uni) | s → c     | [`StreamHeader::Pane`]    | [`PaneOutput`]           |
 //! | `bulk` (uni)      | either    | [`StreamHeader::Bulk`]    | [`Bulk`]                 |
-//! | forward (bidi)    | both      | [`StreamHeader::PortForward`] | [`ForwardReply`], then raw bytes |
+//! | forward (bidi)    | both      | [`StreamHeader::PortForward`] / [`StreamHeader::Forward`] | [`ForwardReply`], then raw bytes |
+//! | transfer (bidi)   | both      | [`StreamHeader::Upload`] / [`StreamHeader::Download`] | [`TransferReply`] and raw bytes |
 //!
 //! Every frame is `[u32 LE body length][body]`, and every body starts with the wire version
 //! ([`WIRE_VERSION`]) followed by one postcard-encoded message. See [`frame`].
@@ -24,6 +25,8 @@
 //!   use, lowest priority) by [`Bulk::HistoryPage`] or [`Bulk::HistoryGone`], keyed by
 //!   `(pane, snapshot_seq, offset)`: the records after a [`PaneOutput::SnapshotZstd`]'s READY
 //!   section, newest page first, ready for a streaming snapshot decoder.
+//! - Developer-workflow requests (ports, editor, git, worktrees, files, attention) are
+//!   [`ClientCtl::Workspace`] → [`ServerCtl::WorkspaceResult`]; see the [`workspace`] types.
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -50,6 +53,7 @@ mod layout;
 mod msg;
 mod serde_bytes;
 mod ticket;
+pub mod workspace;
 
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
@@ -62,6 +66,7 @@ pub use layout::{
 };
 pub use msg::*;
 pub use ticket::{PairingSecret, Ticket, TicketError};
+pub use workspace::*;
 
 /// QUIC ALPN identifier this crate's messages are spoken under.
 pub const ALPN: &[u8] = brand::ALPN;

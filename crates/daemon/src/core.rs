@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
@@ -49,6 +49,10 @@ pub(crate) enum Event {
     Command(CommandMark),
     /// A long command finished while no client showed its pane.
     CommandUnseen(CommandMark),
+    /// The detected ports changed (read the list from `ws.ports`).
+    Ports,
+    /// The attention feed changed.
+    Attention(proto::AttentionUpdate),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -58,6 +62,14 @@ pub(crate) struct PaneRecord {
     /// Last working directory reported by the shell (OSC 7), else the launch directory.
     pub cwd: Option<String>,
     pub agent: Option<AgentRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct WorktreeRecord {
+    pub path: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +119,9 @@ pub(crate) struct Core {
     shell: Option<ShellIntegration>,
     /// Panes each connection shows (focused and visible), for "finished while unseen".
     views: Mutex<HashMap<ConnId, Vec<PaneId>>>,
+    /// Developer-workflow state: ports, attention, turns, editors, worktrees.
+    pub ws: crate::ws::Ws,
+    connected: AtomicUsize,
 }
 
 impl Core {
@@ -120,7 +135,6 @@ impl Core {
         let (events, _) = broadcast::channel(1024);
         Arc::new(Self {
             epoch: SessionEpoch(crate::identity::now_millis()),
-            cfg,
             identity,
             layout: Mutex::new(layout),
             panes: Mutex::new(HashMap::new()),
@@ -132,7 +146,25 @@ impl Core {
             hooks,
             shell,
             views: Mutex::new(HashMap::new()),
+            ws: crate::ws::Ws::new(&cfg),
+            cfg,
+            connected: AtomicUsize::new(0),
         })
+    }
+
+    /// A client connected (`true`) or left.
+    pub fn client_connected(&self, up: bool) {
+        if up {
+            self.connected.fetch_add(1, Ordering::Relaxed);
+            self.ws.ports.trigger.notify_one();
+        } else {
+            self.connected.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Clients currently connected.
+    pub fn connected_clients(&self) -> usize {
+        self.connected.load(Ordering::Relaxed)
     }
 
     /// Records the panes `conn` shows.
@@ -446,6 +478,7 @@ impl Core {
                     task.abort();
                 }
                 self.hooks.cancel_pending(*id);
+                self.ws.forget_pane(*id);
                 entry.pane.hang_up();
                 self.emit(Event::PaneClosed(*id));
             }
@@ -576,6 +609,18 @@ impl Core {
                 ));
             }
         }
+        let worktree =
+            self.ws
+                .worktrees
+                .port_for(std::path::Path::new(&cwd))
+                .map(|(path, port)| WorktreeRecord {
+                    path: path.to_string_lossy().into_owned(),
+                    port,
+                });
+        if let Some(wt) = &worktree {
+            cmd.env("PORT", wt.port.to_string());
+            cmd.env(brand::env_var("WORKTREE"), &wt.path);
+        }
         cmd.current_dir(&cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
@@ -609,6 +654,7 @@ impl Core {
                 kind: *kind,
                 session_id: session_id.clone(),
             }),
+            worktree,
         };
         let entry = Arc::new(PaneEntry {
             pane,
@@ -631,9 +677,11 @@ impl Core {
 
     /// Broadcasts an agent event and refreshes the pane's metadata and record.
     pub fn agent_event(&self, id: PaneId, event: Option<agents::AgentEvent>) {
+        self.agent_attention(id);
         let Some(event) = event else {
             return;
         };
+        self.agent_turn(id, &event);
         if let Some(entry) = self.pane(id) {
             let native = event.session.native_id.as_ref().map(|n| n.to_string());
             let mut record = lock(&entry.record);
@@ -652,6 +700,90 @@ impl Core {
             Err(e) => tracing::warn!("serializing agent event: {e}"),
         }
         self.emit(Event::PaneMeta(id));
+    }
+
+    /// Snapshots the worktree at agent turn boundaries ("what did this turn change").
+    fn agent_turn(&self, id: PaneId, event: &agents::AgentEvent) {
+        use agents::EventKind;
+        if event.subagent.is_some() {
+            return;
+        }
+        match event.kind {
+            EventKind::TurnStarted => {
+                // The agent's own directory (from its hooks) first, then the pane's.
+                let cwd = event
+                    .session
+                    .cwd
+                    .clone()
+                    .filter(|c| c.is_dir())
+                    .or_else(|| {
+                        self.pane(id).and_then(|e| {
+                            let meta = lock(&e.meta).cwd.clone();
+                            meta.or_else(|| lock(&e.record).cwd.clone())
+                                .map(PathBuf::from)
+                        })
+                    });
+                if let Some(cwd) = cwd {
+                    self.ws
+                        .turns
+                        .record(crate::ws::turns::Boundary::Start { pane: id, cwd });
+                }
+            }
+            EventKind::TurnEnded
+            | EventKind::Interrupted
+            | EventKind::Error
+            | EventKind::SessionEnded => {
+                self.ws
+                    .turns
+                    .record(crate::ws::turns::Boundary::End { pane: id });
+            }
+            _ => {}
+        }
+    }
+
+    /// Turns the agent's notifications into attention items, and retires blocked items once
+    /// the agent is no longer blocked.
+    fn agent_attention(&self, id: PaneId) {
+        use crate::ws::AgentNotice;
+        let Some(entry) = self.pane(id) else {
+            return;
+        };
+        let (kind, notices, blocked, wire) = {
+            let mut agent = lock(&entry.agent);
+            let Some(rt) = agent.as_mut() else {
+                return;
+            };
+            let notices = rt.take_notices();
+            let wire = (!notices.is_empty()).then(|| rt.wire_status());
+            (rt.kind(), notices, rt.is_blocked(), wire)
+        };
+        for (notify, event) in notices {
+            let message = event
+                .as_ref()
+                .and_then(|e| e.turn.as_ref())
+                .and_then(|t| t.last_message.clone());
+            let notice = match notify {
+                agents::Notify::Blocked { .. } => {
+                    let (request_id, summary) = match &wire {
+                        Some(proto::AgentStatus {
+                            state: proto::AgentState::Blocked(b),
+                            ..
+                        }) => (Some(b.request_id), b.summary.clone()),
+                        _ => (None, String::new()),
+                    };
+                    AgentNotice::Blocked {
+                        request_id,
+                        summary,
+                    }
+                }
+                agents::Notify::Done => AgentNotice::Done { message },
+                agents::Notify::Failed => AgentNotice::Failed { message },
+            };
+            crate::ws::agent_notice(self, id, kind, notice);
+        }
+        if !blocked {
+            crate::ws::agent_unblocked(self, id);
+        }
     }
 
     /// Applies a client's decision on an approval request.
@@ -787,6 +919,9 @@ async fn pane_task(
                 }
                 let screen = screen_dirty.then(|| pane.screen_text());
                 screen_dirty = false;
+                if let Some(screen) = &screen {
+                    core.ws.ports.observe_screen(id, screen);
+                }
                 let title = lock(&entry.meta).title.clone();
                 let update = lock(&entry.agent)
                     .as_mut()
@@ -795,6 +930,8 @@ async fn pane_task(
                     for event in update {
                         core.agent_event(id, Some(event));
                     }
+                    // Notifications can come due on a timer without an event.
+                    core.agent_event(id, None);
                 }
             }
         }
@@ -843,7 +980,10 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
                 .is_some_and(|f| f.duration_ms >= core.cfg.long_command.as_millis() as u64);
             if long && !core.pane_seen(mark.pane_id) {
                 core.emit(Event::CommandUnseen(mark.clone()));
+                crate::ws::command_unseen(core, &mark);
             }
+            // A command starting or ending is when servers come and go.
+            core.ws.ports.trigger.notify_one();
             core.emit(Event::Command(mark));
         }
     }

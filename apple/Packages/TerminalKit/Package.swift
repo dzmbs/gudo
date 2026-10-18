@@ -20,10 +20,12 @@ let package = Package(
             dependencies: ["TerminalCore"],
             resources: [.copy("Resources/Fonts"), .copy("Resources/Shaders")]
         ),
-        .target(name: "LocalPTY"),
+        .target(name: "CPTYSpawn"),
+        .target(name: "LocalPTY", dependencies: ["CPTYSpawn"]),
         .executableTarget(name: "TerminalDemo", dependencies: ["TerminalRenderer", "LocalPTY"]),
         .executableTarget(name: "TerminalBench", dependencies: ["TerminalRenderer", "LocalPTY"]),
         .testTarget(name: "TerminalCoreTests", dependencies: ["TerminalCore"]),
+        .testTarget(name: "LocalPTYTests", dependencies: ["LocalPTY"]),
         .testTarget(name: "TerminalRendererTests", dependencies: ["TerminalRenderer"]),
     ]
 )

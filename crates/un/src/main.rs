@@ -9,7 +9,13 @@
 //! un resize <h|v> <delta>
 //! un tab new|close|next|prev|select <n>|move <n>|rename <name>
 //! un session new <name>|rename <name>|close
-//! un forward <remote-port> [--local <port>]
+//! un forward <remote-port> | --unix <path> [--local <port>]
+//! un ports [--watch]          un inbox [--seen] [--watch]
+//! un editor status|launch [folder]|stop <folder>|open <path[:line[:col]]>
+//! un git status [path]        un git diff [--staged|--index|--rev R|--merge-base B] [--stat]
+//! un turns [--diff N]         un review --pane P --note 'path:L[-L]:text' [--submit]
+//! un worktree create|list|remove|launch
+//! un fs ls|stat|cat|put|get|mkdir|mv|rm|watch
 //! un search <pattern> [-e] [--case sensitive|insensitive|smart]
 //! un links [--commands N]      un marks      un output [--command N]
 //! ```
@@ -28,6 +34,8 @@ use client_core::proto::{
 use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedReceiver;
+
+mod ws;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 /// Ctrl-] detaches, like telnet, in every encoding the outer terminal may use for it: the legacy
@@ -111,12 +119,19 @@ enum Cmd {
         #[command(subcommand)]
         action: SessionCmd,
     },
-    /// Forward a local TCP port to `localhost:<remote>` on the daemon's host.
+    /// Forward a local TCP port to `localhost:<remote>` (or a Unix socket) on the daemon's
+    /// host.
     Forward {
-        remote: u16,
+        #[arg(required_unless_present = "unix")]
+        remote: Option<u16>,
+        /// A Unix socket on the host instead of a TCP port.
+        #[arg(long, conflicts_with = "remote")]
+        unix: Option<String>,
         #[arg(long, default_value_t = 0)]
         local: u16,
     },
+    #[command(flatten)]
+    Ws(ws::WsCmd),
     /// Search a pane's whole scrollback on the daemon (newest match first).
     Search {
         pattern: String,
@@ -182,7 +197,7 @@ enum SessionCmd {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum Agent {
+pub(crate) enum Agent {
     Claude,
     Codex,
 }
@@ -237,6 +252,8 @@ struct Conn {
     events: UnboundedReceiver<ClientEvent>,
     layout: Option<SessionLayout>,
     sessions: Vec<SessionSummary>,
+    /// Working directories from pane metadata.
+    cwds: std::collections::HashMap<PaneId, String>,
 }
 
 impl Conn {
@@ -256,6 +273,7 @@ impl Conn {
             events,
             layout: None,
             sessions: Vec::new(),
+            cwds: std::collections::HashMap::new(),
         };
         let session = match &cli.session {
             Some(name) => {
@@ -281,6 +299,11 @@ impl Conn {
         match event {
             ClientEvent::Layout { layout } => self.layout = Some(layout.clone()),
             ClientEvent::Sessions { sessions } => self.sessions.clone_from(sessions),
+            ClientEvent::PaneMeta { meta } => {
+                if let Some(cwd) = &meta.cwd {
+                    self.cwds.insert(meta.pane_id, cwd.clone());
+                }
+            }
             ClientEvent::Refused { reason } => bail!("daemon refused the connection: {reason}"),
             _ => {}
         }
@@ -370,6 +393,7 @@ async fn run(cli: Cli) -> Result<()> {
     let outcome = match cli.command {
         Cmd::Pair { .. } => unreachable!("handled above"),
         Cmd::Attach => return attach(conn).await,
+        Cmd::Ws(cmd) => return ws::run(&mut conn, cmd).await,
         Cmd::Search {
             pattern,
             regex,
@@ -627,11 +651,19 @@ async fn run(cli: Cli) -> Result<()> {
                 SessionCmd::Close => conn.op(LayoutOp::CloseSession { session_id }).await?,
             }
         }
-        Cmd::Forward { remote, local } => {
-            let port = conn.client.forward_port(local, remote)?;
-            println!(
-                "forwarding 127.0.0.1:{port} -> daemon host localhost:{remote} (Ctrl-C to stop)"
-            );
+        Cmd::Forward {
+            remote,
+            unix,
+            local,
+        } => {
+            use client_core::proto::ForwardTarget;
+            let target = match (remote, unix) {
+                (_, Some(path)) => ForwardTarget::Unix { path },
+                (Some(port), None) => ForwardTarget::Tcp { port },
+                (None, None) => bail!("give a remote port or --unix"),
+            };
+            let port = conn.client.forward(local, target.clone())?;
+            println!("forwarding 127.0.0.1:{port} -> daemon host {target:?} (Ctrl-C to stop)");
             tokio::signal::ctrl_c().await?;
             return Ok(());
         }

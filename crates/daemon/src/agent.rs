@@ -110,6 +110,9 @@ pub(crate) struct AgentRuntime {
     /// Wire ids for the arbiter's string request ids.
     requests: Vec<(RequestId, agents::RequestId)>,
     last_decided: Option<(RequestId, Actor)>,
+    /// Notifications the arbiter asked for, with the event that caused them, until the core
+    /// takes them for the attention feed.
+    notices: Vec<(agents::Notify, Option<AgentEvent>)>,
 }
 
 impl AgentRuntime {
@@ -133,7 +136,29 @@ impl AgentRuntime {
             arbiter,
             requests: Vec::new(),
             last_decided: None,
+            notices: Vec::new(),
         }
+    }
+
+    fn take(&mut self, update: agents::Update) -> Option<AgentEvent> {
+        if let Some(notify) = update.notify {
+            self.notices.push((notify, update.event.clone()));
+        }
+        update.event
+    }
+
+    /// The notifications collected since the last call.
+    pub fn take_notices(&mut self) -> Vec<(agents::Notify, Option<AgentEvent>)> {
+        std::mem::take(&mut self.notices)
+    }
+
+    pub fn kind(&self) -> AgentKind {
+        self.kind
+    }
+
+    /// Whether the agent is blocked now.
+    pub fn is_blocked(&self) -> bool {
+        self.arbiter.status().blocked().is_some()
     }
 
     fn wire_request(&mut self, id: &agents::RequestId) -> RequestId {
@@ -192,17 +217,22 @@ impl AgentRuntime {
 
     pub fn osc9(&mut self, body: &str) -> Option<AgentEvent> {
         let signal = self.adapter.parse_osc9(body)?;
-        self.arbiter.apply(signal, now()).event
+        let update = self.arbiter.apply(signal, now());
+        self.take(update)
     }
 
     pub fn program_status(&mut self, body: &str) -> Option<AgentEvent> {
         let signal = self.adapter.parse_program_status(body)?;
-        self.arbiter.apply(signal, now()).event
+        let update = self.arbiter.apply(signal, now());
+        self.take(update)
     }
 
     pub fn hook(&mut self, payload: &[u8], seq: u64) -> Option<AgentEvent> {
         match self.adapter.parse_hook(payload, agents::Seq(seq)) {
-            Ok(Some(signal)) => self.arbiter.apply(signal, now()).event,
+            Ok(Some(signal)) => {
+                let update = self.arbiter.apply(signal, now());
+                self.take(update)
+            }
             Ok(None) => None,
             Err(e) => {
                 tracing::debug!("ignoring hook payload: {e}");
@@ -220,14 +250,17 @@ impl AgentRuntime {
                 osc_title: title,
                 ..ScreenInput::default()
             });
-            events.extend(self.arbiter.observe_screen(&verdict, now()).event);
+            let update = self.arbiter.observe_screen(&verdict, now());
+            events.extend(self.take(update));
         }
-        events.extend(self.arbiter.tick(now()).event);
+        let update = self.arbiter.tick(now());
+        events.extend(self.take(update));
         events
     }
 
     pub fn process_exited(&mut self) -> Option<AgentEvent> {
-        self.arbiter.process_exited(now()).event
+        let update = self.arbiter.process_exited(now());
+        self.take(update)
     }
 
     /// The string id of the dialog currently showing, if blocked.
