@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import PaneLayout
 import TerminalCore
 import TerminalRenderer
@@ -6,14 +7,26 @@ import TerminalRenderer
 /// One live terminal: the VT state, its renderer surface and host view, and the backend that feeds
 /// it. The view is created once and moved between parents as the split tree changes, so a split,
 /// zoom or tab switch never re-creates the surface or loses scrollback.
+@Observable
 final class Pane {
     let id: PaneId
-    let view: TerminalView
+    @ObservationIgnored let view: TerminalView
     /// SwiftUI host containers showing this pane (see `TerminalHost`).
-    let hosts = NSHashTable<TerminalHost.Container>.weakObjects()
-    private let backend: any PaneBackend
-    private var appliedGrid: TerminalSurface.Grid?
-    private var resizeTask: Task<Void, Never>?
+    @ObservationIgnored let hosts = NSHashTable<TerminalHost.Container>.weakObjects()
+
+    /// OSC 0/2 title ("" until the program sets one).
+    private(set) var title = ""
+    /// OSC 7 working directory, as a path ("" until the shell reports one).
+    private(set) var workingDirectory = ""
+    /// The pane's foreground program as the backend reports it (the daemon's `tcgetpgrp`); nil
+    /// when the backend cannot tell (local backends), in which case the title stands in.
+    private(set) var foregroundProgram: String?
+    /// Called on the main actor after `title` or `foregroundProgram` change.
+    @ObservationIgnored var onContextChange: (() -> Void)?
+
+    @ObservationIgnored private let backend: any PaneBackend
+    @ObservationIgnored private var appliedGrid: TerminalSurface.Grid?
+    @ObservationIgnored private var resizeTask: Task<Void, Never>?
 
     /// PTY resizes (SIGWINCH) are debounced so a divider drag does not make TUIs redraw on every
     /// frame (04-mobile-ux C3).
@@ -27,6 +40,11 @@ final class Pane {
         view = TerminalView(surface: surface)
         view.onInput = { bytes in bytes.withUnsafeBytes { backend.write($0) } }
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
+
+        var events = Terminal.Events()
+        events.titleChanged = { [weak self] in Task { @MainActor in self?.refreshTitle() } }
+        events.pwdChanged = { [weak self] in Task { @MainActor in self?.refreshWorkingDirectory() } }
+        terminal.setEvents(events)
         backend.start(
             onOutput: { bytes in
                 terminal.write(bytes)
@@ -38,6 +56,18 @@ final class Pane {
     func terminate() {
         resizeTask?.cancel()
         backend.terminate()
+    }
+
+    private func refreshTitle() {
+        let title = view.surface.terminal.title
+        guard title != self.title else { return }
+        self.title = title
+        onContextChange?()
+    }
+
+    private func refreshWorkingDirectory() {
+        let pwd = view.surface.terminal.pwd
+        workingDirectory = URL(string: pwd).flatMap { $0.isFileURL ? $0.path : nil } ?? pwd
     }
 
     private func gridChanged(_ grid: TerminalSurface.Grid) {

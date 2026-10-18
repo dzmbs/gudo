@@ -92,6 +92,9 @@ final class KeyBar: UIInputView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// What runs in the focused pane; picks the key bar profile. (Stub: profiles land separately.)
+    func update(context: KeyBarContext) {}
+
     /// The latched modifiers for the next key; reading clears a one-shot Ctrl.
     func takeLatchedModifiers() -> KeyModifiers {
         switch ctrl {
@@ -181,5 +184,12 @@ final class KeyBar: UIInputView {
         case .locked: "locked"
         }
     }
+}
+
+/// What the key bar knows about the focused pane: the foreground program when the backend reports
+/// it (daemon: `tcgetpgrp`), else only the terminal title (OSC 0/2).
+struct KeyBarContext: Equatable {
+    var program: String?
+    var title: String
 }
 #endif

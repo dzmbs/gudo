@@ -94,6 +94,14 @@ public final class TerminalView: UIView {
         if !bytes.isEmpty { onInput?(bytes) }
     }
 
+    /// Sends text written in a composer (04-mobile-ux C5): as a paste (bracketed when the program
+    /// asked for it, so a multi-line prompt arrives as one), then Return when `submit`.
+    public func sendComposedText(_ text: String, submit: Bool = true) {
+        _ = surface.terminal.paste(text, source: .text, allowUnsafe: true)
+        surface.terminal.scrollToBottom()
+        if submit { send(.press(.enter)) }
+    }
+
     // MARK: Focus
 
     override public var canBecomeFirstResponder: Bool { true }

@@ -38,7 +38,10 @@ final class Workspace {
     }
 
     func title(of tab: Tab) -> String {
-        tab.title ?? "Tab \((session.tabs.firstIndex(of: tab) ?? 0) + 1)"
+        // A user rename wins; then the focused pane's OSC 0/2 title, as Ghostty does.
+        if let title = tab.title { return title }
+        if let title = panes[tab.focused]?.title, !title.isEmpty { return title }
+        return "Tab \((session.tabs.firstIndex(of: tab) ?? 0) + 1)"
     }
 
     // MARK: Commands on the focused pane / active tab
@@ -114,9 +117,15 @@ final class Workspace {
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
         pane.view.takeLatchedModifiers = { [keyBar] in keyBar.takeLatchedModifiers() }
-        pane.view.onFocus = { [weak self, weak view = pane.view] in
-            self?.keyBar.target = view
-            self?.apply(.focus(id))
+        pane.view.onFocus = { [weak self, weak pane] in
+            guard let self, let pane else { return }
+            keyBar.target = pane.view
+            keyBar.update(context: KeyBarContext(program: pane.foregroundProgram, title: pane.title))
+            apply(.focus(id))
+        }
+        pane.onContextChange = { [weak self, weak pane] in
+            guard let self, let pane, keyBar.target === pane.view else { return }
+            keyBar.update(context: KeyBarContext(program: pane.foregroundProgram, title: pane.title))
         }
         #else
         pane.view.setAccessibilityIdentifier(id.description)
