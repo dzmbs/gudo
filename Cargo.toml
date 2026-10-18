@@ -28,6 +28,7 @@ proptest = "1"
 rustix = { version = "1", features = ["event", "fs", "pipe", "process", "pty", "termios"] }
 thiserror = "2"
 tracing = "0.1.44"
+zstd = { version = "0.13", default-features = false }
 
 # single TLS provider; the Apple fast datapath because iOS/macOS are the targets.
 anyhow = "1.0.104"

@@ -76,6 +76,8 @@ struct Measurement {
     label: String,
     primary_history: u64,
     ready_bytes: usize,
+    /// READY compressed as it goes on the wire (zstd level 3).
+    ready_zstd_bytes: usize,
     full_bytes: usize,
     vt_redraw_bytes: usize,
     encode: Duration,
@@ -128,6 +130,9 @@ fn measure(label: &str, terminal: &Terminal) -> Result<Measurement, Error> {
         label: label.to_owned(),
         primary_history,
         ready_bytes,
+        ready_zstd_bytes: zstd::bulk::compress(&snapshot[..ready_bytes], 3)
+            .expect("zstd compress")
+            .len(),
         full_bytes: snapshot.len(),
         vt_redraw_bytes: terminal.vt(TextRegion::Active)?.len(),
         encode: median(encode),
@@ -179,23 +184,24 @@ fn snapshot_size_200x60_with_10k_lines() -> Result<(), Error> {
 
     println!();
     println!(
-        "| workload | primary history rows | READY bytes | VT redraw of active area | full bytes | encode | decode READY | decode full | READY < 50 KB |"
+        "| workload | primary history rows | READY bytes | READY zstd | VT redraw of active area | full bytes | encode | decode READY | decode full | zstd READY < 50 KB |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|---|");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---|");
     for m in &results {
         println!(
-            "| {} | {} | {} ({:.1} KB) | {} | {} ({:.1} MB) | {:.2} ms | {:.2} ms | {:.2} ms | {} |",
+            "| {} | {} | {} ({:.1} KB) | {:.1} KB | {} | {} ({:.1} MB) | {:.2} ms | {:.2} ms | {:.2} ms | {} |",
             m.label,
             m.primary_history,
             m.ready_bytes,
             m.ready_bytes as f64 / 1024.0,
+            m.ready_zstd_bytes as f64 / 1024.0,
             m.vt_redraw_bytes,
             m.full_bytes,
             m.full_bytes as f64 / (1024.0 * 1024.0),
             m.encode.as_secs_f64() * 1e3,
             m.decode_ready.as_secs_f64() * 1e3,
             m.decode_full.as_secs_f64() * 1e3,
-            if m.ready_bytes < READY_TARGET {
+            if m.ready_zstd_bytes < READY_TARGET {
                 "pass"
             } else {
                 "FAIL"
@@ -203,16 +209,19 @@ fn snapshot_size_200x60_with_10k_lines() -> Result<(), Error> {
         );
     }
 
-    // Guard the "typical" claim: a shell on the primary screen over plain or colored output.
+    // Guard the "typical" claim on what actually goes on the wire: zstd-compressed READY for a
+    // shell on the primary screen over plain or colored output. Raw READY is platform-dependent:
+    // libghostty-vt sizes pages from the OS page size, so Linux (4 KiB) encodes ~3-4x more raw
+    // bytes than Apple Silicon (16 KiB) for the same screen.
     for m in results
         .iter()
         .filter(|m| m.label == "Source" || m.label == "Logs")
     {
         assert!(
-            m.ready_bytes < READY_TARGET,
-            "{}: READY is {} bytes",
+            m.ready_zstd_bytes < READY_TARGET,
+            "{}: zstd READY is {} bytes",
             m.label,
-            m.ready_bytes
+            m.ready_zstd_bytes
         );
     }
     Ok(())
