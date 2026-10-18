@@ -45,6 +45,12 @@ pub struct Config {
     pub persist_debounce: Duration,
     /// The agent hook shim; next to the current executable when `None`.
     pub hook_bin: Option<PathBuf>,
+    /// Inject Ghostty's shell integration into bash, zsh and fish panes (OSC 133 command
+    /// marks, OSC 7 working directory). On by default.
+    pub shell_integration: bool,
+    /// A command running at least this long that finishes while no client shows its pane is
+    /// announced with `CommandFinishedUnseen`.
+    pub long_command: Duration,
 }
 
 impl Config {
@@ -61,7 +67,20 @@ impl Config {
             default_size: (80, 24),
             persist_debounce: Duration::from_millis(500),
             hook_bin: None,
+            shell_integration: true,
+            long_command: Duration::from_secs(10),
         }
+    }
+
+    /// The value of `name` in a pane's environment: the configured pane environment first,
+    /// then the daemon's own.
+    pub(crate) fn pane_var(&self, name: &str) -> Option<std::ffi::OsString> {
+        self.pane_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.into())
+            .or_else(|| std::env::var_os(name))
     }
 
     pub(crate) fn shell(&self) -> PathBuf {

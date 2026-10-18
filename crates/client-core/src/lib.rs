@@ -38,8 +38,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use iroh::endpoint::Connection;
 use proto::{
-    AgentKind, ClientCtl, Decide, EchoHintAt, LayoutOp, OpOutcome, PaneId, PaneMeta, PaneSize,
-    SessionId, SessionLayout, SessionSummary, Ticket,
+    AgentKind, ClientCtl, CommandList, CommandMark, CommandOutput, Decide, EchoHintAt,
+    FullKeyEvent, InputPayload, LayoutOp, Links, MouseEvent, OpOutcome, PaneId, PaneMeta, PaneSize,
+    RpcError, SearchPage, SearchQuery, Seq, SessionId, SessionLayout, SessionSummary, Ticket,
 };
 use tokio::runtime::Runtime;
 use tokio::sync::{Notify, mpsc};
@@ -206,6 +207,73 @@ pub enum ClientEvent {
         /// What happened.
         outcome: OpOutcome,
     },
+    /// Older scrollback for a pane, from [`Client::fetch_history`]: Ghostty snapshot history
+    /// records continuing the pane's last snapshot (feed them to the snapshot's streaming
+    /// decoder). The VT mirror, if on, has already prepended them.
+    PaneHistory {
+        /// The pane.
+        pane_id: PaneId,
+        /// `seq` of the snapshot the records extend.
+        snapshot_seq: u64,
+        /// The records, decompressed.
+        data: Vec<u8>,
+        /// Rows the mirror gained (0 without a mirror).
+        rows: u64,
+        /// There is no older history.
+        done: bool,
+    },
+    /// The daemon no longer has the history of the pane's snapshot; it arrives again after
+    /// the next snapshot.
+    PaneHistoryGone {
+        /// The pane.
+        pane_id: PaneId,
+    },
+    /// A shell-integration command started or finished in the attached session.
+    CommandMark {
+        /// The mark.
+        mark: CommandMark,
+    },
+    /// A long command finished while no client was showing its pane (any session).
+    CommandFinishedUnseen {
+        /// The mark.
+        mark: CommandMark,
+    },
+    /// The answer to [`Client::search`].
+    SearchResult {
+        /// The id `search` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// One page of matches.
+        result: Result<SearchPage, RpcError>,
+    },
+    /// The answer to [`Client::links`].
+    Links {
+        /// The id `links` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// What was found.
+        result: Result<Links, RpcError>,
+    },
+    /// The answer to [`Client::commands`].
+    Commands {
+        /// The id `commands` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// The commands.
+        result: Result<CommandList, RpcError>,
+    },
+    /// The answer to [`Client::command_output`].
+    CommandOutput {
+        /// The id `command_output` returned.
+        req_id: u64,
+        /// The pane.
+        pane_id: PaneId,
+        /// The output.
+        result: Result<CommandOutput, RpcError>,
+    },
 }
 
 /// Receives [`ClientEvent`]s. Must return quickly; it runs on the network threads.
@@ -262,7 +330,10 @@ pub(crate) struct Wanted {
 #[derive(Debug)]
 pub(crate) enum Outgoing {
     Ctl(ClientCtl),
-    Input { pane_id: PaneId, data: Vec<u8> },
+    Input {
+        pane_id: PaneId,
+        payload: InputPayload,
+    },
 }
 
 pub(crate) struct Inner {
@@ -420,10 +491,118 @@ impl Client {
 
     /// Sends input to a pane. Queued while disconnected and delivered after reconnecting.
     pub fn send_input(&self, pane_id: PaneId, data: Vec<u8>) {
+        self.send_payload(pane_id, InputPayload::Bytes(data));
+    }
+
+    /// Sends a key event; the daemon encodes it for the program's current keyboard modes
+    /// (legacy, application cursor keys, modifyOtherKeys or kitty flags).
+    pub fn send_key(&self, pane_id: PaneId, key: FullKeyEvent) {
+        self.send_payload(pane_id, InputPayload::KeyFull(key));
+    }
+
+    /// Sends a mouse event; the daemon encodes it for the program's mouse tracking mode and
+    /// format, and drops it if the program does not track the mouse.
+    pub fn send_mouse(&self, pane_id: PaneId, event: MouseEvent) {
+        self.send_payload(pane_id, InputPayload::Mouse(event));
+    }
+
+    /// Pastes text: bracketed if the program enabled bracketed paste, with control bytes that
+    /// could end the paste early replaced. Confirming a multi-line paste is up to the caller
+    /// (see `ghostty_vt::paste_is_safe`).
+    pub fn send_paste(&self, pane_id: PaneId, text: String) {
+        self.send_payload(pane_id, InputPayload::Paste(text));
+    }
+
+    fn send_payload(&self, pane_id: PaneId, payload: InputPayload) {
         let _ = self
             .inner
             .outgoing_tx
-            .send(Outgoing::Input { pane_id, data });
+            .send(Outgoing::Input { pane_id, payload });
+    }
+
+    fn next_id(&self) -> u64 {
+        self.inner.next_op.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Searches a pane's whole scrollback on the daemon; the page arrives as
+    /// [`ClientEvent::SearchResult`] with the returned id. Pass the previous page's
+    /// `next` as `cursor` for the next page.
+    pub fn search(&self, pane_id: PaneId, query: SearchQuery, cursor: u32, limit: u32) -> u64 {
+        let req_id = self.next_id();
+        self.inner.send(ClientCtl::Search {
+            req_id,
+            pane_id,
+            query,
+            cursor,
+            limit,
+        });
+        req_id
+    }
+
+    /// Asks for the hyperlinks, URLs and paths on a pane's screen and in its last `commands`
+    /// commands' output ([`ClientEvent::Links`]).
+    pub fn links(&self, pane_id: PaneId, commands: u16) -> u64 {
+        let req_id = self.next_id();
+        self.inner.send(ClientCtl::Links {
+            req_id,
+            pane_id,
+            commands,
+        });
+        req_id
+    }
+
+    /// Asks for a pane's shell-integration commands ([`ClientEvent::Commands`]).
+    pub fn commands(&self, pane_id: PaneId) -> u64 {
+        let req_id = self.next_id();
+        self.inner.send(ClientCtl::Commands { req_id, pane_id });
+        req_id
+    }
+
+    /// Asks for a command's output, or the last finished command's with `None`
+    /// ([`ClientEvent::CommandOutput`]).
+    pub fn command_output(&self, pane_id: PaneId, command_id: Option<u64>) -> u64 {
+        let req_id = self.next_id();
+        self.inner.send(ClientCtl::CommandOutput {
+            req_id,
+            pane_id,
+            command_id,
+        });
+        req_id
+    }
+
+    /// Fetches the next page of a followed pane's scrollback older than its snapshot, newest
+    /// first, up to about `max_bytes` of records; it arrives as [`ClientEvent::PaneHistory`].
+    /// Returns `false` when there is nothing to fetch: no snapshot yet, all history already
+    /// fetched, or a page still in flight.
+    pub fn fetch_history(&self, pane_id: PaneId, max_bytes: u32) -> bool {
+        let request = {
+            let mut mirrors = lock(&self.inner.mirrors);
+            let Some(h) = mirrors.get_mut(&pane_id).map(|m| &mut m.history) else {
+                return false;
+            };
+            if h.done || h.in_flight {
+                return false;
+            }
+            h.in_flight = true;
+            ClientCtl::FetchHistory {
+                pane_id,
+                snapshot_seq: Seq(h.snapshot_seq),
+                offset: h.next_offset,
+                max_bytes,
+            }
+        };
+        self.inner.send(request);
+        true
+    }
+
+    /// Plain text of a followed pane's mirror including the scrollback it holds.
+    pub fn pane_text_all(&self, pane_id: PaneId) -> Option<String> {
+        lock(&self.inner.mirrors).get(&pane_id)?.text_all()
+    }
+
+    /// Scrollback rows the mirror holds for a pane.
+    pub fn pane_scrollback_rows(&self, pane_id: PaneId) -> Option<usize> {
+        lock(&self.inner.mirrors).get(&pane_id)?.scrollback_rows()
     }
 
     /// Launches a coding agent in a new pane split off `pane_id`.

@@ -1,14 +1,44 @@
-//! Per-pane client state: the resume point and an optional libghostty-vt mirror.
+//! Per-pane client state: the resume point, the history cursor and an optional libghostty-vt
+//! mirror.
 
-use ghostty_vt::{SnapshotDecoder, Terminal, TextRegion};
+use ghostty_vt::{StreamingRestore, Terminal, TextRegion};
 use proto::{PaneSize, SnapGen};
+
+/// The mirror's terminal: still taking history pages, or complete.
+enum Vt {
+    Restoring(StreamingRestore),
+    Done(Terminal),
+}
+
+impl Vt {
+    fn terminal(&self) -> &Terminal {
+        match self {
+            Self::Restoring(r) => r.terminal(),
+            Self::Done(t) => t,
+        }
+    }
+}
+
+/// Where paging through a snapshot's history stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HistoryCursor {
+    /// `seq` of the snapshot the history belongs to.
+    pub snapshot_seq: u64,
+    /// Offset of the next page in that snapshot.
+    pub next_offset: u64,
+    /// No more history.
+    pub done: bool,
+    /// A request is outstanding.
+    pub in_flight: bool,
+}
 
 /// Where a pane's output stands on this client.
 pub(crate) struct Mirror {
     pub snap_gen: SnapGen,
     seq: u64,
     pub acked: u64,
-    vt: Option<Terminal>,
+    vt: Option<Vt>,
+    pub history: HistoryCursor,
 }
 
 /// What applying a `Bytes` frame did.
@@ -23,13 +53,18 @@ pub(crate) enum Applied {
 }
 
 impl Mirror {
-    /// A mirror restored from a READY snapshot.
+    /// A mirror restored from a READY snapshot taken at `seq`.
     pub fn from_snapshot(snap_gen: SnapGen, seq: u64, snapshot: &[u8], keep_vt: bool) -> Self {
         let vt = keep_vt
             .then(|| {
-                SnapshotDecoder::new(snapshot)
-                    .and_then(SnapshotDecoder::ready)
-                    .map(ghostty_vt::Restore::into_terminal)
+                // The daemon's own limit bounds the history a mirror can receive, so the
+                // mirror takes all of it (libghostty-vt's default would drop older pages).
+                StreamingRestore::new(snapshot)
+                    .and_then(|mut r| {
+                        r.set_scrollback_max_bytes(None)?;
+                        Ok(r)
+                    })
+                    .map(Vt::Restoring)
                     .map_err(|e| tracing::warn!("decoding snapshot: {e}"))
                     .ok()
             })
@@ -39,6 +74,12 @@ impl Mirror {
             seq,
             acked: 0,
             vt,
+            history: HistoryCursor {
+                snapshot_seq: seq,
+                next_offset: snapshot.len() as u64,
+                done: false,
+                in_flight: false,
+            },
         }
     }
 
@@ -56,8 +97,10 @@ impl Mirror {
             return Applied::Gap;
         }
         let start = (self.seq - seq) as usize;
-        if let Some(vt) = &mut self.vt {
-            vt.write(&data[start..]);
+        match &mut self.vt {
+            Some(Vt::Restoring(r)) => r.write(&data[start..]),
+            Some(Vt::Done(t)) => t.write(&data[start..]),
+            None => {}
         }
         self.seq = end;
         Applied::New {
@@ -66,23 +109,75 @@ impl Mirror {
         }
     }
 
-    pub fn resize(&mut self, size: PaneSize) {
-        if let Some(vt) = &mut self.vt
-            && let Err(e) = vt.resize(size.cols, size.rows)
+    /// Applies history records at `offset` of snapshot `snapshot_seq`. Returns the rows
+    /// prepended to the mirror, or `None` if the page does not continue this mirror's history
+    /// (an older snapshot's, or a repeat).
+    pub fn apply_history(
+        &mut self,
+        snapshot_seq: u64,
+        offset: u64,
+        next_offset: u64,
+        done: bool,
+        records: &[u8],
+    ) -> Option<u64> {
+        let h = &mut self.history;
+        if snapshot_seq != h.snapshot_seq || offset != h.next_offset || h.done {
+            return None;
+        }
+        h.in_flight = false;
+        h.next_offset = next_offset;
+        h.done = done;
+        let mut rows = 0;
+        if let Some(Vt::Restoring(restore)) = &mut self.vt {
+            match restore.push(records) {
+                Ok(pages) => rows = pages.iter().map(|p| p.rows as u64).sum(),
+                Err(e) => {
+                    tracing::warn!("restoring history: {e}");
+                    self.history.done = true;
+                }
+            }
+        }
+        if self.history.done
+            && let Some(Vt::Restoring(_)) = &self.vt
+            && let Some(Vt::Restoring(restore)) = self.vt.take()
         {
+            self.vt = Some(Vt::Done(restore.into_terminal()));
+        }
+        Some(rows)
+    }
+
+    pub fn resize(&mut self, size: PaneSize) {
+        let result = match &mut self.vt {
+            Some(Vt::Restoring(r)) => r.resize(size.cols, size.rows),
+            Some(Vt::Done(t)) => t.resize(size.cols, size.rows),
+            None => Ok(()),
+        };
+        if let Err(e) = result {
             tracing::warn!("resizing mirror: {e}");
         }
     }
 
+    fn terminal(&self) -> Option<&Terminal> {
+        self.vt.as_ref().map(Vt::terminal)
+    }
+
     pub fn text(&self) -> Option<String> {
-        self.vt.as_ref()?.text(TextRegion::Active).ok()
+        self.terminal()?.text(TextRegion::Active).ok()
+    }
+
+    pub fn text_all(&self) -> Option<String> {
+        self.terminal()?.text(TextRegion::All).ok()
     }
 
     pub fn vt(&self) -> Option<String> {
-        self.vt.as_ref()?.vt(TextRegion::Active).ok()
+        self.terminal()?.vt(TextRegion::Active).ok()
     }
 
     pub fn snapshot(&self) -> Option<Vec<u8>> {
-        self.vt.as_ref()?.encode_snapshot().ok()
+        self.terminal()?.encode_snapshot().ok()
+    }
+
+    pub fn scrollback_rows(&self) -> Option<usize> {
+        Some(self.terminal()?.scrollback_rows())
     }
 }

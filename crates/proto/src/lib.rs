@@ -12,6 +12,24 @@
 //! Every frame is `[u32 LE body length][body]`, and every body starts with the wire version
 //! ([`WIRE_VERSION`]) followed by one postcard-encoded message. See [`frame`].
 //!
+//! # Requests and pushes
+//!
+//! - Layout changes are [`ClientCtl::Op`] → [`ServerCtl::OpResult`] (same `op_id`).
+//! - Pane queries carry a client-chosen `req_id` echoed in the answer, which holds a
+//!   `Result<_, RpcError>`: [`ClientCtl::Search`] → [`ServerCtl::SearchResult`],
+//!   [`ClientCtl::Links`] → [`ServerCtl::LinksResult`], [`ClientCtl::Commands`] →
+//!   [`ServerCtl::CommandsResult`], [`ClientCtl::CommandOutput`] →
+//!   [`ServerCtl::CommandOutputResult`].
+//! - [`ClientCtl::FetchHistory`] is answered on the daemon's `bulk` stream (opened on first
+//!   use, lowest priority) by [`Bulk::HistoryPage`] or [`Bulk::HistoryGone`], keyed by
+//!   `(pane, snapshot_seq, offset)`: the records after a [`PaneOutput::SnapshotZstd`]'s READY
+//!   section, newest page first, ready for a streaming snapshot decoder.
+//! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
+//!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
+//! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
+//!   encoded by the daemon for the program's current modes; [`InputPayload::Bytes`] is
+//!   written as is.
+//!
 //! # Compatibility rules
 //!
 //! postcard is not self-describing, so the byte layout *is* the schema:

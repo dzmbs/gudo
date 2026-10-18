@@ -8,8 +8,8 @@ use std::time::Duration;
 use iroh::endpoint::{Connection, ReadExactError, RecvStream, SendStream, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
 use proto::{
-    Caps, ClientCtl, ClientInput, ForwardReply, Hello, Input, InputPayload, InputSeq, LinkClass,
-    PaneId, PaneOutput, ResumePoint, Seq, ServerCtl, SignedGrant, StreamHeader,
+    Bulk, Caps, ClientCtl, ClientInput, ForwardReply, Hello, Input, InputSeq, LinkClass, PaneId,
+    PaneOutput, ResumePoint, Seq, ServerCtl, SignedGrant, StreamHeader,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -243,6 +243,10 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         resumed
     };
     lock(&inner.stats).connections += 1;
+    // History requests in flight died with the previous connection.
+    for m in lock(&inner.mirrors).values_mut() {
+        m.history.in_flight = false;
+    }
     *lock(&inner.connection) = Some(conn.clone());
     inner.emit(ClientEvent::Connected { epoch, resumed });
 
@@ -312,13 +316,13 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                     Outgoing::Ctl(ctl) => {
                         let _ = ctl_out.send(ctl);
                     }
-                    Outgoing::Input { pane_id, data } => {
+                    Outgoing::Input { pane_id, payload } => {
                         input_seq += 1;
                         let frame = ClientInput::Input(Input {
                             pane_id,
                             input_seq: InputSeq(input_seq),
                             principal,
-                            payload: InputPayload::Bytes(data),
+                            payload,
                         });
                         if let Err(e) = send(&mut input, &frame).await {
                             break e.to_string();
@@ -385,6 +389,44 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             ServerCtl::EchoHintAt(hint) => ClientEvent::EchoHint { hint },
             ServerCtl::AgentEvent { pane_id, json } => ClientEvent::AgentEvent { pane_id, json },
             ServerCtl::OpResult { op_id, outcome } => ClientEvent::OpResult { op_id, outcome },
+            ServerCtl::CommandMark(mark) => ClientEvent::CommandMark { mark },
+            ServerCtl::CommandFinishedUnseen(mark) => ClientEvent::CommandFinishedUnseen { mark },
+            ServerCtl::SearchResult {
+                req_id,
+                pane_id,
+                result,
+            } => ClientEvent::SearchResult {
+                req_id,
+                pane_id,
+                result,
+            },
+            ServerCtl::LinksResult {
+                req_id,
+                pane_id,
+                result,
+            } => ClientEvent::Links {
+                req_id,
+                pane_id,
+                result,
+            },
+            ServerCtl::CommandsResult {
+                req_id,
+                pane_id,
+                result,
+            } => ClientEvent::Commands {
+                req_id,
+                pane_id,
+                result,
+            },
+            ServerCtl::CommandOutputResult {
+                req_id,
+                pane_id,
+                result,
+            } => ClientEvent::CommandOutput {
+                req_id,
+                pane_id,
+                result,
+            },
             ServerCtl::Refused { reason } => {
                 return format!("refused: {reason:?}");
             }
@@ -413,12 +455,19 @@ async fn accept_panes(
         let acks = Arc::clone(&acks);
         let ctl = ctl.clone();
         tokio::spawn(async move {
-            let Ok(Some(StreamHeader::Pane { pane_id })) = recv(&mut stream).await else {
-                return;
-            };
-            while let Ok(Some(out)) = recv::<PaneOutput>(&mut stream).await {
-                apply_output(&inner, pane_id, out, &ctl);
-                acks.notify_one();
+            match recv(&mut stream).await {
+                Ok(Some(StreamHeader::Pane { pane_id })) => {
+                    while let Ok(Some(out)) = recv::<PaneOutput>(&mut stream).await {
+                        apply_output(&inner, pane_id, out, &ctl);
+                        acks.notify_one();
+                    }
+                }
+                Ok(Some(StreamHeader::Bulk)) => {
+                    while let Ok(Some(msg)) = recv::<Bulk>(&mut stream).await {
+                        apply_bulk(&inner, msg);
+                    }
+                }
+                other => tracing::debug!("unexpected stream header: {other:?}"),
             }
         });
     }
@@ -493,6 +542,57 @@ fn apply_output(
             input_seq: input_seq.0,
             at_seq: at_seq.0,
         },
+    };
+    inner.emit(event);
+}
+
+fn apply_bulk(inner: &Inner, msg: Bulk) {
+    let event = match msg {
+        Bulk::HistoryPage {
+            pane_id,
+            snapshot_seq,
+            offset,
+            next_offset,
+            raw_len,
+            done,
+            data,
+            ..
+        } => {
+            let records = match zstd::bulk::decompress(&data, raw_len as usize) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(%pane_id, "bad history page: {e}");
+                    return;
+                }
+            };
+            let applied = lock(&inner.mirrors)
+                .get_mut(&pane_id)
+                .and_then(|m| m.apply_history(snapshot_seq.0, offset, next_offset, done, &records));
+            let Some(rows) = applied else {
+                // A page for an older snapshot, or a repeat: nothing to continue.
+                return;
+            };
+            ClientEvent::PaneHistory {
+                pane_id,
+                snapshot_seq: snapshot_seq.0,
+                data: records,
+                rows,
+                done,
+            }
+        }
+        Bulk::HistoryGone {
+            pane_id,
+            snapshot_seq,
+        } => {
+            if let Some(m) = lock(&inner.mirrors).get_mut(&pane_id)
+                && m.history.snapshot_seq == snapshot_seq.0
+            {
+                m.history.in_flight = false;
+                m.history.done = true;
+            }
+            ClientEvent::PaneHistoryGone { pane_id }
+        }
+        Bulk::History { .. } => return,
     };
     inner.emit(event);
 }

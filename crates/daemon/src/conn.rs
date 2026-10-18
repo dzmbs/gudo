@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use proto::{
-    Actor, ClientCtl, ClientInput, DeviceId, Hello, InputPayload, InputRejectReason, Lease,
-    LeaseMode, PaneId, PaneLaunch, PaneSize, PrincipalId, RefuseReason, ResumePoint, Roles, Seq,
-    ServerCtl, SessionId, StreamHeader, SubscribeMode, UnixMillis, WIRE_VERSION, Welcome,
+    Actor, Bulk, ClientCtl, ClientInput, DeviceId, Hello, InputPayload, InputRejectReason, Lease,
+    LeaseMode, PaneId, PaneLaunch, PaneSize, PrincipalId, RefuseReason, ResumePoint, Roles,
+    RpcError, Seq, ServerCtl, SessionId, StreamHeader, SubscribeMode, UnixMillis, WIRE_VERSION,
+    Welcome,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
@@ -52,6 +53,8 @@ struct Client {
     actor: Actor,
     ctl: mpsc::UnboundedSender<ServerCtl>,
     state: Mutex<ConnState>,
+    /// The connection's `bulk` stream, opened on first use.
+    bulk: tokio::sync::Mutex<Option<SendStream>>,
 }
 
 /// Serves one accepted connection until it closes.
@@ -102,6 +105,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         actor: Actor { principal, device },
         ctl,
         state: Mutex::new(ConnState::default()),
+        bulk: tokio::sync::Mutex::new(None),
     });
     let mut tasks = JoinSet::new();
     tasks.spawn(write_ctl(ctl_tx, ctl_out));
@@ -121,6 +125,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         }
         client.subscribe(point.pane_id, SubscribeMode::Live).await;
     }
+    client.view_changed();
 
     let result = read_ctl(&client, ctl_rx).await;
     tasks.abort_all();
@@ -231,14 +236,11 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             client.send(reject(InputRejectReason::UnknownPane));
             continue;
         };
+        // Keys, mouse and paste are encoded for the program's current modes, which only the
+        // daemon's VT knows for sure (the client's may lag behind by the bytes in flight).
         let bytes = match input.payload {
             InputPayload::Bytes(b) => b,
-            InputPayload::Paste(text) => text.into_bytes(),
-            // Semantic keys and mouse need libghostty's encoders, not wrapped yet.
-            InputPayload::Key(_) | InputPayload::Mouse(_) => {
-                client.send(reject(InputRejectReason::Blocked));
-                continue;
-            }
+            payload => entry.pane.encode_input(payload),
         };
         let size = lock(&client.state).sizes.get(&input.pane_id).copied();
         if let Some(size) = size {
@@ -307,7 +309,105 @@ impl Client {
                 }
             }
             Event::Decided(d) => self.send(ServerCtl::Decided(d)),
+            Event::Command(mark) => {
+                if self.in_session(mark.pane_id) {
+                    self.send(ServerCtl::CommandMark(mark));
+                }
+            }
+            Event::CommandUnseen(mark) => self.send(ServerCtl::CommandFinishedUnseen(mark)),
         }
+    }
+
+    fn view_changed(&self) {
+        let panes = {
+            let state = lock(&self.state);
+            let mut panes = state.visible.clone();
+            panes.extend(state.focus);
+            panes
+        };
+        self.core.set_view(self.id, panes);
+    }
+
+    /// Runs a pane query off the async threads and sends its answer.
+    fn query<T: Send + 'static>(
+        self: &Arc<Self>,
+        pane_id: PaneId,
+        run: impl FnOnce(&crate::core::PaneEntry, &Core) -> Result<T, RpcError> + Send + 'static,
+        answer: impl FnOnce(Result<T, RpcError>) -> ServerCtl + Send + 'static,
+    ) {
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            let entry = client
+                .core
+                .pane(pane_id)
+                .filter(|_| client.in_session(pane_id));
+            let result = match entry {
+                None => Err(RpcError::UnknownPane),
+                Some(entry) => {
+                    let core = Arc::clone(&client.core);
+                    tokio::task::spawn_blocking(move || run(&entry, &core))
+                        .await
+                        .unwrap_or_else(|e| Err(RpcError::Internal(e.to_string())))
+                }
+            };
+            client.send(answer(result));
+        });
+    }
+
+    /// Serves one history page on the `bulk` stream.
+    fn fetch_history(self: &Arc<Self>, pane_id: PaneId, snapshot_seq: Seq, offset: u64, max: u32) {
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            let pane = client
+                .core
+                .pane(pane_id)
+                .filter(|_| client.in_session(pane_id))
+                .map(|e| Arc::clone(&e.pane));
+            let max = max.clamp(16 << 10, 2 << 20);
+            let chunk = match pane {
+                Some(pane) => tokio::task::spawn_blocking(move || {
+                    pane.history_page(snapshot_seq, offset, max)
+                })
+                .await
+                .ok()
+                .flatten(),
+                None => None,
+            };
+            let msg = match chunk {
+                Some(c) => Bulk::HistoryPage {
+                    pane_id,
+                    snapshot_seq,
+                    offset,
+                    next_offset: c.next_offset,
+                    total_len: c.total_len,
+                    raw_len: c.raw_len,
+                    pages: c.pages,
+                    done: c.done,
+                    data: c.zstd,
+                },
+                None => Bulk::HistoryGone {
+                    pane_id,
+                    snapshot_seq,
+                },
+            };
+            let mut bulk = client.bulk.lock().await;
+            if bulk.is_none() {
+                let Ok(mut stream) = client.conn.open_uni().await else {
+                    return;
+                };
+                let _ = stream.set_priority(crate::stream::priority::BULK);
+                if net::send(&mut stream, &StreamHeader::Bulk).await.is_err() {
+                    return;
+                }
+                *bulk = Some(stream);
+            }
+            if let Some(stream) = bulk.as_mut()
+                && let Err(e) = net::send(stream, &msg).await
+            {
+                tracing::debug!("bulk stream: {e}");
+                *bulk = None;
+            }
+        });
     }
 
     async fn handle_ctl(self: &Arc<Self>, msg: ClientCtl) {
@@ -322,11 +422,73 @@ impl Client {
             ClientCtl::Visible { pane_ids } => {
                 lock(&self.state).visible = pane_ids;
                 self.reclassify();
+                self.view_changed();
             }
             ClientCtl::Focus { pane_id } => {
                 lock(&self.state).focus = pane_id;
                 self.reclassify();
+                self.view_changed();
             }
+            ClientCtl::FetchHistory {
+                pane_id,
+                snapshot_seq,
+                offset,
+                max_bytes,
+            } => self.fetch_history(pane_id, snapshot_seq, offset, max_bytes),
+            ClientCtl::Search {
+                req_id,
+                pane_id,
+                query,
+                cursor,
+                limit,
+            } => self.query(
+                pane_id,
+                move |e, _| e.pane.search(&query, cursor, limit),
+                move |result| ServerCtl::SearchResult {
+                    req_id,
+                    pane_id,
+                    result,
+                },
+            ),
+            ClientCtl::Links {
+                req_id,
+                pane_id,
+                commands,
+            } => self.query(
+                pane_id,
+                move |e, core| {
+                    let cwd = lock(&e.meta).cwd.clone().map(std::path::PathBuf::from);
+                    let home = core.cfg.pane_var("HOME").map(std::path::PathBuf::from);
+                    Ok(e.pane.links(commands, cwd.as_deref(), home.as_deref()))
+                },
+                move |result| ServerCtl::LinksResult {
+                    req_id,
+                    pane_id,
+                    result,
+                },
+            ),
+            ClientCtl::Commands { req_id, pane_id } => self.query(
+                pane_id,
+                |e, _| Ok(e.pane.commands()),
+                move |result| ServerCtl::CommandsResult {
+                    req_id,
+                    pane_id,
+                    result,
+                },
+            ),
+            ClientCtl::CommandOutput {
+                req_id,
+                pane_id,
+                command_id,
+            } => self.query(
+                pane_id,
+                move |e, _| e.pane.command_output(command_id),
+                move |result| ServerCtl::CommandOutputResult {
+                    req_id,
+                    pane_id,
+                    result,
+                },
+            ),
             ClientCtl::Resize { pane_id, size } => {
                 lock(&self.state).sizes.insert(pane_id, size);
                 if let Some(entry) = self.core.pane(pane_id) {

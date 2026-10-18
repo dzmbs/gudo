@@ -6,25 +6,27 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use agents::LaunchMode;
 use proto::{
-    Actor, AgentKind, Decide, Decided, EchoHint, EchoHintAt, LayoutOp, OpError, OpOutcome, PaneId,
-    PaneLaunch, PaneMeta, PaneSize, Prediction, PrincipalId, ServerCtl, SessionEpoch, SessionId,
-    SizePolicy, SnapGen,
+    Actor, AgentKind, CommandMark, Decide, Decided, EchoHint, EchoHintAt, LayoutOp, OpError,
+    OpOutcome, PaneId, PaneLaunch, PaneMeta, PaneSize, Prediction, PrincipalId, ServerCtl,
+    SessionEpoch, SessionId, SizePolicy, SnapGen,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, broadcast, mpsc};
 use tokio::task::AbortHandle;
 
 use crate::agent::{AgentRuntime, HookServer};
+use crate::commands::CommandUpdate;
 use crate::config::Config;
 use crate::identity::Identity;
 use crate::layout::{Layout, Removed};
 use crate::osc::Osc;
 use crate::pane::{Pane, VtEvent};
 use crate::persist;
+use crate::shell::ShellIntegration;
 
 /// Identifies one client connection for the daemon's lifetime.
 pub(crate) type ConnId = u64;
@@ -38,8 +40,15 @@ pub(crate) enum Event {
     PaneMeta(PaneId),
     PaneClosed(PaneId),
     Echo(EchoHintAt),
-    Agent { pane_id: PaneId, json: Arc<str> },
+    Agent {
+        pane_id: PaneId,
+        json: Arc<str>,
+    },
     Decided(Decided),
+    /// A shell-integration command started or finished.
+    Command(CommandMark),
+    /// A long command finished while no client showed its pane.
+    CommandUnseen(CommandMark),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -75,6 +84,8 @@ pub(crate) struct PaneEntry {
     pub record: Mutex<PaneRecord>,
     pub agent: Mutex<Option<AgentRuntime>>,
     task: Mutex<Option<AbortHandle>>,
+    /// When the pane's process started, for matching a Codex rollout to it.
+    launched_at: SystemTime,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -93,10 +104,19 @@ pub(crate) struct Core {
     pub persist_dirty: Notify,
     pub shutting_down: AtomicBool,
     pub hooks: HookServer,
+    shell: Option<ShellIntegration>,
+    /// Panes each connection shows (focused and visible), for "finished while unseen".
+    views: Mutex<HashMap<ConnId, Vec<PaneId>>>,
 }
 
 impl Core {
-    pub fn new(cfg: Config, identity: Identity, layout: Layout, hooks: HookServer) -> Arc<Self> {
+    pub fn new(
+        cfg: Config,
+        identity: Identity,
+        layout: Layout,
+        hooks: HookServer,
+        shell: Option<ShellIntegration>,
+    ) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
         Arc::new(Self {
             epoch: SessionEpoch(crate::identity::now_millis()),
@@ -110,7 +130,19 @@ impl Core {
             persist_dirty: Notify::new(),
             shutting_down: AtomicBool::new(false),
             hooks,
+            shell,
+            views: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Records the panes `conn` shows.
+    pub fn set_view(&self, conn: ConnId, panes: Vec<PaneId>) {
+        lock(&self.views).insert(conn, panes);
+    }
+
+    /// Whether any connected client shows `pane`.
+    pub fn pane_seen(&self, pane: PaneId) -> bool {
+        lock(&self.views).values().any(|v| v.contains(&pane))
     }
 
     pub fn emit(&self, event: Event) {
@@ -145,6 +177,7 @@ impl Core {
     }
 
     pub fn detach(&self, conn: ConnId) {
+        lock(&self.views).remove(&conn);
         if lock(&self.attached).remove(&conn).is_some() {
             self.emit(Event::Sessions);
         }
@@ -454,8 +487,18 @@ impl Core {
         let shell = self.cfg.shell();
         let mut cmd = Command::new(&shell);
         let mut agent = None;
+        let injection = self
+            .shell
+            .as_ref()
+            .filter(|_| self.cfg.shell_integration)
+            .and_then(|si| si.injection(&shell, |name| self.cfg.pane_var(name)));
+        let mut inject_env = Vec::new();
         match &launch {
             PaneLaunch::Shell { .. } => {
+                if let Some(inj) = &injection {
+                    cmd.args(&inj.args);
+                    inject_env.clone_from(&inj.env);
+                }
                 cmd.arg("-l");
             }
             PaneLaunch::Command { argv, .. } => {
@@ -507,8 +550,22 @@ impl Core {
                     .map(|a| shell_quote(&a.to_string_lossy()))
                     .collect::<Vec<_>>()
                     .join(" ");
-                let shell_q = shell_quote(&shell.to_string_lossy());
-                cmd.args(["-l", "-c", &format!("{line}; exec {shell_q} -l")]);
+                // integration for that shell.
+                let mut then = vec!["exec".to_owned()];
+                if let Some(inj) = &injection {
+                    then.push("env".into());
+                    then.extend(
+                        inj.env
+                            .iter()
+                            .map(|(k, v)| shell_quote(&format!("{k}={v}"))),
+                    );
+                }
+                then.push(shell_quote(&shell.to_string_lossy()));
+                if let Some(inj) = &injection {
+                    then.extend(inj.args.iter().map(|a| shell_quote(a)));
+                }
+                then.push("-l".into());
+                cmd.args(["-l", "-c", &format!("{line}; {}", then.join(" "))]);
                 for (k, v) in &spec.env {
                     cmd.env(k, v);
                 }
@@ -525,6 +582,9 @@ impl Core {
         cmd.env(brand::env_var("PANE_ID"), id.0.to_string());
         for (k, v) in &self.cfg.pane_env {
             cmd.env(k, OsString::from(v));
+        }
+        for (k, v) in &inject_env {
+            cmd.env(k, v);
         }
         let (cols, rows) = self.cfg.default_size;
         let size = PaneSize {
@@ -559,6 +619,7 @@ impl Core {
             record: Mutex::new(record),
             agent: Mutex::new(agent.map(|(_, _, rt)| rt)),
             task: Mutex::new(None),
+            launched_at: SystemTime::now(),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
         *lock(&entry.task) = Some(task.abort_handle());
@@ -678,6 +739,7 @@ async fn pane_task(
     agent_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut screen_dirty = false;
     let mut detect_tick = 0u32;
+    let codex_lookup = Arc::new(AtomicBool::new(false));
     refresh_hint(&core, &entry);
     loop {
         tokio::select! {
@@ -695,6 +757,7 @@ async fn pane_task(
                     }
                     VtEvent::AltScreen => refresh_hint(&core, &entry),
                     VtEvent::Osc(osc) => handle_osc(&core, &entry, osc),
+                    VtEvent::Command(update) => handle_command(&core, &entry, update),
                 }
             }
             changed = echo.changed() => {
@@ -718,6 +781,9 @@ async fn pane_task(
                 detect_tick += 1;
                 if detect_tick.is_multiple_of(2) && lock(&entry.agent).is_none() {
                     detect_agent(&entry);
+                }
+                if detect_tick.is_multiple_of(2) {
+                    capture_codex_session(&core, &entry, &codex_lookup);
                 }
                 let screen = screen_dirty.then(|| pane.screen_text());
                 screen_dirty = false;
@@ -751,17 +817,6 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
             }
             core.emit(Event::PaneMeta(id));
         }
-        Osc::Prompt(mark) => {
-            // B: the user is editing a command line; C: the command's output starts. A and D
-            // (prompt drawing, command end) leave the state to the next B.
-            let at_prompt = match mark {
-                'B' => true,
-                'C' => false,
-                _ => return,
-            };
-            lock(&entry.meta).at_prompt = at_prompt;
-            refresh_hint(core, entry);
-        }
         Osc::Notify(body) => {
             let event = lock(&entry.agent).as_mut().and_then(|rt| rt.osc9(&body));
             core.agent_event(id, event);
@@ -773,6 +828,72 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
             core.agent_event(id, event);
         }
     }
+}
+
+fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
+    match update {
+        // 133;C: the command runs and owns the terminal.
+        CommandUpdate::AtPrompt(at_prompt) => {
+            lock(&entry.meta).at_prompt = at_prompt;
+            refresh_hint(core, entry);
+        }
+        CommandUpdate::Mark(mark) => {
+            let long = mark
+                .finished
+                .is_some_and(|f| f.duration_ms >= core.cfg.long_command.as_millis() as u64);
+            if long && !core.pane_seen(mark.pane_id) {
+                core.emit(Event::CommandUnseen(mark.clone()));
+            }
+            core.emit(Event::Command(mark));
+        }
+    }
+}
+
+/// While a launched Codex pane's session id is unknown, looks for it off the async runtime
+/// (process table and file system) and records it when found.
+fn capture_codex_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<AtomicBool>) {
+    let wanted = lock(&entry.record)
+        .agent
+        .as_ref()
+        .is_some_and(|a| a.kind == AgentKind::Codex && a.session_id.is_none());
+    if !wanted || busy.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let claimed: Vec<String> = core
+        .pane_entries()
+        .iter()
+        .filter_map(|(_, e)| lock(&e.record).agent.as_ref()?.session_id.clone())
+        .collect();
+    let cwd = lock(&entry.record).cwd.clone().unwrap_or_default();
+    let codex_home = core
+        .cfg
+        .pane_var("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            core.cfg
+                .pane_var("HOME")
+                .map(|h| PathBuf::from(h).join(".codex"))
+        });
+    let root = entry.pane.pty().pid();
+    let since = entry.launched_at;
+    let (core, entry, busy) = (Arc::clone(core), Arc::clone(entry), Arc::clone(busy));
+    tokio::task::spawn_blocking(move || {
+        let found = crate::codex_session::from_open_files(root).or_else(|| {
+            let home = codex_home?;
+            crate::codex_session::from_rollouts(&home, std::path::Path::new(&cwd), since, &claimed)
+        });
+        if let Some(session_id) = found {
+            let mut record = lock(&entry.record);
+            if let Some(agent) = record.agent.as_mut()
+                && agent.session_id.is_none()
+            {
+                tracing::info!(pane = %entry.pane.id, %session_id, "codex session found");
+                agent.session_id = Some(session_id);
+                core.mark_dirty();
+            }
+        }
+        busy.store(false, Ordering::Release);
+    });
 }
 
 /// Starts tracking an agent the user launched by hand (no hooks, screen and OSC only).

@@ -17,6 +17,7 @@ pub(crate) mod priority {
     pub const FOCUSED: i32 = 80;
     pub const VISIBLE: i32 = 50;
     pub const BACKGROUND: i32 = 10;
+    pub const BULK: i32 = 1;
 }
 
 /// How much a pane matters to the client right now.

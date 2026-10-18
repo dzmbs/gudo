@@ -25,17 +25,23 @@
 //! ```
 
 mod agent;
+mod codex_session;
+mod commands;
 mod config;
 mod conn;
 mod core;
 mod forward;
 mod fsutil;
 mod identity;
+mod input;
 mod layout;
 mod net;
 mod osc;
 mod pane;
 mod persist;
+mod procinfo;
+mod scan;
+mod shell;
 mod stream;
 
 use std::io;
@@ -87,7 +93,14 @@ impl Daemon {
             .map(persist::Saved::into_parts)
             .unwrap_or_default();
         let hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
-        let core = Core::new(config, identity, layout, hooks);
+        let shell = match shell::ShellIntegration::install(&config.state_dir) {
+            Ok(si) => Some(si),
+            Err(e) => {
+                tracing::warn!("installing shell integration scripts: {e}");
+                None
+            }
+        };
+        let core = Core::new(config, identity, layout, hooks, shell);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records);
 
