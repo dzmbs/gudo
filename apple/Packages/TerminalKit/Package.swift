@@ -1,12 +1,5 @@
 // swift-tools-version: 6.2
-import Foundation
 import PackageDescription
-
-// libghostty-vt is prebuilt by apple/scripts/build-libghostty-vt.sh into apple/build/ghostty-vt.
-// Once Xcode is available this becomes a `.binaryTarget` over zig's ghostty-vt.xcframework (macOS +
-// iOS + iOS simulator slices) and the unsafe -L flag goes away.
-let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-let ghosttyLibDir = packageDir.appending(path: "../../build/ghostty-vt/lib").standardized.path
 
 let package = Package(
     name: "TerminalKit",
@@ -14,18 +7,14 @@ let package = Package(
     products: [
         .library(name: "TerminalCore", targets: ["TerminalCore"]),
         .library(name: "TerminalRenderer", targets: ["TerminalRenderer"]),
+        .library(name: "LocalPTY", targets: ["LocalPTY"]),
         .executable(name: "TerminalDemo", targets: ["TerminalDemo"]),
         .executable(name: "TerminalBench", targets: ["TerminalBench"]),
     ],
     targets: [
-        .target(
-            name: "CGhosttyVt",
-            linkerSettings: [
-                .unsafeFlags(["-L", ghosttyLibDir]),
-                .linkedLibrary("ghostty-vt"),
-            ]
-        ),
-        .target(name: "TerminalCore", dependencies: ["CGhosttyVt"]),
+        // Built by apple/scripts/build-libghostty-vt.sh (macOS universal, iOS, iOS simulator slices).
+        .binaryTarget(name: "GhosttyVt", path: "../../build/ghostty-vt/lib/ghostty-vt.xcframework"),
+        .target(name: "TerminalCore", dependencies: ["GhosttyVt"]),
         .target(
             name: "TerminalRenderer",
             dependencies: ["TerminalCore"],

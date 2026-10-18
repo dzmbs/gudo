@@ -1,0 +1,88 @@
+# XcodeGen spec. Generate the project with `xcodegen` in apple/ (App.xcodeproj is not committed).
+name: App
+options:
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+configFiles:
+  Debug: Brand.xcconfig
+  Release: Brand.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    # Ad-hoc ("sign to run locally") until there is a team: CODE_SIGN_IDENTITY "-" on each target
+    # (target-level, to override XcodeGen's iOS preset).
+    CODE_SIGN_STYLE: Manual
+    # ghostty-vt.xcframework has no x86_64 simulator slice (Zig's std lacks it); Apple silicon only.
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+packages:
+  TerminalKit:
+    path: Packages/TerminalKit
+  PaneLayout:
+    path: Packages/PaneLayout
+targets:
+  App:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources: [App/Sources]
+    settings:
+      base:
+        PRODUCT_NAME: $(BRAND_NAME)
+        PRODUCT_MODULE_NAME: App
+        CODE_SIGN_IDENTITY: "-"
+        PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: $(BRAND_NAME)
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # The macOS app spawns login shells on local PTYs, which the App Sandbox forbids.
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      - package: TerminalKit
+        product: TerminalCore
+      - package: TerminalKit
+        product: TerminalRenderer
+      - package: TerminalKit
+        product: LocalPTY
+        destinationFilters: [macOS]
+      - package: PaneLayout
+        product: PaneLayout
+  AppUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS, macOS]
+    sources: [App/UITests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: App
+        CODE_SIGN_IDENTITY: "-"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: App
+schemes:
+  App:
+    build:
+      targets:
+        App: all
+    test:
+      targets:
+        - package: PaneLayout/PaneLayoutTests
+        - AppUITests
+    run:
+      config: Debug

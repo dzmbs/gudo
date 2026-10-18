@@ -7,10 +7,13 @@ public final class PTY: Sendable {
     public let fd: Int32
     public let pid: pid_t
     private let reader: DispatchSourceRead
+    private let reaper: DispatchSourceProcess
 
-    /// Spawns `argv` as a session leader whose controlling terminal is the PTY's slave side.
-    /// Output is not read until `start(onOutput:onExit:)`.
-    public init(argv: [String], environment: [String: String], cols: UInt16, rows: UInt16) throws {
+    /// Spawns `argv` as a session leader whose controlling terminal is the PTY's slave side, in
+    /// `workingDirectory` if given. Output is not read until `start(onOutput:onExit:)`.
+    public init(
+        argv: [String], environment: [String: String], workingDirectory: String? = nil, cols: UInt16, rows: UInt16
+    ) throws {
         let master = posix_openpt(O_RDWR | O_NOCTTY)
         guard master >= 0, grantpt(master) == 0, unlockpt(master) == 0, let slaveName = ptsname(master) else {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
@@ -30,6 +33,7 @@ public final class PTY: Sendable {
         posix_spawn_file_actions_addopen(&actions, 0, slaveName, O_RDWR, 0)
         posix_spawn_file_actions_adddup2(&actions, 0, 1)
         posix_spawn_file_actions_adddup2(&actions, 0, 2)
+        if let workingDirectory { posix_spawn_file_actions_addchdir(&actions, workingDirectory) }
 
         let cArgv = argv.map { strdup($0) } + [nil]
         let cEnv = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
@@ -44,6 +48,19 @@ public final class PTY: Sendable {
         self.pid = pid
 
         reader = DispatchSource.makeReadSource(fileDescriptor: master, queue: DispatchQueue(label: "pty.read", qos: .userInteractive))
+        // Reap the child when it exits so it does not linger as a zombie.
+        reaper = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .global(qos: .utility))
+        reaper.setEventHandler { [reaper] in
+            var status: Int32 = 0
+            waitpid(pid, &status, 0)
+            reaper.cancel()
+        }
+        reaper.resume()
+    }
+
+    /// Hangs up the child (SIGHUP), as closing a terminal window does. Output ends with EOF.
+    public func terminate() {
+        kill(pid, SIGHUP)
     }
 
     /// Starts reading. `onOutput` runs on a background queue for every chunk; `onExit` once at EOF.

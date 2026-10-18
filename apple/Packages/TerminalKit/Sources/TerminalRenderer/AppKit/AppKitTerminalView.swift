@@ -10,6 +10,8 @@ public final class TerminalView: NSView {
     public let surface: TerminalSurface
     /// Bytes to write to the PTY (encoded keys).
     public var onInput: (([UInt8]) -> Void)?
+    /// Called when the view becomes first responder (a click, or a programmatic focus change).
+    public var onFocus: (() -> Void)?
 
     private var scrollRemainder: CGFloat = 0
 
@@ -29,7 +31,12 @@ public final class TerminalView: NSView {
 
     override public func becomeFirstResponder() -> Bool {
         surface.isFocused = true
+        onFocus?()
         return true
+    }
+
+    override public func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
     }
 
     override public func resignFirstResponder() -> Bool {

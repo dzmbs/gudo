@@ -1,4 +1,4 @@
-import CGhosttyVt
+import GhosttyVt
 
 /// A snapshot of a terminal's viewport for drawing: libghostty-vt's render-state API (`render.h`).
 ///

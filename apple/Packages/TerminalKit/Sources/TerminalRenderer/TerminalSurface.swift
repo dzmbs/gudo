@@ -5,7 +5,7 @@ import Synchronization
 import TerminalCore
 
 /// Platform-neutral terminal view logic: owns the `CAMetalLayer`, the render loop and the grid
-/// geometry. A thin host view (AppKit `NSView` now, UIKit `UIView` later) forwards layout, the
+/// geometry. A thin host view (`TerminalView`: an AppKit `NSView` or a UIKit `UIView`) forwards layout, the
 /// display link, focus, scrolling and keys.
 ///
 /// Rendering only happens when the terminal reports dirty state: the display link pauses itself on
@@ -25,6 +25,9 @@ public final class TerminalSurface {
     /// Called when the cell grid changes size, e.g. to send TIOCSWINSZ to the PTY.
     public var onGridChange: ((Grid) -> Void)?
     public private(set) var grid: Grid?
+    /// The cursor cell in view points as of the last rendered frame (IME candidate window and
+    /// preedit placement); nil when the cursor is hidden or scrolled out of the viewport.
+    public private(set) var cursorRect: CGRect?
     public var isFocused = true {
         didSet { invalidate() }
     }
@@ -68,8 +71,10 @@ public final class TerminalSurface {
     }
 
     /// Starts frame pacing. `make` creates a display link on the host platform
-    /// (`NSView.displayLink(target:selector:)` or `CADisplayLink(target:selector:)`).
+    /// (`NSView.displayLink(target:selector:)` or `CADisplayLink(target:selector:)`). Replaces a
+    /// running link, e.g. when the host view moves to another window or screen.
     public func startDisplayLink(_ make: (_ target: Any, _ selector: Selector) -> CADisplayLink) {
+        stopDisplayLink()
         let target = DisplayLinkTarget(surface: self)
         let link = make(target, #selector(DisplayLinkTarget.tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
@@ -160,6 +165,7 @@ public final class TerminalSurface {
         state.update(from: terminal)
         guard state.dirty != .clean || needsFullRender else { return false }
         let rows = builder.build(state, fonts: fonts, focused: isFocused, into: &frame)
+        cursorRect = cursorRect(state.cursor, metrics: fonts.metrics)
         state.markClean()
         needsFullRender = false
         let built = CACurrentMediaTime()
@@ -193,6 +199,18 @@ public final class TerminalSurface {
             space: layer.colorspace ?? CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue),
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
+    private func cursorRect(_ cursor: RenderState.Cursor, metrics m: CellMetrics) -> CGRect? {
+        guard cursor.visible, let position = cursor.position else { return nil }
+        let scale = layer.contentsScale
+        let x = Int(position.x) - (cursor.onWideTail ? 1 : 0)
+        // paddingPx is (top, right, bottom, left), as in Ghostty's uniforms.
+        return CGRect(
+            x: (CGFloat(paddingPx.w) + CGFloat(x * m.cellWidth)) / scale,
+            y: (CGFloat(paddingPx.x) + CGFloat(Int(position.y) * m.cellHeight)) / scale,
+            width: CGFloat(m.cellWidth) / scale,
+            height: CGFloat(m.cellHeight) / scale)
     }
 
     private func offscreenTarget() -> MTLTexture? {

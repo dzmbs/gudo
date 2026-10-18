@@ -66,6 +66,17 @@ private func text(_ state: RenderState, row y: Int) -> String {
     #expect(terminal.encode(a) == Array("a".utf8))
 }
 
+@Test func encodesSoftKeyboardInputLikeHardwareChords() {
+    let terminal = Terminal(cols: 80, rows: 24) { _ in }
+    #expect(terminal.encode(.typing("c", mods: .control)) == [0x03])
+    #expect(terminal.encode(.typing("~")) == Array("~".utf8))
+    #expect(terminal.encode(.typing("|")) == Array("|".utf8))
+    #expect(terminal.encode(.typing("é")) == Array("é".utf8))
+    #expect(terminal.encode(.press(.escape)) == [0x1B])
+    #expect(terminal.encode(.press(.enter)) == [0x0D])
+    #expect(terminal.encode(.press(.arrowLeft, mods: .control)) == Array("\u{1b}[1;5D".utf8))
+}
+
 @Test func repliesToQueriesThroughWritePty() {
     let replies = Mutex<[UInt8]>([])
     let terminal = Terminal(cols: 80, rows: 24) { bytes in replies.withLock { $0 += bytes } }
