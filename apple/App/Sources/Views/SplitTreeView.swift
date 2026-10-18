@@ -114,7 +114,11 @@ struct PaneSlot: View {
         let focused = workspace.focusedPane == id
         Group {
             if let pane = workspace.panes[id] {
+                // One host per pane: without the id, switching between two single-pane tabs reuses
+                // the representable (same structural identity), so its container keeps showing,
+                // and its first responder keeps typing into, the previous tab's pane.
                 TerminalHost(pane: pane, isFocused: focused, workspace: workspace)
+                    .id(id)
             } else if let failure = workspace.failures[id] {
                 ContentUnavailableView("Pane Failed to Start", systemImage: "exclamationmark.triangle", description: Text(failure))
             } else {

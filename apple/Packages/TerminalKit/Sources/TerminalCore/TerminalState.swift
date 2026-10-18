@@ -167,7 +167,15 @@ extension Terminal {
             for y in 0..<Int(rows) {
                 var line = ""
                 for x in 0..<Int(cols) {
-                    guard let ref = Self.gridRef(t, GridPoint(x: x, y: y), GHOSTTY_POINT_TAG_VIEWPORT) else { continue }
+                    guard var ref = Self.gridRef(t, GridPoint(x: x, y: y), GHOSTTY_POINT_TAG_VIEWPORT) else { continue }
+                    // The second half of a wide character (and the padding before one that
+                    // wrapped) is part of that character, not a blank: "你好", not "你 好".
+                    var cell = GhosttyCell()
+                    if ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS {
+                        var wide = GHOSTTY_CELL_WIDE_NARROW
+                        ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide)
+                        if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { continue }
+                    }
                     let g = Self.graphemes(ref)
                     line += g.isEmpty ? " " : g
                 }

@@ -95,3 +95,9 @@ private func text(_ state: RenderState, row y: Int) -> String {
     #expect(cells[1].width == .spacerTail)
     #expect(cells[2].count == 1)
 }
+
+@Test func visibleTextJoinsWideCharacters() {
+    let terminal = Terminal(cols: 20, rows: 3) { _ in }
+    terminal.write(Array("你好 😀🚀 ok".utf8))
+    #expect(terminal.visibleText() == "你好 😀🚀 ok")
+}

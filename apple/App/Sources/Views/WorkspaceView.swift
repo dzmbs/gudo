@@ -31,6 +31,10 @@ struct WorkspaceView: View {
                 if isEmpty { dismiss() }
             }
             #endif
+            #if DEBUG && os(macOS)
+            // `-dogfood <scenario.json>`: the in-app scenario runner (App/Sources/Debug).
+            .task { DogfoodRunner.startIfRequested(workspace: workspace) }
+            #endif
     }
 
     @ViewBuilder private var content: some View {

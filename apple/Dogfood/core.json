@@ -1,0 +1,219 @@
+{
+  "name": "core",
+  "description": "The daily-driver checklist on the macOS app with the user's login zsh.",
+  "window": { "width": 1100, "height": 700 },
+  "hangSeconds": 15,
+  "timeoutSeconds": 600,
+  "cases": [
+    {
+      "name": "type-echo",
+      "steps": [
+        { "do": "waitIdle", "quiet": 0.8 },
+        { "do": "type", "text": "echo dogfood-$((6*7))", "latency": true },
+        { "do": "key", "key": "return" },
+        { "do": "waitText", "regex": "^dogfood-42$" },
+        { "do": "assert", "firstResponderIsFocusedPane": true },
+        { "do": "screenshot", "name": "01-type-echo" }
+      ]
+    },
+    {
+      "name": "ctrl-c-stops-sleep",
+      "steps": [
+        { "do": "type", "text": "sleep 100\n" },
+        { "do": "waitProcess", "name": "sleep", "state": "running" },
+        { "do": "key", "key": "ctrl+c" },
+        { "do": "waitProcess", "name": "sleep", "state": "gone", "timeout": 3 },
+        { "do": "type", "text": "echo after-ctrl-c-$((1+2))\n" },
+        { "do": "waitText", "regex": "^after-ctrl-c-3$" }
+      ]
+    },
+    {
+      "name": "ctrl-z-suspends-fg-resumes",
+      "steps": [
+        { "do": "type", "text": "sleep 101\n" },
+        { "do": "waitProcess", "name": "sleep", "state": "running" },
+        { "do": "key", "key": "ctrl+z" },
+        { "do": "waitProcess", "name": "sleep", "state": "stopped", "timeout": 3 },
+        { "do": "waitText", "regex": "suspended +sleep 101" },
+        { "do": "type", "text": "fg\n" },
+        { "do": "waitProcess", "name": "sleep", "state": "running", "timeout": 3 },
+        { "do": "key", "key": "ctrl+c" },
+        { "do": "waitProcess", "name": "sleep", "state": "gone", "timeout": 3 }
+      ]
+    },
+    {
+      "name": "paste-single-and-multiline",
+      "steps": [
+        { "do": "waitIdle" },
+        { "do": "assert", "bracketedPaste": true, "name": "zsh enables bracketed paste at the prompt" },
+        { "do": "paste", "text": "echo pasted-$((40+2))" },
+        { "do": "key", "key": "return" },
+        { "do": "waitText", "regex": "^pasted-42$" },
+        { "do": "waitIdle", "name": "zsh re-enables bracketed paste only when the next prompt is up" },
+        { "do": "assert", "bracketedPaste": true },
+        { "do": "paste", "text": "echo ml-$((1+1))\necho ml-$((2+2))" },
+        { "do": "sleep", "seconds": 0.5 },
+        { "do": "waitText", "regex": "^ml-[24]$", "absent": true, "timeout": 0.2, "name": "bracketed: nothing runs before Return" },
+        { "do": "screenshot", "name": "04-paste-multiline-pending" },
+        { "do": "key", "key": "return" },
+        { "do": "waitText", "regex": "^ml-2$" },
+        { "do": "waitText", "regex": "^ml-4$" }
+      ]
+    },
+    {
+      "name": "vim-insert-quit",
+      "steps": [
+        { "do": "type", "text": "vim ${OUT}/vim-test.txt\n" },
+        { "do": "waitProcess", "name": "vim", "state": "running" },
+        { "do": "assert", "altScreen": true, "timeout": 5 },
+        { "do": "waitText", "regex": "^~" },
+        { "do": "key", "key": "i" },
+        { "do": "waitText", "text": "-- INSERT --" },
+        { "do": "type", "text": "hello from vim", "latency": true },
+        { "do": "waitText", "regex": "^hello from vim" },
+        { "do": "screenshot", "name": "05-vim-insert" },
+        { "do": "key", "key": "escape" },
+        { "do": "type", "text": ":q!\n" },
+        { "do": "waitProcess", "name": "vim", "state": "gone", "timeout": 3 },
+        { "do": "assert", "altScreen": false },
+        { "do": "waitText", "text": "hello from vim", "absent": true, "timeout": 2 }
+      ]
+    },
+    {
+      "name": "less-page-scroll-quit",
+      "steps": [
+        { "do": "type", "text": "seq 1 500 | less\n" },
+        { "do": "waitProcess", "name": "less", "state": "running" },
+        { "do": "waitText", "regex": "^1$" },
+        { "do": "assert", "altScreen": true },
+        { "do": "rememberScreen", "as": "page1" },
+        { "do": "key", "key": "space" },
+        { "do": "waitScreenChanged", "from": "page1" },
+        { "do": "waitText", "regex": "^1$", "absent": true },
+        { "do": "rememberScreen", "as": "page2" },
+        { "do": "scroll", "lines": 3, "name": "wheel on the alt screen becomes arrow keys" },
+        { "do": "waitScreenChanged", "from": "page2" },
+        { "do": "screenshot", "name": "06-less" },
+        { "do": "key", "key": "q" },
+        { "do": "waitProcess", "name": "less", "state": "gone", "timeout": 3 },
+        { "do": "assert", "altScreen": false }
+      ]
+    },
+    {
+      "name": "top-and-quit",
+      "steps": [
+        { "do": "type", "text": "top -s 1\n" },
+        { "do": "waitProcess", "name": "top", "state": "running" },
+        { "do": "waitText", "text": "Processes:", "timeout": 10 },
+        { "do": "screenshot", "name": "07-top" },
+        { "do": "key", "key": "q" },
+        { "do": "waitProcess", "name": "top", "state": "gone", "timeout": 3 },
+        { "do": "type", "text": "echo top-done-$((3*3))\n" },
+        { "do": "waitText", "regex": "^top-done-9$" }
+      ]
+    },
+    {
+      "name": "resize-during-heavy-output",
+      "steps": [
+        { "do": "type", "text": "yes | head -200000; echo heavy-$((5*5))\n" },
+        { "do": "resizeLoop", "count": 24, "intervalMs": 50, "sizes": [[900, 560], [1300, 820], [700, 450], [1100, 700]] },
+        { "do": "waitText", "regex": "^heavy-25$", "timeout": 30 },
+        { "do": "resize", "width": 1100, "height": 700 },
+        { "do": "waitIdle" },
+        { "do": "assert", "ptySizeMatchesGrid": true, "timeout": 2, "name": "SIGWINCH size reached the PTY" },
+        { "do": "type", "text": "echo size-$(stty size | tr ' ' x)\n" },
+        { "do": "waitText", "regex": "^size-[0-9]+x[0-9]+$" },
+        { "do": "screenshot", "name": "08-after-heavy-resize" }
+      ]
+    },
+    {
+      "name": "splits-focus-typing",
+      "steps": [
+        { "do": "remember", "focus": "first" },
+        { "do": "shortcut", "keys": "cmd+d" },
+        { "do": "assert", "panes": 2 },
+        { "do": "assert", "focusIsNot": "first" },
+        { "do": "assert", "firstResponderIsFocusedPane": true },
+        { "do": "waitIdle" },
+        { "do": "type", "text": "echo right-$((1+1))\n" },
+        { "do": "waitText", "regex": "^right-2$" },
+        { "do": "waitText", "pane": 0, "regex": "^right-2$", "absent": true, "timeout": 0.2 },
+        { "do": "shortcut", "keys": "cmd+shift+d" },
+        { "do": "assert", "panes": 3 },
+        { "do": "assert", "focusIndex": 2 },
+        { "do": "waitIdle" },
+        { "do": "type", "text": "echo down-$((2+1))\n" },
+        { "do": "waitText", "regex": "^down-3$" },
+        { "do": "shortcut", "keys": "cmd+opt+left" },
+        { "do": "assert", "focusIs": "first" },
+        { "do": "assert", "firstResponderIsFocusedPane": true },
+        { "do": "type", "text": "echo left-$((3+1))\n" },
+        { "do": "waitText", "regex": "^left-4$" },
+        { "do": "waitText", "pane": 1, "regex": "^left-4$", "absent": true, "timeout": 0.2 },
+        { "do": "shortcut", "keys": "cmd+opt+right" },
+        { "do": "assert", "focusIndex": 1 },
+        { "do": "click", "pane": 2, "name": "clicking a pane focuses it" },
+        { "do": "assert", "focusIndex": 2 },
+        { "do": "screenshot", "name": "09-splits" }
+      ]
+    },
+    {
+      "name": "new-tab-title",
+      "steps": [
+        { "do": "shortcut", "keys": "cmd+t" },
+        { "do": "assert", "tabs": 2 },
+        { "do": "assert", "panes": 1 },
+        { "do": "waitIdle" },
+        { "do": "type", "text": "printf '\\e]2;dogfood-title-%d\\a' 7\n" },
+        { "do": "assert", "tabTitle": "dogfood-title-7", "timeout": 3 },
+        { "do": "shortcut", "keys": "cmd+shift+[" },
+        { "do": "assert", "panes": 3 },
+        { "do": "shortcut", "keys": "cmd+shift+]" },
+        { "do": "assert", "tabTitle": "dogfood-title-7" },
+        { "do": "screenshot", "name": "10-new-tab" }
+      ]
+    },
+    {
+      "name": "cmd-w-kills-pane-processes",
+      "steps": [
+        { "do": "shortcut", "keys": "cmd+d" },
+        { "do": "assert", "panes": 2 },
+        { "do": "waitIdle" },
+        { "do": "type", "text": "sleep 4243 &\n" },
+        { "do": "waitProcess", "name": "sleep", "state": "running" },
+        { "do": "type", "text": "(trap '' HUP; exec cat)\n", "name": "foreground cat that ignores SIGHUP (dies only when the tty goes away)" },
+        { "do": "waitProcess", "name": "cat", "state": "running" },
+        { "do": "capturePids", "as": "closing" },
+        { "do": "shortcut", "keys": "cmd+w" },
+        { "do": "assert", "panes": 1 },
+        { "do": "waitPidsGone", "of": "closing", "timeout": 5 }
+      ]
+    },
+    {
+      "name": "unicode-render",
+      "steps": [
+        { "do": "type", "text": "clear\n" },
+        { "do": "waitIdle", "name": "let clear finish, or the tty echoes the typeahead onto the cleared screen" },
+        { "do": "type", "text": "printf '\\u250c\\u2500\\u252c\\u2500\\u2510 \\ue0b0\\ue0b2\\ue0b4 \\U1F600\\U1F680 \\u4f60\\u597d \\u2588\\u2593\\u2592\\u2591 \\u28ff\\n\\u2514\\u2500\\u2534\\u2500\\u2518 caf\\u00e9 box-%d\\n' 4\n" },
+        { "do": "waitText", "regex": "^└─┴─┘ café box-4$" },
+        { "do": "waitText", "text": "┌─┬─┐" },
+        { "do": "waitText", "text": "😀" },
+        { "do": "waitText", "text": "你好" },
+        { "do": "screenshot", "name": "12-unicode" }
+      ]
+    },
+    {
+      "name": "selection-drag-copy",
+      "steps": [
+        { "do": "type", "text": "clear\n" },
+        { "do": "waitIdle" },
+        { "do": "type", "text": "echo SELECT-$((6*7))-ME\n" },
+        { "do": "waitText", "regex": "^SELECT-42-ME$" },
+        { "do": "selectText", "text": "SELECT-42-ME" },
+        { "do": "screenshot", "name": "13-selection" },
+        { "do": "shortcut", "keys": "cmd+c" },
+        { "do": "assert", "pasteboard": "SELECT-42-ME" }
+      ]
+    }
+  ]
+}
