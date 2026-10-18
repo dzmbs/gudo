@@ -38,5 +38,5 @@ mod snapshot;
 mod terminal;
 
 pub use error::Error;
-pub use snapshot::{HistoryPage, Restore, SnapshotDecoder};
-pub use terminal::{CONTINUATION_MAX_BYTES, Cursor, Screen, Terminal, TextRegion};
+pub use snapshot::{HistoryPage, Restore, SnapshotDecoder, ready_len, snapshot_format};
+pub use terminal::{CONTINUATION_MAX_BYTES, Cursor, ReplySink, Screen, Terminal, TextRegion};

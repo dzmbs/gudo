@@ -1,0 +1,24 @@
+[package]
+name = "un"
+version = "0.0.0"
+description = "Developer CLI over client-core: attach to a pane, drive the layout, forward ports"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The binary name comes from crates/brand (CLI_BIN); Cargo needs it literally.
+[[bin]]
+name = "un"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+brand.workspace = true
+clap.workspace = true
+client-core.workspace = true
+rustix = { workspace = true, features = ["stdio"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "signal"] }
+
+[lints]
+workspace = true

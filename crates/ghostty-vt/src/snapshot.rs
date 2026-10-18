@@ -300,3 +300,64 @@ impl Restore<'_> {
         terminal
     }
 }
+
+/// Size of the snapshot envelope: the `GHOSTSNP` magic and a `u16` format version.
+const ENVELOPE_LEN: usize = 10;
+/// Size of a record header: `tag u16, len u32, crc32c u32`, little-endian.
+const RECORD_HEADER_LEN: usize = 10;
+/// Record tag of the READY marker.
+const READY_TAG: u16 = 5;
+
+/// Returns the length of the snapshot's prefix up to and including the READY record.
+///
+/// scrollback records after it can follow lazily. Walks the record headers without decoding
+/// or checksumming them, so it costs nothing next to encoding. Returns `None` if the bytes are
+/// not a snapshot or contain no READY record.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), ghostty_vt::Error> {
+/// use ghostty_vt::{SnapshotDecoder, Terminal, ready_len};
+///
+/// let mut daemon = Terminal::new(80, 2)?;
+/// daemon.write(b"1\r\n2\r\n3\r\n4");
+/// let snapshot = daemon.encode_snapshot()?;
+/// let len = ready_len(&snapshot).expect("snapshots always have READY");
+/// let restore = SnapshotDecoder::new(&snapshot[..len])?.ready()?;
+/// assert_eq!(restore.source_offset(), Some(len));
+/// # Ok(())
+/// # }
+/// ```
+pub fn ready_len(snapshot: &[u8]) -> Option<usize> {
+    if snapshot.get(..8)? != b"GHOSTSNP" {
+        return None;
+    }
+    let mut pos = ENVELOPE_LEN;
+    while let Some(header) = snapshot.get(pos..pos + RECORD_HEADER_LEN) {
+        let tag = u16::from_le_bytes([header[0], header[1]]);
+        let len = u32::from_le_bytes([header[2], header[3], header[4], header[5]]) as usize;
+        pos = pos.checked_add(RECORD_HEADER_LEN + len)?;
+        if pos > snapshot.len() {
+            return None;
+        }
+        if tag == READY_TAG {
+            return Some(pos);
+        }
+    }
+    None
+}
+
+/// Returns the snapshot format version this build of libghostty-vt writes.
+///
+/// Client and daemon must agree on it; the `Hello` handshake compares it (ARCHITECTURE §4).
+pub fn snapshot_format() -> u16 {
+    static FORMAT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+    *FORMAT.get_or_init(|| {
+        Terminal::new(1, 1)
+            .and_then(|t| t.encode_snapshot())
+            .ok()
+            .and_then(|s| Some(u16::from_le_bytes([*s.get(8)?, *s.get(9)?])))
+            .unwrap_or(0)
+    })
+}

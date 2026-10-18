@@ -1,0 +1,76 @@
+//! Agent hooks reach clients, and a client's decision reaches the waiting hook.
+
+use std::time::Duration;
+
+use client_core::ClientConfig;
+use client_core::proto::{AgentState, OptionId};
+use daemon::{HookRequest, HookResponse};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
+
+use crate::support::{TestClient, start, ticket};
+
+const PERMISSION: &str =
+    include_str!("../../../agents/tests/fixtures/claude/permission_request.json");
+
+async fn hook(socket: &std::path::Path, request: &HookRequest) -> HookResponse {
+    let mut stream = UnixStream::connect(socket).await.unwrap();
+    let mut line = serde_json::to_vec(request).unwrap();
+    line.push(b'\n');
+    stream.write_all(&line).await.unwrap();
+    let mut answer = String::new();
+    BufReader::new(stream).read_line(&mut answer).await.unwrap();
+    serde_json::from_str(&answer).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn permission_request_is_answered_from_a_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = c.attach_and_follow().await;
+
+    let token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
+    let request = HookRequest {
+        v: 1,
+        token,
+        pane: pane.0.to_string(),
+        agent: "claude".into(),
+        event: "PermissionRequest".into(),
+        seq: 1,
+        payload: serde_json::from_str(PERMISSION).unwrap(),
+    };
+    let socket = daemon.hook_socket().to_owned();
+    let waiting = tokio::spawn(async move { hook(&socket, &request).await });
+
+    // The client sees the agent blocked, with the hook's options.
+    c.until("blocked agent", |c| {
+        c.metas
+            .get(&pane)
+            .and_then(|m| m.agent.as_ref())
+            .is_some_and(|a| matches!(a.state, AgentState::Blocked(_)))
+    })
+    .await;
+    assert!(
+        c.agent_events
+            .iter()
+            .any(|e| e.contains("rm -rf node_modules"))
+    );
+    let AgentState::Blocked(blocker) = c.metas[&pane].agent.clone().unwrap().state else {
+        unreachable!()
+    };
+    assert_eq!(blocker.options[0].label, "Yes");
+
+    c.client.decide(blocker.request_id, OptionId(0));
+    let response = tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .expect("hook answered")
+        .unwrap();
+    let stdout: serde_json::Value = serde_json::from_str(&response.stdout.unwrap()).unwrap();
+    assert_eq!(
+        stdout["hookSpecificOutput"]["decision"]["behavior"], "allow",
+        "{stdout}"
+    );
+    drop(c);
+    daemon.shutdown().await;
+}

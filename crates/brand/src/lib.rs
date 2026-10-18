@@ -31,3 +31,12 @@ pub const DIR_NAME: &str = "unnamed";
 pub fn env_var(suffix: &str) -> String {
     format!("{ENV_PREFIX}{suffix}")
 }
+
+/// URL scheme for links into the app, such as pairing tickets (`<scheme>://pair/…`).
+pub const URL_SCHEME: &str = "unnamed";
+
+/// Name of the developer command-line client.
+pub const CLI_BIN: &str = "un";
+
+/// Reverse-DNS label for per-user services (the macOS LaunchAgent).
+pub const SERVICE_LABEL: &str = "dev.unnamed.hostd";

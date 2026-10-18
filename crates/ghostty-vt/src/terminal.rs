@@ -38,12 +38,27 @@ pub const CONTINUATION_MAX_BYTES: usize = 1 << 20;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
 pub struct Terminal {
     raw: NonNull<ffi::GhosttyTerminalImpl>,
+    /// Sink for query replies, owned here and freed in `Drop`. libghostty-vt holds it as the
+    /// terminal's userdata, so it must stay at a stable address: hence a raw heap pointer.
+    reply_sink: *mut ReplySink,
 }
 
-// SAFETY: a terminal handle owns all of its state and libghostty-vt keeps no thread-local or
+/// Receives bytes the terminal wants to send back to the program (query replies).
+pub type ReplySink = Box<dyn FnMut(&[u8]) + Send>;
+
+impl std::fmt::Debug for Terminal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Terminal")
+            .field("raw", &self.raw)
+            .field("reply_sink", &!self.reply_sink.is_null())
+            .finish()
+    }
+}
+
+// SAFETY: the reply sink is `Send` and only reached through this terminal, so moving it along
+// with the handle is sound. A terminal handle owns all of its state and libghostty-vt keeps no thread-local or
 // thread-affine data, so the handle may be used from another thread. `Terminal` is not `Sync`,
 // which keeps all access to one handle serialized as the C API requires.
 unsafe impl Send for Terminal {}
@@ -108,7 +123,10 @@ impl Terminal {
         // SAFETY: `raw` is a valid out pointer; a null allocator selects the default one.
         Error::check(unsafe { ffi::ghostty_terminal_new(ptr::null(), &mut raw, cols, rows) })?;
         let raw = NonNull::new(raw).ok_or(Error::InvalidValue)?;
-        let mut terminal = Self { raw };
+        let mut terminal = Self {
+            raw,
+            reply_sink: ptr::null_mut(),
+        };
         terminal.set_usize(
             ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES,
             Some(CONTINUATION_MAX_BYTES),
@@ -122,7 +140,10 @@ impl Terminal {
     ///
     /// `raw` must be a live terminal handle that nothing else owns or frees.
     pub(crate) unsafe fn from_raw(raw: NonNull<ffi::GhosttyTerminalImpl>) -> Self {
-        Self { raw }
+        Self {
+            raw,
+            reply_sink: ptr::null_mut(),
+        }
     }
 
     pub(crate) fn as_raw(&self) -> ffi::GhosttyTerminal {
@@ -237,6 +258,78 @@ impl Terminal {
         // the call, and `extend_vec` treats it as a `Vec<u8>`.
         Error::check(unsafe { ffi::ghostty_snapshot_encode(self.as_raw(), vec_writer(&mut out)) })?;
         Ok(out)
+    }
+
+    /// Serializes only the READY section: visible screens, modes and unfinished parser input,
+    ///
+    /// libghostty-vt cannot stop at READY yet, so this encodes everything and truncates.
+    ///
+    /// # Errors
+    ///
+    /// As for [`encode_snapshot`](Self::encode_snapshot).
+    pub fn encode_ready_snapshot(&self) -> Result<Vec<u8>, Error> {
+        let mut snapshot = self.encode_snapshot()?;
+        let len = crate::ready_len(&snapshot).ok_or(Error::InvalidValue)?;
+        snapshot.truncate(len);
+        Ok(snapshot)
+    }
+
+    /// Installs `sink` to receive the terminal's replies to queries from the program: device
+    /// attributes, cursor position and status reports, mode queries and the like.
+    ///
+    /// A terminal without a sink ignores queries, which makes programs that wait for a reply
+    /// (for example a TUI asking for the cursor position at startup) stall. The sink runs
+    /// synchronously inside [`write`](Self::write); it must not block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if libghostty-vt rejects the callback options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), ghostty_vt::Error> {
+    /// use std::sync::{Arc, Mutex};
+    ///
+    /// let replies = Arc::new(Mutex::new(Vec::new()));
+    /// let mut terminal = ghostty_vt::Terminal::new(80, 24)?;
+    /// let sink = Arc::clone(&replies);
+    /// terminal.set_reply_sink(Box::new(move |b| sink.lock().unwrap().extend_from_slice(b)))?;
+    /// terminal.write(b"\x1b[6n"); // where is the cursor?
+    /// assert_eq!(&*replies.lock().unwrap(), b"\x1b[1;1R");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_reply_sink(&mut self, sink: ReplySink) -> Result<(), Error> {
+        let new = Box::into_raw(Box::new(sink));
+        // SAFETY: the handle is live. USERDATA takes the pointer value itself; WRITE_PTY takes
+        // a `GhosttyTerminalWritePtyFn`. `new` stays valid until replaced or `Drop`.
+        let result = unsafe {
+            Error::check(ffi::ghostty_terminal_set(
+                self.as_raw(),
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_USERDATA,
+                new.cast::<c_void>().cast_const(),
+            ))
+            .and_then(|()| {
+                let callback: ffi::GhosttyTerminalWritePtyFn = Some(write_pty_trampoline);
+                Error::check(ffi::ghostty_terminal_set(
+                    self.as_raw(),
+                    ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_WRITE_PTY,
+                    callback.map_or(ptr::null(), |f| f as *const c_void),
+                ))
+            })
+        };
+        if let Err(err) = result {
+            // SAFETY: `new` came from `Box::into_raw` above and was never handed out.
+            drop(unsafe { Box::from_raw(new) });
+            return Err(err);
+        }
+        let old = mem::replace(&mut self.reply_sink, new);
+        if !old.is_null() {
+            // SAFETY: `old` came from `Box::into_raw` and libghostty-vt now points at `new`.
+            drop(unsafe { Box::from_raw(old) });
+        }
+        Ok(())
     }
 
     /// Extracts the plain text of `region`, one line per row.
@@ -375,6 +468,28 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         // SAFETY: the handle is live and owned by `self`; nothing uses it afterwards.
         unsafe { ffi::ghostty_terminal_free(self.as_raw()) }
+        if !self.reply_sink.is_null() {
+            // SAFETY: allocated by `set_reply_sink`; the terminal that called it is gone.
+            drop(unsafe { Box::from_raw(self.reply_sink) });
+        }
+    }
+}
+
+unsafe extern "C" fn write_pty_trampoline(
+    _terminal: ffi::GhosttyTerminal,
+    userdata: *mut c_void,
+    data: *const u8,
+    len: usize,
+) {
+    if userdata.is_null() || data.is_null() {
+        return;
+    }
+    // SAFETY: userdata is the `ReplySink` installed by `set_reply_sink`, alive for the
+    // terminal's lifetime and only used from inside `write`, which holds `&mut Terminal`.
+    // `data` is valid for `len` bytes for the duration of the call.
+    unsafe {
+        let sink = &mut *userdata.cast::<ReplySink>();
+        sink(slice::from_raw_parts(data, len));
     }
 }
 

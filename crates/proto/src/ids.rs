@@ -25,6 +25,14 @@ counter! {
     PaneId
 }
 counter! {
+    /// A session on one daemon. Never reused, stable across daemon restarts.
+    SessionId
+}
+counter! {
+    /// A tab on one daemon. Never reused, stable across daemon restarts.
+    TabId
+}
+counter! {
     /// Byte offset into a pane's PTY output stream. Monotonic per pane per [`SnapGen`].
     Seq
 }

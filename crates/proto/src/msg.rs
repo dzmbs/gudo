@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
-    ResumeToken, Roles, Seq, SessionEpoch, SnapGen, UnixMillis,
+    ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
 };
+use crate::layout::{LayoutOp, OpOutcome, SessionLayout, SessionSummary};
 
 // ---------------------------------------------------------------------------------------------
 // Stream headers
@@ -29,6 +30,25 @@ pub enum StreamHeader {
     },
     /// Either direction: [`Bulk`] transfers.
     Bulk,
+    /// Client → daemon, on a bidirectional stream: connect to `127.0.0.1:port` on the daemon's
+    /// host. The daemon answers with one [`ForwardReply`] frame; after `Connected` both
+    /// directions carry raw, unframed bytes until either side finishes its half.
+    PortForward {
+        /// TCP port on the daemon host's loopback interface.
+        port: u16,
+    },
+}
+
+/// The daemon's answer on a [`StreamHeader::PortForward`] stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ForwardReply {
+    /// The TCP connection is open; raw bytes follow.
+    Connected,
+    /// The connection failed or is not allowed; the daemon finishes the stream.
+    Refused {
+        /// Human-readable reason.
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -36,7 +56,7 @@ pub enum StreamHeader {
 // ---------------------------------------------------------------------------------------------
 
 /// Messages the client sends on `ctl`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientCtl {
     /// Opens (or resumes) the session. Idempotent, so it is safe in 0-RTT data.
     Hello(Hello),
@@ -105,6 +125,23 @@ pub enum ClientCtl {
         /// Why the client is leaving.
         reason: ByeReason,
     },
+    /// Asks for the session list, answered by [`ServerCtl::Sessions`].
+    ListSessions,
+    /// Attaches this connection to a session: the daemon answers [`ServerCtl::Attached`] and
+    /// the session's [`ServerCtl::LayoutChanged`], then keeps sending layout changes for it.
+    /// `None` picks the most recently used session, creating one if there is none.
+    Attach {
+        /// The session to attach to.
+        session_id: Option<SessionId>,
+    },
+    /// Changes the layout. Answered by [`ServerCtl::OpResult`] with the same `op_id`, after
+    /// the resulting `LayoutChanged` has been sent.
+    Op {
+        /// Client-chosen id echoed in the result.
+        op_id: u64,
+        /// The change.
+        op: LayoutOp,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -134,13 +171,22 @@ pub struct Hello {
 /// verification without parsing the token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedGrant {
-    /// Version of the token format inside `token`.
+    /// Version of the token format inside `token`: [`SignedGrant::PAIRING`] or
+    /// [`SignedGrant::DEVICE`] in the MVP.
     pub v: u16,
     /// Id of the grant `token` encodes.
     pub grant_id: GrantId,
     /// The signed token.
     #[serde(with = "crate::serde_bytes")]
     pub token: Vec<u8>,
+}
+
+impl SignedGrant {
+    /// `token` is a ticket's one-time [`PairingSecret`](crate::PairingSecret); on success the
+    /// daemon adds the device to its allowlist for the ticket's principal.
+    pub const PAIRING: u16 = 0;
+    /// No token: the device key, proven by the QUIC handshake, is on the daemon's allowlist.
+    pub const DEVICE: u16 = 1;
 }
 
 /// A client's resume point for one pane.
@@ -211,7 +257,7 @@ pub struct Decide {
 // ---------------------------------------------------------------------------------------------
 
 /// Messages the daemon sends on `ctl`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerCtl {
     /// Accepts a `Hello`.
     Welcome(Welcome),
@@ -262,6 +308,38 @@ pub enum ServerCtl {
         /// The ping's nonce.
         nonce: u64,
     },
+    /// The daemon's sessions. Answers [`ClientCtl::ListSessions`] and is re-sent to every
+    /// client when a session is created, renamed or closed.
+    Sessions {
+        /// Sessions within the grant's scope.
+        sessions: Vec<SessionSummary>,
+    },
+    /// Answers [`ClientCtl::Attach`].
+    Attached {
+        /// The session this connection is now attached to.
+        session_id: SessionId,
+    },
+    /// The attached session's layout changed (or is being sent for the first time).
+    LayoutChanged(SessionLayout),
+    /// Answers [`ClientCtl::Op`].
+    OpResult {
+        /// The client's id for the op.
+        op_id: u64,
+        /// What happened.
+        outcome: OpOutcome,
+    },
+    /// versioned JSON. Kept as JSON because that schema is shared with hooks, logs and push
+    /// payloads and evolves on its own version.
+    AgentEvent {
+        /// The pane the agent runs in.
+        pane_id: PaneId,
+        /// One `AgentEvent` object.
+        json: String,
+    },
+    /// The PTY facts local echo prediction depends on, with the daemon's verdict under the
+    /// corrected S6 rule and the output offset they apply from. Supersedes
+    /// [`ServerCtl::EchoHint`].
+    EchoHintAt(EchoHintAt),
 }
 
 /// The daemon's answer to a successful `Hello`.
@@ -407,6 +485,68 @@ pub struct EchoHint {
     pub alt_screen: bool,
     /// The cursor is at a shell prompt (OSC 133).
     pub at_prompt: bool,
+}
+
+/// [`EchoHint`] positioned in the output stream, plus the prediction verdict.
+///
+/// The client applies it once it has applied output up to `at_seq`, so a password prompt's
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EchoHintAt {
+    /// The raw facts.
+    pub hint: EchoHint,
+    /// Output offset from which they hold.
+    pub at_seq: Seq,
+    /// Whether the client may predict printable input.
+    pub prediction: Prediction,
+}
+
+///
+/// `ECHO` off alone does not mean "password": line editors (zsh ZLE, readline) and every TUI
+/// run with `-echo -icanon`. The rule, first match wins:
+///
+/// | termios | other facts | verdict |
+/// |---|---|---|
+/// | `-echo icanon` | – | [`HiddenInput`](Self::HiddenInput) (never predict) |
+/// | any | alternate screen | [`AltScreen`](Self::AltScreen) |
+/// | `echo icanon` | – | [`Allow`](Self::Allow) |
+/// | `-icanon` | at a shell prompt (OSC 133;B seen, 133;C not yet) | [`Allow`](Self::Allow) |
+/// | `-icanon` | otherwise | [`RawOutsidePrompt`](Self::RawOutsidePrompt) |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Prediction {
+    /// Predicting printable characters is safe.
+    Allow,
+    /// Cooked mode with echo off: a password prompt. Never predict.
+    HiddenInput,
+    /// A full-screen program owns the screen; no prediction in v1.
+    AltScreen,
+    /// Raw mode outside a shell prompt (a TUI, or a raw-mode password widget).
+    RawOutsidePrompt,
+}
+
+impl Prediction {
+    /// Applies the rule above.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use proto::Prediction;
+    ///
+    /// // zsh at its prompt: raw, no echo, but shell integration says we are editing a line.
+    /// assert_eq!(Prediction::decide(false, false, false, true), Prediction::Allow);
+    /// // `sudo` asking for a password.
+    /// assert_eq!(Prediction::decide(false, true, false, false), Prediction::HiddenInput);
+    /// ```
+    pub fn decide(echo: bool, icanon: bool, alt_screen: bool, at_prompt: bool) -> Self {
+        if !echo && icanon {
+            Self::HiddenInput
+        } else if alt_screen {
+            Self::AltScreen
+        } else if icanon || at_prompt {
+            Self::Allow
+        } else {
+            Self::RawOutsidePrompt
+        }
+    }
 }
 
 /// Why input was rejected.
@@ -647,6 +787,26 @@ pub enum PaneOutput {
         input_seq: InputSeq,
         /// Output offset after which its effect is visible.
         at_seq: Seq,
+    },
+    /// 200 KB → 42 KB). The daemon always sends this form.
+    SnapshotZstd {
+        /// Output offset the snapshot reflects.
+        seq: Seq,
+        /// Generation the snapshot belongs to.
+        snap_gen: SnapGen,
+        /// Length of the decompressed snapshot, to bound the decoder's allocation.
+        raw_len: u32,
+        /// One zstd frame holding the Ghostty snapshot's READY section.
+        #[serde(with = "crate::serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// The terminal was resized between the bytes before `seq` and the byte at `seq`. Sent
+    /// in-band so every client resizes its VT at the same point in the stream as the daemon.
+    Resized {
+        /// Output offset of the resize.
+        seq: Seq,
+        /// The new size.
+        size: PaneSize,
     },
 }
 

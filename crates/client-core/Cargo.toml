@@ -1,0 +1,32 @@
+[package]
+name = "client-core"
+version = "0.0.0"
+description = "Platform-neutral client: dial by ticket, attach, seq/ack, resume, port forwarding (UniFFI-ready API)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+brand.workspace = true
+getrandom.workspace = true
+ghostty-vt.workspace = true
+iroh.workspace = true
+proto.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tracing.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+daemon.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[lints]
+workspace = true
