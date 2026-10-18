@@ -16,6 +16,8 @@ pub struct PairTicketInfo {
     /// The daemon's endpoint id, lowercase hex (64 characters). Stable across daemon
     /// restarts and upgrades: the app keys paired hosts by it.
     pub daemon_id: String,
+    /// How the daemon wants to be dialled (from the ticket's relay extras, docs/RELAYS.md).
+    pub relays: TicketRelays,
     /// Direct addresses the ticket carries (`ip:port`).
     pub addrs: Vec<String>,
     /// The daemon's home relay, if any.
@@ -23,6 +25,23 @@ pub struct PairTicketInfo {
     /// When the daemon stops accepting the ticket's one-time secret (Unix ms). Paired
     /// devices keep dialling with the ticket afterwards; only first pairing needs it valid.
     pub expires_unix_ms: u64,
+}
+
+/// Which relays a daemon uses, as its pairing ticket says.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum TicketRelays {
+    /// The product's default relays.
+    Default,
+    /// Only the daemon's self-hosted `iroh-relay` servers (a private CA goes into
+    /// `ConnectOptions.relay_ca_der`).
+    Custom {
+        /// Relay URLs.
+        urls: Vec<String>,
+        /// The relays need the shared token the ticket carries (not shown).
+        has_auth_token: bool,
+    },
+    /// No relays: direct addresses only (LAN, Tailscale, VPN).
+    Disabled,
 }
 
 /// Reads a `unnamed://pair/…` ticket (the scheme is the brand's; surrounding whitespace is
@@ -33,14 +52,21 @@ pub struct PairTicketInfo {
 /// [`ClientError::Ticket`] if it does not parse.
 #[uniffi::export]
 pub fn inspect_pair_ticket(ticket: String) -> Result<PairTicketInfo, ClientError> {
-    let parsed: proto::Ticket =
-        ticket
-            .trim()
-            .parse()
-            .map_err(|e: proto::TicketError| ClientError::Ticket {
+    let (parsed, extras) =
+        proto::Ticket::parse_with_extras(ticket.trim()).map_err(|e: proto::TicketError| {
+            ClientError::Ticket {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
     Ok(PairTicketInfo {
+        relays: match extras.relays {
+            proto::TicketRelays::Default => TicketRelays::Default,
+            proto::TicketRelays::Custom { urls, auth_token } => TicketRelays::Custom {
+                urls,
+                has_auth_token: auth_token.is_some(),
+            },
+            proto::TicketRelays::Disabled => TicketRelays::Disabled,
+        },
         daemon_id: parsed
             .daemon_id
             .0
@@ -189,6 +215,21 @@ mod tests {
         assert_eq!(info.addrs, ["127.0.0.1:4433"]);
         assert_eq!(info.relay_url.as_deref(), Some("https://relay.example/"));
         assert_eq!(info.expires_unix_ms, 1_800_000_000_000);
+        assert_eq!(info.relays, TicketRelays::Default);
+        let custom = ticket.to_string_with(&proto::TicketExtras {
+            v: proto::TicketExtras::VERSION,
+            relays: proto::TicketRelays::Custom {
+                urls: vec!["https://relay.example.com".into()],
+                auth_token: Some("secret".into()),
+            },
+        });
+        assert_eq!(
+            inspect_pair_ticket(custom).unwrap().relays,
+            TicketRelays::Custom {
+                urls: vec!["https://relay.example.com".into()],
+                has_auth_token: true,
+            }
+        );
         assert!(matches!(
             inspect_pair_ticket("unnamed://pair/nope".into()),
             Err(ClientError::Ticket { .. })

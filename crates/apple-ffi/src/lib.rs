@@ -25,9 +25,14 @@
 
 mod bytes;
 mod client;
+mod editor;
 mod extras;
+mod mp;
+mod notify;
 mod ssh_api;
 mod types;
+mod workspace;
+mod ws_types;
 
 use std::sync::OnceLock;
 
@@ -35,10 +40,30 @@ use tokio::runtime::Runtime;
 
 pub use bytes::Bytes;
 pub use client::{
-    ClientConfig, ClientError, ClientEvent, ClientEventListener, ClientStats, DaemonClient,
-    PaneBytesBench, RelayMode, bench_pane_bytes, generate_device_key,
+    ClientConfig, ClientError, ClientEvent, ClientEventListener, ClientStats, ConnectOptions,
+    DaemonClient, PaneBytesBench, RelayMode, bench_pane_bytes, generate_device_key,
 };
-pub use extras::{LogLevel, LogSink, PairTicketInfo, inspect_pair_ticket, install_log_sink};
+pub use editor::{
+    EditorSession, VsCodeSshHost, microsoft_privacy_url, vscode_license_url, vscode_remote_ssh_uri,
+    vscode_server_license_url, vscode_ssh_authority, vscode_ssh_config_entry, vscode_tunnel_uri,
+    vscode_tunnel_web_url,
+};
+pub use extras::{
+    LogLevel, LogSink, PairTicketInfo, TicketRelays, inspect_pair_ticket, install_log_sink,
+};
+pub use mp::{
+    Actor, ApprovalAudit, AuditKind, AuditPage, AuditRecord, CreatedInvite, CursorPos, Decided,
+    DeviceInfo, DeviceKind, Grant, GrantInfo, InputRejectReason, InviteInfo, InviteOptions,
+    JoinInfo, Lease, LeaseMode, LeaseOutcome, MultiplayerError, MultiplayerEvent,
+    MultiplayerListener, Participant, Presence, PresenceState, RevokeResult, RevokeTarget, Role,
+    Scope, inspect_invite,
+};
+pub use notify::{
+    ApnsEnvironment, PushActionError, PushActionOffer, PushCapKind, PushDecision, PushError,
+    PushKind, PushNotification, PushSealKey, default_push_relay_url, generate_push_seal_key,
+    open_push_notification, push_action_token, push_relay_register_body, push_seal_public_key,
+    send_push_action, send_push_action_blocking,
+};
 pub use ssh_api::{
     BootstrapListener, BootstrapReport, BootstrapStep, EnvVar, GeneratedSshKey, HostKeyDelegate,
     HostKeyInfo, HostKeyPolicy, HostKeyStatus, HostPlatform, HostdBinaries, HostdBinary,
@@ -50,6 +75,8 @@ pub use ssh_api::{
     private_key_is_encrypted,
 };
 pub use types::*;
+pub use workspace::{AgentLaunch, AgentLaunched, TransferProgress, WorkspaceListener};
+pub use ws_types::*;
 
 uniffi::setup_scaffolding!();
 

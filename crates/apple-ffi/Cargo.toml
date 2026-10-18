@@ -14,8 +14,11 @@ name = "unnamed_core"
 crate-type = ["lib", "staticlib"]
 
 [dependencies]
+brand.workspace = true
 client-core.workspace = true
 flate2.workspace = true
+push.workspace = true
+serde_json.workspace = true
 ssh.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
