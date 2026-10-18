@@ -25,11 +25,29 @@ packages:
     path: Packages/TerminalKit
   PaneLayout:
     path: Packages/PaneLayout
+  HostKit:
+    path: Packages/HostKit
+  UnnamedCore:
+    path: Packages/UnnamedCore
 targets:
   App:
     type: application
     supportedDestinations: [iOS, macOS]
-    sources: [App/Sources]
+    sources:
+      - App/Sources
+      # The static Linux daemons "Install helper" uploads (`cargo xtask build-hostd-linux`).
+      - path: build/hostd/unnamed-hostd-x86_64-linux.gz
+        buildPhase: resources
+        optional: true
+      - path: build/hostd/unnamed-hostd-aarch64-linux.gz
+        buildPhase: resources
+        optional: true
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER).pair
+            CFBundleURLSchemes: [$(BRAND_URL_SCHEME)]
     settings:
       base:
         PRODUCT_NAME: $(BRAND_NAME)
@@ -45,6 +63,10 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # Pairing QR codes (VisionKit DataScannerViewController).
+        INFOPLIST_KEY_NSCameraUsageDescription: Scan a host's pairing QR code.
+        # The daemon is reached over the local network too (direct iroh paths, LAN hosts).
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your hosts on the local network.
         # ProMotion: lets the terminal's display link run at 120 Hz on iPhone too (iPad needs no key).
         INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone: YES
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
@@ -64,6 +86,10 @@ targets:
         destinationFilters: [macOS]
       - package: PaneLayout
         product: PaneLayout
+      - package: HostKit
+        product: HostKit
+      - package: UnnamedCore
+        product: UnnamedCore
   AppUITests:
     type: bundle.ui-testing
     supportedDestinations: [iOS, macOS]

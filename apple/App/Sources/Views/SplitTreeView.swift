@@ -115,6 +115,7 @@ struct PaneSlot: View {
         Group {
             if let pane = workspace.panes[id] {
                 TerminalHost(pane: pane, isFocused: focused, workspace: workspace)
+                    .overlay { StalePaneOverlay(connection: pane.connection, paneId: id) }
             } else if let failure = workspace.failures[id] {
                 ContentUnavailableView("Pane Failed to Start", systemImage: "exclamationmark.triangle", description: Text(failure))
             } else {

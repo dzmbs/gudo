@@ -36,12 +36,47 @@ final class Workspace {
     #endif
 
     @ObservationIgnored private let makeBackend: @MainActor (PaneId) throws -> any PaneBackend
+    /// The remote host this window shows (nil: the local workspace). Its status drives the
+    /// connection banner and retry (04-mobile-ux R8, R9).
+    @ObservationIgnored let host: (any HostConnection)?
+    /// The host id (for the hosts list and persistence), nil for the local workspace.
+    let hostId: String?
 
     init(layout: any LayoutStore = LocalLayoutStore(), makeBackend: @escaping @MainActor (PaneId) throws -> any PaneBackend = makeLocalBackend) {
         self.layout = layout
         self.makeBackend = makeBackend
+        host = nil
+        hostId = nil
         reconcilePanes()
         _ = settingsObserver
+    }
+
+    /// A window on a remote host: its layout store (the daemon's, or a local one for plain SSH)
+    /// and its pane backends.
+    init(hostId: String, connection: any HostConnection) {
+        layout = connection.layoutStore
+        makeBackend = { try connection.makeBackend(for: $0) }
+        host = connection
+        self.hostId = hostId
+        reconcilePanes()
+        _ = settingsObserver
+        followLayout()
+    }
+
+    /// Whether this window is on a remote host.
+    var isRemote: Bool { host != nil }
+
+    /// A daemon's layout changes on its own (other clients, the daemon's answers to our ops, a
+    /// pane whose process exited): keep the panes in step.
+    private func followLayout() {
+        withObservationTracking {
+            _ = layout.session
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.reconcilePanes()
+                self?.followLayout()
+            }
+        }
     }
 
     var session: Session { layout.session }

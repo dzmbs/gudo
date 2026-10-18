@@ -3,6 +3,7 @@ import Observation
 import PaneLayout
 import TerminalCore
 import TerminalRenderer
+import os
 
 /// One live terminal: the VT state, its renderer surface and host view, and the backend that feeds
 /// it. The view is created once and moved between parents as the split tree changes, so a split,
@@ -21,6 +22,8 @@ final class Pane {
     /// The pane's foreground program as the backend reports it (the daemon's `tcgetpgrp`); nil
     /// when the backend cannot tell (local backends), in which case the title stands in.
     private(set) var foregroundProgram: String?
+    /// Live, or showing stale content while its host reconnects (dimmed, never blank: R12).
+    private(set) var connection = PaneConnection.live
     /// Called on the main actor after `title` or `foregroundProgram` change.
     @ObservationIgnored var onContextChange: (() -> Void)?
     /// The cell size in points after a layout (split sizes snap to it).
@@ -29,6 +32,8 @@ final class Pane {
     @ObservationIgnored private let backend: any PaneBackend
     @ObservationIgnored private var appliedGrid: TerminalSurface.Grid?
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
+
+    nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "pane")
 
     /// PTY resizes (SIGWINCH) are debounced so a divider drag does not make TUIs redraw on every
     /// frame (04-mobile-ux C3).
@@ -60,12 +65,42 @@ final class Pane {
                 Task { @MainActor in surface?.applyPrediction(update) }
             }
         }
-        backend.start(
-            onOutput: { bytes in
-                terminal.write(bytes)
+        backend.start { [weak self] event in
+            switch event {
+            case .output(let data):
+                data.withUnsafeBytes { terminal.write($0) }
                 surface.outputArrived()
-            },
-            onExit: onExit)
+            case .snapshot(let ready):
+                // Resume after a gap or first attach: the daemon's state replaces ours. A bad
+                // snapshot keeps what is on screen (stale beats blank) and is logged.
+                do {
+                    try terminal.restore(snapshot: ready)
+                } catch {
+                    Pane.log.error("snapshot restore failed: \(String(describing: error), privacy: .public)")
+                }
+                surface.outputArrived()
+            case .history(let records, _):
+                _ = try? terminal.appendHistory(records)
+                surface.outputArrived()
+            case .resized(let cols, let rows):
+                // The remote PTY changed size at this point of the stream: follow it so the
+                // bytes after it lay out as they did there.
+                Task { @MainActor in
+                    guard let grid = surface.grid, grid.cols != cols || grid.rows != rows else { return }
+                    terminal.resize(cols: cols, rows: rows, cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
+                    surface.outputArrived()
+                }
+            case .connection(let state):
+                Task { @MainActor in self?.connection = state }
+            case .exited:
+                onExit()
+            }
+        }
+        // Scrolling to the top of what the pane holds asks the host for older scrollback.
+        surface.onScroll = { [weak surface] rows in
+            guard rows < 0, let terminal = surface?.terminal, terminal.scrollbar.offset == 0 else { return }
+            _ = backend.requestHistory()
+        }
         if let program = backend as? any ForegroundProgramReporting {
             program.onForegroundProgramChange { [weak self] name in
                 Task { @MainActor in

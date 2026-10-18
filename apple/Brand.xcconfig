@@ -4,3 +4,5 @@
 
 BRAND_NAME = unnamed
 BRAND_BUNDLE_ID_PREFIX = dev.unnamed
+// Deep links (`<scheme>://pair/<ticket>`); must match crates/brand URL_SCHEME.
+BRAND_URL_SCHEME = unnamed

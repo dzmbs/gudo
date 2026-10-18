@@ -12,7 +12,7 @@ enum TabStyle: String {
 
 /// A window: tabs (sidebar, strip, or the compact switcher on iPhone) around the active tab's panes.
 struct WorkspaceView: View {
-    @State private var workspace = Workspace()
+    let workspace: Workspace
     @AppStorage("tabStyle") private var tabStyle = TabStyle.sidebar
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -28,12 +28,19 @@ struct WorkspaceView: View {
             #if os(macOS)
             // Closing the last pane closes the window, as in Ghostty.
             .onChange(of: workspace.session.tabs.isEmpty) { _, isEmpty in
-                if isEmpty { dismiss() }
+                if isEmpty, !workspace.isRemote { dismiss() }
             }
             #endif
     }
 
     @ViewBuilder private var content: some View {
+        layoutContent
+            .overlay(alignment: .top) {
+                if let host = workspace.host { ConnectionBanner(host: host, hostId: workspace.hostId) }
+            }
+    }
+
+    @ViewBuilder private var layoutContent: some View {
         #if os(iOS)
         if sizeClass == .compact {
             CompactWorkspaceView(workspace: workspace)
@@ -55,6 +62,7 @@ struct WorkspaceView: View {
                 ActiveTabView(workspace: workspace)
                     .toolbar {
                         ToolbarItemGroup(placement: .primaryAction) {
+                            HostsButton()
                             PaneMenu(workspace: workspace)
                             TabStyleToggle(style: $tabStyle)
                         }
@@ -83,6 +91,12 @@ struct ActiveTabView: View {
                     node: single.map(Node.leaf) ?? tab.root,
                     workspace: workspace,
                     showsFocus: single == nil && tab.root.panes.count > 1)
+            } else if let host = workspace.host, !host.isReady {
+                ContentUnavailableView {
+                    Label("Connecting…", systemImage: "network")
+                } description: {
+                    Text(host.status.summary)
+                }
             } else {
                 ContentUnavailableView {
                     Label("No Tabs", systemImage: "terminal")

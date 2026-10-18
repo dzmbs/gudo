@@ -70,6 +70,8 @@ struct TabBar: View {
             .scrollIndicators(.hidden)
             Button("New Tab", systemImage: "plus") { workspace.apply(.newTab) }
                 .labelStyle(.iconOnly)
+            HostsButton()
+                .labelStyle(.iconOnly)
             PaneMenu(workspace: workspace)
                 .labelStyle(.iconOnly)
             TabStyleToggle(style: $style)
@@ -139,6 +141,8 @@ struct CompactWorkspaceView: View {
                     paneSwitcher(tab)
                 }
                 Button("New Tab", systemImage: "plus") { workspace.apply(.newTab) }
+                    .labelStyle(.iconOnly)
+                HostsButton()
                     .labelStyle(.iconOnly)
             }
             .padding(.horizontal, 12)

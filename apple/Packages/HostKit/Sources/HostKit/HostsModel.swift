@@ -316,6 +316,11 @@ public final class HostsModel {
         }
     }
 
+    /// Dismisses the import list.
+    public func clearSSHConfigAliases() {
+        sshConfigAliases = []
+    }
+
     #if os(macOS)
     /// macOS reads the user's config directly.
     public func loadUserSSHConfig() throws {
