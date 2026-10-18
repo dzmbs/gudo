@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// The context-aware key bar (04-mobile-ux C5) over the software keyboard: profile switching from
@@ -104,3 +105,4 @@ final class KeyBarUITests: XCTestCase {
         Thread.sleep(forTimeInterval: seconds)
     }
 }
+#endif

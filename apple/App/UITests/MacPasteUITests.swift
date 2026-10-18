@@ -30,7 +30,7 @@ final class MacPasteUITests: XCTestCase {
         expectValue(of: pane, containing: "pasted-by-menu\n")
     }
 
-    private func expectValue(of element: XCUIElement, containing text: String) {
+    @MainActor private func expectValue(of element: XCUIElement, containing text: String) {
         let predicate = NSPredicate { object, _ in
             ((object as? XCUIElement)?.value as? String)?.contains(text) == true
         }

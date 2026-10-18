@@ -93,6 +93,12 @@ drags in mouse mode); two fingers send the wheel. iPad pointer: click-drag selec
 hover underlines links and reports motion in any-event mode. Hardware keys: full HID map incl.
 function keys, Option-as-Meta per side (Pane menu ▸ Keyboard), ⌘ chords go to the app.
 
+Key bar (`App/Sources/KeyBar*`): profiles as data (Shell, Claude Code, Codex, Vim, Pager) picked from
+the foreground program, else the OSC title, with a chip to override; snippets row; composer (multi-line,
+⌘↩ or Send pastes it bracketed then Return; default on for agents, per pane); collapses to a 28 pt strip
+when a hardware keyboard is attached (`-keyBar.fullWithHardwareKeyboard YES` keeps the full row). All
+visuals come from `KeyBarStyle`.
+
 Backend hooks (additive, in `App/Sources/Panes/PaneBackend.swift`): `PredictionFeed` and
 `ForegroundProgramReporting` (picks the key bar profile; the title stands in until the daemon reports
 the program).
