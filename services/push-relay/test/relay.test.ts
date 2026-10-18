@@ -1,0 +1,372 @@
+import { env as cfEnv, exports as cfExports } from "cloudflare:workers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import vectors from "../../../crates/push/tests/vectors/push-v1.json";
+import { buildApnsRequest, providerJwt, resetJwt } from "../src/apns";
+import { openCap, sealCap } from "../src/cap";
+import { b64url, concat, hex, unb64url, utf8 } from "../src/encoding";
+import { DAEMON_BUCKET } from "../src/limiter";
+import type { Env } from "../src/env";
+import { type RelayRequest, parseRequest, verifySignature } from "../src/request";
+
+/** The bindings, as wrangler.jsonc and vitest.config.ts define them. */
+const env = cfEnv as unknown as Env & { TEST_APNS_PUBLIC_KEY: string };
+const worker = (cfExports as unknown as { default: { fetch(r: Request): Promise<Response> } })
+  .default;
+
+const TOKEN = "a1".repeat(32);
+
+/** A stand-in daemon: an Ed25519 key, like the daemon's iroh key. */
+async function daemon() {
+  const keys = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  const raw = new Uint8Array(
+    (await crypto.subtle.exportKey("raw", keys.publicKey)) as ArrayBuffer,
+  );
+  return { id: hex(raw), key: keys.privateKey };
+}
+type Daemon = Awaited<ReturnType<typeof daemon>>;
+
+function nonce(): string {
+  return hex(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+async function call(path: string, init: RequestInit = {}): Promise<Response> {
+  return worker.fetch(new Request(`https://push.test${path}`, init));
+}
+
+async function register(
+  d: Daemon,
+  extra: Record<string, unknown> = {},
+): Promise<{ cap: string; expires: number }> {
+  const res = await call("/v1/register", {
+    method: "POST",
+    body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id, ...extra }),
+  });
+  expect(res.status).toBe(200);
+  return res.json();
+}
+
+async function signed(d: Daemon, req: Partial<RelayRequest>): Promise<RequestInit> {
+  const body = utf8.encode(
+    JSON.stringify({
+      v: 1,
+      daemon: d.id,
+      push_type: "alert",
+      category: "approval",
+      collapse: "c0ffee".repeat(5) + "00",
+      sealed: b64url(crypto.getRandomValues(new Uint8Array(200))),
+      ts: Date.now(),
+      nonce: nonce(),
+      ...req,
+    }),
+  );
+  const sig = await crypto.subtle.sign(
+    { name: "Ed25519" },
+    d.key,
+    concat(utf8.encode("push-relay/v1\0"), body),
+  );
+  return {
+    method: "POST",
+    body,
+    headers: { "x-push-signature": b64url(new Uint8Array(sig)) },
+  };
+}
+
+interface ApnsCall {
+  url: string;
+  headers: Headers;
+  body: any;
+}
+
+let apnsCalls: ApnsCall[];
+let apnsReply: () => Response;
+
+beforeEach(() => {
+  resetJwt();
+  apnsCalls = [];
+  apnsReply = () => new Response(null, { status: 200, headers: { "apns-id": "id-1" } });
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input as RequestInfo, init);
+    apnsCalls.push({
+      url: request.url,
+      headers: request.headers,
+      body: JSON.parse(await request.text()),
+    });
+    return apnsReply();
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+async function verifyJwt(jwt: string): Promise<{ header: any; claims: any }> {
+  const [h, c, s] = jwt.split(".");
+  const der = Uint8Array.from(
+    atob(env.TEST_APNS_PUBLIC_KEY.replace(/-----[^-]+-----|\s/g, "")),
+    (ch) => ch.charCodeAt(0),
+  );
+  const key = await crypto.subtle.importKey(
+    "spki",
+    der,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["verify"],
+  );
+  const ok = await crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    key,
+    unb64url(s)!,
+    utf8.encode(`${h}.${c}`),
+  );
+  expect(ok).toBe(true);
+  const dec = (part: string) => JSON.parse(new TextDecoder().decode(unb64url(part)!));
+  return { header: dec(h), claims: dec(c) };
+}
+
+describe("push relay", () => {
+  it("answers health checks and refuses unknown routes", async () => {
+    expect(await (await call("/healthz")).text()).toBe("ok");
+    expect((await call("/nope", { method: "POST" })).status).toBe(404);
+    expect((await call("/v1/push")).status).toBe(405);
+  });
+
+  it("forwards a signed approval to APNs as a mutable, time-sensitive alert", async () => {
+    const d = await daemon();
+    const { cap, expires } = await register(d);
+    expect(cap.startsWith("v1.")).toBe(true);
+    expect(cap).not.toContain(TOKEN);
+    expect(expires * 1000).toBeGreaterThan(Date.now() + 170 * 86400 * 1000);
+
+    const init = await signed(d, { cap });
+    const res = await call("/v1/push", init);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: "id-1" });
+
+    expect(apnsCalls).toHaveLength(1);
+    const [apns] = apnsCalls;
+    expect(apns.url).toBe(`https://api.push.apple.com/3/device/${TOKEN}`);
+    expect(apns.headers.get("apns-push-type")).toBe("alert");
+    expect(apns.headers.get("apns-topic")).toBe("dev.unnamed.app");
+    expect(apns.headers.get("apns-priority")).toBe("10");
+    expect(apns.headers.get("apns-collapse-id")).toBe("c0ffee".repeat(5) + "00");
+    const sent = JSON.parse(new TextDecoder().decode(init.body as Uint8Array));
+    expect(apns.body).toEqual({
+      aps: {
+        alert: { title: "Approval needed", body: "An agent is waiting for you." },
+        "mutable-content": 1,
+        category: "AGENT_APPROVAL",
+        sound: "default",
+        "interruption-level": "time-sensitive",
+      },
+      s: sent.sealed,
+      v: 1,
+    });
+
+    const { header, claims } = await verifyJwt(apns.headers.get("authorization")!.slice(7));
+    expect(header).toEqual({ alg: "ES256", kid: env.APNS_KEY_ID });
+    expect(claims.iss).toBe(env.APNS_TEAM_ID);
+  });
+
+  it("uses the sandbox for development tokens and a low priority for done", async () => {
+    const d = await daemon();
+    const { cap } = await register(d, { env: "sandbox" });
+    const res = await call("/v1/push", await signed(d, { cap, category: "done" }));
+    expect(res.status).toBe(200);
+    expect(apnsCalls[0].url).toBe(`https://api.sandbox.push.apple.com/3/device/${TOKEN}`);
+    expect(apnsCalls[0].headers.get("apns-priority")).toBe("5");
+    expect(apnsCalls[0].body.aps.category).toBe("AGENT_DONE");
+    expect(apnsCalls[0].body.aps["interruption-level"]).toBe("active");
+  });
+
+  it("refuses bad signatures, stale requests, replays and foreign capabilities", async () => {
+    const d = await daemon();
+    const other = await daemon();
+    const { cap } = await register(d);
+
+    const forged = await signed(other, { cap });
+    const forgedBody = JSON.parse(new TextDecoder().decode(forged.body as Uint8Array));
+    forgedBody.daemon = d.id; // claims to be d, signed by other
+    const res1 = await call("/v1/push", { ...forged, body: JSON.stringify(forgedBody) });
+    expect(res1.status).toBe(401);
+
+    const stale = await call("/v1/push", await signed(d, { cap, ts: Date.now() - 10 * 60 * 1000 }));
+    expect(stale.status).toBe(401);
+
+    const once = await signed(d, { cap });
+    expect((await call("/v1/push", once)).status).toBe(200);
+    expect((await call("/v1/push", once)).status).toBe(409);
+
+    // other's own valid signature, but d's capability.
+    expect((await call("/v1/push", await signed(other, { cap }))).status).toBe(403);
+    // A garbled capability.
+    expect((await call("/v1/push", await signed(d, { cap: cap.slice(0, -4) + "AAAA" }))).status).toBe(
+      403,
+    );
+    // An alert capability cannot start a Live Activity.
+    const la = await signed(d, { cap, push_type: "live_activity", event: "update", category: undefined });
+    expect((await call("/v1/push", la)).status).toBe(403);
+    expect(apnsCalls).toHaveLength(1);
+  });
+
+  it("rejects malformed requests", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    expect((await call("/v1/push", { method: "POST", body: "{" })).status).toBe(400);
+    for (const bad of [
+      { category: "nope" },
+      { push_type: "fax" },
+      { nonce: "zz" },
+      { sealed: "!!" },
+      { sealed: "A".repeat(4000) },
+      { daemon: "00" },
+    ] as Partial<RelayRequest>[]) {
+      expect((await call("/v1/push", await signed(d, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect(
+      (await call("/v1/register", { method: "POST", body: JSON.stringify({ token: "xyz" }) })).status,
+    ).toBe(400);
+  });
+
+  it("rate-limits each daemon", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    let limited: Response | undefined;
+    for (let i = 0; i < DAEMON_BUCKET.capacity + 1; i++) {
+      const res = await call("/v1/push", await signed(d, { cap }));
+      if (res.status === 429) {
+        limited = res;
+        break;
+      }
+      expect(res.status).toBe(200);
+    }
+    expect(limited, "the bucket ran out").toBeDefined();
+    expect(Number(limited!.headers.get("retry-after"))).toBeGreaterThan(0);
+    // Another daemon is unaffected.
+    const e = await daemon();
+    const { cap: capE } = await register(e);
+    expect((await call("/v1/push", await signed(e, { cap: capE }))).status).toBe(200);
+  });
+
+  it("maps APNs answers for the daemon", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    apnsReply = () => Response.json({ reason: "Unregistered" }, { status: 410 });
+    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(410);
+    apnsReply = () => Response.json({ reason: "BadDeviceToken" }, { status: 400 });
+    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(410);
+    apnsReply = () => Response.json({ reason: "InternalServerError" }, { status: 500 });
+    const busy = await call("/v1/push", await signed(d, { cap }));
+    expect(busy.status).toBe(502);
+    expect(busy.headers.get("retry-after")).toBe("5");
+    apnsReply = () => Response.json({ reason: "PayloadTooLarge" }, { status: 413 });
+    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(422);
+
+    // An expired provider token is renewed once.
+    let first = true;
+    apnsReply = () => {
+      if (first) {
+        first = false;
+        return Response.json({ reason: "ExpiredProviderToken" }, { status: 403 });
+      }
+      return new Response(null, { status: 200 });
+    };
+    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(200);
+  });
+
+  it("drives Live Activities on the liveactivity topic", async () => {
+    const d = await daemon();
+    const { cap } = await register(d, { kind: "activity" });
+    const start = await signed(d, {
+      cap,
+      push_type: "live_activity",
+      category: undefined,
+      event: "start",
+      urgent: true,
+      stale: 1_900_000_000,
+    });
+    expect((await call("/v1/push", start)).status).toBe(200);
+    const sealed = JSON.parse(new TextDecoder().decode(start.body as Uint8Array)).sealed;
+    const [call0] = apnsCalls;
+    expect(call0.headers.get("apns-push-type")).toBe("liveactivity");
+    expect(call0.headers.get("apns-topic")).toBe("dev.unnamed.app.push-type.liveactivity");
+    expect(call0.headers.get("apns-priority")).toBe("10");
+    expect(call0.body.aps).toMatchObject({
+      event: "start",
+      "content-state": { s: sealed, v: 1 },
+      "stale-date": 1_900_000_000,
+      "attributes-type": "AgentsActivityAttributes",
+      attributes: { v: 1 },
+    });
+    expect(call0.body.aps.alert.title).toBe("Agents");
+
+    const end = await signed(d, {
+      cap,
+      push_type: "live_activity",
+      category: undefined,
+      event: "end",
+      dismiss: 1_900_000_100,
+    });
+    expect((await call("/v1/push", end)).status).toBe(200);
+    expect(apnsCalls[1].headers.get("apns-priority")).toBe("5");
+    expect(apnsCalls[1].body.aps["dismissal-date"]).toBe(1_900_000_100);
+    expect(apnsCalls[1].body.aps.attributes).toBeUndefined();
+  });
+
+  it("limits registrations per client address", async () => {
+    const d = await daemon();
+    let status = 200;
+    for (let i = 0; i < 25 && status === 200; i++) {
+      status = (
+        await call("/v1/register", {
+          method: "POST",
+          headers: { "cf-connecting-ip": "203.0.113.9" },
+          body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id }),
+        })
+      ).status;
+    }
+    expect(status).toBe(429);
+  });
+});
+
+describe("formats shared with the daemon", () => {
+  it("verifies a request signed by the Rust daemon code", async () => {
+    const body = utf8.encode(vectors.relay_request.body);
+    const parsed = parseRequest(body);
+    expect(typeof parsed).toBe("object");
+    const req = parsed as RelayRequest;
+    expect(req.daemon).toBe(vectors.daemon_public);
+    expect(req.category).toBe("approval");
+    expect(await verifySignature(req.daemon, body, vectors.relay_request.signature)).toBe(true);
+    const tampered = utf8.encode(vectors.relay_request.body.replace("approval", "done"));
+    expect(await verifySignature(req.daemon, tampered, vectors.relay_request.signature)).toBe(false);
+  });
+
+  it("builds the APNs request for a Rust-sealed payload without touching it", () => {
+    const req = parseRequest(utf8.encode(vectors.relay_request.body)) as RelayRequest;
+    const apns = buildApnsRequest(
+      env,
+      { t: TOKEN, e: "production", d: req.daemon, k: "alert", x: 0 },
+      req,
+      1_760_000_000_000,
+    );
+    expect(JSON.parse(apns.body).s).toBe(vectors.payloads[0].sealed);
+    expect(apns.headers["apns-expiration"]).toBe(String(1_760_000_000 + 3600));
+  });
+
+  it("opens capabilities sealed with the previous key during a rotation", async () => {
+    const cap = { t: TOKEN, e: "production" as const, d: "00".repeat(32), k: "alert" as const, x: 1 };
+    const old = await sealCap(env.PUSH_CAP_KEY_PREVIOUS!, cap);
+    expect(await openCap(old, [env.PUSH_CAP_KEY, env.PUSH_CAP_KEY_PREVIOUS])).toEqual(cap);
+    expect(await openCap(old, [env.PUSH_CAP_KEY])).toBeNull();
+  });
+
+  it("caches the provider JWT", async () => {
+    const a = await providerJwt(env, 1_000_000);
+    expect(await providerJwt(env, 1_000_000 + 30 * 60 * 1000)).toBe(a);
+    expect(await providerJwt(env, 1_000_000 + 41 * 60 * 1000)).not.toBe(a);
+  });
+});

@@ -61,6 +61,9 @@ pub struct EndpointInfo {
     pub addrs: Vec<SocketAddr>,
     /// Home relay, if any.
     pub relay_url: Option<String>,
+    /// The relays the daemon uses (default, self-hosted or none), for pairing tickets.
+    #[serde(default)]
+    pub relays: proto::TicketRelays,
     /// Process id of the daemon.
     pub pid: u32,
     /// When it started.
@@ -276,6 +279,23 @@ pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
         secret,
         expires: UnixMillis(expires),
     })
+}
+
+/// [`mint_ticket`] as text, with the running daemon's relay choice appended
+/// ([`proto::TicketExtras`]) so the app dials through the same self-hosted relays, or none.
+///
+/// # Errors
+///
+/// As [`mint_ticket`].
+pub fn mint_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
+    let ticket = mint_ticket(state_dir, ttl)?;
+    let relays = endpoint_info(state_dir)?
+        .map(|info| info.relays)
+        .unwrap_or_default();
+    Ok(ticket.to_string_with(&proto::TicketExtras {
+        v: proto::TicketExtras::VERSION,
+        relays,
+    }))
 }
 
 /// Number of devices on the allowlist.

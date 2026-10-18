@@ -102,6 +102,13 @@ pub(crate) fn new_uuid() -> String {
 
 static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 
+/// A dialog's approving and refusing options, with labels (for push notification actions).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ApprovalButtons {
+    pub approve: Option<(OptionId, String)>,
+    pub deny: Option<(OptionId, String)>,
+}
+
 /// The agent side of one pane.
 pub(crate) struct AgentRuntime {
     kind: AgentKind,
@@ -269,6 +276,30 @@ impl AgentRuntime {
             .status()
             .blocked()
             .map(|b| b.request_id.clone())
+    }
+
+    /// For a notification's Approve / Deny buttons: the options of the dialog `id` that allow
+    /// this one request and that refuse it, with their labels. `None` unless the agent is
+    /// blocked on `id` now.
+    pub fn approval_options(&self, id: RequestId) -> Option<ApprovalButtons> {
+        let request = self.requests.iter().find(|(w, _)| *w == id)?.1.clone();
+        let blocked = self
+            .arbiter
+            .status()
+            .blocked()
+            .filter(|b| b.request_id == request)?;
+        let find = |choice: ApprovalChoice| {
+            blocked
+                .blocker
+                .options
+                .iter()
+                .position(|o| o.id == choice)
+                .map(|i| (OptionId(i as u32), blocked.blocker.options[i].label.clone()))
+        };
+        Some(ApprovalButtons {
+            approve: find(ApprovalChoice::AllowOnce),
+            deny: find(ApprovalChoice::Deny),
+        })
     }
 
     pub fn knows_request(&self, id: RequestId) -> bool {

@@ -1,0 +1,31 @@
+# Self-hosted iroh relay (docs/RELAYS.md). Copy next to docker-compose.yml, set the hostname
+# and a token, then `docker compose up -d`.
+
+enable_relay = true
+http_bind_addr = "[::]:80"
+# QUIC address discovery (UDP 7842): lets peers learn their public address for hole punching.
+enable_quic_addr_discovery = true
+enable_metrics = true
+metrics_bind_addr = "127.0.0.1:9090"
+
+# Only devices and daemons that know the token may relay. Put the same token in the daemon's
+# config.toml ([relay] auth_token); pairing tickets carry it to the app.
+# IROH_RELAY_ACCESS_TOKEN in the environment overrides this list.
+access.shared_token = ["CHANGE-ME-long-random-token"]
+
+[tls]
+cert_mode = "LetsEncrypt"
+hostname = "relay.example.com"
+contact = "admin@example.com"
+cert_dir = "/data/certs"
+prod_tls = true
+https_bind_addr = "[::]:443"
+quic_bind_addr = "[::]:7842"
+
+[limits]
+accept_conn_limit = 100.0
+accept_conn_burst = 200
+
+[limits.client.rx]
+bytes_per_second = 10485760
+max_burst_bytes = 20971520

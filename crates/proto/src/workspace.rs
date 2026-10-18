@@ -214,6 +214,14 @@ pub enum WorkspaceRequest {
     /// A folder, or a file at a line, through the running tunnel →
     /// [`WorkspaceResponse::VsCodeTunnelOpened`].
     VsCodeTunnelOpen(VsCodeTunnelOpen),
+    /// Registers (or updates) this device for push notifications → [`WorkspaceResponse::Push`].
+    PushRegister(PushRegistration),
+    /// Stops push notifications to this device → [`WorkspaceResponse::Push`].
+    PushUnregister,
+    /// Push settings and this device's registration → [`WorkspaceResponse::Push`].
+    PushStatus,
+    /// Answers an approval from a notification action → [`WorkspaceResponse::PushDecided`].
+    PushAction(PushActionRequest),
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -266,6 +274,10 @@ pub enum WorkspaceResponse {
     VsCodeTunnel(VsCodeTunnelStatus),
     /// Where a folder or file opens through the tunnel.
     VsCodeTunnelOpened(VsCodeTunnelOpened),
+    /// Push settings and this device's registration.
+    Push(PushStatus),
+    /// A notification action's decision was applied.
+    PushDecided(crate::Decided),
 }
 
 /// Why a workspace request failed.
@@ -1059,4 +1071,82 @@ pub struct VsCodeTunnelOpened {
     /// The file was opened at the line in a window already connected to the tunnel (through
     /// the server's own CLI channel); otherwise load `web_url` and ask again once connected.
     pub in_window: bool,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Push notifications (docs/PUSH.md)
+// ---------------------------------------------------------------------------------------------
+
+/// A device's push registration, sent over its own connection (so the daemon knows which
+/// device it is). Everything Apple-side stays inside `cap`, which only the push relay can
+/// open: the daemon never sees the APNs token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushRegistration {
+    /// The push capability the relay issued for this device and this daemon (`POST
+    /// /v1/register`), opaque.
+    pub cap: String,
+    /// The device's X25519 public key; payloads are HPKE-sealed to it.
+    pub seal_key: [u8; 32],
+    /// The relay that issued `cap`; the daemon's configured relay when `None`.
+    pub relay_url: Option<String>,
+    /// What to push.
+    pub prefs: PushPrefs,
+    /// A push-to-start capability for the agents Live Activity, if the device has one.
+    pub activity_cap: Option<String>,
+}
+
+/// Which attention items a device wants pushed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushPrefs {
+    /// An agent asks to approve a tool call (actionable: Approve / Deny).
+    pub approvals: bool,
+    /// An agent waits for an answer in the terminal.
+    pub blocked: bool,
+    /// An agent finished its turn.
+    pub done: bool,
+    /// An agent's turn failed.
+    pub failed: bool,
+    /// A long command finished unseen.
+    pub commands: bool,
+}
+
+impl Default for PushPrefs {
+    fn default() -> Self {
+        Self {
+            approvals: true,
+            blocked: true,
+            done: true,
+            failed: true,
+            commands: true,
+        }
+    }
+}
+
+/// Push settings on the daemon and the asking device's registration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushStatus {
+    /// Pushes are on (`push.enabled` in the daemon's `config.toml`).
+    pub enabled: bool,
+    /// The relay the daemon posts to by default.
+    pub relay_url: String,
+    /// This device's preferences, if it is registered.
+    pub registered: Option<PushPrefs>,
+    /// Registered devices.
+    pub devices: u32,
+    /// The last delivery failure for this device, if the last attempt failed.
+    pub last_error: Option<String>,
+}
+
+/// A decision taken in a notification action, without opening the app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushActionRequest {
+    /// The action token from the decrypted notification, verbatim.
+    #[serde(with = "crate::serde_bytes")]
+    pub token: Vec<u8>,
+    /// Approve (`true`) or deny.
+    pub approve: bool,
+    /// The device's Ed25519 signature over the token and decision (crates/push
+    /// `sign_decision`).
+    #[serde(with = "crate::serde_bytes")]
+    pub sig: Vec<u8>,
 }

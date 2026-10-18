@@ -151,7 +151,7 @@ fn run(
                 "No devices paired yet. Scan this with the app, or run `{} pair` later:",
                 brand::DAEMON_BIN
             );
-            print_ticket(&daemon.pairing_ticket(daemon::PAIRING_TTL)?.to_string());
+            print_ticket(&daemon.pairing_link(daemon::PAIRING_TTL)?);
         }
         wait_for_signal().await?;
         eprintln!("shutting down");
@@ -215,16 +215,18 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration) -> Result<(
     if !wait.is_zero() {
         wait_for_endpoint(state_dir, wait)?;
     }
-    let ticket = daemon::mint_ticket(state_dir, ttl)
+    let text = daemon::mint_ticket_text(state_dir, ttl)
         .with_context(|| format!("minting a ticket in {}", state_dir.display()))?;
+    let (ticket, extras) = proto::Ticket::parse_with_extras(&text)?;
     if json {
         let info = daemon::endpoint_info(state_dir)?;
         let out = serde_json::json!({
-            "ticket": ticket.to_string(),
+            "ticket": text,
             "daemon_id": hex(&ticket.daemon_id.0),
             "expires_unix_ms": ticket.expires.0,
             "addrs": ticket.addrs,
             "relay_url": ticket.relay_url,
+            "relays": relays_label(&extras.relays),
             "running": info.is_some_and(|i| pid_alive(i.pid)),
             "version": env!("CARGO_PKG_VERSION"),
         });
@@ -237,7 +239,7 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration) -> Result<(
             brand::DAEMON_BIN
         );
     }
-    print_ticket(&ticket.to_string());
+    print_ticket(&text);
     eprintln!("Valid for {} minutes, for one device.", ttl.as_secs() / 60);
     Ok(())
 }
@@ -308,11 +310,20 @@ fn status(state_dir: &Path) -> Result<()> {
     for addr in &info.addrs {
         println!("address:   {addr}");
     }
+    println!("relays:    {}", relays_label(&info.relays));
     if let Some(relay) = &info.relay_url {
         println!("relay:     {relay}");
     }
     println!("paired devices: {}", daemon::paired_devices(state_dir)?);
     Ok(())
+}
+
+fn relays_label(relays: &proto::TicketRelays) -> String {
+    match relays {
+        proto::TicketRelays::Default => "default".into(),
+        proto::TicketRelays::Disabled => "none (local only)".into(),
+        proto::TicketRelays::Custom { urls, .. } => format!("self-hosted ({})", urls.join(", ")),
+    }
 }
 
 fn pid_alive(pid: u32) -> bool {

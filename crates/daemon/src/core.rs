@@ -120,9 +120,12 @@ pub(crate) struct Core {
     pub hooks: HookServer,
     shell: Option<ShellIntegration>,
     /// Panes each connection shows (focused and visible), for "finished while unseen".
-    views: Mutex<HashMap<ConnId, Vec<PaneId>>>,
+    /// Panes each connection shows, with the device it belongs to.
+    views: Mutex<HashMap<ConnId, (proto::DeviceId, Vec<PaneId>)>>,
     /// Developer-workflow state: ports, attention, turns, editors, worktrees.
     pub ws: crate::ws::Ws,
+    /// Push registrations and delivery (docs/PUSH.md).
+    pub push: crate::notifier::Push,
     connected: AtomicUsize,
 }
 
@@ -150,6 +153,7 @@ impl Core {
             shell,
             views: Mutex::new(HashMap::new()),
             ws,
+            push: crate::notifier::Push::load(&cfg.state_dir),
             cfg,
             connected: AtomicUsize::new(0),
         })
@@ -171,13 +175,21 @@ impl Core {
     }
 
     /// Records the panes `conn` shows.
-    pub fn set_view(&self, conn: ConnId, panes: Vec<PaneId>) {
-        lock(&self.views).insert(conn, panes);
+    pub fn set_view(&self, conn: ConnId, device: proto::DeviceId, panes: Vec<PaneId>) {
+        lock(&self.views).insert(conn, (device, panes));
     }
 
     /// Whether any connected client shows `pane`.
     pub fn pane_seen(&self, pane: PaneId) -> bool {
-        lock(&self.views).values().any(|v| v.contains(&pane))
+        lock(&self.views).values().any(|(_, v)| v.contains(&pane))
+    }
+
+    /// Whether `device` is connected and showing some pane of this host (the app is in the
+    /// foreground here, so it alerts in-app and a push would be a duplicate).
+    pub fn device_active(&self, device: proto::DeviceId) -> bool {
+        lock(&self.views)
+            .values()
+            .any(|(d, v)| *d == device && !v.is_empty())
     }
 
     pub fn emit(&self, event: Event) {
