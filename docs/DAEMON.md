@@ -144,8 +144,10 @@ cargo build --release -p hostd -p un
 # Host
 unnamed-hostd run                 # prints a pairing QR + ticket if nothing is paired yet
 unnamed-hostd pair                # new one-time ticket (QR + text), valid 10 min
+unnamed-hostd pair --json --wait 30   # the same as one JSON object, once a running daemon has
+                                  # recorded its endpoint and relay (used by ssh::bootstrap)
 unnamed-hostd status
-unnamed-hostd service install     # systemd --user (Linux) / LaunchAgent (macOS)
+unnamed-hostd service install     # systemd --user (Linux) / LaunchAgent (macOS); (re)starts it
 unnamed-hostd service uninstall
 #   --state-dir DIR (or $UN_STATE_DIR), run: --bind ADDR, --no-relay, --shell PATH
 #   logs: UN_LOG=debug

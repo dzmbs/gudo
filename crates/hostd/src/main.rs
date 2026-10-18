@@ -3,6 +3,7 @@
 //! ```text
 //! unnamed-hostd run                 serve until SIGINT/SIGTERM
 //! unnamed-hostd pair                print a one-time pairing ticket (text + QR)
+//! unnamed-hostd pair --json --wait 30   the same as JSON, once the daemon is up
 //! unnamed-hostd status              is it running, where, how many devices
 //! unnamed-hostd service install     run at login (systemd --user / launchd)
 //! unnamed-hostd service uninstall
@@ -50,6 +51,14 @@ enum Command {
         /// Minutes the ticket stays valid.
         #[arg(long, default_value_t = 10)]
         minutes: u64,
+        /// Print one JSON object (ticket, daemon id, expiry, addresses) instead, for tools
+        /// such as the app's SSH bootstrap.
+        #[arg(long)]
+        json: bool,
+        /// Wait up to this many seconds for a running daemon to record its endpoint (and
+        /// its home relay) before minting, e.g. right after `service install`.
+        #[arg(long, default_value_t = 0)]
+        wait: u64,
     },
     /// Show whether the daemon is running.
     Status,
@@ -80,7 +89,16 @@ fn main() -> Result<()> {
             no_relay,
             shell,
         } => run(state_dir, bind, no_relay, shell),
-        Command::Pair { minutes } => pair(&state_dir, Duration::from_secs(minutes * 60)),
+        Command::Pair {
+            minutes,
+            json,
+            wait,
+        } => pair(
+            &state_dir,
+            Duration::from_secs(minutes * 60),
+            json,
+            Duration::from_secs(wait),
+        ),
         Command::Status => status(&state_dir),
         Command::Service { action } => match action {
             ServiceAction::Install => service::install(&state_dir),
@@ -193,9 +211,26 @@ fn login_shell() -> Option<PathBuf> {
     }
 }
 
-fn pair(state_dir: &Path, ttl: Duration) -> Result<()> {
+fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration) -> Result<()> {
+    if !wait.is_zero() {
+        wait_for_endpoint(state_dir, wait)?;
+    }
     let ticket = daemon::mint_ticket(state_dir, ttl)
         .with_context(|| format!("minting a ticket in {}", state_dir.display()))?;
+    if json {
+        let info = daemon::endpoint_info(state_dir)?;
+        let out = serde_json::json!({
+            "ticket": ticket.to_string(),
+            "daemon_id": hex(&ticket.daemon_id.0),
+            "expires_unix_ms": ticket.expires.0,
+            "addrs": ticket.addrs,
+            "relay_url": ticket.relay_url,
+            "running": info.is_some_and(|i| pid_alive(i.pid)),
+            "version": env!("CARGO_PKG_VERSION"),
+        });
+        println!("{out}");
+        return Ok(());
+    }
     if daemon::endpoint_info(state_dir)?.is_some_and(|info| !pid_alive(info.pid)) {
         eprintln!(
             "warning: the daemon is not running; start it with `{} run`",
@@ -205,6 +240,35 @@ fn pair(state_dir: &Path, ttl: Duration) -> Result<()> {
     print_ticket(&ticket.to_string());
     eprintln!("Valid for {} minutes, for one device.", ttl.as_secs() / 60);
     Ok(())
+}
+
+/// Waits until a live daemon has recorded its endpoint, then (up to `RELAY_GRACE` longer)
+/// until it has a home relay, so the ticket works from networks without a direct path.
+fn wait_for_endpoint(state_dir: &Path, wait: Duration) -> Result<()> {
+    const RELAY_GRACE: Duration = Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    let mut live_since = None;
+    loop {
+        let info = daemon::endpoint_info(state_dir).ok().flatten();
+        if let Some(info) = info.filter(|i| pid_alive(i.pid)) {
+            let since = *live_since.get_or_insert_with(std::time::Instant::now);
+            if info.relay_url.is_some() || since.elapsed() >= RELAY_GRACE {
+                return Ok(());
+            }
+        }
+        if start.elapsed() >= wait {
+            if live_since.is_some() {
+                return Ok(());
+            }
+            bail!(
+                "no running {} recorded an endpoint in {} within {} s",
+                brand::DAEMON_BIN,
+                state_dir.display(),
+                wait.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Prints the ticket as a QR code (Unicode half blocks, works over SSH) and as text.

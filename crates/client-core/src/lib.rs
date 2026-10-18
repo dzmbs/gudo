@@ -11,6 +11,9 @@
 //! `Hello` carries a resume point per followed pane, focused first, and the daemon continues
 //! each from its ring buffer or sends a snapshot.
 //!
+//! Hosts without the daemon get [`SshPane`]s: a PTY over plain SSH (the [`ssh`] crate)
+//! delivering the same pane events, so the app renders both alike (docs/SSH.md §4).
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -26,6 +29,7 @@
 
 mod conn;
 mod mirror;
+mod ssh_pane;
 
 use std::collections::HashMap;
 use std::net::TcpListener as StdTcpListener;
@@ -43,6 +47,8 @@ use tokio::sync::{Notify, mpsc};
 use crate::mirror::Mirror;
 
 pub use proto;
+pub use ssh;
+pub use ssh_pane::{RESTART_MARKER, SshPane, SshPaneOptions, ssh_runtime};
 
 /// Which relays the client's endpoint may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

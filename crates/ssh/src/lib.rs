@@ -1,0 +1,69 @@
+//! Client-side SSH for the app and the CLI: the zero-setup path and the fallback rung of
+//!
+//! - **Dial**: [`Connection::connect`] reaches a [`Target`] through any `ProxyJump` hops
+//!   (`direct-tcpip` channels through each), verifies host keys against [`KnownHosts`]
+//!   (TOFU via [`HostKeyPrompt`], pinning, mismatch errors with both fingerprints) and
+//!   authenticates with the [`Credentials`] in order: agent, keys, [`ExternalSigner`]s
+//!   (Secure Enclave), password, keyboard-interactive.
+//! - **Stay up**: a [`Connection`] is alive only while keepalives are answered
+//!   ([`Keepalive`]); a [`Session`] redials dead connections with backoff and never gives
+//!   up in the foreground ([`ReconnectPolicy`]), reporting each [`ConnectionState`].
+//! - **Use**: [`Connection::exec`], [`Connection::open_shell`] (PTY, resize, env),
+//!   [`Connection::upload`] (exec `cat`/`gzip -dc` with a SHA-256 check, no SFTP).
+//! - **Upgrade**: [`bootstrap`] installs `unnamed-hostd` and returns a pairing ticket.
+//! - **Configure**: [`SshConfig`] reads `~/.ssh/config` with OpenSSH semantics.
+//!
+//! The API takes and returns owned values and uses trait-object callbacks, so it maps onto
+//! UniFFI (async methods, callback interfaces) without generics. See docs/SSH.md.
+//!
+//! # Examples
+//!
+//! ```no_run
+//! use std::sync::Arc;
+//! use ssh::{AuthMethod, Connection, ConnectOptions, Credentials, HostKeyPolicy, KnownHosts, SshConfig};
+//!
+//! # async fn demo() -> Result<(), ssh::SshError> {
+//! let config = SshConfig::load_default()?;
+//! let target = config.target("me@box", "me")?;
+//! let creds = Credentials::new().with(AuthMethod::Agent(None));
+//! let known = Arc::new(KnownHosts::open(std::path::Path::new("/tmp/known_hosts"))?);
+//! let conn = Connection::connect(&target, &ConnectOptions::new(creds, known, HostKeyPolicy::AcceptNew)).await?;
+//! let out = conn.exec("uname -sm").await?.check()?;
+//! println!("{}", out.stdout_text());
+//! # Ok(())
+//! # }
+//! ```
+
+mod auth;
+mod bootstrap;
+mod channel;
+mod client;
+mod config;
+mod error;
+mod keys;
+mod known_hosts;
+mod session;
+mod target;
+mod wildcard;
+
+pub use auth::{AuthMethod, Credentials, InteractivePrompt, InteractiveResponder};
+pub use bootstrap::{
+    BinarySource, BootstrapListener, BootstrapOptions, BootstrapReport, BootstrapStep,
+    HostPlatform, HostdBinaries, InstallAction, ServiceMode, bootstrap, detect_platform,
+};
+pub use channel::{
+    ExecOutput, PtyRequest, Shell, ShellEvent, ShellOutput, UploadEncoding, UploadReport,
+    sha256_hex, shell_quote,
+};
+pub use client::{ConnectOptions, Connection, Keepalive, Timeouts};
+pub use config::{HostConfig, SshConfig};
+pub use error::SshError;
+pub use keys::{ExternalSigner, GeneratedKey, SecretKey, SignerError, generate_ed25519};
+pub use known_hosts::{
+    HostKeyInfo, HostKeyPolicy, HostKeyPrompt, HostKeyStatus, KnownHosts, fingerprint, host_name,
+};
+pub use session::{ConnectionState, ReconnectPolicy, Session, SessionListener};
+pub use target::{DEFAULT_PORT, Destination, HostSpec, Target};
+
+/// Re-exported for implementors of [`ExternalSigner`] and tests.
+pub use russh::keys::PublicKey;

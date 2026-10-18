@@ -1,4 +1,6 @@
-//! client-core against a real daemon (relays off, loopback).
+//! client-core against a real daemon (relays off, loopback), and against an SSH host.
+
+mod ssh_host;
 
 use std::time::Duration;
 

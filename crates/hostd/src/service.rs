@@ -36,7 +36,7 @@ fn unit_path() -> Result<PathBuf> {
         .join(format!("{}.service", brand::DAEMON_BIN)))
 }
 
-/// Installs and starts the service.
+/// Installs and (re)starts the service.
 #[cfg(target_os = "linux")]
 pub fn install(state_dir: &Path) -> Result<()> {
     let path = unit_path()?;
@@ -61,12 +61,10 @@ pub fn install(state_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(path.parent().expect("unit path has a parent"))?;
     std::fs::write(&path, unit)?;
     run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
-    run(Command::new("systemctl").args([
-        "--user",
-        "enable",
-        "--now",
-        &format!("{}.service", brand::DAEMON_BIN),
-    ]))?;
+    let unit = format!("{}.service", brand::DAEMON_BIN);
+    run(Command::new("systemctl").args(["--user", "enable", &unit]))?;
+    // Restart rather than start, so reinstalling over a new binary (an upgrade) runs it.
+    run(Command::new("systemctl").args(["--user", "restart", &unit]))?;
     println!("installed {}", path.display());
     println!(
         "To keep it running after you log out (and start it at boot on a server), run once:\n  \
