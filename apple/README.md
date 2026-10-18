@@ -62,6 +62,15 @@ tabs; key bar and sticky Ctrl over the software keyboard; divider drag, ⌃⌘ r
 split). Set `TEST_RUNNER_HOLD_SECONDS=30` to keep a UI test's final screen up for
 `xcrun simctl io "$DEVICE" screenshot`.
 
+`TerminalInputUITests` (iPad) covers long-press/double-tap selection with handles and the edit menu,
+multi-line paste confirmation, IME marked text (`-demoPreedit`, debug builds) and echo prediction
+(`-echoLatencyMs`). Paste reads the pasteboard, so grant it once per simulator:
+`xcrun simctl privacy "$DEVICE" grant pasteboard dev.unnamed.app` (a denied prompt is remembered and
+paste then silently reads nothing). `MacPasteUITests` needs macOS UI-automation approval (Touch ID), so
+the Mac paste path is also covered in process by `AppKitPasteTests` in TerminalKit.
+
+(TerminalBench `--glyphs-png`), `selection-handles-ipad.png`, `ime-preedit-ipad.png`.
+
 ## Terminal view
 
 
@@ -88,9 +97,9 @@ Backend hooks (additive, in `App/Sources/Panes/PaneBackend.swift`): `PredictionF
 `ForegroundProgramReporting` (picks the key bar profile; the title stands in until the daemon reports
 the program).
 
-Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typing 0.10 ms/frame build;
-sprite screen full redraw 1.08 ms avg / 1.45 ms p99; selection drag (whole viewport dirty every frame)
-2.33 ms avg / 5.47 ms p99.
+Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typing 0.03 ms/frame build;
+sprite screen full redraw 0.61 ms avg / 0.66 ms p99; selection drag (whole viewport dirty every frame)
+0.60 ms avg / 0.67 ms p99; GPU ≤ 0.3 ms avg. All within the ~2 ms budget.
 
 ## Shortcuts (Ghostty defaults)
 
