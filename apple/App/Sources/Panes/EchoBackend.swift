@@ -99,8 +99,8 @@ nonisolated final class EchoBackend: PaneBackend {
 
     private func emit(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
-        let deliver = { [state] in
-            guard let onOutput = state.withLock({ $0.onOutput }) else { return }
+        let deliver = {
+            guard let onOutput = self.state.withLock({ $0.onOutput }) else { return }
             bytes.withUnsafeBytes(onOutput)
         }
         if latency > 0 { queue.asyncAfter(deadline: .now() + latency, execute: deliver) } else { deliver() }

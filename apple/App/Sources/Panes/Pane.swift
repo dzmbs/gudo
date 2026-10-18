@@ -44,7 +44,7 @@ final class Pane {
         var events = Terminal.Events()
         events.titleChanged = { [weak self] in Task { @MainActor in self?.refreshTitle() } }
         events.pwdChanged = { [weak self] in Task { @MainActor in self?.refreshWorkingDirectory() } }
-        events.bell = { [weak view] in Task { @MainActor in view?.ringBell() } }
+        events.bell = { [weak self] in Task { @MainActor in self?.view.ringBell() } }
         terminal.setEvents(events)
 
         if let feed = backend as? any PredictionFeed {

@@ -232,8 +232,10 @@ final class FrameBuilder {
             let blinkHidden = style?.blink == true && !blinkOn
             if !info.scalars.isEmpty, info.scalars != [0x20], !blinkHidden {
                 // Ghostty lets a narrow symbol (Nerd Font icon) grow into a following blank cell.
-                var maxSpan = span
-                if span == 1, x + 1 < cols, x + 1 >= filled || Self.isBlank(infos[x + 1]) { maxSpan = 2 }
+                let maxSpan = NerdFontConstraint.constraintWidth(
+                    codepoint: info.scalars[0], span: span,
+                    previous: x > 0 ? infos[x - 1].scalars.first ?? 0 : nil,
+                    next: x + 1 < cols ? (x + 1 < filled ? infos[x + 1].scalars.first ?? 0 : 0) : nil)
                 if let glyph = fonts.glyph(
                     for: info.scalars,
                     style: FontStyle(bold: style?.bold ?? false, italic: style?.italic ?? false),

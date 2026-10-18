@@ -527,7 +527,7 @@ public final class TerminalView: UIView {
 
     override public func paste(_ sender: Any?) {
         guard let text = UIPasteboard.general.string else { return }
-        paste(text)
+        pasteText(text)
     }
 
     override public func selectAll(_ sender: Any?) {
@@ -537,7 +537,7 @@ public final class TerminalView: UIView {
 
     /// Pastes `text`: bracketed when the program enabled it; a multi-line paste into a program that
     /// did not (a shell would run each line) asks first.
-    public func paste(_ text: String) {
+    public func pasteText(_ text: String) {
         clearSelection()
         switch surface.paste(text) {
         case .needsConfirmation:
