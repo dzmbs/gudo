@@ -21,7 +21,7 @@ pub(crate) enum WsCmd {
         #[arg(long)]
         watch: bool,
     },
-    /// The editor server (VS Code serve-web or openvscode-server).
+    /// The editor server (VS Code serve-web; VSCodium or openvscode-server).
     Editor {
         #[command(subcommand)]
         action: EditorCmd,
@@ -164,6 +164,8 @@ fn print_tunnel(s: &client_core::proto::VsCodeTunnelStatus) {
 pub(crate) enum Editor {
     Vscode,
     Openvscode,
+    /// VSCodium's Web Host (MIT, Open VSX): no licence prompt.
+    Vscodium,
 }
 
 #[derive(Subcommand)]
@@ -418,6 +420,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                     None => EditorChoice::Auto,
                     Some(Editor::Vscode) => EditorChoice::Only(EditorKind::VsCode),
                     Some(Editor::Openvscode) => EditorChoice::Only(EditorKind::OpenVsCode),
+                    Some(Editor::Vscodium) => EditorChoice::Only(EditorKind::Vscodium),
                 };
                 let e = c
                     .editor_launch(EditorLaunch {

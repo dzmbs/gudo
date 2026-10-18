@@ -130,6 +130,12 @@ pub struct Config {
     /// An openvscode-server to use instead of the pinned download: a directory containing
     /// `bin/openvscode-server` (`editor.openvscode` in `config.toml`).
     pub openvscode_dir: Option<PathBuf>,
+    /// A VSCodium Web Host (REH web) to use instead of the pinned download: a directory
+    /// containing `bin/codium-server` (`editor.vscodium` in `config.toml`).
+    pub vscodium_dir: Option<PathBuf>,
+    /// The editor `EditorChoice::Auto` launches (`editor.default` in `config.toml`:
+    /// `"vscode"`, the default, or `"vscodium"`).
+    pub editor_default: proto::EditorKind,
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
@@ -161,6 +167,8 @@ impl Config {
             port_scan_interval: Duration::from_secs(2),
             code_cli: None,
             openvscode_dir: None,
+            vscodium_dir: None,
+            editor_default: proto::EditorKind::VsCode,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
@@ -180,8 +188,10 @@ impl Config {
     /// [editor]
     /// code = "/usr/local/bin/code"
     /// openvscode = "/opt/openvscode-server"
+    /// vscodium = "/opt/vscodium-reh-web"   # instead of the pinned download
+    /// default = "vscode"           # "vscode" | "vscodium": what `Auto` launches
     ///
-    /// [relay]                      # docs/RELAYS.md
+    /// [relay]                     # docs/RELAYS.md
     /// mode = "custom"              # "default" | "custom" | "local-only"
     /// urls = ["https://relay.example.com"]
     /// auth_token = "…"             # if the relays require one
@@ -222,6 +232,15 @@ impl Config {
         }
         if let Some(dir) = file.editor.openvscode {
             self.openvscode_dir = Some(dir);
+        }
+        if let Some(dir) = file.editor.vscodium {
+            self.vscodium_dir = Some(dir);
+        }
+        if let Some(default) = file.editor.default {
+            self.editor_default = match default {
+                DefaultEditor::Vscode => proto::EditorKind::VsCode,
+                DefaultEditor::Vscodium => proto::EditorKind::Vscodium,
+            };
         }
         if self.relay == RelayMode::Default {
             self.relay = file
@@ -383,4 +402,14 @@ struct WorktreesSection {
 struct EditorSection {
     code: Option<PathBuf>,
     openvscode: Option<PathBuf>,
+    vscodium: Option<PathBuf>,
+    default: Option<DefaultEditor>,
+}
+
+/// `editor.default`.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum DefaultEditor {
+    Vscode,
+    Vscodium,
 }

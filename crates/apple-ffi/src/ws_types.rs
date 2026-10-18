@@ -953,6 +953,9 @@ pub enum EditorKind {
     VsCode,
     /// Gitpod's openvscode-server (explicit fallback only).
     OpenVsCode,
+    /// VSCodium's Web Host (MIT, Open VSX extensions): downloaded by the host on first use,
+    /// never a licence prompt or sign-in.
+    Vscodium,
 }
 
 impl From<proto::EditorKind> for EditorKind {
@@ -960,6 +963,7 @@ impl From<proto::EditorKind> for EditorKind {
         match k {
             proto::EditorKind::VsCode => Self::VsCode,
             proto::EditorKind::OpenVsCode => Self::OpenVsCode,
+            proto::EditorKind::Vscodium => Self::Vscodium,
         }
     }
 }
@@ -969,6 +973,7 @@ impl From<EditorKind> for proto::EditorKind {
         match k {
             EditorKind::VsCode => Self::VsCode,
             EditorKind::OpenVsCode => Self::OpenVsCode,
+            EditorKind::Vscodium => Self::Vscodium,
         }
     }
 }
@@ -976,8 +981,9 @@ impl From<EditorKind> for proto::EditorKind {
 /// Which editor a launch uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum EditorChoice {
-    /// `code serve-web` (fails with `Unavailable` without the CLI, `Denied` without the
-    /// licence accepted; never switches editors silently).
+    /// The host's configured default (`[editor] default`): `code serve-web` unless the
+    /// owner chose VSCodium. For VS Code it fails with `Unavailable` without the CLI and
+    /// `Denied` without the licence accepted; it never switches editors silently.
     Auto,
     /// Exactly this one.
     Only {

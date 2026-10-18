@@ -351,6 +351,8 @@ port_base = 4100                 # first PORT handed to a worktree
 [editor]
 code = "/usr/local/bin/code"     # default: PATH + usual app bundle locations
 openvscode = "/opt/openvscode-server"   # instead of the pinned download
+vscodium = "/opt/vscodium-reh-web"      # instead of the pinned VSCodium download
+default = "vscode"               # what `Auto` launches: "vscode" (default) | "vscodium"
 ```
 
 driver with a daemon- or session-wide grant; editor and tunnel launches need the owner.
@@ -394,7 +396,7 @@ replaces a LAN one). Scans run every 2 s while any client is connected, at once 
 prints a new URL or a command starts/ends, never with no client; the whole list is pushed when
 it changes. Gap: a URL that scrolls off within one tick is missed (the listener still is).
 
-### 5.3 Editor (VS Code tunnel; `code serve-web`; openvscode-server as explicit fallback)
+### 5.3 Editor (VS Code tunnel; `code serve-web`; VSCodium as automatic fallback; openvscode-server explicit only)
 
 **Main path since 2026-10-18: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
 their own GitHub or Microsoft account by device code. The app opens
@@ -465,6 +467,54 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   returns a `url_path` with `payload=[["openFile","vscode-remote://localhost:<port>/path:L:C"],
   ["gotoLineMode","true"]]` for the app to load (the authority assumes the in-app proxy keeps
   in tests); this is S-ED1 territory.
+
+no editor picker; VS Code is the editor and must just work).
+
+- **Fallback rule** (`DaemonClient::open_editor`, apple-ffi): with the VS Code licence accepted,
+  the host's default editor (VS Code) is tried first, installing the `code` CLI from Microsoft
+  if missing. If the CLI **cannot be obtained** (`VsCodeCliInstall` fails: download blocked,
+  offline or mirrored network, no Microsoft build for the OS/arch/libc) or **cannot run**
+  (`serve-web` exits before listening, e.g. a wrong libc), the same call launches
+  `Only(Vscodium)` with no prompt and returns `EditorSession.fallback_reason` (the VS Code
+  error) so the app can show a quiet note. It never falls back when the licence was not
+  accepted (`Unavailable`/`Denied` are returned as before), when the grant is not the owner's,
+  or when a kind was asked for explicitly. Both failing → `Failed` with both messages.
+- The explicit kind is internal: `open_editor_with(folder, accept, Some(kind))` (Rust only,
+  `#[doc(hidden)]`, for tests), `un ws editor launch --kind vscodium`, and the host's
+  `[editor] default = "vscodium"` (then `Auto` means VSCodium; for hosts where Microsoft's CLI
+  is known not to work). Proto: `EditorKind::Vscodium` appended (goldens added).
+- **What runs:** VSCodium's Web Host `vscodium-reh-web-<platform>-1.140.06880.tar.gz` from
+  <https://github.com/VSCodium/vscodium/releases> (pinned in `ws/editor.rs`, SHA-256 from the
+  release's `.sha256` files): linux-x64 `f16388ea…`, linux-arm64 `d21cccd1…`, darwin-arm64
+  `171645ce…`, darwin-x64 `76062c1a…`. curl, else wget; hash checked; the tarball has no
+  top-level directory, so it unpacks into `<state>/editors/vscodium-reh-web-<platform>-<version>/`
+  (atomic rename). `editor.vscodium` points at an existing one instead.
+- `bin/codium-server --host 127.0.0.1 --port <free> --connection-token <random 128-bit>
+  --telemetry-level off` in the folder. Same flags and token semantics as openvscode-server
+  (`?tkn=` → `vscode-tkn` cookie + 302; no token → 403; `--without-connection-token` exists and
+  is never used). Its `product.json` has an empty `serverLicense` and `serverLicensePrompt`, so
+  there is no licence flag, prompt or sign-in. Extensions come from Open VSX
+  (`extensionsGallery.serviceUrl = https://open-vsx.org/vscode/gallery`); server data in
+  `~/.vscodium-server`. One server per folder, own process group, killed on `EditorStop` and
+  daemon shutdown; `EditorOpen`'s remote-CLI path works the same (`bin/remote-cli/codium`).
+- **Verified live (2026-10-19)**, ignored test `real_vscodium_downloads_and_serves`
+  (download + verify + unpack + start + token redirect + workbench through an iroh forward):
+  macOS 26 arm64 (M5 Max) 14.6 s; Linux arm64 OrbStack VM (Ubuntu 24.04) 11.9 s. Both ~95–100 MB at ~9 MB/s from GitHub. The
+  workbench HTML has no `<title>` (the workbench sets it from script);
+  `apple-mobile-web-app-title` is `Code` and the served web manifest's `name` is `VSCodium`.
+  Without the token `/` is refused. Fake-binary e2e: `vscodium_launches_without_a_licence_and_as_the_default`
+  (daemon), `open_editor_falls_back_to_vscodium_when_vscode_cannot_be_had` (apple-ffi: blocked
+  CLI download, and a `code` that exits on start).
+
+| | VS Code (`code serve-web`, the editor) | VSCodium Web Host (fallback) |
+|---|---|---|
+| Licence | Microsoft VS Code + Server licence, accepted once in the app | MIT (<https://github.com/VSCodium/vscodium/blob/master/LICENSE>); no prompt |
+| Sign-in | none | none |
+| Extensions | Microsoft Marketplace | Open VSX only (Marketplace terms forbid non-Microsoft products) |
+| Not available | — | Pylance, C# Dev Kit, Remote-* (SSH, Containers, WSL), Live Share, GitHub Copilot (not on Open VSX; checked 2026-10-19, 404). Python, rust-analyzer, etc. are there |
+| Platforms | wherever Microsoft ships the CLI | Linux x64/arm64, macOS arm64/x64 (pinned) |
+| Who downloads | Microsoft's update service | VSCodium's GitHub releases, SHA-256 pinned |
+
 - Licences (ARCHITECTURE §9): Microsoft's VS Code Server licence
   (<https://code.visualstudio.com/license/server>, read 2026-10-18) allows use "with Microsoft
   Visual Studio Code" on the user's devices and internal network, and forbids hosting,
