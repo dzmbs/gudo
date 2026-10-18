@@ -750,6 +750,31 @@ fn workspace_messages(c: &mut Checker) {
                 data: vec![0xab; 2],
             },
         ),
+        ("VsCodeTunnelStatus", WorkspaceRequest::VsCodeTunnelStatus),
+        (
+            "VsCodeCliInstall",
+            WorkspaceRequest::VsCodeCliInstall(VsCodeCliInstall {
+                accept_license: true,
+            }),
+        ),
+        (
+            "VsCodeTunnelStart",
+            WorkspaceRequest::VsCodeTunnelStart(VsCodeTunnelStart {
+                accept_server_license: true,
+                provider: TunnelProvider::Microsoft,
+                name: Some("box".into()),
+            }),
+        ),
+        ("VsCodeTunnelStop", WorkspaceRequest::VsCodeTunnelStop),
+        (
+            "VsCodeTunnelOpen",
+            WorkspaceRequest::VsCodeTunnelOpen(VsCodeTunnelOpen {
+                folder: None,
+                path: "~/a.rs".into(),
+                line: Some(3),
+                column: None,
+            }),
+        ),
     ];
     for (name, req) in requests {
         let goldens = WORKSPACE_REQUEST_GOLDENS;
@@ -924,6 +949,20 @@ fn workspace_messages(c: &mut Checker) {
         ),
         ("Denied", Err(WsError::Denied("no".into()))),
         ("Disconnected", Err(WsError::Disconnected)),
+        (
+            "VsCodeTunnel",
+            Ok(WorkspaceResponse::VsCodeTunnel(tunnel())),
+        ),
+        (
+            "VsCodeTunnelOpened",
+            Ok(WorkspaceResponse::VsCodeTunnelOpened(VsCodeTunnelOpened {
+                name: "box".into(),
+                folder: "/p".into(),
+                web_url: "https://vscode.dev/tunnel/box/p".into(),
+                desktop_uri: "vscode://vscode-remote/tunnel+box/p/a.rs:3".into(),
+                in_window: true,
+            })),
+        ),
     ];
     for (name, result) in responses {
         let golden = WORKSPACE_RESPONSE_GOLDENS
@@ -964,6 +1003,68 @@ fn workspace_messages(c: &mut Checker) {
         }),
         "06000000011b01010300",
     );
+    for (name, state, golden) in [
+        (
+            "Stopped",
+            TunnelState::Stopped,
+            "20000000011c01022f630107312e3134322e300104366436320104323636390101000100",
+        ),
+        (
+            "Starting",
+            TunnelState::Starting,
+            "20000000011c01022f630107312e3134322e300104366436320104323636390101010100",
+        ),
+        (
+            "NeedsLogin",
+            TunnelState::NeedsLogin(DeviceLogin {
+                provider: TunnelProvider::GitHub,
+                verification_url: "https://github.com/login/device".into(),
+                user_code: "ABCD-1234".into(),
+                at: UnixMillis(1000),
+            }),
+            "4d000000011c01022f630107312e3134322e30010436643632010432363639010102001f68747470733a2f2f6769746875622e636f6d2f6c6f67696e2f64657669636509414243442d31323334e8070100",
+        ),
+        (
+            "Running",
+            TunnelState::Running {
+                name: "box".into(),
+                web_url: "https://vscode.dev/tunnel/box".into(),
+                adopted: false,
+            },
+            "43000000011c01022f630107312e3134322e3001043664363201043236363901010303626f781d68747470733a2f2f7673636f64652e6465762f74756e6e656c2f626f78000100",
+        ),
+        (
+            "Failed",
+            TunnelState::Failed {
+                message: "x".into(),
+                retrying: true,
+            },
+            "23000000011c01022f630107312e3134322e300104366436320104323636390101040178010100",
+        ),
+    ] {
+        let mut status = tunnel();
+        status.state = state;
+        c.check(
+            &format!("ServerCtl::VsCodeTunnel({name})"),
+            ServerCtl::VsCodeTunnel(status),
+            golden,
+        );
+    }
+}
+
+fn tunnel() -> VsCodeTunnelStatus {
+    VsCodeTunnelStatus {
+        cli: Some(VsCodeCli {
+            path: "/c".into(),
+            version: Some("1.142.0".into()),
+            commit: Some("6d62".into()),
+            sha256: Some("2669".into()),
+            managed: true,
+        }),
+        cli_downloadable: true,
+        state: TunnelState::Stopped,
+        provider: Some(TunnelProvider::GitHub),
+    }
 }
 
 const WORKSPACE_REQUEST_GOLDENS: &[(&str, &str)] = &[
@@ -995,6 +1096,11 @@ const WORKSPACE_REQUEST_GOLDENS: &[(&str, &str)] = &[
         "FsWrite",
         "1700000001150518037e2f660105312d352d39000101800302abab",
     ),
+    ("VsCodeTunnelStatus", "0400000001150519"),
+    ("VsCodeCliInstall", "050000000115051a01"),
+    ("VsCodeTunnelStart", "0b0000000115051b01010103626f78"),
+    ("VsCodeTunnelStop", "040000000115051c"),
+    ("VsCodeTunnelOpen", "0f0000000115051d00067e2f612e7273010300"),
 ];
 const WORKSPACE_RESPONSE_GOLDENS: &[(&str, &str)] = &[
     ("Done", "050000000118050000"),
@@ -1037,6 +1143,14 @@ const WORKSPACE_RESPONSE_GOLDENS: &[(&str, &str)] = &[
     ),
     ("Denied", "080000000118050100026e6f"),
     ("Disconnected", "050000000118050106"),
+    (
+        "VsCodeTunnel",
+        "23000000011805001101022f630107312e3134322e300104366436320104323636390101000100",
+    ),
+    (
+        "VsCodeTunnelOpened",
+        "58000000011805001203626f78022f701f68747470733a2f2f7673636f64652e6465762f74756e6e656c2f626f782f702a7673636f64653a2f2f7673636f64652d72656d6f74652f74756e6e656c2b626f782f702f612e72733a3301",
+    ),
 ];
 
 fn mark(finished: bool) -> CommandMark {

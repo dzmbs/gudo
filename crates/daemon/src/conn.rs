@@ -343,6 +343,7 @@ impl Client {
                 ports: self.core.ws.ports.current(),
             }),
             Event::Attention(update) => self.send(ServerCtl::Attention(update)),
+            Event::VsCodeTunnel(status) => self.send(ServerCtl::VsCodeTunnel(status)),
         }
     }
 

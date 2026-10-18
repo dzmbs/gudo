@@ -130,6 +130,12 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         local: u16,
     },
+    /// Splice stdin/stdout onto the host's sshd (`localhost:<port>`) over the daemon link: an
+    /// SSH `ProxyCommand` for VS Code Remote - SSH to hosts reachable only through the daemon.
+    SshProxy {
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+    },
     #[command(flatten)]
     Ws(ws::WsCmd),
     /// Search a pane's whole scrollback on the daemon (newest match first).
@@ -393,6 +399,16 @@ async fn run(cli: Cli) -> Result<()> {
     let outcome = match cli.command {
         Cmd::Pair { .. } => unreachable!("handled above"),
         Cmd::Attach => return attach(conn).await,
+        Cmd::SshProxy { port } => {
+            conn.client
+                .forward_io(
+                    client_core::proto::ForwardTarget::Tcp { port },
+                    tokio::io::stdin(),
+                    tokio::io::stdout(),
+                )
+                .await?;
+            return Ok(());
+        }
         Cmd::Ws(cmd) => return ws::run(&mut conn, cmd).await,
         Cmd::Search {
             pattern,

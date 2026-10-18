@@ -127,7 +127,13 @@ the safe *Prompter* role possible),  kitty graphics, foldable layouts, external 
   saved in `crates/agents/tests/fixtures/claude/captured-2.1.302/`.
   (https://code.visualstudio.com/license/server): use "with Microsoft Visual Studio Code" on your
   own devices / internal network is allowed; hosting, sharing, redistributing, or "combine it
-  with any of your applications for others to use" is not (§5.4–5.5). Decision (DAEMON.md §5.3):
-  never ship or download it ourselves, launch `code serve-web` only from the user's own `code`
-  CLI after an in-app licence accept, default to openvscode-server (MIT; Linux builds only — no
-  macOS release exists). Still needs a legal read before launch.
+  with any of your applications for others to use" is not (§5.4–5.5). **Superseded
+  VS Code):
+  - Main path: Microsoft's `code tunnel` on the user's host, under the user's own account. The
+    user accepts the licence in the app first, and the CLI comes from Microsoft's update
+    service with its SHA-256 checked.
+  - The editor itself is vscode.dev, top-level in WKWebView, or desktop VS Code via
+    `vscode://vscode-remote/tunnel+…` or Remote-SSH over our forward.
+  - serve-web is opt-in. openvscode-server is an explicit fallback only.
+  - Still needs a legal read, or Microsoft's confirmation, of the Remote FAQ line "cannot build
+    a public or commercial service on top of … VS Code Server" before launch.

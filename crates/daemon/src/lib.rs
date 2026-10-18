@@ -126,6 +126,7 @@ impl Daemon {
         tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
+        core.ws.tunnel.autostart(&core.cfg);
         core.mark_dirty();
         Ok(Self {
             core,
@@ -186,6 +187,7 @@ impl Daemon {
         }
         self.endpoint.close().await;
         self.core.ws.editors.stop_all().await;
+        self.core.ws.tunnel.shutdown();
         let panes: Vec<_> = self
             .core
             .pane_entries()

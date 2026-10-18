@@ -53,6 +53,8 @@ pub(crate) enum Event {
     Ports,
     /// The attention feed changed.
     Attention(proto::AttentionUpdate),
+    /// The VS Code tunnel changed state.
+    VsCodeTunnel(proto::VsCodeTunnelStatus),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -133,6 +135,7 @@ impl Core {
         shell: Option<ShellIntegration>,
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
+        let ws = crate::ws::Ws::new(&cfg, events.clone());
         Arc::new(Self {
             epoch: SessionEpoch(crate::identity::now_millis()),
             identity,
@@ -146,7 +149,7 @@ impl Core {
             hooks,
             shell,
             views: Mutex::new(HashMap::new()),
-            ws: crate::ws::Ws::new(&cfg),
+            ws,
             cfg,
             connected: AtomicUsize::new(0),
         })
