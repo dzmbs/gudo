@@ -13,6 +13,15 @@ crates/apple-ffi (lib name unnamed_core)        apple/Packages/UnnamedCore (Swif
               known_hosts, ssh_config,              Streams.swift           (AsyncStream adapters)
               bootstrap                           Tests/UnnamedCoreTests/   (swift test)
   types.rs    mirrors of proto types
+  workspace.rs  git, worktrees, files, transfers,
+                ports, attention, agent launcher
+  ws_types.rs   mirrors of proto::workspace
+  editor.rs   serve-web default flow, tunnel,
+              desktop links
+  mp.rs       invites, roles, leases, presence,
+              grants, audit
+  notify.rs   push keys, register, NSE open,
+              lock-screen actions
 ```
 
 ## 1. Building
@@ -109,11 +118,115 @@ AsyncStream<ClientEvent>`; `SshStateStream` does the same for SSH session states
 | `session.openPane(options:listener:) -> SshPane` | plain-SSH fallback pane: **the same `ClientEvent`s as daemon panes** (`connected`, `paneBytes` with a running `seq`, `paneResized`, `disconnected`, `refused`, `paneClosed`); `sendInput / resize / close`; `tmuxSession` re-attaches after drops |
 | `session.bootstrap(binaries:ticketMinutes:waitSecs:listener:) async throws -> BootstrapReport` | install/upgrade/reuse `unnamed-hostd`, start it, mint a ticket (`report.ticket` → `DaemonClient.connect`); `BootstrapListener.onStep` progress; `HostdBinary.file(path:)` or `.data(data:)`, gzip or raw |
 
+
+Requests are `async throws(WorkspaceError)` methods on `DaemonClient`; they run on the core
+runtime and can be awaited from the main actor. Times are Unix ms (`*Ms`), ids `UInt64`,
+payloads `Data`. Pushes go to a separate `WorkspaceListener` (`setWorkspaceListener`):
+`WorkspaceEvent.portsChanged / fsChanged / attention / vsCodeTunnel`. Types mirror
+`proto::workspace` one to one (`GitStatus`, `GitDiff`, `FileStat`, `DirListing`, `WriteTarget`,
+`WorktreeInfo`, `AttentionItem`, `PortInfo`, …), in `crates/apple-ffi/src/ws_types.rs`.
+
+| | |
+|---|---|
+| `forward(localPort:target:) throws(ClientError) -> UInt16` | `127.0.0.1:localPort` (0 picks) → `ForwardTarget.tcp(port:)` or `.unix(path:)` on the host; one QUIC stream per connection, survives reconnects; returns the bound port |
+| `stopForward(localPort:) -> Bool`, `forwards() -> [ForwardInfo]` | |
+| `ports()` (last push), `listPorts() async` | detected listening ports; changes as `.portsChanged` |
+| `gitStatus(path:)`, `gitDiff(request:)` | `GitDiffRequest(path:base:files:context:hunks:)`, `DiffBase.head / .index / .staged / .rev / .mergeBase` |
+| `listTurns(paneId:)`, `turnDiff(paneId:turn:context:hunks:)`, `sendReview(review:)` | what an agent turn changed; review notes typed into the agent as a prompt |
+| `worktreeCreate / worktreeList / worktreeRemove / worktreeLaunch` | worktrees with their `PORT`; `worktreeLaunch` returns the new pane |
+| `fsList / fsStat / fsRead / fsWrite / fsMkdir / fsRename / fsDelete / fsWatch / fsUnwatch` | ≤ 1 MiB reads/writes; `WriteTarget.ifMatch` for conflicts; watches end with the connection (re-watch after `.connected`) |
+| `uploadFile(localPath:target:progress:)`, `uploadBytes(data:target:)`, `downloadFile(remotePath:localPath:offset:len:progress:)` | own stream at bulk priority; `TransferProgress.onProgress(done:total:)` per 64 KiB |
+| `attentionList()`, `attentionSeen(seen:)` | the inbox and its unseen count; seen syncs to every device; changes as `.attention` |
+| `perform(op:) async throws -> OpOutcome` | `op` that waits for its own `OpResult` (the event still reaches the listener) |
+
+### Editor (DAEMON.md §5.3)
+
+-> EditorSession`:
+
+1. `EditorLaunch(choice: .auto)`: the daemon starts `code serve-web --host 127.0.0.1 --port <free>
+   --connection-token <random>` in the folder (reused if one already serves it). `.auto` never
+   switches to openvscode-server and never runs `code tunnel`.
+2. No `code` CLI on the host: with `acceptVscodeLicense` the host downloads it from Microsoft
+   (`vscodeCliInstall(acceptLicense: true)`, SHA-256 checked) and step 1 is retried; without it
+   the call fails with `WorkspaceError.unavailable` saying what to do. No licence accepted →
+   nothing is installed or started.
+3. A local forward to the server, on the host's port number when it is free here (so the
+   editor's own `localhost:<port>` URLs stay valid), else any port; an existing forward is
+   reused.
+4. Returns `url` = `http://localhost:<local>/?tkn=…&folder=…` for the `WKWebView`, the
+   `localPort`, the `EditorInstance` and whether the CLI was installed now.
+
+`acceptVscodeLicense` means the user accepted `vscodeLicenseUrl()` (the CLI) and
+`vscodeServerLicenseUrl()` (serve-web) in the app. `closeEditor(session:stopServer:)`,
+`editorOpenInSession(session:path:line:column:) -> String?` (a URL to load, `nil` when the file
+opened in the window already showing). Lower level: `editorStatus / editorLaunch / editorStop /
+editorOpen`.
+
+**VS Code Remote Tunnel, opt-in fallback** (needs a GitHub/Microsoft sign-in, only on the
+user's explicit choice): `vscodeTunnelStatus / vscodeCliInstall / vscodeTunnelStart /
+vscodeTunnelStop / vscodeTunnelOpen`. The device code arrives as
+`WorkspaceEvent.vsCodeTunnel(status)` with `status.state == .needsLogin(login:)`
+(`verificationUrl`, `userCode`).
+
+Desktop links (`client_core::vscode`): `vscodeRemoteSshUri(host:path:line:column:)`
+(`VsCodeSshHost(host: "127.0.0.1", user:, port: <forward to .tcp(port: 22)>)` for an
+iroh-only host), `vscodeSshAuthority`, `vscodeTunnelUri`, `vscodeTunnelWebUrl`,
+`vscodeSshConfigEntry`; `microsoftPrivacyUrl()`.
+
+### Agents
+
+| | |
+|---|---|
+| `launchAgentPane(launch: AgentLaunch) async -> AgentLaunched` | Claude/Codex split off `splitFrom`, in a `worktree` (with its `PORT`), a `cwd`, or `resume`-ing a session; an optional first `prompt` goes through the composer path once `PaneMeta.agent` reports idle (`readyTimeoutMs`, default 30 s). A refused or late prompt is `promptError`; the pane exists either way |
+| `launchAgent(paneId:agent:axis:)` | unchanged fire-and-forget op |
+| `decide(requestId:optionId:)` | **signed**: client-core signs `"approval-v1\0" ‖ postcard(daemon, request, option, actor)` with the device key (`Decide.sig`, DAEMON.md §6.6) |
+
+Agent state stays in `PaneMeta.agent` (`.blocked(requestId:summary:options:)`), raw agent
+events in `ClientEvent.agentEvent(paneId:json:)`, decisions by anyone in
+`MultiplayerEvent.decided`.
+
+
+Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerError`
+(`forbidden`, `notFound`, `invalid`, `conflict`, `failed`, `disconnected`).
+
+| | |
+|---|---|
+| `DaemonClient.join(invite:config:listener:)`, `joinWith(…options:…)` | join as a guest by link or QR text (any case, `#` fragment form too) |
+| `inspectInvite(invite:) -> InviteInfo` | join card without dialling: inviter, label, roles, scope, expiry, uses |
+| `createInvite(options: InviteOptions) -> CreatedInvite` | `roles: [Role]` (`.viewer / .prompter / .driver / .approver / .owner`), `scope` (`.daemon / .session / .tab / .pane`), `ttlSecs`, `maxUses`, `delegate`, `label`, `inviter`; returns `link`, `qrPayload` (upper-cased link → QR alphanumeric mode), `grantId`, `expiresMs`. A guest with `delegate` signs a narrower child |
+| `setMultiplayerListener(listener:)` | `MultiplayerEvent.joined / participants / presence / lease / leaseRequested / inputRejected / forbidden / decided / alreadyDecided / revoked` |
+| `me()`, `participantList()`, `lease(paneId:)` | last pushed state, no round trip |
+| `whoAmI()`, `participants()`, `setName(name:)`, `leases()` | |
+| `takeControl(paneId:force:)`, `giveControl(paneId:to:)`, `answerControl(paneId:give:)`, `releaseControl(paneId:)` | `LeaseOutcome.granted / .pending(holder:) / .kept` |
+| `prompt(paneId:text:submit:) -> UInt32` | composer path (sanitized; the prompter role's only input) |
+| `setTyping(paneId:typing:)` | typing indicator |
+| `listGrants()`, `listDevices()`, `revoke(target:)`, `audit(after:limit:)` | owner only; `RevokeTarget.grant / .device / .principal`; `AuditPage.chainOk` |
+
+### Push (docs/PUSH.md)
+
+| | |
+|---|---|
+| `generatePushSealKey() -> PushSealKey` | X25519 `secret` (Keychain group shared with the NSE) and `publicKey`; `pushSealPublicKey(secret:)` |
+| `pushRelayRegisterBody(apnsToken:environment:daemonId:kind:) -> String` | JSON for `POST <relay>/v1/register` (the app posts it with URLSession; `defaultPushRelayUrl()`); the answer's `cap` goes into the registration |
+| `pushRegister(registration:)`, `pushUnregister()`, `pushStatus()` | per daemon, over the connection; `PushRegistration(cap:sealKey:relayUrl:prefs:activityCap:)` |
+| `openPushNotification(deviceSecret:sealed:) throws(PushError) -> PushNotification` | NSE: decrypt + verify the daemon's signature (check `daemon` is paired); `category` is the `UNNotificationCategory` id |
+| `pushActionToken(token:)`, `sendPushAction(…) async`, `sendPushActionBlocking(…)` | lock-screen Approve/Deny on a one-shot connection signed with the device key → `Decided`; `PushActionError` |
+
+### Relays
+
+`DaemonClient.connectWith(ticket:config:options:listener:)` with `ConnectOptions(relayCaDer:
+[Data])` trusts a private CA for self-hosted relays. `inspectPairTicket(ticket:).relays` says
+what the ticket asks for: `TicketRelays.default / .custom(urls:hasAuthToken:) / .disabled`
+(docs/RELAYS.md); the app's own `RelayMode.disabled` still wins.
+
 Errors are typed Swift enums: `ClientError` (`Ticket`, `Key`, `Io`), `SshError` (`Io`, `Protocol`,
 `Timeout`, `Disconnected`, `AuthFailed{user,host,tried,allowed}`,
 `HostKeyMismatch{host,expected,actual}`, `HostKeyRejected`, `Key`, `KeyEncrypted`, `Signer`,
 `Config`, `Remote{status,stderr}`, `ChecksumMismatch`, `Bootstrap`, `Closed`), `SignerError`
-(`Cancelled`, `Failed`) for the signer to throw.
+(`Cancelled`, `Failed`) for the signer to throw, `WorkspaceError` (`Denied`, `NotFound`,
+`Conflict`, `Invalid`, `Unavailable`, `Failed`, `Disconnected`, mirroring `proto::WsError`),
+`MultiplayerError`, `PushError` (`Malformed`, `Open`, `Signature`, `Json`, `TooLarge`,
+`Expired`) and `PushActionError` (`Client`, `Token`, `Unreachable`, `Refused`, `Rejected`).
 
 ## 3. Threading
 
@@ -126,9 +239,10 @@ Errors are typed Swift enums: `ClientError` (`Ticket`, `Key`, `Io`), `SshError` 
   connection in the background; releasing an `SshSession` (and its panes, which keep it
   alive) closes it.
 - **Callbacks** arrive on runtime threads, never the main thread:
-  - `ClientEventListener.onEvent`, `SshSessionListener.onState`,
-    `BootstrapListener.onStep`, `KnownHostsListener.changed`: a runtime worker, in order, one at
-    a time per client / pane / session. Return quickly (hop to the main actor or a render queue);
+  - `ClientEventListener.onEvent`, `WorkspaceListener.onWorkspaceEvent`,
+    `MultiplayerListener.onMultiplayerEvent`, `TransferProgress.onProgress`,
+    `SshSessionListener.onState`, `BootstrapListener.onStep`, `KnownHostsListener.changed`: a
+    runtime worker, in order, one at a time per client / pane / session / transfer. Return quickly (hop to the main actor or a render queue);
     a slow listener stalls that connection.
   - `HostKeyDelegate`, `SshSigner.sign`, `SshInteractiveResponder.respond`: the blocking pool,
     after the key exchange and before credentials are sent. These may wait for the user (a
@@ -192,6 +306,17 @@ cd apple/Packages/UnnamedCore && swift test
 source ../../../target/ssh-test/env && swift test --filter SshTests
 ```
 
+- Rust, `cargo test -p apple-ffi` (`tests/workspace.rs`, an in-process daemon with `$HOME` in
+  a temp dir and no `code` CLI): file round trip with upload/download progress, typed
+  `Conflict`/`Denied`/`NotFound`; git status and HEAD diff in a temp repo; a forward to a local
+  TCP echo server, then stop; invite + join with a second client (QR text inspected, `joined`,
+  a viewer's keys refused with `inputRejected(.role)`, take-control forbidden, owner lists and
+  revokes the grant, the guest gets `revoked`, audit chain ok); an agent turn's attention item
+  marked seen and the push; editor status without a `code` CLI and `openEditor` without the
+  licence → `Unavailable` naming the fix, no forward left behind; push register / status /
+  unregister and the relay body.
+- Swift `WorkspaceTests` (daemon with `[files] allow` set to its state dir): forward to an
+  echo server, `fsList` / `fsWrite` / `fsRead`, invite + join as a viewer with refused input.
 - Offline: keys, ssh_config + ProxyJump + destinations, known_hosts persistence callback, typed
   errors, the `PaneBytes` crossing benchmark.
 - Daemon (`UN_HOSTD_BIN` overrides the binary): connect by ticket to a spawned `unnamed-hostd
@@ -205,7 +330,11 @@ source ../../../target/ssh-test/env && swift test --filter SshTests
 
 ## 7. Not done / follow-ups
 
-- No `tracing` bridge to `os_log` yet: Rust logs are dropped in the app.
+- `openEditor` with the licence accepted on a host without the CLI downloads from Microsoft;
+  only the refusal path is tested here (the daemon's `tests/it/vscode.rs` covers the install
+  with a fake update service). The serve-web page in a real `WKWebView` is not tested.
+- `launchAgentPane`'s prompt-after-idle is not tested against a real Claude/Codex.
+- Full `Presence` (cursor, viewport) is not sent from Swift yet; only `setTyping`.
 - `HostdBinary` data is inflated and re-gzipped for upload (≈0.3 s for 19 MB); the `ssh` crate
   could take pre-gzipped bytes directly.
 - macOS daemon builds for bootstrapping Mac hosts are not produced by `xtask` (the `ssh` crate

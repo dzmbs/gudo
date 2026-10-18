@@ -170,9 +170,12 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "apple-ffi"
 version = "0.0.0"
 dependencies = [
+ "brand",
  "client-core",
  "daemon",
  "flate2",
+ "push",
+ "serde_json",
  "ssh",
  "tempfile",
  "thiserror 2.0.21",
