@@ -83,6 +83,26 @@ final class TerminalInputUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
     }
 
+    /// With 400 ms each way, typed characters show at once as underlined predictions, then the
+    /// echo confirms them (the screen text then contains them for real).
+    @MainActor
+    func testEchoPredictionOnSlowLink() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-echoLatencyMs", "400"]
+        app.launch()
+        let pane = element(app, "pane-1")
+        XCTAssertTrue(pane.waitForExistence(timeout: 10))
+        pane.tap()
+        app.typeKey("p", modifierFlags: [])
+        app.typeKey("r", modifierFlags: [])
+        app.typeKey("e", modifierFlags: [])
+        app.typeKey("d", modifierFlags: [])
+        add(XCTAttachment(screenshot: app.screenshot()).named("echo-prediction"))
+        let confirmed = NSPredicate(format: "value CONTAINS %@", "pred")
+        expectation(for: confirmed, evaluatedWith: element(app, "pane-1-screen"))
+        waitForExpectations(timeout: 10)
+    }
+
     @MainActor
     func testMarkedTextIsDrawnInline() throws {
         let app = XCUIApplication()

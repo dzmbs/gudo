@@ -146,8 +146,12 @@ public final class TerminalView: UIView {
 
     /// The terminal screen as one element (identifier `<view id>-screen`; its value reports IME
     /// composition), next to the selection handles while they show.
-    private lazy var screenElement: UIAccessibilityElement = {
-        let element = UIAccessibilityElement(accessibilityContainer: self)
+    private lazy var screenElement: ScreenElement = {
+        let element = ScreenElement(accessibilityContainer: self)
+        element.text = { [weak self] in
+            guard let self else { return nil }
+            return self.markedText.map { "composing \($0)" } ?? self.surface.terminal.visibleText()
+        }
         element.accessibilityLabel = "Terminal"
         element.accessibilityTraits = .allowsDirectInteraction
         return element
@@ -714,7 +718,6 @@ extension TerminalView: UITextInput {
         self.markedText = markedText?.isEmpty == false ? markedText : nil
         markedSelection = selectedRange
         surface.preedit = self.markedText.map { TerminalSurface.Preedit(text: $0) }
-        screenElement.accessibilityValue = self.markedText.map { "composing \($0)" }
     }
 
     public func unmarkText() {
@@ -890,6 +893,17 @@ private final class SelectionHandle: UIView {
         bar.frame = CGRect(x: Self.hitWidth / 2 - 1, y: isStart ? Self.knobSize : 0, width: 2, height: lineHeight)
         knob.frame = CGRect(
             x: Self.hitWidth / 2 - Self.knobSize / 2, y: isStart ? 0 : lineHeight, width: Self.knobSize, height: Self.knobSize)
+    }
+}
+
+/// The terminal screen for assistive technologies: its value is the visible text, or the IME
+/// composition while composing.
+private final class ScreenElement: UIAccessibilityElement {
+    var text: (() -> String?)?
+
+    override var accessibilityValue: String? {
+        get { text?() }
+        set {}
     }
 }
 
