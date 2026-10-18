@@ -579,13 +579,22 @@ async fn artifacts_canvases_and_blobs_survive_a_restart_and_export() {
     let pane = owner.c.attach_and_follow().await;
     let session = owner.session();
 
-    // A canvas pane splits off the terminal with a new drawing.
+    // A canvas pane splits off the terminal showing a (Pencil) drawing; `None` would make
+    // an Excalidraw scene (tests/it/inline.rs).
+    let pencil = owner
+        .c
+        .client
+        .artifact_create(drawing_req(session, CoordSpace::Canvas, vec![]))
+        .await
+        .unwrap();
     let OpOutcome::PaneCreated { pane_id: canvas } = owner
         .c
         .op(LayoutOp::Split {
             pane_id: pane,
             axis: Axis::Horizontal,
-            launch: PaneLaunch::Canvas { artifact_id: None },
+            launch: PaneLaunch::Canvas {
+                artifact_id: Some(pencil.artifact_id),
+            },
         })
         .await
     else {
@@ -821,5 +830,400 @@ async fn caps_refuse_oversized_blobs_and_batches() {
         .await;
     assert!(matches!(r, Err(ArtifactError::Invalid(_))), "{r:?}");
     drop(owner);
+    daemon.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Excalidraw scenes, inline placements, kitty capture, import
+// ---------------------------------------------------------------------------------------------
+
+fn exel(id: &str, version: u64, nonce: u32, x: f32, label: &str) -> client_core::proto::ExElement {
+    let json = format!(
+        r##"{{"id":"{id}","type":"rectangle","x":{x},"y":0,"width":120,"height":60,"strokeColor":"#1e1e1e","backgroundColor":"transparent","strokeWidth":2,"opacity":100,"version":{version},"versionNonce":{nonce},"isDeleted":false,"customData":{{"label":"{label}"}}}}"##
+    );
+    client_core::proto::ExElement {
+        id: id.into(),
+        version,
+        version_nonce: nonce,
+        deleted: false,
+        json,
+    }
+}
+
+fn ex_state(c: &TestClient, id: ArtifactId) -> Vec<client_core::proto::ExElement> {
+    c.client
+        .excalidraw_scene(id)
+        .map(|s| s.changed_since(0))
+        .unwrap_or_default()
+}
+
+fn placed(u: &ArtifactUpdate, f: impl Fn(&client_core::proto::Placement) -> bool) -> bool {
+    is_event(u, |e| matches!(e, ArtifactEvent::Placed(p) if f(p)))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn excalidraw_scenes_reconcile_between_clients_and_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut a = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    let shell = a.c.attach_and_follow().await;
+    let mut b = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    b.c.client.attach(None);
+    b.c.until("b layout", |c| c.layout.is_some()).await;
+
+    // A canvas pane with no artifact gets a new Excalidraw scene.
+    let OpOutcome::PaneCreated { pane_id: canvas } =
+        a.c.op(LayoutOp::Split {
+            pane_id: shell,
+            axis: Axis::Horizontal,
+            launch: PaneLaunch::Canvas { artifact_id: None },
+        })
+        .await
+    else {
+        panic!("canvas split failed")
+    };
+    let u = b
+        .wait("canvas on b", |u| {
+            is_event(u, |e| matches!(e, ArtifactEvent::Canvases { canvases, .. } if canvases.iter().any(|c| c.pane_id == canvas)))
+        })
+        .await;
+    let ArtifactUpdate::Event(e) = u else {
+        unreachable!()
+    };
+    let ArtifactEvent::Canvases { canvases, .. } = *e else {
+        unreachable!()
+    };
+    let id = canvases
+        .iter()
+        .find(|c| c.pane_id == canvas)
+        .unwrap()
+        .artifact_id;
+    let info = a.c.client.artifact_get(id, u64::MAX).await.unwrap().info;
+    assert_eq!(info.kind, ArtifactKind::Excalidraw);
+
+    // Both edit: disjoint elements merge; the same element at the same version goes to the
+    // lower versionNonce on every replica; an older version loses and comes back as the
+    // winner.
+    let (_, rejected) =
+        a.c.client
+            .excalidraw_put(
+                id,
+                vec![
+                    exel("box-a", 1, 50, 0.0, "a1"),
+                    exel("same", 5, 10, 200.0, "from-a"),
+                ],
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+    assert!(rejected.is_empty());
+    let (_, rejected) =
+        b.c.client
+            .excalidraw_put(
+                id,
+                vec![
+                    exel("box-b", 1, 1, 400.0, "b1"),
+                    exel("same", 5, 3, 200.0, "from-b"),
+                    exel("box-a", 0, 0, 0.0, "stale"),
+                ],
+                Some(r#"{"gridSize":20}"#.into()),
+                vec![],
+            )
+            .await
+            .unwrap();
+    assert_eq!(rejected, vec![exel("box-a", 1, 50, 0.0, "a1")]);
+    a.wait("b's elements on a", |u| {
+        is_event(u, |e| matches!(e, ArtifactEvent::Excalidraw { elements, .. } if elements.iter().any(|e| e.id == "box-b")))
+    })
+    .await;
+    b.wait("a's elements on b", |u| {
+        is_event(u, |e| matches!(e, ArtifactEvent::Excalidraw { elements, .. } if elements.iter().any(|e| e.id == "box-a")))
+    })
+    .await;
+    let sa = ex_state(&a.c, id);
+    assert_eq!(sa, ex_state(&b.c, id));
+    assert_eq!(sa.len(), 3);
+    assert!(
+        sa.iter()
+            .any(|e| e.id == "same" && e.json.contains("from-b"))
+    );
+    let full = a.c.client.excalidraw_get(id, 0).await.unwrap();
+    assert_eq!(full.elements, sa);
+    assert_eq!(full.app_state.as_deref(), Some(r#"{"gridSize":20}"#));
+
+    // B away, A edits and deletes, B back: caught up.
+    b.c.client.suspend();
+    let mut gone = exel("box-b", 2, 9, 400.0, "b1");
+    gone.deleted = true;
+    gone.json = gone
+        .json
+        .replace(r#""isDeleted":false"#, r#""isDeleted":true"#);
+    a.c.client
+        .excalidraw_put(
+            id,
+            vec![exel("box-a", 2, 7, 10.0, "a2"), gone],
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+    let rev = a.c.client.excalidraw_scene(id).unwrap().revision;
+    b.seen.clear();
+    b.c.client.reconnect();
+    b.wait("b resynced", |u| {
+        matches!(u, ArtifactUpdate::Synced { artifact_id, version } if *artifact_id == id && *version == rev)
+    })
+    .await;
+    assert_eq!(ex_state(&a.c, id), ex_state(&b.c, id));
+    assert_eq!(b.c.client.excalidraw_scene(id).unwrap().live(), 2);
+
+    // Exports: ASCII box glyphs, SVG, PNG (the daemon's render).
+    let (_, ascii) =
+        b.c.client
+            .artifact_export(id, None, ExportFormat::Ascii)
+            .await
+            .unwrap();
+    let ascii = String::from_utf8(ascii).unwrap();
+    assert!(ascii.contains('┌') && ascii.contains('┘'), "{ascii}");
+    let (_, svg) =
+        b.c.client
+            .artifact_export(id, None, ExportFormat::Svg)
+            .await
+            .unwrap();
+    assert_eq!(String::from_utf8(svg).unwrap().matches("<rect").count(), 2);
+    let (_, png) =
+        b.c.client
+            .artifact_export(id, None, ExportFormat::Png)
+            .await
+            .unwrap();
+    assert_eq!(
+        drawing::sniff(&png).unwrap().0,
+        client_core::proto::MediaType::Png
+    );
+
+    // A viewer may read the scene but not change it, place it or import.
+    let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite =
+        a.c.client
+            .create_invite(spec, "owner".into())
+            .await
+            .unwrap();
+    let mut vic = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    vic.client.attach(None);
+    vic.until("viewer layout", |c| c.layout.is_some()).await;
+    assert_eq!(
+        vic.client
+            .excalidraw_get(id, 0)
+            .await
+            .unwrap()
+            .elements
+            .len(),
+        3
+    );
+    let r = vic
+        .client
+        .excalidraw_put(id, vec![exel("v", 1, 1, 0.0, "v")], None, vec![])
+        .await;
+    assert!(matches!(r, Err(ArtifactError::Forbidden(_))), "{r:?}");
+    let r = vic
+        .client
+        .import_to_pane(shell, "x.excalidraw".into(), b"{}".to_vec())
+        .await;
+    assert!(matches!(r, Err(ArtifactError::Forbidden(_))), "{r:?}");
+    drop((a, b, vic));
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inline_placements_follow_output_survive_reattach_and_capture_kitty_images() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut a = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    let pane = a.c.attach_and_follow().await;
+    let session = a.session();
+    a.c.type_line(pane, "echo before-the-sketch");
+    a.c.wait_text(pane, "before-the-sketch\n").await;
+
+    // "Done" on the overlay: the drawing goes inline at the cursor row.
+    let sketch =
+        a.c.client
+            .artifact_create(drawing_req(
+                session,
+                CoordSpace::Cells,
+                vec![stroke(1, 1.0)],
+            ))
+            .await
+            .unwrap();
+    let place = |replace| client_core::proto::PlaceRequest {
+        pane_id: pane,
+        artifact_id: sketch.artifact_id,
+        version: None,
+        anchor: None,
+        col: 2,
+        cols: 0,
+        rows: 0,
+        png: None,
+        replace,
+    };
+    let p = a.c.client.place(place(None)).await.unwrap();
+    assert_eq!(p.anchor.state, AnchorState::Live);
+    assert_eq!(p.col, 2);
+    assert!(p.cols >= 1 && p.rows >= 1);
+    let start_fb = p.anchor.from_bottom;
+
+    // More output scrolls it up; the placement stays on its row.
+    a.c.type_line(
+        pane,
+        "i=0; while [ $i -lt 40 ]; do echo line-$i; i=$((i+1)); done",
+    );
+    a.c.wait_text(pane, "line-39").await;
+    let list = a.c.client.list_placements(pane).await.unwrap();
+    let now = list
+        .iter()
+        .find(|x| x.placement_id == p.placement_id)
+        .unwrap();
+    assert_eq!(now.anchor.state, AnchorState::Live);
+    assert!(
+        // 40 lines and two prompts below it (the screen had room for some at first).
+        now.anchor.from_bottom > start_fb && now.anchor.from_bottom >= 40,
+        "{start_fb} → {}",
+        now.anchor.from_bottom
+    );
+
+    // A client attaching later (a new device, a resume after a snapshot) gets it too.
+    let mut late = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    late.c.client.attach(None);
+    late.wait("placement on attach", |u| {
+        placed(u, |x| x.placement_id == p.placement_id)
+    })
+    .await;
+    assert_eq!(late.c.client.placements(pane).len(), 1);
+
+    // Re-opened and edited in place: the new version replaces the old placement.
+    a.c.client
+        .artifact_apply(sketch.artifact_id, 1, vec![stroke(2, 3.0)])
+        .await
+        .unwrap();
+    let p2 = a.c.client.place(place(Some(p.placement_id))).await.unwrap();
+    assert_eq!(p2.version, 2);
+    late.wait("unplaced old", |u| {
+        is_event(u, |e| matches!(e, ArtifactEvent::Unplaced { placement_id, .. } if *placement_id == p.placement_id))
+    })
+    .await;
+    late.wait("placed new", |u| {
+        placed(u, |x| x.placement_id == p2.placement_id)
+    })
+    .await;
+
+    // A program in the pane prints a PNG with the kitty graphics protocol: the daemon keeps
+    // it as an image artifact placed at the cursor row.
+    let png = drawing::encode_png(&drawing::Rgba {
+        width: 36,
+        height: 36,
+        data: vec![120; 36 * 36 * 4],
+    });
+    let b64 = data_encoding::BASE64.encode(&png);
+    a.c.type_line(
+        pane,
+        &format!("printf '\\033_Ga=T,f=100,C=1,q=2,c=4,r=2;{b64}\\033\\\\\\n\\nKITTY-DONE\\n'"),
+    );
+    a.c.wait_text(pane, "KITTY-DONE").await;
+    let u = late
+        .wait("kitty placement", |u| {
+            placed(u, |x| {
+                x.source == client_core::proto::PlacementSource::Kitty
+            })
+        })
+        .await;
+    let ArtifactUpdate::Event(e) = u else {
+        unreachable!()
+    };
+    let ArtifactEvent::Placed(k) = *e else {
+        unreachable!()
+    };
+    assert_eq!((k.cols, k.rows), (4, 2));
+    assert_eq!(k.image.width, 36);
+    let (_, bytes) = late.c.client.blob_download(k.image.hash).await.unwrap();
+    assert_eq!(bytes, png);
+    let kinds: Vec<ArtifactKind> =
+        a.c.client
+            .artifacts(session)
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.kind)
+            .collect();
+    assert!(kinds.contains(&ArtifactKind::Image));
+
+    // A dropped .excalidraw file becomes an inline diagram; so does a dropped photo.
+    let flow = include_bytes!("../../../drawing/tests/fixtures/flow.excalidraw");
+    let d =
+        a.c.client
+            .import_to_pane(pane, "flow.excalidraw".into(), flow.to_vec())
+            .await
+            .unwrap();
+    let (_, ascii) =
+        a.c.client
+            .artifact_export(d.artifact_id, None, ExportFormat::Ascii)
+            .await
+            .unwrap();
+    let ascii = String::from_utf8(ascii).unwrap();
+    assert!(ascii.contains("daemon") && ascii.contains('▶'), "{ascii}");
+    let photo =
+        a.c.client
+            .import_to_pane(pane, "photo.png".into(), png.clone())
+            .await
+            .unwrap();
+    assert_eq!(photo.image.hash, k.image.hash);
+
+    // Clearing the screen and scrollback detaches what was placed on the cleared rows.
+    a.c.type_line(pane, "printf '\\033[H\\033[2J\\033[3J'");
+    late.wait("placement detached", |u| {
+        placed(u, |x| {
+            x.placement_id == p2.placement_id
+                && x.anchor.state == AnchorState::Detached(DetachReason::RowGone)
+        })
+    })
+    .await;
+
+    // Removing a placement tells everyone.
+    a.c.client.unplace(photo.placement_id).await.unwrap();
+    late.wait("unplaced photo", |u| {
+        is_event(u, |e| matches!(e, ArtifactEvent::Unplaced { placement_id, .. } if *placement_id == photo.placement_id))
+    })
+    .await;
+    let before = a.c.client.list_placements(pane).await.unwrap().len();
+    drop((a, late));
+    daemon.shutdown().await;
+
+    // After a restart the placements are kept, detached (the terminal state is gone), and
+    // the Excalidraw scene is intact.
+    let daemon = start(dir.path()).await;
+    let mut a = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    a.c.client.attach(None);
+    a.c.until("layout", |c| c.layout.is_some()).await;
+    let after = a.c.client.list_placements(pane).await.unwrap();
+    assert_eq!(after.len(), before);
+    assert!(after.iter().all(|x| x.anchor.state != AnchorState::Live));
+    let scene = a.c.client.excalidraw_get(d.artifact_id, 0).await.unwrap();
+    assert_eq!(scene.elements.len(), 9);
+    drop(a);
     daemon.shutdown().await;
 }

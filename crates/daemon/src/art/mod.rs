@@ -8,11 +8,15 @@
 //! blobs/<sha256 hex>             images and PNGs, shared by every session
 //! <session>/<artifact>/info.bin  ArtifactInfo (postcard), rewritten atomically on change
 //! <session>/<artifact>/ops.log   [u32 LE len][postcard OpBatch]…, appended per batch
+//! <session>/<artifact>/excalidraw.bin  an Excalidraw scene (postcard), written each second
+//!                                when it changed
 //! <session>/send/<id>@<v>.png    files pasted into agent panes
 //! ```
 //!
 //! The daemon orders batches; every client applies them in version order and converges.
 
+pub(crate) mod ex;
+pub(crate) mod place;
 pub(crate) mod send;
 
 use std::collections::{BTreeMap, HashSet};
@@ -57,6 +61,8 @@ fn not_found(id: ArtifactId) -> ArtifactError {
 struct Index {
     next_id: u64,
     canvases: Vec<CanvasPane>,
+    next_placement: u64,
+    placements: Vec<proto::Placement>,
 }
 
 struct Item {
@@ -64,6 +70,10 @@ struct Item {
     scene: Scene,
     log: Vec<OpBatch>,
     log_bytes: u64,
+    /// Excalidraw scenes only.
+    ex: Option<drawing::ExScene>,
+    /// The Excalidraw scene changed since it was last written.
+    ex_dirty: bool,
 }
 
 #[derive(Default)]
@@ -71,6 +81,10 @@ struct State {
     next_id: u64,
     items: BTreeMap<ArtifactId, Item>,
     canvases: BTreeMap<PaneId, ArtifactId>,
+    next_placement: u64,
+    placements: BTreeMap<u64, proto::Placement>,
+    /// Anchor key of each placement made in this run.
+    anchor_keys: std::collections::HashMap<u64, u64>,
     /// Bytes of blobs and op logs on disk.
     total: u64,
 }
@@ -109,6 +123,18 @@ impl Art {
                 .canvases
                 .into_iter()
                 .map(|c| (c.pane_id, c.artifact_id))
+                .collect();
+            st.next_placement = index.next_placement.max(1);
+            // Inline placements lose their rows with the terminal state.
+            st.placements = index
+                .placements
+                .into_iter()
+                .map(|mut p| {
+                    if p.anchor.state == AnchorState::Live {
+                        p.anchor.state = AnchorState::Detached(DetachReason::DaemonRestart);
+                    }
+                    (p.placement_id, p)
+                })
                 .collect();
         }
         let Ok(sessions) = fs::read_dir(&self.dir) else {
@@ -174,6 +200,8 @@ impl Art {
     fn save_index(&self, st: &State) {
         let index = Index {
             next_id: st.next_id,
+            next_placement: st.next_placement,
+            placements: st.placements.values().cloned().collect(),
             canvases: st
                 .canvases
                 .iter()
@@ -276,6 +304,9 @@ impl Art {
                         .map(|i| i.hash.to_hex())
                         .chain(it.info.preview.iter().map(|p| p.image.hash.to_hex()))
                         .collect();
+                    if let Some(ex) = &it.ex {
+                        refs.extend(ex.files.values().map(|f| f.image.hash.to_hex()));
+                    }
                     for batch in &it.log {
                         for op in &batch.ops {
                             if let DrawOp::Add(e) = op
@@ -287,6 +318,7 @@ impl Art {
                     }
                     refs
                 })
+                .chain(st.placements.values().map(|p| p.image.hash.to_hex()))
                 .collect()
         };
         let Ok(blobs) = fs::read_dir(self.dir.join("blobs")) else {
@@ -352,6 +384,16 @@ impl Art {
     pub fn scene_at(&self, id: ArtifactId, version: Option<u64>) -> Result<(ArtifactInfo, Scene)> {
         let st = lock(&self.state);
         let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
+        if let Some(ex) = &it.ex {
+            // Excalidraw keeps the latest state of each element, not its history.
+            if version.is_some_and(|v| v != it.info.version) {
+                return Err(ArtifactError::NotFound(format!(
+                    "Excalidraw scenes keep only their current revision ({})",
+                    it.info.version
+                )));
+            }
+            return Ok((it.info.clone(), ex.to_scene()));
+        }
         let version = version.unwrap_or(it.info.version);
         if version > it.info.version {
             return Err(ArtifactError::NotFound(format!(
@@ -399,15 +441,17 @@ impl Art {
                     "an image artifact needs its blob".into(),
                 ));
             }
-            (ArtifactKind::Drawing, Some(_)) => {
+            (ArtifactKind::Drawing | ArtifactKind::Excalidraw, Some(_)) => {
                 return Err(ArtifactError::Invalid(
                     "place images in drawings with an Image element".into(),
                 ));
             }
-            (ArtifactKind::Drawing, None) => None,
+            (ArtifactKind::Drawing | ArtifactKind::Excalidraw, None) => None,
         };
-        if req.kind == ArtifactKind::Image && !req.ops.is_empty() {
-            return Err(ArtifactError::Invalid("images take no ops".into()));
+        if req.kind != ArtifactKind::Drawing && !req.ops.is_empty() {
+            return Err(ArtifactError::Invalid(
+                "only drawings take ops (Excalidraw scenes take ExcalidrawPut)".into(),
+            ));
         }
         let now = UnixMillis(now_millis());
         let mut st = lock(&self.state);
@@ -436,6 +480,8 @@ impl Art {
                 scene: Scene::new(),
                 log: Vec::new(),
                 log_bytes: 0,
+                ex: (req.kind == ArtifactKind::Excalidraw).then(drawing::ExScene::new),
+                ex_dirty: false,
             },
         );
         self.save_index(&st);
@@ -467,7 +513,9 @@ impl Art {
         let mut st = lock(&self.state);
         let it = st.items.get_mut(&id).ok_or_else(|| not_found(id))?;
         if it.info.kind != ArtifactKind::Drawing {
-            return Err(ArtifactError::Invalid("images cannot be edited".into()));
+            return Err(ArtifactError::Invalid(
+                "only drawings take ops (Excalidraw scenes take ExcalidrawPut)".into(),
+            ));
         }
         let batch = OpBatch {
             version: it.info.version + 1,
@@ -592,8 +640,10 @@ impl Art {
         {
             let mut st = lock(&self.state);
             let it = st.items.get(&id).ok_or_else(|| not_found(id))?;
-            if it.info.kind != ArtifactKind::Drawing {
-                return Err(ArtifactError::Invalid("canvas panes show drawings".into()));
+            if it.info.kind == ArtifactKind::Image {
+                return Err(ArtifactError::Invalid(
+                    "canvas panes show drawings and Excalidraw scenes".into(),
+                ));
             }
             st.canvases.insert(pane, id);
             self.save_index(&st);
@@ -702,6 +752,12 @@ pub(crate) async fn run(core: std::sync::Arc<Core>) {
         for info in core.art.check_anchors(&core) {
             core.emit_artifact(info.session_id, proto::ArtifactEvent::Info(info), None);
         }
+        for p in core.art.check_placements(&core) {
+            if let Some(session) = core.session_of_pane(p.pane_id) {
+                core.emit_artifact(session, proto::ArtifactEvent::Placed(p), None);
+            }
+        }
+        core.art.flush();
     }
 }
 
@@ -765,8 +821,16 @@ fn load_item(dir: &Path) -> io::Result<Option<Item>> {
             break;
         }
     }
-    info.version = scene.version;
-    info.elements = scene.elements().len() as u32;
+    let ex = if info.kind == ArtifactKind::Excalidraw {
+        let ex = ex::load(dir)?;
+        info.version = ex.revision;
+        info.elements = ex.live() as u32;
+        Some(ex)
+    } else {
+        info.version = scene.version;
+        info.elements = scene.elements().len() as u32;
+        None
+    };
     // Terminal state does not survive a restart, and neither do anchors' rows.
     if let Some(a) = info.anchor.as_mut()
         && a.state == AnchorState::Live
@@ -778,6 +842,8 @@ fn load_item(dir: &Path) -> io::Result<Option<Item>> {
         scene,
         log,
         log_bytes,
+        ex,
+        ex_dirty: false,
     }))
 }
 
@@ -822,6 +888,23 @@ pub(crate) fn export(
     let (info, scene) = art.scene_at(id, version)?;
     let version = version.unwrap_or(info.version);
     match format {
+        ExportFormat::Ascii => {
+            let text = match (info.kind, info.image) {
+                (ArtifactKind::Image, Some(img)) => format!(
+                    "[image {}×{}, {}]\n",
+                    img.width,
+                    img.height,
+                    img.media.mime()
+                ),
+                _ => drawing::to_ascii(&scene, info.space, 160),
+            };
+            Ok(Exported {
+                format,
+                version,
+                data: text.into_bytes(),
+                blob: None,
+            })
+        }
         ExportFormat::Svg => {
             let href = |img: &ImageRef| {
                 if img.size > 8 << 20 {

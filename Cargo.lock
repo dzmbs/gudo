@@ -1153,6 +1153,7 @@ dependencies = [
  "data-encoding",
  "flate2",
  "proto",
+ "serde_json",
 ]
 
 [[package]]

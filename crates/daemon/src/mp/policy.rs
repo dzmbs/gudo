@@ -138,6 +138,11 @@ pub(crate) fn artifact(req: &proto::ArtifactRequest) -> (Need, Target) {
             None => (Need::Draw, Target::Any),
         },
         R::Send(s) => (Need::Draw, Target::Pane(s.pane_id)),
+        R::ExcalidrawGet { .. } => (Need::View, Target::Any),
+        R::ExcalidrawPut(_) | R::Unplace { .. } => (Need::Draw, Target::Any),
+        R::Place(p) => (Need::Draw, Target::Pane(p.pane_id)),
+        R::Import(i) => (Need::Draw, Target::Pane(i.pane_id)),
+        R::Placements { pane_id } => (Need::View, Target::Pane(*pane_id)),
     }
 }
 

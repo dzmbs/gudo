@@ -36,6 +36,7 @@ mod forward;
 mod fsutil;
 mod identity;
 mod input;
+mod kitty;
 mod layout;
 mod mp;
 mod net;
@@ -203,6 +204,7 @@ impl Daemon {
         for task in &self.tasks {
             task.abort();
         }
+        self.core.art.flush();
         if let Err(e) = persist::save(&self.core).await {
             tracing::warn!("saving layout on shutdown: {e}");
         }

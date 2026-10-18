@@ -579,6 +579,29 @@ impl Client {
                         }
                         (*event).clone()
                     }
+                    ArtifactEvent::Excalidraw { artifact_id, .. } => {
+                        let visible = self
+                            .core
+                            .art
+                            .info(*artifact_id)
+                            .is_some_and(|i| self.artifact_visible(&i));
+                        if !visible {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Placed(p) => {
+                        if !self.pane_allowed(p.pane_id) {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Unplaced { pane_id, .. } => {
+                        if !self.pane_allowed(*pane_id) {
+                            return;
+                        }
+                        (*event).clone()
+                    }
                     ArtifactEvent::Canvases {
                         session_id,
                         canvases,
@@ -606,6 +629,12 @@ impl Client {
             Scope::Tab(_) | Scope::Pane(_) => {
                 info.anchor.is_some_and(|a| self.pane_allowed(a.pane_id))
                     || info.canvas_panes.iter().any(|p| self.pane_allowed(*p))
+                    || self
+                        .core
+                        .art
+                        .placement_panes(info.artifact_id)
+                        .into_iter()
+                        .any(|p| self.pane_allowed(p))
             }
         }
     }
@@ -716,8 +745,10 @@ impl Client {
                 anchor,
             } => {
                 let info = self.visible_artifact(artifact_id)?;
-                if info.kind != proto::ArtifactKind::Drawing {
-                    return Err(ArtifactError::Invalid("only drawings are anchored".into()));
+                if info.kind == proto::ArtifactKind::Image {
+                    return Err(ArtifactError::Invalid(
+                        "images are placed (`Place`), not anchored".into(),
+                    ));
                 }
                 if let Some(old) = info.anchor
                     && let Some(entry) = core.pane(old.pane_id)
@@ -768,6 +799,105 @@ impl Client {
                 .await
                 .map_err(|e| ArtifactError::Failed(e.to_string()))?
                 .map(ArtifactResponse::Exported)
+            }
+            ArtifactRequest::ExcalidrawGet { artifact_id, since } => {
+                self.visible_artifact(artifact_id)?;
+                art.ex_get(artifact_id, since)
+                    .map(ArtifactResponse::Excalidraw)
+            }
+            ArtifactRequest::ExcalidrawPut(put) => {
+                self.visible_artifact(put.artifact_id)?;
+                let artifact_id = put.artifact_id;
+                let applied = art.ex_put(put)?;
+                if !applied.won.is_empty()
+                    || applied.app_state.is_some()
+                    || !applied.files.is_empty()
+                {
+                    core.emit_artifact(
+                        applied.info.session_id,
+                        ArtifactEvent::Excalidraw {
+                            artifact_id,
+                            version: applied.info.version,
+                            elements: applied.won,
+                            app_state: applied.app_state,
+                            files: applied.files,
+                        },
+                        Some(self.id),
+                    );
+                }
+                Ok(ArtifactResponse::ExcalidrawApplied {
+                    artifact_id,
+                    version: applied.info.version,
+                    rejected: applied.lost,
+                })
+            }
+            ArtifactRequest::Place(req) => {
+                self.visible_artifact(req.artifact_id)?;
+                if let Some(old) = req.replace {
+                    let mine = art
+                        .placement(old)
+                        .is_some_and(|p| self.pane_allowed(p.pane_id));
+                    if !mine {
+                        return Err(ArtifactError::NotFound(format!("placement {old}")));
+                    }
+                }
+                let core2 = Arc::clone(core);
+                let (placement, replaced) = tokio::task::spawn_blocking(move || {
+                    crate::art::place::place(&core2, req, proto::PlacementSource::User)
+                })
+                .await
+                .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                if let Some(session) = core.session_of_pane(placement.pane_id) {
+                    if let Some(old) = replaced {
+                        core.emit_artifact(
+                            session,
+                            ArtifactEvent::Unplaced {
+                                pane_id: old.pane_id,
+                                placement_id: old.placement_id,
+                            },
+                            None,
+                        );
+                    }
+                    core.emit_artifact(session, ArtifactEvent::Placed(placement.clone()), None);
+                }
+                Ok(ArtifactResponse::Placed(placement))
+            }
+            ArtifactRequest::Unplace { placement_id } => {
+                let p = art
+                    .placement(placement_id)
+                    .filter(|p| self.pane_allowed(p.pane_id))
+                    .ok_or_else(|| ArtifactError::NotFound(format!("placement {placement_id}")))?;
+                crate::art::place::unplace(core, placement_id);
+                if let Some(session) = core.session_of_pane(p.pane_id) {
+                    core.emit_artifact(
+                        session,
+                        ArtifactEvent::Unplaced {
+                            pane_id: p.pane_id,
+                            placement_id,
+                        },
+                        None,
+                    );
+                }
+                Ok(ArtifactResponse::Done)
+            }
+            ArtifactRequest::Placements { pane_id } => {
+                let _ = art.check_placements(core);
+                Ok(ArtifactResponse::Placements(art.placements(pane_id)))
+            }
+            ArtifactRequest::Import(req) => {
+                let (core2, actor) = (Arc::clone(core), self.actor);
+                let (placement, info) = tokio::task::spawn_blocking(move || {
+                    crate::art::place::import(&core2, actor, req)
+                })
+                .await
+                .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                core.emit_artifact(info.session_id, ArtifactEvent::Created(info.clone()), None);
+                core.emit_artifact(
+                    info.session_id,
+                    ArtifactEvent::Placed(placement.clone()),
+                    None,
+                );
+                Ok(ArtifactResponse::Placed(placement))
             }
             ArtifactRequest::Send(send) => {
                 if let Some(id) = send.artifact_id {
@@ -856,7 +986,8 @@ impl Client {
                 self.actor,
                 &proto::ArtifactCreate {
                     session_id: session,
-                    kind: proto::ArtifactKind::Drawing,
+                    // Canvas panes host the Excalidraw editor (finger, mouse, trackpad).
+                    kind: proto::ArtifactKind::Excalidraw,
                     title: String::new(),
                     space: proto::CoordSpace::Canvas,
                     anchor: None,
@@ -1456,6 +1587,14 @@ impl Client {
             session_id: session,
             canvases,
         }));
+        // Inline images in the session's panes: not part of Ghostty snapshots, so the
+        // daemon hands them over itself on every attach (resume, reattach, new device).
+        let _ = self.core.art.check_placements(&self.core);
+        for pane in panes_of(&self.core, session, scope) {
+            for p in self.core.art.placements(pane) {
+                self.send(ServerCtl::Artifact(ArtifactEvent::Placed(p)));
+            }
+        }
     }
 
     fn reclassify(&self) {
@@ -1518,4 +1657,16 @@ impl Client {
             },
         );
     }
+}
+
+/// Panes of a session visible to `scope`.
+fn panes_of(core: &Core, session: SessionId, scope: Scope) -> Vec<PaneId> {
+    core.layout_for(session, scope)
+        .map(|l| {
+            l.tabs
+                .iter()
+                .flat_map(|t| crate::layout::leaves(&t.root).collect::<Vec<_>>())
+                .collect()
+        })
+        .unwrap_or_default()
 }

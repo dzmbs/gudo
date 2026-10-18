@@ -229,6 +229,40 @@ impl Anchors {
         })
     }
 
+    /// Pins the cursor's row (an image displayed at the cursor, a placement with no row).
+    pub fn pin_cursor(
+        &mut self,
+        term: &mut Terminal,
+        seq: u64,
+        key: u64,
+    ) -> Result<AnchorPos, String> {
+        self.remove(term, key);
+        let at = term.cursor_point();
+        let y = at.y;
+        let pin = term.pin_at(Point { y, x: 0 }).map_err(|e| e.to_string())?;
+        let screen = if term.active_screen() == Screen::Alternate {
+            AnchorScreen::Alternate
+        } else {
+            AnchorScreen::Primary
+        };
+        let fb = from_bottom(term, Point { y, x: 0 });
+        self.pinned.insert(
+            key,
+            Pinned {
+                pin,
+                screen,
+                fingerprint: Fingerprint::take(term, y),
+                last_from_bottom: fb,
+            },
+        );
+        Ok(AnchorPos::Live {
+            screen,
+            at_seq: Seq(seq),
+            from_bottom: fb,
+            y: Some(y),
+        })
+    }
+
     /// Where `key` is now; `None` if unknown (never created, or already reported detached
     /// and removed).
     pub fn position(&mut self, term: &mut Terminal, seq: u64, key: u64) -> Option<AnchorPos> {

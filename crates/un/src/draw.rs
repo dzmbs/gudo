@@ -45,6 +45,21 @@ pub(crate) enum DrawCmd {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+    /// Show an artifact inline in a pane at its cursor row (as the app's "done" does).
+    Place {
+        id: u64,
+        /// The pane (default: focused).
+        #[arg(long)]
+        pane: Option<u64>,
+        #[arg(long)]
+        version: Option<u64>,
+    },
+    /// Turn an image or `.excalidraw` file into an artifact placed inline in a pane.
+    Import {
+        file: std::path::PathBuf,
+        #[arg(long)]
+        pane: Option<u64>,
+    },
     /// Hand a drawing (or a local PNG/JPEG file) to the agent in a pane: the daemon writes
     /// it on the host and pastes its path, which Claude Code and Codex attach as an image.
     Send {
@@ -72,6 +87,8 @@ pub(crate) enum ShowMode {
 pub(crate) enum Format {
     Png,
     Svg,
+    /// Box-glyph text (shapes, arrows, text) for terminals and agents.
+    Ascii,
 }
 
 pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
@@ -105,44 +122,83 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
                     .client
                     .artifact_export(id, version, ExportFormat::Png)
                     .await?;
-                print_kitty(&png)?;
+                print_kitty(&png, width)?;
                 return Ok(());
             }
-            match scene.info.kind {
-                ArtifactKind::Image => {
-                    let img = scene.info.image.context("image without blob")?;
-                    println!(
-                        "image {}×{}, {} bytes ({})",
-                        img.width,
-                        img.height,
-                        img.size,
-                        img.media.mime()
-                    );
+            let pure_ink = scene.info.kind == ArtifactKind::Drawing
+                && conn.client.artifact_scene(id).is_some_and(|(_, s)| {
+                    s.elements()
+                        .iter()
+                        .all(|e| matches!(e.kind, ElementKind::Stroke(_)))
+                });
+            if pure_ink {
+                let (_, s) = conn.client.artifact_scene(id).context("scene")?;
+                if version.is_some_and(|v| v != s.version) {
+                    bail!("past versions are shown with --mode kitty, or `un draw export`");
                 }
-                ArtifactKind::Drawing => {
-                    let (_, s) = conn
-                        .client
-                        .artifact_scene(id)
-                        .unwrap_or((scene.info.clone(), drawing::Scene::new()));
-                    if version.is_some_and(|v| v != s.version) {
-                        bail!("past versions are shown with --mode kitty, or `un draw export`");
-                    }
-                    print!("{}", summary(&s));
-                    let img = drawing::rasterize(
-                        &s,
-                        scene.info.space,
-                        drawing::RasterOptions {
-                            scale: if scene.info.space == CoordSpace::Cells {
-                                1.0
-                            } else {
-                                2.0
-                            },
-                            ..drawing::RasterOptions::default()
+                print!("{}", summary(&s));
+                let img = drawing::rasterize(
+                    &s,
+                    scene.info.space,
+                    drawing::RasterOptions {
+                        scale: if scene.info.space == CoordSpace::Cells {
+                            1.0
+                        } else {
+                            2.0
                         },
-                    );
-                    print!("{}", drawing::braille(&img, width));
-                }
+                        ..drawing::RasterOptions::default()
+                    },
+                );
+                print!("{}", drawing::braille(&img, width));
+            } else {
+                // Shapes, arrows and text read best as box glyphs (agents read this too).
+                let (_, text) = conn
+                    .client
+                    .artifact_export(id, version, ExportFormat::Ascii)
+                    .await?;
+                print!("{}", String::from_utf8_lossy(&text));
             }
+        }
+        DrawCmd::Place { id, pane, version } => {
+            let pane = match pane {
+                Some(p) => PaneId(p),
+                None => conn.tab()?.focused,
+            };
+            let p = conn
+                .client
+                .place(client_core::proto::PlaceRequest {
+                    pane_id: pane,
+                    artifact_id: ArtifactId(id),
+                    version,
+                    anchor: None,
+                    col: 0,
+                    cols: 0,
+                    rows: 0,
+                    png: None,
+                    replace: None,
+                })
+                .await?;
+            println!(
+                "placed artifact {} v{} in pane {pane} at the cursor row: {}×{} cells (placement {})",
+                p.artifact_id, p.version, p.cols, p.rows, p.placement_id
+            );
+        }
+        DrawCmd::Import { file, pane } => {
+            let pane = match pane {
+                Some(p) => PaneId(p),
+                None => conn.tab()?.focused,
+            };
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let name = file
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let p = conn.client.import_to_pane(pane, name, bytes).await?;
+            println!(
+                "imported as artifact {} and placed in pane {pane}: {}×{} cells",
+                p.artifact_id, p.cols, p.rows
+            );
         }
         DrawCmd::Export {
             id,
@@ -153,6 +209,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
             let format = match format {
                 Format::Png => ExportFormat::Png,
                 Format::Svg => ExportFormat::Svg,
+                Format::Ascii => ExportFormat::Ascii,
             };
             let (v, data) = conn
                 .client
@@ -218,6 +275,7 @@ fn line(info: &ArtifactInfo) -> String {
     let kind = match info.kind {
         ArtifactKind::Drawing => "drawing",
         ArtifactKind::Image => "image",
+        ArtifactKind::Excalidraw => "diagram",
     };
     let place = match (&info.anchor, info.canvas_panes.as_slice()) {
         (Some(a), _) => match a.state {
@@ -314,22 +372,34 @@ fn kitty_supported() -> bool {
     reply.contains("_Gi=31;OK")
 }
 
-/// Prints a PNG with the kitty graphics protocol (`f=100`, chunked base64).
-fn print_kitty(png: &[u8]) -> Result<()> {
+/// Prints a PNG with the kitty graphics protocol (`f=100`, chunked base64) at most `width`
+/// columns wide, then moves below it. The image is placed with `C=1` (cursor stays) and
+/// explicit `c`/`r`, and the rows are reserved with newlines, so the layout is the same in
+/// kitty, Ghostty, WezTerm and our own panes (whose daemon keeps the image as an inline
+/// placement).
+fn print_kitty(png: &[u8], width: usize) -> Result<()> {
+    let term_cols = rustix::termios::tcgetwinsize(rustix::stdio::stdout())
+        .map(|w| usize::from(w.ws_col))
+        .unwrap_or(80)
+        .max(1);
+    let (w, h) = drawing::sniff(png).map_or((1, 1), |(_, w, h)| (w.max(1), h));
+    // Images are 2× renders; a cell is about 9×18 points.
+    let cols = (w as usize / 18).clamp(1, width.min(term_cols));
+    let rows = ((cols as f64 * 9.0 * f64::from(h) / f64::from(w) / 18.0).round() as usize).max(1);
     let b64 = data_encoding::BASE64.encode(png);
     let mut out = std::io::stdout().lock();
     let chunks: Vec<&[u8]> = b64.as_bytes().chunks(4096).collect();
     for (i, chunk) in chunks.iter().enumerate() {
         let more = u8::from(i + 1 < chunks.len());
         if i == 0 {
-            write!(out, "\x1b_Ga=T,f=100,m={more};")?;
+            write!(out, "\x1b_Ga=T,f=100,C=1,q=2,c={cols},r={rows},m={more};")?;
         } else {
             write!(out, "\x1b_Gm={more};")?;
         }
         out.write_all(chunk)?;
         out.write_all(b"\x1b\\")?;
     }
-    out.write_all(b"\n")?;
+    out.write_all("\n".repeat(rows).as_bytes())?;
     out.flush()?;
     Ok(())
 }

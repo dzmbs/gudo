@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::anchor::{AnchorPos, Anchors, ScrollLog};
 use crate::commands::{CommandLog, CommandUpdate};
+use crate::kitty::KittyScanner;
 use crate::osc::{Osc, OscScanner};
 use crate::scan::{self, LinkCollector, ScreenText};
 
@@ -48,6 +49,15 @@ pub(crate) enum VtEvent {
     Activity,
     /// Shell integration reported a prompt or command step.
     Command(CommandUpdate),
+    /// A program displayed a PNG with the kitty graphics protocol; its top-left cell (the
+    /// cursor when the sequence ended) is pinned under `key`.
+    KittyImage {
+        key: u64,
+        png: Vec<u8>,
+        col: u16,
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// A resize applied at an output offset, numbered in order of application.
@@ -78,11 +88,34 @@ struct Vt {
     /// Rows scrolled per output chunk, for resolving client row positions.
     scroll: ScrollLog,
     anchors: Anchors,
+    kitty: KittyScanner,
+    next_kitty: u64,
 }
 
 impl Vt {
     fn feed(&mut self, seq: pty::Seq, data: &[u8]) {
-        self.term.write(data);
+        // Write up to the end of each kitty image so its cell can be pinned where the
+        // program put it (the cursor at that moment).
+        let images = self.kitty.feed(data);
+        let mut written = 0;
+        for img in images {
+            self.term.write(&data[written..img.end]);
+            written = img.end;
+            let key = (1 << 62) | self.next_kitty;
+            self.next_kitty += 1;
+            let at = seq.get() + img.end as u64;
+            let col = self.term.cursor().x;
+            if self.anchors.pin_cursor(&mut self.term, at, key).is_ok() {
+                let _ = self.events.send(VtEvent::KittyImage {
+                    key,
+                    png: img.png,
+                    col,
+                    cols: img.cols,
+                    rows: img.rows,
+                });
+            }
+        }
+        self.term.write(&data[written..]);
         self.seq = seq.get() + data.len() as u64;
         let prompts = self.term.take_semantic_prompts();
         if !prompts.is_empty() {
@@ -217,6 +250,8 @@ impl Pane {
             events,
             scroll: ScrollLog::default(),
             anchors: Anchors::default(),
+            kitty: KittyScanner::default(),
+            next_kitty: 0,
         }));
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
@@ -599,6 +634,13 @@ impl Pane {
             _ => None,
         };
         Ok((pos, command))
+    }
+
+    /// Pins the cursor's row under `key`.
+    pub fn anchor_cursor(&self, key: u64) -> Result<AnchorPos, String> {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        vt.anchors.pin_cursor(&mut vt.term, vt.seq, key)
     }
 
     /// Where anchor `key` is now (`None`: unknown, or detached and already reported).

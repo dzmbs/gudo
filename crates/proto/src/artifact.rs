@@ -86,6 +86,9 @@ pub enum ArtifactKind {
     Drawing,
     /// One image (pasted, dropped, a screenshot or photo).
     Image,
+    /// An Excalidraw scene (the canvas editor for finger, mouse and trackpad): elements kept
+    /// as Excalidraw's own JSON, reconciled per element ([`ExElement`]).
+    Excalidraw,
 }
 
 /// The coordinate space of a drawing's elements.
@@ -443,6 +446,9 @@ pub enum ExportFormat {
     Png,
     /// SVG written by the daemon from the vector elements.
     Svg,
+    /// Text: box-drawing glyphs for shapes and arrows (termdraw style), text as is, ink as
+    /// dots. For terminals without graphics and for agents that read text.
+    Ascii,
 }
 
 /// The PNG a send uses.
@@ -532,6 +538,164 @@ pub enum ArtifactRequest {
     },
     /// → [`ArtifactResponse::Sent`].
     Send(ArtifactSend),
+    /// An Excalidraw scene's elements changed after `since` (0 = all) →
+    /// [`ArtifactResponse::Excalidraw`].
+    ExcalidrawGet {
+        /// The scene.
+        artifact_id: ArtifactId,
+        /// Revision the client has (0 = none).
+        since: u64,
+    },
+    /// Offers changed Excalidraw elements → [`ArtifactResponse::ExcalidrawApplied`]. Each
+    /// element is kept if its `version` is higher than the stored one, or equal with a lower
+    /// `version_nonce` (Excalidraw's own reconciliation); the others come back as the stored
+    /// winners.
+    ExcalidrawPut(ExcalidrawPut),
+    /// Shows an artifact inline in a terminal pane, glued to an output row →
+    /// [`ArtifactResponse::Placed`]. Replaces `replace` (re-opened and edited in place).
+    Place(PlaceRequest),
+    /// Removes an inline placement → [`ArtifactResponse::Done`].
+    Unplace {
+        /// The placement.
+        placement_id: u64,
+    },
+    /// A pane's inline placements → [`ArtifactResponse::Placements`].
+    Placements {
+        /// The pane.
+        pane_id: PaneId,
+    },
+    /// An image (PNG, JPEG) or an `.excalidraw` file pasted or dropped onto a terminal pane:
+    /// it becomes an artifact placed inline at the cursor row → [`ArtifactResponse::Placed`].
+    Import(ImportRequest),
+}
+
+/// One Excalidraw element as the editor holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExElement {
+    /// Excalidraw's element id.
+    pub id: String,
+    /// Excalidraw's `version` (bumped on every change).
+    pub version: u64,
+    /// Excalidraw's `versionNonce` (random per change; the lower one wins a version tie).
+    pub version_nonce: u32,
+    /// `isDeleted` (deleted elements stay as tombstones so peers learn of the deletion).
+    pub deleted: bool,
+    /// The element as JSON, verbatim.
+    pub json: String,
+}
+
+/// An image the scene references: Excalidraw's `fileId` and the blob holding it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExFile {
+    /// Excalidraw's file id.
+    pub file_id: String,
+    /// The blob (upload it first).
+    pub image: ImageRef,
+}
+
+/// Changed elements, app state and files of an Excalidraw scene.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcalidrawPut {
+    /// The scene.
+    pub artifact_id: ArtifactId,
+    /// Revision the client last saw (informational).
+    pub base: u64,
+    /// Changed elements (whole elements, not patches).
+    pub elements: Vec<ExElement>,
+    /// The persistent part of `appState` as JSON (background, grid), if it changed.
+    pub app_state: Option<String>,
+    /// Images newly referenced.
+    pub files: Vec<ExFile>,
+}
+
+/// An Excalidraw scene, or what changed in it after a revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExcalidrawScene {
+    /// The artifact; `info.version` is the scene's revision.
+    pub info: ArtifactInfo,
+    /// Every element (tombstones included) when `since` was 0, else those changed after it.
+    pub elements: Vec<ExElement>,
+    /// The persistent app state JSON.
+    pub app_state: Option<String>,
+    /// Every file the scene references.
+    pub files: Vec<ExFile>,
+}
+
+/// Where a placement came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PlacementSource {
+    /// A person finished drawing on the pane, or placed / imported an artifact.
+    User,
+    /// A program in the pane printed it with the kitty graphics protocol (for example
+    /// `un draw show`); the daemon kept the image so it survives snapshots and resumes.
+    Kitty,
+}
+
+/// An artifact shown inline in a terminal pane: a `cols × rows` cell box whose top-left cell
+/// is column `col` of the anchored row. It scrolls with the output (the anchor is a tracked
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Placement {
+    /// Daemon-assigned id, never reused.
+    pub placement_id: u64,
+    /// The pane.
+    pub pane_id: PaneId,
+    /// What is shown.
+    pub artifact_id: ArtifactId,
+    /// The artifact version shown (the image is that version's render).
+    pub version: u64,
+    /// The image drawn: the artifact's image, or a render of `version`.
+    pub image: ImageRef,
+    /// The row.
+    pub anchor: RowAnchor,
+    /// First column.
+    pub col: u16,
+    /// Width in cells.
+    pub cols: u16,
+    /// Height in cells.
+    pub rows: u16,
+    /// Who placed it.
+    pub source: PlacementSource,
+    /// When.
+    pub at: UnixMillis,
+}
+
+/// Places an artifact inline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceRequest {
+    /// The pane.
+    pub pane_id: PaneId,
+    /// The artifact.
+    pub artifact_id: ArtifactId,
+    /// The version (`None` = current).
+    pub version: Option<u64>,
+    /// The row; `None` = the cursor's row now.
+    pub anchor: Option<AnchorRequest>,
+    /// First column.
+    pub col: u16,
+    /// Size in cells; `0` derives it from the image (at most the pane's width).
+    pub cols: u16,
+    /// Height in cells; `0` derives it from the image's aspect ratio.
+    pub rows: u16,
+    /// This device's render of the version (Excalidraw's hand-drawn look, ink); `None` uses
+    /// the image, the preview, or the daemon's render.
+    pub png: Option<BlobHash>,
+    /// A placement this one replaces (the overlay was re-opened and edited).
+    pub replace: Option<u64>,
+}
+
+/// A file pasted or dropped onto a pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportRequest {
+    /// The pane.
+    pub pane_id: PaneId,
+    /// The file name (its extension picks the kind: `.excalidraw` / `.json` scene, else an
+    /// image sniffed from its bytes).
+    pub name: String,
+    /// The content: inline (≤ 1 MiB) …
+    #[serde(with = "crate::serde_bytes")]
+    pub data: Vec<u8>,
+    /// … or an uploaded blob (images only).
+    pub blob: Option<BlobHash>,
 }
 
 /// One change log slice or a full scene.
@@ -600,6 +764,21 @@ pub enum ArtifactResponse {
     Sent(Sent),
     /// Done.
     Done,
+    /// An Excalidraw scene or its changes.
+    Excalidraw(ExcalidrawScene),
+    /// Elements offered by [`ArtifactRequest::ExcalidrawPut`] were reconciled.
+    ExcalidrawApplied {
+        /// The scene.
+        artifact_id: ArtifactId,
+        /// The scene's revision now.
+        version: u64,
+        /// Offered elements that lost, as the stored winners (apply them locally).
+        rejected: Vec<ExElement>,
+    },
+    /// The placement made.
+    Placed(Placement),
+    /// A pane's placements.
+    Placements(Vec<Placement>),
 }
 
 /// Why an artifact request failed.
@@ -697,6 +876,28 @@ pub enum ArtifactEvent {
         session_id: SessionId,
         /// Every canvas pane in it.
         canvases: Vec<CanvasPane>,
+    },
+    /// Excalidraw elements someone else changed (apply with the same reconciliation).
+    Excalidraw {
+        /// The scene.
+        artifact_id: ArtifactId,
+        /// Its revision after the change.
+        version: u64,
+        /// The changed elements that won.
+        elements: Vec<ExElement>,
+        /// New app state, if it changed.
+        app_state: Option<String>,
+        /// Newly referenced images.
+        files: Vec<ExFile>,
+    },
+    /// An inline placement was made, replaced or changed (its anchor detached).
+    Placed(Placement),
+    /// An inline placement was removed.
+    Unplaced {
+        /// The pane.
+        pane_id: PaneId,
+        /// The placement.
+        placement_id: u64,
     },
 }
 

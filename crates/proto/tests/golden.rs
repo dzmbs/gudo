@@ -521,6 +521,7 @@ fn every_message_matches_its_frozen_bytes() {
     workspace_messages(&mut c);
     multiplayer_messages(&mut c);
     artifact_messages(&mut c);
+    artifact_messages_2(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -2695,4 +2696,180 @@ fn artifact_messages(c: &mut Checker) {
         "03000000010300",
     );
     c.check("Caps::ARTIFACTS", Caps::ARTIFACTS, "020000000108");
+}
+
+
+fn ex_element() -> ExElement {
+    ExElement {
+        id: "r1".into(),
+        version: 4,
+        version_nonce: 77,
+        deleted: false,
+        json: r#"{"id":"r1"}"#.into(),
+    }
+}
+
+fn ex_file() -> ExFile {
+    ExFile {
+        file_id: "f1".into(),
+        image: image_ref(),
+    }
+}
+
+fn placement() -> Placement {
+    Placement {
+        placement_id: 8,
+        pane_id: PANE,
+        artifact_id: ArtifactId(5),
+        version: 3,
+        image: image_ref(),
+        anchor: row_anchor(),
+        col: 2,
+        cols: 40,
+        rows: 12,
+        source: PlacementSource::User,
+        at: UnixMillis(30),
+    }
+}
+
+fn artifact_messages_2(c: &mut Checker) {
+    let req = |req: ArtifactRequest| ClientCtl::Artifact { req_id: 6, req };
+    let res = |result: Result<ArtifactResponse, ArtifactError>| ServerCtl::ArtifactResult {
+        req_id: 6,
+        result,
+    };
+    for (name, msg, golden) in [
+        (
+            "ClientCtl::Artifact(Export Ascii)",
+            req(ArtifactRequest::Export {
+                artifact_id: ArtifactId(5),
+                version: None,
+                format: ExportFormat::Ascii,
+            }),
+            "0700000001170607050002",
+        ),
+        (
+            "ClientCtl::Artifact(ExcalidrawGet)",
+            req(ArtifactRequest::ExcalidrawGet {
+                artifact_id: ArtifactId(5),
+                since: 9,
+            }),
+            "06000000011706090509",
+        ),
+        (
+            "ClientCtl::Artifact(ExcalidrawPut)",
+            req(ArtifactRequest::ExcalidrawPut(ExcalidrawPut {
+                artifact_id: ArtifactId(5),
+                base: 9,
+                elements: vec![ex_element()],
+                app_state: Some("{}".into()),
+                files: vec![ex_file()],
+            })),
+            "480000000117060a050901027231044d000b7b226964223a227231227d01027b7d01026631555555555555555555555555555555555555555555555555555555555555555500e8078005e003",
+        ),
+        (
+            "ClientCtl::Artifact(Place)",
+            req(ArtifactRequest::Place(PlaceRequest {
+                pane_id: PANE,
+                artifact_id: ArtifactId(5),
+                version: Some(3),
+                anchor: Some(AnchorRequest {
+                    pane_id: PANE,
+                    at_seq: Seq(800),
+                    from_bottom: 3,
+                }),
+                col: 2,
+                cols: 0,
+                rows: 0,
+                png: Some(HASH),
+                replace: Some(7),
+            })),
+            "330000000117060b030501030103a006030200000155555555555555555555555555555555555555555555555555555555555555550107",
+        ),
+        (
+            "ClientCtl::Artifact(Unplace)",
+            req(ArtifactRequest::Unplace { placement_id: 8 }),
+            "050000000117060c08",
+        ),
+        (
+            "ClientCtl::Artifact(Placements)",
+            req(ArtifactRequest::Placements { pane_id: PANE }),
+            "050000000117060d03",
+        ),
+        (
+            "ClientCtl::Artifact(Import)",
+            req(ArtifactRequest::Import(ImportRequest {
+                pane_id: PANE,
+                name: "a.excalidraw".into(),
+                data: b"{}".to_vec(),
+                blob: None,
+            })),
+            "160000000117060e030c612e657863616c6964726177027b7d00",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
+    for (name, msg, golden) in [
+        (
+            "ServerCtl::ArtifactResult(Excalidraw)",
+            res(Ok(ArtifactResponse::Excalidraw(ExcalidrawScene {
+                info: ArtifactInfo {
+                    kind: ArtifactKind::Excalidraw,
+                    ..artifact_info()
+                },
+                elements: vec![ex_element()],
+                app_state: None,
+                files: vec![ex_file()],
+            }))),
+            "b300000001220600080502020174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c010400010901027231044d000b7b226964223a227231227d0001026631555555555555555555555555555555555555555555555555555555555555555500e8078005e003",
+        ),
+        (
+            "ServerCtl::ArtifactResult(ExcalidrawApplied)",
+            res(Ok(ArtifactResponse::ExcalidrawApplied {
+                artifact_id: ArtifactId(5),
+                version: 10,
+                rejected: vec![ex_element()],
+            })),
+            "1a0000000122060009050a01027231044d000b7b226964223a227231227d",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Placed)",
+            res(Ok(ArtifactResponse::Placed(placement()))),
+            "3d000000012206000a08030503555555555555555555555555555555555555555555555555555555555555555500e8078005e003030084070c01040002280c001e",
+        ),
+        (
+            "ServerCtl::ArtifactResult(Placements)",
+            res(Ok(ArtifactResponse::Placements(vec![Placement {
+                source: PlacementSource::Kitty,
+                ..placement()
+            }]))),
+            "3e000000012206000b0108030503555555555555555555555555555555555555555555555555555555555555555500e8078005e003030084070c01040002280c011e",
+        ),
+        (
+            "ServerCtl::Artifact(Excalidraw)",
+            ServerCtl::Artifact(ArtifactEvent::Excalidraw {
+                artifact_id: ArtifactId(5),
+                version: 10,
+                elements: vec![ex_element()],
+                app_state: Some("{}".into()),
+                files: vec![],
+            }),
+            "1d000000012306050a01027231044d000b7b226964223a227231227d01027b7d00",
+        ),
+        (
+            "ServerCtl::Artifact(Placed)",
+            ServerCtl::Artifact(ArtifactEvent::Placed(placement())),
+            "3b00000001230708030503555555555555555555555555555555555555555555555555555555555555555500e8078005e003030084070c01040002280c001e",
+        ),
+        (
+            "ServerCtl::Artifact(Unplaced)",
+            ServerCtl::Artifact(ArtifactEvent::Unplaced {
+                pane_id: PANE,
+                placement_id: 8,
+            }),
+            "050000000123080308",
+        ),
+    ] {
+        c.check(name, msg, golden);
+    }
 }
