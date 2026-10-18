@@ -19,8 +19,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use client_core::proto::{
-    AgentKind, Axis, Direction, LayoutOp, OpOutcome, PaneId, PaneLaunch, PaneSize, SessionId,
-    SessionLayout, SessionSummary, TabLayout,
+    AgentKind, Axis, Direction, LayoutNode, LayoutOp, OpOutcome, PaneId, PaneLaunch, PaneSize,
+    SessionId, SessionLayout, SessionSummary, TabLayout,
 };
 use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
 use tokio::io::AsyncReadExt;
@@ -580,6 +580,7 @@ async fn attach(mut conn: Conn) -> Result<()> {
     let mut buf = [0u8; 4096];
     let mut pane = conn.tab()?.focused;
     follow(&conn.client, pane);
+    show_position(conn.layout(), pane);
 
     loop {
         tokio::select! {
@@ -618,6 +619,7 @@ async fn attach(mut conn: Conn) -> Result<()> {
                         pane = focused;
                         follow(&conn.client, pane);
                     }
+                    show_position(&layout, pane);
                 }
                 ClientEvent::Disconnected { .. } => {
                     // Shown in the window title so the screen stays intact.
@@ -655,6 +657,33 @@ async fn attach(mut conn: Conn) -> Result<()> {
     drop(_raw);
     println!("\r\n[detached]");
     Ok(())
+}
+
+/// Names the attached pane in the outer terminal's title, since `attach` shows one pane at a time
+/// and fresh panes look identical.
+fn show_position(layout: &SessionLayout, pane: PaneId) {
+    fn leaves(node: &LayoutNode) -> usize {
+        match node {
+            LayoutNode::Leaf(_) => 1,
+            LayoutNode::Split { first, second, .. } => leaves(first) + leaves(second),
+        }
+    }
+    let Some((index, tab)) = layout
+        .tabs
+        .iter()
+        .enumerate()
+        .find(|(_, t)| Some(t.tab_id) == layout.active_tab)
+    else {
+        return;
+    };
+    let title = format!(
+        "un · {} · tab {}/{} · pane {pane} ({} in tab)",
+        layout.name,
+        index + 1,
+        layout.tabs.len(),
+        leaves(&tab.root),
+    );
+    write_out(format!("\x1b]2;{title}\x07").as_bytes());
 }
 
 fn follow(client: &Client, pane: PaneId) {
