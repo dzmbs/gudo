@@ -1,0 +1,18 @@
+[package]
+name = "spike-transport"
+version = "0.0.0"
+description = "SPIKE (throwaway): iroh stream priorities, keystroke latency and pane backpressure (05 §9 S4)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+iroh.workspace = true
+proto.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[lints]
+workspace = true

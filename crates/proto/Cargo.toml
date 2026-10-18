@@ -1,0 +1,16 @@
+[package]
+name = "proto"
+version = "0.0.0"
+description = "Wire types and framing for the client <-> daemon protocol (no async runtime, no transport)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+brand.workspace = true
+postcard.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

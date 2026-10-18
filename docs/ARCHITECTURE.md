@@ -46,7 +46,8 @@ One iroh connection per (device, daemon), ALPN `unnamed/1`, postcard/CBOR, every
 | `bulk` | 1 | Scrollback pages, files, images |
 
 - Background panes send metadata only. Per-pane unacked budget; exceeding it → stop bytes, send one snapshot
-  later.
+  the budget does (+9 ms). Size it as **link rate × allowed added delay** (≈32 KB at 20 Mbit/s for ~10 ms),
+  not bandwidth × RTT × 2 (+39 ms). Rate-limit snapshots of a flooding pane. Snapshots are zstd-compressed
 - Resume: client paints its own cached snapshot instantly (dimmed), re-dials, daemon replays from ring
 - Echo prediction from real PTY facts (`ECHO`/`ICANON`, alt screen, OSC 133) — never predicts at password
 - Client and daemon must run the same Ghostty snapshot format version → handshake checks it and offers a
