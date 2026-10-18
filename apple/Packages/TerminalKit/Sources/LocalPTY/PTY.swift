@@ -1,3 +1,4 @@
+import CPTYSpawn
 import Darwin
 import Foundation
 
@@ -9,8 +10,8 @@ public final class PTY: Sendable {
     private let reader: DispatchSourceRead
     private let reaper: DispatchSourceProcess
 
-    /// Spawns `argv` as a session leader whose controlling terminal is the PTY's slave side, in
-    /// `workingDirectory` if given. Output is not read until `start(onOutput:onExit:)`.
+    /// Spawns `argv` as a session leader whose controlling terminal is the PTY's slave side (so ^C
+    /// and ^Z become signals), in `workingDirectory` if given. Output is not read until `start(onOutput:onExit:)`.
     public init(
         argv: [String], environment: [String: String], workingDirectory: String? = nil, cols: UInt16, rows: UInt16
     ) throws {
@@ -21,29 +22,18 @@ public final class PTY: Sendable {
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         _ = ioctl(master, TIOCSWINSZ, &size)
 
-        var attributes = posix_spawnattr_t(nil as OpaquePointer?)
-        posix_spawnattr_init(&attributes)
-        defer { posix_spawnattr_destroy(&attributes) }
-        // setsid() runs before the file actions, so opening the slave makes it the controlling tty.
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
-
-        var actions = posix_spawn_file_actions_t(nil as OpaquePointer?)
-        posix_spawn_file_actions_init(&actions)
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawn_file_actions_addopen(&actions, 0, slaveName, O_RDWR, 0)
-        posix_spawn_file_actions_adddup2(&actions, 0, 1)
-        posix_spawn_file_actions_adddup2(&actions, 0, 2)
-        if let workingDirectory { posix_spawn_file_actions_addchdir(&actions, workingDirectory) }
-
         let cArgv = argv.map { strdup($0) } + [nil]
         let cEnv = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-        defer { (cArgv + cEnv).forEach { free($0) } }
-        var pid: pid_t = 0
-        let status = posix_spawn(&pid, argv[0], &actions, &attributes, cArgv, cEnv)
-        guard status == 0 else {
+        let cwd = workingDirectory.map { strdup($0) } ?? nil
+        defer { (cArgv + cEnv + [cwd]).forEach { free($0) } }
+        let pid = un_pty_spawn(slaveName, argv[0], cArgv, cEnv, cwd)
+        guard pid > 0 else {
+            let error = errno
             close(master)
-            throw POSIXError(.init(rawValue: status) ?? .EIO)
+            throw POSIXError(.init(rawValue: error) ?? .EIO)
         }
+        // The child closed its copy; keep the master out of any later children.
+        _ = fcntl(master, F_SETFD, FD_CLOEXEC)
         self.fd = master
         self.pid = pid
 
