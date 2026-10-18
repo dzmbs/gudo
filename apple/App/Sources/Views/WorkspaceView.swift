@@ -294,7 +294,7 @@ struct ActiveTabView: View {
                 let isSplit = single == nil && tab.root.panes.count > 1
                 SplitTreeView(node: single.map(Node.leaf) ?? tab.root, workspace: workspace, isSplit: isSplit)
                     .padding(paneStyle == .comfortable && isSplit ? DS.Space.xs + 2 : 0)
-                    .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background)
+                    .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
                     .connectionOverlay(
                         model.connection, hostName: "studio",
                         onRetry: { model.connection = .connected },
@@ -303,7 +303,7 @@ struct ActiveTabView: View {
                 WelcomeView(workspace: workspace)
             }
         }
-        .background(theme.background)
+        .background(theme.background, ignoresSafeAreaEdges: [])
     }
 }
 
@@ -339,6 +339,15 @@ private struct WelcomeView: View {
         .accessibilityIdentifier("welcome")
     }
 
+    /// Shortcut hints only where a hardware keyboard is likely (not on iPhone).
+    private var showsShortcuts: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom != .phone
+        #else
+        true
+        #endif
+    }
+
     private func welcomeRow(_ title: String, systemImage: String, keys: [String]?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: DS.Space.m) {
@@ -347,7 +356,7 @@ private struct WelcomeView: View {
                     .foregroundStyle(theme.foreground.opacity(0.6))
                 Text(title).foregroundStyle(theme.foreground)
                 Spacer()
-                if let keys { ShortcutLabel(keys) }
+                if let keys, showsShortcuts { ShortcutLabel(keys) }
             }
             .padding(.horizontal, DS.Space.m)
             .padding(.vertical, DS.Space.s + 1)
@@ -383,11 +392,11 @@ private struct SheetContent: View {
             }
         case .browser:
             BrowserView(initialURL: URL(string: "https://ghostty.org/docs")!)
-                .frame(minWidth: 640, minHeight: 480)
+                .macMinimumSize(width: 640, height: 480)
                 .presentationSizing(.page)
         case .editor:
             EditorView(source: model.files, path: "~/projects/unnamed/Cargo.toml")
-                .frame(minWidth: 640, minHeight: 480)
+                .macMinimumSize(width: 640, height: 480)
                 .presentationSizing(.page)
         case .settings:
             SettingsView()
@@ -403,7 +412,7 @@ private struct SheetContent: View {
                     }
                 }
         }
-        .frame(minWidth: 640, minHeight: 520)
+        .macMinimumSize(width: 640, height: 520)
         // Code and file lists need the room: a page sheet on iPad, not a form sheet.
         .presentationSizing(.page)
     }

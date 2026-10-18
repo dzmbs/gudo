@@ -7,6 +7,8 @@ One multiplatform SwiftUI app (iPhone, iPad, Mac; iOS/iPadOS/macOS 26+) over thr
 | `App/Sources` | The app: `Workspace` (one window: layout + live panes), split/tab views, menu commands, iOS key bar, pane backends |
 | `App/UITests` | Hardware-keyboard UI tests (splits, zoom, focus, tabs, key bar) |
 | `Packages/PaneLayout` | Layout model shared in spirit with the daemon: Session → Tab → split tree, `LayoutOp`, `LayoutStore` |
+| `Packages/DesignSystem` | Tokens, Liquid Glass components, Ghostty overlays (resize, search, palette, exit bar), agent status, the 463 Ghostty themes; spec in `docs/DESIGN.md` |
+| `App/Sources/Screens` | Hosts, pairing, Inbox, share, links, diff, files, browser, editor: views over the protocols in `App/Sources/Model/ScreenModels.swift` (mock data in `MockData.swift`) |
 | `Packages/TerminalKit` | libghostty-vt wrapper (`TerminalCore`), Metal renderer + AppKit/UIKit `TerminalView` (`TerminalRenderer`), `LocalPTY` (macOS) |
 | `Brand.xcconfig` | Product name and bundle id prefix; nothing else hard-codes them |
 | `project.yml` | XcodeGen spec; `App.xcodeproj` is generated and not committed |
@@ -106,6 +108,19 @@ the program).
 Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typing 0.03 ms/frame build;
 sprite screen full redraw 0.61 ms avg / 0.66 ms p99; selection drag (whole viewport dirty every frame)
 0.60 ms avg / 0.67 ms p99; GPU ≤ 0.3 ms avg. All within the ~2 ms budget.
+
+## Design review
+
+Every screen opens directly with mock data: `-screen <name> -mock` (names in `docs/DESIGN.md`,
+e.g. `splits`, `inbox`, `palette`, `diff`). Screenshots in light and dark:
+
+```sh
+scripts/mac-screenshots.sh build/DerivedData/Build/Products/Debug/unnamed.app out  # Mac, works while locked
+```
+
+The Mac script uses the Debug-only `-snapshot <png>` switch (the app draws its own window; glass and
+the vibrant sidebar do not draw that way and show white). UI tests that paste need the
+simulator's paste permission: `xcrun simctl privacy "$DEVICE" grant pasteboard dev.unnamed.app`.
 
 ## Shortcuts (Ghostty defaults)
 

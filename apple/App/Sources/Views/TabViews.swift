@@ -213,7 +213,7 @@ private struct AgentsSection: View {
                         HStack(spacing: DS.Space.s + 2) {
                             StatusIndicator(row.state, size: 12)
                                 .frame(width: 16)
-                            Text(model.paneStatus.program(of: row.pane.description) ?? row.pane.description)
+                            Text(model.paneStatus.program(of: row.pane.description) ?? workspace.programName(of: row.pane))
                                 .font(DS.Font.rowTitle)
                                 .lineLimit(1)
                             Text("\(row.index + 1)")

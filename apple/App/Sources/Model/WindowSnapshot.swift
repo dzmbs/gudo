@@ -38,6 +38,17 @@ enum WindowSnapshot {
             }
             NSGraphicsContext.restoreGraphicsState()
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            // Vibrant (sidebar) content does not draw into `cacheDisplay`; list what is there instead.
+            var lines: [String] = []
+            func visit(_ view: NSView, depth: Int) {
+                if let table = view as? NSTableView {
+                    let frame = table.convert(table.bounds, to: nil)
+                    lines.append("\(type(of: table)) rows=\(table.numberOfRows) frame=\(frame) visible=\(!table.isHiddenOrHasHiddenAncestor)")
+                }
+                view.subviews.forEach { visit($0, depth: depth + 1) }
+            }
+            visit(frameView, depth: 0)
+            try? lines.joined(separator: "\n").write(toFile: path + ".txt", atomically: true, encoding: .utf8)
             if UserDefaults.standard.bool(forKey: "snapshotQuit") { NSApp.terminate(nil) }
         }
     }

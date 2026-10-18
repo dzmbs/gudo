@@ -101,6 +101,12 @@ final class Workspace {
         return foregrounds[tab.focused]?.shortDirectory
     }
 
+    /// What a pane runs, for headers and lists: the reported program, else what the PTY says,
+    /// else "shell". Never the pane id, which UI tests use as the terminal's identifier.
+    func programName(of pane: PaneId) -> String {
+        panes[pane]?.foregroundProgram ?? foregrounds[pane]?.program ?? "shell"
+    }
+
     /// The focused pane's absolute directory, for the window's represented folder.
     func absoluteDirectory(of tab: Tab) -> String? {
         if let pwd = panes[tab.focused]?.workingDirectory, !pwd.isEmpty { return pwd }

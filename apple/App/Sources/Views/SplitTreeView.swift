@@ -184,7 +184,7 @@ struct PaneSlot: View {
                 UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background)
             }
         }
-        .background(theme.background)
+        .background(theme.background, ignoresSafeAreaEdges: [])
         .clipShape(.rect(cornerRadius: paneStyle == .comfortable && isSplit ? DS.Radius.pane : 0))
     }
 
@@ -220,7 +220,7 @@ private struct PaneHeader: View {
             if let state {
                 StatusIndicator(state, size: 10)
             }
-            Text(model.paneStatus.program(of: id.description) ?? id.description)
+            Text(model.paneStatus.program(of: id.description) ?? workspace.programName(of: id))
                 .font(.caption.weight(isFocused ? .semibold : .regular))
                 .foregroundStyle(theme.foreground.opacity(isFocused ? 0.9 : 0.6))
                 .lineLimit(1)
@@ -249,7 +249,7 @@ private struct PaneHeader: View {
         .padding(.leading, DS.Space.s)
         .padding(.trailing, DS.Space.xxs)
         .frame(height: Self.height)
-        .background(theme.background)
+        .background(theme.background, ignoresSafeAreaEdges: [])
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.splitDivider).frame(height: 1)
         }
