@@ -7,5 +7,12 @@ name = "brand"
 version = "0.0.0"
 
 [[package]]
+name = "ghostty-vt"
+version = "0.0.0"
+dependencies = [
+ "ghostty-vt-sys",
+]
+
+[[package]]
 name = "ghostty-vt-sys"
 version = "0.0.0"
