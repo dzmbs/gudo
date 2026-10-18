@@ -14,6 +14,8 @@ final class Pane {
     private let backend: any PaneBackend
     private var appliedGrid: TerminalSurface.Grid?
     private var resizeTask: Task<Void, Never>?
+    /// Every grid change, undebounced, for the cols × rows overlay.
+    var onGridChange: ((TerminalSurface.Grid) -> Void)?
 
     /// PTY resizes (SIGWINCH) are debounced so a divider drag does not make TUIs redraw on every
     /// frame (04-mobile-ux C3).
@@ -35,12 +37,17 @@ final class Pane {
             onExit: onExit)
     }
 
+    func foreground() -> PaneForeground? {
+        backend.foreground()
+    }
+
     func terminate() {
         resizeTask?.cancel()
         backend.terminate()
     }
 
     private func gridChanged(_ grid: TerminalSurface.Grid) {
+        onGridChange?(grid)
         resizeTask?.cancel()
         // The first layout applies at once, so the shell starts at the real size.
         guard appliedGrid != nil else { return applyGrid(grid) }

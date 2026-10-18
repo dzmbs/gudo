@@ -1,5 +1,6 @@
 #if !os(macOS)
 import Dispatch
+import Foundation
 import PaneLayout
 import Synchronization
 
@@ -40,6 +41,10 @@ nonisolated final class EchoBackend: PaneBackend {
 
     func terminate() {
         state.withLock { $0.onOutput = nil }
+    }
+
+    func foreground() -> PaneForeground? {
+        PaneForeground(program: "zsh", directory: NSHomeDirectory())
     }
 
     private func handle(_ input: [UInt8]) {

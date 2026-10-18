@@ -1,7 +1,9 @@
+import DesignSystem
 import PaneLayout
 import Observation
 #if os(iOS)
 import GameController
+import UIKit
 #endif
 
 /// One window's state: the layout (behind `LayoutStore`) and the live panes it references.
@@ -15,6 +17,14 @@ final class Workspace {
     private(set) var failures: [PaneId: String] = [:]
     /// The tab whose rename prompt is showing.
     var renamingTab: TabId?
+    /// Each pane's terminal grid, for the resize overlay.
+    private(set) var grids: [PaneId: GridSize] = [:]
+    /// Transient per-pane states drawn over the terminal (Ghostty's surface overlays).
+    var notices: [PaneId: PaneNotice] = [:]
+    /// What runs in each pane (program and directory), refreshed about once a second.
+    private(set) var foregrounds: [PaneId: PaneForeground] = [:]
+    /// Until when grid changes come from the software keyboard rather than the user.
+    @ObservationIgnored private(set) var keyboardResizeUntil = ContinuousClock.now
 
     #if os(iOS)
     /// The key bar shared by this window's panes; it follows the first responder.
@@ -27,6 +37,20 @@ final class Workspace {
         self.layout = layout
         self.makeBackend = makeBackend
         reconcilePanes()
+        // Weak across the sleep, so a closed window's workspace is freed and the loop ends.
+        Task { [weak self] in
+            while self != nil {
+                self?.refreshForegrounds()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        #if os(iOS)
+        NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.keyboardResizeUntil = .now + .milliseconds(800) }
+        }
+        #endif
     }
 
     var session: Session { layout.session }
@@ -37,8 +61,21 @@ final class Workspace {
         reconcilePanes()
     }
 
+    /// A rename wins; otherwise the focused pane's program or directory, like Ghostty's titles.
     func title(of tab: Tab) -> String {
-        tab.title ?? "Tab \((session.tabs.firstIndex(of: tab) ?? 0) + 1)"
+        tab.title ?? foregrounds[tab.focused]?.title ?? "Shell"
+    }
+
+    /// The focused pane's directory, for the window title and the sidebar's second line.
+    func directory(of tab: Tab) -> String? {
+        foregrounds[tab.focused]?.shortDirectory
+    }
+
+    private func refreshForegrounds() {
+        for (id, pane) in panes {
+            let current = pane.foreground()
+            if foregrounds[id] != current { foregrounds[id] = current }
+        }
     }
 
     // MARK: Commands on the focused pane / active tab
@@ -94,6 +131,9 @@ final class Workspace {
         for (id, pane) in panes where !live.contains(id) {
             pane.terminate()
             panes[id] = nil
+            grids[id] = nil
+            notices[id] = nil
+            foregrounds[id] = nil
         }
         failures = failures.filter { live.contains($0.key) }
         for id in live where panes[id] == nil && failures[id] == nil {
@@ -110,6 +150,10 @@ final class Workspace {
             // The process exited: close its pane, as Ghostty does.
             Task { @MainActor in self?.apply(.close(id)) }
         }
+        pane.onGridChange = { [weak self] grid in
+            let size = GridSize(cols: Int(grid.cols), rows: Int(grid.rows))
+            if self?.grids[id] != size { self?.grids[id] = size }
+        }
         #if os(iOS)
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
@@ -123,5 +167,22 @@ final class Workspace {
         pane.view.onFocus = { [weak self] in self?.apply(.focus(id)) }
         #endif
         return pane
+    }
+}
+
+/// What Ghostty draws over a surface besides the grid.
+struct PaneNotice: Equatable {
+    /// "Process exited" bar; the pane stays open showing its last output.
+    var exit: (message: String, failed: Bool)?
+    /// The terminal is reading a password with echo off.
+    var secureInput = false
+    /// The bell rang recently.
+    var bell = false
+    /// The link under the pointer.
+    var hoveredURL: String?
+
+    static func == (lhs: PaneNotice, rhs: PaneNotice) -> Bool {
+        lhs.exit?.message == rhs.exit?.message && lhs.exit?.failed == rhs.exit?.failed
+            && lhs.secureInput == rhs.secureInput && lhs.bell == rhs.bell && lhs.hoveredURL == rhs.hoveredURL
     }
 }

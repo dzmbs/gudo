@@ -68,10 +68,12 @@ public struct PresenceStack: View {
     }
 
     public var body: some View {
-        HStack(spacing: -6) {
-            ForEach(participants.prefix(limit)) { participant in
+        HStack(spacing: -4) {
+            // Later avatars sit under earlier ones so every set of initials stays readable.
+            ForEach(Array(participants.prefix(limit).enumerated()), id: \.element.id) { index, participant in
                 PresenceAvatar(participant)
-                    .overlay(Circle().stroke(.background, lineWidth: 1.5))
+                    .background(Circle().fill(.background).padding(-1.5))
+                    .zIndex(Double(limit - index))
             }
             if participants.count > limit {
                 Text("+\(participants.count - limit)")

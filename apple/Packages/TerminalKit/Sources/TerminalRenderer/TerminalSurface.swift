@@ -104,12 +104,16 @@ public final class TerminalSurface {
         let pad = Int((padding * scale).rounded())
         let cols = max(1, (Int(pixelSize.width) - 2 * pad) / m.cellWidth)
         let rows = max(1, (Int(pixelSize.height) - 2 * pad) / m.cellHeight)
-        // Ghostty without padding balance: fixed top/left, the remainder goes right/bottom.
+        // Ghostty with `window-padding-balance = true`: the space left over after whole cells is
+        // split evenly, so the grid sits centered and its first column never hugs the edge.
+        let extraX = Int(pixelSize.width) - 2 * pad - cols * m.cellWidth
+        let extraY = Int(pixelSize.height) - 2 * pad - rows * m.cellHeight
+        let left = pad + extraX / 2, top = pad + extraY / 2
         paddingPx = SIMD4(
-            Float(pad),
-            Float(Int(pixelSize.width) - pad - cols * m.cellWidth),
-            Float(Int(pixelSize.height) - pad - rows * m.cellHeight),
-            Float(pad))
+            Float(top),
+            Float(Int(pixelSize.width) - left - cols * m.cellWidth),
+            Float(Int(pixelSize.height) - top - rows * m.cellHeight),
+            Float(left))
 
         let newGrid = Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
         if newGrid != grid {

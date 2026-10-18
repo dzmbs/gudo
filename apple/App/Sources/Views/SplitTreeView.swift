@@ -1,18 +1,19 @@
+import DesignSystem
 import PaneLayout
 import SwiftUI
 
-/// Renders a split tree recursively: leaves are panes, splits are two subtrees around a
-/// draggable divider.
+/// Renders a split tree recursively: leaves are panes, splits are two subtrees around a draggable
+/// divider. Compact (default) is Ghostty's look: flush panes, a 1 pt divider in the background
 struct SplitTreeView: View {
     let node: Node
     let workspace: Workspace
-    /// Draw the focus ring and dim unfocused panes (only when more than one pane is visible).
-    let showsFocus: Bool
+    /// More than one pane is visible: dim unfocused panes and show pane headers.
+    let isSplit: Bool
 
     var body: some View {
         switch node {
         case .leaf(let id):
-            PaneSlot(id: id, workspace: workspace, showsFocus: showsFocus)
+            PaneSlot(id: id, workspace: workspace, isSplit: isSplit)
         case .split(let axis, let ratio, let first, let second):
             SplitContainer(axis: axis, ratio: ratio, first: first, second: second, workspace: workspace)
         }
@@ -26,50 +27,66 @@ private struct SplitContainer: View {
     let second: Node
     let workspace: Workspace
 
-    private static let dividerThickness: CGFloat = 1
-    private static let dividerHitThickness: CGFloat = 12
+    @Environment(\.terminalTheme) private var theme
+    @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
 
     /// Drag translation already applied, so each change sends only the new delta.
     @State private var appliedTranslation: CGFloat?
 
+    private var gap: CGFloat { paneStyle == .comfortable ? DS.Space.xs + 2 : DS.Size.dividerVisible }
+
     var body: some View {
         GeometryReader { geometry in
             let extent = axis == .horizontal ? geometry.size.width : geometry.size.height
-            let firstLength = ((extent - Self.dividerThickness) * ratio).rounded()
+            let firstLength = ((extent - gap) * ratio).rounded()
             if axis == .horizontal {
                 HStack(spacing: 0) {
-                    SplitTreeView(node: first, workspace: workspace, showsFocus: true).frame(width: firstLength)
+                    SplitTreeView(node: first, workspace: workspace, isSplit: true).frame(width: firstLength)
                     divider(extent: extent)
-                    SplitTreeView(node: second, workspace: workspace, showsFocus: true)
+                    SplitTreeView(node: second, workspace: workspace, isSplit: true)
                 }
             } else {
                 VStack(spacing: 0) {
-                    SplitTreeView(node: first, workspace: workspace, showsFocus: true).frame(height: firstLength)
+                    SplitTreeView(node: first, workspace: workspace, isSplit: true).frame(height: firstLength)
                     divider(extent: extent)
-                    SplitTreeView(node: second, workspace: workspace, showsFocus: true)
+                    SplitTreeView(node: second, workspace: workspace, isSplit: true)
                 }
             }
         }
     }
 
+    /// Ghostty SplitView.Divider: a visible line plus an invisible hit area, the resize pointer,
+    /// double-click to equalize, and an adjustable accessibility element.
     private func divider(extent: CGFloat) -> some View {
         let horizontal = axis == .horizontal
+        #if os(macOS)
+        let hit = DS.Size.dividerVisible + DS.Size.dividerHitPointer
+        #else
+        let hit = DS.Size.dividerHitTouch
+        #endif
         return Rectangle()
-            .fill(.separator)
-            .frame(width: horizontal ? Self.dividerThickness : nil, height: horizontal ? nil : Self.dividerThickness)
+            .fill(paneStyle == .comfortable ? Color.clear : theme.splitDivider)
+            .frame(width: horizontal ? gap : nil, height: horizontal ? nil : gap)
             .overlay {
                 Color.clear
-                    .frame(width: horizontal ? Self.dividerHitThickness : nil, height: horizontal ? nil : Self.dividerHitThickness)
+                    .frame(width: horizontal ? hit : nil, height: horizontal ? nil : hit)
                     .contentShape(Rectangle())
                     #if os(macOS)
                     .pointerStyle(horizontal ? .columnResize : .rowResize)
+                    #else
+                    .hoverEffect(.highlight)
                     #endif
                     .gesture(drag(extent: extent))
+                    .onTapGesture(count: 2) { equalize() }
             }
             .zIndex(1)
             .accessibilityElement()
-            .accessibilityLabel("Split divider")
+            .accessibilityLabel(horizontal ? "Horizontal split divider" : "Vertical split divider")
+            .accessibilityHint(horizontal ? "Drag to resize the left and right panes" : "Drag to resize the top and bottom panes")
             .accessibilityValue("\(Int((ratio * 100).rounded())) percent")
+            .accessibilityAdjustableAction { direction in
+                move(by: direction == .increment ? 0.025 : -0.025)
+            }
     }
 
     /// Moves the divider by resizing the pane on its leading side towards it, which `resize`
@@ -81,44 +98,174 @@ private struct SplitContainer: View {
                 let translation = axis == .horizontal ? value.translation.width : value.translation.height
                 let delta = translation - (appliedTranslation ?? 0)
                 appliedTranslation = translation
-                let pane = first.trailingPane(along: axis)
-                workspace.apply(.resize(pane, axis == .horizontal ? .right : .down, amount: delta / max(extent, 1)))
+                move(by: delta / max(extent, 1))
             }
             .onEnded { _ in appliedTranslation = nil }
     }
+
+    private func move(by amount: Double) {
+        let pane = first.trailingPane(along: axis)
+        workspace.apply(.resize(pane, axis == .horizontal ? .right : .down, amount: amount))
+    }
+
+    private func equalize() {
+        withAnimation(DS.Motion.snappy) { move(by: 0.5 - ratio) }
+    }
 }
 
-/// One pane in the tree: the terminal, or why it failed to start.
+/// One pane in the tree: its header in splits, the terminal (or why it failed to start), and
+/// Ghostty's surface overlays.
 struct PaneSlot: View {
     let id: PaneId
     let workspace: Workspace
-    let showsFocus: Bool
+    let isSplit: Bool
+
+    @Environment(\.terminalTheme) private var theme
+    @Environment(AppModel.self) private var model
+    @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
+    @AppStorage(TerminalPreferences.Key.resizeOverlay) private var resizeOverlay = TerminalPreferences.ResizeOverlay.afterFirst
+    @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
 
     var body: some View {
         let focused = workspace.focusedPane == id
-        Group {
-            if let pane = workspace.panes[id] {
-                TerminalHost(pane: pane, isFocused: focused, workspace: workspace)
-            } else if let failure = workspace.failures[id] {
-                ContentUnavailableView("Pane Failed to Start", systemImage: "exclamationmark.triangle", description: Text(failure))
-            } else {
-                Color.terminalBackground
+        let notice = workspace.notices[id] ?? PaneNotice()
+        VStack(spacing: 0) {
+            if isSplit {
+                PaneHeader(id: id, workspace: workspace, isFocused: focused)
+            }
+            ZStack {
+                content
+                ResizeOverlay(size: workspace.grids[id], mode: resizeOverlay) { [workspace] in
+                    ContinuousClock.now < workspace.keyboardResizeUntil
+                }
+                if let url = notice.hoveredURL {
+                    URLHoverBanner(url: url)
+                }
+                if let exit = notice.exit {
+                    ProcessExitedBar(exit.message, failed: exit.failed)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                }
+                if notice.secureInput && focused {
+                    SecureInputBadge()
+                }
+                BellBorder(ringing: notice.bell)
+                if model.isSearchShown && focused {
+                    TerminalSearchBar(
+                        needle: Bindable(model).searchNeedle,
+                        selected: model.searchNeedle.isEmpty ? nil : 2,
+                        total: model.searchNeedle.isEmpty ? nil : 14,
+                        onNext: {}, onPrevious: {},
+                        onClose: { model.isSearchShown = false })
+                }
             }
         }
         .overlay {
-            if showsFocus {
-                // Ghostty's unfocused-split-opacity (0.7) and a 2 pt accent ring (04-mobile-ux C3).
-                if focused {
-                    Rectangle().strokeBorder(.tint, lineWidth: 2).allowsHitTesting(false)
-                } else {
-                    Color.black.opacity(0.3).allowsHitTesting(false)
-                }
+            // Ghostty unfocused-split-opacity: the background color at 1 - opacity, header included.
+            if isSplit && !focused {
+                UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background)
             }
+        }
+        .background(theme.background)
+        .clipShape(.rect(cornerRadius: paneStyle == .comfortable && isSplit ? DS.Radius.pane : 0))
+    }
+
+    @ViewBuilder private var content: some View {
+        if let pane = workspace.panes[id] {
+            TerminalHost(pane: pane, isFocused: workspace.focusedPane == id, workspace: workspace)
+        } else if let failure = workspace.failures[id] {
+            EmptyState("Pane Failed to Start", systemImage: "exclamationmark.triangle", message: failure) {
+                Button("Close Pane") { workspace.apply(.close(id)) }
+            }
+            .foregroundStyle(theme.foreground)
+        } else {
+            theme.background
         }
     }
 }
 
-private extension Node {
+/// It sits on the terminal background so the pane still reads as one surface.
+private struct PaneHeader: View {
+    let id: PaneId
+    let workspace: Workspace
+    let isFocused: Bool
+
+    @Environment(\.terminalTheme) private var theme
+    @Environment(AppModel.self) private var model
+    @State private var isHovered = false
+
+    var body: some View {
+        let state = model.paneStatus.state(of: id.description)
+        HStack(spacing: DS.Space.xs + 2) {
+            if let state {
+                StatusIndicator(state, size: 10)
+            }
+            Text(model.paneStatus.program(of: id.description) ?? id.description)
+                .font(.caption.weight(isFocused ? .semibold : .regular))
+                .foregroundStyle(theme.foreground.opacity(isFocused ? 0.9 : 0.6))
+                .lineLimit(1)
+            if let state, state != .idle {
+                Text(state.title)
+                    .font(.caption)
+                    .foregroundStyle(state.color)
+            }
+            Spacer(minLength: 0)
+            Menu {
+                PaneMenuItems(workspace: workspace, model: model, pane: id)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.foreground.opacity(0.7))
+                    .frame(width: 24, height: 20)
+                    .contentShape(.rect)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .opacity(isFocused || isHovered ? 1 : 0)
+            .accessibilityLabel("Pane Menu")
+        }
+        .padding(.leading, DS.Space.s)
+        .padding(.trailing, DS.Space.xxs)
+        .frame(height: 24)
+        .background(theme.background)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.splitDivider).frame(height: 1)
+        }
+        .contentShape(.rect)
+        .onTapGesture { workspace.apply(.focus(id)) }
+        .onHover { isHovered = $0 }
+    }
+}
+
+/// Split / zoom / search / close for one pane, shared by the pane header and the toolbar.
+struct PaneMenuItems: View {
+    let workspace: Workspace
+    let model: AppModel
+    var pane: PaneId?
+
+    var body: some View {
+        Button("Split Right", systemImage: "rectangle.split.2x1") { focusThen { workspace.split(.horizontal) } }
+        Button("Split Down", systemImage: "rectangle.split.1x2") { focusThen { workspace.split(.vertical) } }
+        // One title for both directions, like Ghostty's "Zoom Split" toggle.
+        Button("Zoom Pane", systemImage: "arrow.up.left.and.arrow.down.right") {
+            focusThen { workspace.apply(.toggleZoom) }
+        }
+        Divider()
+        Button("Find…", systemImage: "magnifyingglass") { focusThen { model.isSearchShown = true } }
+        Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
+        Button("Share Session…", systemImage: "person.crop.circle.badge.plus") { model.sheet = .invite }
+        Divider()
+        Button("Close Pane", systemImage: "xmark", role: .destructive) { focusThen { workspace.closeFocusedPane() } }
+    }
+
+    private func focusThen(_ action: () -> Void) {
+        if let pane, workspace.focusedPane != pane { workspace.apply(.focus(pane)) }
+        action()
+    }
+}
+
+extension Node {
     /// The pane touching this subtree's trailing edge along `axis` (right edge for horizontal).
     func trailingPane(along axis: Axis) -> PaneId {
         switch self {
@@ -127,9 +274,4 @@ private extension Node {
             splitAxis == axis ? second.trailingPane(along: axis) : first.trailingPane(along: axis)
         }
     }
-}
-
-extension Color {
-    /// Ghostty's default background (#282C34), shown before a pane's first frame.
-    static let terminalBackground = Color(red: 0x28 / 255, green: 0x2C / 255, blue: 0x34 / 255)
 }

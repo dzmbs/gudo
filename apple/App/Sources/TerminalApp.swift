@@ -9,6 +9,9 @@ struct TerminalApp: App {
         #if os(macOS)
         // Tabs are ours (⌘T); AppKit's window tabbing would compete for the same shortcuts.
         NSWindow.allowsAutomaticWindowTabbing = false
+        #if DEBUG
+        WindowSnapshot.scheduleIfRequested()
+        #endif
         #endif
     }
 
@@ -18,7 +21,14 @@ struct TerminalApp: App {
         }
         .commands { WorkspaceCommands() }
         #if os(macOS)
-        .defaultSize(width: 1100, height: 700)
+        .defaultSize(width: 1180, height: 760)
+        .windowToolbarStyle(.unified(showsTitle: true))
+        #endif
+
+        #if os(macOS)
+        Settings {
+            SettingsView()
+        }
         #endif
     }
 }

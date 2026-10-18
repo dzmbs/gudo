@@ -20,14 +20,17 @@ nonisolated public struct GridSize: Equatable, Hashable, Sendable {
 public struct ResizeOverlay: View {
     let size: GridSize?
     var mode: TerminalPreferences.ResizeOverlay
+    /// Resizes the user did not ask for (the software keyboard sliding in) show nothing.
+    var isSuppressed: () -> Bool
 
     @State private var lastSize: GridSize?
     @State private var ready = false
     @State private var visible = false
 
-    public init(size: GridSize?, mode: TerminalPreferences.ResizeOverlay = .afterFirst) {
+    public init(size: GridSize?, mode: TerminalPreferences.ResizeOverlay = .afterFirst, isSuppressed: @escaping () -> Bool = { false }) {
         self.size = size
         self.mode = mode
+        self.isSuppressed = isSuppressed
     }
 
     public var body: some View {
@@ -53,7 +56,7 @@ public struct ResizeOverlay: View {
         }
         .task(id: size) {
             defer { lastSize = size }
-            guard ready, size != nil else { return }
+            guard ready, size != nil, !isSuppressed() else { return }
             switch mode {
             case .never: return
             case .afterFirst where lastSize == nil: return

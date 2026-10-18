@@ -1,4 +1,5 @@
 #if os(iOS)
+import DesignSystem
 import TerminalCore
 import TerminalRenderer
 import UIKit
@@ -56,18 +57,30 @@ final class KeyBar: UIInputView {
 
     init() {
         let isPad = UIDevice.current.userInterfaceIdiom == .pad
-        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: isPad ? 52 : 44), inputViewStyle: .keyboard)
+        Self.isPad = isPad
+        // No backdrop of its own: the keys float over the content like the keyboard's own glass.
+        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: KeyBarStyle.barHeight(isPad: isPad)), inputViewStyle: .default)
         allowsSelfSizing = true
         translatesAutoresizingMaskIntoConstraints = false
+        backgroundColor = .clear
+        // Match the terminal's dark keyboard (TerminalView.keyboardAppearance) in light mode too.
+        overrideUserInterfaceStyle = .dark
 
         let stack = UIStackView()
         stack.axis = .horizontal
-        stack.spacing = 6
+        stack.spacing = KeyBarStyle.spacing(isPad: isPad)
         stack.alignment = .center
         Self.leadingKeys.forEach { stack.addArrangedSubview(button(for: $0)) }
         configureCtrlButton()
         stack.addArrangedSubview(ctrlButton)
         Self.trailingKeys.forEach { stack.addArrangedSubview(button(for: $0)) }
+        // Wider gaps between the groups: esc tab · ctrl · arrows · symbols.
+        let groupGap = KeyBarStyle.spacing(isPad: isPad) * 2.5
+        for id in ["tab", "ctrl", "right"] {
+            if let key = stack.arrangedSubviews.first(where: { $0.accessibilityIdentifier == "keybar-\(id)" }) {
+                stack.setCustomSpacing(groupGap, after: key)
+            }
+        }
 
         let scroll = UIScrollView()
         scroll.showsHorizontalScrollIndicator = false
@@ -77,15 +90,15 @@ final class KeyBar: UIInputView {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         stack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: isPad ? 52 : 44),
+            heightAnchor.constraint(equalToConstant: KeyBarStyle.barHeight(isPad: isPad)),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: KeyBarStyle.edgeInset(isPad: isPad)),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -KeyBarStyle.edgeInset(isPad: isPad)),
             stack.centerYAnchor.constraint(equalTo: scroll.frameLayoutGuide.centerYAnchor),
-            stack.heightAnchor.constraint(equalToConstant: isPad ? 40 : 34),
+            stack.heightAnchor.constraint(equalToConstant: KeyBarStyle.keyHeight(isPad: isPad)),
         ])
     }
 
@@ -109,7 +122,8 @@ final class KeyBar: UIInputView {
         let button = UIButton(configuration: Self.style(title: key.title, symbol: key.symbol, active: false))
         button.accessibilityIdentifier = "keybar-\(key.id)"
         button.accessibilityLabel = key.accessibilityLabel
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: KeyBarStyle.minKeyWidth(isPad: Self.isPad)).isActive = true
+        button.heightAnchor.constraint(equalToConstant: KeyBarStyle.keyHeight(isPad: Self.isPad)).isActive = true
         button.addAction(UIAction { [weak self] _ in self?.pressBegan(key) }, for: .touchDown)
         for end: UIControl.Event in [.touchUpInside, .touchUpOutside, .touchCancel] {
             button.addAction(UIAction { [weak self] _ in self?.repeater.stop() }, for: end)
@@ -127,20 +141,12 @@ final class KeyBar: UIInputView {
         repeater.start { [weak target] in target?.send(repeated) }
     }
 
+    /// The look lives in DesignSystem's `KeyBarStyle`.
     private static func style(title: String?, symbol: String?, active: Bool) -> UIButton.Configuration {
-        var configuration = active ? UIButton.Configuration.prominentGlass() : .glass()
-        configuration.cornerStyle = .medium
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
-        if let symbol {
-            configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(textStyle: .callout, scale: .medium))
-        }
-        if let title {
-            var attributes = AttributeContainer()
-            attributes.font = UIFont.monospacedSystemFont(ofSize: 15, weight: .medium)
-            configuration.attributedTitle = AttributedString(title, attributes: attributes)
-        }
-        return configuration
+        KeyBarStyle.configuration(title: title, symbol: symbol, active: active, isPad: isPad)
     }
+
+    private static var isPad = false
 
     // MARK: Ctrl
 
@@ -148,7 +154,8 @@ final class KeyBar: UIInputView {
     private func configureCtrlButton() {
         ctrlButton.accessibilityIdentifier = "keybar-ctrl"
         ctrlButton.accessibilityLabel = "Control"
-        ctrlButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
+        ctrlButton.widthAnchor.constraint(greaterThanOrEqualToConstant: KeyBarStyle.minKeyWidth(isPad: Self.isPad) + 8).isActive = true
+        ctrlButton.heightAnchor.constraint(equalToConstant: KeyBarStyle.keyHeight(isPad: Self.isPad)).isActive = true
         ctrlButton.addAction(UIAction { [weak self] _ in self?.ctrlTapped() }, for: .touchUpInside)
         updateCtrlButton()
     }
