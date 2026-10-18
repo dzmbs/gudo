@@ -34,6 +34,7 @@ not being on mobile at all.
 | # | Decision | Choice | Why / source |
 |---|---|---|---|
 | D1 | Platforms | iOS + iPadOS first, macOS from same Swift code. **Minimum iOS 26 / macOS 26** (no legacy) | User; enables `BGContinuedProcessingTask`, current SwiftUI/Liquid Glass |
+| D19 | Host platforms | **macOS and headless Linux are equal first-class hosts** (incl. AWS/GCP VMs, x86_64 + aarch64). Static musl daemon binary (cargo-zigbuild), XDG dirs, systemd `--user` / launchd service, headless pairing (terminal QR + ticket text), install via `curl \| sh` or one tap over SSH from the phone. Cloud VMs need no inbound ports: outbound UDP hole punching or relay over 443 | Owner |
 
 
 One iroh connection per (device, daemon), ALPN `unnamed/1`, postcard/CBOR, every message versioned.
