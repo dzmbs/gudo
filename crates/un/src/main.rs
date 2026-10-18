@@ -27,8 +27,25 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
-/// Ctrl-] detaches, like telnet.
-const DETACH_KEY: u8 = 0x1d;
+/// Ctrl-] detaches, like telnet, in every encoding the outer terminal may use for it: the legacy
+/// byte, the kitty keyboard protocol (`CSI 93;5u`, optionally with an event type) and xterm's
+/// modifyOtherKeys (`CSI 27;5;93~`). The remote program can switch the outer terminal into the
+/// latter two because `attach` passes its output through raw.
+const DETACH_SEQUENCES: [&[u8]; 4] = [b"\x1d", b"\x1b[93;5u", b"\x1b[93;5:1u", b"\x1b[27;5;93~"];
+
+/// Turns off the input and screen modes a remote program may have enabled on the outer terminal:
+/// kitty keyboard flags, modifyOtherKeys, bracketed paste, mouse reporting, focus events, the
+/// alternate screen, and a hidden cursor.
+const RESTORE_MODES: &[u8] =
+    b"\x1b[=0;1u\x1b[>4;0m\x1b[?2004l\x1b[?1000;1002;1003;1006l\x1b[?1004l\x1b[?1049l\x1b[?25h";
+
+/// Returns where the first detach sequence in `input` starts, if any.
+fn detach_position(input: &[u8]) -> Option<usize> {
+    DETACH_SEQUENCES
+        .iter()
+        .filter_map(|seq| input.windows(seq.len()).position(|w| w == *seq))
+        .min()
+}
 
 #[derive(Parser)]
 #[command(name = brand::CLI_BIN, version, about = "Developer client for the host daemon")]
@@ -572,7 +589,7 @@ async fn attach(mut conn: Conn) -> Result<()> {
                     break;
                 }
                 let input = &buf[..n];
-                if let Some(i) = input.iter().position(|&b| b == DETACH_KEY) {
+                if let Some(i) = detach_position(input) {
                     if i > 0 {
                         conn.client.send_input(pane, input[..i].to_vec());
                     }
@@ -634,6 +651,7 @@ async fn attach(mut conn: Conn) -> Result<()> {
             },
         }
     }
+    write_out(RESTORE_MODES);
     drop(_raw);
     println!("\r\n[detached]");
     Ok(())
@@ -643,4 +661,18 @@ fn follow(client: &Client, pane: PaneId) {
     client.resize(pane, local_size());
     client.subscribe(pane);
     client.set_view(Some(pane), vec![pane]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detach_position;
+
+    #[test]
+    fn detach_is_found_in_every_ctrl_bracket_encoding() {
+        assert_eq!(detach_position(b"ab\x1d"), Some(2));
+        assert_eq!(detach_position(b"x\x1b[93;5u"), Some(1));
+        assert_eq!(detach_position(b"\x1b[93;5:1u"), Some(0));
+        assert_eq!(detach_position(b"ls\x1b[27;5;93~"), Some(2));
+        assert_eq!(detach_position(b"\x1b[93u plain bracket"), None);
+    }
 }
