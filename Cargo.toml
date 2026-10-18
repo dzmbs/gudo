@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 brand = { path = "crates/brand" }
+ghostty-vt = { path = "crates/ghostty-vt" }
 ghostty-vt-sys = { path = "crates/ghostty-vt-sys" }
 
 [workspace.lints.rust]
