@@ -92,14 +92,17 @@ impl Daemon {
         core::restore(&core, records);
 
         let endpoint = bind(&core).await?;
-        let info = endpoint_info_of(&endpoint, &core).await;
+        let info = endpoint_info_of(&endpoint);
         identity::write_endpoint_info(&core.cfg.state_dir, &info)?;
         tracing::info!(
             daemon = %endpoint.id(),
             addrs = ?info.addrs,
-            relay = ?info.relay_url,
             "listening"
         );
+        tasks.push(tokio::spawn(track_addresses(
+            Arc::clone(&core),
+            endpoint.clone(),
+        )));
 
         tasks.push(tokio::spawn(accept_loop(
             Arc::clone(&core),
@@ -127,6 +130,18 @@ impl Daemon {
     /// The hook socket agents report to.
     pub fn hook_socket(&self) -> &std::path::Path {
         self.core.hooks.socket()
+    }
+
+    /// Waits (at most `timeout`) until the endpoint has a home relay, so a ticket minted next
+    /// works across NATs. Returns at once with relays disabled.
+    pub async fn wait_online(&self, timeout: Duration) {
+        if self.core.cfg.relay == RelayMode::Default {
+            let _ = tokio::time::timeout(timeout, self.endpoint.online()).await;
+            let info = endpoint_info_of(&self.endpoint);
+            if let Err(e) = identity::write_endpoint_info(&self.core.cfg.state_dir, &info) {
+                tracing::warn!("recording endpoint: {e}");
+            }
+        }
     }
 
     /// Mints a one-time pairing ticket valid for `ttl`.
@@ -184,11 +199,21 @@ async fn bind(core: &Core) -> Result<Endpoint, StartError> {
         .map_err(|e| StartError::Bind(e.to_string()))
 }
 
-async fn endpoint_info_of(endpoint: &Endpoint, core: &Core) -> EndpointInfo {
-    if core.cfg.relay == RelayMode::Default {
-        // Wait briefly for a home relay so the ticket works across NATs.
-        let _ = tokio::time::timeout(Duration::from_secs(5), endpoint.online()).await;
+/// Keeps `endpoint.json` current as iroh learns addresses and picks a home relay, so tickets
+/// minted by `hostd pair` carry what works now.
+async fn track_addresses(core: Arc<Core>, endpoint: Endpoint) {
+    use iroh::Watcher;
+    let mut watcher = endpoint.watch_addr();
+    while watcher.updated().await.is_ok() {
+        let info = endpoint_info_of(&endpoint);
+        tracing::debug!(addrs = ?info.addrs, relay = ?info.relay_url, "endpoint address changed");
+        if let Err(e) = identity::write_endpoint_info(&core.cfg.state_dir, &info) {
+            tracing::warn!("recording endpoint: {e}");
+        }
     }
+}
+
+fn endpoint_info_of(endpoint: &Endpoint) -> EndpointInfo {
     let addr = endpoint.addr();
     let mut addrs: Vec<SocketAddr> = addr.ip_addrs().copied().collect();
     if addrs.is_empty() {

@@ -128,6 +128,7 @@ fn run(
             hex(&daemon.daemon_id().0)
         );
         if daemon.paired_devices() == 0 {
+            daemon.wait_online(Duration::from_secs(5)).await;
             eprintln!(
                 "No devices paired yet. Scan this with the app, or run `{} pair` later:",
                 brand::DAEMON_BIN
