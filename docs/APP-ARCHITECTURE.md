@@ -28,10 +28,10 @@ All are `@MainActor @Observable`. Views never hold a socket or a `DaemonClient` 
 
 | Model | What a view reads | What a view calls |
 |---|---|---|
-| `AppModel` (App) | `hosts`, `lastError` | `workspace(for:)` (resolve on target change, never in `body`), `existingWorkspace(for:)`, `handle(url:)` |
-| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette (`paletteMode`: commands / go to tab / new tab on host) and search state, `groups: HostGroups`, `workspaces[groupId]` (one per open host, kept live), `target` / `workspace` (what the detail column shows), `currentTab: TabRef`, `connection: ConnectionState` (the shown host's status in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)`, `focus(TabRef)`, `focus(pane:onGroup:)`, `newTab(onGroup:)`, `selectTab(shortcut:)` / `selectTab(offset:)`, `showHostPicker()`, `showTabFinder()`, `closeHost`, `restore(openHosts:collapsed:focus:)`, `addHost(mode:destination:)`, `retryConnection()`, `disconnect()` |
+| `AppModel` (App) | `hosts`, `lastError`, `localLayout` (this device's tabs, shared by windows), `openWindows` | `makeWorkspace(for:selecting:)` (a window's own workspace on a host; resolve on target change, never in `body`), `isHostOpen(_:elsewhereThan:)`, `endSharedPanes(of:)`, `handle(url:)` |
+| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette (`paletteMode`: commands / go to tab / new tab on host) and search state, `groups: HostGroups`, `workspaces[groupId]` (one per open host, kept live), `target` / `workspace` (what the detail column shows), `currentTab: TabRef`, `connection: ConnectionState` (the shown host's status in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)`, `focus(TabRef)`, `focus(pane:onGroup:)`, `newTab(onGroup:)`, `selectTab(shortcut:)` / `selectTab(offset:)`, `showHostPicker()`, `showTabFinder()`, `closeHost`, `restore(openHosts:collapsed:focus:)`, `addHost(mode:destination:)`, `retryConnection()`, `disconnect()`; windows (§17): `widthBucket`, `newWindow()`, `openInNewWindow(_:)`, `open(_ request:)`, `continue(_ payload:)`, `handoffMissing`, `close()` |
 | `HostGroups` (HostKit, one per window) | `groups: [HostGroup]` (this device, then open hosts in open order, then hosts connected elsewhere: id, name, kind, `status`, `tabs`, `isReady`, `failure`), `tabs: [TabRef]` (the unified order), `openHosts`, `collapsed` | `open(id)` (never redials an open host), `close(id)`, `restore(ids)`, `tab(forShortcut:)`, `shortcutNumber(of:)`, `tab(after:offset:)`, `newTabHost(preferred:)` |
-| `Workspace` (App) | `session`, `panes`, `title(of:)` (the tab's name), `context(of:)` (agent task → program → shell title → repo:branch → directory), `canOpenTabs` | `apply(op)`; unnamed tabs get a friendly name (`FriendlyName`, sent as a rename so a daemon keeps it for every device) |
+| `Workspace` (App, one per window per host) | `session` (the window's view: `WindowLayoutStore`), `sharedLayout`, `panes` (this window's terminals), `title(of:)` (the tab's name), `context(of:)` (agent task → program → shell title → repo:branch → directory), `canOpenTabs` | `apply(op)`; unnamed tabs get a friendly name (`FriendlyName`, sent as a rename so a daemon keeps it for every device) |
 | `HostsModel` | `entries: [HostEntry]` (sorted: Needs you → pinned → recent), `installs[id]` (`InstallProgress.summary`), `installNotes[id]`, `sshConfigAliases`, `keys.keys`, `hostKeyPrompts.pending`, `network.isOffline` | `open(id)`, `pair(ticket, name:)`, `connectSSH(…)`, `installHelper(id)`, `loadSSHConfig(text)` / `loadUserSSHConfig()` (macOS) / `importSSHHosts(aliases)`, `rename`, `setPinned`, `disconnect`, `remove`, `foreground()/background()/networkChanged()` |
 | `HostEntry` (value) | `name`, `kind` (`.daemon`/`.ssh`), `address`, `status: ConnectionStatus`, `needsYou: String?`, `blockedAgents`, `canInstallHelper`, `pinned`, `lastConnected` | — |
 | `ConnectionStatus` (value) | `.idle/.connecting/.connected(rtt)/.reconnecting(attempt, reason)/.offline/.suspended/.needsAttention(reason)`; `summary` (words, A22), `isLive`, `needsUser` | — |
@@ -485,3 +485,113 @@ detail popover (also from the host menu's Agent Usage), and a quiet strip at the
 Inbox. Unknown means absent; the reason is in the popover. Settings › Agents › Check Usage with
 Your Claude and Codex Sign-In (`AgentUsageSettings.apiFallbackKey`, off) re-watches every host.
 Tests: `AgentUsageTests` (HostKit), `UsageFeedTests` (AppTests), `UsageUITests`.
+
+## 17. Windows (iPad scenes, Stage Manager, external displays, Mac windows; Handoff; width buckets)
+
+Every window is independent: its own host, tab and pane selection, its own terminals, its own
+restore (`@SceneStorage`: open hosts, collapsed groups, focused tab, the request it opened).
+`TerminalApp` is one `WindowGroup(for: WindowRequest.self)`; iPadOS multiple scenes come from
+the generated scene manifest (`UIApplicationSupportsMultipleScenes`).
+
+```
+ window A ─ WindowModel ─ Workspace(A, host) ─ WindowLayoutStore ─┐            ┌─ Pane(A) ─ Terminal + surface + view
+                                                                  ├─ host's one LayoutStore      │ tap
+ window B ─ WindowModel ─ Workspace(B, host) ─ WindowLayoutStore ─┘            └─ Pane(B) ─ Terminal + surface + view
+                                                         one stream per pane:  PaneRouter (daemon) / SharedPaneBackend (PTY, SSH, echo)
+```
+
+**Layout: one store per host, a view per window.** `WindowLayoutStore` (PaneLayout) wraps the
+host's store: tabs, split trees, names and zoom are the host's; the active tab and each tab's
+focused pane are the window's. Every op still goes to the host's store (focus too, so a daemon
+hears the last focus); ops on "the active tab" (new tab, zoom) first focus this window's pane
+there; a tab or pane the window creates becomes its selection once the store has it (at once
+locally, after the daemon's answer remotely; 5 s timeout); a tab closed elsewhere hands over to
+its neighbour. Tests: `WindowLayoutStoreTests`.
+
+**Panes: a terminal per window, one stream per pane.** Two windows showing one pane each have a
+`Pane` (VT, renderer, view) — a view lives in one window only. The daemon keeps one subscription
+per pane per connection, so the connection's `PaneRouter` fans each pane's stream out to taps
+(one `DaemonPaneBackend` per window): subscribe with the first, unsubscribe with the last; acks
+go to the tap whose keystroke they answer, hints to all, drawing offsets (`onOutputApplied`) per
+tap. Local PTYs, plain-SSH channels and the echo stand-in are one process or channel per pane:
+`SharedPaneBackend` (HostKit) owns it and hands out taps (`AppModel.sharedPane`). A tap that
+starts while others run is seeded from one of their terminals (`Terminal.seedEvents()`: the
+snapshot's READY section, then the whole scrollback), under the fan-out's delivery lock, so it
+shows exactly what the others show without asking the host again. One size per pane: the window
+that typed or took focus last drives it (`SharedPaneTap.claimSize`, also on every write); the
+others render the same grid. When the last window showing a local or SSH pane closes while the
+pane stays in the layout, its stream is parked in a headless terminal, and a later window starts
+from it. Closing a host in a window ends its taps there; the connection stays while another
+window shows the host (`HostGroups.isOpenElsewhere`). The daemon hears the union of every
+window's visible panes and the last window's focus (`DaemonConnection.setWindowView`).
+Tests: `PaneSharingTests`, `SharedPaneBackendTests`, `WindowsTests` (AppTests).
+
+**Opening windows.** ⌘N (iPad: File ▸ New Window and the terminal's own key command; Mac:
+`WindowGroup`'s New Window) opens a window like the current one (`WindowRequest.like`: same
+hosts, same tab). Open in New Window is in the tab context menus (sidebar row, strip chip,
+compact switcher) and the host group's menu. On iPad a tab row or chip dragged out of the window
+carries the window activity (`TabDrag`): dropped outside, iPadOS opens a new scene that continues
+it (same host id on this device).
+
+**External displays.** With Stage Manager the display gets ordinary windows (above). Without it,
+`AppDelegate` gives the `windowExternalDisplayNonInteractive` role its own scene
+(`ExternalDisplaySceneDelegate`): a full-size presentation of the iPad's active window's tab with
+its own terminals, at the display's scale (`traitCollection.displayScale`, and the screen's own
+display link), the font scaled so the pane's grid fills the display; input stays on the iPad.
+
+**Handoff.** Each window advertises `NSUserActivity` `<bundle id>.terminal`
+(`NSUserActivityTypes`) with a `HandoffPayload`: kind, host id and name, the daemon's endpoint id
+or the SSH address, tab, pane, installation id. Continuing (`onContinueUserActivity`) resolves the
+host by id on the same device, else by daemon id, else by SSH address, and opens the tab and pane
+(`WindowModel.select`; the `<scheme>://open/<host>/<pane>` path uses the same focus). A host the
+device has not paired: an alert names it and offers Add Host (SSH pre-filled; ticket otherwise).
+This device's own shell is never offered to other devices.
+
+**Width buckets.** `WidthBucket` picks the layout from the window's width, never the device:
+under 600 pt compact (the iPhone layout: one pane, tab switcher, tab bar), else regular (sidebar
+and splits), with 12 pt of hysteresis so a drag at the edge does not flip back and forth. The
+window's `horizontalSizeClass` is overridden to match, so every screen agrees. A switch keeps the
+workspace, tab, focused pane and terminals (views move between containers; scrollback and
+viewport are the terminal's) and suppresses the cols × rows overlay for a second
+(`Workspace.layoutChangeUntil`). Tests: `WindowsTests` (bucket logic), `WindowsUITests`.
+
+**One model per scene.** `WindowRoot` makes its `WindowModel` once, when the scene first
+appears (SwiftUI rebuilds the root struct, and a `@State` initial value would be evaluated each
+time); `start()` then registers it (`ActiveWindow`, `AppModel.openWindows`) and opens this
+device's workspace. Spare models never exist, so menu commands, design fixtures (`-screen`) and
+dictation always act on a window on screen (`WindowsUITests.testOneModelPerWindowAndFixturesOnIt`).
+Dictation's `AppModel.openWorkspaces` lists every window's workspaces, the key window's first. The
+key bar stays one per app (`Workspace.sharedKeyBar`): only the key window's terminal has the
+keyboard, and the input accessory view follows that first responder between scenes. Remote panes
+follow the stream's size (`sizeFollowsStream`): the window that drives a pane resizes the PTY,
+the others draw the stream's grid without reflowing it.
+
+Test hooks: `-windowProbe YES` (bucket, host, tab, pane, Handoff payload, overlay count, window
+and model counts, how the last activity resolved, as JSON on `window-probe`, plus narrow / wide /
+front controls), `-resetWindows YES` (start from one window), `-continueActivity <json>` (continue a payload at launch),
+`<scheme>://debug/width/<pt>` and `-windowWidth <pt>` (narrow the window, debug builds).
+`apple/scripts/windows-ui-test.sh [ipad] [iphone]` starts a daemon, turns on Stage Manager in the
+simulator (`SBChamoisWindowingEnabled`) and runs `WindowsUITests`.
+
+Limits (need a device or a second device): real Split View / Slide Over and Stage Manager drags
+(UI tests narrow the window with the debug width and rotate the iPhone instead); a real external
+display (the non-interactive scene is not exercised by the simulator's tests); Handoff between
+devices, same Apple Account, Bluetooth and Wi-Fi on; ad-hoc "-" signed Mac builds have no team
+and cannot hand off); a daemon host continued on another device opens that device's attached
+session, so the tab and pane are found only when both attach the same session (else the host
+shows on its active tab). Drawing placements are routed per pane id by `DrawingHub`, so with a
+pane in two windows only the newest window's controller gets placement updates (drawing owner).
+
+Test status (2026-10-19, after merging main 8cf7810): `WindowsUITests` passes Handoff contents,
+both continuation cases, one-model-per-window + `-mock -screen splits`, and the iPhone rotation
+(compact ↔ regular, same pane, no overlay). Two iPad cases are open harness gaps:
+`testTwoWindowsOnOneHostTypeIndependently` opens the second window with ⌘N, follows the same
+host and tab, starts its terminal from the first window's and types into its own new tab (all
+passed, screenshots attached), but with iPadOS 26 windowing the new window covers the first and
+neither the `debug/front` link (its "Open in…?" confirmation) nor the probe's front control has
+reliably brought window 1 back for the last step; `testCrossingTheWidthBoundary…` reaches compact
+through the debug link but not through the probe's controls, and after the link's confirmation
+iPadOS restores keyboard focus to the first pane (the model then shows pane 1 while pane 3 keeps
+the keyboard), which the content check trips on. The same behaviours are covered without UI by
+`WindowsTests` and `WindowLayoutStoreTests`. Also seen: right after the system's "Open in…?"
+confirmation, focus can move to a tab's first pane (pre-existing focus restoration, not fixed).

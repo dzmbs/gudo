@@ -24,6 +24,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
         AppModel.log.error("remote notifications unavailable: \(error.localizedDescription, privacy: .public)")
     }
+
+    /// Windows (Windows/ExternalDisplay.swift): an external display without Stage Manager gets a
+    /// window of its own; every other scene is SwiftUI's `WindowGroup`.
+    func application(
+        _ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        ExternalDisplay.configuration(for: connectingSceneSession)
+            ?? UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+    }
 }
 #else
 import AppKit

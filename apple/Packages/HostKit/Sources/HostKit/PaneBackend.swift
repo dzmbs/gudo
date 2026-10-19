@@ -144,3 +144,30 @@ nonisolated public protocol ForegroundProgramReporting: PaneBackend {
     /// `onChange` receives the program name (e.g. "vim", "claude"), or nil when unknown; any thread.
     func onForegroundProgramChange(_ onChange: @escaping @Sendable (String?) -> Void)
 }
+
+/// A backend one pane shares between windows (docs/APP-ARCHITECTURE.md "Windows"): each window's
+/// `Pane` has its own terminal and its own instance of this (a tap), all on one stream.
+nonisolated public protocol SharedPaneTap: PaneBackend {
+    /// Starts like `start(events:)`. A tap that starts while others of the pane run begins from
+    /// one of their terminals (their `seed`), then follows the stream with them; `seed` is how
+    /// to copy this tap's terminal for taps that start later (`Terminal.seedEvents()`).
+    func start(events: @escaping @Sendable (PaneEvent) -> Void, seed: (@Sendable () -> [PaneEvent])?)
+    /// This tap's window drives the pane's size now (it took focus); typing claims it too.
+    func claimSize()
+    /// The window closed but the pane stays in the layout: stop following it without ending
+    /// its process (the default ends it, like `terminate`).
+    func detach()
+}
+
+nonisolated extension SharedPaneTap {
+    public func detach() { terminate() }
+}
+
+nonisolated extension Terminal {
+    /// This terminal as the events that rebuild it elsewhere: its snapshot (screens, modes,
+    /// cursor) and then its whole scrollback. Seeds a window's terminal from another's.
+    public func seedEvents() -> [PaneEvent] {
+        guard let snapshot = encodeSnapshot(), let (ready, history) = Terminal.splitSnapshot(snapshot) else { return [] }
+        return [.snapshot(ready), .history(history, done: true)]
+    }
+}

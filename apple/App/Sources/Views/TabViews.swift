@@ -381,6 +381,7 @@ private struct GroupMenu: View {
                 Button("Retry Now", systemImage: "arrow.clockwise") { model.hosts.retry(group.id) }
             }
             Divider()
+            Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(host: group.id) }
             if group.kind == .daemon {
                 Button("Agent Usage", systemImage: "gauge.with.dots.needle.33percent") { model.usageDetailHost = group.id }
             }
@@ -511,9 +512,11 @@ private struct TabRow: View {
                 model.focus(ref)
                 workspace?.renamingTab = tab.id
             }
+            Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
+                .accessibilityIdentifier("open-in-new-window")
             Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace?.apply(.closeTab(tab.id)) }
         }
-        .draggable(ref.description)
+        .tabDrag(ref, model: model)
         .dropDestination(for: String.self) { items, _ in
             // Reorder within a host; tabs live on their host, so they never cross groups.
             guard let item = items.first, let slash = item.lastIndex(of: "/"),
@@ -794,13 +797,17 @@ struct TabStyleToggle: View {
     }
 }
 
-/// Rename / Close for a tab, shared by the strip and the compact switcher.
+/// Rename / Open in New Window / Close for a tab, shared by the strip and the compact switcher.
 struct TabMenu: View {
     let tab: Tab
     let workspace: Workspace
+    @Environment(WindowModel.self) private var model
 
     var body: some View {
         Button("Rename…", systemImage: "pencil") { workspace.renamingTab = tab.id }
+        Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+            model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
+        }
         Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }
     }
 }

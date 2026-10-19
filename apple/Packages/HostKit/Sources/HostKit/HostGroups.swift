@@ -182,12 +182,17 @@ public final class HostGroups {
         return opened
     }
 
-    /// Closes a host in this window and drops its connection (it stays saved).
+    /// Whether another window still shows a host (its connection then stays up when this
+    /// window closes it). Set by the app, which knows every window.
+    @ObservationIgnored public var isOpenElsewhere: (String) -> Bool = { _ in false }
+
+    /// Closes a host in this window and drops its connection (it stays saved), unless another
+    /// window still shows it.
     public func close(_ id: String) {
         openHosts.removeAll { $0 == id }
         failures[id] = nil
         collapsed.remove(id)
-        hosts.disconnect(id)
+        if !isOpenElsewhere(id) { hosts.disconnect(id) }
     }
 
     /// Forgets a host that was removed from the saved hosts.

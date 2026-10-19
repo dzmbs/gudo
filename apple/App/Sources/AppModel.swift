@@ -10,17 +10,31 @@ enum WorkspaceTarget: Hashable, Codable {
     case host(String)
 }
 
-/// App-wide state: the hosts (HostKit's `HostsModel`) and one `Workspace` per open target, so
-/// a host's panes (and their terminals) survive switching away and back. The UI binds to these;
-/// docs/APP-ARCHITECTURE.md lists the seams.
+/// App-wide state: the hosts (HostKit's `HostsModel`), this device's layout, and the pane
+/// streams every window shares. Each window makes its own `Workspace` per host
+/// (`makeWorkspace`): its own selection, terminals and views over the host's one layout store and
+/// one stream per pane (docs/APP-ARCHITECTURE.md "Windows").
 @MainActor
 @Observable
 final class AppModel {
     let hosts: HostsModel
     /// Shown by the window when a pairing / connection started outside it fails (deep link).
     var lastError: String?
+    /// This device's tabs (the Mac's shells; empty on iPhone and iPad unless a test or fixture
+    /// asks for the echo stand-in), shared by every window like a host's layout.
+    let localLayout: LocalLayoutStore
 
-    @ObservationIgnored private var workspaces: [WorkspaceTarget: (workspace: Workspace, connection: ObjectIdentifier?)] = [:]
+    /// Pane streams shared by windows, for backends that are one process or channel per pane
+    /// (local PTYs, plain SSH, the echo stand-in). Daemon panes share their connection's router.
+    @ObservationIgnored private var sharedPanes: [SharedPaneKey: SharedPaneBackend] = [:]
+    /// Every open window (Hosts closing in one window stay connected while another shows them).
+    @ObservationIgnored private let windows = NSHashTable<WindowModel>.weakObjects()
+
+    private struct SharedPaneKey: Hashable {
+        /// The connection (nil: this device).
+        var connection: ObjectIdentifier?
+        var pane: PaneId
+    }
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "app")
 
     static let shared = AppModel()
@@ -49,18 +63,20 @@ final class AppModel {
         configuration.bundledDaemons = { bundled }
         hosts = HostsModel(secrets: secrets, repository: repository, configuration: configuration)
         hosts.hostKeyPrompts.trustNewHostsAutomatically = defaults.bool(forKey: "testTrustHostKeys")
+        // No local shell on iOS (only the echo stand-in for tests): an empty session.
+        localLayout = LaunchOptions.hasLocalShell ? LocalLayoutStore() : LocalLayoutStore(session: Session(tabs: [], activeTabId: nil))
     }
 
-    /// The workspace for a target, created on first use. A host whose connection object changed
-    /// (plain SSH upgraded to the daemon) gets a fresh workspace on the new connection.
-    func workspace(for target: WorkspaceTarget) -> Workspace? {
+    /// A window's workspace for a target: this window's view of the host (its own selection,
+    /// starting on `tab` if given, and its own terminals) over the host's shared layout and pane
+    /// streams. Opening the host connects it if needed; nil if it cannot be opened.
+    func makeWorkspace(for target: WorkspaceTarget, selecting tab: TabId? = nil) -> Workspace? {
         switch target {
         case .local:
-            if let existing = workspaces[.local] { return existing.workspace }
-            // No local shell on iOS (only the echo stand-in for tests): an empty session.
-            let workspace = LaunchOptions.hasLocalShell ? Workspace() : Workspace(layout: LocalLayoutStore(session: Session(tabs: [], activeTabId: nil)))
-            workspaces[.local] = (workspace, nil)
-            return workspace
+            return Workspace(layout: localLayout, selecting: tab) { [weak self] pane in
+                guard let self else { throw HostError.notConnected }
+                return try self.sharedPane(nil, pane) { try makeLocalBackend(for: pane) }
+            }
         case .host(let id):
             let connection: any HostConnection
             do {
@@ -69,21 +85,62 @@ final class AppModel {
                 Self.log.error("open host \(id, privacy: .public): \(String(describing: error), privacy: .public)")
                 return nil
             }
-            let identity = ObjectIdentifier(connection)
-            if let existing = workspaces[target], existing.connection == identity { return existing.workspace }
-            let workspace = Workspace(hostId: id, connection: connection)
-            workspaces[target] = (workspace, identity)
-            return workspace
+            // A daemon's router already shares each pane's stream between windows.
+            if connection is DaemonConnection { return Workspace(hostId: id, connection: connection, selecting: tab) }
+            return Workspace(hostId: id, connection: connection, selecting: tab) { [weak self, weak connection] pane in
+                guard let self, let connection else { throw HostError.notConnected }
+                return try self.sharedPane(ObjectIdentifier(connection), pane) { try connection.makeBackend(for: pane) }
+            }
         }
     }
 
-    /// Every open workspace (dictation looks for the pane that has the keyboard).
-    var openWorkspaces: [Workspace] { workspaces.values.map(\.workspace) }
-
-    /// The workspace already open for a target, without creating or connecting anything.
-    func existingWorkspace(for target: WorkspaceTarget) -> Workspace? {
-        workspaces[target]?.workspace
+    /// A tap of a pane's shared stream, starting the backend with the first window that shows
+    /// the pane.
+    private func sharedPane(
+        _ connection: ObjectIdentifier?, _ pane: PaneId, make: () throws -> any PaneBackend
+    ) rethrows -> any PaneBackend {
+        sharedPanes = sharedPanes.filter { !$0.value.isTerminated }
+        let key = SharedPaneKey(connection: connection, pane: pane)
+        if let shared = sharedPanes[key] { return shared.makeTap() }
+        let shared = SharedPaneBackend(try make())
+        sharedPanes[key] = shared
+        return shared.makeTap()
     }
+
+    /// Every open window's workspaces, the key window's first (dictation looks for the pane
+    /// that has the keyboard, else the key window's focused pane).
+    var openWorkspaces: [Workspace] {
+        let key = openWindows.first { $0 === ActiveWindow.model }
+        let windows = (key.map { [$0] } ?? []) + openWindows.filter { $0 !== key }
+        return windows.flatMap { window in
+            [window.workspace].compactMap { $0 } + window.workspaces.values.filter { $0 !== window.workspace }
+        }
+    }
+
+    /// Ends the shared streams of a connection that closed (its panes cannot come back).
+    func endSharedPanes(of connection: any HostConnection) {
+        let id = ObjectIdentifier(connection)
+        for (key, shared) in sharedPanes where key.connection == id { shared.terminate() }
+        sharedPanes = sharedPanes.filter { $0.key.connection != id }
+    }
+
+    // MARK: Windows
+
+    func register(_ window: WindowModel) {
+        windows.add(window)
+        windowsChanged += 1
+    }
+
+    /// Bumped when a window opens or closes (observers of `openWindows`).
+    var windowsChanged = 0
+
+    /// Whether a window other than `window` has a host open.
+    func isHostOpen(_ id: String, elsewhereThan window: WindowModel) -> Bool {
+        windows.allObjects.contains { $0 !== window && !$0.isClosed && $0.groups.openHosts.contains(id) }
+    }
+
+    /// Every open window, most recently active first when known.
+    var openWindows: [WindowModel] { windows.allObjects.filter { !$0.isClosed }.sorted { $0.serial < $1.serial } }
 
     /// The gzipped static Linux daemons bundled as resources (project.yml), for "Install helper".
     nonisolated static func bundledDaemons() -> HostdBinaries {
@@ -115,6 +172,10 @@ final class AppModel {
     /// `-testTickets <t1>,<t2>,…` pairs with each daemon (named by `-testTicketNames
     /// alpha,beta,…`) for the multi-host tests; the window opens them all and shows the first.
     func runLaunchHooks() async -> [WorkspaceTarget] {
+        // Once per app: every window's launch asks, only the first pairs and shows the hosts
+        // (two windows restored at launch must not pair the same ticket twice).
+        guard !launchHooksRan else { return [] }
+        launchHooksRan = true
         let defaults = UserDefaults.standard
         if let list = defaults.string(forKey: "testTickets"), !list.isEmpty {
             let tickets = list.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
@@ -133,6 +194,8 @@ final class AppModel {
         }
         return await runSingleLaunchHook().map { [$0] } ?? []
     }
+
+    @ObservationIgnored private var launchHooksRan = false
 
     private func runSingleLaunchHook() async -> WorkspaceTarget? {
         let defaults = UserDefaults.standard

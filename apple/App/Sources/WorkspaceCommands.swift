@@ -19,9 +19,19 @@ struct WorkspaceCommands: Commands {
     private var editorHasKeys: Bool { model?.isEditorShown == true }
 
     var body: some Commands {
+        #if os(iOS)
+        // iPadOS: New Window opens the same hosts on the same tab (`WindowRequest.like`); the
+        // window then goes its own way. The Mac's File ▸ New Window does the same through
+        // `WindowGroup(for:)` with no request (it restores the last window's hosts).
+        CommandGroup(replacing: .newItem) {
+            buttons([.newWindow])
+            buttons(WorkspaceAction.fileActions)
+        }
+        #else
         CommandGroup(after: .newItem) {
             buttons(WorkspaceAction.fileActions)
         }
+        #endif
         CommandGroup(after: .textEditing) {
             buttons([.find])
         }

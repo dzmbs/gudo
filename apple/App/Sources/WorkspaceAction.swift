@@ -9,6 +9,8 @@ enum WorkspaceAction: Hashable {
     case toggleZoom, focus(Direction), resize(Direction)
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
     case draw, newCanvas
+    /// A new window with this window's hosts, on its tab (⌘N).
+    case newWindow
     /// The window's own screens and overlays.
     case commandPalette, commandPaletteGhostty, find, links, inbox, hosts
 
@@ -20,7 +22,7 @@ enum WorkspaceAction: Hashable {
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
-    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + windowActions
+    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + windowActions + [.newWindow]
 
     var title: String {
         switch self {
@@ -39,6 +41,7 @@ enum WorkspaceAction: Hashable {
         case .goToTab: "Go to Tab…"
         case .draw: "Draw on Pane"
         case .newCanvas: "New Canvas Split"
+        case .newWindow: "New Window"
         case .commandPalette, .commandPaletteGhostty: "Command Palette"
         case .find: "Find…"
         case .links: "Links & Paths…"
@@ -65,6 +68,7 @@ enum WorkspaceAction: Hashable {
         // ⇧⌘D is Ghostty's Split Down.
         case .draw: KeyboardShortcut("d", modifiers: [.command, .control])
         case .newCanvas: KeyboardShortcut("d", modifiers: [.command, .control, .shift])
+        case .newWindow: KeyboardShortcut("n")
         // ⌘K is Raycast's and Linear's; ⇧⌘P is Ghostty's.
         case .commandPalette: KeyboardShortcut("k")
         case .commandPaletteGhostty: KeyboardShortcut("p", modifiers: [.command, .shift])
@@ -91,6 +95,7 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): window.selectTab(shortcut: number)
         case .lastTab: window.selectTab(shortcut: 9)
         case .goToTab: window.showTabFinder()
+        case .newWindow: window.newWindow()
         case .commandPalette, .commandPaletteGhostty: window.isPaletteShown.toggle()
         case .find: window.isSearchShown = true
         case .links: window.sheet = .links
@@ -114,7 +119,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab: break
+        case .goToTab, .newWindow: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.

@@ -40,7 +40,7 @@ final class LiveHostDirectory: HostDirectory {
         #endif
         return HostSummary(
             id: Self.localId, name: WindowModel.deviceName, address: address, kind: .local, connection: .connected,
-            sessionCount: app.existingWorkspace(for: .local)?.session.tabs.count ?? 0, agentCounts: [:],
+            sessionCount: app.localLayout.session.tabs.count, agentCounts: [:],
             lastSeen: .now, isPinned: false)
     }
 

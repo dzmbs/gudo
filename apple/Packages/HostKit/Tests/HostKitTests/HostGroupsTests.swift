@@ -173,6 +173,18 @@ final class FakeConnection: HostConnection {
         #expect(box.tabs.isEmpty)
     }
 
+    /// Windows: a host another window still shows keeps its connection when one window closes it.
+    @Test func closingAHostAnotherWindowShowsKeepsItsConnection() throws {
+        let (groups, fakes, _) = try fixture()
+        groups.isOpenElsewhere = { $0 == "studio" }
+        groups.close("studio")
+        #expect(!groups.openHosts.contains("studio"))
+        #expect(fakes["studio"]!.lifecycle.isEmpty)
+        #expect(groups.hosts.connection("studio") != nil)
+        groups.close("hetzner")
+        #expect(groups.hosts.connection("hetzner") == nil)
+    }
+
     @Test func tabRefsRoundTripForPersistence() throws {
         let ref = TabRef(hostId: "hetzner", tab: TabId(42))
         let data = try JSONEncoder().encode([ref])

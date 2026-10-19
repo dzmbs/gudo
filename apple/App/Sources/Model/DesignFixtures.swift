@@ -24,14 +24,8 @@ enum DesignFixtures {
             for _ in 0..<50 where workspace.focusedPane == nil {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            // iPad launches build a second window model whose local workspace replaces the first
-            // one in `AppModel` (on main too): fill the one the app holds now, which is on screen.
-            try? await Task.sleep(for: .seconds(1))
-            let shown = model.app.workspace(for: .local) ?? workspace
-            for _ in 0..<50 where shown.focusedPane == nil {
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            programs(shown)
+            // One window model per scene: the workspace given is the one on screen.
+            programs(workspace)
             return
         case "live-splits":
             // A real host's tab split in three, names and titles left as they are.

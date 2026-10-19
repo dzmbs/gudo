@@ -161,6 +161,23 @@ decision is independent of it, so a rename is one line.
 
 Each screen can be opened directly for review: `-screen <name> -mock` (see Screenshots).
 
+### Windows and widths
+
+- Layout by window width, never by device (`WidthBucket`): under 600 pt the compact layout (one
+  pane, the tab switcher, the floating tab bar), from 600 pt the sidebar with splits; 12 pt of
+  hysteresis. An iPhone in portrait, Slide Over, a third or an 11" half of an iPad and narrow
+  Stage Manager windows are compact; an iPhone in landscape, a foldable's inner screen, iPad mini
+  and wider windows are regular. Crossing the boundary keeps the tab, the focused pane and its
+  scroll position, and never shows the cols × rows overlay.
+- Every window is its own (iPad scenes, Stage Manager, Mac windows): New Window (⌘N) opens the
+  same hosts on the same tab; tab and host context menus have Open in New Window
+  (`macwindow.badge.plus`); on iPad a tab dragged out of the window becomes a window.
+- An external display without Stage Manager shows the iPad's tab full size, chrome-free, the
+  font scaled to fill it; the iPad keeps the keyboard and the chrome.
+- Handoff from another device opens the same host, tab and pane. A host this device does not
+  have: an alert, "studio isn't set up on this iPad", with Add Host (SSH address filled in) and
+  Not Now; never a silent failure.
+
 ### Window and title bar (Mac)
 
 - One layout for both tab placements: the integrated sidebar (vertical tabs only) beside a
