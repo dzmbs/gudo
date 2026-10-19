@@ -27,7 +27,7 @@ enum WorkspaceShortcuts {
               window.firstResponder is TerminalView || window.firstResponder === window,
               let workspace = ActiveWindow.workspace(in: window), let action = action(for: event)
         else { return false }
-        action.perform(on: workspace)
+        action.perform(on: workspace, window: ActiveWindow.model(for: workspace))
         return true
     }
 

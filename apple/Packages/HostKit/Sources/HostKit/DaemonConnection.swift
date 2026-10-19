@@ -45,6 +45,9 @@ public final class DaemonConnection: HostConnection {
     public private(set) var echoRoundTrip: Duration?
     /// Timings of the current connection, for diagnostics and the report.
     public private(set) var timings = Timings()
+    /// How many times this connection dialled or redialled (connect, retry, foreground and
+    /// network-change resumes). Switching between hosts in a window must not change it.
+    @ObservationIgnored public private(set) var dials = 0
     /// Called when a layout or connection change should be persisted (the attached session).
     @ObservationIgnored public var onAttached: ((UInt64) -> Void)?
 
@@ -109,6 +112,7 @@ public final class DaemonConnection: HostConnection {
             continuation.yield(event)
         }
         status = .connecting
+        dials += 1
         timings = Timings(dialStarted: .now)
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
         let client = try dialer(ticket, listener)
@@ -131,6 +135,7 @@ public final class DaemonConnection: HostConnection {
             try? connect()
         } else {
             status = .connecting
+            dials += 1
             client?.reconnect()
         }
     }
@@ -139,6 +144,7 @@ public final class DaemonConnection: HostConnection {
         guard let client else { return }
         if case .connected = status { return }
         Self.log.info("foreground: resuming host=\(self.hostId, privacy: .public)")
+        dials += 1
         timings.dialStarted = .now
         client.reconnect()
     }
@@ -154,6 +160,7 @@ public final class DaemonConnection: HostConnection {
         guard let client else { return }
         if case .suspended = status { return }
         Self.log.info("network changed: redialing host=\(self.hostId, privacy: .public)")
+        dials += 1
         timings.dialStarted = .now
         client.reconnect()
     }

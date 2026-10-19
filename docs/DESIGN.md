@@ -178,19 +178,32 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 
 
 - Inbox (count badge, red only when something needs you) and Hosts at the top.
-- Section with the window's place ("This Mac", or the host's name) and its connection dot (+ New
-  Tab on the Mac; the iPad sidebar has it in its own bar, level with the detail's). One row per
-  tab: tab number (tertiary, monospaced), the tab's name (medium when selected) with the most
-  urgent agent glyph, the live context in SF Mono underneath, ⌘N on the Mac. Selection is a 9 %
-  fill with radius 10 (hover 6 %), never the accent. Drag to reorder; context menu Rename / Close.
+- One group per host the window shows, all at once (owner, 2026-10-18: switching hosts never
+  goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
+  host in the order it was opened. Group header: disclosure chevron (tap the header to collapse;
+  a collapsed group shows its tab count), connection dot, the host's name (primary when it is the
+  host on screen), an "SSH" outline badge for plain-SSH hosts, + on hover (always on touch) for a
+  new tab there. While a host is not live, its state in words under the name in its color
+  ("Reconnecting · attempt 2", the reason it could not open) and its rows at 60 % — never hidden.
+  Context menu: New Tab, Collapse, Retry Now, Show in Hosts, Disconnect.
+- One row per tab: its number across all hosts (tertiary, monospaced), the tab's name (medium
+  when selected) with the most urgent agent glyph, the live context in SF Mono underneath, ⌘N on
+  the Mac (⌘1–8 index the unified list; numbers do not change when a group collapses or a host
+  goes down). Selection is a 9 % fill with radius 10 (hover 6 %), never the accent. Drag to
+  reorder within a host; context menu Rename / Close. Under a group's tabs, its agents.
+- Tab strip with several hosts: each host's run of tabs starts with its dot and name.
+- iPhone: the title menu lists every host as a section (name, and its state when not live) with
+  its tabs and "New Tab on …".
 - Tab names: every new tab gets a short friendly adjective-noun name ("quiet-otter",
   `Workspace/FriendlyName.swift`, curated lists), stable, and sent to the daemon as a rename so
   every device shows it. A user rename always wins. The context line is the agent's task, else
   the foreground program, else the program's OSC 0/2 title, else `repo:branch` (local), else the
   directory. Settings ▸ "Tab Title from Shell" (`title-from-shell`) lets an OSC title replace a
   generated name.
-- Section "Agents": every pane whose program reports status, across tabs: glyph, program, tab
-- Footer: connection state and Settings.
+- A group's agents: every pane of that host whose program reports status, across its tabs:
+  focuses the pane, switching hosts if needed.
+- Footer: the host on screen when it is down, else every host at a glance ("3 hosts connected",
+  "hetzner · Reconnecting"), and Settings.
 
 ### Tab strip (horizontal tabs) — Ghostty native tabs
 
@@ -245,6 +258,12 @@ Ghostty's palette in a glass panel near the top: 20 pt light query "Execute a co
 rows with icon or status glyph, title, subtitle, badge and shortcut. Empty query: sections Needs
 You → Tabs → Terminal → Go → Hosts. With a query: fuzzy ranked flat list, matched characters bold
 in the accent. ↑↓ / ⌃P ⌃N move, Return runs, Esc or a click outside closes.
+
+Two more modes of the same panel: **Go to Tab…** (⌘P, "Go to a tab on any host…") lists every
+tab on every host in sidebar order, subtitle "host · context", so a query matches a tab's name,
+its context line or its host; **New Tab On** (⌥⌘T, "New tab on…") lists the open hosts, the
+current one first with a "Current" badge, then other saved hosts (connects, then opens the tab)
+and Add Host…. The empty-query Tabs section also spans every host.
 
 ### Scrollback search (⌘F)
 

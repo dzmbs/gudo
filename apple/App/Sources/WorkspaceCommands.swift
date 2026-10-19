@@ -53,7 +53,7 @@ struct WorkspaceCommands: Commands {
 
     private func buttons(_ actions: [WorkspaceAction]) -> some View {
         ForEach(actions, id: \.self) { action in
-            Button(action.title) { workspace.map(action.perform) }
+            Button(action.title) { if let workspace { action.perform(on: workspace, window: model ?? ActiveWindow.model(for: workspace)) } }
                 .keyboardShortcut(action.shortcut)
         }
     }
@@ -72,6 +72,11 @@ enum ActiveWindow {
 
     static var model: WindowModel? {
         models.allObjects.first { workspace != nil && $0.workspace === workspace } ?? models.allObjects.first
+    }
+
+    /// The window showing `workspace`.
+    static func model(for workspace: Workspace) -> WindowModel? {
+        models.allObjects.first { $0.workspace === workspace }
     }
 
     #if os(macOS)

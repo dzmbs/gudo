@@ -125,7 +125,7 @@ final class DogfoodRunner {
         guard let action = actions.first(where: {
             $0.shortcut.modifiers == mods && DogfoodEvents.keyCode(for: $0.shortcut.key.character) == event.keyCode
         }) else { return false }
-        action.perform(on: workspace)
+        action.perform(on: workspace, window: ActiveWindow.model(for: workspace))
         return true
     }
 

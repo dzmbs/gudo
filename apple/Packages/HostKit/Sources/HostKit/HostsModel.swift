@@ -136,7 +136,13 @@ public final class HostsModel {
             hostId: record.id, ticket: ticket, session: record.sessionId, dialer: try daemonDialer())
         connection.onAttached = { [weak self] session in self?.update(record.id) { $0.sessionId = session } }
         connections[record.id] = connection
-        try connection.connect()
+        do {
+            try connection.connect()
+        } catch {
+            // Never leave a dead connection behind: the host shows why it could not open.
+            connections[record.id] = nil
+            throw error
+        }
         return connection
     }
 
@@ -150,11 +156,18 @@ public final class HostsModel {
 
     private func openSSH(_ record: HostRecord, password: String?) throws -> SshConnection {
         guard let endpoint = record.ssh else { throw HostError.notConnected }
+        // Credentials first: a host without them must not keep an idle connection.
+        let target = try target(for: endpoint)
+        let auth = try auth(for: record, password: password)
         let connection = SshConnection(hostId: record.id)
         connections[record.id] = connection
-        try connection.connect(
-            target: try target(for: endpoint), auth: try auth(for: record, password: password),
-            knownHosts: knownHosts, hostKeys: .ask(delegate: hostKeyPrompts.delegate()))
+        do {
+            try connection.connect(
+                target: target, auth: auth, knownHosts: knownHosts, hostKeys: .ask(delegate: hostKeyPrompts.delegate()))
+        } catch {
+            connections[record.id] = nil
+            throw error
+        }
         return connection
     }
 
