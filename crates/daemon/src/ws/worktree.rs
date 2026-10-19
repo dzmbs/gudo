@@ -6,11 +6,13 @@
 //! worktree holds and nothing is listening on. Every pane started inside a registered worktree
 //! gets `PORT` and `<PREFIX>WORKTREE` in its environment, recorded in the layout file.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use proto::{WorktreeCreate, WorktreeInfo, WsError};
+use proto::{
+    ArchivedWorktree, UnixMillis, WorktreeCreate, WorktreeInfo, WorktreeSettings, WsError,
+};
 use serde::{Deserialize, Serialize};
 
 use super::git::{self, git};
@@ -20,6 +22,60 @@ use crate::fsutil;
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Registry {
     ports: BTreeMap<PathBuf, u16>,
+    /// Worktrees the daemon created (New Task, Checkout PR, `WorktreeCreate`): the only ones
+    /// auto-delete may remove.
+    #[serde(default)]
+    managed: BTreeSet<PathBuf>,
+    /// When each managed worktree's pull request was first seen merged (Unix ms).
+    #[serde(default)]
+    merged: BTreeMap<PathBuf, u64>,
+    /// Archived worktrees, oldest first.
+    #[serde(default)]
+    archived: Vec<Archived>,
+    #[serde(default)]
+    next_archive: u64,
+    /// Days after merging before auto-delete; `None` is the default (7).
+    #[serde(default)]
+    auto_delete_days: Option<u32>,
+}
+
+/// Default for [`proto::WorktreeSettings::auto_delete_merged_days`].
+pub(crate) const DEFAULT_AUTO_DELETE_DAYS: u32 = 7;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Archived {
+    id: u64,
+    repo: PathBuf,
+    path: PathBuf,
+    branch: Option<String>,
+    head: Option<String>,
+    saved_changes: bool,
+    archived_at: u64,
+}
+
+impl Archived {
+    fn wire(&self) -> ArchivedWorktree {
+        ArchivedWorktree {
+            id: self.id,
+            repo: self.repo.to_string_lossy().into_owned(),
+            repo_name: self
+                .repo
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: self.path.to_string_lossy().into_owned(),
+            branch: self.branch.clone(),
+            head: self.head.clone(),
+            saved_changes: self.saved_changes,
+            archived_at: UnixMillis(self.archived_at),
+        }
+    }
+}
+
+/// Refs an archived worktree is kept under: `refs/<product>/archived/<id>/head` (its commit)
+/// and `…/changes` (its uncommitted changes, when saved).
+fn archive_ref(id: u64, part: &str) -> String {
+    format!("refs/{}/archived/{id}/{part}", brand::DIR_NAME)
 }
 
 pub(crate) struct Worktrees {
@@ -84,8 +140,12 @@ impl Worktrees {
     fn release(&self, path: &Path) {
         let mut registry = lock(&self.registry);
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
-        let removed =
+        let mut removed =
             registry.ports.remove(&canonical).is_some() || registry.ports.remove(path).is_some();
+        for p in [&canonical, &path.to_owned()] {
+            removed |= registry.managed.remove(p);
+            removed |= registry.merged.remove(p).is_some();
+        }
         if removed {
             self.save(&registry);
         }
@@ -145,6 +205,7 @@ impl Worktrees {
             e => e,
         })?;
         let port = self.allocate(&path);
+        self.mark_managed(&path);
         let head = git(&path, &["rev-parse", "HEAD"])
             .ok()
             .map(|o| String::from_utf8_lossy(&o).trim().to_owned());
@@ -163,7 +224,9 @@ impl Worktrees {
         })
     }
 
-    pub fn remove(&self, path: &Path, force: bool, delete_branch: bool) -> Result<(), WsError> {
+    /// The worktree at `path` (canonical), its repository's list and its main worktree;
+    /// refuses the main worktree itself.
+    fn linked(&self, path: &Path) -> Result<(PathBuf, WorktreeInfo, PathBuf), WsError> {
         let path = path
             .canonicalize()
             .map_err(|e| super::paths::io_error(path, &e))?;
@@ -171,24 +234,12 @@ impl Worktrees {
         let wt = list
             .iter()
             .find(|w| Path::new(&w.path).canonicalize().ok().as_deref() == Some(path.as_path()))
+            .cloned()
             .ok_or_else(|| WsError::Invalid(format!("{} is not a worktree", path.display())))?;
         if wt.main {
             return Err(WsError::Denied(
                 "refusing to remove the main worktree".into(),
             ));
-        }
-        if !force {
-            let dirty = git(
-                &path,
-                &["status", "--porcelain", "-z", "--untracked-files=normal"],
-            )?;
-            let count = dirty.split(|&b| b == 0).filter(|e| !e.is_empty()).count();
-            if count > 0 {
-                return Err(WsError::Conflict(format!(
-                    "{} has {count} uncommitted or untracked change(s); remove with force",
-                    path.display()
-                )));
-            }
         }
         // Run from the main worktree: the removed directory must not be git's cwd.
         let main = list
@@ -196,6 +247,27 @@ impl Worktrees {
             .find(|w| w.main)
             .map(|w| PathBuf::from(&w.path))
             .ok_or_else(|| WsError::Failed("no main worktree".into()))?;
+        Ok((path, wt, main))
+    }
+
+    pub fn remove(
+        &self,
+        path: &Path,
+        force: bool,
+        delete_branch: bool,
+        teardown: Option<&str>,
+    ) -> Result<(), WsError> {
+        let (path, wt, main) = self.linked(path)?;
+        let count = dirty_count(&path)?;
+        if !force && count > 0 {
+            return Err(WsError::Conflict(format!(
+                "{} has {count} uncommitted or untracked change(s); remove with force",
+                path.display()
+            )));
+        }
+        if let Some(cmd) = teardown {
+            run_hook(&path, cmd).or_else(|e| if force { Ok(()) } else { Err(e) })?;
+        }
         let path_str = path.to_string_lossy().into_owned();
         let mut args = vec!["worktree", "remove"];
         if force {
@@ -211,6 +283,310 @@ impl Worktrees {
             }
         }
         Ok(())
+    }
+
+    // --- managed worktrees and auto-delete ----------------------------------------------------
+
+    pub fn mark_managed(&self, path: &Path) {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+        let mut registry = lock(&self.registry);
+        if registry.managed.insert(path) {
+            self.save(&registry);
+        }
+    }
+
+    pub fn is_managed(&self, path: &Path) -> bool {
+        lock(&self.registry).managed.contains(path)
+    }
+
+    pub fn managed_paths(&self) -> Vec<PathBuf> {
+        lock(&self.registry).managed.iter().cloned().collect()
+    }
+
+    /// Drops a worktree that disappeared behind the daemon's back.
+    pub fn forget(&self, path: &Path) {
+        self.release(path);
+    }
+
+    /// When `path`'s pull request was first seen merged; records `now` the first time.
+    pub fn merged_since(&self, path: &Path, merged: bool, now: u64) -> Option<u64> {
+        let mut registry = lock(&self.registry);
+        if !registry.managed.contains(path) {
+            return None;
+        }
+        if !merged {
+            if registry.merged.remove(path).is_some() {
+                self.save(&registry);
+            }
+            return None;
+        }
+        if let Some(&at) = registry.merged.get(path) {
+            return Some(at);
+        }
+        registry.merged.insert(path.to_owned(), now);
+        self.save(&registry);
+        Some(now)
+    }
+
+    /// Managed worktrees merged at least `days` days ago (of `day` length).
+    pub fn due_for_delete(&self, now: u64, day: std::time::Duration) -> Vec<PathBuf> {
+        let registry = lock(&self.registry);
+        let days = registry
+            .auto_delete_days
+            .unwrap_or(DEFAULT_AUTO_DELETE_DAYS);
+        if days == 0 {
+            return Vec::new();
+        }
+        let after = u64::try_from(day.as_millis())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::from(days));
+        registry
+            .merged
+            .iter()
+            .filter(|(p, at)| registry.managed.contains(*p) && now.saturating_sub(**at) >= after)
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+
+    pub fn settings(&self, set: Option<WorktreeSettings>) -> WorktreeSettings {
+        let mut registry = lock(&self.registry);
+        if let Some(s) = set {
+            registry.auto_delete_days = Some(s.auto_delete_merged_days);
+            self.save(&registry);
+        }
+        WorktreeSettings {
+            auto_delete_merged_days: registry
+                .auto_delete_days
+                .unwrap_or(DEFAULT_AUTO_DELETE_DAYS),
+        }
+    }
+
+    // --- archive and restore ------------------------------------------------------------------
+
+    /// Archives a linked worktree: teardown, its commit (and with `force` its uncommitted
+    /// changes) kept under [`archive_ref`], directory removed, branch kept.
+    pub fn archive(
+        &self,
+        path: &Path,
+        force: bool,
+        teardown: Option<&str>,
+        now: u64,
+    ) -> Result<ArchivedWorktree, WsError> {
+        let (path, wt, main) = self.linked(path)?;
+        let count = dirty_count(&path)?;
+        if count > 0 && !force {
+            return Err(WsError::Conflict(format!(
+                "{} has {count} uncommitted or untracked change(s); archive with force to keep \
+                 them with it",
+                path.display()
+            )));
+        }
+        if let Some(cmd) = teardown {
+            run_hook(&path, cmd).or_else(|e| if force { Ok(()) } else { Err(e) })?;
+        }
+        let head = git(&path, &["rev-parse", "--verify", "HEAD"])
+            .map(|o| String::from_utf8_lossy(&o).trim().to_owned())
+            .map_err(|_| {
+                WsError::Invalid("a worktree without commits cannot be archived".into())
+            })?;
+        let id = {
+            let mut registry = lock(&self.registry);
+            registry.next_archive += 1;
+            registry.next_archive
+        };
+        let keep = || -> Result<bool, WsError> {
+            git(&main, &["update-ref", &archive_ref(id, "head"), &head])?;
+            if count == 0 {
+                return Ok(false);
+            }
+            let tree = git::worktree_tree(&path)?;
+            let commit = git(
+                &path,
+                &[
+                    "-c",
+                    "user.name=archive",
+                    "-c",
+                    "user.email=archive@localhost",
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &head,
+                    "-m",
+                    "uncommitted changes at archive",
+                ],
+            )?;
+            let commit = String::from_utf8_lossy(&commit).trim().to_owned();
+            git(&main, &["update-ref", &archive_ref(id, "changes"), &commit])?;
+            Ok(true)
+        };
+        let path_str = path.to_string_lossy().into_owned();
+        let saved_changes = keep().and_then(|saved| {
+            git(&main, &["worktree", "remove", "--force", "--", &path_str]).map(|_| saved)
+        });
+        let saved_changes = match saved_changes {
+            Ok(saved) => saved,
+            Err(e) => {
+                // Leave nothing half done: the worktree is still there.
+                for part in ["head", "changes"] {
+                    let _ = git(&main, &["update-ref", "-d", &archive_ref(id, part)]);
+                }
+                return Err(e);
+            }
+        };
+        self.release(&path);
+        let record = Archived {
+            id,
+            repo: main,
+            path,
+            branch: wt.branch,
+            head: Some(head),
+            saved_changes,
+            archived_at: now,
+        };
+        let wire = record.wire();
+        let mut registry = lock(&self.registry);
+        registry.archived.push(record);
+        self.save(&registry);
+        Ok(wire)
+    }
+
+    /// Archived worktrees, newest first, optionally of one repository (its main worktree).
+    pub fn archived(&self, repo: Option<&Path>) -> Vec<ArchivedWorktree> {
+        let registry = lock(&self.registry);
+        registry
+            .archived
+            .iter()
+            .rev()
+            .filter(|a| repo.is_none_or(|r| a.repo == r))
+            .map(Archived::wire)
+            .collect()
+    }
+
+    /// Recreates an archived worktree where it was, on its branch (recreated from the kept
+    /// commit if it was deleted), with its saved changes back as uncommitted changes.
+    pub fn restore(&self, id: u64) -> Result<WorktreeInfo, WsError> {
+        let record = lock(&self.registry)
+            .archived
+            .iter()
+            .find(|a| a.id == id)
+            .cloned()
+            .ok_or_else(|| WsError::NotFound(format!("archived worktree {id}")))?;
+        if record.path.exists() {
+            return Err(WsError::Conflict(format!(
+                "{} exists",
+                record.path.display()
+            )));
+        }
+        let main = &record.repo;
+        let base_ref = archive_ref(id, "head");
+        let path_str = record.path.to_string_lossy().into_owned();
+        if let Some(parent) = record.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| super::paths::io_error(parent, &e))?;
+        }
+        match &record.branch {
+            Some(branch) => {
+                let exists = git(
+                    main,
+                    &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+                )
+                .is_ok();
+                if exists {
+                    git(main, &["worktree", "add", "--", &path_str, branch])?;
+                } else {
+                    git(
+                        main,
+                        &["worktree", "add", "-b", branch, "--", &path_str, &base_ref],
+                    )?;
+                }
+            }
+            None => {
+                git(
+                    main,
+                    &["worktree", "add", "--detach", "--", &path_str, &base_ref],
+                )?;
+            }
+        }
+        if record.saved_changes {
+            let changes = archive_ref(id, "changes");
+            git(&record.path, &["checkout", &changes, "--", "."])?;
+            // Back to uncommitted changes: the index follows HEAD again, the files stay.
+            git(&record.path, &["reset", "-q"])?;
+            let _ = git(main, &["update-ref", "-d", &changes]);
+        }
+        let _ = git(main, &["update-ref", "-d", &base_ref]);
+        let port = self.allocate(&record.path);
+        self.mark_managed(&record.path);
+        {
+            let mut registry = lock(&self.registry);
+            registry.archived.retain(|a| a.id != id);
+            self.save(&registry);
+        }
+        let head = git(&record.path, &["rev-parse", "HEAD"])
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o).trim().to_owned());
+        Ok(WorktreeInfo {
+            path: record
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| record.path.clone())
+                .to_string_lossy()
+                .into_owned(),
+            branch: record.branch,
+            head,
+            main: false,
+            locked: false,
+            prunable: false,
+            port: Some(port),
+        })
+    }
+}
+
+/// Uncommitted and untracked paths in a worktree.
+pub(crate) fn dirty_count(path: &Path) -> Result<usize, WsError> {
+    let dirty = git(
+        path,
+        &["status", "--porcelain", "-z", "--untracked-files=normal"],
+    )?;
+    Ok(dirty.split(|&b| b == 0).filter(|e| !e.is_empty()).count())
+}
+
+/// Runs a teardown command in `dir` through `sh -c`, waiting at most five minutes.
+pub(crate) fn run_hook(dir: &Path, cmd: &str) -> Result<(), WsError> {
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", cmd])
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| WsError::Failed(format!("teardown: {e}")))?;
+    // Drained on a thread so a chatty teardown never blocks on a full pipe.
+    let stderr = child.stderr.take().map(|mut e| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut s = String::new();
+            let _ = e.read_to_string(&mut s);
+            s
+        })
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                let err = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
+                return Err(WsError::Failed(format!(
+                    "teardown `{cmd}` failed ({status}): {}",
+                    err.trim()
+                )));
+            }
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                return Err(WsError::Failed(format!("teardown `{cmd}` timed out")));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(e) => return Err(WsError::Failed(e.to_string())),
+        }
     }
 }
 
@@ -233,7 +609,7 @@ fn generated_branch() -> String {
 }
 
 /// `git worktree list --porcelain -z`: attribute lines, a blank field between worktrees.
-fn parse_list(out: &[u8]) -> Vec<WorktreeInfo> {
+pub(crate) fn parse_list(out: &[u8]) -> Vec<WorktreeInfo> {
     let mut list: Vec<WorktreeInfo> = Vec::new();
     let mut current: Option<WorktreeInfo> = None;
     for field in out.split(|&b| b == 0) {

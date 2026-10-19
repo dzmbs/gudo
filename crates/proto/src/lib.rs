@@ -40,6 +40,9 @@
 //!   [`ServerCtl::Askpass`], for clients with [`Caps::ASKPASS`]; see [`askpass`].
 //! - Agent plan usage: [`WorkspaceRequest::UsageWatch`] → [`WorkspaceResponse::AgentUsage`],
 //!   then pushes [`ServerCtl::AgentUsage`] for clients with [`Caps::AGENT_USAGE`]; see [`usage`].
+//! - The git-native workspace (repositories, worktrees and branches per pane, pull requests
+//!   through the host's `gh`, tasks, archive, scripts) is pushed as [`ServerCtl::Repos`] to
+//!   clients with [`Caps::REPO_STATUS`], with its requests in [`WorkspaceRequest`]; see [`repo`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -69,6 +72,7 @@ pub mod info;
 mod layout;
 pub mod mp;
 mod msg;
+pub mod repo;
 mod serde_bytes;
 mod ticket;
 pub mod usage;
@@ -90,6 +94,7 @@ pub use layout::{
 };
 pub use mp::*;
 pub use msg::*;
+pub use repo::*;
 pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
 pub use usage::*;
 pub use workspace::*;

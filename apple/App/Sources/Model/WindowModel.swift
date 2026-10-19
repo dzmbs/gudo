@@ -39,7 +39,10 @@ final class WindowModel {
     var destination = Destination.terminal
     var sheet: SheetRoute?
     var isPaletteShown = false {
-        didSet { if !isPaletteShown { paletteMode = .commands } }
+        didSet {
+            if !isPaletteShown { paletteMode = .commands }
+            if isPaletteShown { git.refreshArchived() }
+        }
     }
     var paletteMode = PaletteMode.commands
     var isSearchShown = false
@@ -100,6 +103,8 @@ final class WindowModel {
     /// The editor is presented (full screen on iPhone and iPad).
     var isEditorShown = false
     let toasts = ToastCenter()
+    /// The git-native workspace of this window (worktree, pull request, scripts).
+    let git = GitUI()
 
     @ObservationIgnored private var downSince: Date?
     /// A restored tab to select once its host's layout arrives.
@@ -154,6 +159,7 @@ final class WindowModel {
         }
         // Registered by the window when it appears (`WindowRoot`), not here: SwiftUI can create
         // spare models it never shows, and the shortcuts found one of those (⌘K opened nothing).
+        git.window = self
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
         followGroups()

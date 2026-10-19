@@ -71,7 +71,7 @@ pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT, STATUS_LINE_EVENT};
 pub use askpass::{ASKPASS_VERSION, AskpassCall, HelperQuery, HelperReply};
 pub use assist::HistoryConfig;
 pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir};
-pub use config::{CustomRelays, PushConfig};
+pub use config::{CustomRelays, PushConfig, RepoConfig};
 pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
 };
@@ -145,6 +145,7 @@ impl Daemon {
         tasks.push(tokio::spawn(persist::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::ports::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(ws::repo::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(notifier::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(mp::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(art::run(Arc::clone(&core))));

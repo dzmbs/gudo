@@ -90,15 +90,19 @@ pub struct ClientConfig {
     /// and [`Client::pane_snapshot`]). An app that feeds its own renderer's VT can turn this
     /// off; seq/ack and resume work either way.
     pub mirror_vt: bool,
+    /// Ask for the repository snapshot ([`WorkspaceEvent::Repos`]): the daemon then watches
+    /// the panes' repositories while this client is connected.
+    pub repo_status: bool,
 }
 
 impl ClientConfig {
-    /// Defaults: n0 relays, VT mirror on.
+    /// Defaults: n0 relays, VT mirror on, no repository snapshot.
     pub fn new(secret_key: Vec<u8>) -> Self {
         Self {
             secret_key,
             relay: RelayMode::Default,
             mirror_vt: true,
+            repo_status: false,
         }
     }
 

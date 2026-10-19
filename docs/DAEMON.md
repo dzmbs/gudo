@@ -612,7 +612,8 @@ with the count), and can `branch -d` the branch. Each worktree gets a stable `PO
 `<state>/worktrees.json` across restarts. Every pane whose directory is inside a registered
 worktree is started with `PORT` and `UN_WORKTREE`, recorded in `layout.json`
 (`worktree: {path, port}`). `WorktreeLaunch{path, split_from, axis, agent?}` splits a pane into
-run yet.
+a shell or Claude/Codex in the worktree. Setup and teardown commands come from
+`.unnamed.json` (§5.12).
 
 ### 5.6 Files
 
@@ -700,6 +701,80 @@ while a connection watches; the last status-line snapshot survives restarts
 (`<state>/usage/claude-status-line.json`). Tools are found through the panes' `PATH` (plus
 `~/.local/bin`), `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Tests: `cargo test -p daemon --test it usage`
 (fixture rollouts, status-line hook, fake `claude` / `codex`, a local HTTP endpoint).
+### 5.12 Git-native workspace (`proto::repo`)
+
+The sidebar's picture of the host's repositories, pushed whole as `ServerCtl::Repos(RepoSnapshot)`
+to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests opt in with
+`ClientConfig::repo_status`), right after they connect and on every change. Code:
+`crates/daemon/src/ws/repo.rs` (tracker), `repo_ops.rs` (requests), `gh.rs` (GitHub CLI).
+
+- **What**: each pane in a git worktree → that worktree (`panes`); every worktree of every
+  repository a pane is in (`worktrees`, main first): repository (main worktree path) and name,
+  worktree name, main or not, branch (or detached `HEAD`), upstream with ahead/behind,
+  `+added −removed` against `HEAD` with untracked files counted (≤ 500 files of ≤ 1 MiB,
+  binary skipped), changed paths, dirty; the branch's pull request; the repository's scripts and
+  setup/teardown; managed (made by the daemon) and when its PR was first seen merged; and `gh`'s
+  state (`Ready{account}`, `Missing`, `NotAuthenticated{message}`).
+- **Only while watched**: one task owns it. With no `REPO_STATUS` client connected it drops its
+  file watches and reads nothing (the auto-delete sweep still runs, below).
+- **Cheap refreshes**: a pane's directory (OSC 7, else its launch directory) maps to a worktree
+  with `rev-parse --show-toplevel`, cached 20 s; repositories are listed with `worktree list`
+  every 30 s or when worktrees change. A worktree is read with `status --porcelain=v2`,
+  `diff --numstat HEAD` and `ls-files --others`, all with `GIT_OPTIONAL_LOCKS=0` (reading never
+  writes the index, so it never triggers its own events). Triggers, debounced 300 ms and at most
+  one read per debounce period: file events (FSEvents on the whole worktree on macOS; the top
+  level, the git directory and `refs/heads` elsewhere, where recursive inotify would need a watch
+  per directory; inside `.git` only `HEAD`, `index` and refs count), a finished command (shell
+  integration) or agent event in a pane of the worktree, and a poll as the safety net (10 s with
+  panes, 60 s without). Snapshots go out only when something changed.
+- **Pull requests via the host's `gh`** (no token in the app): `gh pr view <branch> --json
+  number,title,state,isDraft,headRefName,additions,deletions,mergeStateStatus,statusCheckRollup,url`
+  per worktree branch, in the worktree, with `GH_PROMPT_DISABLED` and a 30 s timeout. Cached and
+  re-asked on a schedule: 30 s while checks run, 2 min otherwise, 5 min with no PR, 15 min once
+  merged or closed, soon after a commit or push; errors back off 1 → 32 min; a repository with no
+  GitHub remote is not asked again; nothing while `gh auth status` says missing or signed out
+  (re-checked every 5 min). `gh` is found on `PATH`, then Homebrew, Linuxbrew and `~/.local/bin`
+  run is pending; `SUCCESS` succeeds; `NEUTRAL`, `SKIPPED`, `CANCELLED` are their own; every other
+  conclusion fails; status contexts `ERROR`/`FAILURE` fail. Failures sort first.
+- **Requests** (`WorkspaceRequest`; Drive on the host, like the git and worktree requests):
+  `RepoRefresh{path?}` (read everything now, and that PR or all → `Repos`); `PrMerge{path,
+  number, strategy}` (re-reads the PR, refuses with `Conflict` if the number changed or
+  `mergeStateStatus` is not CLEAN/UNSTABLE/HAS_HOOKS, then `gh pr merge N
+  --merge|--squash|--rebase`); `PrRerunFailed{path}` (`gh run rerun <id> --failed` for each
+  failed check's Actions run); `PrCreate{path, draft, base?}` (push `-u` to the upstream's
+  remote or `origin`, then `gh pr create --fill`); `PrCheckout{repo, number}` (a detached
+  worktree `pr-N`, then `gh pr checkout N`, with `--branch pr-N` if the head branch is checked
+  out elsewhere); `TaskCreate{repo, session, name, branch?, base?, agent?}` (branch from the
+  name, `-2`… if taken; a worktree under the worktree root; the setup command queued; a new tab
+  with a shell or the agent); `ScriptRun{cwd, session, name, command}` (a new tab that runs the
+  command, then stays a shell with shell integration; an empty command is a plain shell tab);
+  `WorktreeArchive{path, force}`; `WorktreeArchived{repo?}`; `WorktreeRestore{id}`;
+  `WorktreeSettings(Option<…>)` (changing it needs the owner).
+- **Setup, teardown and scripts**: `.unnamed.json` at the worktree's top level (else the main
+  worktree's): `{"setup": "...", "teardown": "...", "scripts": [{"name", "command", "icon",
+  "tint", "default"}]}`. Setup runs first in the new task's pane, echoed dimmed (`› pnpm i`),
+  before the shell or the agent. Teardown runs (`sh -c`, ≤ 5 min) before archive or delete; a
+  failing teardown stops them unless forced.
+- **Archive keeps refs**: refused with `Conflict` when the worktree has changes unless `force`.
+  The commit goes to `refs/unnamed/archived/<id>/head` and, with changes, a commit of the whole
+  working tree (untracked files included, the user's index untouched) to `…/changes`; then the
+  worktree is removed; the branch stays. Restore re-adds the worktree where it was, on its branch
+  (recreated from the ref if it was deleted), checks the saved changes out and resets the index
+  so they are uncommitted again, and deletes the refs. Records live in `<state>/worktrees.json`.
+- **Auto-delete**: worktrees the daemon made (TaskCreate, PrCheckout, WorktreeCreate, restore)
+  are removed `auto_delete_merged_days` (default 7; 0 never; set from the app's Settings) after
+  their PR was first seen merged, by an hourly sweep that asks `gh` itself for managed worktrees
+  no pane follows. Never one with uncommitted changes: it stays, shown as merged and dirty, and
+  the app asks. Teardown runs first; the branch stays.
+- **Tests**: `cargo test -p daemon --test it repos` on real temporary repositories with a fake
+  `gh` answering from fixture JSON: the snapshot (pane → worktree, ahead/behind against a real
+  `origin`, `+4 −1` with untracked files, a commit seen through the git directory, PR and
+  checks), New Task with setup, a script tab, re-run, merge refused for a changed number and for
+  a blocked PR, the merged clock; archive refused when dirty, a forced archive keeping both refs,
+  restore with the changes uncommitted again; auto-delete of a clean merged worktree after "2
+  days" of 100 ms with teardown, never the dirty or the open one; no snapshot for clients
+  without the capability. Unit tests: `gh` JSON and errors, line counting, event filtering, the
+  config file, branch names. Goldens: `crates/proto/tests/golden_repo.rs`.
 
 
 Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on

@@ -72,6 +72,10 @@ pub struct ClientConfig {
     /// turn it off; seq/ack and resume work either way.
     #[uniffi(default = true)]
     pub mirror_vt: bool,
+    /// Receive the repository snapshot (`WorkspaceEvent.repos`); the daemon watches the
+    /// panes' repositories while this client is connected.
+    #[uniffi(default = true)]
+    pub repo_status: bool,
 }
 
 /// A fresh random 32-byte device key for [`ClientConfig::secret_key`].
@@ -547,6 +551,7 @@ impl From<ClientConfig> for client_core::ClientConfig {
                 RelayMode::Disabled => client_core::RelayMode::Disabled,
             },
             mirror_vt: config.mirror_vt,
+            repo_status: config.repo_status,
         }
     }
 }

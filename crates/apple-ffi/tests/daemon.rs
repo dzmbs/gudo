@@ -54,6 +54,7 @@ fn connect_attach_split_echo() {
             secret_key: generate_device_key(),
             relay: RelayMode::Disabled,
             mirror_vt: true,
+            repo_status: false,
         },
         events.clone(),
     )

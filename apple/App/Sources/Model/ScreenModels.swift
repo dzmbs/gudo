@@ -153,8 +153,14 @@ nonisolated struct AgentLaunchRequest: Hashable, Sendable {
     var prompt: String
     /// Run in a fresh git worktree (its own branch and `PORT`).
     var worktree = false
-    /// The worktree's branch; nil lets the host name one (`unnamed/<word>-<hex>`).
+    /// The worktree's branch; nil derives it from `name`.
     var branch: String?
+    /// The task's name: the new tab's and the worktree's (a friendly generated one by default).
+    var name: String?
+    /// The repository (any directory in it) for the worktree; the focused pane's when nil.
+    var repo: String?
+    /// Open a shell instead of starting `agent`.
+    var shell = false
 }
 
 @MainActor

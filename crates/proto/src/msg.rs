@@ -613,6 +613,9 @@ pub enum ServerCtl {
     /// Agent plan usage changed. Sent to clients with [`Caps::AGENT_USAGE`] that watch it
     /// ([`WorkspaceRequest::UsageWatch`]).
     AgentUsage(crate::AgentUsageReport),
+    /// The repositories, worktrees, branches and pull requests of the panes (sent whole, to
+    /// clients with [`Caps::REPO_STATUS`], after attaching and on every change).
+    Repos(crate::repo::RepoSnapshot),
 }
 
 /// A successful [`ClientCtl::Attach`].

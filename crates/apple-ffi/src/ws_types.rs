@@ -1440,6 +1440,11 @@ pub enum WorkspaceEvent {
         /// The whole report.
         report: crate::usage::AgentUsageReport,
     },
+    /// The repositories, worktrees, branches and pull requests of the panes (whole).
+    Repos {
+        /// The snapshot.
+        snapshot: crate::repo::RepoSnapshot,
+    },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
@@ -1464,6 +1469,9 @@ impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
             },
             E::AgentUsage { report } => Self::AgentUsage {
                 report: report.into(),
+            },
+            E::Repos { snapshot } => Self::Repos {
+                snapshot: snapshot.into(),
             },
         }
     }

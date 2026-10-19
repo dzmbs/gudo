@@ -30,6 +30,7 @@ enum PaletteCommands {
         }
 
         commands += tabs(model: model, section: "Tabs")
+        commands += git(model: model)
 
         let actions: [(WorkspaceAction, String)] = [
             (.newTab, "plus"), (.newTabOnHost, "plus.rectangle.on.rectangle"), (.goToTab, "arrow.right.square"),
@@ -57,7 +58,7 @@ enum PaletteCommands {
             }),
             ("share", "Share Session", "person.crop.circle.badge.plus", nil, { model.sheet = .invite }),
             ("join", "Join a Session…", "person.2.badge.plus", nil, { model.joinInvite = ""; model.sheet = .join }),
-            ("agent", "New Agent", "sparkle", nil, { model.sheet = .launchAgent }),
+            ("agent", "New Task…", "sparkle", nil, { model.sheet = .launchAgent }),
             ("inbox", "Go to Inbox", "tray", ["⇧", "⌘", "I"], { model.destination = .inbox }),
             ("hosts", "Go to Hosts", "server.rack", nil, { model.destination = .hosts }),
             ("add-host", "Add Host", "plus.circle", nil, { model.addHost() }),
@@ -103,6 +104,61 @@ enum PaletteCommands {
                     shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
                 ) { model.focus(ref) })
             }
+        }
+        return commands
+    }
+
+    /// The focused pane's worktree: pull request actions (Merge respects GitHub's merge state and
+    static func git(model: WindowModel) -> [PaletteCommand] {
+        let git = model.git
+        guard let wt = git.worktree else { return [] }
+        var commands: [PaletteCommand] = []
+        let section = "Git · \(wt.displayBranch)"
+        if let pr = wt.visiblePR, pr.state == .open {
+            if pr.mergeBlocker == nil {
+                commands.append(PaletteCommand(
+                    id: "git-merge", title: "Merge PR #\(pr.number)",
+                    subtitle: "\(GitSettings.name(GitSettings.mergeStrategy)) · \(pr.title)", section: section,
+                    systemImage: "arrow.triangle.merge", badge: pr.mergeState == .unstable ? "Optional check failed" : nil
+                ) { git.requestMerge(wt) })
+            }
+            if pr.hasRerunnableFailures {
+                commands.append(PaletteCommand(
+                    id: "git-rerun", title: "Re-run Failed Checks", subtitle: pr.checksSummary.words, section: section,
+                    systemImage: "arrow.clockwise") { git.rerunFailed(wt) })
+            }
+        }
+        if let pr = wt.visiblePR {
+            commands.append(PaletteCommand(
+                id: "git-open-pr", title: "Open PR #\(pr.number) on GitHub", subtitle: pr.title, section: section,
+                systemImage: "arrow.up.right.square", shortcut: ["⌃", "⌘", "G"]) { git.openOnGitHub(pr) })
+        } else if !wt.main, case .ready = git.gh {
+            commands.append(PaletteCommand(
+                id: "git-create-pr", title: "Create Pull Request", subtitle: "Push \(wt.displayBranch) and open it (gh pr create --fill)",
+                section: section, systemImage: "arrow.triangle.pull") { git.createPR(wt) })
+        }
+        commands.append(PaletteCommand(
+            id: "git-checkout-pr", title: "Check Out Pull Request…", subtitle: "Into a new worktree", section: section,
+            systemImage: "arrow.down.to.line") { git.isCheckoutPromptShown = true })
+        for script in git.scripts(for: wt) {
+            commands.append(PaletteCommand(
+                id: "git-run-\(script.id)", title: "Run: \(script.name)", subtitle: script.command, section: section,
+                systemImage: script.systemImage, shortcut: script == git.defaultScript(for: wt) ? ["⌘", "R"] : nil,
+                badge: "Script") { git.run(script, in: wt) })
+        }
+        if !wt.main {
+            commands.append(PaletteCommand(
+                id: "git-archive", title: "Archive Worktree", subtitle: wt.name, section: section, systemImage: "archivebox",
+                badge: "Archive") { git.archive(wt) })
+            commands.append(PaletteCommand(
+                id: "git-delete", title: "Delete Worktree…", subtitle: wt.name, section: section, systemImage: "trash",
+                badge: "Remove") { git.delete(wt) })
+        }
+        for archived in git.archived where archived.repo == wt.repo {
+            commands.append(PaletteCommand(
+                id: "git-restore-\(archived.id)", title: "Restore \(archived.branch ?? (archived.path as NSString).lastPathComponent)",
+                subtitle: "Archived \(Date(timeIntervalSince1970: Double(archived.archivedAtMs) / 1000).formatted(.relative(presentation: .named)))\(archived.savedChanges ? " · with changes" : "")",
+                section: section, systemImage: "tray.and.arrow.up") { git.restore(archived) })
         }
         return commands
     }

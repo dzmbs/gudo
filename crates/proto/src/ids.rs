@@ -275,6 +275,9 @@ bitset! {
         /// with `ClientCtl::Askpass` (see `proto::askpass`). Without it the daemon's askpass
         /// helper asks on the terminal. (Bit 6 is the usage meters' `AGENT_USAGE`.)
         ASKPASS = 7;
+        /// Wants `ServerCtl::Repos` (repository, worktree, branch and pull request state of
+        /// every pane); the daemon only watches repositories while such a client is connected.
+        REPO_STATUS = 8;
     }
 }
 

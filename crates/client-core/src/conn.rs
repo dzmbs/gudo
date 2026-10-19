@@ -270,6 +270,11 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
                 Caps::ASKPASS
             } else {
                 Caps::EMPTY
+            }
+            | if inner.config.repo_status {
+                Caps::REPO_STATUS
+            } else {
+                Caps::EMPTY
             },
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
