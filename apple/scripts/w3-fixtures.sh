@@ -62,6 +62,8 @@ while IFS= read -r line; do
       case "$out" in *'"allow"'*) echo "decision: allowed" ;; *'"deny"'*) echo "decision: denied" ;; *) echo "decision: none" ;; esac
       ;;
   esac
+  # A real turn takes seconds; the daemon snapshots the tree when the turn starts.
+  sleep 1
   echo "turn: $line" >>agent-notes.txt
   send Stop "$(json session_id=$sid hook_event_name=Stop cwd=$PWD "last_assistant_message=Done: $line")" >/dev/null
 done
