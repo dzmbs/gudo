@@ -13,6 +13,8 @@ import AppKit
 struct InboxView: View {
     let feed: any AgentFeed
     var onLaunch: () -> Void = {}
+    /// A plain shell tab (the window's current host); when set, + is a menu: New Terminal, New Agent.
+    var onNewTerminal: (() -> Void)?
     /// Jump to the agent's pane (default: the feed's own `open`).
     var onOpen: ((AgentItem) -> Void)?
 
@@ -40,8 +42,23 @@ struct InboxView: View {
         .navigationSubtitle(unseenLine)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("New Agent", systemImage: "plus", action: onLaunch)
-                    .accessibilityIdentifier("inbox-new-agent")
+                if let onNewTerminal {
+                    // + is a terminal first (the plain shell), then an agent.
+                    Menu {
+                        Button("New Terminal", systemImage: "terminal", action: onNewTerminal)
+                            .accessibilityIdentifier("inbox-new-terminal")
+                        Button("New Agent", systemImage: "sparkle", action: onLaunch)
+                            .accessibilityIdentifier("inbox-new-agent")
+                    } label: {
+                        Label("New", systemImage: "plus")
+                    } primaryAction: {
+                        onNewTerminal()
+                    }
+                    .accessibilityIdentifier("inbox-new")
+                } else {
+                    Button("New Agent", systemImage: "plus", action: onLaunch)
+                        .accessibilityIdentifier("inbox-new-agent")
+                }
             }
         }
         #if os(iOS)

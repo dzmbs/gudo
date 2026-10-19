@@ -1,4 +1,5 @@
 import DesignSystem
+import HostKit
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -58,42 +59,47 @@ struct TerminalApp: App {
     }
 }
 
-/// One window: the workspace it shows (this device or a host) inside the design's chrome. Deep
-/// links, the hosts list and the launch test hooks pick the target; the window model (sidebar
-/// destination, sheets, palette) survives switching targets.
+/// One window: every open host at once (the sidebar groups them), the target's workspace in the
+/// detail column, inside the design's chrome. Deep links, the hosts list, the sidebar and the
+/// launch test hooks pick the target; the window model (sidebar destination, sheets, palette,
+/// open hosts) survives switching targets. Which hosts were open, which groups were collapsed and
+/// the last-focused tab are restored on launch.
 struct WindowRoot: View {
     @Environment(AppModel.self) private var app
+    /// Legacy single-target restore (before multi-host windows).
     @SceneStorage("target") private var storedTarget: String?
-    @State private var target = WorkspaceTarget.local
+    @SceneStorage("openHosts") private var storedHosts: String?
+    @SceneStorage("collapsedHosts") private var storedCollapsed: String?
+    @SceneStorage("focusedTab") private var storedFocus: String?
     @State private var restored = false
     @State private var model = WindowModel(app: AppModel.shared)
-    /// The workspace on screen, resolved when the target changes (never during `body`).
-    @State private var workspace: Workspace?
 
     var body: some View {
         Group {
-            if let workspace {
+            if let workspace = model.workspace {
+                // No `.id` per workspace: the sidebar (every host) stays put while the detail
+                // column switches hosts; the panes are keyed by their workspace inside.
                 WorkspaceView(workspace: workspace)
-                    .id(ObjectIdentifier(workspace))
             } else {
                 EmptyState(
                     "Host Unavailable", systemImage: "exclamationmark.triangle",
                     message: app.lastError ?? "The host could not be opened."
                 ) {
-                    Button("Show Hosts") { show(.local, destination: .hosts) }
-                        .buttonStyle(.glassProminent)
+                    Button("Show Hosts") {
+                        model.show(.local)
+                        model.destination = .hosts
+                    }
+                    .buttonStyle(.glassProminent)
                 }
             }
         }
         .environment(model)
-        .onChange(of: connectionIdentity) { _, _ in
-            // A host whose connection was replaced (plain SSH upgraded to the daemon) gets a
-            // workspace on the new connection; the window stays on the host.
-            refresh()
-        }
         .onChange(of: app.lastError) { _, error in
             if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
         }
+        .onChange(of: model.groups.openHosts) { _, _ in persist() }
+        .onChange(of: model.groups.collapsed) { _, _ in persist() }
+        .onChange(of: model.currentTab) { _, _ in persist() }
         .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
         .onOpenURL { url in
             // An invite opens the Join sheet: joining is always the user's tap.
@@ -108,7 +114,8 @@ struct WindowRoot: View {
             }
             Task {
                 if let target = await app.handle(url: url) {
-                    show(target)
+                    model.show(target)
+                    model.destination = .terminal
                     model.toasts.show(Toast("Paired with \(model.hostName)", systemImage: "checkmark.circle.fill", style: .success))
                 }
             }
@@ -116,24 +123,20 @@ struct WindowRoot: View {
         .task {
             guard !restored else { return }
             restored = true
-            model.show = { show($0) }
-            refresh()
             app.hosts.foreground()
-            if let hooked = await app.runLaunchHooks() {
-                show(hooked)
-            } else if UserDefaults.standard.bool(forKey: "restoreLastTarget")
-                        || (LaunchOptions.screen == nil && !LaunchOptions.mock && UserDefaults.standard.object(forKey: "restoreLastTarget") == nil),
-                      let storedTarget, let data = storedTarget.data(using: .utf8),
-                      let saved = try? JSONDecoder().decode(WorkspaceTarget.self, from: data),
-                      case .host(let id) = saved, app.hosts.record(id) != nil
-            {
-                show(saved)
+            let hooked = await app.runLaunchHooks()
+            if !hooked.isEmpty {
+                // Open every hooked host (they stay connected), show the first.
+                for target in hooked { model.show(target) }
+                model.show(hooked[0])
+            } else if shouldRestore {
+                restore()
             }
             // `-openHost <name or id>`: open that saved host (screenshots, manual checks).
             if let wanted = UserDefaults.standard.string(forKey: "openHost"),
                let record = app.hosts.records.first(where: { $0.id == wanted || $0.name == wanted })
             {
-                show(.host(record.id))
+                model.show(.host(record.id))
             }
             // `-destination hosts|inbox`: open on that screen (screenshots of live data).
             switch UserDefaults.standard.string(forKey: "destination") {
@@ -144,22 +147,52 @@ struct WindowRoot: View {
         }
     }
 
-    /// The current target's connection object, so `onChange` sees an upgrade.
-    private var connectionIdentity: ObjectIdentifier? {
-        guard case .host(let id) = target else { return nil }
-        return app.hosts.connections[id].map { ObjectIdentifier($0) }
+    /// Restore by default in normal launches; never for design fixtures, `-mock` or dogfood
+    /// runs unless `-restoreLastTarget YES` asks for it.
+    private var shouldRestore: Bool {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "restoreLastTarget") != nil { return defaults.bool(forKey: "restoreLastTarget") }
+        return LaunchOptions.screen == nil && !LaunchOptions.mock && defaults.string(forKey: "dogfood") == nil
     }
 
-    private func refresh() {
-        workspace = app.workspace(for: target)
-        model.workspace = workspace
+    /// The window's open hosts and focused tab: the scene's own storage, else what the last
+    /// window saved (a new scene on iPad, a Mac window restored without state), else the
+    /// single host of a window saved before multi-host.
+    private func restore() {
+        let defaults = UserDefaults.standard
+        let decoder = JSONDecoder()
+        func decode<T: Decodable>(_ type: T.Type, _ text: String?) -> T? {
+            text.flatMap { $0.data(using: .utf8) }.flatMap { try? decoder.decode(type, from: $0) }
+        }
+        var hosts = decode([String].self, storedHosts) ?? decode([String].self, defaults.string(forKey: Self.lastHostsKey))
+        var focus = decode(TabRef.self, storedFocus) ?? decode(TabRef.self, defaults.string(forKey: Self.lastFocusKey))
+        if hosts == nil, case .host(let id)? = decode(WorkspaceTarget.self, storedTarget) {
+            hosts = [id]
+            focus = nil
+            model.show(.host(id))
+        }
+        let collapsed = decode([String].self, storedCollapsed) ?? decode([String].self, defaults.string(forKey: Self.lastCollapsedKey)) ?? []
+        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: focus)
     }
 
-    private func show(_ selected: WorkspaceTarget, destination: Destination = .terminal) {
-        model.destination = destination
-        AppModel.log.info("show \(String(describing: selected), privacy: .public)")
-        target = selected
-        refresh()
-        storedTarget = (try? JSONEncoder().encode(selected)).flatMap { String(data: $0, encoding: .utf8) }
+    private static let lastHostsKey = "window.openHosts"
+    private static let lastCollapsedKey = "window.collapsedHosts"
+    private static let lastFocusKey = "window.focusedTab"
+
+    /// Saves what a relaunch restores, per window and as the app's latest.
+    private func persist() {
+        guard restored, shouldRestore else { return }
+        let encoder = JSONEncoder()
+        func encode(_ value: some Encodable) -> String? {
+            (try? encoder.encode(value)).flatMap { String(data: $0, encoding: .utf8) }
+        }
+        storedHosts = encode(model.groups.openHosts)
+        storedCollapsed = encode(model.groups.collapsed.sorted())
+        storedFocus = model.currentTab.flatMap(encode)
+        storedTarget = nil
+        let defaults = UserDefaults.standard
+        defaults.set(storedHosts, forKey: Self.lastHostsKey)
+        defaults.set(storedCollapsed, forKey: Self.lastCollapsedKey)
+        defaults.set(storedFocus, forKey: Self.lastFocusKey)
     }
 }

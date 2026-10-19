@@ -87,9 +87,8 @@ final class LiveHostDirectory: HostDirectory {
 
     func forget(_ id: HostSummary.ID) {
         guard id != Self.localId else { return }
-        let shown = window?.workspace?.hostId == id
         app.hosts.remove(id)
-        if shown { window?.show(.local) }
+        window?.forgetHost(id)
     }
 
     func togglePin(_ id: HostSummary.ID) {
@@ -112,9 +111,7 @@ final class LiveHostDirectory: HostDirectory {
     }
 
     func disconnect(_ id: HostSummary.ID) {
-        let shown = window?.workspace?.hostId == id
-        app.hosts.disconnect(id)
-        if shown { window?.show(.local) }
+        if let window { window.closeHost(id) } else { app.hosts.disconnect(id) }
     }
 
     func installHelper(_ id: HostSummary.ID) async throws {

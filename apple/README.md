@@ -86,7 +86,8 @@ repository, a `claude` stand-in that drives the daemon's hooks, a `code serve-we
 
 Remote hosts: `(cd Packages/HostKit && swift test)` (needs `cargo build -p hostd`),
 `scripts/daemon-ui-test.sh <udid>` (iPad UI test against a local daemon that is killed and restarted
-mid-test), and `RealHostUITests` with `TEST_RUNNER_SSH_TARGET` / `TEST_RUNNER_SSH_KEY`
+mid-test), `scripts/multihost-ui-test.sh <udid>` (two local daemons in one window: switching by click
+and ⌘1/⌘2 with no reconnect; one daemon killed while the other stays live), and `RealHostUITests` with `TEST_RUNNER_SSH_TARGET` / `TEST_RUNNER_SSH_KEY`
 (docs/APP-ARCHITECTURE.md §7).
 
 The scheme's test action runs the layout tests and the UI tests (iPad: shortcuts, splits, zoom, focus,
@@ -185,8 +186,9 @@ simulator's paste permission: `xcrun simctl privacy "$DEVICE" grant pasteboard d
 | ⇧⌘↩ | Zoom pane |
 | ⌥⌘ arrows | Focus pane in that direction |
 | ⌃⌘ arrows | Move the divider |
-| ⌘T | New tab |
-| ⇧⌘[ / ⇧⌘], ⌘1…⌘8, ⌘9 | Previous / next tab, tab N, last tab |
+| ⌘T / ⌥⌘T | New tab on the current host / on a host you pick |
+| ⇧⌘[ / ⇧⌘], ⌘1…⌘8, ⌘9 | Previous / next tab, tab N, last tab — across every host in the window (the sidebar's numbering) |
+| ⌘P | Go to Tab… (any host; matches name, context line, host) |
 
 They are SwiftUI commands: menu-bar items on macOS, and on iPadOS the menu bar and the ⌘-hold overlay.
 Split / zoom / close are also in the pane menu in the toolbar, for touch. In the simulator, XCUITest's

@@ -29,7 +29,8 @@ All are `@MainActor @Observable`. Views never hold a socket or a `DaemonClient` 
 | Model | What a view reads | What a view calls |
 |---|---|---|
 | `AppModel` (App) | `hosts`, `lastError` | `workspace(for:)` (resolve on target change, never in `body`), `existingWorkspace(for:)`, `handle(url:)` |
-| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette and search state, `connection: ConnectionState` (the window host's `ConnectionStatus` in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)` (set by `WindowRoot`), `addHost(mode:destination:)`, `retryConnection()`, `disconnect()` |
+| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette (`paletteMode`: commands / go to tab / new tab on host) and search state, `groups: HostGroups`, `workspaces[groupId]` (one per open host, kept live), `target` / `workspace` (what the detail column shows), `currentTab: TabRef`, `connection: ConnectionState` (the shown host's status in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)`, `focus(TabRef)`, `focus(pane:onGroup:)`, `newTab(onGroup:)`, `selectTab(shortcut:)` / `selectTab(offset:)`, `showHostPicker()`, `showTabFinder()`, `closeHost`, `restore(openHosts:collapsed:focus:)`, `addHost(mode:destination:)`, `retryConnection()`, `disconnect()` |
+| `HostGroups` (HostKit, one per window) | `groups: [HostGroup]` (this device, then open hosts in open order, then hosts connected elsewhere: id, name, kind, `status`, `tabs`, `isReady`, `failure`), `tabs: [TabRef]` (the unified order), `openHosts`, `collapsed` | `open(id)` (never redials an open host), `close(id)`, `restore(ids)`, `tab(forShortcut:)`, `shortcutNumber(of:)`, `tab(after:offset:)`, `newTabHost(preferred:)` |
 | `Workspace` (App) | `session`, `panes`, `title(of:)` (the tab's name), `context(of:)` (agent task → program → shell title → repo:branch → directory), `canOpenTabs` | `apply(op)`; unnamed tabs get a friendly name (`FriendlyName`, sent as a rename so a daemon keeps it for every device) |
 | `HostsModel` | `entries: [HostEntry]` (sorted: Needs you → pinned → recent), `installs[id]` (`InstallProgress.summary`), `installNotes[id]`, `sshConfigAliases`, `keys.keys`, `hostKeyPrompts.pending`, `network.isOffline` | `open(id)`, `pair(ticket, name:)`, `connectSSH(…)`, `installHelper(id)`, `loadSSHConfig(text)` / `loadUserSSHConfig()` (macOS) / `importSSHHosts(aliases)`, `rename`, `setPinned`, `disconnect`, `remove`, `foreground()/background()/networkChanged()` |
 | `HostEntry` (value) | `name`, `kind` (`.daemon`/`.ssh`), `address`, `status: ConnectionStatus`, `needsYou: String?`, `blockedAgents`, `canInstallHelper`, `pinned`, `lastConnected` | — |
@@ -84,6 +85,28 @@ does not report the foreground program yet, so `ForegroundProgramReporting` is n
 | R11 end-to-end check | `DaemonIntegrationTests`, `DaemonUITests` type a marker and assert it comes back |
 | R12 output independent of views | `PaneRouter` buffers per pane until the view starts; VT lives in `Pane`, not the view; stale panes keep their content |
 
+Multi-host windows (2026-10-19): a window shows every open host at once. `HostGroups` keeps the
+window's open hosts; `HostsModel.connections` keeps one `HostConnection` per host for as long as it
+is open, and `WindowModel.workspaces` one `Workspace` per open host (its panes stream in the
+background, R12), so selecting a tab on another host only changes `WindowModel.target` — no dial
+(`DaemonConnection.dials` counts dials; `MultiHostUITests` asserts it stays put while switching).
+The iOS lifecycle is per app, not per window: `HostsModel.background()` suspends every connection,
+`foreground()` resumes every one at once (R1/R3/R5); plain-SSH hosts still reconnect instead
+(below). A failed `open` no longer leaves an idle connection behind: the group shows the reason
+(`HostGroups.failures`). Per window, `WindowRoot` persists `openHosts`, `collapsedHosts` and
+`focusedTab` (`TabRef`) in scene storage, mirrored to user defaults for new scenes; launch
+reopens them and selects the tab once its host's layout arrives (`-restoreLastTarget NO`
+disables restore; design fixtures, `-mock` and dogfood runs skip it).
+
+Keyboard across hosts (iOS): one `KeyBar` for the app (`Workspace.sharedKeyBar`), so a host
+switch keeps the same input accessory view (no input-view reload, no second line editor competing
+for first responder); the old host's terminal resigns first responder before its view leaves the
+window and the new host's focused pane inherits the keyboard (`Workspace.inheritsKeyboardFocus`);
+the terminal answers the tab shortcuts itself (`TerminalView.appKeyCommands`), so ⌘1…⌘9,
+⇧⌘[ ], ⌘T, ⌥⌘T and ⌘P never depend on the responder chain reaching the scene's menu commands.
+Known gap (key bar): while the prompt line editor's text field holds the keyboard, ⌘ shortcuts
+do not reach the app (the field lives in the keyboard's accessory window).
+
 Threading: `ClientEvent`s arrive on the Rust runtime thread. Pane-stream events (bytes,
 snapshots, resizes, history, acks, hints, connection state) are routed directly to the pane's
 handler on that thread, in order (no main-actor hop on the keystroke path); everything else
@@ -130,7 +153,10 @@ RTT at debug), `ssh`, `hosts` (pairing, bootstrap action and time). In the simul
 
 ## 6. Test hooks (launch arguments)
 
-`-testTicket <ticket>` pair and show; `-testSSH user@host[:port]` with `-testSSHKey <path>` or
+`-testTicket <ticket>` pair and show; `-testTickets <t1>,<t2>` with `-testTicketNames a,b` pair
+with several daemons and open them all in the window; `-hostsDirectory <path>` keeps saved hosts
+and secrets in that folder (tests never touch the user's hosts or Keychain); `-connectionProbe
+YES` exposes each open host's connection identity and dial count to UI tests; `-testSSH user@host[:port]` with `-testSSHKey <path>` or
 `-testSSHPassword <pw>`; `-testTrustHostKeys YES`; `-testInstallHelper YES`; `-testRelay
 disabled`; `-testMirror YES` (core VT mirror for pane text).
 
@@ -142,6 +168,8 @@ disabled`; `-testMirror YES` (core VT mirror for pane text).
 | `cd apple/Packages/TerminalKit && swift test --filter snapshot` | READY restore + history pages + live bytes |
 | `apple/scripts/daemon-ui-test.sh [udid]` | `DaemonUITests` on the iPad simulator against a local daemon, killed and restarted mid-test |
 | `apple/scripts/w3-ui-test.sh [udid] [test …]` | `W3UITests` on the iPad simulator against a local daemon set up by `w3-fixtures.sh` (HOME = a scratch dir with a git repo, a `claude` stand-in that drives the daemon's real hooks, a `code serve-web` stand-in): Files, Diff + notes, New Agent → Approve → finished summary → Reply → Open Pane → the turn's diff → review sent to the agent, Editor (workbench over the forward, ⌘P reaches the page, a path from Links opens at its line), a dev server offered and opened, Copy Last Command Output |
+| `apple/scripts/multihost-ui-test.sh [udid]` | `MultiHostUITests`: two local daemons in one window; click and ⌘1/⌘2/⇧⌘[ switches with the same connections and no stale overlay, ⌘T on the current host, one daemon killed → its group reconnecting while the other stays live, then back |
+| `HostGroupsTests` (HostKit) | the aggregation with fake connections: two daemons + one SSH host, open order, ⌘1–9 mapping, wraparound across hosts, status changes, no redial, lifecycle reaches every host, restore and failures |
 | `TEST_RUNNER_SSH_TARGET=… TEST_RUNNER_SSH_KEY=… xcodebuild … -only-testing:AppUITests/RealHostUITests test` | just ssh → Install helper → daemon pane: ls, vim, Ctrl-C, htop, screenshots |
 | `MacDogfoodUITests` | Ctrl-C, Ctrl-Z, vim, resize during output, closing a tab kills its process (pgrep), local and daemon |
 

@@ -28,10 +28,14 @@ final class AppModel {
     private init() {
         CoreLog.install()
         let defaults = UserDefaults.standard
-        let repository = HostRepository.appDefault()
-        let secrets = SecretStores.appDefault(
-            service: (Bundle.main.bundleIdentifier ?? "app") + ".secrets",
-            fallbackDirectory: repository.directory.appending(path: "secrets"))
+        // `-hostsDirectory <path>`: saved hosts and secrets in that folder only (UI tests and
+        // screenshots against throwaway daemons never touch the user's own hosts or Keychain).
+        let isolated = defaults.string(forKey: "hostsDirectory").map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let repository = isolated.map { HostRepository(directory: $0) } ?? HostRepository.appDefault()
+        let secrets: any SecretStore = isolated.map { FileSecretStore(directory: $0.appending(path: "secrets")) }
+            ?? SecretStores.appDefault(
+                service: (Bundle.main.bundleIdentifier ?? "app") + ".secrets",
+                fallbackDirectory: repository.directory.appending(path: "secrets"))
         var configuration = HostsModel.Configuration()
         if defaults.string(forKey: "testRelay") == "disabled" { configuration.relay = .disabled }
         configuration.mirrorVt = defaults.bool(forKey: "testMirror")
@@ -98,7 +102,29 @@ final class AppModel {
     /// `-testTicket <ticket>`: pair and show that host. `-testSSH user@host[:port]` with
     /// `-testSSHKey <path>` (a private key file to import) or `-testSSHPassword <pw>`: "just ssh"
     /// to it; `-testInstallHelper YES` then installs the helper and switches to the daemon.
-    func runLaunchHooks() async -> WorkspaceTarget? {
+    /// `-testTickets <t1>,<t2>,…` pairs with each daemon (named by `-testTicketNames
+    /// alpha,beta,…`) for the multi-host tests; the window opens them all and shows the first.
+    func runLaunchHooks() async -> [WorkspaceTarget] {
+        let defaults = UserDefaults.standard
+        if let list = defaults.string(forKey: "testTickets"), !list.isEmpty {
+            let tickets = list.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+            let names = (defaults.string(forKey: "testTicketNames") ?? "").split(separator: ",").map(String.init)
+            var targets: [WorkspaceTarget] = []
+            for (index, ticket) in tickets.enumerated() {
+                do {
+                    let name = names.indices.contains(index) ? names[index] : "test daemon \(index + 1)"
+                    targets.append(.host(try await hosts.pair(try PairingTicket(ticket), name: name)))
+                } catch {
+                    lastError = "pairing failed: \(error.localizedDescription)"
+                    Self.log.error("test pairing failed: \(String(describing: error), privacy: .public)")
+                }
+            }
+            return targets
+        }
+        return await runSingleLaunchHook().map { [$0] } ?? []
+    }
+
+    private func runSingleLaunchHook() async -> WorkspaceTarget? {
         let defaults = UserDefaults.standard
         if let ticket = defaults.string(forKey: "testTicket"), !ticket.isEmpty {
             do {

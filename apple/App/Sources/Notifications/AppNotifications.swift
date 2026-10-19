@@ -267,12 +267,13 @@ extension AppNotifications {
     static func openPane(hostId: String, pane: UInt64) {
         guard let model = ActiveWindow.model else { return }
         model.destination = .terminal
+        // Opens the host in the window's sidebar if needed (a host already open just shows: no
+        // reconnect), then focuses the pane's tab and the pane once the host's layout has it.
         model.show(.host(hostId))
         Task {
-            // The workspace resolves on the next turn; then focus the pane.
             for _ in 0..<40 {
-                if let workspace = model.workspace, workspace.hostId == hostId, workspace.session.panes.contains(PaneId(pane)) {
-                    workspace.apply(.focus(PaneId(pane)))
+                if model.workspace(ofGroup: hostId)?.session.panes.contains(PaneId(pane)) == true {
+                    model.focus(pane: PaneId(pane), onGroup: hostId)
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(50))

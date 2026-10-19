@@ -244,6 +244,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         case .Invalid(let message)?, .NotFound(let message)?, .Failed(let message)?:
             "Couldn't send (\(message)). Kept your line."
         case nil: "Couldn't send: the host didn't answer. Kept your line."
+        default: "Couldn't send. Kept your line."
         }
     }
 

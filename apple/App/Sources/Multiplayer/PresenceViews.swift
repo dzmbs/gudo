@@ -366,7 +366,8 @@ struct MultiplayerWindowHooks: ViewModifier {
             .onChange(of: workspace.multiplayer?.notice) { _, notice in
                 if let notice { model.toasts.show(notice.toast) }
             }
-            .task(id: workspace.multiplayer?.me?.name) {
+            // Per host: the window no longer rebuilds per workspace (multi-host sidebar).
+            .task(id: "\(workspace.hostId ?? "")/\(workspace.multiplayer?.me?.name ?? "")") {
                 // A paired device is "owner" on the host until it says who it is; others see
                 // this device's name instead.
                 guard !LaunchOptions.mock, let session = workspace.multiplayer, let me = session.me,
