@@ -521,6 +521,7 @@ fn every_message_matches_its_frozen_bytes() {
     workspace_messages(&mut c);
     attach_results(&mut c);
     daemon_info_messages(&mut c);
+    agent_usage_messages(&mut c);
     multiplayer_messages(&mut c);
     artifact_messages(&mut c);
     artifact_messages_2(&mut c);
@@ -561,6 +562,103 @@ fn attach_results(c: &mut Checker) {
         })),
         "090000000126010004676f6e65",
     );
+}
+
+fn usage_report() -> AgentUsageReport {
+    AgentUsageReport {
+        agents: vec![
+            AgentUsage {
+                agent: AgentKind::Claude,
+                plan: Some("max".into()),
+                windows: vec![
+                    UsageWindow {
+                        name: "5h".into(),
+                        minutes: 300,
+                        used_permille: 625,
+                        resets_at: Some(UnixMillis(1_792_438_800_000)),
+                        limited: false,
+                    },
+                    UsageWindow {
+                        name: "weekly".into(),
+                        minutes: 10_080,
+                        used_permille: 1000,
+                        resets_at: None,
+                        limited: true,
+                    },
+                ],
+                source: UsageSource::StatusLine,
+                as_of: Some(UnixMillis(1_792_402_200_000)),
+                note: None,
+            },
+            AgentUsage {
+                agent: AgentKind::Codex,
+                plan: None,
+                windows: vec![],
+                source: UsageSource::Unknown,
+                as_of: None,
+                note: Some("why".into()),
+            },
+        ],
+    }
+}
+
+/// Agent plan usage: `Caps::AGENT_USAGE` (bit 6), `DaemonFeatures::AGENT_USAGE` (bit 1),
+/// `WorkspaceRequest::UsageWatch` / `UsageUnwatch` (appended after `PushAction`, 0x22/0x23),
+/// `WorkspaceResponse::AgentUsage` (appended after `PushDecided`, 0x15) and
+/// `ServerCtl::AgentUsage` (appended after `DaemonInfo`, 0x28).
+fn agent_usage_messages(c: &mut Checker) {
+    c.check("Caps::AGENT_USAGE", Caps::AGENT_USAGE, "020000000140");
+    c.check(
+        "DaemonFeatures::AGENT_USAGE",
+        DaemonFeatures::AGENT_USAGE,
+        "020000000102",
+    );
+    c.check(
+        "ClientCtl::Workspace(UsageWatch)",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::UsageWatch(UsageWatch { api_fallback: true }),
+        },
+        "050000000115092201",
+    );
+    c.check(
+        "ClientCtl::Workspace(UsageUnwatch)",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::UsageUnwatch,
+        },
+        "0400000001150923",
+    );
+    c.check(
+        "ServerCtl::WorkspaceResult(AgentUsage)",
+        ServerCtl::WorkspaceResult {
+            req_id: 9,
+            result: Ok(WorkspaceResponse::AgentUsage(usage_report())),
+        },
+        "3c0000000118090015020001036d617802023568ac02f10401809db6ad953400067765656b6c79e04ee80700010201c0abfc9b95340001000000000103776879",
+    );
+    c.check(
+        "ServerCtl::AgentUsage",
+        ServerCtl::AgentUsage(usage_report()),
+        "39000000012a020001036d617802023568ac02f10401809db6ad953400067765656b6c79e04ee80700010201c0abfc9b95340001000000000103776879",
+    );
+    for (name, source, hex) in [
+        ("UsageSource::Unknown", UsageSource::Unknown, "020000000100"),
+        (
+            "UsageSource::LocalLog",
+            UsageSource::LocalLog,
+            "020000000101",
+        ),
+        (
+            "UsageSource::StatusLine",
+            UsageSource::StatusLine,
+            "020000000102",
+        ),
+        ("UsageSource::Cli", UsageSource::Cli, "020000000103"),
+        ("UsageSource::Api", UsageSource::Api, "020000000104"),
+    ] {
+        c.check(name, source, hex);
+    }
 }
 
 fn daemon_info() -> DaemonInfo {

@@ -5,7 +5,8 @@ Status: MVP path working end to end on macOS and Linux (2026-10-18), plus termin
 roles enforced on every request, control lease, presence, signed approvals, audit log,
 anchors, send to agent) and input assistance for the mobile line editor (§8: foreground
 program, prompt state and input line, atomic submit, history, completion, file search,
-blocked-agent options).
+blocked-agent options), and native password prompts (§9: askpass helper, detected
+hidden-input prompts).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -611,7 +612,8 @@ with the count), and can `branch -d` the branch. Each worktree gets a stable `PO
 `<state>/worktrees.json` across restarts. Every pane whose directory is inside a registered
 worktree is started with `PORT` and `UN_WORKTREE`, recorded in `layout.json`
 (`worktree: {path, port}`). `WorktreeLaunch{path, split_from, axis, agent?}` splits a pane into
-run yet.
+a shell or Claude/Codex in the worktree. Setup and teardown commands come from
+`.unnamed.json` (§5.12).
 
 ### 5.6 Files
 
@@ -680,6 +682,99 @@ daemon's signature; approvals carry a daemon-signed action token that the app re
 `docs/PUSH.md`. Relay modes (`[relay]` in `config.toml`: default, self-hosted `iroh-relay`
 URLs with token and private CA, local-only) and how pairing tickets carry them:
 `docs/RELAYS.md`. Tests: `cargo test -p daemon --test it notify relays`.
+
+
+`crates/daemon/src/usage/` reports Claude Code's and Codex's plan windows (5h, weekly, per-model)
+to owner connections that watch: `WorkspaceRequest::UsageWatch { api_fallback }` answers with the
+report at once, then `ServerCtl::AgentUsage` pushes changes (clients with `Caps::AGENT_USAGE`);
+`UsageUnwatch` stops. Offered as `DaemonFeatures::AGENT_USAGE`.
+
+Sources, preferred first: Codex's `token_count` rate limits in its rollouts; Claude's status-line
+input (Claude panes launched by the daemon run `un-hook claude StatusLine` as their status line,
+which forwards the JSON as hook event `StatusLine` and then runs the user's own status line);
+when those are missing or older than 10 min, `claude -p /usage --output-format stream-json`
+(+ `claude auth status --json` for the plan) and `codex app-server` → `account/rateLimits/read`,
+in the background, at most every 5 min per agent; only for a watcher that opted in, the
+providers' undocumented usage endpoints with the host's sign-in (`~/.claude/.credentials.json`,
+`~/.codex/auth.json`), at most every 5 min. The report refreshes at most once a minute and only
+while a connection watches; the last status-line snapshot survives restarts
+(`<state>/usage/claude-status-line.json`). Tools are found through the panes' `PATH` (plus
+`~/.local/bin`), `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Tests: `cargo test -p daemon --test it usage`
+(fixture rollouts, status-line hook, fake `claude` / `codex`, a local HTTP endpoint).
+### 5.12 Git-native workspace (`proto::repo`)
+
+The sidebar's picture of the host's repositories, pushed whole as `ServerCtl::Repos(RepoSnapshot)`
+to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests opt in with
+`ClientConfig::repo_status`), right after they connect and on every change. Code:
+`crates/daemon/src/ws/repo.rs` (tracker), `repo_ops.rs` (requests), `gh.rs` (GitHub CLI).
+
+- **What**: each pane in a git worktree → that worktree (`panes`); every worktree of every
+  repository a pane is in (`worktrees`, main first): repository (main worktree path) and name,
+  worktree name, main or not, branch (or detached `HEAD`), upstream with ahead/behind,
+  `+added −removed` against `HEAD` with untracked files counted (≤ 500 files of ≤ 1 MiB,
+  binary skipped), changed paths, dirty; the branch's pull request; the repository's scripts and
+  setup/teardown; managed (made by the daemon) and when its PR was first seen merged; and `gh`'s
+  state (`Ready{account}`, `Missing`, `NotAuthenticated{message}`).
+- **Only while watched**: one task owns it. With no `REPO_STATUS` client connected it drops its
+  file watches and reads nothing (the auto-delete sweep still runs, below).
+- **Cheap refreshes**: a pane's directory (OSC 7, else its launch directory) maps to a worktree
+  with `rev-parse --show-toplevel`, cached 20 s; repositories are listed with `worktree list`
+  every 30 s or when worktrees change. A worktree is read with `status --porcelain=v2`,
+  `diff --numstat HEAD` and `ls-files --others`, all with `GIT_OPTIONAL_LOCKS=0` (reading never
+  writes the index, so it never triggers its own events). Triggers, debounced 300 ms and at most
+  one read per debounce period: file events (FSEvents on the whole worktree on macOS; the top
+  level, the git directory and `refs/heads` elsewhere, where recursive inotify would need a watch
+  per directory; inside `.git` only `HEAD`, `index` and refs count), a finished command (shell
+  integration) or agent event in a pane of the worktree, and a poll as the safety net (10 s with
+  panes, 60 s without). Snapshots go out only when something changed.
+- **Pull requests via the host's `gh`** (no token in the app): `gh pr view <branch> --json
+  number,title,state,isDraft,headRefName,additions,deletions,mergeStateStatus,statusCheckRollup,url`
+  per worktree branch, in the worktree, with `GH_PROMPT_DISABLED` and a 30 s timeout. Cached and
+  re-asked on a schedule: 30 s while checks run, 2 min otherwise, 5 min with no PR, 15 min once
+  merged or closed, soon after a commit or push; errors back off 1 → 32 min; a repository with no
+  GitHub remote is not asked again; nothing while `gh auth status` says missing or signed out
+  (re-checked every 5 min). `gh` is found on `PATH`, then Homebrew, Linuxbrew and `~/.local/bin`
+  run is pending; `SUCCESS` succeeds; `NEUTRAL`, `SKIPPED`, `CANCELLED` are their own; every other
+  conclusion fails; status contexts `ERROR`/`FAILURE` fail. Failures sort first.
+- **Requests** (`WorkspaceRequest`; Drive on the host, like the git and worktree requests):
+  `RepoRefresh{path?}` (read everything now, and that PR or all → `Repos`); `PrMerge{path,
+  number, strategy}` (re-reads the PR, refuses with `Conflict` if the number changed or
+  `mergeStateStatus` is not CLEAN/UNSTABLE/HAS_HOOKS, then `gh pr merge N
+  --merge|--squash|--rebase`); `PrRerunFailed{path}` (`gh run rerun <id> --failed` for each
+  failed check's Actions run); `PrCreate{path, draft, base?}` (push `-u` to the upstream's
+  remote or `origin`, then `gh pr create --fill`); `PrCheckout{repo, number}` (a detached
+  worktree `pr-N`, then `gh pr checkout N`, with `--branch pr-N` if the head branch is checked
+  out elsewhere); `TaskCreate{repo, session, name, branch?, base?, agent?}` (branch from the
+  name, `-2`… if taken; a worktree under the worktree root; the setup command queued; a new tab
+  with a shell or the agent); `ScriptRun{cwd, session, name, command}` (a new tab that runs the
+  command, then stays a shell with shell integration; an empty command is a plain shell tab);
+  `WorktreeArchive{path, force}`; `WorktreeArchived{repo?}`; `WorktreeRestore{id}`;
+  `WorktreeSettings(Option<…>)` (changing it needs the owner).
+- **Setup, teardown and scripts**: `.unnamed.json` at the worktree's top level (else the main
+  worktree's): `{"setup": "...", "teardown": "...", "scripts": [{"name", "command", "icon",
+  "tint", "default"}]}`. Setup runs first in the new task's pane, echoed dimmed (`› pnpm i`),
+  before the shell or the agent. Teardown runs (`sh -c`, ≤ 5 min) before archive or delete; a
+  failing teardown stops them unless forced.
+- **Archive keeps refs**: refused with `Conflict` when the worktree has changes unless `force`.
+  The commit goes to `refs/unnamed/archived/<id>/head` and, with changes, a commit of the whole
+  working tree (untracked files included, the user's index untouched) to `…/changes`; then the
+  worktree is removed; the branch stays. Restore re-adds the worktree where it was, on its branch
+  (recreated from the ref if it was deleted), checks the saved changes out and resets the index
+  so they are uncommitted again, and deletes the refs. Records live in `<state>/worktrees.json`.
+- **Auto-delete**: worktrees the daemon made (TaskCreate, PrCheckout, WorktreeCreate, restore)
+  are removed `auto_delete_merged_days` (default 7; 0 never; set from the app's Settings) after
+  their PR was first seen merged, by an hourly sweep that asks `gh` itself for managed worktrees
+  no pane follows. Never one with uncommitted changes: it stays, shown as merged and dirty, and
+  the app asks. Teardown runs first; the branch stays.
+- **Tests**: `cargo test -p daemon --test it repos` on real temporary repositories with a fake
+  `gh` answering from fixture JSON: the snapshot (pane → worktree, ahead/behind against a real
+  `origin`, `+4 −1` with untracked files, a commit seen through the git directory, PR and
+  checks), New Task with setup, a script tab, re-run, merge refused for a changed number and for
+  a blocked PR, the merged clock; archive refused when dirty, a forced archive keeping both refs,
+  restore with the changes uncommitted again; auto-delete of a clean merged worktree after "2
+  days" of 100 ms with teardown, never the dirty or the open one; no snapshot for clients
+  without the capability. Unit tests: `gh` JSON and errors, line counting, event filtering, the
+  config file, branch names. Goldens: `crates/proto/tests/golden_repo.rs`.
 
 
 Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
@@ -1302,7 +1397,92 @@ to connections whose attached session holds it.
   rely on them for programs that exit at once.
 - D2b, D5a, D6 and D8 (Phase 2) are not built.
 
-## 9. Known gaps / follow-ups
+## 9. Native password prompts (`proto::askpass`)
+
+When a program in a pane asks for a secret, the app shows a secure prompt anchored to the pane
+instead of the user typing blind into the terminal. Two sources, one wire (`Caps::ASKPASS`,
+`ClientCtl::Askpass` → `ServerCtl::AskpassResult`, pushes `ServerCtl::Askpass`).
+
+### 9.1 Askpass
+
+- **Environment.** Every pane gets `SUDO_ASKPASS`, `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE=prefer`
+  (OpenSSH ≥ 8.4 then uses it even with a terminal) and `GIT_ASKPASS`, all naming
+  `<state>/askpass/un-askpass`: a two-line script, rewritten on start, that runs
+  `un-hook askpass "$@"` (also `unnamed-hostd askpass`). `UN_ASKPASS` names it too, and the
+  pane gets the hook socket's coordinates (`UN_SOCK`, `UN_TOKEN`, `UN_ENDPOINT_FILE`).
+  The user's dotfiles run after and can override any of them. `[askpass] enabled = false`
+  in `config.toml` turns all of this off.
+- **Helper.** `un-hook askpass <prompt>` sends one JSON line on the hook socket
+  (`AskpassCall{v, token, pane, askpass: {prompt, program, confirm, probe}}`; `program` is its
+  parent's command line, `confirm` is `SSH_ASKPASS_PROMPT=confirm`) and reads one line back:
+  `{"answer": "…"}` (printed with a newline, exit 0), `"cancelled"` (exit 1) or `"terminal"`.
+  On `"terminal"`, or when the daemon cannot be reached, it asks on `/dev/tty` itself with echo
+  off, so nothing is worse than without it. `SSH_ASKPASS_PROMPT=none` (a FIDO touch notice) is
+  printed on the terminal. `--available` only asks whether an app could answer (exit 0/1).
+- **Daemon.** Checks the hook token and the peer's uid (same user), cleans the prompt and
+  program text (control and bidi characters removed, ≤ 512 characters), classifies the program
+  (`Sudo`, `Ssh`, `Git`, `Gpg`, `Other`; a script's name, not its interpreter's), marks yes/no
+  questions `echo` (ssh's host key question, git's username) and a question repeated within
+  60 s of an answer as `retry`. With nobody able to answer it replies `"terminal"` at once.
+  Otherwise it pushes `AskpassPush::Prompt` and waits for the first of: an answer
+  (`Closed{Answered{by}}`), a cancel (`Cancelled{by}`), the timeout (`[askpass] timeout_secs`,
+  default 300: `TimedOut`, the program gets no answer), the helper's connection closing
+  (Ctrl-C: `Abandoned`), or nobody able to answer for 10 s (`MovedToTerminal`, the helper asks
+  on the terminal). Every connection's sheet closes with that `Closed`.
+- **Who sees it.** Connections that announced `Caps::ASKPASS` (the app; `client-core` with
+  `ConnectOptions::askpass`), are attached to the pane's session and hold Driver or Owner on the
+  pane. Guests who only watch never get the prompt text, and their `Answer`/`Cancel` are
+  `Denied`. Open prompts are sent again on attach (same ids), so a reconnecting app keeps its
+  sheet. The first `Answer` wins; later ones get `Gone`.
+- **Secrets.** `proto::Secret` redacts its `Debug` output and zeroes its bytes on drop; the
+  helper's reply buffer, the JSON line and the helper's stdout buffer are zeroed after use. The
+  daemon logs prompt ids, panes, sources and close reasons, never the answer. Answers with
+  control characters (a newline would end sudo's read early) are refused.
+
+### 9.2 `sudo` without `-A`
+
+sudo only uses `SUDO_ASKPASS` with `-A`. With shell integration (`[askpass] sudo = true`, the
+default), interactive bash, zsh and fish get a `sudo` function: zsh through our own `ZDOTDIR`
+whose `.zshenv` sources Ghostty's, bash through our `ENV` file that sources `ghostty.bash`,
+fish through `vendor_conf.d/un-askpass.fish` next to Ghostty's. It runs `sudo -A` only when
+`un-askpass --available` says an app could answer now; otherwise, and whenever the arguments
+before the command already include `-A`, `-S`/`--stdin` or `-n`, it is plain `sudo`.
+
+Trade-offs: the probe costs a few ms per `sudo`; aliases such as `sudo='sudo -E'` still reach
+the function, but one naming sudo by path, or a `sudo` function defined later in the user's
+dotfiles, replaces it; scripts,
+`env sudo …` and `command sudo` get plain sudo (asked on the terminal, where the detected prompt
+below still helps); sudo's credential cache works as usual (no prompt, no helper); `sudo -A`
+reads `SUDO_ASKPASS` from the caller's environment, so `env_reset` does not get in the way.
+Shells without integration (macOS `/bin/bash`, `sh`) only get the variables.
+
+### 9.3 Detected terminal prompts
+
+Whenever a pane's termios is `-echo icanon` (the S6 hidden-input shape) the daemon checks the
+cursor row on each output and termios change: a line ending in `:` that names a password,
+passphrase, passcode or PIN (`proto::looks_like_password_prompt`) is pushed as
+`AskpassPush::Detected{pane, prompt, at_seq}` and `DetectedGone` when echo comes back or the
+line changes (also sent on attach). The app offers "Enter Password Securely"; the answer is
+`AskpassRequest::TypeSecret{pane, secret}`, which needs Driver and the pane's lease, and is
+written with a Return only if echo is still off at that moment (`NotHidden` otherwise, nothing
+written): the secret can never be echoed, land in the shell's history, or run as a command.
+Programs that read passwords in raw mode (most TUIs, `pinentry-curses`) are not detected.
+
+### 9.4 Tests
+
+`tests/it/askpass.rs` (fake helper on the hook socket): the prompt reaches two askpass clients
+and not a plain one, first answer wins and the other sees `Answered`, a late answer is `Gone`,
+retry flag, cancel, control characters refused, yes/no questions; a viewer guest is never told
+and is `Denied` while a driver guest answers; timeout, abandoned (helper hangs up), bad token;
+no app → `"terminal"` and `--available` false, the app leaving mid-prompt → `"terminal"`
+after the grace; a program that turns echo off and prints `Password:` gets `Detected`,
+`TypeSecret` reaches it without echo, `NotHidden` at a shell prompt, a client attaching late is
+told. `crates/hostd/tests/askpass.rs` runs the real `un-hook`: sudo- and ssh-like scripts that
+call `$SUDO_ASKPASS`/`$SSH_ASKPASS` get the app's answer (or fail on Cancel), the terminal
+fallback reads with echo off, and interactive zsh's `sudo` becomes `sudo -A` only while an app
+can answer (`-S` left alone). Goldens: `proto/tests/golden_askpass.rs`.
+
+## 10. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
@@ -1340,6 +1520,11 @@ to connections whose attached session holds it.
   Excalidraw scenes keep no history (only the current revision exports); live ink is relayed without per-connection
   rate limiting; a session's artifacts are deleted with it; anchors detach on daemon restart;
   the daemon's raster render draws text and images as outlines only.
+- Native password prompts (§9): gpg's pinentry is not wired (it is configured in
+  `gpg-agent.conf`, not the environment; `pinentry-tty` and `--pinentry-mode loopback` prompts
+  are caught as detected prompts, curses pinentry is not); raw-mode password readers are not
+  detected; a prompt in a pane of another session than the one attached waits until the app
+  attaches there (or times out); the app does not yet badge a tab whose pane has an open prompt.
 - `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
   leased). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.

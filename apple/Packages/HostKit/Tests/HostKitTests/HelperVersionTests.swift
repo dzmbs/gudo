@@ -6,11 +6,12 @@ import UnnamedCore
 nonisolated func daemonInfo(
     build: String = "aaa", builtUnix: UInt64 = 100, protocol level: UInt32 = 1, minClient: UInt32 = 0,
     selfUpgrade: Bool = true, hostname: String = "ubuntu-32gb-hel1-2.example.com", os: String = "linux",
-    arch: String = "x86_64"
+    arch: String = "x86_64", agentUsage: Bool = false
 ) -> DaemonInfo {
     DaemonInfo(
         version: "0.0.0", build: build, builtUnix: builtUnix, protocol: level, minClientProtocol: minClient,
-        selfUpgrade: selfUpgrade, hostname: hostname, os: os, osName: "Ubuntu 24.04.1 LTS", arch: arch)
+        selfUpgrade: selfUpgrade, hostname: hostname, os: os, osName: "Ubuntu 24.04.1 LTS", arch: arch,
+        agentUsage: agentUsage)
 }
 
 nonisolated let bundled = BundledDaemons(

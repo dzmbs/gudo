@@ -12,7 +12,10 @@ let package = Package(
     targets: [
         .target(
             name: "DesignSystem",
-            resources: [.copy("Resources/ghostty-themes.json")],
+            resources: [
+                .copy("Resources/ghostty-themes.json"),
+                .process("Resources/ProgramLogos.xcassets"),
+            ],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(name: "DesignSystemTests", dependencies: ["DesignSystem"]),

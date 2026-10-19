@@ -333,6 +333,10 @@ private struct DetailColumn: View {
         #endif
         .navigationSubtitle(model.destination == .terminal ? subtitle : "")
         .toolbar { TerminalToolbar(workspace: workspace, tabStyle: $tabStyle, sidebarShown: $sidebarShown) }
+        .modifier(GitDialogs(git: model.git))
+        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
+            if has { model.git.syncAutoDelete() }
+        }
         .background(theme.background.ignoresSafeArea())
     }
 
@@ -384,6 +388,18 @@ private struct TerminalToolbar: ToolbarContent {
             HostToolbarButton(workspace: workspace)
         }
         ToolbarSpacer(.fixed, placement: .primaryAction)
+        // The focused pane's worktree: its pull request beside the host, then Open and Run.
+        if model.destination == .terminal, let worktree = model.git.worktree {
+            ToolbarItem(placement: .primaryAction) {
+                PRToolbarButton(git: model.git, worktree: worktree)
+            }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            ToolbarItemGroup(placement: .primaryAction) {
+                OpenInMenu(git: model.git)
+                RunMenu(git: model.git, worktree: worktree)
+            }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Find", systemImage: "magnifyingglass") { model.isSearchShown.toggle() }
                 .help("Find (⌘F)")

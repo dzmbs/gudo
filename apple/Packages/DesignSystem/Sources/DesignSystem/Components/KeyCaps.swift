@@ -15,8 +15,10 @@ public struct ShortcutLabel: View {
                 Text(symbol).frame(minWidth: 13)
             }
         }
-        .font(.callout)
+        // The row's own font; `.secondary` is relative to the row's colour (white on the
+        // palette's selected row).
         .foregroundStyle(.secondary)
+        .monospacedDigit()
         .accessibilityLabel(symbols.joined())
     }
 }

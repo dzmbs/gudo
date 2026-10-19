@@ -110,6 +110,10 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
         var asked: Set<UInt64> = []
         var watched: [String] = []
         var nextWatch: UInt64 = 1
+        /// `usageWatch` calls (their `apiFallback`), `usageUnwatch` calls, and the report.
+        var usageWatches: [Bool] = []
+        var usageUnwatches = 0
+        var usage = AgentUsageReport(agents: [])
     }
 
     let state = Mutex(State())
@@ -186,5 +190,18 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
     private func asked(_ id: UInt64) -> UInt64 {
         state.withLock { _ = $0.asked.insert(id) }
         return id
+    }
+}
+
+extension FakeWorkspaceAPI: DaemonUsageAPI {
+    func usageWatch(apiFallback: Bool) async throws -> AgentUsageReport {
+        state.withLock { state in
+            state.usageWatches.append(apiFallback)
+            return state.usage
+        }
+    }
+
+    func usageUnwatch() async throws {
+        state.withLock { $0.usageUnwatches += 1 }
     }
 }

@@ -318,7 +318,7 @@ private struct WindowContent: View {
     /// The window's open hosts and focused tab: the scene's own storage, else what the last
     /// window saved (a new scene on iPad, a Mac window restored without state), else the
     /// single host of a window saved before multi-host.
-    private func restore() {
+    private func restore(_ model: WindowModel) {
         let defaults = UserDefaults.standard
         let decoder = JSONDecoder()
         func decode<T: Decodable>(_ type: T.Type, _ text: String?) -> T? {
@@ -340,7 +340,7 @@ private struct WindowContent: View {
     private static let lastFocusKey = "window.focusedTab"
 
     /// Saves what a relaunch restores, per window and as the app's latest.
-    private func persist() {
+    private func persist(_ model: WindowModel) {
         guard restored, shouldRestore else { return }
         let encoder = JSONEncoder()
         func encode(_ value: some Encodable) -> String? {

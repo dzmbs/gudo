@@ -176,7 +176,22 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::EditorStatus
         | R::EditorOpen { .. }
         | R::VsCodeTunnelStatus
-        | R::VsCodeTunnelOpen(_) => (Need::Drive, Target::Host),
+        | R::VsCodeTunnelOpen(_)
+        // The git-native workspace touches the host's repositories (and GitHub as the
+        // host's `gh` user), like the git and worktree requests above.
+        | R::RepoRefresh { .. }
+        | R::PrMerge(_)
+        | R::PrRerunFailed { .. }
+        | R::PrCreate(_)
+        | R::PrCheckout(_)
+        | R::WorktreeArchive { .. }
+        | R::WorktreeArchived { .. }
+        | R::WorktreeRestore { .. }
+        | R::WorktreeSettings(None)
+        | R::TaskCreate(_)
+        | R::ScriptRun(_) => (Need::Drive, Target::Host),
+        // Housekeeping that deletes worktrees is the owner's call.
+        R::WorktreeSettings(Some(_)) => (Need::Own, Target::Daemon),
         R::EditorLaunch(_)
         | R::EditorStop { .. }
         | R::VsCodeCliInstall(_)
@@ -186,6 +201,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::PushRegister(_) | R::PushUnregister | R::PushStatus | R::PushAction(_) => {
             (Need::Own, Target::Daemon)
         }
+        // The owner's plan and its limits; a guest has no business there.
+        R::UsageWatch(_) | R::UsageUnwatch => (Need::Own, Target::Daemon),
     }
 }
 

@@ -72,6 +72,10 @@ pub struct ClientConfig {
     /// turn it off; seq/ack and resume work either way.
     #[uniffi(default = true)]
     pub mirror_vt: bool,
+    /// Receive the repository snapshot (`WorkspaceEvent.repos`); the daemon watches the
+    /// panes' repositories while this client is connected.
+    #[uniffi(default = true)]
+    pub repo_status: bool,
 }
 
 /// A fresh random 32-byte device key for [`ClientConfig::secret_key`].
@@ -523,12 +527,17 @@ pub struct ConnectOptions {
     /// the ticket (`PairTicketInfo.relays`).
     #[uniffi(default = [])]
     pub relay_ca_der: Vec<Bytes>,
+    /// Show native password prompts (`AskpassListener`): the daemon sends this connection
+    /// the askpass prompts of panes it may drive. Off for clients that cannot show them.
+    #[uniffi(default = false)]
+    pub askpass: bool,
 }
 
 impl From<ConnectOptions> for client_core::ConnectOptions {
     fn from(o: ConnectOptions) -> Self {
         Self {
             relay_ca_der: o.relay_ca_der.into_iter().map(Into::into).collect(),
+            askpass: o.askpass,
         }
     }
 }
@@ -542,6 +551,7 @@ impl From<ClientConfig> for client_core::ClientConfig {
                 RelayMode::Disabled => client_core::RelayMode::Disabled,
             },
             mirror_vt: config.mirror_vt,
+            repo_status: config.repo_status,
         }
     }
 }

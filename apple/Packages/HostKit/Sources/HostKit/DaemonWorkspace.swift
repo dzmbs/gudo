@@ -58,6 +58,14 @@ nonisolated public protocol DaemonWorkspaceAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonWorkspaceAPI {}
 
+/// of `DaemonWorkspaceAPI`'s list so fakes that do not care need nothing.
+nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
+    func usageWatch(apiFallback: Bool) async throws -> AgentUsageReport
+    func usageUnwatch() async throws
+}
+
+extension DaemonClient: DaemonUsageAPI {}
+
 /// One daemon's workspace pushes and pane RPCs, shared by every window and screen: detected
 /// ports, the attention feed with its unseen count, directory watches, and the request/answer
 /// pairing for `links` / `search` / `commandOutput` (answers arrive as `ClientEvent`s).
@@ -77,6 +85,18 @@ public final class DaemonWorkspace {
     public private(set) var unseen = 0
     /// Bumped on each (re)connect, so screens can reload.
     public private(set) var generation = 0
+    /// The host's agents' plan usage, while something shows it (`beginWatchingUsage`); nil when
+    /// not watched, not offered by the daemon, not allowed (guests) or not answered yet.
+    public private(set) var usage: AgentUsageReport?
+    /// Whether the daemon answers usage requests (its `DaemonInfo.agentUsage`).
+    @ObservationIgnored public var supportsUsage: () -> Bool = { false }
+    @ObservationIgnored private var usageViewers = 0
+    @ObservationIgnored private var usageTask: Task<Void, Never>?
+    /// A watch was sent on this connection (so stopping must say so).
+    @ObservationIgnored private var usageWatchSent = false
+    /// Repositories, worktrees, branches and pull requests of the host's panes, as last pushed
+    /// (`WorkspaceEvent.repos`); nil until the first snapshot.
+    public internal(set) var repos: RepoSnapshot?
 
     @ObservationIgnored private let resolve: () -> (any DaemonWorkspaceAPI)?
     @ObservationIgnored private var installedOn: ObjectIdentifier?
@@ -122,6 +142,7 @@ public final class DaemonWorkspace {
         guard installedOn != identity else { return }
         installedOn = identity
         ports = client.ports()
+        if let repoClient = client as? any DaemonRepoAPI, let snapshot = repoClient.repos() { repos = snapshot }
     }
 
     // MARK: Observers (other features)
@@ -162,7 +183,47 @@ public final class DaemonWorkspace {
             for observer in attentionObservers.values { observer(update) }
         case .vsCodeTunnel:
             break
+        case .agentUsage(let report):
+            if usageViewers > 0 { usage = report }
+        case .repos(let snapshot):
+            repos = snapshot
         }
+    }
+
+    // MARK: Repositories (git-native workspace)
+
+    /// The repository API of the client of the moment, or `HostError.notConnected`.
+    public func repoClient() throws -> any DaemonRepoAPI {
+        guard let api = api as? any DaemonRepoAPI else { throw HostError.notConnected }
+        return api
+    }
+
+    /// Re-reads git state now and the pull request of `path` (every one when nil).
+    public func refreshRepos(path: String? = nil) async {
+        guard let api = try? repoClient() else { return }
+        do {
+            repos = try await api.repoRefresh(path: path)
+        } catch {
+            Self.log.error("repo refresh host=\(self.hostId, privacy: .public): \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// The worktree a pane is in.
+    public func worktree(ofPane pane: UInt64) -> WorktreeState? {
+        guard let repos, let path = repos.panes.first(where: { $0.paneId == pane })?.worktree else { return nil }
+        return repos.worktrees.first { $0.path == path }
+    }
+
+    /// A worktree by path.
+    public func worktree(_ path: String) -> WorktreeState? {
+        repos?.worktrees.first { $0.path == path }
+    }
+
+    /// Applies a pull request a request returned, so the UI shows it before the next push.
+    public func applyPR(_ pr: PullRequest?, to path: String) {
+        guard var snapshot = repos, let i = snapshot.worktrees.firstIndex(where: { $0.path == path }) else { return }
+        snapshot.worktrees[i].pr = pr
+        repos = snapshot
     }
 
     func apply(_ update: AttentionUpdate) {
@@ -189,6 +250,7 @@ public final class DaemonWorkspace {
             generation += 1
             Task { await refresh() }
             rewatch()
+            if usageViewers > 0 { watchUsage() }
         case .searchResult(let id, _, _, _), .links(let id, _, _, _), .commands(let id, _, _, _),
              .commandOutput(let id, _, _, _):
             pending.removeValue(forKey: id)?.resume(returning: event)
@@ -237,6 +299,58 @@ public final class DaemonWorkspace {
             Self.log.error("attention seen host=\(self.hostId, privacy: .public): \(String(describing: error), privacy: .public)")
         }
     }
+
+    // MARK: Agent usage
+
+    /// Something on screen shows this host's usage: the daemon refreshes it (at most once a
+    /// minute) and pushes changes while anything watches. Balance with `endWatchingUsage`.
+    public func beginWatchingUsage() {
+        usageViewers += 1
+        if usageViewers == 1 { watchUsage() }
+    }
+
+    public func endWatchingUsage() {
+        guard usageViewers > 0 else { return }
+        usageViewers -= 1
+        guard usageViewers == 0 else { return }
+        usageTask?.cancel()
+        guard usageWatchSent else { return }
+        usageWatchSent = false
+        let api = resolve() as? any DaemonUsageAPI
+        Task { try? await api?.usageUnwatch() }
+    }
+
+    /// Watches again with the current setting (Settings › Agents changed).
+    public func usageSettingsChanged() {
+        if usageViewers > 0 { watchUsage() }
+    }
+
+    /// Every host's hub re-watches with the current setting.
+    public static func usageSettingsChanged() {
+        for entry in DaemonWorkspaceRegistry.hubs.values where entry.connection != nil {
+            entry.hub.usageSettingsChanged()
+        }
+    }
+
+    private func watchUsage() {
+        guard supportsUsage(), let api = resolve() as? any DaemonUsageAPI else { return }
+        let fallback = AgentUsageSettings.apiFallback
+        usageWatchSent = true
+        usageTask?.cancel()
+        usageTask = Task { [weak self] in
+            do {
+                let report = try await api.usageWatch(apiFallback: fallback)
+                guard !Task.isCancelled, let self, self.usageViewers > 0 else { return }
+                self.usage = report
+            } catch {
+                // Quiet: no meter (a guest, an old daemon, a dropped link). The log says why.
+                Self.log.info("usage host=\(self?.hostId ?? "", privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    /// Tests: a report as if pushed.
+    func setUsage(_ report: AgentUsageReport?) { usage = report }
 
     // MARK: Watches
 
@@ -353,6 +467,7 @@ extension DaemonConnection {
     public var workspace: DaemonWorkspace {
         if let existing = existingWorkspace { return existing }
         let hub = DaemonWorkspace(hostId: hostId, events: workspaceEvents) { [weak self] in self?.client as? any DaemonWorkspaceAPI }
+        hub.supportsUsage = { [weak self] in self?.daemonInfo?.agentUsage ?? false }
         DaemonWorkspaceRegistry.hubs = DaemonWorkspaceRegistry.hubs.filter { $0.value.connection != nil }
         DaemonWorkspaceRegistry.hubs[ObjectIdentifier(self)] = .init(hub: hub, connection: self)
         let previous = onEvent

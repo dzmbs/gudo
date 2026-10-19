@@ -109,6 +109,8 @@ targets:
         # Push-to-talk dictation (VoiceKit): on-device speech only.
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Hear what you dictate into the terminal while you hold the mic key.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Turn what you dictate into text, on this device only.
+        # Passwords remembered for terminal prompts (Askpass): read only after Face ID.
+        INFOPLIST_KEY_NSFaceIDUsageDescription: Use a password you chose to remember for a host's terminal prompt.
         # ProMotion: lets the terminal's display link run at 120 Hz on iPhone too (iPad needs no key).
         INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight

@@ -2,15 +2,18 @@
 
 mod agents;
 mod artifacts;
+mod askpass;
 mod assist;
 mod codex;
 mod e2e;
 mod multiplayer;
 mod notify;
 mod relays;
+mod repos;
 mod shell;
 mod support;
 mod terminal;
 mod upgrade;
+mod usage;
 mod vscode;
 mod workspace;

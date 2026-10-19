@@ -14,12 +14,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use proto::{
-    AttentionList, AttentionSeen, AttentionUpdate, Axis, DeleteMode, DirListing, DownloadHeader,
-    EditorInstance, EditorLaunch, EditorList, EditorOpened, FileChunk, FileStat, ForwardReply,
-    ForwardTarget, FsChange, GitDiff, GitDiffRequest, GitStatus, PaneId, PortInfo, ReviewRequest,
-    ServerCtl, StreamHeader, TransferReply, TurnInfo, UploadHeader, VsCodeCliInstall,
-    VsCodeTunnelOpen, VsCodeTunnelOpened, VsCodeTunnelStart, VsCodeTunnelStatus, WorkspaceRequest,
-    WorkspaceResponse, WorktreeCreate, WorktreeInfo, WriteTarget, WsError,
+    AgentUsageReport, AttentionList, AttentionSeen, AttentionUpdate, Axis, DeleteMode, DirListing,
+    DownloadHeader, EditorInstance, EditorLaunch, EditorList, EditorOpened, FileChunk, FileStat,
+    ForwardReply, ForwardTarget, FsChange, GitDiff, GitDiffRequest, GitStatus, PaneId, PortInfo,
+    ReviewRequest, ServerCtl, StreamHeader, TransferReply, TurnInfo, UploadHeader,
+    VsCodeCliInstall, VsCodeTunnelOpen, VsCodeTunnelOpened, VsCodeTunnelStart, VsCodeTunnelStatus,
+    WorkspaceRequest, WorkspaceResponse, WorktreeCreate, WorktreeInfo, WriteTarget, WsError,
+};
+use proto::{
+    ArchivedWorktree, PrCheckout, PrCreate, PrMerge, PullRequest, RepoSnapshot, ScriptRun,
+    TaskCreate, TaskCreated, WorktreeSettings,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -56,6 +60,17 @@ pub enum WorkspaceEvent {
     VsCodeTunnel {
         /// The whole status.
         status: VsCodeTunnelStatus,
+    },
+    /// Agent plan usage changed (while watching, [`Client::usage_watch`]).
+    AgentUsage {
+        /// The whole report.
+        report: AgentUsageReport,
+    },
+    /// The repositories, worktrees, branches and pull requests of the panes (the whole
+    /// snapshot; only with [`ClientConfig::repo_status`](crate::ClientConfig::repo_status)).
+    Repos {
+        /// The snapshot.
+        snapshot: RepoSnapshot,
     },
 }
 
@@ -100,6 +115,7 @@ pub(crate) struct WsState {
     listener: Mutex<Option<Arc<dyn WorkspaceListener>>>,
     ports: Mutex<Vec<PortInfo>>,
     forwards: Mutex<HashMap<u16, (ForwardTarget, AbortHandle)>>,
+    repos: Mutex<Option<RepoSnapshot>>,
 }
 
 impl WsState {
@@ -119,6 +135,11 @@ impl WsState {
             ServerCtl::FsChanged(change) => WorkspaceEvent::FsChanged { change },
             ServerCtl::Attention(update) => WorkspaceEvent::Attention { update },
             ServerCtl::VsCodeTunnel(status) => WorkspaceEvent::VsCodeTunnel { status },
+            ServerCtl::AgentUsage(report) => WorkspaceEvent::AgentUsage { report },
+            ServerCtl::Repos(snapshot) => {
+                *lock(&self.repos) = Some(snapshot.clone());
+                WorkspaceEvent::Repos { snapshot }
+            }
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
@@ -292,6 +313,31 @@ impl Client {
             column,
         };
         expect!(self.workspace(req).await?, WorkspaceResponse::EditorOpened(o) => o)
+    }
+
+    // --- agent usage ----------------------------------------------------------------------
+
+    /// Agent plan usage on the host now, and its changes as [`WorkspaceEvent::AgentUsage`]
+    /// until [`Client::usage_unwatch`]. Only for daemons offering
+    /// [`DaemonFeatures::AGENT_USAGE`](proto::DaemonFeatures::AGENT_USAGE); older ones drop a
+    /// connection that sends it. `api_fallback` lets the daemon ask the providers' usage
+    /// endpoints with the host's own sign-in when the tools' local data says nothing.
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WsError`] (owners only).
+    pub async fn usage_watch(&self, api_fallback: bool) -> Result<AgentUsageReport, WsError> {
+        let req = WorkspaceRequest::UsageWatch(proto::UsageWatch { api_fallback });
+        expect!(self.workspace(req).await?, WorkspaceResponse::AgentUsage(r) => r)
+    }
+
+    /// Stops this connection's usage pushes.
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WsError`].
+    pub async fn usage_unwatch(&self) -> Result<(), WsError> {
+        expect!(self.workspace(WorkspaceRequest::UsageUnwatch).await?, WorkspaceResponse::Done => ())
     }
 
 
@@ -573,6 +619,88 @@ impl Client {
     pub async fn attention_seen(&self, seen: AttentionSeen) -> Result<AttentionList, WsError> {
         expect!(self.workspace(WorkspaceRequest::AttentionSeen(seen)).await?,
             WorkspaceResponse::Attention(a) => a)
+    }
+
+    // --- git-native workspace (proto::repo) -----------------------------------------------
+
+    /// The last repository snapshot the daemon pushed.
+    pub fn repos(&self) -> Option<RepoSnapshot> {
+        lock(&self.inner.ws.repos).clone()
+    }
+
+    /// Re-reads every watched worktree now, and `path`'s pull request (all of them when
+    /// `None`).
+    pub async fn repo_refresh(&self, path: Option<String>) -> Result<RepoSnapshot, WsError> {
+        let snapshot = expect!(self.workspace(WorkspaceRequest::RepoRefresh { path }).await?,
+            WorkspaceResponse::Repos(s) => s)?;
+        *lock(&self.inner.ws.repos) = Some(snapshot.clone());
+        Ok(snapshot)
+    }
+
+    /// Merges a worktree's pull request; the pull request after merging.
+    pub async fn pr_merge(&self, merge: PrMerge) -> Result<Option<PullRequest>, WsError> {
+        expect!(self.workspace(WorkspaceRequest::PrMerge(merge)).await?,
+            WorkspaceResponse::Pr(p) => p)
+    }
+
+    /// Re-runs the failed jobs of a worktree's pull request.
+    pub async fn pr_rerun_failed(&self, path: String) -> Result<Option<PullRequest>, WsError> {
+        expect!(self.workspace(WorkspaceRequest::PrRerunFailed { path }).await?,
+            WorkspaceResponse::Pr(p) => p)
+    }
+
+    /// Pushes the branch and opens a pull request.
+    pub async fn pr_create(&self, create: PrCreate) -> Result<Option<PullRequest>, WsError> {
+        expect!(self.workspace(WorkspaceRequest::PrCreate(create)).await?,
+            WorkspaceResponse::Pr(p) => p)
+    }
+
+    /// Checks a pull request out into a new worktree.
+    pub async fn pr_checkout(&self, checkout: PrCheckout) -> Result<WorktreeInfo, WsError> {
+        expect!(self.workspace(WorkspaceRequest::PrCheckout(checkout)).await?,
+            WorkspaceResponse::Worktree(w) => w)
+    }
+
+    /// Archives a worktree (its commits and, with `force`, its changes are kept).
+    pub async fn worktree_archive(&self, path: String, force: bool) -> Result<(), WsError> {
+        expect!(self.workspace(WorkspaceRequest::WorktreeArchive { path, force }).await?,
+            WorkspaceResponse::Done => ())
+    }
+
+    /// Archived worktrees, newest first.
+    pub async fn worktree_archived(
+        &self,
+        repo: Option<String>,
+    ) -> Result<Vec<ArchivedWorktree>, WsError> {
+        expect!(self.workspace(WorkspaceRequest::WorktreeArchived { repo }).await?,
+            WorkspaceResponse::Archived(a) => a)
+    }
+
+    /// Restores an archived worktree.
+    pub async fn worktree_restore(&self, id: u64) -> Result<WorktreeInfo, WsError> {
+        expect!(self.workspace(WorkspaceRequest::WorktreeRestore { id }).await?,
+            WorkspaceResponse::Worktree(w) => w)
+    }
+
+    /// Reads (`None`) or changes the worktree housekeeping.
+    pub async fn worktree_settings(
+        &self,
+        set: Option<WorktreeSettings>,
+    ) -> Result<WorktreeSettings, WsError> {
+        expect!(self.workspace(WorkspaceRequest::WorktreeSettings(set)).await?,
+            WorkspaceResponse::WorktreeSettings(s) => s)
+    }
+
+    /// A new task: worktree, branch, and a tab with a shell or agent in it.
+    pub async fn task_create(&self, task: TaskCreate) -> Result<TaskCreated, WsError> {
+        expect!(self.workspace(WorkspaceRequest::TaskCreate(task)).await?,
+            WorkspaceResponse::TaskCreated(t) => t)
+    }
+
+    /// Runs a script in a new tab; its pane.
+    pub async fn script_run(&self, run: ScriptRun) -> Result<PaneId, WsError> {
+        expect!(self.workspace(WorkspaceRequest::ScriptRun(run)).await?,
+            WorkspaceResponse::PaneCreated { pane_id } => pane_id)
     }
 }
 

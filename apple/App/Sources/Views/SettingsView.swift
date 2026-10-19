@@ -24,9 +24,11 @@ struct SettingsView: View {
         #if os(macOS)
         TabView {
             SwiftUI.Tab("Appearance", systemImage: "paintpalette") { pane { AppearanceSection() } }
-            SwiftUI.Tab("Terminal", systemImage: "terminal") { pane { FontSection(); CursorSection(); SplitsSection() } }
+            SwiftUI.Tab("Terminal", systemImage: "terminal") { pane { FontSection(); CursorSection(); SplitsSection(); PasswordsSection() } }
             SwiftUI.Tab("Keyboard", systemImage: "keyboard") { pane { KeyboardSection(); VoiceSettingsSection() } }
             SwiftUI.Tab("Notifications", systemImage: "bell.badge") { pane { NotificationsSection() } }
+            SwiftUI.Tab("Agents", systemImage: "sparkle") { pane { AgentsSettingsSection() } }
+            SwiftUI.Tab("Git", systemImage: "arrow.triangle.branch") { pane { GitSettingsSection() } }
             SwiftUI.Tab("About", systemImage: "info.circle") { pane { AboutSection() } }
         }
         .frame(width: 560, height: 520)
@@ -41,8 +43,11 @@ struct SettingsView: View {
                 CursorSection().raisedRows()
                 SplitsSection().raisedRows()
                 KeyboardSection().raisedRows()
+                PasswordsSection().raisedRows()
                 VoiceSettingsSection().raisedRows()
                 NotificationsSection().raisedRows()
+                AgentsSettingsSection().raisedRows()
+                GitSettingsSection().raisedRows()
                 AboutSection().raisedRows()
             }
             .terminalGrouped()
@@ -397,6 +402,18 @@ private struct AcknowledgementsView: View {
             ack("Nerd Fonts", "MIT and per-icon-set licenses · symbols in the terminal font")
             ack("iTerm2-Color-Schemes", "MIT · terminal themes, as bundled by Ghostty")
             ack("Orca", "MIT · key bar and reconnect behaviour")
+            Section {
+                ack("Git logo", "Jason Long · CC BY 3.0 · creativecommons.org/licenses/by/3.0")
+                ack("Neovim logo", "Jason Long · CC BY 3.0 · creativecommons.org/licenses/by/3.0")
+                ack("Ruby logo", "© 2006 Yukihiro Matsumoto · CC BY-SA 2.5 · creativecommons.org/licenses/by-sa/2.5 · cropped to the gem")
+                ack("tmux logo", "Copyright (c) 2015, Jason Long · ISC License: Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies. THE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. Drawn in one colour.")
+                ack("Helix logo", "@jakenvac · Mozilla Public License 2.0 · source: github.com/helix-editor/helix")
+                ack("btop logo", "Aristocratos · Apache License 2.0 · github.com/aristocratos/btop")
+            } header: {
+                Text("Program logos")
+            } footer: {
+                Text("Shown next to a tab to say which program runs in it. The names and logos belong to their owners, who do not endorse this app.")
+            }
             Section {
                 ack("Visual Studio Code", "Microsoft Software License Terms · the editor. Its server and CLI are downloaded from Microsoft onto your own hosts when you open the editor; they are not part of this app.")
                 link("Visual Studio Code License", vscodeLicenseUrl())

@@ -127,6 +127,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         ctl: ctl.clone(),
         watches: Arc::default(),
         actor: authz.actor,
+        caps: hello.caps,
     };
     let id = core.next_conn_id();
     let _ = ctl.send(ServerCtl::Joined(authz.join_info(&authz.name)));
@@ -144,6 +145,12 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         ws,
     });
     core.client_connected(true);
+    core.askpass.register(client.id, &client.authz, client.caps);
+    let repo_watch = client.caps.contains(Caps::REPO_STATUS);
+    if repo_watch {
+        core.ws.repos.watch(true);
+        client.forward(Event::Repos);
+    }
     let mut tasks = JoinSet::new();
     tasks.spawn(write_ctl(ctl_tx, ctl_out));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
@@ -176,6 +183,9 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     core.detach(client.id);
     core.mp.leave(&core, client.id);
     core.client_connected(false);
+    if repo_watch {
+        core.ws.repos.watch(false);
+    }
     lock(&client.ws.watches).clear();
     result
 }
@@ -190,6 +200,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
     if core.cfg.self_exe.is_some() {
         features |= DaemonFeatures::SELF_UPGRADE;
     }
+    features |= DaemonFeatures::AGENT_USAGE;
     crate::info::build_info(features)
 }
 
@@ -722,7 +733,65 @@ impl Client {
                     self.send(ServerCtl::Assist(push));
                 }
             }
+            Event::Askpass(push) => {
+                if self.may_answer(crate::askpass::push_pane(&push)) {
+                    self.send(ServerCtl::Askpass(push));
+                }
+            }
+            Event::Repos => {
+                if let Some(snapshot) = self.scoped_repos() {
+                    self.send(ServerCtl::Repos(snapshot));
+                }
+            }
         }
+    }
+
+    /// Whether this connection is shown native password prompts for `pane`: it asked for
+    /// them, shows the pane's session and may drive the pane. Guests who only watch never see
+    /// the prompt text.
+    fn may_answer(&self, pane: PaneId) -> bool {
+        self.caps.contains(Caps::ASKPASS)
+            && self.in_session(pane)
+            && self.allow(Need::Drive, Target::Pane(pane)).is_ok()
+    }
+
+    /// The open and detected password prompts of `pane`, for a connection that just attached.
+    fn askpass_state(&self, pane: PaneId) {
+        if !self.may_answer(pane) {
+            return;
+        }
+        for prompt in self.core.askpass.open_in(pane) {
+            self.send(ServerCtl::Askpass(proto::AskpassPush::Prompt(prompt)));
+        }
+        if let Some(detected) = crate::askpass::detected(&self.core, pane) {
+            self.send(ServerCtl::Askpass(proto::AskpassPush::Detected(detected)));
+        }
+    }
+
+    /// The repository snapshot as this connection may see it: clients with
+    /// `Caps::REPO_STATUS` that may read the host's repositories, panes within the scope and
+    /// the repositories those panes are in. `None` before the first snapshot.
+    fn scoped_repos(&self) -> Option<proto::RepoSnapshot> {
+        if !self.caps.contains(Caps::REPO_STATUS) || self.allow(Need::Drive, Target::Host).is_err()
+        {
+            return None;
+        }
+        let snapshot = self.core.ws.repos.snapshot();
+        if snapshot.rev == 0 {
+            return None;
+        }
+        let mut snapshot = (*snapshot).clone();
+        if self.authz.scope != Scope::Daemon {
+            snapshot.panes.retain(|p| self.pane_allowed(p.pane_id));
+            let repos: std::collections::BTreeSet<String> = snapshot
+                .worktrees
+                .iter()
+                .filter(|w| snapshot.panes.iter().any(|p| p.worktree == w.path))
+                .map(|w| w.repo.clone())
+                .collect();
+            snapshot.worktrees.retain(|w| repos.contains(&w.repo));
+        }
+        Some(snapshot)
     }
 
     /// Whether this connection may see an artifact: its session for daemon- and
@@ -1378,6 +1447,13 @@ impl Client {
                     client.send(ServerCtl::AssistResult { req_id, result });
                 });
             }
+            ClientCtl::Askpass { req_id, req } => {
+                let client = Arc::clone(self);
+                tokio::spawn(async move {
+                    let result = crate::askpass::request(&client.core, &client.authz, req).await;
+                    client.send(ServerCtl::AskpassResult { req_id, result });
+                });
+            }
             ClientCtl::Op { op_id, mut op } => {
                 let (need, target) = policy::op(&op);
                 let outcome = match self.allow(need, target) {
@@ -1730,6 +1806,7 @@ impl Client {
             if lease.holder.is_some() {
                 self.send(ServerCtl::Lease(lease));
             }
+            self.askpass_state(pane);
         }
         self.send(ServerCtl::Participants {
             participants: self.core.mp.participants(&self.core, &self.authz),

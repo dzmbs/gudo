@@ -265,6 +265,14 @@ pub enum ClientCtl {
         /// The request.
         req: AssistRequest,
     },
+    /// Answers or cancels a native password prompt, or types a secret at a detected one;
+    /// answered by [`ServerCtl::AskpassResult`]. Needs Driver on the pane.
+    Askpass {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: crate::askpass::AskpassRequest,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -592,6 +600,22 @@ pub enum ServerCtl {
     /// (with its own format, which tells the client) but serves nothing on that connection
     /// except [`StreamHeader::Upgrade`], so an incompatible daemon can still be upgraded.
     DaemonInfo(DaemonInfo),
+    /// Answers [`ClientCtl::Askpass`].
+    AskpassResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<(), crate::askpass::AskpassError>,
+    },
+    /// A native password prompt opened or closed, or a detected one appeared or went away.
+    /// Sent only to clients with [`Caps::ASKPASS`] holding Driver on the pane.
+    Askpass(crate::askpass::AskpassPush),
+    /// Agent plan usage changed. Sent to clients with [`Caps::AGENT_USAGE`] that watch it
+    /// ([`WorkspaceRequest::UsageWatch`]).
+    AgentUsage(crate::AgentUsageReport),
+    /// The repositories, worktrees, branches and pull requests of the panes (sent whole, to
+    /// clients with [`Caps::REPO_STATUS`], after attaching and on every change).
+    Repos(crate::repo::RepoSnapshot),
 }
 
 /// A successful [`ClientCtl::Attach`].

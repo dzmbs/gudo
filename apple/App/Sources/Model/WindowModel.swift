@@ -44,7 +44,10 @@ final class WindowModel {
     }
     var sheet: SheetRoute?
     var isPaletteShown = false {
-        didSet { if !isPaletteShown { paletteMode = .commands } }
+        didSet {
+            if !isPaletteShown { paletteMode = .commands }
+            if isPaletteShown { git.refreshArchived() }
+        }
     }
     var paletteMode = PaletteMode.commands
     var isSearchShown = false
@@ -110,11 +113,17 @@ final class WindowModel {
     let editor: any EditorSource
     let ports: any PortSource
     let links: any LinkSource
+    /// Agent plan usage per host (sidebar host headers, Inbox).
+    let usage: any UsageFeed
+    /// The host whose usage detail popover is open (from its meter or its menu).
+    var usageDetailHost: String?
     /// The page the in-app browser opens (a forwarded port, a link).
     var browserURL: URL?
     /// The editor is presented (full screen on iPhone and iPad).
     var isEditorShown = false
     let toasts = ToastCenter()
+    /// The git-native workspace of this window (worktree, pull request, scripts).
+    let git = GitUI()
 
     @ObservationIgnored private var downSince: Date?
     /// A restored tab to select once its host's layout arrives.
@@ -134,6 +143,12 @@ final class WindowModel {
         groups = HostGroups(
             hosts: app.hosts,
             local: LaunchOptions.hasLocalShell ? HostGroups.Local(name: Self.deviceName, layout: app.localLayout) : nil)
+        if LaunchOptions.mock || LaunchOptions.fakeUsage {
+            let groups = groups
+            usage = FakeUsageFeed { groups.groups.map { UsageHost(id: $0.id, name: $0.name) } }
+        } else {
+            usage = LiveUsageFeed(app: app)
+        }
         if LaunchOptions.mock {
             hosts = MockHostDirectory()
             agents = MockAgentFeed()
@@ -169,6 +184,7 @@ final class WindowModel {
             ports.window = self
             links.window = self
         }
+        git.window = self
         #if os(iOS)
         // A first guess from the screen until the window is measured (`WindowRoot`), so an
         // iPhone never draws the regular layout for a frame.
@@ -706,6 +722,8 @@ extension ConnectionState {
 enum LaunchOptions {
     static let mock = ProcessInfo.processInfo.arguments.contains("-mock")
     static let screen: String? = UserDefaults.standard.string(forKey: "screen")
+    /// Every host header and the Inbox show a fixed usage report (`FakeUsageFeed`): UI tests.
+    static let fakeUsage = UserDefaults.standard.bool(forKey: "fakeUsage")
     /// Whether this device offers a local shell: always on the Mac; on iPhone and iPad only the
     /// echo stand-in, so only for UI tests (`-localEcho YES`), `-mock` and design fixtures. A real
     /// iOS install starts on the welcome and Hosts screens, never in a fake shell.

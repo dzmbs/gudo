@@ -17,6 +17,20 @@ public extension DS {
         public static let xl: CGFloat = 20
         public static let xxl: CGFloat = 24
         public static let xxxl: CGFloat = 32
+        public static let row: CGFloat = 6
+    }
+}
+
+// MARK: - Opacity
+
+public extension DS {
+    /// The three greys come from `.secondary` / `.tertiary` / `.quaternary`; these are the only
+    nonisolated enum Opacity {
+        /// Leading glyphs in rows and empty states: present, never louder than the text.
+        public static let mutedGlyph: Double = 0.6
+        /// Inactive tabs and secondary chrome dimmed by opacity, so their colours survive.
+        public static let inactive: Double = 0.7
+        public static let inactiveHover: Double = 0.85
     }
 }
 
@@ -24,8 +38,9 @@ public extension DS {
 
 public extension DS {
     nonisolated enum Radius {
-        /// Key caps, the resize overlay (Ghostty SurfaceView.swift `SurfaceResizeOverlay`: 4).
+        /// Key caps, badges, the resize overlay (Ghostty `SurfaceResizeOverlay`: 4).
         public static let chip: CGFloat = 4
+        public static let paletteRow: CGFloat = 5
         /// Text fields inside overlays (Ghostty search field: 6).
         public static let field: CGFloat = 6
         /// Buttons and hover fills inside bars (Ghostty `SearchButtonStyle`: 6, rows: 8).
@@ -55,8 +70,13 @@ public extension DS {
         public static let tab: CGFloat = 28
         /// Presence avatar diameter.
         public static let avatar: CGFloat = 22
-        /// Command palette width (Ghostty CommandPalette.swift `.frame(maxWidth: 500)`).
+        #if os(macOS)
+        public static let paletteWidth: CGFloat = 500
+        #else
         public static let paletteWidth: CGFloat = 560
+        #endif
+        /// A hairline: one physical pixel (separators, the tab strip's rule).
+        public static func hairline(scale: CGFloat) -> CGFloat { 1 / max(scale, 1) }
         public static let keyBarPhone: CGFloat = 44
         public static let keyBarPad: CGFloat = 52
         public static let keyBarHardware: CGFloat = 36
@@ -71,6 +91,9 @@ public extension DS {
     nonisolated enum Motion {
         /// Selection changes, row insertions, tab switches.
         public static let snappy = Animation.snappy(duration: 0.25)
+        public static let quick = Animation.easeInOut(duration: 0.15)
+        /// Hover fills.
+        public static let hover = Animation.easeInOut(duration: 0.1)
         /// Overlays appearing and disappearing (Ghostty search bar corner snap: easeOut 0.2).
         public static let overlay = Animation.easeOut(duration: 0.2)
         /// Badges and indicators changing state (Ghostty KeyStateIndicator: response 0.3, damping 0.8).

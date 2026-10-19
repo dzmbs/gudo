@@ -29,7 +29,7 @@ All are `@MainActor @Observable`. Views never hold a socket or a `DaemonClient` 
 | Model | What a view reads | What a view calls |
 |---|---|---|
 | `AppModel` (App) | `hosts`, `lastError`, `localLayout` (this device's tabs, shared by windows), `openWindows` | `makeWorkspace(for:selecting:)` (a window's own workspace on a host; resolve on target change, never in `body`), `isHostOpen(_:elsewhereThan:)`, `endSharedPanes(of:)`, `handle(url:)` |
-| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette (`paletteMode`: commands / go to tab / new tab on host) and search state, `groups: HostGroups`, `workspaces[groupId]` (one per open host, kept live), `target` / `workspace` (what the detail column shows), `currentTab: TabRef`, `connection: ConnectionState` (the shown host's status in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)`, `focus(TabRef)`, `focus(pane:onGroup:)`, `newTab(onGroup:)`, `selectTab(shortcut:)` / `selectTab(offset:)`, `showHostPicker()`, `showTabFinder()`, `closeHost`, `restore(openHosts:collapsed:focus:)`, `addHost(mode:destination:)`, `retryConnection()`, `disconnect()`; windows (§14): `widthBucket`, `newWindow()`, `openInNewWindow(_:)`, `open(_ request:)`, `continue(_ payload:)`, `handoffMissing`, `close()` |
+| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette (`paletteMode`: commands / go to tab / new tab on host) and search state, `groups: HostGroups`, `workspaces[groupId]` (one per open host, kept live), `target` / `workspace` (what the detail column shows), `currentTab: TabRef`, `connection: ConnectionState` (the shown host's status in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)`, `focus(TabRef)`, `focus(pane:onGroup:)`, `newTab(onGroup:)`, `selectTab(shortcut:)` / `selectTab(offset:)`, `showHostPicker()`, `showTabFinder()`, `closeHost`, `restore(openHosts:collapsed:focus:)`, `addHost(mode:destination:)`, `retryConnection()`, `disconnect()`; windows (§17): `widthBucket`, `newWindow()`, `openInNewWindow(_:)`, `open(_ request:)`, `continue(_ payload:)`, `handoffMissing`, `close()` |
 | `HostGroups` (HostKit, one per window) | `groups: [HostGroup]` (this device, then open hosts in open order, then hosts connected elsewhere: id, name, kind, `status`, `tabs`, `isReady`, `failure`), `tabs: [TabRef]` (the unified order), `openHosts`, `collapsed` | `open(id)` (never redials an open host), `close(id)`, `restore(ids)`, `tab(forShortcut:)`, `shortcutNumber(of:)`, `tab(after:offset:)`, `newTabHost(preferred:)` |
 | `Workspace` (App, one per window per host) | `session` (the window's view: `WindowLayoutStore`), `sharedLayout`, `panes` (this window's terminals), `title(of:)` (the tab's name), `context(of:)` (agent task → program → shell title → repo:branch → directory), `canOpenTabs` | `apply(op)`; unnamed tabs get a friendly name (`FriendlyName`, sent as a rename so a daemon keeps it for every device) |
 | `HostsModel` | `entries: [HostEntry]` (sorted: Needs you → pinned → recent), `installs[id]` (`InstallProgress.summary`), `installNotes[id]`, `sshConfigAliases`, `keys.keys`, `hostKeyPrompts.pending`, `network.isOffline` | `open(id)`, `pair(ticket, name:)`, `connectSSH(…)`, `installHelper(id)`, `loadSSHConfig(text)` / `loadUserSSHConfig()` (macOS) / `importSSHHosts(aliases)`, `rename`, `setPinned`, `disconnect`, `remove`, `foreground()/background()/networkChanged()` |
@@ -443,7 +443,50 @@ Gaps: no release signing key (hash plus a run of the new build is the check); th
 been exercised by the existing bootstrap tests, not by an update of a paired host; macOS hosts get
 no offer (the app bundles Linux daemons only).
 
-## 14. Windows (iPad scenes, Stage Manager, external displays, Mac windows; Handoff; width buckets)
+## 15. Native password prompts (DAEMON.md §9)
+
+`DaemonConnection.askpass` (`AskpassSession`, HostKit) follows the core's askpass pushes: open
+prompts (`prompts`, kept through a dropped connection as `stale` for 15 s so a sheet survives a
+blip), detected hidden-input prompts by pane (`detected`), and why prompts closed. Both dialers
+connect with `ConnectOptions.askpass = true`. In the pane (`App/Sources/Askpass`):
+
+- `AskpassPaneOverlay` (in `PaneSlot`) shows `SecretPromptCard` at the top of the prompt's pane:
+  the program's icon and "sudo needs your password" / "ssh needs a passphrase" (`AskpassCopy`),
+  the asking command and host in SF Mono, the program's own prompt as the field label, a
+  `SecureField` (`.password` content type, so password managers can fill it; a plain field for
+  yes/no questions), "Remember in Keychain", Cancel (Esc) and OK (Return). The card is glass
+  over the terminal, like the lease request; it takes focus and gives it back to the terminal.
+- At a detected prompt the pane shows the "Enter Password Securely" chip at its bottom edge,
+  just above the key bar; it opens the same card, whose OK types the secret and Return.
+- `SecretEntry` holds the typed text only until it is sent. "Remember in Keychain" is opt-in per
+  host and prompt: `AskpassVault` (`KeychainAskpassVault`, service `<bundle id>.askpass`) keeps
+  it under `.userPresence` access control, `WhenUnlockedThisDeviceOnly`, keyed by a SHA-256 of
+  host, program kind and prompt. A saved password is never sent by itself: the card shows a
+  Face ID button, and the system asks before it is read. If the same question comes back right
+  after it was used (`retry`), it is forgotten and the card says so. Settings › Passwords counts
+  them and has "Forget Saved Passwords". Builds without a usable Keychain hide the toggle.
+- Accessibility: the card is a container labelled with its title; the field is labelled with the
+  program's prompt; the chip, the Face ID button and the toggle have labels and hints.
+
+Tests: `AskpassSessionTests`, `AskpassCopyTests` (HostKit), `SecretEntryTests` (App), and
+`AskpassUITests` against a local daemon (`apple/scripts/askpass-ui-test.sh`): `$SSH_ASKPASS`
+answered in the card, Cancel, and the chip at a `stty -echo; read` prompt.
+
+
+`DaemonWorkspace.usage` holds a host's `AgentUsageReport` while something shows it:
+`beginWatchingUsage()` / `endWatchingUsage()` count viewers (the first sends `usageWatch`, the
+last `usageUnwatch`), only for daemons whose `DaemonInfo.agentUsage` is true; pushes
+(`WorkspaceEvent.agentUsage`) update it; a reconnect re-watches. `UsageFeed` (`LiveUsageFeed`,
+`FakeUsageFeed` for `-mock` / `-fakeUsage YES`) is what views read. HostKit's `UsageMeter` makes
+the compact line ("Claude · 62% of 5h · resets 14:20": the limited, else fullest, window that has
+not reset) and its tone (quiet ≤ 80 %, amber above, red limited); `UsageDetail` the popover rows.
+Views (`UsageViews.swift`): one line per agent under each daemon host's name in the sidebar, the
+detail popover (also from the host menu's Agent Usage), and a quiet strip at the bottom of the
+Inbox. Unknown means absent; the reason is in the popover. Settings › Agents › Check Usage with
+Your Claude and Codex Sign-In (`AgentUsageSettings.apiFallbackKey`, off) re-watches every host.
+Tests: `AgentUsageTests` (HostKit), `UsageFeedTests` (AppTests), `UsageUITests`.
+
+## 17. Windows (iPad scenes, Stage Manager, external displays, Mac windows; Handoff; width buckets)
 
 Every window is independent: its own host, tab and pane selection, its own terminals, its own
 restore (`@SceneStorage`: open hosts, collapsed groups, focused tab, the request it opened).

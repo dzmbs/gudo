@@ -139,6 +139,7 @@ impl Host {
             secret_key: generate_device_key(),
             relay: RelayMode::Disabled,
             mirror_vt: true,
+            repo_status: false,
         };
         let client = DaemonClient::connect(ticket, config, events.clone()).unwrap();
         events.wait("connected", |all| {

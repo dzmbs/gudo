@@ -28,6 +28,7 @@
 
 mod art_types;
 mod artifacts;
+mod askpass;
 mod assist;
 mod bytes;
 mod client;
@@ -35,9 +36,11 @@ mod editor;
 mod extras;
 mod mp;
 mod notify;
+mod repo;
 mod ssh_api;
 mod types;
 mod upgrade;
+mod usage;
 mod workspace;
 mod ws_types;
 
@@ -50,6 +53,10 @@ pub use artifacts::{
     ArtifactListener, DownloadedBlob, excalidraw_element, excalidraw_wins, pack_ink_points,
     render_ascii, render_excalidraw_ascii, render_png, render_svg, simplify_ink_points,
     sniff_image, unpack_ink_points,
+};
+pub use askpass::{
+    AskpassCloseReason, AskpassError, AskpassEvent, AskpassListener, DetectedPrompt, SecretPrompt,
+    SecretSource, looks_like_password_prompt,
 };
 pub use assist::{
     AssistError, AssistEvent, AssistListener, BlockedChoice, BlockedOption, BlockedPrompt,
@@ -83,6 +90,7 @@ pub use notify::{
     open_push_notification, push_action_token, push_relay_register_body, push_seal_public_key,
     send_push_action, send_push_action_blocking,
 };
+pub use repo::*;
 pub use ssh_api::{
     BootstrapListener, BootstrapReport, BootstrapStep, EnvVar, GeneratedSshKey, HostKeyDelegate,
     HostKeyInfo, HostKeyPolicy, HostKeyStatus, HostPlatform, HostdBinaries, HostdBinary,
@@ -97,6 +105,7 @@ pub use types::*;
 pub use upgrade::{
     DaemonInfo, UpgradeError, UpgradeFailureCode, min_daemon_protocol, protocol_level,
 };
+pub use usage::{AgentUsage, AgentUsageReport, UsageSource, UsageWindow};
 pub use workspace::{AgentLaunch, AgentLaunched, TransferProgress, WorkspaceListener};
 pub use ws_types::*;
 

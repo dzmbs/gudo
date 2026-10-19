@@ -208,10 +208,11 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   (only when not live), Show in Hosts, Disconnect.
 - A host with no tabs shows one row "New Terminal" (`plus` in `.secondary`) under its header
   (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
-- One row per tab: its number across all hosts (tertiary, monospaced), the tab's name (medium
-  when selected) with its agent glyph (§3.4: working = mini spinner, needs input = amber
-  `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`; none
-  on the focused tab), the live context in SF Mono underneath, ⌘N on the Mac (⌘1–8 index the
+- One row per tab: its number across all hosts (tertiary, monospaced), a leading slot (16 pt on
+  holds the focused pane's program mark (14 / 16 pt: the official logo where its terms allow,
+  replaced by the agent glyph on unfocused tabs (§3.4: working = mini spinner, needs input =
+  amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
+  every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1–8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
   9 % fill with radius 10 (hover 6 %), never the accent. Drag to reorder within a host; context
   menu Rename / Close. Under a group's tabs, its agents.
@@ -234,7 +235,8 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 
 ### Tab strip (horizontal tabs) — Ghostty native tabs
 
-Equal-width tabs across the row; centered title with the agent glyph; ⌘N right-aligned; close
+Equal-width tabs across the row; centered title led by the same slot as the sidebar
+(program mark, the agent glyph instead on unfocused tabs); ⌘N right-aligned; close
 button on hover at the leading edge; 1 pt separators between unselected tabs (none beside the
 selected one); the selected tab a slightly lighter rounded pill (primary 11 %, radius 7, 0.5 pt
 hairline), moved with `matchedGeometryEffect`; + at the end. The strip sits under the shared
@@ -247,8 +249,8 @@ tabs to reorder.
   pointer highlight on iPad; double-click/tap equalizes; adjustable for VoiceOver ("Horizontal
   split divider", ±2.5 %). Split sizes snap to whole cells (main's `SplitSnapping`).
 - No focus ring. Unfocused panes are dimmed with the background at 1 − `unfocused-split-opacity`.
-- Pane header (only in splits, 24 pt, on the terminal background): status glyph, program, state
-  word in its color, and the pane menu (… on hover/focus). Tap focuses.
+- Pane header (only in splits, 24 pt, on the terminal background): program mark (12 pt),
+  program's display name, status glyph and state word in its color, and the pane menu (… on hover/focus). Tap focuses.
 - Overlays on the grid: cols × rows centered while resizing (hidden while the software keyboard
   moves, so it only answers user resizes); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
@@ -322,7 +324,7 @@ hint (e.g. Tailscale). The sidebar footer and connection dots show the same stat
 
 ### Agent Inbox (`Screens/InboxView.swift`)
 
-Needs you / Running / Finished. Row: status glyph, agent, host · session, an accent dot while
+Needs you / Running / Finished. Row: status glyph, the agent's mark (14 pt) and name, host · session, an accent dot while
 unseen, age (ticking for running), an open-pane arrow, prompt. Permission requests show the tool
 and command in an SF Mono block with Deny (glass) and Approve (prominent); questions and finished
 turns offer Reply…, an inline composer that types into the agent. Finished turns carry the
@@ -407,6 +409,64 @@ the palette's green/red. Side by side on iPad/Mac (lines wrap; empty cells a fai
 on iPhone (horizontal scroll per file, 18 pt rows). Tap a line → an inline note composer; notes
 are accent-tinted cards under their line; a floating glass bar "2 notes · Goes to Claude Code as
 one prompt" with Copy and Send to Claude Code (⌘↩).
+
+
+The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. Values from
+
+- **Sidebar**: inside each host group, tabs outside a repository first (as before), then one
+  section per repository: the name in the section style, `.secondary`, sentence case, no icon,
+  + New Task (hover on the Mac, 0.6 on touch), padding top 12 / bottom 4. Under it one row per
+  worktree, main first: a 16 pt slot (18 on touch) with the branch glyph, or the pull request's
+  glyph in its state colour (open green, merged purple from the palette's magenta, closed red,
+  draft grey), at 0.6 with a 10 pt checks badge in the corner; the branch (body 13 on the Mac,
+  subheadline 15 on touch, regular weight always) with the worktree's name under it in
+  footnote `.tertiary`, hidden when it repeats the branch; then a fixed-size trailing cluster,
+  6 pt apart: `+N −M` (caption, monospaced digits, palette green/red), `#PR` (caption
+  cross-fades the cluster to the row's ⌘N (0.15 s, no reflow). Rows: 6 pt vertical insets, title
+  and subtitle touching, selection a neutral 10 % fill at radius 8, and on the selected row every
+  coloured glyph and count drops to `.secondary`. A worktree with one tab is that tab's row; with
+  several, the tabs follow one level in (14 pt); with none it is quiet and a click opens a tab
+  there. Context menu: New Tab Here, Open on GitHub, Run ▸, Copy Path, Copy Branch Name,
+  Rename/Close Tab, Archive Worktree…, Delete Worktree…. The ⌘1–9 order follows the rows.
+- **Needs you**: above the hosts, a highlight section (6 pt amber dot at 60 % with a hairline,
+  "Needs you") hoists every tab, on any host, whose agent waits or failed: glyph, tab, "host ·
+  branch", the state word in its colour. The rows also stay in place below.
+- **Toolbar**: next to the host button, the focused worktree's pull request: its glyph at 0.6
+  with the checks badge and `#42` in subheadline `.secondary` (or the branch when there is none).
+  Hover opens the popover and it closes 150 ms after the pointer leaves both (tap on touch; a
+  sheet on iPhone). Then one glass group: Open In ▾ (VS Code, Files, Diff, GitHub) and Run ▾
+  (the default script on click, ⌘R; the repository's scripts with their tinted symbols, then
+  Global, then Edit Scripts…).
+  Headline "Open Title #42" with the state word and number `.secondary`; a `.secondary` line
+  "branch · Ready to merge" (or why not: behind, blocked, conflicts, draft, still checking);
+  `+128 −17` in subheadline green/red (and "· Merge conflicts" in red); the checks ring (12 pt,
+  2 pt line: failed, in progress, skipped, passed) with "1 failed, 1 in progress, 3 successful";
+  a divider; one caption row per check: coloured symbol, name (opens its page), status word
+  right-aligned `.secondary`; then Open on GitHub, Re-run Failed (when an Actions run failed)
+  and Merge… (prominent, only when GitHub allows it). With no PR: "No Pull Request" and Create
+  Pull Request. When the host's `gh` is missing or signed out, the popover says so, once, with
+  the command (`gh auth login`) and Copy: no token is ever asked for in the app.
+- **Palette** (section "Git · branch"): Merge PR #42 (strategy from Settings, then a
+  confirmation naming it; an UNSTABLE PR says an optional check failed), Re-run Failed Checks,
+  Open PR on GitHub ⌃⌘G, Create Pull Request, Check Out Pull Request… (into a new worktree),
+  Run: <script> (badge "Script"), Archive Worktree, Delete Worktree…, Restore <branch>. A Git
+  menu carries the same, with ⌘R and ⌃⌘G.
+- **New Task** (replaces New Agent): Run (Claude Code · Codex · Shell, segmented), host,
+  repository, New Worktree, the name (a friendly generated one, shuffle) and the branch (its
+  placeholder is the branch the host derives from the name), "Runs setup first: `pnpm i`", the
+  prompt. Start makes the worktree and opens its tab at once; the prompt is typed when the agent
+  is ready.
+- **Archive and delete** ask only when there is something to lose: "It has 3 uncommitted
+  changes. They are kept with the archive and come back when you restore it." Settings ▸ Git:
+  merge strategy, Delete Merged Worktrees (Never, 1, 3, 7 (default), 14, 30 days; sent to each
+  host), global scripts (name, command, SF Symbol, tint, ⌘R).
+
+with a stand-in `gh`): `ipad-sidebar-dark`, `ipad-sidebar-fix-login-dark`, `ipad-toolbar-pr-dark`,
+`ipad-pr-popover-dark`, `ipad-merge-confirm-dark`, `ipad-new-task-dark` from `GitUITests`
+(`apple/scripts/git-ui-test.sh`); `mac-sidebar-dark` drawn by the app
+(`apple/scripts/git-mac-screenshot.sh`; glass toolbar items come out as white shapes in that
+path). `ipad-before-sidebar-dark` and `mac-before-sidebar-dark` are the same data before the
+grouping.
 
 ### Files (`Screens/FilesBrowserView.swift`) and editor (`Screens/EditorView.swift`)
 
@@ -495,7 +555,7 @@ Return. Canvas panes show the same editor full size on the terminal background. 
 with `-snapshot`, so it works on a locked Mac — glass and the sidebar list are not captured by
 `cacheDisplay` and show as white). Screens: `single splits bar hosts inbox palette search
 keybar reconnect overlays welcome pairing launchAgent invite links diff files browser editor
-settings toggle`.
+settings toggle programs` (`programs`: one tab per program for the marks, `-fixtureTabs N` for
 
 `hosts` (live hosts list), `hetzner-splits` / `hetzner` (the Hetzner daemon session, split on the
 host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn by the app itself

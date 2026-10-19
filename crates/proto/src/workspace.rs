@@ -222,6 +222,59 @@ pub enum WorkspaceRequest {
     PushStatus,
     /// Answers an approval from a notification action → [`WorkspaceResponse::PushDecided`].
     PushAction(PushActionRequest),
+    /// Agent plan usage now → [`WorkspaceResponse::AgentUsage`]; while watching, changes
+    /// arrive as [`ServerCtl::AgentUsage`](crate::ServerCtl::AgentUsage) (clients with
+    /// [`Caps::AGENT_USAGE`](crate::Caps::AGENT_USAGE)). Sending it again refreshes (at most
+    /// once a minute) and replaces the options. Only daemons offering
+    /// [`DaemonFeatures::AGENT_USAGE`](crate::DaemonFeatures::AGENT_USAGE) understand it.
+    UsageWatch(crate::UsageWatch),
+    /// Stops this connection's usage pushes → [`WorkspaceResponse::Done`].
+    UsageUnwatch,
+    /// Re-reads the git state of every watched worktree (and the pull request of `path`'s, or
+    /// of all of them) now → [`WorkspaceResponse::Repos`].
+    RepoRefresh {
+        /// One worktree whose pull request to refresh; `None` for all.
+        path: Option<String>,
+    },
+    /// Merges a worktree's pull request → [`WorkspaceResponse::Pr`].
+    PrMerge(crate::repo::PrMerge),
+    /// Re-runs the failed jobs of the pull request's failed workflow runs (`gh run rerun
+    /// --failed`) → [`WorkspaceResponse::Pr`].
+    PrRerunFailed {
+        /// The worktree.
+        path: String,
+    },
+    /// Pushes the branch and opens a pull request → [`WorkspaceResponse::Pr`].
+    PrCreate(crate::repo::PrCreate),
+    /// Checks a pull request out into a new worktree → [`WorkspaceResponse::Worktree`].
+    PrCheckout(crate::repo::PrCheckout),
+    /// Archives a worktree: runs its teardown, keeps its commits (and, with `force`, its
+    /// uncommitted changes) under a ref, removes the directory → [`WorkspaceResponse::Done`].
+    /// Refused with `Conflict` when it has changes unless `force`.
+    WorktreeArchive {
+        /// The worktree.
+        path: String,
+        /// Archive even with uncommitted changes (they are saved and restored).
+        force: bool,
+    },
+    /// Archived worktrees, newest first → [`WorkspaceResponse::Archived`].
+    WorktreeArchived {
+        /// Only this repository's (any directory inside it); `None` for all.
+        repo: Option<String>,
+    },
+    /// Brings an archived worktree back where it was → [`WorkspaceResponse::Worktree`].
+    WorktreeRestore {
+        /// From [`ArchivedWorktree::id`](crate::repo::ArchivedWorktree::id).
+        id: u64,
+    },
+    /// Reads, and with `Some` changes, the worktree housekeeping →
+    /// [`WorkspaceResponse::WorktreeSettings`].
+    WorktreeSettings(Option<crate::repo::WorktreeSettings>),
+    /// A new task: worktree, branch and a tab with a shell or agent →
+    /// [`WorkspaceResponse::TaskCreated`].
+    TaskCreate(crate::repo::TaskCreate),
+    /// Runs a script in a new tab → [`WorkspaceResponse::PaneCreated`].
+    ScriptRun(crate::repo::ScriptRun),
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -278,6 +331,18 @@ pub enum WorkspaceResponse {
     Push(PushStatus),
     /// A notification action's decision was applied.
     PushDecided(crate::Decided),
+    /// Agent plan usage.
+    AgentUsage(crate::AgentUsageReport),
+    /// The repositories of the panes.
+    Repos(crate::repo::RepoSnapshot),
+    /// A worktree's pull request after the request (`None`: it has none).
+    Pr(Option<crate::repo::PullRequest>),
+    /// Archived worktrees.
+    Archived(Vec<crate::repo::ArchivedWorktree>),
+    /// The worktree housekeeping.
+    WorktreeSettings(crate::repo::WorktreeSettings),
+    /// A new task.
+    TaskCreated(crate::repo::TaskCreated),
 }
 
 /// Why a workspace request failed.
