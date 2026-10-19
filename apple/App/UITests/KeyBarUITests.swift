@@ -135,6 +135,30 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
+    /// With a hardware keyboard the bar is a slim strip, and what it keeps stays key-sized:
+    /// hiding the keys must not stretch a toggle across the row (seen with a Magic Keyboard).
+    @MainActor
+    func testHardwareKeyboardStripKeepsKeysCompact() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "NO", "-restoreLastTarget", "NO", "-localEcho", "YES"]
+        app.launch()
+        let pane1 = element(app, "pane-1")
+        XCTAssertTrue(pane1.waitForExistence(timeout: 10))
+        pane1.tap()
+        let esc = app.buttons["keybar-esc"]
+        XCTAssertTrue(esc.waitForExistence(timeout: 5))
+        // The simulator reports the Mac's keyboard; without one the full bar shows instead.
+        try XCTSkipIf(app.buttons["keybar-ctrl"].exists, "no hardware keyboard: the full bar is shown")
+        XCTAssertFalse(app.buttons["keybar-composer-toggle"].exists && app.buttons["keybar-composer-toggle"].isHittable,
+                       "no composer toggle for a shell")
+        app.typeText("title claude\n")
+        let toggle = app.buttons["keybar-composer-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "agents keep the composer toggle")
+        XCTAssertLessThan(toggle.frame.width, 80, "a key, not the whole row: \(toggle.frame)")
+        XCTAssertFalse(element(app, "keybar-composer").exists, "no composer by default with a hardware keyboard")
+        add(XCTAttachment(screenshot: app.screenshot()))
+    }
+
     @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()

@@ -31,6 +31,9 @@ public final class TerminalView: UIView {
     /// Opens a link the user tapped; the default asks for confirmation and opens it with
     /// `UIApplication.open`.
     public var onOpenLink: ((URL) -> Void)?
+    /// Whether Apple Pencil handwriting (Scribble) may type into the terminal. Off: Pencil
+    /// strokes over a terminal are drawing or nothing, never text sent to the shell unseen.
+    public var allowsHandwriting = false
 
     private let repeater = KeyRepeater()
     private var repeatingKey: UIKeyboardHIDUsage?
@@ -95,6 +98,8 @@ public final class TerminalView: UIView {
         let menu = UIEditMenuInteraction(delegate: self)
         addInteraction(menu)
         editMenu = menu
+        // A text input gets Scribble by default, which turned Pencil strokes into shell input.
+        addInteraction(UIScribbleInteraction(delegate: self))
 
         surface.onFrameRendered = { [weak self] in self?.layoutSelectionHandles() }
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: TerminalView, _) in view.setNeedsLayout() }
@@ -949,6 +954,12 @@ extension KeyModifiers {
         if flags.contains(.alternate) { insert(.alt) }
         if flags.contains(.command) { insert(.super) }
         if flags.contains(.alphaShift) { insert(.capsLock) }
+    }
+}
+
+extension TerminalView: UIScribbleInteractionDelegate {
+    public func scribbleInteraction(_ interaction: UIScribbleInteraction, shouldBeginAt location: CGPoint) -> Bool {
+        allowsHandwriting
     }
 }
 #endif

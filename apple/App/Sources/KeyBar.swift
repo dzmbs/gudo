@@ -37,7 +37,6 @@ final class KeyBar: UIInputView {
         var composerOn: Bool?
         var draft = ""
         var profile: KeyBarProfile { manual ?? detected }
-        var showsComposer: Bool { composerOn ?? profile.prefersComposer }
     }
 
     /// Called when the bar's height changes (rows shown or hidden), so the workspace can treat
@@ -211,6 +210,12 @@ final class KeyBar: UIInputView {
         set { if let target { paneStates[ObjectIdentifier(target)] = newValue } }
     }
 
+    /// The composer shows where the user turned it on, else for agents on the software keyboard
+    /// only: with a hardware keyboard the terminal takes the typing.
+    private func showsComposer(_ state: PaneState) -> Bool {
+        state.composerOn ?? (state.profile.prefersComposer && !compact)
+    }
+
     private var compact: Bool {
         hardwareKeyboard && !UserDefaults.standard.bool(forKey: Self.fullWithHardwareKeyboardKey)
     }
@@ -219,20 +224,22 @@ final class KeyBar: UIInputView {
     private func apply() {
         let state = state
         profile = state.profile
-        lineEditor.shellProfile = profile.id == "shell" && !state.showsComposer
+        lineEditor.shellProfile = profile.id == "shell" && !showsComposer(state)
         lineEditor.agentProfile = profile.id == "claude" || profile.id == "codex"
         rebuildWing()
         updateProfileButton()
         if composer.text != state.draft { composer.text = state.draft }
-        composer.isHidden = !state.showsComposer
-        composerToggle.configuration = style.button(.init(title: nil, symbol: "text.bubble", active: state.showsComposer))
-        composerToggle.accessibilityValue = state.showsComposer ? "on" : "off"
+        composer.isHidden = !showsComposer(state)
+        composerToggle.configuration = style.button(.init(title: nil, symbol: "text.bubble", active: showsComposer(state)))
+        composerToggle.accessibilityValue = showsComposer(state) ? "on" : "off"
         snippetScroll.isHidden = !snippetsShown || compact
         snippetsToggle.configuration = style.button(.init(title: nil, symbol: "text.append", active: snippetsShown))
         snippetsToggle.accessibilityValue = snippetsShown ? "shown" : "hidden"
         arrowPad.isHidden = !arrowPadShown || compact
         joystick.isActive = arrowPadShown
-        for view in [ctrlButton, altButton, tabButton, wingScroll, joystick] as [UIView] { view.isHidden = compact }
+        // The wing's keys go, its scroll view stays: it is the flexible middle that keeps the
+        // trailing toggles at their own size.
+        for view in [ctrlButton, altButton, tabButton, wingStack, joystick] as [UIView] { view.isHidden = compact }
         if compact {
             ctrl = .off
             alt = .off
@@ -248,10 +255,10 @@ final class KeyBar: UIInputView {
     private func applyWidth() {
         let inline = wide && !compact
         arrowCluster.isHidden = !inline
-        // Agents keep the composer toggle in reach even on iPhone; other panels live in the
-        // profile menu there.
+        // The composer toggle is for agents (or a composer the user turned on); for a shell the
+        // composer is in the profile menu.
         let agent = profile.id == "claude" || profile.id == "codex"
-        composerToggle.isHidden = !(wide || compact || agent)
+        composerToggle.isHidden = !(agent || showsComposer(state))
         snippetsToggle.isHidden = !inline
         hideKeyboard.isHidden = !inline
     }
@@ -602,7 +609,7 @@ final class KeyBar: UIInputView {
             UIAction(title: candidate.name, state: state.manual == candidate ? .on : .off) { [weak self] _ in self?.choose(candidate) }
         }
         let panels = UIMenu(options: .displayInline, children: [
-            UIAction(title: "Composer", image: UIImage(systemName: "text.bubble"), state: state.showsComposer ? .on : .off) { [weak self] _ in
+            UIAction(title: "Composer", image: UIImage(systemName: "text.bubble"), state: showsComposer(state) ? .on : .off) { [weak self] _ in
                 self?.toggleComposer()
             },
             UIAction(title: "Snippets", image: UIImage(systemName: "text.append"), state: snippetsShown ? .on : .off) { [weak self] _ in
@@ -621,9 +628,11 @@ final class KeyBar: UIInputView {
         // Narrow bars (iPhone): panels first and the key sets in a submenu, so the menu fits
         // without scrolling. Wide bars (iPad) have room for everything inline.
         let keySets = [automatic, UIMenu(options: .displayInline, children: choices)]
+        // No menu title: on a menu long enough to scroll, UIKit draws the title over the first
+        // rows. The checked key set says which keys are showing.
         profileButton.menu = wide
-            ? UIMenu(title: "Keys for \(profile.name)", children: keySets + [panels])
-            : UIMenu(title: "Keys for \(profile.name)", children: [
+            ? UIMenu(children: keySets + [panels])
+            : UIMenu(children: [
                 UIMenu(title: "Key Set", subtitle: profile.name, image: UIImage(systemName: "keyboard"), children: keySets),
                 panels,
             ])
@@ -641,10 +650,10 @@ final class KeyBar: UIInputView {
 
     private func toggleComposer() {
         var state = state
-        state.composerOn = !state.showsComposer
+        state.composerOn = !showsComposer(state)
         self.state = state
         apply()
-        if state.showsComposer { composer.textView.becomeFirstResponder() }
+        if showsComposer(state) { composer.textView.becomeFirstResponder() }
     }
 
     // MARK: Snippets

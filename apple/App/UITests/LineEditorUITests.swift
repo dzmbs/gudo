@@ -26,11 +26,32 @@ final class LineEditorUITests: XCTestCase {
         add(attachment)
     }
 
-    func testPromptTypingGoesToTheLineEditorAndRunsAtomically() throws {
+    /// By default the terminal takes the typing at a prompt, like any terminal: no editor row.
+    func testTypingGoesToTheTerminalByDefault() throws {
         let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
         try XCTSkipIf(ticket.isEmpty, "no daemon ticket (TEST_RUNNER_PAIR_TICKET)")
         let app = XCUIApplication()
         app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-keyBar.fullWithHardwareKeyboard", "YES"]
+        app.launch()
+
+        let pane = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'")).firstMatch
+        XCTAssertTrue(pane.waitForExistence(timeout: 30), "a daemon pane appears")
+        let screen = element(app, pane.identifier + "-screen")
+        pane.tap()
+        app.typeText("echo plain-$((6*7))")
+        wait("value CONTAINS %@", "echo plain-$((6*7))", screen)
+        XCTAssertFalse(element(app, "keybar-line").exists, "no line editor unless turned on")
+        XCTAssertFalse(element(app, "keybar-composer").exists, "no composer for a shell")
+        app.typeText("\n")
+        wait("value CONTAINS %@", "plain-42", screen, timeout: 20)
+    }
+
+    func testPromptTypingGoesToTheLineEditorAndRunsAtomically() throws {
+        let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
+        try XCTSkipIf(ticket.isEmpty, "no daemon ticket (TEST_RUNNER_PAIR_TICKET)")
+        let app = XCUIApplication()
+        // The line editor is opt-in (the terminal takes typing by default).
+        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-keyBar.fullWithHardwareKeyboard", "YES", "-keyBar.lineEditor", "YES"]
         app.launch()
 
         let pane = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'")).firstMatch

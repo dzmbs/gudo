@@ -15,8 +15,10 @@ import UnnamedCore
 final class LineEditorController: NSObject, UITextFieldDelegate {
     /// Whether the editor may take over at prompts (the profile menu's "Line Editor").
     static let enabledKey = "keyBar.lineEditor"
+    /// Off unless turned on: the terminal takes the typing. `bool(forKey:)` also reads a launch
+    /// argument (`-keyBar.lineEditor YES`), which arrives as a string.
     static var enabled: Bool {
-        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
+        UserDefaults.standard.bool(forKey: enabledKey)
     }
 
     let editorRow = UIView()
@@ -190,7 +192,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
             } catch AssistError.NotAtPrompt {
                 self?.show(message: "The shell is busy. Kept your line.")
             } catch {
-                self?.show(message: "Couldn't send: \(error.localizedDescription)")
+                self?.show(message: Self.words(for: error))
             }
         }
     }
@@ -231,6 +233,18 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
     func complete() {
         guard let first = chipStack.arrangedSubviews.first as? ChipButton else { return }
         if chipStack.arrangedSubviews.count == 1 { apply(first.completion, run: false) }
+    }
+
+    /// What went wrong, in words: never a type name. The draft always stays in the field.
+    static func words(for error: any Error) -> String {
+        switch error as? AssistError {
+        case .Denied(let message)?: "Not allowed: \(message). Kept your line."
+        case .UnknownPane?: "This pane is gone on the host. Kept your line."
+        case .NotAtPrompt?: "The shell is busy. Kept your line."
+        case .Invalid(let message)?, .NotFound(let message)?, .Failed(let message)?:
+            "Couldn't send (\(message)). Kept your line."
+        case nil: "Couldn't send: the host didn't answer. Kept your line."
+        }
     }
 
     private func show(message text: String) {
