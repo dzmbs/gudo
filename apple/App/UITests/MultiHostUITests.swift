@@ -55,7 +55,54 @@ final class MultiHostUITests: XCTestCase {
         XCTAssertTrue(pane.waitForExistence(timeout: 30), "a pane is on screen")
         pane.tap()
         app.typeText(command + "\n")
-        waitFor(NSPredicate(format: "value CONTAINS %@", expected), screens(app).firstMatch, timeout: 20, "echo \(expected)")
+        seeOnScreen(app, expected, timeout: 20)
+    }
+
+    /// Some pane's screen shows `text` (any of them: the accessibility tree can hold a pane
+    /// screen that is leaving alongside the one on screen).
+    private func seeOnScreen(_ app: XCUIApplication, _ text: String, timeout: TimeInterval) {
+        let matching = screens(app).matching(NSPredicate(format: "value CONTAINS %@", text))
+        waitFor(NSPredicate(format: "count > 0"), matching, timeout: timeout, "a screen shows \(text)")
+    }
+
+    /// in the sidebar (New Terminal under it) and in the terminal area (the welcome view with
+    /// New Terminal ⌘T), never a dead end; on the Inbox, + is New Terminal first. A daemon host
+    /// cannot be held at zero tabs (the daemon drops an empty session and the client attaches a
+    /// fresh one with a shell), so this runs on this iPad's own group (`-localEcho YES`), which
+    /// draws the same group, row and welcome view. Needs no daemon.
+    func testNewTerminalWhereNoTabsAreOpen() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad and Mac")
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-localEcho", "YES", "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES",
+            "-hostsDirectory", NSTemporaryDirectory() + "multihost-empty-\(UUID().uuidString)",
+        ]
+        app.launch()
+        let row1 = element(app, "tab-row-1")
+        XCTAssertTrue(row1.waitForExistence(timeout: 20), "this iPad's tab")
+        // Close the only tab from its context menu.
+        row1.press(forDuration: 1.2)
+        let close = app.buttons["Close Tab"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+        XCTAssertTrue(row1.waitForNonExistence(timeout: 10), "no tabs left")
+        // The group stays, with New Terminal; the terminal area is the welcome view.
+        let newTerminal = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'new-terminal-'")).firstMatch
+        XCTAssertTrue(newTerminal.waitForExistence(timeout: 10), "New Terminal in the sidebar")
+        XCTAssertTrue(element(app, "welcome").waitForExistence(timeout: 10), "the welcome view, not a void")
+        XCTAssertTrue(element(app, "welcome-new-terminal").exists, "New Terminal ⌘T in the welcome view")
+        shot(app, "multihost-no-tabs")
+        newTerminal.tap()
+        XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 20), "a shell pane")
+        XCTAssertTrue(element(app, "tab-row-1").waitForExistence(timeout: 10))
+        // From the Inbox, + opens a terminal first and goes back to it.
+        element(app, "sidebar-inbox").tap()
+        let plus = element(app, "inbox-new")
+        XCTAssertTrue(plus.waitForExistence(timeout: 5), "+ on the Inbox")
+        plus.tap()
+        XCTAssertTrue(element(app, "tab-row-2").waitForExistence(timeout: 10), "+ on the Inbox opened a terminal")
+        XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 10), "back on the terminal")
     }
 
     /// Right after a switch: the pane is live (no stale dimming, no connecting card).
@@ -70,9 +117,11 @@ final class MultiHostUITests: XCTestCase {
         let alpha = env["PAIR_TICKET_A"] ?? "", beta = env["PAIR_TICKET_B"] ?? ""
         try XCTSkipIf(alpha.isEmpty || beta.isEmpty, "no daemon tickets (run apple/scripts/multihost-ui-test.sh)")
         let app = XCUIApplication()
+        // The prompt line editor is off: with it on, XCUITest's typed text at a daemon prompt
+        // does not reach the shell (main's own DaemonUITests fails the same way; reported).
         app.launchArguments += extra + [
             "-testTickets", "\(alpha),\(beta)", "-testTicketNames", names, "-testRelay", "disabled",
-            "-hostsDirectory", NSTemporaryDirectory() + "multihost-\(UUID().uuidString)", "-connectionProbe", "YES",
+            "-hostsDirectory", NSTemporaryDirectory() + "multihost-\(alpha.suffix(10))\(beta.suffix(10))", "-connectionProbe", "YES",
             "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES", "-keyBar.lineEditor", "NO",
         ]
         app.launch()
@@ -89,11 +138,11 @@ final class MultiHostUITests: XCTestCase {
         XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 40), "studio's pane")
         // Both hosts' tabs are listed (one each, the friendly names), under their host's section.
         switcher.tap()
-        let buttons = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'New Tab on '"))
+        let buttons = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'New Terminal on '"))
         waitFor(NSPredicate(format: "count == 2"), buttons, timeout: 10, "a section per host")
-        XCTAssertTrue(app.staticTexts["studio"].exists || app.otherElements["studio"].exists || app.buttons["New Tab on studio"].exists)
+        XCTAssertTrue(app.staticTexts["studio"].exists || app.otherElements["studio"].exists || app.buttons["New Terminal on studio"].exists)
         shot(app, "multihost-iphone-switcher")
-        app.buttons["New Tab on hetzner"].tap()
+        app.buttons["New Terminal on hetzner"].tap()
         waitFor(NSPredicate(format: "label CONTAINS 'hetzner'"), switcher, timeout: 20, "now on hetzner")
         XCTAssertEqual(stale(app).count, 0)
         shot(app, "multihost-iphone-hetzner")
@@ -132,16 +181,20 @@ final class MultiHostUITests: XCTestCase {
         // ⌘1 → alpha (its screen still has its output), ⌘2 → beta, ⌘1 again: no reconnect.
         app.typeKey("1", modifierFlags: .command)
         assertLiveAtOnce(app, "⌘1")
-        waitFor(NSPredicate(format: "value CONTAINS 'on-alpha-21'"), screens(app).firstMatch, timeout: 5, "⌘1 shows alpha")
+        waitFor(NSPredicate(format: "selected == true"), row1, timeout: 5, "⌘1 shows alpha")
+        seeOnScreen(app, "on-alpha-21", timeout: 5)
         app.typeKey("2", modifierFlags: .command)
         assertLiveAtOnce(app, "⌘2")
-        waitFor(NSPredicate(format: "value CONTAINS 'on-beta-32'"), screens(app).firstMatch, timeout: 5, "⌘2 shows beta")
+        waitFor(NSPredicate(format: "selected == true"), row2, timeout: 5, "⌘2 shows beta")
+        seeOnScreen(app, "on-beta-32", timeout: 5)
         // (⇧⌘[ / ⇧⌘] across hosts: HostGroupsTests; XCUITest's synthesized ⇧⌘[ reaches the
         // iPad app only sometimes, like ⇧⌘↩.)
         app.typeKey("1", modifierFlags: .command)
-        waitFor(NSPredicate(format: "value CONTAINS 'on-alpha-21'"), screens(app).firstMatch, timeout: 5, "⌘1 again")
+        waitFor(NSPredicate(format: "selected == true"), row1, timeout: 5, "⌘1 again")
+        seeOnScreen(app, "on-alpha-21", timeout: 5)
         app.typeKey("2", modifierFlags: .command)
-        waitFor(NSPredicate(format: "value CONTAINS 'on-beta-32'"), screens(app).firstMatch, timeout: 5, "⌘2 again")
+        waitFor(NSPredicate(format: "selected == true"), row2, timeout: 5, "⌘2 again")
+        seeOnScreen(app, "on-beta-32", timeout: 5)
         XCTAssertEqual(value(probe), connections, "the same connection objects, no new dials, after switching")
 
         // ⌘T opens on the current host (beta): beta now has two tabs (rows 2 and 3).

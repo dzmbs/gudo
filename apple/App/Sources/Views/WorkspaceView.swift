@@ -296,7 +296,7 @@ private struct DetailColumn: View {
                     // Behind the key bar and keyboard, which float over the terminal.
                     .background(theme.background.ignoresSafeArea(.all, edges: .bottom))
             case .inbox:
-                InboxView(feed: model.agents, onLaunch: { model.sheet = .launchAgent })
+                InboxView(feed: model.agents, onLaunch: { model.sheet = .launchAgent }, onNewTerminal: { model.newTab() })
             case .hosts:
                 HostsScreen()
             }
@@ -372,6 +372,10 @@ private struct TerminalToolbar: ToolbarContent {
             .menuIndicator(.hidden)
             .disabled(workspace.focusedPane == nil || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
+            Button("Draw", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
+                .help("Draw on Pane (⌃⌘D)")
+                .disabled(!DrawingCommands.canDraw(in: workspace) || model.destination != .terminal)
+                .accessibilityIdentifier("draw-button")
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
                 .help("Command Palette (⌘K)")
                 .accessibilityIdentifier("open-palette")
@@ -398,7 +402,7 @@ private struct CompactRoot: View {
             }
             SwiftUI.Tab("Inbox", systemImage: "tray", value: Destination.inbox) {
                 NavigationStack {
-                    InboxView(feed: model.agents, onLaunch: { model.sheet = .launchAgent })
+                    InboxView(feed: model.agents, onLaunch: { model.sheet = .launchAgent }, onNewTerminal: { model.newTab() })
                 }
             }
             .badge(model.needsYouCount)
@@ -500,10 +504,12 @@ private struct WelcomeView: View {
                 Image(systemName: workspace.canOpenTabs ? "terminal" : "server.rack")
                     .font(.system(size: 34, weight: .regular))
                     .foregroundStyle(theme.foreground.opacity(0.5))
-                Text(workspace.canOpenTabs ? "No Open Tabs" : "Connect a Host")
+                Text(workspace.isRemote ? "No Open Tabs on \(model.hostName)" : workspace.canOpenTabs ? "No Open Tabs" : "Connect a Host")
                     .font(DS.Font.title)
                     .foregroundStyle(theme.foreground)
-                Text(workspace.canOpenTabs
+                Text(workspace.isRemote
+                    ? "Open a terminal on this host. Its sessions keep running there while this device sleeps."
+                    : workspace.canOpenTabs
                     ? "Open a shell here, or connect to a host to pick up its sessions."
                     : "Pair a machine running the helper, or connect to any SSH host. Sessions keep running there while this device sleeps.")
                     .font(.callout)
@@ -512,7 +518,8 @@ private struct WelcomeView: View {
             }
             VStack(spacing: 2) {
                 if workspace.canOpenTabs {
-                    welcomeRow("New Tab", systemImage: "plus", keys: ["⌘", "T"]) { workspace.apply(.newTab) }
+                    welcomeRow("New Terminal", systemImage: "plus", keys: ["⌘", "T"]) { model.newTab(onGroup: model.currentGroupId) }
+                        .accessibilityIdentifier("welcome-new-terminal")
                     welcomeRow("Connect to a Host…", systemImage: "server.rack", keys: nil) { model.addHost() }
                     welcomeRow("Start an Agent…", systemImage: "sparkle", keys: nil) { model.sheet = .launchAgent }
                 } else {

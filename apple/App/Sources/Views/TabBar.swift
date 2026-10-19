@@ -10,7 +10,7 @@ import SwiftUI
 /// like Ghostty's transparent titlebar, so tabs and terminal read as one surface.
 ///
 /// Every host's tabs share the strip in the sidebar's order; with more than one host, each run of
-/// tabs starts with its host's dot and name, so the strip reads "This Mac · a b | hetzner · c".
+/// tabs carries its host as a second line (status UX §3.2); a single-host window shows no host.
 struct TabBar: View {
     let workspace: Workspace
     @Binding var style: TabStyle
@@ -24,31 +24,20 @@ struct TabBar: View {
         let active = model.destination == .terminal ? model.currentTab : nil
         let activeIndex = active.flatMap { all.firstIndex(of: $0) }
         HStack(spacing: 0) {
+            // Status UX §3.2: no host on a tab while the window is single-host; with tabs from
+            // more than one host, each tab gets the host's name as a second line.
+            let mixed = Set(all.map(\.hostId)).count > 1
             ForEach(groups) { group in
-                if groups.count > 1 {
-                    HStack(spacing: DS.Space.xs + 1) {
-                        ConnectionDot(group.connectionState)
-                        Text(group.name)
-                            .font(DS.Font.meta)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .padding(.leading, group.id == groups.first?.id ? DS.Space.xs : DS.Space.m)
-                    .padding(.trailing, DS.Space.xs)
-                    .fixedSize()
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("tabbar-host-\(group.name)")
-                }
                 ForEach(group.tabs) { tab in
                     let ref = group.ref(tab.id)
                     let index = all.firstIndex(of: ref) ?? 0
-                    if index > 0, all[index - 1].hostId == group.id {
+                    if index > 0 {
                         // Ghostty/AppKit draw no separator next to the selected tab.
                         Rectangle()
                             .fill(Color.primary.opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 0.14))
                             .frame(width: 1, height: 16)
                     }
-                    TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, namespace: selection)
+                    TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: mixed, namespace: selection)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -72,6 +61,8 @@ private struct TabChip: View {
     let ref: TabRef
     let group: HostGroup
     let isActive: Bool
+    /// The window holds tabs from more than one host: name the host under the title.
+    let showsHost: Bool
     let namespace: Namespace.ID
     @Environment(WindowModel.self) private var model
     @State private var isHovered = false
@@ -95,12 +86,21 @@ private struct TabChip: View {
             }
 
             HStack(spacing: DS.Space.xs + 2) {
-                if let state {
-                    StatusIndicator(state, size: 10)
+                // §3.4: the focused tab shows no indicator.
+                if let state, !isActive {
+                    AgentGlyph(state: state)
                 }
-                Text(title)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                VStack(spacing: 0) {
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if showsHost {
+                        Text(group.name)
+                            .font(DS.Font.meta)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
             }
             .font(.callout.weight(isActive ? .medium : .regular))
             .foregroundStyle(isActive ? .primary : .secondary)

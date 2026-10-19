@@ -167,17 +167,17 @@ private struct HostGroupHeader: View {
 
     var body: some View {
         let state = group.connectionState
+        let live = group.isLocal || group.status.isLive
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: DS.Space.xs + 2) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                    .frame(width: 10)
-                ConnectionDot(state)
+            HStack(spacing: DS.Space.s) {
+                // dim), a state glyph only when not live, and + New Terminal. No dots.
+                Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
                 Text(group.name)
                     .font(DS.Font.section)
-                    .foregroundStyle(group.id == model.currentGroupId && model.destination == .terminal ? .primary : .secondary)
+                    .foregroundStyle(live ? .primary : .tertiary)
                     .lineLimit(1)
                 if group.kind == .ssh {
                     // Plain SSH: tabs do not outlive the connection (no daemon to keep them).
@@ -196,21 +196,23 @@ private struct HostGroupHeader: View {
                         .foregroundStyle(.tertiary)
                         .contentTransition(.numericText())
                 }
-                Button("New Tab on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
+                // The host's agents at a glance (§3.4 aggregate: blocked > error > done > working).
+                if let agents = aggregateAgentState {
+                    AgentGlyph(state: agents)
+                }
+                if !live {
+                    HostStateGlyph(status: group.status, failure: group.failure)
+                }
+                Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bar)
                     .font(.callout)
-                    .opacity(showsPlus ? 1 : 0)
-                    .help("New Tab on \(group.name)")
+                    // Always there (a host with no tabs must never look like a dead end); quieter
+                    // until hover on the Mac.
+                    .opacity(canOpen ? (plusEmphasized ? 1 : 0.45) : 0)
+                    .disabled(!canOpen)
+                    .help("New Terminal on \(group.name)")
                     .accessibilityIdentifier("new-tab-\(group.name)")
-            }
-            if !state.isLive {
-                Text(statusWords)
-                    .font(.footnote)
-                    .foregroundStyle(state.color)
-                    .lineLimit(2)
-                    .padding(.leading, 10 + 10 + 2 * (DS.Space.xs + 2))
-                    .transition(.opacity)
             }
         }
         .padding(.leading, DS.Space.l)
@@ -231,21 +233,120 @@ private struct HostGroupHeader: View {
         .accessibilityAction(named: "New Tab") { model.newTab(onGroup: group.id) }
     }
 
-    private var showsPlus: Bool {
+    private var canOpen: Bool { group.isLocal || group.isReady }
+
+    private var plusEmphasized: Bool {
         #if os(macOS)
-        hovered && (group.isLocal || group.isReady)
+        hovered
         #else
-        group.isLocal || group.isReady
+        true
         #endif
     }
 
-    /// could not open.
-    private var statusWords: String {
-        if let failure = group.failure { return failure }
-        switch group.status {
-        case .reconnecting(let attempt, _): return attempt > 1 ? "Reconnecting · attempt \(attempt)" : "Reconnecting…"
-        case .idle: return "Not connected"
-        default: return group.status.summary
+    /// The most urgent agent state across the host's panes, nil when nothing reports.
+    private var aggregateAgentState: AgentState? {
+        let states = group.tabs.flatMap(\.root.panes).compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
+        return states.filter { $0 != .idle && $0 != .unknown }.min { AgentGlyph.priority($0) < AgentGlyph.priority($1) }
+    }
+}
+
+/// Amber "your turn" (status UX §3.1 `attention`; DesignSystem gets the token, same values as
+/// today's `working`).
+private let attentionColor = DS.Palette.working
+
+/// A host's link state, only while it is not live (status UX §3.3): reconnecting, offline, can't
+/// connect; a mini spinner while dialling, after a 1 s grace. Labelled with its copy.
+struct HostStateGlyph: View {
+    let status: ConnectionStatus
+    var failure: String?
+    @State private var graceOver = false
+
+    var body: some View {
+        Group {
+            if let failure {
+                glyph("exclamationmark.triangle.fill", DS.Palette.error, "Can't connect · \(failure)")
+            } else {
+                switch status {
+                case .connecting:
+                    if graceOver {
+                        ProgressView().controlSize(.mini).accessibilityLabel("Connecting…")
+                    }
+                case .reconnecting:
+                    glyph("arrow.triangle.2.circlepath", attentionColor, "Reconnecting…")
+                case .offline:
+                    glyph("wifi.slash", .secondary, "Offline · waiting for network")
+                case .needsAttention(let reason):
+                    glyph("exclamationmark.triangle.fill", DS.Palette.error, "Can't connect · \(reason)")
+                case .idle, .suspended, .connected:
+                    EmptyView()
+                }
+            }
+        }
+        .frame(width: 14, height: 14)
+        .task(id: status) {
+            graceOver = false
+            try? await Task.sleep(for: .seconds(1))
+            graceOver = true
+        }
+    }
+
+    private func glyph(_ name: String, _ color: Color, _ label: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 12))
+            .foregroundStyle(color)
+            .help(label)
+            .accessibilityLabel(label)
+    }
+}
+
+/// An agent's activity (status UX §3.4): working is a mini spinner in .secondary, needs input an
+/// amber question mark, done a green check, failed a red cross; idle shows nothing. 12 pt in a
+/// 14 pt slot so rows never jump.
+struct AgentGlyph: View {
+    let state: AgentState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static func priority(_ state: AgentState) -> Int {
+        switch state {
+        case .blocked: 0
+        case .error: 1
+        case .done: 2
+        case .working: 3
+        case .idle, .unknown: 4
+        }
+    }
+
+    var body: some View {
+        Group {
+            switch state {
+            case .working:
+                if reduceMotion {
+                    Image(systemName: "circle.dotted").foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.mini)
+                }
+            case .blocked:
+                Image(systemName: "questionmark.circle.fill").foregroundStyle(attentionColor)
+            case .done:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.Palette.done)
+            case .error:
+                Image(systemName: "xmark.circle.fill").foregroundStyle(DS.Palette.error)
+            case .idle, .unknown:
+                EmptyView()
+            }
+        }
+        .font(.system(size: 12))
+        .frame(width: 14, height: 14)
+        .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        switch state {
+        case .working: "Working"
+        case .blocked: "Needs input"
+        case .done: "Done"
+        case .error: "Failed"
+        case .idle, .unknown: ""
         }
     }
 }
@@ -258,7 +359,7 @@ private struct GroupMenu: View {
 
     var body: some View {
         if group.isLocal || group.isReady {
-            Button("New Tab", systemImage: "plus") { model.newTab(onGroup: group.id) }
+            Button("New Terminal", systemImage: "plus") { model.newTab(onGroup: group.id) }
         }
         Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
             withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(group.id) }
@@ -294,13 +395,14 @@ private struct GroupPlaceholder: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .frame(width: 16)
-                Text(group.isReady || group.isLocal ? "New Tab" : group.failure != nil ? "Retry" : "Waiting for the host…")
+                Text(group.isReady || group.isLocal ? "New Terminal" : group.failure != nil ? "Retry" : "Waiting for the host…")
                     .font(DS.Font.rowSubtitle)
                     .foregroundStyle(.secondary)
             }
             .sidebarRow(selected: false)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(group.isReady || group.isLocal ? "new-terminal-\(group.name)" : "group-placeholder-\(group.name)")
     }
 }
 
@@ -355,8 +457,9 @@ private struct TabRow: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if let state {
-                            StatusIndicator(state, size: 10)
+                        // §3.4: the focused tab shows no indicator.
+                        if let state, !isActive {
+                            AgentGlyph(state: state)
                         }
                         if tab.zoomed != nil {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -438,7 +541,7 @@ private struct GroupAgents: View {
                         model.focus(pane: row.pane, onGroup: group.id)
                     } label: {
                         HStack(spacing: DS.Space.s + 2) {
-                            StatusIndicator(row.state, size: 12)
+                            AgentGlyph(state: row.state)
                                 .frame(width: 16)
                             Text(model.agentProgram(ofPane: row.pane, onGroup: group.id)
                                 ?? model.workspace(ofGroup: group.id)?.programName(of: row.pane) ?? "agent")
@@ -463,7 +566,8 @@ private struct GroupAgents: View {
     }
 }
 
-/// Connection summary and Settings, pinned under the list.
+/// Settings, pinned under the list. No connection summary (status UX §3.2, §3.7 rule 1): each
+/// host's state is on its own header, once.
 private struct SidebarFooter: View {
     @Environment(WindowModel.self) private var model
     #if os(macOS)
@@ -472,12 +576,6 @@ private struct SidebarFooter: View {
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
-            ConnectionDot(footerState)
-            Text(footerText)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .accessibilityIdentifier("connection-status")
             Spacer()
             Button("Settings", systemImage: "gearshape") {
                 #if os(macOS)
@@ -491,27 +589,6 @@ private struct SidebarFooter: View {
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
-    }
-
-    private var hosts: [HostGroup] { model.groups.groups.filter { !$0.isLocal } }
-
-    /// The window's host when it is down, else every host at a glance.
-    private var footerState: ConnectionState {
-        if !model.connection.isLive { return model.connection }
-        return hosts.first { !$0.status.isLive }?.connectionState ?? model.connection
-    }
-
-    /// "studio · Reconnecting" for the host on screen; else "3 hosts connected", or the one host
-    /// that is not ("hetzner · Reconnecting"); "Local" with no hosts open.
-    private var footerText: String {
-        if model.connectionOverride != nil || !model.connection.isLive {
-            return "\(model.hostName) · \(model.connection.title)"
-        }
-        let down = hosts.filter { !$0.status.isLive }
-        if let first = down.first { return down.count == 1 ? "\(first.name) · \(first.connectionState.title)" : "\(down.count) hosts not connected" }
-        if hosts.count > 1 { return "\(hosts.count) hosts connected" }
-        if model.isRemote, let status = model.workspace?.host?.status.summary { return status }
-        return LaunchOptions.hasLocalShell ? "Local" : "No host connected"
     }
 }
 
@@ -591,17 +668,17 @@ struct CompactTerminalView: View {
                             if model.currentTab == ref {
                                 Label(title, systemImage: "checkmark")
                             } else if let state = tab.root.panes.compactMap({ model.agentState(ofPane: $0, onGroup: group.id) }).min(by: { $0.urgency < $1.urgency }) {
-                                Label(title, systemImage: state.needsYou ? "exclamationmark.circle" : state == .working ? "circle.dotted" : "circle")
+                                Label(title, systemImage: state == .blocked ? "questionmark.circle.fill" : state == .error ? "xmark.circle.fill" : state == .done ? "checkmark.circle.fill" : "circle.dotted")
                             } else {
                                 Text(title)
                             }
                         }
                     }
                     if group.isLocal || group.isReady {
-                        Button("New Tab on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
+                        Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
                     }
                 } header: {
-                    Text(group.isLocal || group.status.isLive ? group.name : "\(group.name) · \(group.connectionState.title)")
+                    Text(group.name)
                 }
             }
             if let tab = workspace.session.activeTab {
@@ -611,17 +688,24 @@ struct CompactTerminalView: View {
             }
         } label: {
             HStack(spacing: DS.Space.xs + 2) {
-                ConnectionDot(model.connection)
-                if groups.count > 1 {
-                    Text(model.hostName)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                // Status UX §3.2 iPhone bar: the tab's title, the host's name as a second line,
+                // a state glyph after it only when the host is not live. No dot.
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(workspace.session.activeTab.map(workspace.title(of:)) ?? (workspace.canOpenTabs ? "No Tabs" : Brand.name))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
+                    HStack(spacing: DS.Space.xs) {
+                        Text(model.hostName)
+                            .font(DS.Font.meta)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if let status = workspace.host?.status, !status.isLive {
+                            HostStateGlyph(status: status)
+                                .scaleEffect(0.85)
+                        }
+                    }
                 }
-                Text(workspace.session.activeTab.map(workspace.title(of:)) ?? (workspace.canOpenTabs ? "No Tabs" : Brand.name))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
