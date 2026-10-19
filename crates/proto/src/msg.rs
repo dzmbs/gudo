@@ -12,7 +12,7 @@ use crate::ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
     ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
 };
-use crate::layout::{LayoutOp, OpOutcome, SessionLayout, SessionSummary};
+use crate::layout::{LayoutOp, OpError, OpOutcome, SessionLayout, SessionSummary};
 use crate::mp::{JoinInfo, MpError, MpRequest, MpResponse, Participant};
 use crate::workspace::{
     AttentionUpdate, DownloadHeader, ForwardTarget, FsChange, PortInfo, UploadHeader,
@@ -151,9 +151,11 @@ pub enum ClientCtl {
     },
     /// Asks for the session list, answered by [`ServerCtl::Sessions`].
     ListSessions,
-    /// Attaches this connection to a session: the daemon answers [`ServerCtl::Attached`] and
-    /// the session's [`ServerCtl::LayoutChanged`], then keeps sending layout changes for it.
-    /// `None` picks the most recently used session, creating one if there is none.
+    /// Attaches this connection to a session: the daemon answers [`ServerCtl::Attached`] (or
+    /// [`ServerCtl::AttachResult`] with [`Caps::ATTACH_RESULT`]) and the session's
+    /// [`ServerCtl::LayoutChanged`], then keeps sending layout changes for it. `None` picks the
+    /// most recently used session, creating one if there is none. A requested session that no
+    /// longer exists falls back the same way; `AttachResult` says so.
     Attach {
         /// The session to attach to.
         session_id: Option<SessionId>,
@@ -437,6 +439,7 @@ pub enum ServerCtl {
         sessions: Vec<SessionSummary>,
     },
     /// Answers [`ClientCtl::Attach`].
+    /// Clients with [`Caps::ATTACH_RESULT`] get [`ServerCtl::AttachResult`] instead.
     Attached {
         /// The session this connection is now attached to.
         session_id: SessionId,
@@ -576,6 +579,41 @@ pub enum ServerCtl {
     },
     /// A pane's foreground program or (for watched panes) prompt state changed.
     Assist(AssistPush),
+    /// Answers [`ClientCtl::Attach`] for clients with [`Caps::ATTACH_RESULT`].
+    AttachResult(Result<Attachment, AttachFailure>),
+}
+
+/// A successful [`ClientCtl::Attach`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    /// The session this connection is now attached to.
+    pub session_id: SessionId,
+    /// How the daemon chose it.
+    pub via: AttachVia,
+    /// The session the client asked for, when it no longer exists (closed elsewhere, or lost
+    /// when the daemon's state was reset).
+    pub missing: Option<SessionId>,
+}
+
+/// Why a [`ClientCtl::Attach`] failed: the grant's scope has nothing to attach to, or a new
+/// session could not be created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachFailure {
+    /// Machine-readable reason.
+    pub code: OpError,
+    /// Why, in words.
+    pub message: String,
+}
+
+/// How the daemon chose the session in [`ServerCtl::Attached`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AttachVia {
+    /// The session the client asked for.
+    Requested,
+    /// The most recently used session the grant can see.
+    MostRecent,
+    /// A new session, because there was none.
+    Created,
 }
 
 /// The daemon's answer to a successful `Hello`.

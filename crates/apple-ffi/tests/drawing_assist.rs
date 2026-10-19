@@ -167,7 +167,7 @@ fn attach(client: &DaemonClient, events: &Recorder<ClientEvent>) -> (u64, u64) {
     client.attach(None);
     let session = events.wait("attached", |all| {
         all.iter().find_map(|e| match e {
-            ClientEvent::Attached { session_id } => Some(*session_id),
+            ClientEvent::Attached { session_id, .. } => Some(*session_id),
             _ => None,
         })
     });
