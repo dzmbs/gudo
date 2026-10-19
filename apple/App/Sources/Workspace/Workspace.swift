@@ -6,6 +6,7 @@ import TerminalCore
 import TerminalRenderer
 #if os(iOS)
 import GameController
+import HostKit
 import UIKit
 #endif
 
@@ -101,6 +102,7 @@ final class Workspace {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.keyboardResizeUntil = .now + .milliseconds(800) }
         }
+        keyBar.onHeightChange = { [weak self] in self?.keyboardResizeUntil = .now + .milliseconds(800) }
         #endif
         _ = settingsObserver
     }
@@ -373,6 +375,7 @@ final class Workspace {
         pane.view.onFocus = { [weak self, weak pane] in
             guard let self, let pane else { return }
             keyBar.target = pane.view
+            keyBar.assist = pane.backend as? any LineAssist
             keyBar.update(context: keyBarContext(of: pane))
             apply(.focus(id))
         }

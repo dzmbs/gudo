@@ -77,6 +77,42 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
+    /// every profile, a vertical flick sends a key's second glyph, and tapping the joystick opens
+    /// and closes the arrow pad.
+    @MainActor
+    func testSpineIsFixedFlickSendsAlternateAndJoystickOpensPad() throws {
+        let app = launch()
+        let spine = ["keybar-profile", "keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-joystick"]
+        XCTAssertTrue(element(app, "keybar-joystick").waitForExistence(timeout: 5))
+        let shellFrames = spine.map { element(app, $0).frame }
+
+        app.typeText("title vim main.swift\n")
+        XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Vim"))
+        XCTAssertTrue(app.buttons["keybar-colon"].waitForExistence(timeout: 5))
+        XCTAssertEqual(spine.map { element(app, $0).frame }, shellFrames, "the spine never moves between profiles")
+
+        app.typeText("title zsh ~/src\n")
+        XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Shell"))
+        let pipe = app.buttons["keybar-pipe"]
+        XCTAssertTrue(pipe.waitForExistence(timeout: 5))
+        // A flick: press, then drag 30 pt up before lifting.
+        let start = pipe.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -30)))
+        pipe.tap()
+        let pane = element(app, "pane-1-screen")
+        let predicate = NSPredicate(format: "value CONTAINS %@", "&|")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: pane)], timeout: 5), .completed,
+                       "flick sent the alternate (&), tap the main glyph (|); pane: \(String(describing: pane.value))")
+
+        let joystick = element(app, "keybar-joystick")
+        joystick.tap()
+        XCTAssertTrue(app.buttons["keybar-pad-home"].waitForExistence(timeout: 5), "tap opens the arrow pad")
+        joystick.tap()
+        XCTAssertTrue(app.buttons["keybar-pad-home"].waitForNonExistence(timeout: 5), "tap again closes it")
+        add(XCTAttachment(screenshot: app.screenshot()))
+        hold()
+    }
+
     @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()

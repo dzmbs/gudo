@@ -212,7 +212,7 @@ nonisolated final class PaneRouter: Sendable {
 /// (the daemon ends the process), so `terminate` only stops following it.
 nonisolated public final class DaemonPaneBackend: PredictionFeed {
     public let pane: PaneId
-    private let client: any DaemonClientAPI
+    let client: any DaemonClientAPI
     private let router: PaneRouter
     /// Bytes requested per history page.
     static let historyPageBytes: UInt32 = 256 * 1024
