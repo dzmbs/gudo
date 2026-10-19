@@ -581,3 +581,17 @@ and cannot hand off); a daemon host continued on another device opens that devic
 session, so the tab and pane are found only when both attach the same session (else the host
 shows on its active tab). Drawing placements are routed per pane id by `DrawingHub`, so with a
 pane in two windows only the newest window's controller gets placement updates (drawing owner).
+
+Test status (2026-10-19, after merging main 8cf7810): `WindowsUITests` passes Handoff contents,
+both continuation cases, one-model-per-window + `-mock -screen splits`, and the iPhone rotation
+(compact ↔ regular, same pane, no overlay). Two iPad cases are open harness gaps:
+`testTwoWindowsOnOneHostTypeIndependently` opens the second window with ⌘N, follows the same
+host and tab, starts its terminal from the first window's and types into its own new tab (all
+passed, screenshots attached), but with iPadOS 26 windowing the new window covers the first and
+neither the `debug/front` link (its "Open in…?" confirmation) nor the probe's front control has
+reliably brought window 1 back for the last step; `testCrossingTheWidthBoundary…` reaches compact
+through the debug link but not through the probe's controls, and after the link's confirmation
+iPadOS restores keyboard focus to the first pane (the model then shows pane 1 while pane 3 keeps
+the keyboard), which the content check trips on. The same behaviours are covered without UI by
+`WindowsTests` and `WindowLayoutStoreTests`. Also seen: right after the system's "Open in…?"
+confirmation, focus can move to a tab's first pane (pre-existing focus restoration, not fixed).
