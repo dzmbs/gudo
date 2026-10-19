@@ -380,6 +380,7 @@ final class Workspace {
             keyBar.assist = pane.backend as? any LineAssist
             keyBar.update(context: keyBarContext(of: pane))
             apply(.focus(id))
+            keyBar.onDraw = DrawingCommands.canDraw(in: self) ? { [weak self] in if let self { DrawingCommands.toggleDrawing(in: self) } } : nil
         }
         #if DEBUG
         // `-demoPreedit <text>` shows IME marked text in the first pane, for screenshots and UI
