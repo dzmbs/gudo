@@ -167,6 +167,7 @@ final class KeyBar: UIInputView {
         if isWide != wide {
             wide = isWide
             applyWidth()
+            updateProfileButton()
         }
     }
 
@@ -610,9 +611,15 @@ final class KeyBar: UIInputView {
                 self?.toggleArrowPad()
             },
         ])
-        profileButton.menu = UIMenu(title: "Keys for \(profile.name)", children: [
-            automatic, UIMenu(options: .displayInline, children: choices), panels,
-        ])
+        // Narrow bars (iPhone): panels first and the key sets in a submenu, so the menu fits
+        // without scrolling. Wide bars (iPad) have room for everything inline.
+        let keySets = [automatic, UIMenu(options: .displayInline, children: choices)]
+        profileButton.menu = wide
+            ? UIMenu(title: "Keys for \(profile.name)", children: keySets + [panels])
+            : UIMenu(title: "Keys for \(profile.name)", children: [
+                UIMenu(title: "Key Set", subtitle: profile.name, image: UIImage(systemName: "keyboard"), children: keySets),
+                panels,
+            ])
     }
 
     private func choose(_ profile: KeyBarProfile?) {
