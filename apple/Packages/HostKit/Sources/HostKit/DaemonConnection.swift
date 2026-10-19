@@ -41,7 +41,7 @@ public final class DaemonConnection: HostConnection {
             return agent
         }
     }
-    /// Latest keystroke-to-echo round trip.
+    /// Keystroke-to-echo round trip: the median of the last five.
     public private(set) var echoRoundTrip: Duration?
     /// Timings of the current connection, for diagnostics and the report.
     public private(set) var timings = Timings()
@@ -50,6 +50,9 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored public private(set) var dials = 0
     /// Called when a layout or connection change should be persisted (the attached session).
     @ObservationIgnored public var onAttached: ((UInt64) -> Void)?
+    /// Something the user should hear about once (the remembered session was gone). The UI
+    /// shows it and calls `dismissNotice()`.
+    public private(set) var notice: HostNotice?
     /// Who is here, roles, control leases, invites and the audit log (docs/DAEMON.md §6).
     public let multiplayer = MultiplayerSession()
     /// The daemon's workspace pushes (attention feed, ports, files), fanned out to observers.
@@ -77,6 +80,8 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored private var lastView: (UInt64?, [UInt64])?
     @ObservationIgnored private var attempt: UInt32 = 0
     @ObservationIgnored private var sawOutput = false
+    /// Between `Attach` and the session's first layout (status `.connecting(.openingSession)`).
+    @ObservationIgnored private var attaching = false
 
     private static let log = Logger(subsystem: Log.subsystem, category: "daemon")
 
@@ -95,10 +100,13 @@ public final class DaemonConnection: HostConnection {
         router = PaneRouter { echo.continuation.yield($0) }
         sendOp = { [weak self] op in self?.client?.op(op: op) ?? 0 }
         Task { [weak self] in
+            var recent: [Duration] = []
             for await rtt in echo.stream {
                 guard let self else { return }
-                echoRoundTrip = rtt
-                if case .connected = status { status = .connected(rtt: rtt) }
+                // The median of the last five, so one slow keystroke does not flag the link.
+                recent = Array((recent + [rtt]).suffix(5))
+                echoRoundTrip = recent.sorted()[recent.count / 2]
+                if case .connected = status { status = .connected(rtt: echoRoundTrip) }
                 Self.log.debug("echo rtt \(rtt / .milliseconds(1), format: .fixed(precision: 1)) ms host=\(self.hostId, privacy: .public)")
             }
         }
@@ -123,7 +131,7 @@ public final class DaemonConnection: HostConnection {
             if case .paneBytes = event { return }
             continuation.yield(event)
         }
-        status = .connecting
+        status = .connecting(.dialing)
         dials += 1
         timings = Timings(dialStarted: .now)
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
@@ -149,7 +157,7 @@ public final class DaemonConnection: HostConnection {
         if client == nil {
             try? connect()
         } else {
-            status = .connecting
+            status = .connecting(.dialing)
             dials += 1
             client?.reconnect()
         }
@@ -188,6 +196,20 @@ public final class DaemonConnection: HostConnection {
         status = .idle
     }
 
+    public func dismissNotice() {
+        notice = nil
+    }
+
+    /// The words for a failed attach: the daemon's code decides, its message is a fallback.
+    static func attachFailure(_ code: OpErrorCode, _ message: String) -> String {
+        switch code {
+        case .notFound: "The session you were invited to has ended."
+        case .forbidden: "You don't have access to a session on this host."
+        case .spawnFailed: "The host couldn't start a shell for a new session."
+        case .nameTaken, .invalid: message
+        }
+    }
+
     /// Answers a blocked agent.
     public func decide(requestId: UInt64, optionId: UInt32) {
         client?.decide(requestId: requestId, optionId: optionId)
@@ -207,10 +229,17 @@ public final class DaemonConnection: HostConnection {
             if let previous = self.epoch, previous != epoch { layout.resetRevision() }
             self.epoch = epoch
             attempt = 0
-            status = .connected(rtt: echoRoundTrip)
             if let start = timings.dialStarted { timings.connected = .now - start }
             Self.log.info("connected host=\(self.hostId, privacy: .public) resumed=\(resumed) after \(self.timings.connected.map { $0 / .milliseconds(1) } ?? -1, format: .fixed(precision: 1)) ms")
-            if !resumed { client?.attach(sessionId: attachSession) }
+            // Live only once there is a session to show: a resumed connection keeps its
+            // attachment; a new one attaches and waits for the layout.
+            if resumed, layout.hasLayout {
+                status = .connected(rtt: echoRoundTrip)
+            } else {
+                status = .connecting(.openingSession)
+                attaching = true
+                client?.attach(sessionId: attachSession)
+            }
             lastView = nil
             pushView()
         case .disconnected(let reason):
@@ -221,14 +250,24 @@ public final class DaemonConnection: HostConnection {
         case .refused(let reason):
             status = .needsAttention(reason: "Refused: \(reason)")
             Self.log.error("refused host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
-        case .attached(let result):
-            // Compile shim for the typed AttachResult (154e11d); the coordinator owns attach
-            // handling (fallback reporting via `result.via` / `result.missing`).
-            attachSession = result.sessionId
-            onAttached?(result.sessionId)
+        case .attached(let session, let via, let missing):
+            attachSession = session
+            onAttached?(session)
+            if let missing {
+                Self.log.info("session \(missing) is gone on host=\(self.hostId, privacy: .public); attached \(session) (\(String(describing: via), privacy: .public))")
+                notice = HostNotice(sessionGone: missing, via: via)
+            }
+        case .attachFailed(let code, let message):
+            attaching = false
+            Self.log.error("attach failed host=\(self.hostId, privacy: .public): \(message, privacy: .public)")
+            status = .needsAttention(reason: Self.attachFailure(code, message))
         case .layout(let layout):
             self.layout.receive(layout)
             if timings.firstLayout == nil, let start = timings.dialStarted { timings.firstLayout = .now - start }
+            if attaching {
+                attaching = false
+                status = .connected(rtt: echoRoundTrip)
+            }
             pushView()
         case .paneMeta(let meta):
             self.meta[PaneId(meta.paneId)] = meta
@@ -287,4 +326,17 @@ public enum HostError: Error, Equatable, LocalizedError {
 
 nonisolated enum Log {
     static let subsystem = Bundle.main.bundleIdentifier ?? "dev.unnamed.app"
+}
+
+/// A one-time message about a host, shown as a toast.
+nonisolated public struct HostNotice: Sendable, Equatable, Identifiable {
+    public let id = UUID()
+    public let text: String
+
+    init(sessionGone missing: UInt64, via: AttachVia) {
+        text = switch via {
+        case .created: "Your previous session ended. Started a new one."
+        case .mostRecent, .requested: "Your previous session ended. Showing the most recent one."
+        }
+    }
 }

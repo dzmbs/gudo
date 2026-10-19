@@ -6,9 +6,10 @@ import Foundation
 nonisolated public enum ConnectionStatus: Sendable, Equatable {
     /// Not started (a saved host nobody opened yet).
     case idle
-    /// First dial.
-    case connecting
-    /// Live. `rtt` is the latest keystroke round trip, if measured.
+    /// On the way to live: dialling, then opening the session (`phase`).
+    case connecting(ConnectPhase)
+    /// Live: the transport answers and there is a session to show. `rtt` is the latest
+    /// keystroke round trip, if measured.
     case connected(rtt: Duration?)
     /// Lost; redialling with backoff. Content stays on screen, dimmed.
     case reconnecting(attempt: UInt32, reason: String)
@@ -25,6 +26,18 @@ nonisolated public enum ConnectionStatus: Sendable, Equatable {
         if case .connected = self { true } else { false }
     }
 
+    public var isConnecting: Bool {
+        if case .connecting = self { true } else { false }
+    }
+
+    /// Live but slow: the last keystroke round trip took longer than
+    public var isSlow: Bool {
+        if case .connected(let rtt?) = self { rtt > Self.slowRoundTrip } else { false }
+    }
+
+    /// Round trips above this read as a slow link.
+    public static let slowRoundTrip = Duration.milliseconds(400)
+
     /// Whether the host belongs in "Needs you" for connection reasons.
     public var needsUser: Bool {
         switch self {
@@ -37,7 +50,7 @@ nonisolated public enum ConnectionStatus: Sendable, Equatable {
     public var summary: String {
         switch self {
         case .idle: "Not connected"
-        case .connecting: "Connecting…"
+        case .connecting(let phase): phase.summary
         case .connected(let rtt):
             if let rtt { "Connected · \(Int((rtt / .milliseconds(1)).rounded())) ms" } else { "Connected" }
         case .reconnecting(let attempt, let reason):
@@ -45,6 +58,21 @@ nonisolated public enum ConnectionStatus: Sendable, Equatable {
         case .offline(let reason): "Offline · \(reason)"
         case .suspended: "Paused"
         case .needsAttention(let reason): reason
+        }
+    }
+}
+
+/// Where a connection is on its way to live, so the UI can say what it is waiting for.
+nonisolated public enum ConnectPhase: Sendable, Equatable {
+    /// Reaching the host (QUIC dial, SSH handshake).
+    case dialing
+    /// Connected; attaching to the daemon session and waiting for its layout.
+    case openingSession
+
+    public var summary: String {
+        switch self {
+        case .dialing: "Connecting…"
+        case .openingSession: "Opening session…"
         }
     }
 }

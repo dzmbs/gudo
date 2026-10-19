@@ -278,8 +278,8 @@ private struct HostGroups {
 private extension ConnectionState {
     var isDialledOrLive: Bool {
         switch self {
-        case .connected, .connecting, .reconnecting: true
-        case .unreachable, .disconnected: false
+        case .connected, .slow, .connecting, .reconnecting, .offline, .paused: true
+        case .needsAttention, .unreachable, .disconnected: false
         }
     }
 }
@@ -302,7 +302,8 @@ private struct HostRow: View {
                     Text(host.name)
                         .font(DS.Font.rowTitleEmphasis)
                         .lineLimit(1)
-                    ConnectionDot(host.connection)
+                    ConnectionGlyph(host.connection)
+                        .font(.caption)
                     if host.isPinned {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
@@ -380,16 +381,21 @@ private struct HostRow: View {
         } else {
             switch host.connection {
             case .reconnecting(let attempt, _):
-                Text("Reconnecting · attempt \(attempt)")
+                Text("Reconnecting… · attempt \(attempt)")
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(DS.Palette.working)
-            case .connecting:
-                Text("Connecting")
+                    .foregroundStyle(.secondary)
+            case .connecting, .offline:
+                Text(host.connection.title)
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(DS.Palette.working)
+                    .foregroundStyle(.secondary)
             case .unreachable(let reason, let hint):
                 let why = [reason, hint].compactMap(\.self).joined(separator: " ")
-                Text("\(Text("Unreachable").foregroundStyle(DS.Palette.error)) · \(why)")
+                Text("\(Text("Can't reach").foregroundStyle(DS.Palette.error)) · \(why)")
+                    .foregroundStyle(.secondary)
+                    .font(DS.Font.rowSubtitle)
+                    .lineLimit(2)
+            case .needsAttention(let reason, _):
+                Text("\(Text("Can't connect").foregroundStyle(DS.Palette.error)) · \(reason)")
                     .foregroundStyle(.secondary)
                     .font(DS.Font.rowSubtitle)
                     .lineLimit(2)
@@ -397,7 +403,7 @@ private struct HostRow: View {
                 Text(host.statusLine ?? lastUsed)
                     .font(DS.Font.rowSubtitle)
                     .foregroundStyle(.tertiary)
-            case .connected:
+            case .connected, .slow, .paused:
                 if let line = host.lastLine {
                     Text(line)
                         .font(DS.Font.literalSmall)

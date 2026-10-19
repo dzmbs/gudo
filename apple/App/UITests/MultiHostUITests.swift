@@ -207,7 +207,7 @@ final class MultiHostUITests: XCTestCase {
 
         // Ask the driver script to kill alpha: alpha's group reconnects…
         signal("kill-alpha")
-        waitFor(NSPredicate(format: "value == 'Reconnecting' OR value == 'Unreachable'"), groupA, timeout: 90, "alpha goes down")
+        waitFor(NSPredicate(format: "value BEGINSWITH 'Reconnecting' OR value BEGINSWITH 'Can'"), groupA, timeout: 90, "alpha goes down")
         // …while beta stays live and takes input.
         XCTAssertEqual(value(groupB), "Connected", "beta stays connected")
         XCTAssertEqual(stale(app).count, 0, "beta's panes are not stale")

@@ -170,11 +170,14 @@ private struct HostGroupHeader: View {
         let live = group.isLocal || group.status.isLive
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: DS.Space.s) {
-                // dim), a state glyph only when not live, and + New Terminal. No dots.
-                Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack")
+                // Status UX §3.2: the host's icon (replaced by its state glyph while the link is
+                // Terminal. No dots, no status text.
+                ConnectionGlyph(
+                    state,
+                    healthy: Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack").foregroundStyle(.secondary))
                     .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
                     .frame(width: 16)
+                    .help(group.failure ?? (live ? group.name : state.title))
                 Text(group.name)
                     .font(DS.Font.section)
                     .foregroundStyle(live ? .primary : .tertiary)
@@ -199,9 +202,6 @@ private struct HostGroupHeader: View {
                 // The host's agents at a glance (§3.4 aggregate: blocked > error > done > working).
                 if let agents = aggregateAgentState {
                     AgentGlyph(state: agents)
-                }
-                if !live {
-                    HostStateGlyph(status: group.status, failure: group.failure)
                 }
                 Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
                     .labelStyle(.iconOnly)
@@ -250,55 +250,6 @@ private struct HostGroupHeader: View {
     }
 }
 
-/// Amber "your turn" (status UX §3.1 `attention`; DesignSystem gets the token, same values as
-/// today's `working`).
-private let attentionColor = DS.Palette.working
-
-/// A host's link state, only while it is not live (status UX §3.3): reconnecting, offline, can't
-/// connect; a mini spinner while dialling, after a 1 s grace. Labelled with its copy.
-struct HostStateGlyph: View {
-    let status: ConnectionStatus
-    var failure: String?
-    @State private var graceOver = false
-
-    var body: some View {
-        Group {
-            if let failure {
-                glyph("exclamationmark.triangle.fill", DS.Palette.error, "Can't connect · \(failure)")
-            } else {
-                switch status {
-                case .connecting:
-                    if graceOver {
-                        ProgressView().controlSize(.mini).accessibilityLabel("Connecting…")
-                    }
-                case .reconnecting:
-                    glyph("arrow.triangle.2.circlepath", attentionColor, "Reconnecting…")
-                case .offline:
-                    glyph("wifi.slash", .secondary, "Offline · waiting for network")
-                case .needsAttention(let reason):
-                    glyph("exclamationmark.triangle.fill", DS.Palette.error, "Can't connect · \(reason)")
-                case .idle, .suspended, .connected:
-                    EmptyView()
-                }
-            }
-        }
-        .frame(width: 14, height: 14)
-        .task(id: status) {
-            graceOver = false
-            try? await Task.sleep(for: .seconds(1))
-            graceOver = true
-        }
-    }
-
-    private func glyph(_ name: String, _ color: Color, _ label: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 12))
-            .foregroundStyle(color)
-            .help(label)
-            .accessibilityLabel(label)
-    }
-}
-
 /// An agent's activity (status UX §3.4): working is a mini spinner in .secondary, needs input an
 /// amber question mark, done a green check, failed a red cross; idle shows nothing. 12 pt in a
 /// 14 pt slot so rows never jump.
@@ -326,7 +277,7 @@ struct AgentGlyph: View {
                     ProgressView().controlSize(.mini)
                 }
             case .blocked:
-                Image(systemName: "questionmark.circle.fill").foregroundStyle(attentionColor)
+                Image(systemName: "questionmark.circle.fill").foregroundStyle(DS.Palette.attention)
             case .done:
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.Palette.done)
             case .error:
@@ -700,9 +651,9 @@ struct CompactTerminalView: View {
                             .font(DS.Font.meta)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        if let status = workspace.host?.status, !status.isLive {
-                            HostStateGlyph(status: status)
-                                .scaleEffect(0.85)
+                        if !model.connection.isLive {
+                            ConnectionGlyph(model.connection)
+                                .font(.system(size: 10))
                         }
                     }
                 }

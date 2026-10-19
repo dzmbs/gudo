@@ -5,7 +5,7 @@ import Observation
 import PaneLayout
 
 /// What the detail column (or the iPhone tab) shows.
-enum Destination: Hashable {
+enum Destination: String, Hashable {
     case terminal
     case inbox
     case hosts
@@ -62,10 +62,18 @@ final class WindowModel {
             if workspace !== oldValue { followConnection() }
             if workspace != nil { ActiveWindow.workspace = workspace }
             workspace?.onNewTabUnavailable = { [weak self] in self?.newTab() }
+            workspace?.onLayoutUnavailable = { [weak self] in
+                guard let self else { return }
+                toasts.show(Toast(layoutUnavailableHelp, systemImage: "network.slash", style: .neutral))
+            }
         }
     }
     /// The design fixtures' stand-in connection state (`-screen reconnect`).
     var connectionOverride: ConnectionState?
+    #if DEBUG
+    /// The detail column's frame in window coordinates, for the dogfood runner's layout checks.
+    @ObservationIgnored var detailFrame: CGRect = .zero
+    #endif
     /// The window's host link in the design system's words; `.connected` for the local workspace.
     private(set) var liveConnection = ConnectionState.connected
 
@@ -118,6 +126,8 @@ final class WindowModel {
         guard let id = workspace?.hostId else { return Self.deviceName }
         return app.hosts.record(id)?.name ?? id
     }
+
+    var layoutUnavailableHelp: String { "Not available until \(hostName) is connected" }
 
     /// Whether the window shows a remote host.
     var isRemote: Bool { workspace?.isRemote ?? false }
@@ -363,10 +373,12 @@ final class WindowModel {
     // MARK: Connection state
 
     /// Mirrors the window's host status into `liveConnection`, remembering when it went down so
-    /// the reconnect card can say how long ago output last arrived.
+    /// the reconnect notice can say when the host was last heard from, and shows the host's
+    /// one-time notices as toasts.
     private func followConnection() {
         let status = workspace?.host?.status
-        if status?.isLive ?? true {
+        // A suspended app is not "down": coming back from the background starts the clock anew.
+        if status.map({ $0.isLive || $0 == .suspended }) ?? true {
             downSince = nil
         } else if downSince == nil {
             downSince = .now
@@ -376,8 +388,14 @@ final class WindowModel {
         if next != liveConnection { liveConnection = next }
         guard let host = workspace?.host else { return }
         let observed = workspace
+        let daemon = host as? DaemonConnection
+        if let notice = daemon?.notice {
+            toasts.show(Toast(notice.text, systemImage: "arrow.uturn.backward", style: .neutral))
+            daemon?.dismissNotice()
+        }
         withObservationTracking {
             _ = host.status
+            _ = daemon?.notice
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 // Only the host on screen drives the window's state.
@@ -389,18 +407,24 @@ final class WindowModel {
 }
 
 extension ConnectionState {
+    /// the link went down.
     init(_ status: ConnectionStatus, since: Date) {
         switch status {
-        case .connected:
-            self = .connected
-        case .idle, .connecting, .suspended:
-            self = .connecting
+        case .connected(let rtt):
+            if status.isSlow, let rtt { self = .slow(rtt: rtt) } else { self = .connected }
+        case .idle:
+            self = .disconnected
+        case .connecting(let phase):
+            // Dialling needs no words beyond "Connecting…"; later phases say what they wait for.
+            self = .connecting(phase: phase == .dialing ? nil : phase.summary)
+        case .suspended:
+            self = .paused
         case .reconnecting(let attempt, _):
             self = .reconnecting(attempt: Int(max(attempt, 1)), since: since)
-        case .offline(let reason):
-            self = .unreachable(reason: reason, hint: "Sessions resume when the network is back.")
+        case .offline:
+            self = .offline(since: since)
         case .needsAttention(let reason):
-            self = .unreachable(reason: reason, hint: nil)
+            self = .needsAttention(reason: reason, action: nil)
         }
     }
 }

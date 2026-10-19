@@ -34,7 +34,7 @@ public final class SshConnection: HostConnection {
         options: SshOptions = defaultSshOptions()
     ) throws {
         let states = SshStateStream()
-        status = .connecting
+        status = .connecting(.dialing)
         let started = ContinuousClock.now
         session = try SshSession.start(
             target: target, auth: auth, knownHosts: knownHosts, hostKeys: hostKeys, options: options,
@@ -97,7 +97,7 @@ public final class SshConnection: HostConnection {
     func apply(_ state: SshConnectionState) {
         switch state {
         case .connecting:
-            status = .connecting
+            status = .connecting(.dialing)
         case .connected:
             status = .connected(rtt: keepaliveRoundTrip)
         case .reconnecting(let attempt, _, let reason):
