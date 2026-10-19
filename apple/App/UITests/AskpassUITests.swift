@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// Native password prompts against a real local `unnamed-hostd` (apple/scripts/askpass-ui-test.sh
@@ -82,3 +83,4 @@ final class AskpassUITests: XCTestCase {
         shot(app, "askpass-done")
     }
 }
+#endif

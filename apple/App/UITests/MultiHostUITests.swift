@@ -8,6 +8,15 @@ import XCTest
 /// Skipped without the tickets.
 @MainActor
 final class MultiHostUITests: XCTestCase {
+    /// The device is an iPhone (UIDevice does not exist on the Mac).
+    static var isPhone: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
     override nonisolated func setUp() {
         continueAfterFailure = false
     }
@@ -71,7 +80,7 @@ final class MultiHostUITests: XCTestCase {
     /// fresh one with a shell), so this runs on this iPad's own group (`-localEcho YES`), which
     /// draws the same group, row and welcome view. Needs no daemon.
     func testNewTerminalWhereNoTabsAreOpen() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad and Mac")
+        try XCTSkipIf(Self.isPhone, "the sidebar is iPad and Mac")
         let app = XCUIApplication()
         app.launchArguments += [
             "-localEcho", "YES", "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES",
@@ -134,7 +143,7 @@ final class MultiHostUITests: XCTestCase {
     /// iPhone: the title menu lists every host as a section with its tabs; picking a tab on the
     /// other host switches at once.
     func testPhoneSwitcherGroupsTabsByHost() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "iPhone only")
+        try XCTSkipIf(!Self.isPhone, "iPhone only")
         let app = try launch(names: "studio,hetzner", extra: ["-noAutoFocus", "YES"])
         let switcher = element(app, "tab-switcher")
         XCTAssertTrue(switcher.waitForExistence(timeout: 40))
@@ -152,7 +161,7 @@ final class MultiHostUITests: XCTestCase {
     }
 
     func testTwoHostsLiveSwitchAndOneGoesDown() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad and Mac")
+        try XCTSkipIf(Self.isPhone, "the sidebar is iPad and Mac")
         let app = try launch()
 
         // Both hosts at once, each group live, one tab each: ⌘1 is alpha's, ⌘2 beta's.
