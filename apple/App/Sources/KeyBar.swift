@@ -4,6 +4,7 @@ import HostKit
 import TerminalCore
 import TerminalRenderer
 import UIKit
+import VoiceKit
 
 /// floating Liquid Glass shapes over the terminal, centred on the keyboard.
 ///
@@ -122,8 +123,10 @@ final class KeyBar: UIInputView {
     private let joystick = JoystickView()
     private let menuButton = UIButton()
     private let hideButton = UIButton()
+    private let micButton = UIButton()
     private let menuCircle: CircleView
     private let hideCircle: CircleView
+    private let micCircle: CircleView
 
     init(style: KeyBarStyle = .default, snippets: SnippetStore = .shared) {
         self.style = style
@@ -142,6 +145,7 @@ final class KeyBar: UIInputView {
         composerKey = CapsuleKey(metrics: metrics)
         menuCircle = CircleView(content: menuButton)
         hideCircle = CircleView(content: hideButton)
+        micCircle = CircleView(content: micButton)
         super.init(frame: CGRect(x: 0, y: 0, width: 0, height: metrics.bandHeight), inputViewStyle: .default)
         allowsSelfSizing = true
         translatesAutoresizingMaskIntoConstraints = false
@@ -293,6 +297,7 @@ final class KeyBar: UIInputView {
         joystick.diameter = metrics.capsuleHeight
         menuButton.configuration = circleConfiguration(symbol: "ellipsis")
         hideButton.configuration = circleConfiguration(symbol: "keyboard.chevron.compact.down")
+        updateMic()
         apply()
     }
 
@@ -418,7 +423,8 @@ final class KeyBar: UIInputView {
         menuButton.configuration = circleConfiguration(symbol: "ellipsis")
         hideButton.configuration = circleConfiguration(symbol: "keyboard.chevron.compact.down")
 
-        for view in [capsuleA, capsuleB, capsuleC, joystick, menuCircle, hideCircle] as [UIView] { band.addSubview(view) }
+        configureMic()
+        for view in [capsuleA, capsuleB, capsuleC, micCircle, joystick, menuCircle, hideCircle] as [UIView] { band.addSubview(view) }
     }
 
     private func circleConfiguration(symbol: String) -> UIButton.Configuration {
@@ -444,7 +450,10 @@ final class KeyBar: UIInputView {
         let aWidth = CapsuleView.width(slots: aSlots, metrics: m)
         let cSlots = capsuleC.keys.map { _ in m.minimumSlot }
         let cWidth = m.showsArrowKeys ? CapsuleView.width(slots: cSlots, metrics: m) : 0
-        let circles: [UIView] = [joystick, menuCircle] + (m.showsAlt ? [hideCircle] : [])
+        // Hold-to-talk where there is room; narrow iPhones have the keyboard's own mic.
+        let showsMic = m.showsAlt && VoiceSettings.load().isEnabled
+        micCircle.isHidden = !showsMic
+        let circles: [UIView] = (showsMic ? [micCircle] : []) + [joystick, menuCircle] + (m.showsAlt ? [hideCircle] : [])
         let circlesWidth = CGFloat(circles.count) * h + CGFloat(circles.count - 1) * m.gap
         let fixed = aWidth + m.gap + (m.showsArrowKeys ? cWidth + m.gap : 0) + m.gap + circlesWidth
         let budget = width - 2 * m.margin - fixed
@@ -509,7 +518,7 @@ final class KeyBar: UIInputView {
     /// agents) and ⋯. The Magic Keyboard has no Esc key; ⌘. sends Esc as well.
     private func layoutPill(width: CGFloat) {
         let m = metrics
-        for view in [capsuleB, capsuleC, joystick, hideCircle] as [UIView] { view.isHidden = true }
+        for view in [capsuleB, capsuleC, joystick, hideCircle, micCircle] as [UIView] { view.isHidden = true }
         guard hardwareMode == .minimal else {
             capsuleA.isHidden = true
             menuCircle.isHidden = true
@@ -605,6 +614,34 @@ final class KeyBar: UIInputView {
         var repeated = event
         repeated.action = .repeat
         repeater.start { [weak target] in target?.send(repeated) }
+    }
+
+    // MARK: Voice
+
+    /// Hold to dictate (VoiceKit, on device): the words show at the cursor while held and go in on
+    /// release, without Return. Dragging off cancels.
+    private func configureMic() {
+        micButton.accessibilityIdentifier = "keybar-mic"
+        micButton.accessibilityLabel = "Dictate"
+        micButton.accessibilityHint = "Hold and speak; release to insert the words."
+        let voice = VoiceDictation.shared.voice
+        micButton.addAction(UIAction { _ in _ = voice.start() }, for: .touchDown)
+        micButton.addAction(UIAction { _ in Task { _ = await voice.stop() } }, for: .touchUpInside)
+        micButton.addAction(UIAction { _ in voice.cancel() }, for: [.touchUpOutside, .touchCancel])
+        updateMic()
+    }
+
+    private func updateMic() {
+        let voice = VoiceDictation.shared.voice
+        var configuration = circleConfiguration(symbol: voice.isActive ? "mic.fill" : "mic")
+        if voice.isActive { configuration.baseForegroundColor = tintColor }
+        micButton.configuration = configuration
+        micButton.accessibilityValue = voice.isActive ? "Listening" : nil
+        withObservationTracking {
+            _ = voice.isActive
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.updateMic() }
+        }
     }
 
     // MARK: Modifiers
