@@ -38,6 +38,8 @@ final class Pane {
     @ObservationIgnored var onGridChange: ((TerminalSurface.Grid) -> Void)?
 
     nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "pane")
+    /// The grid's cell size in pixels, for resizes that follow the stream (off the main actor).
+    nonisolated let cellPixels = OSAllocatedUnfairLock<(width: UInt32, height: UInt32)>(initialState: (0, 0))
 
     /// PTY resizes (SIGWINCH) are debounced so a divider drag does not make TUIs redraw on every
     /// frame (04-mobile-ux C3).
@@ -50,6 +52,7 @@ final class Pane {
         let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
         view = TerminalView(surface: surface)
         view.onInput = { bytes in bytes.withUnsafeBytes { backend.write($0) } }
+        surface.sizeFollowsStream = backend.sizeFollowsStream
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
         // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).
         view.keyInterceptor = { [weak self] event in self.map { VoiceDictation.shared.handleKey(event, pane: $0) } ?? false }
@@ -71,6 +74,7 @@ final class Pane {
                 Task { @MainActor in surface?.applyPrediction(update) }
             }
         }
+        let cellPixels = cellPixels
         backend.start { [weak self] event in
             switch event {
             case .output(let data):
@@ -81,6 +85,8 @@ final class Pane {
                 // snapshot keeps what is on screen (stale beats blank) and is logged.
                 do {
                     try terminal.restore(snapshot: ready)
+                    let size = terminal.size
+                    Pane.log.debug("snapshot restored \(size.cols)x\(size.rows)")
                 } catch {
                     Pane.log.error("snapshot restore failed: \(String(describing: error), privacy: .public)")
                 }
@@ -89,13 +95,12 @@ final class Pane {
                 _ = try? terminal.appendHistory(records)
                 surface.outputArrived()
             case .resized(let cols, let rows):
-                // The remote PTY changed size at this point of the stream: follow it so the
-                // bytes after it lay out as they did there.
-                Task { @MainActor in
-                    guard let grid = surface.grid, grid.cols != cols || grid.rows != rows else { return }
-                    terminal.resize(cols: cols, rows: rows, cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
-                    surface.outputArrived()
-                }
+                // The remote PTY changed size at this point of the stream: follow it here, in
+                // order with the output around it, so the bytes after it lay out as they did there.
+                let cell = cellPixels.withLock { $0 }
+                Pane.log.debug("remote resize \(cols)x\(rows)")
+                terminal.resize(cols: cols, rows: rows, cellWidth: cell.width, cellHeight: cell.height)
+                surface.outputArrived()
             case .connection(let state):
                 Task { @MainActor in self?.connection = state }
             case .exited:
@@ -139,6 +144,7 @@ final class Pane {
     }
 
     private func gridChanged(_ grid: TerminalSurface.Grid) {
+        cellPixels.withLock { $0 = (grid.cellWidth, grid.cellHeight) }
         onGridChange?(grid)
         if let size = view.surface.cellSize { onCellSize?(size) }
         resizeTask?.cancel()

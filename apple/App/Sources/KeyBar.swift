@@ -94,6 +94,9 @@ final class KeyBar: UIInputView {
     private var lastAltTap: ContinuousClock.Instant?
     private let repeater = KeyRepeater()
     private var hardwareKeyboard = GCKeyboard.coalesced != nil
+    /// The on-screen keyboard is up (its frame is taller than this bar): even with a hardware
+    /// keyboard attached, it then gets the full bar.
+    private var softwareKeyboardShown = false
     private var snippetsShown = false
     private var arrowPadShown = false
     private var metrics = CapsuleMetrics.for(width: 400, compactHeight: false, isPad: false)
@@ -191,6 +194,7 @@ final class KeyBar: UIInputView {
 
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardsChanged), name: .GCKeyboardDidConnect, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardsChanged), name: .GCKeyboardDidDisconnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         apply()
     }
 
@@ -250,9 +254,10 @@ final class KeyBar: UIInputView {
         return UserDefaults.standard.string(forKey: Self.hardwareModeKey).flatMap(HardwareMode.init) ?? .minimal
     }
 
-    /// The slim pill (hardware keyboard, minimal), or nothing (hidden).
+    /// The slim pill (hardware keyboard, minimal), or nothing (hidden). Only while no on-screen
+    /// keyboard shows: someone who brings it up with a Magic Keyboard attached types on it.
     private var compact: Bool {
-        hardwareKeyboard && hardwareMode != .full
+        hardwareKeyboard && !softwareKeyboardShown && hardwareMode != .full
     }
 
     /// The composer shows where the user turned it on, else for agents on the software keyboard
@@ -311,6 +316,18 @@ final class KeyBar: UIInputView {
 
     @objc private func keyboardsChanged() {
         hardwareKeyboard = GCKeyboard.coalesced != nil
+        apply()
+    }
+
+    /// The keyboard frame includes this bar; anything much taller is the on-screen keyboard
+    /// (a hardware keyboard leaves only the bar, or the bar and the shortcuts strip).
+    @objc private func keyboardFrameChanged(_ note: Notification) {
+        guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let screen = window?.windowScene?.screen ?? (note.object as? UIScreen) ?? window?.screen else { return }
+        let visible = frame.intersection(screen.bounds).height
+        let shown = visible - bounds.height > 120
+        guard shown != softwareKeyboardShown else { return }
+        softwareKeyboardShown = shown
         apply()
     }
 

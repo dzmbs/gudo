@@ -285,6 +285,8 @@ nonisolated final class PaneRouter: Sendable {
 /// (the daemon ends the process), so `terminate` only stops following it.
 nonisolated public final class DaemonPaneBackend: PredictionFeed {
     public let pane: PaneId
+    /// The daemon reports every PTY resize in the stream (`PaneResized`).
+    public var sizeFollowsStream: Bool { true }
     let client: any DaemonClientAPI
     let router: PaneRouter
     /// Bytes requested per history page.

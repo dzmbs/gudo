@@ -171,6 +171,11 @@ public final class TerminalSurface {
 
     // MARK: Geometry
 
+    /// A remote pane's terminal is resized by its stream (where the remote PTY changed size), not
+    /// by layout: layout only reports the new grid (`onGridChange`), and the renderer draws the
+    /// terminal at whatever size it has until the resize arrives (about one round trip).
+    public var sizeFollowsStream = false
+
     /// Sizes the drawable and the cell grid for a view of `size` points at `scale` pixels/point.
     /// The grid is a whole number of cells; the remainder becomes right/bottom padding (Ghostty
     /// without `window-padding-balance`).
@@ -205,7 +210,9 @@ public final class TerminalSurface {
         let newGrid = Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
         if newGrid != grid {
             grid = newGrid
-            terminal.resize(cols: newGrid.cols, rows: newGrid.rows, cellWidth: newGrid.cellWidth, cellHeight: newGrid.cellHeight)
+            if !sizeFollowsStream {
+                terminal.resize(cols: newGrid.cols, rows: newGrid.rows, cellWidth: newGrid.cellWidth, cellHeight: newGrid.cellHeight)
+            }
             predictor?.reset()
             onGridChange?(newGrid)
         }

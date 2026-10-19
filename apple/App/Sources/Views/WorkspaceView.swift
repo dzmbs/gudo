@@ -159,6 +159,18 @@ private struct TabsEmptied: Equatable {
     var isEmpty: Bool
 }
 
+#if os(iOS)
+/// Settings, in the sidebar's top bar (iPad).
+private struct SettingsToolbarButton: View {
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        Button("Settings", systemImage: "gearshape") { model.sheet = .settings }
+            .accessibilityIdentifier("open-settings")
+    }
+}
+#endif
+
 /// The sidebar column on the terminal's background family. On iPad it has its own bar (the
 /// app name and New Tab) level with the detail's; on the Mac it runs up under the titlebar.
 private struct SidebarColumn: View {
@@ -172,6 +184,9 @@ private struct SidebarColumn: View {
                 .navigationTitle(Brand.name)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        SettingsToolbarButton()
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         NewTabButton(workspace: workspace)
                     }
@@ -181,8 +196,8 @@ private struct SidebarColumn: View {
         }
         .background(theme.sidebarBackground.ignoresSafeArea())
         .environment(\.colorScheme, theme.colorScheme)
-        // The keyboard and its key bar float over the sidebar; its footer stays at the bottom.
-        .ignoresSafeArea(.keyboard)
+        // The sidebar's footer rides above the keyboard: the key bar is transparent glass, and a
+        // footer left under it showed through between the capsules.
         #else
         WorkspaceSidebar()
             .background(theme.sidebarBackground.ignoresSafeArea())
@@ -405,13 +420,14 @@ private struct HostToolbarButton: View {
     var body: some View {
         if workspace.isRemote {
             Button { showsDetails.toggle() } label: {
-                Label {
-                    Text(model.hostName)
-                } icon: {
+                // A plain stack, not a Label: iPad toolbars reduce a Label to its icon.
+                HStack(spacing: 6) {
                     ConnectionGlyph(model.connection, healthy: Image(systemName: "server.rack"))
+                    Text(model.hostName).lineLimit(1)
                 }
-                .labelStyle(.titleAndIcon)
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(model.connection.isQuiet ? .primary : .secondary)
+                .padding(.horizontal, 6)
             }
             .help(model.connection.isQuiet ? model.hostName : "\(model.hostName) · \(model.connection.title)")
             .accessibilityIdentifier("hosts-button")
