@@ -129,6 +129,8 @@ final class WindowModel {
     init(app: AppModel, isPresentation: Bool = false) {
         self.app = app
         self.isPresentation = isPresentation
+        Self.made += 1
+        serial = Self.made
         groups = HostGroups(
             hosts: app.hosts,
             local: LaunchOptions.hasLocalShell ? HostGroups.Local(name: Self.deviceName, layout: app.localLayout) : nil)
@@ -192,6 +194,12 @@ final class WindowModel {
     /// View and Stage Manager do.
     var debugWidth: Double? = UserDefaults.standard.double(forKey: "windowWidth").nonZeroWidth
     #endif
+
+    /// The order this window was made in (windows list in opening order).
+    let serial: Int
+
+    /// Window models made in this process (the probe shows it: one per window).
+    static var made = 0
 
     /// Whether `start()` ran: the window is on screen and owns terminals.
     private(set) var isStarted = false

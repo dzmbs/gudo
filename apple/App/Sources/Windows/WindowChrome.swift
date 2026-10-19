@@ -142,9 +142,10 @@ struct WindowProbe: View {
                     .accessibilityValue(value)
                     .accessibilityIdentifier("window-probe")
             }
-            .font(.system(size: 8))
-            .frame(height: 24)
-            .opacity(0.05)
+            .font(.system(size: 10))
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .opacity(0.3)
         }
     }
 
@@ -159,6 +160,7 @@ struct WindowProbe: View {
             "pane": workspace?.focusedPane.map { String($0.rawValue) } ?? "",
             "overlays": String(model.resizeOverlayShows),
             "windows": String(model.app.openWindows.count),
+            "models": String(WindowModel.made),
         ]
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys

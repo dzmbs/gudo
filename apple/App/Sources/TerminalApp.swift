@@ -70,9 +70,39 @@ struct TerminalApp: App {
 /// open hosts) survives switching targets. Which hosts were open, which groups were collapsed and
 /// the last-focused tab are restored per window. The window publishes what it shows for Handoff
 /// and continues other devices' (and dragged-out tabs') activities.
+///
+/// The window's model is made once per scene, when the scene first appears: SwiftUI rebuilds
+/// this struct (and would re-run a `@State` initial value) several times per scene, and a
+/// spare model would have its own sources and terminals and could be picked as the active
+/// window.
 struct WindowRoot: View {
     /// What this window was opened for (New Window, Open in New Window), if anything.
     var request: WindowRequest?
+    @State private var model: WindowModel?
+    @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
+
+    var body: some View {
+        if let model {
+            WindowContent(request: request, model: model)
+        } else {
+            // One frame on the terminal background while the model is made.
+            ThemeCatalog.theme(named: themeName).background
+                .ignoresSafeArea()
+                .onAppear {
+                    guard model == nil else { return }
+                    let made = WindowModel(app: AppModel.shared)
+                    made.start()
+                    model = made
+                }
+        }
+    }
+
+}
+
+/// A window's content around its model (see `WindowRoot`).
+private struct WindowContent: View {
+    var request: WindowRequest?
+    let model: WindowModel
     @Environment(AppModel.self) private var app
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
@@ -84,7 +114,6 @@ struct WindowRoot: View {
     /// The request this scene already opened (a restored scene must not open it again).
     @SceneStorage("openedRequest") private var openedRequest: String?
     @State private var restored = false
-    @State private var model = WindowModel(app: AppModel.shared)
     #if DEBUG
     /// UI tests: a narrower window than the simulator's screen (`<scheme>://debug/width/<pt>`,
     /// `-windowWidth <pt>`), to cross the width boundary as Split View and Stage Manager do.
@@ -93,7 +122,6 @@ struct WindowRoot: View {
     var body: some View {
         sized
             .environment(model)
-            .onAppear { model.start() }
             .onChange(of: app.lastError) { _, error in
                 if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
             }
@@ -106,7 +134,7 @@ struct WindowRoot: View {
             .onOpenURL(perform: open(url:))
             // Links (pairing, invites, a pane from a notification) go to a window that is
             // already open; activities (Handoff, a tab dragged out) may make new ones.
-            .handlesExternalEvents(preferring: [WindowRoot.urlScheme], allowing: ["*"])
+            .handlesExternalEvents(preferring: [WindowContent.urlScheme], allowing: ["*"])
             #if os(iOS)
             .background { SceneReader(model: model) }
             #endif
@@ -117,7 +145,7 @@ struct WindowRoot: View {
                 model.openWindow = { request in openWindow(value: request) }
                 #if DEBUG && os(iOS)
                 // `-resetWindows YES` (UI tests): start from one window, whatever iPadOS restored.
-                if UserDefaults.standard.bool(forKey: "resetWindows") { WindowRoot.closeOtherWindows() }
+                if UserDefaults.standard.bool(forKey: "resetWindows") { WindowContent.closeOtherWindows(keeping: model) }
                 #endif
                 app.hosts.foreground()
                 let hooked = await app.runLaunchHooks()
@@ -257,11 +285,10 @@ struct WindowRoot: View {
     private static var closedOtherWindows = false
 
     /// Destroys every scene but one (once per launch; UI tests).
-    private static func closeOtherWindows() {
-        guard !closedOtherWindows else { return }
+    private static func closeOtherWindows(keeping window: WindowModel) {
+        guard !closedOtherWindows, let keep = window.scene?.session else { return }
         closedOtherWindows = true
         let sessions = UIApplication.shared.openSessions.filter { $0.role == .windowApplication }
-        let keep = sessions.first { $0.scene?.activationState == .foregroundActive } ?? sessions.first
         for session in sessions where session !== keep {
             UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
         }

@@ -140,7 +140,7 @@ final class AppModel {
     }
 
     /// Every open window, most recently active first when known.
-    var openWindows: [WindowModel] { windows.allObjects.filter { !$0.isClosed } }
+    var openWindows: [WindowModel] { windows.allObjects.filter { !$0.isClosed }.sorted { $0.serial < $1.serial } }
 
     /// The gzipped static Linux daemons bundled as resources (project.yml), for "Install helper".
     nonisolated static func bundledDaemons() -> HostdBinaries {

@@ -512,8 +512,20 @@ workspace, tab, focused pane and terminals (views move between containers; scrol
 viewport are the terminal's) and suppresses the cols × rows overlay for a second
 (`Workspace.layoutChangeUntil`). Tests: `WindowsTests` (bucket logic), `WindowsUITests`.
 
+**One model per scene.** `WindowRoot` makes its `WindowModel` once, when the scene first
+appears (SwiftUI rebuilds the root struct, and a `@State` initial value would be evaluated each
+time); `start()` then registers it (`ActiveWindow`, `AppModel.openWindows`) and opens this
+device's workspace. Spare models never exist, so menu commands, design fixtures (`-screen`) and
+dictation always act on a window on screen (`WindowsUITests.testOneModelPerWindowAndFixturesOnIt`).
+Dictation's `AppModel.openWorkspaces` lists every window's workspaces, the key window's first. The
+key bar stays one per app (`Workspace.sharedKeyBar`): only the key window's terminal has the
+keyboard, and the input accessory view follows that first responder between scenes. Remote panes
+follow the stream's size (`sizeFollowsStream`): the window that drives a pane resizes the PTY,
+the others draw the stream's grid without reflowing it.
+
 Test hooks: `-windowProbe YES` (bucket, host, tab, pane, Handoff payload, overlay count, window
-count as JSON on `window-probe`), `-continueActivity <json>` (continue a payload at launch),
+and model counts, how the last activity resolved, as JSON on `window-probe`, plus narrow / wide /
+front controls), `-resetWindows YES` (start from one window), `-continueActivity <json>` (continue a payload at launch),
 `<scheme>://debug/width/<pt>` and `-windowWidth <pt>` (narrow the window, debug builds).
 `apple/scripts/windows-ui-test.sh [ipad] [iphone]` starts a daemon, turns on Stage Manager in the
 simulator (`SBChamoisWindowingEnabled`) and runs `WindowsUITests`.

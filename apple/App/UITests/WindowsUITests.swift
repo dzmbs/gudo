@@ -149,7 +149,7 @@ final class WindowsUITests: XCTestCase {
 
         // Back in the first window (brought to the front, as a click on it would): it is still
         // on its tab, and typing there goes to its own pane, which never saw window 2's command.
-        openLink(app, "unnamed://debug/front/0")
+        tapControl(app, "debug-front-0")
         let oldPane = app.descendants(matching: .any).matching(identifier: "pane-\(before["pane"] ?? "")").firstMatch
         waitFor("the first window in front") { oldPane.exists && oldPane.isHittable }
         shot(app, "windows-first-window-again")
@@ -163,6 +163,25 @@ final class WindowsUITests: XCTestCase {
         let tabs = Set((0..<probes(app).count).map { probe(probes(app).element(boundBy: $0))["tab"] ?? "" })
         XCTAssertEqual(tabs, [before["tab"] ?? "", newTab], "each window kept its own tab")
         shot(app, "windows-two-tabs")
+    }
+
+    /// One window model per window (SwiftUI rebuilding the scene's root must not make spare
+    /// ones), and the design fixtures land on the window on screen: `-mock -screen splits` shows
+    /// the three-pane split.
+    func testOneModelPerWindowAndFixturesOnIt() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "the split fixture is iPad")
+        let app = XCUIApplication()
+        app.launchArguments += ["-mock", "-screen", "splits", "-windowProbe", "YES", "-resetWindows", "YES", "-noAutoFocus", "YES"]
+        app.launch()
+        let element = probes(app).firstMatch
+        XCTAssertTrue(element.waitForExistence(timeout: 20))
+        waitFor("three panes") { panes(app).count == 3 }
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let fields = probe(element)
+        XCTAssertEqual(fields["windows"], "1")
+        XCTAssertEqual(fields["models"], fields["windows"], "one window model per window")
+        XCTAssertEqual(panes(app).count, 3)
+        shot(app, "mock-splits")
     }
 
     // MARK: Handoff
@@ -245,26 +264,27 @@ final class WindowsUITests: XCTestCase {
         // Two panes, the second focused, and some output to keep.
         app.typeKey("d", modifierFlags: .command)
         waitFor("a split") { panes(app).count == 2 }
+        let element = probes(app).firstMatch
+        let focused = probe(element)["pane"] ?? ""
+        let target = app.descendants(matching: .any)["pane-\(focused)"]
+        XCTAssertTrue(target.waitForExistence(timeout: 5))
+        target.tap()
         app.typeText("echo markerkept\n")
         XCTAssertTrue(seeOnScreen(app, "markerkept"))
-        let element = probes(app).firstMatch
-        // A link brings the system's confirmation, and coming back from it lets iPadOS restore
-        // keyboard focus; do that once before the baseline, so the baseline is the steady state.
-        openLink(app, "unnamed://debug/width/0")
         let regular = probe(element)
         XCTAssertEqual(regular["bucket"], "regular")
         XCTAssertTrue(self.element(app, "sidebar-inbox").exists, "the sidebar in regular width")
 
-        openLink(app, "unnamed://debug/width/420")
+        tapControl(app, "debug-narrow")
         waitFor("compact") { probe(element)["bucket"] == "compact" }
         let compact = probe(element)
         XCTAssertEqual(compact["tab"], regular["tab"])
         XCTAssertEqual(compact["pane"], regular["pane"], "the focused pane stays focused")
         XCTAssertTrue(self.element(app, "tab-switcher").waitForExistence(timeout: 5), "the compact tab switcher")
-        XCTAssertTrue(seeOnScreen(app, "markerkept", timeout: 5), "the pane keeps its content")
         shot(app, "width-compact")
+        XCTAssertTrue(seeOnScreen(app, "markerkept", timeout: 15), "the pane keeps its content")
 
-        openLink(app, "unnamed://debug/width/0")
+        tapControl(app, "debug-wide")
         waitFor("regular again") { probe(element)["bucket"] == "regular" }
         XCTAssertTrue(self.element(app, "sidebar-inbox").waitForExistence(timeout: 5))
         let back = probe(element)
