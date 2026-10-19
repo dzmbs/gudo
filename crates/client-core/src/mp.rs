@@ -228,6 +228,27 @@ impl Client {
         Ok(client)
     }
 
+    /// Like [`join`](Self::join), with [`ConnectOptions`](crate::ConnectOptions).
+    ///
+    /// # Errors
+    ///
+    /// An unparsable invite or a bad key.
+    pub fn join_with(
+        invite: &str,
+        config: crate::ClientConfig,
+        options: crate::ConnectOptions,
+        listener: Arc<dyn crate::ClientListener>,
+    ) -> Result<Self, crate::ClientError> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("client-core")
+            .enable_all()
+            .build()?;
+        let mut client = Self::join_on_with(runtime.handle(), invite, config, options, listener)?;
+        client.runtime = Some(runtime);
+        Ok(client)
+    }
+
     /// Like [`join`](Self::join), on a shared runtime.
     ///
     /// # Errors

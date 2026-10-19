@@ -523,12 +523,17 @@ pub struct ConnectOptions {
     /// the ticket (`PairTicketInfo.relays`).
     #[uniffi(default = [])]
     pub relay_ca_der: Vec<Bytes>,
+    /// Show native password prompts (`AskpassListener`): the daemon sends this connection
+    /// the askpass prompts of panes it may drive. Off for clients that cannot show them.
+    #[uniffi(default = false)]
+    pub askpass: bool,
 }
 
 impl From<ConnectOptions> for client_core::ConnectOptions {
     fn from(o: ConnectOptions) -> Self {
         Self {
             relay_ca_der: o.relay_ca_der.into_iter().map(Into::into).collect(),
+            askpass: o.askpass,
         }
     }
 }

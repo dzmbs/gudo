@@ -144,6 +144,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         ws,
     });
     core.client_connected(true);
+    core.askpass.register(client.id, &client.authz, client.caps);
     let mut tasks = JoinSet::new();
     tasks.spawn(write_ctl(ctl_tx, ctl_out));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
@@ -722,6 +723,33 @@ impl Client {
                     self.send(ServerCtl::Assist(push));
                 }
             }
+            Event::Askpass(push) => {
+                if self.may_answer(crate::askpass::push_pane(&push)) {
+                    self.send(ServerCtl::Askpass(push));
+                }
+            }
+        }
+    }
+
+    /// Whether this connection is shown native password prompts for `pane`: it asked for
+    /// them, shows the pane's session and may drive the pane. Guests who only watch never see
+    /// the prompt text.
+    fn may_answer(&self, pane: PaneId) -> bool {
+        self.caps.contains(Caps::ASKPASS)
+            && self.in_session(pane)
+            && self.allow(Need::Drive, Target::Pane(pane)).is_ok()
+    }
+
+    /// The open and detected password prompts of `pane`, for a connection that just attached.
+    fn askpass_state(&self, pane: PaneId) {
+        if !self.may_answer(pane) {
+            return;
+        }
+        for prompt in self.core.askpass.open_in(pane) {
+            self.send(ServerCtl::Askpass(proto::AskpassPush::Prompt(prompt)));
+        }
+        if let Some(detected) = crate::askpass::detected(&self.core, pane) {
+            self.send(ServerCtl::Askpass(proto::AskpassPush::Detected(detected)));
         }
     }
 
@@ -1378,6 +1406,13 @@ impl Client {
                     client.send(ServerCtl::AssistResult { req_id, result });
                 });
             }
+            ClientCtl::Askpass { req_id, req } => {
+                let client = Arc::clone(self);
+                tokio::spawn(async move {
+                    let result = crate::askpass::request(&client.core, &client.authz, req).await;
+                    client.send(ServerCtl::AskpassResult { req_id, result });
+                });
+            }
             ClientCtl::Op { op_id, mut op } => {
                 let (need, target) = policy::op(&op);
                 let outcome = match self.allow(need, target) {
@@ -1730,6 +1765,7 @@ impl Client {
             if lease.holder.is_some() {
                 self.send(ServerCtl::Lease(lease));
             }
+            self.askpass_state(pane);
         }
         self.send(ServerCtl::Participants {
             participants: self.core.mp.participants(&self.core, &self.authz),
