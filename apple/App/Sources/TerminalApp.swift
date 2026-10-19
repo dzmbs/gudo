@@ -88,12 +88,12 @@ struct WindowRoot: View {
     #if DEBUG
     /// UI tests: a narrower window than the simulator's screen (`<scheme>://debug/width/<pt>`,
     /// `-windowWidth <pt>`), to cross the width boundary as Split View and Stage Manager do.
-    @State private var debugWidth: Double? = UserDefaults.standard.object(forKey: "windowWidth") as? Double
     #endif
 
     var body: some View {
         sized
             .environment(model)
+            .onAppear { model.start() }
             .onChange(of: app.lastError) { _, error in
                 if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
             }
@@ -104,11 +104,21 @@ struct WindowRoot: View {
             .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
             .modifier(HandoffActivity(model: model, onContinue: continueActivity))
             .onOpenURL(perform: open(url:))
+            // Links (pairing, invites, a pane from a notification) go to a window that is
+            // already open; activities (Handoff, a tab dragged out) may make new ones.
+            .handlesExternalEvents(preferring: [WindowRoot.urlScheme], allowing: ["*"])
+            #if os(iOS)
+            .background { SceneReader(model: model) }
+            #endif
             .onDisappear { model.close() }
             .task {
                 guard !restored else { return }
                 restored = true
                 model.openWindow = { request in openWindow(value: request) }
+                #if DEBUG && os(iOS)
+                // `-resetWindows YES` (UI tests): start from one window, whatever iPadOS restored.
+                if UserDefaults.standard.bool(forKey: "resetWindows") { WindowRoot.closeOtherWindows() }
+                #endif
                 app.hosts.foreground()
                 let hooked = await app.runLaunchHooks()
                 if !hooked.isEmpty {
@@ -135,8 +145,10 @@ struct WindowRoot: View {
                 }
                 #if DEBUG
                 // `-continueActivity <json>`: continue a Handoff payload as if another device sent it.
-                if let json = UserDefaults.standard.string(forKey: "continueActivity"),
-                   let payload = try? JSONDecoder().decode(HandoffPayload.self, from: Data(json.utf8))
+                // (Base64 of the JSON: a launch argument that looks like a plist is parsed as one.)
+                if let text = UserDefaults.standard.string(forKey: "continueActivity"),
+                   let json = Data(base64Encoded: text) ?? text.data(using: .utf8),
+                   let payload = try? JSONDecoder().decode(HandoffPayload.self, from: json)
                 {
                     continueActivity(payload)
                 }
@@ -151,11 +163,6 @@ struct WindowRoot: View {
         #if os(iOS)
         content
             .environment(\.horizontalSizeClass, model.widthBucket == .compact ? .compact : .regular)
-            #if DEBUG
-            .frame(maxWidth: debugWidth.map { CGFloat($0) } ?? .infinity, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.black.ignoresSafeArea())
-            #endif
             .background {
                 // The window's width, from the first layout on (`onGeometryChange` only reports
                 // changes).
@@ -163,15 +170,22 @@ struct WindowRoot: View {
                     Color.clear.onChange(of: Double(proxy.size.width), initial: true) { _, width in widthChanged(width) }
                 }
             }
-            .overlay(alignment: .bottomTrailing) { WindowProbe() }
+            #if DEBUG
+            .frame(maxWidth: model.debugWidth.map { CGFloat($0) } ?? .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.black.ignoresSafeArea())
+            #endif
+            .overlay(alignment: .leading) { WindowProbe() }
         #else
         content
-            .overlay(alignment: .bottomTrailing) { WindowProbe() }
+            .overlay(alignment: .leading) { WindowProbe() }
         #endif
     }
 
     @ViewBuilder private var content: some View {
-        if let workspace = model.workspace {
+        if !model.isStarted {
+            Color.clear
+        } else if let workspace = model.workspace {
             // No `.id` per workspace: the sidebar (every host) stays put while the detail
             // column switches hosts; the panes are keyed by their workspace inside.
             WorkspaceView(workspace: workspace)
@@ -207,9 +221,18 @@ struct WindowRoot: View {
         // `<scheme>://debug/width/<pt>` (0: the full width): UI tests narrow the window.
         if url.host() == "debug", url.pathComponents.count >= 3, url.pathComponents[1] == "width" {
             let value = Double(url.pathComponents[2]) ?? 0
-            debugWidth = value > 0 ? value : nil
+            model.debugWidth = value > 0 ? value : nil
             return
         }
+        #if os(iOS)
+        // `<scheme>://debug/front/<n>`: bring the n-th open window (in opening order) to the front.
+        if url.host() == "debug", url.pathComponents.count >= 3, url.pathComponents[1] == "front",
+           let index = Int(url.pathComponents[2])
+        {
+            model.bringWindowForward(index)
+            return
+        }
+        #endif
         #endif
         // An invite opens the Join sheet: joining is always the user's tap.
         if AppLinks.isInvite(url) {
@@ -230,11 +253,32 @@ struct WindowRoot: View {
         }
     }
 
+    #if DEBUG && os(iOS)
+    private static var closedOtherWindows = false
+
+    /// Destroys every scene but one (once per launch; UI tests).
+    private static func closeOtherWindows() {
+        guard !closedOtherWindows else { return }
+        closedOtherWindows = true
+        let sessions = UIApplication.shared.openSessions.filter { $0.role == .windowApplication }
+        let keep = sessions.first { $0.scene?.activationState == .foregroundActive } ?? sessions.first
+        for session in sessions where session !== keep {
+            UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
+        }
+    }
+    #endif
+
     /// Another device's window (Handoff), or a tab dragged out of another window here.
     private func continueActivity(_ payload: HandoffPayload) {
         AppModel.log.info("continue \(payload.kind.rawValue, privacy: .public) \(payload.hostName, privacy: .public) from \(payload.device, privacy: .public)")
         model.continue(payload)
     }
+
+    /// The app's URL scheme (Brand.xcconfig), for routing links to open windows.
+    static let urlScheme: String = {
+        let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]]
+        return (types?.first?["CFBundleURLSchemes"] as? [String])?.first ?? "unnamed"
+    }()
 
     /// Restore by default in normal launches; never for design fixtures, `-mock` or dogfood
     /// runs unless `-restoreLastTarget YES` asks for it.

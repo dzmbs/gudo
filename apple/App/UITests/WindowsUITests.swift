@@ -11,6 +11,8 @@ import XCTest
 final class WindowsUITests: XCTestCase {
     override nonisolated func setUp() {
         continueAfterFailure = false
+        // Let the previous test's windows finish closing (a launch right after can be refused).
+        Thread.sleep(forTimeInterval: 3)
     }
 
     // MARK: Helpers
@@ -66,7 +68,27 @@ final class WindowsUITests: XCTestCase {
         add(attachment)
     }
 
+    /// Taps a probe control (`WindowProbe`) in the window in front.
+    private func tapControl(_ app: XCUIApplication, _ id: String) {
+        let controls = app.buttons.matching(identifier: id)
+        XCTAssertTrue(controls.firstMatch.waitForExistence(timeout: 5), id)
+        let front = (0..<controls.count).map { controls.element(boundBy: $0) }.first { $0.isHittable } ?? controls.firstMatch
+        front.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    }
+
+    /// Opens one of the app's own links, answering the system's "Open in …?" confirmation.
+    private func openLink(_ app: XCUIApplication, _ link: String) {
+        app.open(URL(string: link)!)
+        let open = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Open"]
+        if open.waitForExistence(timeout: 4) { open.tap() }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    }
+
     private var scratch: String { NSTemporaryDirectory() + "windows-\(UUID().uuidString)" }
+
+    /// One folder per daemon ticket: a ticket pairs once, later launches dial with the grant.
+    private func daemonHosts(_ ticket: String) -> String { NSTemporaryDirectory() + "windows-\(ticket.suffix(10))" }
 
     // MARK: Two windows on one host
 
@@ -80,7 +102,7 @@ final class WindowsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-testTickets", ticket, "-testTicketNames", "studio", "-testRelay", "disabled",
-            "-hostsDirectory", scratch, "-windowProbe", "YES", "-restoreLastTarget", "NO",
+            "-hostsDirectory", daemonHosts(ticket), "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO",
             "-tabStyle", "sidebar", "-sidebarShown", "YES", "-keyBar.lineEditor", "<false/>",
         ]
         app.launch()
@@ -122,15 +144,22 @@ final class WindowsUITests: XCTestCase {
         app.typeText("echo two-$((40+3))\n")
         XCTAssertTrue(seeOnScreen(app, "two-43"), "window 2 typed into its own tab")
 
-        // Back in the first window: it is still on its tab, and its shell never saw window 2's
-        // command; typing there goes to its own pane.
+        shot(app, "windows-second-window")
+        let newScreen = app.descendants(matching: .any).matching(identifier: "pane-\(newPane)-screen").firstMatch
+
+        // Back in the first window (brought to the front, as a click on it would): it is still
+        // on its tab, and typing there goes to its own pane, which never saw window 2's command.
+        openLink(app, "unnamed://debug/front/0")
         let oldPane = app.descendants(matching: .any).matching(identifier: "pane-\(before["pane"] ?? "")").firstMatch
-        XCTAssertTrue(oldPane.waitForExistence(timeout: 10), "the first window's pane is still on screen")
+        waitFor("the first window in front") { oldPane.exists && oldPane.isHittable }
+        shot(app, "windows-first-window-again")
         oldPane.tap()
+        let oldScreen = app.descendants(matching: .any).matching(identifier: "pane-\(before["pane"] ?? "")-screen").firstMatch
+        XCTAssertTrue(oldScreen.waitForExistence(timeout: 10), "the first window's pane")
         app.typeText("echo three-$((40+4))\n")
-        XCTAssertTrue(seeOnScreen(app, "three-44"))
-        let oldScreen = app.descendants(matching: .any)["pane-\(before["pane"] ?? "")-screen"]
+        waitFor("window 1 typed into its own pane") { (oldScreen.value as? String ?? "").contains("three-44") }
         XCTAssertFalse((oldScreen.value as? String ?? "").contains("two-43"), "window 1's shell never saw window 2's command")
+        XCTAssertFalse((newScreen.value as? String ?? "").contains("three-44"), "window 2's shell never saw window 1's command")
         let tabs = Set((0..<probes(app).count).map { probe(probes(app).element(boundBy: $0))["tab"] ?? "" })
         XCTAssertEqual(tabs, [before["tab"] ?? "", newTab], "each window kept its own tab")
         shot(app, "windows-two-tabs")
@@ -146,7 +175,7 @@ final class WindowsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-testTickets", ticket, "-testTicketNames", "studio", "-testRelay", "disabled",
-            "-hostsDirectory", scratch, "-windowProbe", "YES", "-restoreLastTarget", "NO", "-keyBar.lineEditor", "<false/>",
+            "-hostsDirectory", daemonHosts(ticket), "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO", "-keyBar.lineEditor", "<false/>",
         ]
         app.launch()
         XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 40), "the daemon's pane")
@@ -168,7 +197,7 @@ final class WindowsUITests: XCTestCase {
         let payload = #"{"kind":"ssh","hostId":"X","hostName":"build-box","ssh":"me@build.example","tab":3,"pane":5,"origin":"another-device","device":"This Mac"}"#
         let app = XCUIApplication()
         app.launchArguments += [
-            "-hostsDirectory", scratch, "-windowProbe", "YES", "-restoreLastTarget", "NO", "-continueActivity", payload,
+            "-hostsDirectory", scratch, "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO", "-continueActivity", Data(payload.utf8).base64EncodedString(),
         ]
         app.launch()
         let alert = app.alerts.firstMatch
@@ -187,11 +216,13 @@ final class WindowsUITests: XCTestCase {
         let payload = #"{"kind":"local","hostName":"This Mac","tab":2,"pane":1,"origin":"another-device","device":"This Mac"}"#
         let app = XCUIApplication()
         app.launchArguments += [
-            "-hostsDirectory", scratch, "-windowProbe", "YES", "-restoreLastTarget", "NO", "-continueActivity", payload,
+            "-hostsDirectory", scratch, "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO", "-continueActivity", Data(payload.utf8).base64EncodedString(),
         ]
         app.launch()
         // Another device's own shell cannot continue here: a toast says so, no alert.
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "runs on This Mac")).firstMatch.waitForExistence(timeout: 15))
+        let element = probes(app).firstMatch
+        XCTAssertTrue(element.waitForExistence(timeout: 15))
+        waitFor("the activity was continued") { probe(element)["continued"] == "elsewhere" }
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
@@ -204,7 +235,7 @@ final class WindowsUITests: XCTestCase {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "iPad widths")
         let app = XCUIApplication()
         app.launchArguments += [
-            "-localEcho", "YES", "-hostsDirectory", scratch, "-windowProbe", "YES", "-restoreLastTarget", "NO",
+            "-localEcho", "YES", "-hostsDirectory", scratch, "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO",
             "-tabStyle", "sidebar", "-sidebarShown", "YES", "-resizeOverlay", "always",
         ]
         app.launch()
@@ -214,28 +245,31 @@ final class WindowsUITests: XCTestCase {
         // Two panes, the second focused, and some output to keep.
         app.typeKey("d", modifierFlags: .command)
         waitFor("a split") { panes(app).count == 2 }
-        app.typeText("printf 'marker-%s\\n' kept\n")
-        XCTAssertTrue(seeOnScreen(app, "marker-kept"))
+        app.typeText("echo markerkept\n")
+        XCTAssertTrue(seeOnScreen(app, "markerkept"))
         let element = probes(app).firstMatch
+        // A link brings the system's confirmation, and coming back from it lets iPadOS restore
+        // keyboard focus; do that once before the baseline, so the baseline is the steady state.
+        openLink(app, "unnamed://debug/width/0")
         let regular = probe(element)
         XCTAssertEqual(regular["bucket"], "regular")
         XCTAssertTrue(self.element(app, "sidebar-inbox").exists, "the sidebar in regular width")
 
-        app.open(URL(string: "unnamed://debug/width/420")!)
+        openLink(app, "unnamed://debug/width/420")
         waitFor("compact") { probe(element)["bucket"] == "compact" }
         let compact = probe(element)
         XCTAssertEqual(compact["tab"], regular["tab"])
         XCTAssertEqual(compact["pane"], regular["pane"], "the focused pane stays focused")
         XCTAssertTrue(self.element(app, "tab-switcher").waitForExistence(timeout: 5), "the compact tab switcher")
-        XCTAssertTrue(seeOnScreen(app, "marker-kept", timeout: 5), "the pane keeps its content")
+        XCTAssertTrue(seeOnScreen(app, "markerkept", timeout: 5), "the pane keeps its content")
         shot(app, "width-compact")
 
-        app.open(URL(string: "unnamed://debug/width/0")!)
+        openLink(app, "unnamed://debug/width/0")
         waitFor("regular again") { probe(element)["bucket"] == "regular" }
         XCTAssertTrue(self.element(app, "sidebar-inbox").waitForExistence(timeout: 5))
         let back = probe(element)
         XCTAssertEqual(back["pane"], regular["pane"])
-        XCTAssertTrue(seeOnScreen(app, "marker-kept", timeout: 5))
+        XCTAssertTrue(seeOnScreen(app, "markerkept", timeout: 5))
         // Let the overlay's window pass, then check none was shown by the switches.
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         XCTAssertEqual(probe(element)["overlays"], regular["overlays"], "no cols × rows overlay from a layout switch")
@@ -248,7 +282,7 @@ final class WindowsUITests: XCTestCase {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "iPhone")
         let app = XCUIApplication()
         app.launchArguments += [
-            "-localEcho", "YES", "-hostsDirectory", scratch, "-windowProbe", "YES", "-restoreLastTarget", "NO",
+            "-localEcho", "YES", "-hostsDirectory", scratch, "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO",
             "-noAutoFocus", "YES",
         ]
         XCUIDevice.shared.orientation = .portrait

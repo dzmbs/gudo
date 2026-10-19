@@ -56,6 +56,28 @@ struct HandoffActivity: ViewModifier {
 #if os(iOS)
 import UIKit
 
+/// Tells the window model which scene it is in.
+struct SceneReader: UIViewRepresentable {
+    let model: WindowModel
+
+    final class Probe: UIView {
+        weak var model: WindowModel?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if let scene = window?.windowScene { model?.scene = scene }
+        }
+    }
+
+    func makeUIView(context: Context) -> Probe {
+        let probe = Probe()
+        probe.model = model
+        probe.isUserInteractionEnabled = false
+        return probe
+    }
+
+    func updateUIView(_ probe: Probe, context: Context) {}
+}
+
 /// A tab row or chip as a drag: its reference as text (reordering within the host) and, on
 /// iPad, the window activity, so dropping it outside the window opens it in a new window.
 enum TabDrag {
@@ -100,15 +122,29 @@ struct WindowProbe: View {
 
     var body: some View {
         if WindowProbe.isEnabled {
-            Text(value)
-                .font(.system(size: 1))
-                .opacity(0.02)
-                .frame(width: 2, height: 2)
-                .accessibilityElement()
-                .accessibilityLabel("window")
-                .accessibilityValue(value)
-                .accessibilityIdentifier("window-probe")
-                .allowsHitTesting(false)
+            HStack(spacing: 0) {
+                #if DEBUG
+                // Test controls: narrow / restore the window's content, bring window 1 forward.
+                Button("narrow") { model.debugWidth = 420 }
+                    .accessibilityIdentifier("debug-narrow")
+                Button("wide") { model.debugWidth = nil }
+                    .accessibilityIdentifier("debug-wide")
+                #if os(iOS)
+                Button("front") { model.bringWindowForward(0) }
+                    .accessibilityIdentifier("debug-front-0")
+                #endif
+                #endif
+                Text(value)
+                    .font(.system(size: 1))
+                    .frame(width: 2, height: 2)
+                    .accessibilityElement()
+                    .accessibilityLabel("window")
+                    .accessibilityValue(value)
+                    .accessibilityIdentifier("window-probe")
+            }
+            .font(.system(size: 8))
+            .frame(height: 24)
+            .opacity(0.05)
         }
     }
 
@@ -130,6 +166,7 @@ struct WindowProbe: View {
             fields["handoff"] = String(decoding: data, as: UTF8.self)
         }
         if let missing = model.handoffMissing { fields["missing"] = missing.hostName }
+        if let result = model.continuedResult { fields["continued"] = result }
         let data = (try? encoder.encode(fields)) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }

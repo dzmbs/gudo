@@ -129,7 +129,6 @@ final class WindowModel {
     init(app: AppModel, isPresentation: Bool = false) {
         self.app = app
         self.isPresentation = isPresentation
-        let local = app.makeWorkspace(for: .local)
         groups = HostGroups(
             hosts: app.hosts,
             local: LaunchOptions.hasLocalShell ? HostGroups.Local(name: Self.deviceName, layout: app.localLayout) : nil)
@@ -168,19 +167,50 @@ final class WindowModel {
             ports.window = self
             links.window = self
         }
+        #if os(iOS)
+        // A first guess from the screen until the window is measured (`WindowRoot`), so an
+        // iPhone never draws the regular layout for a frame.
+        if !isPresentation { widthBucket = WidthBucket.of(width: Double(UIScreen.main.bounds.width), current: nil) }
+        #endif
+    }
+
+    #if os(iOS)
+    /// The window's scene (`SceneReader`), to bring it forward.
+    @ObservationIgnored weak var scene: UIWindowScene?
+
+    /// Brings the n-th open window (in opening order) to the front (UI tests).
+    func bringWindowForward(_ index: Int) {
+        let windows = app.openWindows.filter { !$0.isPresentation }
+        guard windows.indices.contains(index), let session = windows[index].scene?.session else { return }
+        UIApplication.shared.requestSceneSessionActivation(session, userActivity: nil, options: nil)
+    }
+    #endif
+
+    #if DEBUG
+    /// UI tests: the window's content narrower than the window (`-windowWidth <pt>`, the
+    /// probe's buttons, `<scheme>://debug/width/<pt>`), to cross the width boundary as Split
+    /// View and Stage Manager do.
+    var debugWidth: Double? = UserDefaults.standard.double(forKey: "windowWidth").nonZeroWidth
+    #endif
+
+    /// Whether `start()` ran: the window is on screen and owns terminals.
+    private(set) var isStarted = false
+
+    /// The window appeared: it registers and opens this device's workspace. Not in `init`:
+    /// SwiftUI may build a view's `@State` initial value more than once and keep only one, and
+    /// a discarded model must own no terminals and count as no window.
+    func start() {
+        guard !isStarted, !isClosed else { return }
+        isStarted = true
         if !isPresentation { ActiveWindow.register(self) }
         app.register(self)
         groups.isOpenElsewhere = { [weak self, weak app] id in
             guard let self, let app else { return false }
             return app.isHostOpen(id, elsewhereThan: self)
         }
+        let local = app.makeWorkspace(for: .local)
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
-        #if os(iOS)
-        // A first guess from the screen until the window is measured (`WindowRoot`), so an
-        // iPhone never draws the regular layout for a frame.
-        if !isPresentation { widthBucket = WidthBucket.of(width: Double(UIScreen.main.bounds.width), current: nil) }
-        #endif
         followGroups()
     }
 
@@ -454,7 +484,9 @@ final class WindowModel {
     /// words for why not and a way to add the host.
     func `continue`(_ payload: HandoffPayload) {
         lastContinued = payload
-        switch payload.resolve(records: app.hosts.records) {
+        let resolution = payload.resolve(records: app.hosts.records)
+        continuedResult = String(describing: resolution)
+        switch resolution {
         case .host(let id, let tab, let pane):
             if let tab {
                 select(TabRef(hostId: id, tab: tab), pane: pane)
@@ -477,6 +509,8 @@ final class WindowModel {
     var handoffMissing: HandoffPayload?
     /// The last activity continued here (UI tests read it through the probe).
     @ObservationIgnored private(set) var lastContinued: HandoffPayload?
+    /// How the last continued activity resolved (the probe shows it).
+    private(set) var continuedResult: String?
 
     /// Add Host for a host another device continued from: SSH pre-filled with its address, a
     /// pairing ticket for a daemon.
@@ -507,7 +541,7 @@ final class WindowModel {
     /// one when a host's connection object is replaced, plain SSH → daemon), and the target's on
     /// screen. Hosts other windows opened are listed, but get a workspace here only once shown.
     func syncWorkspaces() {
-        guard !isClosed else { return }
+        guard isStarted, !isClosed else { return }
         var next: [String: Workspace] = [:]
         if let local = workspaces[HostGroups.localId] ?? app.makeWorkspace(for: .local) { next[HostGroups.localId] = local }
         var wanted = Set(groups.openHosts)
@@ -679,3 +713,8 @@ enum LaunchOptions {
 #if canImport(UIKit)
 import UIKit
 #endif
+
+private extension Double {
+    /// Nil for 0 (an unset default).
+    var nonZeroWidth: Double? { self > 0 ? self : nil }
+}

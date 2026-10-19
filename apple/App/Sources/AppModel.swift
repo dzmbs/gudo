@@ -155,6 +155,10 @@ final class AppModel {
     /// `-testTickets <t1>,<t2>,…` pairs with each daemon (named by `-testTicketNames
     /// alpha,beta,…`) for the multi-host tests; the window opens them all and shows the first.
     func runLaunchHooks() async -> [WorkspaceTarget] {
+        // Once per app: every window's launch asks, only the first pairs and shows the hosts
+        // (two windows restored at launch must not pair the same ticket twice).
+        guard !launchHooksRan else { return [] }
+        launchHooksRan = true
         let defaults = UserDefaults.standard
         if let list = defaults.string(forKey: "testTickets"), !list.isEmpty {
             let tickets = list.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
@@ -173,6 +177,8 @@ final class AppModel {
         }
         return await runSingleLaunchHook().map { [$0] } ?? []
     }
+
+    @ObservationIgnored private var launchHooksRan = false
 
     private func runSingleLaunchHook() async -> WorkspaceTarget? {
         let defaults = UserDefaults.standard

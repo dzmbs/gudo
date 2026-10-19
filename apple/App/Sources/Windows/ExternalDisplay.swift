@@ -31,6 +31,7 @@ final class ExternalDisplaySceneDelegate: NSObject, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
         guard let scene = scene as? UIWindowScene else { return }
         let model = WindowModel(app: AppModel.shared, isPresentation: true)
+        model.start()
         self.model = model
         let window = UIWindow(windowScene: scene)
         let root = ExternalDisplayRoot(model: model).environment(AppModel.shared)
