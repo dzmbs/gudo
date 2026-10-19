@@ -119,16 +119,23 @@ private struct WindowContent: View {
     /// `-windowWidth <pt>`), to cross the width boundary as Split View and Stage Manager do.
     #endif
 
-    var body: some View {
+    /// The window's content with what it follows: errors, what to persist, its phase.
+    private var observed: some View {
         sized
             .environment(model)
-            .onChange(of: app.lastError) { _, error in
-                if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
-            }
+            .onChange(of: app.lastError) { _, error in showError(error) }
             .onChange(of: model.groups.openHosts) { _, _ in persist() }
             .onChange(of: model.groups.collapsed) { _, _ in persist() }
             .onChange(of: model.currentTab) { _, _ in persist() }
             .onChange(of: scenePhase, initial: true) { _, phase in model.isOnScreen = phase != .background }
+    }
+
+    private func showError(_ error: String?) {
+        if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
+    }
+
+    var body: some View {
+        observed
             .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
             .modifier(HandoffActivity(model: model, onContinue: continueActivity))
             .onOpenURL(perform: open(url:))
@@ -318,7 +325,7 @@ private struct WindowContent: View {
     /// The window's open hosts and focused tab: the scene's own storage, else what the last
     /// window saved (a new scene on iPad, a Mac window restored without state), else the
     /// single host of a window saved before multi-host.
-    private func restore(_ model: WindowModel) {
+    private func restore() {
         let defaults = UserDefaults.standard
         let decoder = JSONDecoder()
         func decode<T: Decodable>(_ type: T.Type, _ text: String?) -> T? {
@@ -340,7 +347,7 @@ private struct WindowContent: View {
     private static let lastFocusKey = "window.focusedTab"
 
     /// Saves what a relaunch restores, per window and as the app's latest.
-    private func persist(_ model: WindowModel) {
+    private func persist() {
         guard restored, shouldRestore else { return }
         let encoder = JSONEncoder()
         func encode(_ value: some Encodable) -> String? {
