@@ -652,6 +652,11 @@ public final class TerminalView: UIView {
             if action == .press { heldOptionKeys.insert(uiKey.keyCode) } else { heldOptionKeys.remove(uiKey.keyCode) }
         }
         guard let key = PhysicalKey(hidUsage: UInt32(uiKey.keyCode.rawValue)) else { return false }
+        // ⌘. is Esc: the Magic Keyboard for iPad has no Esc key (Blink, Echo do the same).
+        if uiKey.keyCode == .keyboardPeriod, uiKey.modifierFlags.intersection([.command, .control, .alternate, .shift]) == .command {
+            if markedText == nil { send(KeyEvent(key: .escape, action: action, mods: [], consumedMods: [], text: "", unshiftedCodepoint: 0)) }
+            return true
+        }
         guard !uiKey.modifierFlags.contains(.command), markedText == nil, !inputSourceComposes else { return false }
 
         let mods = KeyModifiers(uiKey.modifierFlags)
