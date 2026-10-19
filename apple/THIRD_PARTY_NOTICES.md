@@ -67,3 +67,12 @@ Source: https://github.com/stablyai/orca (reference/orca). MIT License, Copyrigh
 Lovecast Inc. Behavioural patterns (agent state vocabulary, reconnect wording, key bar data
 model) were adopted from its mobile app and style guide; no Orca code is included in the
 design layer.
+
+## Excalidraw
+
+Source: https://github.com/excalidraw/excalidraw, npm `@excalidraw/excalidraw` 0.18.1 (MIT), with
+React and react-dom 19.1.0 (MIT). `App/Resources/Excalidraw/` is a build of it
+(`scripts/build-excalidraw.sh` from `scripts/excalidraw/`): the editor of the draw overlay and
+canvas panes, bundled offline. Its fonts (Excalifont, Virgil, Nunito, Lilita One, Comic Shanns,
+Cascadia Code, Liberation Sans, Assistant) ship under their own open licences (SIL OFL 1.1 /
+Apache 2.0); the Xiaolai CJK face is left out. Full text: `App/Resources/Excalidraw/LICENSE-excalidraw.txt`.

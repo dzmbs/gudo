@@ -71,6 +71,16 @@ impl ScrollLog {
         }
     }
 
+    /// Call right after the terminal was resized. A resize moves the bottom row without
+    /// scrolling anything (rows are added or dropped at the bottom, or pulled back from
+    /// scrollback), so the baseline moves instead of `scrolled`: otherwise growing the pane
+    /// would count as rows scrolled and push anchors named before it past the top.
+    pub fn resized(&mut self, term: &mut Terminal) {
+        if let Some(p) = self.reference.and_then(|p| term.pin_point(p)) {
+            self.base = self.scrolled as i64 - from_bottom(term, p) as i64;
+        }
+    }
+
     fn repin(&mut self, term: &mut Terminal) {
         if let Some(old) = self.reference.take() {
             term.unpin(old);
@@ -356,6 +366,26 @@ mod tests {
             Some(AnchorPos::Detached(DetachReason::RowGone))
         );
         assert_eq!(anchors.position(&mut t, seq, 1), None);
+    }
+
+    #[test]
+    fn growing_the_pane_is_not_scrolling() {
+        let mut t = Terminal::new(40, 10).unwrap();
+        let mut log = ScrollLog::default();
+        let mut seq = 0;
+        feed(&mut t, &mut log, &mut seq, b"$ ls\r\none\r\n");
+        // A client of the new size names "one" (row 1) before any output follows the resize.
+        let at = seq;
+        t.resize(40, 30).unwrap();
+        log.resized(&mut t);
+        let fb = t.total_rows() as u64 - 2;
+        feed(&mut t, &mut log, &mut seq, b"$ ");
+        let mut anchors = Anchors::default();
+        let pos = anchors.create(&mut t, &log, seq, 1, Seq(at), fb).unwrap();
+        let AnchorPos::Live { y: Some(y), .. } = pos else {
+            panic!("{pos:?}")
+        };
+        assert_eq!(row_text(&t, y), "one");
     }
 
     #[test]

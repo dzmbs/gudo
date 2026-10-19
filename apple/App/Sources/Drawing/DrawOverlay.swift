@@ -1,0 +1,541 @@
+import DesignSystem
+import DrawingKit
+import Observation
+import PaneLayout
+import SwiftUI
+import TerminalCore
+import TerminalRenderer
+import UnnamedCore
+#if os(iOS)
+import PencilKit
+import UIKit
+#else
+import AppKit
+#endif
+
+/// What the overlay's toolbar shows.
+@Observable
+final class OverlayModel {
+    enum Tool: Hashable { case pen, shapes }
+    var tool: Tool = .shapes
+    var showsPen = false
+    var agentName: String?
+    var status: String?
+    var busy = false
+    var readOnly = false
+    var isReopened = false
+    @ObservationIgnored var onDone: () -> Void = {}
+    @ObservationIgnored var onCancel: () -> Void = {}
+    @ObservationIgnored var onSend: () -> Void = {}
+    @ObservationIgnored var onRemove: () -> Void = {}
+    @ObservationIgnored var onTool: (Tool) -> Void = { _ in }
+    @ObservationIgnored var onDebugRect: () -> Void = {}
+}
+
+/// The draw overlay on a terminal pane (docs/DAEMON.md §7.11, "the primary UX"): a transparent
+/// layer anchored to a row that scrolls with the output, holding one Excalidraw scene — shapes,
+/// arrows and text from the embedded editor, Pencil ink from PencilKit converted to `freedraw`
+/// elements — synced live with the daemon. Done renders a PNG on device and places it in the
+/// pane's output (`placePng`, replacing the placement it was reopened from); Cancel discards a
+/// new drawing; Send to Claude/Codex places it and pastes it into the agent's prompt.
+@MainActor
+final class DrawOverlay: NSObject {
+    let view = OverlayContainer()
+    private(set) var artifactId: UInt64?
+    private unowned let drawing: PaneDrawing
+    private var origin: RowPin
+    private let reopened: Placement?
+    private let web = CanvasWebView()
+    private var sync: SceneSync?
+    private let model = OverlayModel()
+    private var geometry: OverlayGeometry?
+    private var created = false
+    private var closed = false
+    private var scrollRemainder: CGFloat = 0
+    private let anchorMark = AnchorMark()
+    #if os(iOS)
+    private(set) var ink: InkCanvasController?
+    private var toolbar: UIHostingController<OverlayToolbar>?
+    #else
+    private var toolbar: NSHostingView<OverlayToolbar>?
+    #endif
+
+    init(drawing: PaneDrawing, origin: RowPin, reopened: Placement?) {
+        self.drawing = drawing
+        self.origin = origin
+        self.reopened = reopened
+        super.init()
+        model.readOnly = drawing.isReadOnly
+        model.isReopened = reopened != nil
+        model.agentName = drawing.agentTarget()?.name
+        model.onDone = { [weak self] in self?.commit() }
+        model.onCancel = { [weak self] in self?.cancel() }
+        model.onSend = { [weak self] in self?.send() }
+        model.onRemove = { [weak self] in self?.remove() }
+        model.onTool = { [weak self] in self?.setTool($0) }
+        model.onDebugRect = { [weak self] in self?.debugRect() }
+
+        web.webView.frame = view.bounds
+        #if os(iOS)
+        web.webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        #else
+        web.webView.autoresizingMask = [.width, .height]
+        #endif
+        view.addSubview(web.webView)
+        view.addSubview(anchorMark)
+        web.onMessage = { [weak self] in self?.message($0) }
+
+        #if os(iOS)
+        if !model.readOnly {
+            let ink = InkCanvasController(overlay: self)
+            ink.canvas.frame = view.bounds
+            view.addSubview(ink.canvas)
+            self.ink = ink
+            model.showsPen = true
+            // iPad: Pencil inks while fingers draw shapes; iPhone: pick Pen or Shapes.
+            model.tool = UIDevice.current.userInterfaceIdiom == .pad ? .pen : .shapes
+            ink.setTool(model.tool, pencilOnly: UIDevice.current.userInterfaceIdiom == .pad)
+        }
+        let host = UIHostingController(rootView: OverlayToolbar(model: model))
+        host.view.backgroundColor = .clear
+        host.sizingOptions = [.intrinsicContentSize]
+        host.overrideUserInterfaceStyle = drawing.isDarkTheme ? .dark : .light
+        view.addSubview(host.view)
+        toolbar = host
+        #else
+        let host = NSHostingView(rootView: OverlayToolbar(model: model))
+        host.appearance = NSAppearance(named: drawing.isDarkTheme ? .darkAqua : .aqua)
+        view.addSubview(host)
+        toolbar = host
+        #endif
+        view.onLayout = { [weak self] in self?.layout() }
+    }
+
+    // MARK: Lifecycle
+
+    func start() {
+        if let reopened { drawing.hiddenPlacement = reopened.placementId }
+        Task { await open() }
+    }
+
+    private func open() async {
+        let client = drawing.hub.client
+        if let reopened {
+            artifactId = reopened.artifactId
+        } else if !model.readOnly {
+            do {
+                let session = drawing.sessionId
+                let info = try await anchored(origin) { anchor in
+                    try await client.artifactCreate(create: ArtifactCreate(
+                        sessionId: session, kind: .excalidraw, title: "Sketch", space: .canvas,
+                        anchor: anchor, image: nil, ops: []))
+                }
+                artifactId = info.artifactId
+                created = true
+            } catch {
+                model.status = "Could not start a drawing: \(Self.describe(error))"
+                return
+            }
+        }
+        guard let artifactId, !closed else { return }
+        let sync = SceneSync(artifactId: artifactId, sessionId: drawing.sessionId, hub: drawing.hub, web: web)
+        sync.readOnly = model.readOnly
+        self.sync = sync
+        if reopened != nil, let scene = try? await client.excalidrawGet(artifactId: artifactId, since: 0),
+           let state = scene.appState.flatMap({ SceneSync.object($0) as? [String: Any] }),
+           let row = state["overlayRow"] as? Int, row != 0,
+           let shifted = drawing.tracker.terminal.pinRow(relativeTo: origin, offset: -row)
+        {
+            // The placement starts at the drawing's top row; the scene's origin is `row` below.
+            origin = shifted
+        }
+        updateGeometry()
+        await sync.load(mode: "overlay", theme: drawing.isDarkTheme ? "dark" : "light", viewport: viewport)
+        if model.tool == .shapes { web.call("setTool", ["type": "rectangle"]) }
+    }
+
+    private var viewport: [String: Any]? {
+        guard let g = geometry else { return nil }
+        return ["originX": g.origin.x, "originY": g.origin.y, "zoom": g.zoom]
+    }
+
+    /// The terminal scrolled or re-laid out: move the scene with its row.
+    func terminalMoved() {
+        let before = geometry
+        updateGeometry()
+        if geometry != before, let viewport { web.call("setViewport", viewport) }
+    }
+
+    private func updateGeometry() {
+        guard let surface = drawing.surface, let cell = surface.cellSize,
+              let row = drawing.tracker.terminal.viewportRows(of: [origin]).first ?? nil
+        else { return }
+        let gridOrigin = surface.rect(for: GridPoint(x: 0, y: 0)).origin
+        let g = OverlayGeometry(cell: cell, gridOrigin: gridOrigin, anchorRow: row)
+        geometry = g
+        anchorMark.frame = CGRect(x: max(0, g.origin.x - 3), y: g.origin.y + 2, width: 2, height: cell.height - 4)
+    }
+
+    private func layout() {
+        let bounds = view.bounds
+        #if os(iOS)
+        guard let toolbarView = toolbar?.view else { return }
+        let size = toolbarView.intrinsicContentSize
+        let bottom = bounds.height - view.safeAreaInsets.bottom - 12
+        toolbarView.frame = CGRect(x: (bounds.width - size.width) / 2, y: bottom - size.height, width: size.width, height: size.height)
+        ink?.canvas.frame = bounds
+        #else
+        guard let toolbar else { return }
+        let size = toolbar.fittingSize
+        toolbar.frame = CGRect(x: (bounds.width - size.width) / 2, y: bounds.height - size.height - 12, width: size.width, height: size.height)
+        #endif
+        terminalMoved()
+    }
+
+    private func close() {
+        guard !closed else { return }
+        closed = true
+        sync?.close()
+        web.tearDown()
+        #if os(iOS)
+        ink?.tearDown()
+        #endif
+        drawing.overlayClosed()
+    }
+
+    // MARK: Messages from the editor
+
+    private func message(_ body: [String: Any]) {
+        switch body["type"] as? String {
+        case "change": sync?.changed(body)
+        case "files": sync?.filesAdded(body)
+        case "done": commit()
+        case "cancel": cancel()
+        case "wheel":
+            guard let surface = drawing.surface, let cell = surface.cellSize else { return }
+            scrollRemainder += CGFloat(body["dy"] as? Double ?? 0) / cell.height
+            let rows = Int(scrollRemainder.rounded(.towardZero))
+            scrollRemainder -= CGFloat(rows)
+            if rows != 0 { surface.scroll(rows: rows) }
+        case "inkApplied":
+            #if os(iOS)
+            ink?.applied(ids: body["ids"] as? [String] ?? [])
+            #endif
+        default:
+            break
+        }
+    }
+
+    /// Ink converted from PencilKit, added to the scene as the user's own edit.
+    func addInk(_ elements: [[String: Any]]) {
+        web.call("addElements", ["elements": elements])
+    }
+
+    var currentGeometry: OverlayGeometry? { geometry }
+    var client: DaemonClient { drawing.hub.client }
+
+    /// Debug and tests: runs a script in the editor page.
+    func webEval(_ script: String) {
+        Task {
+            await web.waitUntilReady()
+            _ = try? await web.webView.evaluateJavaScript(script)
+        }
+    }
+
+    func peerInk(_ ink: InkLive) {
+        drawing.peerInk.add(ink, geometry: { [weak self] in self?.geometry }, color: PeerInkView.color(for: ink.actor.principal))
+    }
+
+    // MARK: Actions
+
+    private func setTool(_ tool: OverlayModel.Tool) {
+        model.tool = tool
+        #if os(iOS)
+        ink?.setTool(tool, pencilOnly: UIDevice.current.userInterfaceIdiom == .pad)
+        #endif
+        if tool == .shapes { web.call("setTool", ["type": "rectangle"]) }
+    }
+
+    private func debugRect() {
+        // Around the anchor row and the three above it (output, not the live prompt below).
+        let w = (geometry?.sceneColumnWidth ?? 10) * 8
+        web.call("debugRect", ["x": 10, "y": -55, "width": Double(w), "height": 70])
+    }
+
+    /// Done: render on device and place in the pane's output.
+    func commit() {
+        guard !model.busy else { return }
+        if model.readOnly { return close() }
+        model.busy = true
+        Task {
+            // A failure keeps the overlay (and the drawing) open with the reason shown.
+            if case .failed = await place() { return }
+            close()
+        }
+    }
+
+    /// What Done did.
+    enum PlaceOutcome {
+        case placed(Placement, Data)
+        /// Nothing drawn: a new drawing was deleted, a reopened placement removed.
+        case empty
+        case failed
+    }
+
+    private func send() {
+        guard !model.busy, let target = drawing.agentTarget() else { return }
+        model.busy = true
+        model.status = "Sending to \(target.name)…"
+        Task {
+            if case .placed(let placement, let png) = await place() {
+                do {
+                    _ = try await drawing.hub.client.sendToAgent(paneId: target.pane, artifactId: placement.artifactId, version: nil, png: png)
+                    if let workspace = drawing.workspace { workspace.apply(.focus(PaneId(target.pane))) }
+                } catch {
+                    model.status = "\(target.name) did not get it: \(Self.describe(error))"
+                    model.busy = false
+                    return
+                }
+            }
+            close()
+        }
+    }
+
+    private func remove() {
+        guard let reopened else { return close() }
+        Task {
+            try? await drawing.hub.client.unplace(placementId: reopened.placementId)
+            drawing.hub.noteRemoved(reopened.placementId, pane: drawing.paneId)
+            close()
+        }
+    }
+
+    private func cancel() {
+        if created, let artifactId {
+            let client = drawing.hub.client
+            Task { try? await client.artifactDelete(artifactId: artifactId) }
+        }
+        close()
+    }
+
+    /// Renders the covered cells to PNG and places it; nil when the scene is empty (then a new
+    /// drawing is deleted and a reopened placement removed).
+    private func place() async -> PlaceOutcome {
+        guard let artifactId, let sync, let geometry, let surface = drawing.surface, let grid = surface.grid else {
+            return fail("The drawing is not ready yet")
+        }
+        web.call("flushNow")
+        _ = await web.value("1")
+        await sync.settle()
+        guard let b = await web.value("canvas.bounds()") as? [String: Any],
+              let x = b["x"] as? Double, let y = b["y"] as? Double, let w = b["width"] as? Double, let h = b["height"] as? Double
+        else {
+            if let reopened {
+                try? await drawing.hub.client.unplace(placementId: reopened.placementId)
+                drawing.hub.noteRemoved(reopened.placementId, pane: drawing.paneId)
+            } else if created {
+                try? await drawing.hub.client.artifactDelete(artifactId: artifactId)
+            }
+            CanvasWebView.log.info("done: empty scene")
+            return .empty
+        }
+        let box = geometry.cells(covering: CGRect(x: x, y: y, width: w, height: h), maxCols: Int(grid.cols))
+        let scale = geometry.zoom * surface.layer.contentsScale
+        guard let png = await web.export(scale: scale, bounds: geometry.sceneRect(of: box))?.data,
+              let top = drawing.tracker.terminal.pinRow(relativeTo: origin, offset: box.row)
+        else {
+            return fail("Could not render the drawing")
+        }
+        sync.setAppState(["overlayRow": box.row])
+        await sync.settle()
+        do {
+            let client = drawing.hub.client
+            let paneId = drawing.paneId
+            let replace = reopened?.placementId
+            let placement = try await anchored(top) { anchor in
+                try await client.placePng(
+                    request: PlaceRequest(
+                        paneId: paneId, artifactId: artifactId, version: nil, anchor: anchor,
+                        col: UInt16(box.col), cols: UInt16(box.cols), rows: UInt16(box.rows), replace: replace),
+                    png: png)
+            }
+            // Show it at once from this device's own render (no round trip for the blob).
+            drawing.hub.seed(hash: placement.image.hash, png: png)
+            if let pixels = DrawingHub.decode(png) { surface.setInlineImage(pixels, key: placement.image.hash) }
+            drawing.hub.noteLocal(placement, replacing: reopened?.placementId)
+            CanvasWebView.log.info("placed \(placement.placementId) \(box.cols)x\(box.rows) at col \(box.col)")
+            return .placed(placement, png)
+        } catch {
+            return fail("Could not place the drawing: \(Self.describe(error))")
+        }
+    }
+
+    /// Runs a request naming `pin`'s row. While the pane is being resized (the software keyboard
+    /// coming up, a divider drag) the daemon's grid can briefly differ from ours and refuse the
+    /// row; the request is retried with the anchor taken again once sizes settle.
+    private func anchored<T>(_ pin: RowPin, _ request: (AnchorRequest) async throws -> T) async throws -> T {
+        var attempt = 0
+        while true {
+            guard let a = drawing.tracker.anchor(of: pin) else { throw ArtifactError.Invalid(message: "that row is gone") }
+            do {
+                return try await request(AnchorRequest(paneId: drawing.paneId, atSeq: a.atSeq, fromBottom: a.fromBottom))
+            } catch ArtifactError.Invalid(let message) where attempt < 5 {
+                attempt += 1
+                CanvasWebView.log.info("anchor refused (\(message, privacy: .public)); retrying")
+                try? await Task.sleep(for: .milliseconds(250 * attempt))
+            }
+        }
+    }
+
+    private func fail(_ message: String) -> PlaceOutcome {
+        CanvasWebView.log.error("done: \(message, privacy: .public)")
+        model.status = message
+        model.busy = false
+        return .failed
+    }
+
+    static func describe(_ error: any Error) -> String {
+        if let error = error as? ArtifactError {
+            switch error {
+            case .Forbidden: return "view only"
+            case .NotAgentPane: return "no agent in that pane"
+            case .Disconnected: return "disconnected"
+            case .NotFound(let message), .TooLarge(let message), .Invalid(let message), .Failed(let message): return message
+            }
+        }
+        return error.localizedDescription
+    }
+}
+
+/// Hosts the overlay over the terminal; lays out on resize.
+final class OverlayContainer: PlatformView {
+    var onLayout: (() -> Void)?
+
+    #if os(iOS)
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        backgroundColor = .clear
+        accessibilityIdentifier = "drawing.overlay"
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?()
+    }
+    #else
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        autoresizingMask = [.width, .height]
+        setAccessibilityIdentifier("drawing.overlay")
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+    #endif
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// A thin accent bar at the anchor row's left edge: where the drawing is pinned.
+final class AnchorMark: PlatformView {
+    #if os(iOS)
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = UIColor(DS.Palette.accent)
+        layer.cornerRadius = 1
+    }
+    #else
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(DS.Palette.accent).cgColor
+        layer?.cornerRadius = 1
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    #endif
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Done / Cancel / Send, Pen or Shapes: one quiet glass capsule at the bottom of the pane.
+struct OverlayToolbar: View {
+    @Bindable var model: OverlayModel
+
+    var body: some View {
+        GlassEffectContainer {
+            HStack(spacing: 8) {
+                if let status = model.status {
+                    Text(status)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 320)
+                        .padding(.leading, 6)
+                }
+                if model.readOnly {
+                    Label("View Only", systemImage: "eye")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                    Button("Close") { model.onCancel() }
+                        .buttonStyle(.glass)
+                        .keyboardShortcut(.cancelAction)
+                } else {
+                    if model.showsPen {
+                        Picker("Tool", selection: Binding(get: { model.tool }, set: { model.onTool($0) })) {
+                            Image(systemName: "pencil.tip").tag(OverlayModel.Tool.pen)
+                                .accessibilityLabel("Pen")
+                            Image(systemName: "square.on.circle").tag(OverlayModel.Tool.shapes)
+                                .accessibilityLabel("Shapes")
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 96)
+                        .accessibilityIdentifier("drawing.tool")
+                    }
+                    #if DEBUG
+                    if UserDefaults.standard.bool(forKey: "drawingDebug") {
+                        Button("Rect") { model.onDebugRect() }
+                            .buttonStyle(.glass)
+                            .accessibilityIdentifier("drawing.debugRect")
+                    }
+                    #endif
+                    if model.isReopened {
+                        Button(role: .destructive) { model.onRemove() } label: { Image(systemName: "trash") }
+                            .buttonStyle(.glass)
+                            .accessibilityLabel("Remove Drawing")
+                            .accessibilityIdentifier("drawing.remove")
+                    }
+                    Button("Cancel") { model.onCancel() }
+                        .buttonStyle(.glass)
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("drawing.cancel")
+                    if let agent = model.agentName {
+                        Button { model.onSend() } label: {
+                            Label("Send to \(agent)", systemImage: "paperplane")
+                        }
+                        .buttonStyle(.glass)
+                        .accessibilityIdentifier("drawing.send")
+                    }
+                    Button("Done") { model.onDone() }
+                        .buttonStyle(.glassProminent)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .accessibilityIdentifier("drawing.done")
+                }
+            }
+            .disabled(model.busy)
+            .padding(6)
+            .floatingCapsule()
+        }
+        .fixedSize()
+    }
+}

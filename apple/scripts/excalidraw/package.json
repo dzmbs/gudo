@@ -1,0 +1,14 @@
+{
+  "name": "canvas-bundle",
+  "private": true,
+  "description": "Offline Excalidraw bundle for the app's draw overlay and canvas panes (apple/scripts/build-excalidraw.sh).",
+  "license": "MIT",
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10"
+  }
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<!-- Offline: everything comes from the app bundle (custom scheme); no network. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:">
+<title>Canvas</title>
+<link rel="stylesheet" href="canvas.css">
+<style>
+  html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body { -webkit-user-select: none; -webkit-touch-callout: none; }
+  /* Overlay: the terminal shows through; the host draws Done / Cancel / Send. */
+  body[data-mode="overlay"] .excalidraw,
+  body[data-mode="overlay"] .excalidraw .excalidraw-container,
+  body[data-mode="canvas"] .excalidraw,
+  body[data-mode="canvas"] .excalidraw .excalidraw-container { background: transparent !important; }
+  body[data-mode="overlay"] .main-menu-trigger,
+  body[data-mode="overlay"] .help-icon,
+  body[data-mode="overlay"] .default-sidebar-trigger,
+  body[data-mode="overlay"] .sidebar-trigger,
+  body[data-mode="overlay"] .zoom-actions,
+  body[data-mode="overlay"] .welcome-screen-center,
+  body[data-mode="overlay"] .welcome-screen-decor,
+  body[data-mode="overlay"] .HintViewer,
+  body .excalidraw .help-icon,
+  body .excalidraw .welcome-screen-decor { display: none !important; }
+</style>
+<script src="boot.js"></script>
+</head>
+<body data-mode="overlay" data-theme="dark">
+<div id="root"></div>
+<script src="canvas.js"></script>
+</body>
+</html>

@@ -266,6 +266,13 @@ pub enum PaneLaunch {
         /// Working directory.
         cwd: Option<String>,
     },
+    /// A canvas pane (no process) showing a drawing or Excalidraw scene; `nil` has the daemon
+    /// create a new Excalidraw scene (docs/DAEMON.md §7.2, §7.11). Which leaves are canvases
+    /// comes from `ArtifactEvent.canvases`.
+    Canvas {
+        /// The artifact to show.
+        artifact_id: Option<u64>,
+    },
 }
 
 impl From<PaneLaunch> for proto::PaneLaunch {
@@ -277,6 +284,9 @@ impl From<PaneLaunch> for proto::PaneLaunch {
                 agent: agent.into(),
                 resume,
                 cwd,
+            },
+            PaneLaunch::Canvas { artifact_id } => Self::Canvas {
+                artifact_id: artifact_id.map(proto::ArtifactId),
             },
         }
     }

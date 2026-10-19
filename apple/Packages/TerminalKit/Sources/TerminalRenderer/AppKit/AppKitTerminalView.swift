@@ -270,7 +270,8 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     public func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(copy(_:)): surface.terminal.selection != nil
-        case #selector(paste(_:)): NSPasteboard.general.string(forType: .string) != nil
+        case #selector(paste(_:)):
+            NSPasteboard.general.string(forType: .string) != nil || (onPasteAttachment != nil && Self.hasAttachment(NSPasteboard.general))
         case #selector(selectAll(_:)): true
         default: true
         }
@@ -283,8 +284,47 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     }
 
     @objc public func paste(_ sender: Any?) {
+        // Images and files (no text) go to the host: a drawing artifact placed in the pane.
+        if let onPasteAttachment, Self.hasAttachment(NSPasteboard.general), onPasteAttachment(NSPasteboard.general) { return }
         guard let text = NSPasteboard.general.string(forType: .string) else { return }
         pasteText(text)
+    }
+
+    // MARK: Attachments (images, .excalidraw files)
+
+    /// Handles a paste whose pasteboard holds an image or a file and no text; returns whether it
+    /// took it. Setting it also accepts drops of images and files onto the view
+    /// (`onDropAttachment`).
+    public var onPasteAttachment: ((NSPasteboard) -> Bool)? {
+        didSet { updateDragTypes() }
+    }
+
+    /// Handles images and files dropped on the view at a point; returns whether it took them.
+    public var onDropAttachment: ((NSPasteboard, CGPoint) -> Bool)? {
+        didSet { updateDragTypes() }
+    }
+
+    static func hasAttachment(_ pasteboard: NSPasteboard) -> Bool {
+        // Files (the host decides which it takes), or an image with no text alongside.
+        if pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) { return true }
+        return pasteboard.string(forType: .string) == nil && pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
+    }
+
+    private func updateDragTypes() {
+        if onDropAttachment != nil {
+            registerForDraggedTypes([.fileURL, .png, .tiff, NSPasteboard.PasteboardType("public.jpeg")])
+        } else {
+            unregisterDraggedTypes()
+        }
+    }
+
+    override public func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        onDropAttachment != nil && Self.hasAttachment(sender.draggingPasteboard) ? .copy : []
+    }
+
+    override public func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard let onDropAttachment else { return false }
+        return onDropAttachment(sender.draggingPasteboard, convert(sender.draggingLocation, from: nil))
     }
 
     @objc override public func selectAll(_ sender: Any?) {

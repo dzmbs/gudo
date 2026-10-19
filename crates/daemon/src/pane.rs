@@ -321,6 +321,8 @@ impl Pane {
         vt.term
             .resize(size.cols, size.rows)
             .map_err(io::Error::other)?;
+        let vt = &mut *vt;
+        vt.scroll.resized(&mut vt.term);
         // Inside the Vt lock, so no output can be fed between the record and the ioctl: every
         // byte before `at` was produced for the old size as far as the VT is concerned.
         self.pty.resize(win_size(size))?;

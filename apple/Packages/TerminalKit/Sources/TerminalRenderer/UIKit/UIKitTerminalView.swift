@@ -169,7 +169,9 @@ public final class TerminalView: UIView {
     override public var accessibilityElements: [Any]? {
         get {
             screenElement.accessibilityFrameInContainerSpace = bounds
-            return [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
+            // Views hosts add over the grid (the draw overlay, placement markers) come first.
+            let hosted = subviews.filter { $0 !== startHandle && $0 !== endHandle && !$0.isHidden }.reversed()
+            return Array(hosted) + [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
         }
         set {}
     }
@@ -545,7 +547,7 @@ public final class TerminalView: UIView {
     override public func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
         case #selector(copy(_:)): surface.terminal.selection != nil
-        case #selector(paste(_:)): UIPasteboard.general.hasStrings
+        case #selector(paste(_:)): UIPasteboard.general.hasStrings || (onPasteAttachment != nil && UIPasteboard.general.hasImages)
         case #selector(selectAll(_:)): true
         default: super.canPerformAction(action, withSender: sender)
         }
@@ -558,9 +560,18 @@ public final class TerminalView: UIView {
     }
 
     override public func paste(_ sender: Any?) {
+        // An image (and no text) goes to the host: a drawing artifact placed in the pane.
+        if let onPasteAttachment, !UIPasteboard.general.hasStrings, UIPasteboard.general.hasImages,
+           onPasteAttachment(UIPasteboard.general)
+        {
+            return
+        }
         guard let text = UIPasteboard.general.string else { return }
         pasteText(text)
     }
+
+    /// Handles a paste of an image with no text; returns whether it took it.
+    public var onPasteAttachment: ((UIPasteboard) -> Bool)?
 
     override public func selectAll(_ sender: Any?) {
         surface.terminal.selectAll()

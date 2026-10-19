@@ -248,6 +248,7 @@ prefixed so they do not shadow Swift names: `DrawElement`, `DrawElementKind`
 | `importToPane(paneId:name:data:) -> Placement` | pasted / dropped image or `.excalidraw` file |
 | `sendToAgent(paneId:artifactId:version:png:) -> SentToAgent` | `ArtifactError.NotAgentPane` for a pane without an agent |
 | `canvasPanes(sessionId:)` | canvas leaves, as last pushed (`.canvases`) |
+| `op(op: .split(paneId:axis:launch: .canvas(artifactId:)))` | a canvas split (`PaneLaunch.canvas`; `nil` = a new Excalidraw scene) |
 
 `ArtifactEvent`: `created, changed(info:batch:), info, deleted, ink, canvases, excalidraw,
 placed, unplaced, synced(artifactId:version:)`.
