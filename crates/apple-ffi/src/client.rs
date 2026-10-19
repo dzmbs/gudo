@@ -9,9 +9,9 @@ use tokio::sync::oneshot;
 
 use crate::bytes::Bytes;
 use crate::types::{
-    AgentKind, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent, LayoutOp, Links,
-    MouseEvent, OpOutcome, PaneMeta, PaneSize, RpcError, SearchPage, SearchQuery, SessionLayout,
-    SessionSummary,
+    AgentKind, AttachVia, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent,
+    LayoutOp, Links, MouseEvent, OpErrorCode, OpOutcome, PaneMeta, PaneSize, RpcError, SearchPage,
+    SearchQuery, SessionLayout, SessionSummary,
 };
 use crate::ws_types::{ForwardInfo, ForwardTarget, WorkspaceError};
 use crate::{on_runtime, runtime};
@@ -113,6 +113,17 @@ pub enum ClientEvent {
     Attached {
         /// The session.
         session_id: u64,
+        /// How the daemon chose it.
+        via: AttachVia,
+        /// The session asked for, when it no longer exists.
+        missing: Option<u64>,
+    },
+    /// Nothing to attach to (a guest whose session closed), or no session could be created.
+    AttachFailed {
+        /// Machine-readable reason.
+        code: OpErrorCode,
+        /// Why, in words.
+        message: String,
     },
     /// The attached session's layout.
     Layout {
@@ -275,8 +286,18 @@ impl From<client_core::ClientEvent> for ClientEvent {
             E::Sessions { sessions } => Self::Sessions {
                 sessions: sessions.into_iter().map(Into::into).collect(),
             },
-            E::Attached { session_id } => Self::Attached {
+            E::Attached {
+                session_id,
+                via,
+                missing,
+            } => Self::Attached {
                 session_id: session_id.0,
+                via: via.into(),
+                missing: missing.map(|s| s.0),
+            },
+            E::AttachFailed { code, message } => Self::AttachFailed {
+                code: code.into(),
+                message,
             },
             E::Layout { layout } => Self::Layout {
                 layout: layout.into(),

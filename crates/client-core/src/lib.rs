@@ -44,9 +44,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use iroh::endpoint::Connection;
 use proto::{
-    AgentKind, ClientCtl, CommandList, CommandMark, CommandOutput, Decide, EchoHintAt,
-    FullKeyEvent, InputPayload, LayoutOp, Links, MouseEvent, OpOutcome, PaneId, PaneMeta, PaneSize,
-    RpcError, SearchPage, SearchQuery, Seq, SessionId, SessionLayout, SessionSummary, Ticket,
+    AgentKind, AttachVia, ClientCtl, CommandList, CommandMark, CommandOutput, Decide, EchoHintAt,
+    FullKeyEvent, InputPayload, LayoutOp, Links, MouseEvent, OpError, OpOutcome, PaneId, PaneMeta,
+    PaneSize, RpcError, SearchPage, SearchQuery, Seq, SessionId, SessionLayout, SessionSummary,
+    Ticket,
 };
 use tokio::runtime::Runtime;
 use tokio::sync::{Notify, mpsc};
@@ -158,6 +159,18 @@ pub enum ClientEvent {
     Attached {
         /// The session.
         session_id: SessionId,
+        /// How the daemon chose it ([`AttachVia::Requested`] from daemons that do not say).
+        via: AttachVia,
+        /// The session asked for, when it no longer exists.
+        missing: Option<SessionId>,
+    },
+    /// The daemon had nothing to attach to (a guest whose session closed) or could not create
+    /// a session. Daemons without `AttachResult` report it as a failed op 0, translated here.
+    AttachFailed {
+        /// Machine-readable reason.
+        code: OpError,
+        /// Why, in words.
+        message: String,
     },
     /// The attached session's layout.
     Layout {

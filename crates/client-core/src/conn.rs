@@ -8,8 +8,9 @@ use std::time::Duration;
 use iroh::endpoint::{Connection, ReadExactError, RecvStream, SendStream, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
 use proto::{
-    Bulk, Caps, ClientCtl, ClientInput, ForwardReply, Hello, Input, InputSeq, LinkClass, PaneId,
-    PaneOutput, ResumePoint, Seq, ServerCtl, SignedGrant, StreamHeader,
+    AttachFailure, AttachVia, Attachment, Bulk, Caps, ClientCtl, ClientInput, ForwardReply, Hello,
+    Input, InputSeq, LinkClass, OpOutcome, PaneId, PaneOutput, ResumePoint, Seq, ServerCtl,
+    SignedGrant, StreamHeader,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -236,7 +237,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
-        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS,
+        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS | Caps::ATTACH_RESULT,
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
     };
@@ -438,8 +439,29 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             ServerCtl::Sessions { sessions } => ClientEvent::Sessions { sessions },
             ServerCtl::Attached { session_id } => {
                 lock(&inner.wanted).session = Some(session_id);
-                ClientEvent::Attached { session_id }
+                ClientEvent::Attached {
+                    session_id,
+                    via: AttachVia::Requested,
+                    missing: None,
+                }
             }
+            ServerCtl::AttachResult(Ok(Attachment {
+                session_id,
+                via,
+                missing,
+            })) => {
+                lock(&inner.wanted).session = Some(session_id);
+                ClientEvent::Attached {
+                    session_id,
+                    via,
+                    missing,
+                }
+            }
+            ServerCtl::AttachResult(Err(AttachFailure { code, message }))
+            | ServerCtl::OpResult {
+                op_id: 0,
+                outcome: OpOutcome::Failed { code, message },
+            } => ClientEvent::AttachFailed { code, message },
             ServerCtl::LayoutChanged(layout) => ClientEvent::Layout { layout },
             ServerCtl::PaneMeta(meta) => ClientEvent::PaneMeta { meta },
             ServerCtl::PaneClosed { pane_id } => {

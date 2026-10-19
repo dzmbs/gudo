@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use client_core::ClientConfig;
-use client_core::proto::{Axis, LayoutOp, OpOutcome, PaneLaunch};
+use client_core::proto::{AttachVia, Axis, LayoutOp, OpOutcome, PaneLaunch, SessionId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::support::{TestClient, leaves, ms, shape, start, ticket};
@@ -33,6 +33,37 @@ async fn attach_type_and_see_echo() {
     );
     assert_eq!(daemon.paired_devices(), 1);
     drop(c);
+    daemon.shutdown().await;
+}
+
+/// A client that remembered a session the daemon no longer has (closed elsewhere, or lost with
+/// the daemon's state) lands in the most recent one, or a new one, and is told which.
+#[tokio::test(flavor = "multi_thread")]
+async fn attach_to_a_gone_session_falls_back_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let gone = SessionId(99);
+
+    let mut first = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    first.client.attach(Some(gone));
+    first.until("attached", |c| !c.attached.is_empty()).await;
+    let (created, via, missing) = first.attached[0];
+    assert_eq!((via, missing), (AttachVia::Created, Some(gone)));
+    first.until("layout", |c| c.layout.is_some()).await;
+
+    let mut second = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    second.client.attach(Some(gone));
+    second.until("attached", |c| !c.attached.is_empty()).await;
+    assert_eq!(
+        second.attached[0],
+        (created, AttachVia::MostRecent, Some(gone))
+    );
+
+    let mut third = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    third.client.attach(Some(created));
+    third.until("attached", |c| !c.attached.is_empty()).await;
+    assert_eq!(third.attached[0], (created, AttachVia::Requested, None));
+    assert!(first.attach_failed.is_empty() && second.attach_failed.is_empty());
     daemon.shutdown().await;
 }
 
