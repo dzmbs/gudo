@@ -5,7 +5,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use client_core::proto::{
-    LayoutNode, LayoutOp, OpOutcome, PaneId, PaneSize, SessionLayout, TabLayout,
+    AttachVia, LayoutNode, LayoutOp, OpOutcome, PaneId, PaneSize, SessionId, SessionLayout,
+    TabLayout,
 };
 use client_core::{
     Client, ClientConfig, ClientEvent, EventQueue, MultiplayerEvent, MultiplayerEventQueue,
@@ -74,6 +75,10 @@ pub struct TestClient {
     pub log: Vec<String>,
     /// Refusals (`ClientEvent::Refused` reasons).
     pub refused: Vec<String>,
+    /// Attach answers: (session, how it was chosen, the requested session that was gone).
+    pub attached: Vec<(SessionId, AttachVia, Option<SessionId>)>,
+    /// Attach failures (`ClientEvent::AttachFailed` messages).
+    pub attach_failed: Vec<String>,
     mp_events: UnboundedReceiver<MultiplayerEvent>,
     /// Multiplayer pushes received so far.
     pub mp: Vec<MultiplayerEvent>,
@@ -128,6 +133,8 @@ impl TestClient {
             metas: HashMap::new(),
             log: Vec::new(),
             refused: Vec::new(),
+            attached: Vec::new(),
+            attach_failed: Vec::new(),
             mp_events,
             mp: Vec::new(),
         }
@@ -166,6 +173,12 @@ impl TestClient {
                 self.metas.insert(meta.pane_id, meta);
             }
             ClientEvent::Refused { reason } => self.refused.push(reason),
+            ClientEvent::Attached {
+                session_id,
+                via,
+                missing,
+            } => self.attached.push((session_id, via, missing)),
+            ClientEvent::AttachFailed { message, .. } => self.attach_failed.push(message),
             _ => {}
         }
     }

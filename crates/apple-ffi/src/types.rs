@@ -477,6 +477,39 @@ pub enum OpErrorCode {
     Forbidden,
 }
 
+impl From<proto::OpError> for OpErrorCode {
+    fn from(code: proto::OpError) -> Self {
+        match code {
+            proto::OpError::NotFound => Self::NotFound,
+            proto::OpError::NameTaken => Self::NameTaken,
+            proto::OpError::SpawnFailed => Self::SpawnFailed,
+            proto::OpError::Invalid => Self::Invalid,
+            proto::OpError::Forbidden => Self::Forbidden,
+        }
+    }
+}
+
+/// How the daemon chose the session a connection attached to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum AttachVia {
+    /// The session the client asked for.
+    Requested,
+    /// The most recently used session.
+    MostRecent,
+    /// A new session, because there was none.
+    Created,
+}
+
+impl From<proto::AttachVia> for AttachVia {
+    fn from(via: proto::AttachVia) -> Self {
+        match via {
+            proto::AttachVia::Requested => Self::Requested,
+            proto::AttachVia::MostRecent => Self::MostRecent,
+            proto::AttachVia::Created => Self::Created,
+        }
+    }
+}
+
 /// The result of a layout op.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum OpOutcome {
@@ -531,13 +564,7 @@ impl From<proto::OpOutcome> for OpOutcome {
                 pane_id: pane_id.0,
             },
             proto::OpOutcome::Failed { code, message } => Self::Failed {
-                code: match code {
-                    proto::OpError::NotFound => OpErrorCode::NotFound,
-                    proto::OpError::NameTaken => OpErrorCode::NameTaken,
-                    proto::OpError::SpawnFailed => OpErrorCode::SpawnFailed,
-                    proto::OpError::Invalid => OpErrorCode::Invalid,
-                    proto::OpError::Forbidden => OpErrorCode::Forbidden,
-                },
+                code: code.into(),
                 message,
             },
         }

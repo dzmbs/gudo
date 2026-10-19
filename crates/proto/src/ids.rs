@@ -262,5 +262,7 @@ bitset! {
         ECHO_PREDICTION = 2;
         /// Understands drawings and images (`ServerCtl::Artifact`, canvas panes).
         ARTIFACTS = 3;
+        /// Understands `ServerCtl::AttachResult` (how the session was chosen, or why not).
+        ATTACH_RESULT = 4;
     }
 }

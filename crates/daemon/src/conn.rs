@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use proto::{
     Actor, ArtifactError, ArtifactEvent, ArtifactInfo, ArtifactRequest, ArtifactResponse,
-    AuditKind, BlobHeader, BlobReply, Bulk, ClientCtl, ClientInput, DeviceId, ForwardReply, Hello,
-    InputPayload, InputRejectReason, LeaseRequestKind, MpError, MpRequest, MpResponse, PaneId,
-    PaneLaunch, PaneSize, RefuseReason, ResumePoint, RpcError, Scope, Seq, ServerCtl, SessionId,
-    SignedGrant, StreamHeader, SubscribeMode, TransferReply, WIRE_VERSION, Welcome,
-    WorkspaceRequest, WorkspaceResponse, WsError,
+    AttachFailure, AttachVia, Attachment, AuditKind, BlobHeader, BlobReply, Bulk, Caps, ClientCtl,
+    ClientInput, DeviceId, ForwardReply, Hello, InputPayload, InputRejectReason, LeaseRequestKind,
+    MpError, MpRequest, MpResponse, PaneId, PaneLaunch, PaneSize, RefuseReason, ResumePoint,
+    RpcError, Scope, Seq, ServerCtl, SessionId, SignedGrant, StreamHeader, SubscribeMode,
+    TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest, WorkspaceResponse, WsError,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
@@ -56,6 +56,8 @@ struct Client {
     actor: Actor,
     /// Roles and scope, fixed at the handshake; re-validated on every message.
     authz: Authz,
+    /// Optional features the client announced in its `Hello`.
+    caps: Caps,
     ctl: mpsc::UnboundedSender<ServerCtl>,
     state: Mutex<ConnState>,
     /// The connection's `bulk` stream, opened on first use.
@@ -120,6 +122,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         conn: conn.clone(),
         actor: authz.actor,
         authz,
+        caps: hello.caps,
         ctl,
         state: Mutex::new(ConnState::default()),
         bulk: tokio::sync::Mutex::new(None),
@@ -1556,56 +1559,65 @@ impl Client {
         })
     }
 
+    /// Answers an `Attach` that found nothing to attach to. Clients without
+    /// [`Caps::ATTACH_RESULT`] get the older failed `OpResult` with op id 0.
+    fn attach_failed(&self, code: proto::OpError, message: String) {
+        self.send(if self.caps.contains(Caps::ATTACH_RESULT) {
+            ServerCtl::AttachResult(Err(AttachFailure { code, message }))
+        } else {
+            ServerCtl::OpResult {
+                op_id: 0,
+                outcome: proto::OpOutcome::Failed { code, message },
+            }
+        });
+    }
+
     fn attach(&self, requested: Option<SessionId>) {
         let scope = self.authz.scope;
         let exists = requested.is_some_and(|s| {
             let known = lock(&self.core.layout).session(s).is_some();
             known && self.core.session_visible(s, scope)
         });
-        let recent = self.core.recent_session_in(scope);
-        let session = match requested {
-            Some(s) if exists => s,
-            Some(_) => {
-                self.send(ServerCtl::OpResult {
-                    op_id: 0,
-                    outcome: proto::OpOutcome::Failed {
-                        code: proto::OpError::NotFound,
-                        message: "no such session".into(),
-                    },
-                });
-                return;
-            }
-            None => match recent {
-                Some(s) => s,
-                None if self.allow(Need::Own, Target::Daemon).is_err() => {
-                    self.send(ServerCtl::OpResult {
-                        op_id: 0,
-                        outcome: proto::OpOutcome::Failed {
-                            code: proto::OpError::NotFound,
-                            message: "nothing to attach to in this grant's scope".into(),
-                        },
-                    });
+        // A requested session that is gone falls back like `None` does, so a client that
+        // remembered a closed session still lands somewhere (it is told which one).
+        let missing = requested.filter(|_| !exists);
+        let (session, via) = if let Some(s) = requested.filter(|_| exists) {
+            (s, AttachVia::Requested)
+        } else if let Some(s) = self.core.recent_session_in(scope) {
+            (s, AttachVia::MostRecent)
+        } else if self.allow(Need::Own, Target::Daemon).is_err() {
+            self.attach_failed(
+                proto::OpError::NotFound,
+                "nothing to attach to in this grant's scope".into(),
+            );
+            return;
+        } else {
+            match self
+                .core
+                .create_session(String::new(), PaneLaunch::Shell { cwd: None })
+            {
+                Ok((s, _, _)) => (s, AttachVia::Created),
+                Err((code, message)) => {
+                    self.attach_failed(code, message);
                     return;
                 }
-                None => match self
-                    .core
-                    .create_session(String::new(), PaneLaunch::Shell { cwd: None })
-                {
-                    Ok((s, _, _)) => s,
-                    Err((code, message)) => {
-                        self.send(ServerCtl::OpResult {
-                            op_id: 0,
-                            outcome: proto::OpOutcome::Failed { code, message },
-                        });
-                        return;
-                    }
-                },
-            },
+            }
         };
+        if let Some(gone) = missing {
+            tracing::info!(conn = %self.id, requested = %gone, attached = %session, "requested session is gone; attached another");
+        }
         lock(&self.state).session = Some(session);
         self.core.attach(self.id, session);
-        self.send(ServerCtl::Attached {
-            session_id: session,
+        self.send(if self.caps.contains(Caps::ATTACH_RESULT) {
+            ServerCtl::AttachResult(Ok(Attachment {
+                session_id: session,
+                via,
+                missing,
+            }))
+        } else {
+            ServerCtl::Attached {
+                session_id: session,
+            }
         });
         let Some(layout) = self.core.layout_for(session, scope) else {
             return;

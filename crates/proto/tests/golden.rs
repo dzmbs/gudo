@@ -519,6 +519,7 @@ fn every_message_matches_its_frozen_bytes() {
     );
     terminal_completeness(&mut c);
     workspace_messages(&mut c);
+    attach_results(&mut c);
     multiplayer_messages(&mut c);
     artifact_messages(&mut c);
     artifact_messages_2(&mut c);
@@ -527,6 +528,37 @@ fn every_message_matches_its_frozen_bytes() {
         c.failures.is_empty(),
         "wire format changed:\n{}",
         c.failures.join("\n")
+    );
+}
+
+/// `ServerCtl::AttachResult` (appended after `Assist`, variant 0x26), for clients with
+/// `Caps::ATTACH_RESULT`.
+fn attach_results(c: &mut Checker) {
+    c.check(
+        "ServerCtl::AttachResult(Requested)",
+        ServerCtl::AttachResult(Ok(Attachment {
+            session_id: SESSION,
+            via: AttachVia::Requested,
+            missing: None,
+        })),
+        "06000000012600010000",
+    );
+    c.check(
+        "ServerCtl::AttachResult(MostRecent, missing)",
+        ServerCtl::AttachResult(Ok(Attachment {
+            session_id: SESSION,
+            via: AttachVia::MostRecent,
+            missing: Some(SessionId(7)),
+        })),
+        "0700000001260001010107",
+    );
+    c.check(
+        "ServerCtl::AttachResult(Err)",
+        ServerCtl::AttachResult(Err(AttachFailure {
+            code: OpError::NotFound,
+            message: "gone".into(),
+        })),
+        "090000000126010004676f6e65",
     );
 }
 
