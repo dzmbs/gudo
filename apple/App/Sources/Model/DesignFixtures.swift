@@ -30,6 +30,35 @@ enum DesignFixtures {
         default:
             break
         }
+        // left as it is.
+        if !LaunchOptions.mock {
+            // Screenshot seeds (apple/scripts/w3-screenshots.sh): text typed into the focused
+            // pane, an agent started with a first prompt.
+            let defaults = UserDefaults.standard
+            if let text = defaults.string(forKey: "typeOnStart"), let id = workspace.focusedPane, let pane = workspace.panes[id] {
+                Data(text.replacingOccurrences(of: "\\n", with: "\r").utf8).withUnsafeBytes { pane.backend.write($0) }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            if let prompt = defaults.string(forKey: "seedAgent"), let host = workspace.hostId {
+                _ = try? await model.agents.launch(AgentLaunchRequest(agent: .claude, hostId: host, prompt: prompt))
+                try? await Task.sleep(for: .seconds(4))
+            }
+            switch screen {
+            case "inbox":
+                model.destination = .inbox
+                return
+            case "files", "diff", "links", "browser", "launchAgent":
+                if let route = SheetRoute(rawValue: screen) { model.sheet = route }
+                return
+            case "editor":
+                model.openEditor()
+                return
+            case "seed":
+                return
+            default:
+                break
+            }
+        }
 
         splits(workspace)
         switch screen {

@@ -41,9 +41,14 @@ enum PaletteCommands {
         let tools: [(String, String, String, [String]?, () -> Void)] = [
             ("find", "Find in Scrollback", "magnifyingglass", ["⌘", "F"], { model.isSearchShown = true }),
             ("links", "Links & Paths", "link", ["⇧", "⌘", "L"], { model.sheet = .links }),
+            ("copy-output", "Copy Last Command Output", "doc.on.clipboard", nil, { Task { await model.copyLastCommandOutput() } }),
             ("diff", "Review Changes", "plusminus", nil, { model.sheet = .diff }),
+            ("editor", "Open in VS Code", "chevron.left.forwardslash.chevron.right", nil, { model.openEditor() }),
             ("files", "Browse Files", "folder", nil, { model.sheet = .files }),
-            ("browser", "Open Browser", "safari", nil, { model.sheet = .browser }),
+            ("browser", "Dev Servers & Ports", "network", nil, {
+                model.browserURL = nil
+                model.sheet = .browser
+            }),
             ("share", "Share Session", "person.crop.circle.badge.plus", nil, { model.sheet = .invite }),
             ("join", "Join a Session…", "person.2.badge.plus", nil, { model.joinInvite = ""; model.sheet = .join }),
             ("agent", "New Agent", "sparkle", nil, { model.sheet = .launchAgent }),
@@ -54,6 +59,13 @@ enum PaletteCommands {
         ]
         for (id, title, image, keys, run) in tools {
             commands.append(PaletteCommand(id: id, title: title, section: "Go", systemImage: image, shortcut: keys, action: run))
+        }
+
+        for port in model.ports.ports where port.isHTTP {
+            commands.append(PaletteCommand(
+                id: "port-\(port.port)", title: "Open localhost:\(port.port)",
+                subtitle: [port.process, port.pane].compactMap { $0 }.joined(separator: " · "), section: "Ports",
+                systemImage: "globe") { Task { await model.openPort(port) } })
         }
 
         for host in model.hosts.hosts {

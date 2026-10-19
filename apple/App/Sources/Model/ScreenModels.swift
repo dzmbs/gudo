@@ -111,16 +111,56 @@ nonisolated struct AgentItem: Identifiable, Hashable, Sendable {
     var request: Request?
     /// One-line result summary for done/failed items.
     var summary: String?
+    /// The host and pane it runs in (live items); nil for mock items and for finished history
+    /// whose pane is gone.
+    var hostId: String?
+    var paneId: UInt64?
+    /// The host's attention feed has not shown this on any device yet.
+    var unseen = false
+    /// A live agent pane: Reply types into it through the composer path.
+    var canReply = false
+    /// A long command that finished unseen (attention feed), not an agent.
+    var isCommand = false
+}
+
+/// A host an agent can start on (a connected daemon).
+nonisolated struct LaunchHost: Identifiable, Hashable, Sendable {
+    var id: String
+    var name: String
+    /// Where a plain launch runs: the focused pane's directory there.
+    var directory: String?
+}
+
+/// What "New Agent" starts.
+nonisolated struct AgentLaunchRequest: Hashable, Sendable {
+    var agent: AgentKind
+    var hostId: String
+    var prompt: String
+    /// Run in a fresh git worktree (its own branch and `PORT`).
+    var worktree = false
+    /// The worktree's branch; nil lets the host name one (`unnamed/<word>-<hex>`).
+    var branch: String?
 }
 
 @MainActor
 protocol AgentFeed: AnyObject, Observable {
     var items: [AgentItem] { get }
+    /// Unseen attention items per host name, only hosts with any.
+    var unseenByHost: [String: Int] { get }
+    /// Connected daemons an agent can start on.
+    var launchHosts: [LaunchHost] { get }
     func approve(_ id: AgentItem.ID)
     func deny(_ id: AgentItem.ID)
-    func reply(_ id: AgentItem.ID, text: String)
+    /// Types `text` into the agent's pane (composer path) and submits it.
+    func reply(_ id: AgentItem.ID, text: String) async throws
     func markDone(_ id: AgentItem.ID)
-    func launch(_ agent: AgentKind, host: String, prompt: String)
+    /// The inbox is on screen: what it shows counts as seen, on every device.
+    func markSeen()
+    /// Shows the agent's pane in this window.
+    func open(_ id: AgentItem.ID)
+    /// Starts Claude Code or Codex in a new pane; returns a note when the first prompt could not
+    /// be typed (the pane runs either way).
+    func launch(_ request: AgentLaunchRequest) async throws -> String?
 }
 
 // MARK: - Panes: status, links, search
@@ -139,11 +179,36 @@ nonisolated struct DetectedLink: Identifiable, Hashable, Sendable {
     var kind: Kind
     /// As printed, e.g. `src/app.rs:42:7` or `https://…`.
     var text: String
-    /// Line in the scrollback it was last seen on (negative = above the viewport).
+    /// Line in the scrollback it was last seen on (negative = above the viewport; 0 = on screen).
     var line: Int
+    /// What it points at: the URL, or the path resolved against the pane's directory.
+    var target: String? = nil
+    /// `path:line:col` positions.
+    var targetLine: Int? = nil
+    var targetColumn: Int? = nil
+    /// For a path: whether it exists on the host (nil: not checked).
+    var exists: Bool? = nil
+    /// Found in the output of a finished command rather than on screen.
+    var fromCommand = false
+
+    /// The resolved target, else the text as printed.
+    var resolved: String { target ?? text }
 }
 
-// MARK: - Files and diffs
+/// The focused pane's links, its last command's output, and search over its whole scrollback
+/// (the daemon's pane RPCs, DAEMON.md "Search and links").
+@MainActor
+protocol LinkSource: AnyObject {
+    /// Whether the focused pane can answer (a daemon pane).
+    var isAvailable: Bool { get }
+    func links() async throws -> [DetectedLink]
+    /// The last finished command and its output (`command`, `output`).
+    func lastCommandOutput() async throws -> (command: String?, output: String)
+    /// How many matches `needle` has in the focused pane's scrollback (nil when unknown).
+    func countMatches(_ needle: String) async throws -> Int?
+}
+
+// MARK: - Files
 
 nonisolated struct FileEntry: Identifiable, Hashable, Sendable {
     enum GitStatus: String, Sendable { case modified = "M", added = "A", deleted = "D", untracked = "U", renamed = "R" }
@@ -154,14 +219,67 @@ nonisolated struct FileEntry: Identifiable, Hashable, Sendable {
     var size: Int64?
     var modified: Date?
     var git: GitStatus?
+    var isSymlink = false
+    var isHidden = false
+}
+
+/// What a file shows in the preview.
+nonisolated enum FilePreview: Hashable, Sendable {
+    /// UTF-8 text (`truncated` past the first MiB).
+    case text(String, truncated: Bool)
+    /// An image's bytes.
+    case image(Data)
+    /// Neither: name, size and a download.
+    case binary(size: Int64)
+}
+
+/// A directory watch; `cancel()` ends it.
+@MainActor
+final class FileWatch {
+    private let onCancel: () -> Void
+    private var cancelled = false
+
+    init(onCancel: @escaping () -> Void) {
+        self.onCancel = onCancel
+    }
+
+    func cancel() {
+        guard !cancelled else { return }
+        cancelled = true
+        onCancel()
+    }
 }
 
 @MainActor
 protocol FileSource: AnyObject {
+    /// Where browsing starts: the focused pane's directory (`~` without one).
     var root: String { get }
+    /// The host the files are on, for titles ("studio").
+    var hostName: String { get }
+    /// Nil when files can be browsed; else why not, in words.
+    var unavailableReason: String? { get }
     func list(_ directory: String) async throws -> [FileEntry]
     func read(_ path: String) async throws -> String
+    func preview(_ path: String) async throws -> FilePreview
+    func mkdir(_ path: String) async throws
+    func rename(_ path: String, to name: String) async throws
+    /// Moves to the host's trash (`~/.Trash`, the XDG trash).
+    func trash(_ path: String) async throws
+    /// Uploads a local file into `directory`; `progress` gets 0…1.
+    func upload(_ local: URL, to directory: String, progress: @escaping @MainActor (Double) -> Void) async throws
+    /// Downloads into a temporary file and returns it (share sheet / Save to Files).
+    func download(_ path: String, progress: @escaping @MainActor (Double) -> Void) async throws -> URL
+    /// Calls `onChange` when the directory's entries change (not recursive).
+    func watch(_ directory: String, onChange: @escaping @MainActor () -> Void) async -> FileWatch?
+    /// A path as the user reads it: the host's home as `~`.
+    func display(_ path: String) -> String
 }
+
+extension FileSource {
+    func display(_ path: String) -> String { path }
+}
+
+// MARK: - Diffs
 
 nonisolated struct DiffLine: Identifiable, Hashable, Sendable {
     enum Kind: Sendable { case context, added, removed }
@@ -185,11 +303,141 @@ nonisolated struct DiffFile: Identifiable, Hashable, Sendable {
     var additions: Int
     var deletions: Int
     var hunks: [DiffHunk]
+    /// Previous path of a rename.
+    var oldPath: String? = nil
+    var isBinary = false
+    /// Hunks left out (over the 1 MiB per-file cap).
+    var hunksOmitted = false
+}
+
+/// What a review compares.
+nonisolated enum DiffScope: Hashable, Sendable {
+    /// Everything not committed: HEAD vs the working tree (untracked included).
+    case workingTree
+    /// What is staged: HEAD vs the index.
+    case staged
+    /// What one agent turn changed (`listTurns` / `turnDiff`).
+    case turn(pane: UInt64, turn: UInt64)
+}
+
+/// One agent turn with its snapshot pair.
+nonisolated struct DiffTurn: Identifiable, Hashable, Sendable {
+    var id: String { "\(pane)/\(turn)" }
+    var pane: UInt64
+    var turn: UInt64
+    /// "Claude Code" etc.
+    var agent: String
+    var started: Date
+    var ended: Date?
+    var scope: DiffScope { .turn(pane: pane, turn: turn) }
+}
+
+/// A note on lines of a diff, sent to the agent as a numbered review prompt.
+nonisolated struct ReviewNote: Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var path: String
+    var startLine: Int
+    var endLine: Int
+    /// The line numbers are the old side's (a removed line).
+    var oldSide: Bool
+    var quote: String?
+    var note: String
+}
+
+/// The repository a review is about.
+nonisolated struct DiffRepository: Hashable, Sendable {
+    var root: String
+    var branch: String?
+    var ahead: Int = 0
+    var behind: Int = 0
+    var changedFiles: Int = 0
 }
 
 @MainActor
 protocol DiffSource: AnyObject {
     /// What the diff is against, e.g. "Working tree vs HEAD".
     var title: String { get }
-    func files() async throws -> [DiffFile]
+    /// Nil when there is a repository to review; else why not, in words.
+    var unavailableReason: String? { get }
+    func repository() async throws -> DiffRepository
+    func files(_ scope: DiffScope) async throws -> [DiffFile]
+    /// Turns of the agents in this repository, newest first.
+    func turns() async throws -> [DiffTurn]
+    /// The agent that review notes go to for a scope, by name ("Claude Code"), or nil.
+    func reviewer(for scope: DiffScope) -> String?
+    /// Types the notes into the agent as one numbered prompt and submits it.
+    func sendReview(_ notes: [ReviewNote], scope: DiffScope, preamble: String?) async throws
+}
+
+// MARK: - Editor
+
+/// Where the editor is, in words the progress view shows.
+nonisolated enum EditorPhase: Hashable, Sendable {
+    case idle
+    /// Asking the host what it has.
+    case checking
+    /// First run: VS Code's CLI is downloading on the host.
+    case installing
+    /// The server is starting in the folder.
+    case starting
+    /// The workbench is loading in the web view.
+    case loading(URL)
+    case ready(URL)
+    case failed(String)
+
+    var url: URL? {
+        switch self {
+        case .loading(let url), .ready(let url): url
+        default: nil
+        }
+    }
+}
+
+/// VS Code in the browser over a forward to the host (`code serve-web`), never a sign-in.
+@MainActor
+protocol EditorSource: AnyObject, Observable {
+    var phase: EditorPhase { get }
+    /// The folder the editor shows.
+    var folder: String { get }
+    var hostName: String { get }
+    /// Nil when the editor can open; else why not.
+    var unavailableReason: String? { get }
+    /// Starts (or reuses) the editor for the window's folder.
+    func open() async
+    /// Opens a file at a line in the running editor (starting it first if needed).
+    func open(path: String, line: Int?, column: Int?) async
+    /// The workbench finished loading.
+    func didLoad()
+    /// Leaves the editor; `stopServer` also ends it on the host.
+    func close(stopServer: Bool) async
+    /// A URL the web view should load next (a file opened in a window not showing yet).
+    var pendingURL: URL? { get }
+}
+
+// MARK: - Ports and the browser
+
+nonisolated struct DetectedPort: Identifiable, Hashable, Sendable {
+    var id: UInt16 { port }
+    var port: UInt16
+    /// The listening process ("node", "python3").
+    var process: String
+    /// The URL it printed, if any.
+    var url: String?
+    var isHTTP: Bool
+    /// Bound only on the host's loopback.
+    var loopbackOnly: Bool
+    /// The pane it belongs to, by title.
+    var pane: String?
+}
+
+@MainActor
+protocol PortSource: AnyObject, Observable {
+    var ports: [DetectedPort] { get }
+    var hostName: String { get }
+    /// A port that appeared since the user last looked (the "open it?" offer).
+    var offer: DetectedPort? { get }
+    func dismissOffer()
+    /// A local URL for the port: a forward to the host's `localhost:<port>`, on the same port
+    /// number when it is free here so the app's own absolute URLs keep working.
+    func open(_ port: DetectedPort) async throws -> URL
 }

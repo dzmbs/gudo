@@ -72,7 +72,11 @@ final class MockAgentFeed: AgentFeed {
         AgentItem(
             id: "a5", agent: .claude, hostName: "studio", sessionTitle: "unnamed · docs", state: .done,
             since: ago(25 * 60), prompt: "Update SSH.md for the new host key flow",
-            summary: "Edited 2 files · docs/SSH.md, docs/ROADMAP.md"),
+            summary: "Edited 2 files · docs/SSH.md, docs/ROADMAP.md", unseen: true, canReply: true),
+        AgentItem(
+            id: "a7", agent: .other, hostName: "studio", sessionTitle: "unnamed", state: .done,
+            since: ago(31 * 60), prompt: "cargo test --workspace --release", summary: "Exited 0 · 4m 12s",
+            unseen: true, isCommand: true),
         AgentItem(
             id: "a6", agent: .claude, hostName: "studio", sessionTitle: "unnamed · ghostty bump", state: .error,
             since: ago(48 * 60), prompt: "Bump libghostty-vt to the latest tip",
@@ -81,14 +85,24 @@ final class MockAgentFeed: AgentFeed {
 
     func approve(_ id: AgentItem.ID) { transition(id, to: .working) }
     func deny(_ id: AgentItem.ID) { transition(id, to: .working) }
-    func reply(_ id: AgentItem.ID, text: String) { transition(id, to: .working) }
+    func reply(_ id: AgentItem.ID, text: String) async throws { transition(id, to: .working) }
     func markDone(_ id: AgentItem.ID) { items.removeAll { $0.id == id } }
-    func launch(_ agent: AgentKind, host: String, prompt: String) {
+    var unseenByHost: [String: Int] { ["studio": 2, "devbox": 1] }
+    var launchHosts: [LaunchHost] {
+        [LaunchHost(id: "studio", name: "studio", directory: "~/projects/unnamed"),
+         LaunchHost(id: "devbox", name: "devbox", directory: "~/src/api")]
+    }
+    func markSeen() {
+        for index in items.indices { items[index].unseen = false }
+    }
+    func open(_ id: AgentItem.ID) {}
+    func launch(_ request: AgentLaunchRequest) async throws -> String? {
         items.insert(
             AgentItem(
-                id: UUID().uuidString, agent: agent, hostName: host, sessionTitle: "new session", state: .working,
-                since: .now, prompt: prompt),
+                id: UUID().uuidString, agent: request.agent, hostName: request.hostId, sessionTitle: "new session",
+                state: .working, since: .now, prompt: request.prompt, canReply: true),
             at: 0)
+        return nil
     }
 
     private func transition(_ id: AgentItem.ID, to state: AgentState) {
@@ -181,12 +195,76 @@ final class MockFileSource: FileSource {
         codegen-units = 1
         """
     }
+
+    var hostName: String { "studio" }
+    var unavailableReason: String? { nil }
+    func preview(_ path: String) async throws -> FilePreview { .text(try await read(path), truncated: false) }
+    func mkdir(_ path: String) async throws {}
+    func rename(_ path: String, to name: String) async throws {}
+    func trash(_ path: String) async throws {}
+    func upload(_ local: URL, to directory: String, progress: @escaping @MainActor (Double) -> Void) async throws { progress(1) }
+    func download(_ path: String, progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appending(path: (path as NSString).lastPathComponent)
+        try Data(try await read(path).utf8).write(to: url)
+        return url
+    }
+    func watch(_ directory: String, onChange: @escaping @MainActor () -> Void) async -> FileWatch? { nil }
+}
+
+/// The editor as the first run shows it (`-screen editor -mock`): VS Code being set up.
+@Observable
+final class MockEditorSource: EditorSource {
+    var phase = EditorPhase.installing
+    var folder: String { "~/projects/unnamed" }
+    var hostName: String { "studio" }
+    var unavailableReason: String? { nil }
+    var pendingURL: URL?
+    func open() async {}
+    func open(path: String, line: Int?, column: Int?) async {}
+    func didLoad() {}
+    func close(stopServer: Bool) async {}
+}
+
+@Observable
+final class MockPortSource: PortSource {
+    var ports: [DetectedPort] = [
+        DetectedPort(port: 5173, process: "node", url: "http://localhost:5173/", isHTTP: true, loopbackOnly: true, pane: "pnpm dev"),
+        DetectedPort(port: 8000, process: "python3", url: nil, isHTTP: true, loopbackOnly: false, pane: "http.server"),
+        DetectedPort(port: 5432, process: "postgres", url: nil, isHTTP: false, loopbackOnly: true, pane: nil),
+    ]
+    var hostName: String { "studio" }
+    var offer: DetectedPort? { nil }
+    func dismissOffer() {}
+    func open(_ port: DetectedPort) async throws -> URL { URL(string: "https://ghostty.org/docs")! }
+}
+
+final class MockLinkSource: LinkSource {
+    var isAvailable: Bool { true }
+    func links() async throws -> [DetectedLink] { MockLinks.links }
+    func lastCommandOutput() async throws -> (command: String?, output: String) { ("cargo test", "test result: ok. 42 passed") }
+    func countMatches(_ needle: String) async throws -> Int? { 14 }
 }
 
 final class MockDiffSource: DiffSource {
     let title = "Working tree vs HEAD"
+    var unavailableReason: String? { nil }
 
-    func files() async throws -> [DiffFile] {
+    func repository() async throws -> DiffRepository {
+        DiffRepository(root: "~/projects/unnamed", branch: "w3-screens", ahead: 2, behind: 0, changedFiles: 3)
+    }
+
+    func turns() async throws -> [DiffTurn] {
+        [
+            DiffTurn(pane: 3, turn: 4, agent: "Claude Code", started: ago(6 * 60), ended: nil),
+            DiffTurn(pane: 3, turn: 3, agent: "Claude Code", started: ago(22 * 60), ended: ago(19 * 60)),
+            DiffTurn(pane: 4, turn: 1, agent: "Codex", started: ago(50 * 60), ended: ago(41 * 60)),
+        ]
+    }
+
+    func reviewer(for scope: DiffScope) -> String? { "Claude Code" }
+    func sendReview(_ notes: [ReviewNote], scope: DiffScope, preamble: String?) async throws {}
+
+    func files(_ scope: DiffScope) async throws -> [DiffFile] {
         [
             DiffFile(
                 path: "crates/apple-ffi/src/layout.rs", status: .modified, additions: 9, deletions: 3,

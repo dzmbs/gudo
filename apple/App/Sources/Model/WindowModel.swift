@@ -26,7 +26,12 @@ final class WindowModel {
     var sheet: SheetRoute?
     var isPaletteShown = false
     var isSearchShown = false
-    var searchNeedle = ""
+    var searchNeedle = "" {
+        didSet { if searchNeedle != oldValue { updateSearchCount() } }
+    }
+    /// Matches of `searchNeedle` in the focused pane's whole scrollback (daemon panes).
+    var searchTotal: Int?
+    @ObservationIgnored var searchCountTask: Task<Void, Never>?
     /// The Add Host sheet's starting mode and destination (quick connect pre-fills SSH).
     var pairingMode = PairingSheet.Mode.ssh
     var pairingDestination = ""
@@ -59,6 +64,13 @@ final class WindowModel {
     let paneStatus: any PaneStatusSource
     let files: any FileSource
     let diffs: any DiffSource
+    let editor: any EditorSource
+    let ports: any PortSource
+    let links: any LinkSource
+    /// The page the in-app browser opens (a forwarded port, a link).
+    var browserURL: URL?
+    /// The editor is presented (full screen on iPhone and iPad).
+    var isEditorShown = false
     let toasts = ToastCenter()
 
     /// Opens a target in this window (`WindowRoot` sets it).
@@ -68,21 +80,41 @@ final class WindowModel {
     init(app: AppModel) {
         self.app = app
         defer { ActiveWindow.register(self) }
-        files = MockFileSource()
-        diffs = MockDiffSource()
         if LaunchOptions.mock {
             hosts = MockHostDirectory()
             agents = MockAgentFeed()
             paneStatus = MockPaneStatus()
+            files = MockFileSource()
+            diffs = MockDiffSource()
+            editor = MockEditorSource()
+            ports = MockPortSource()
+            links = MockLinkSource()
             return
         }
         let live = LiveHostDirectory(app: app)
         hosts = live
-        agents = LiveAgentFeed(hosts: app.hosts)
+        let feed = LiveAgentFeed(hosts: app.hosts)
+        agents = feed
         let status = LivePaneStatus()
         paneStatus = status
+        let files = LiveFileSource(app: app)
+        let diffs = LiveDiffSource(app: app)
+        let editor = LiveEditorSource(app: app)
+        let ports = LivePortSource(app: app)
+        let links = LiveLinkSource(app: app)
+        self.files = files
+        self.diffs = diffs
+        self.editor = editor
+        self.ports = ports
+        self.links = links
         live.window = self
         status.window = self
+        feed.window = self
+        files.window = self
+        diffs.window = self
+        editor.window = self
+        ports.window = self
+        links.window = self
     }
 
     var connection: ConnectionState { connectionOverride ?? liveConnection }

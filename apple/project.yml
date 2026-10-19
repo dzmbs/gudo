@@ -68,6 +68,9 @@ targets:
         # Launch on the terminal background so the first frame never flashes white.
         UILaunchScreen:
           UIColorName: LaunchBackground
+        # The editor and dev servers load over local forwards (http://localhost:<port>).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         # Agent runs on the Lock Screen and in the Dynamic Island (AgentActivityWidget).
         NSSupportsLiveActivities: true
         # Shared with the Notification Service Extension in push builds (Brand.xcconfig).
@@ -186,6 +189,23 @@ targets:
     dependencies:
       - package: NotifyKit
         product: NotifyKit
+  AppTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources: [App/Tests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.tests
+        GENERATE_INFOPLIST_FILE: YES
+        # The app's product is named after the brand, not the target.
+        "TEST_HOST[sdk=iphonesimulator*]": $(BUILT_PRODUCTS_DIR)/$(BRAND_NAME).app/$(BRAND_NAME)
+        "TEST_HOST[sdk=iphoneos*]": $(BUILT_PRODUCTS_DIR)/$(BRAND_NAME).app/$(BRAND_NAME)
+        "TEST_HOST[sdk=macosx*]": $(BUILT_PRODUCTS_DIR)/$(BRAND_NAME).app/Contents/MacOS/$(BRAND_NAME)
+        BUNDLE_LOADER: $(TEST_HOST)
+        CODE_SIGN_IDENTITY: "-"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: App
   AppUITests:
     type: bundle.ui-testing
     supportedDestinations: [iOS, macOS]
@@ -210,6 +230,7 @@ schemes:
         - package: DesignSystem/DesignSystemTests
         - package: DrawingKit/DrawingKitTests
         - package: NotifyKit/NotifyKitTests
+        - AppTests
         - AppUITests
     run:
       config: Debug

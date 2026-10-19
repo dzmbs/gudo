@@ -276,11 +276,16 @@ hint (e.g. Tailscale). The sidebar footer and connection dots show the same stat
 
 ### Agent Inbox (`Screens/InboxView.swift`)
 
-Needs you / Running / Finished. Row: status glyph, agent, host · session, age (ticking for
-running), prompt. Permission requests show the tool and command in an SF Mono block with Deny
-(glass) and Approve (prominent); questions show the text and Reply… which opens an inline
-composer. Optimistic: the row moves to Running with `snappy` at once. Swipe Mark Done; context
-menu Open Pane, Copy Prompt. New Agent sheet: agent (Claude Code / Codex), connected host, prompt.
+Needs you / Running / Finished. Row: status glyph, agent, host · session, an accent dot while
+unseen, age (ticking for running), an open-pane arrow, prompt. Permission requests show the tool
+and command in an SF Mono block with Deny (glass) and Approve (prominent); questions and finished
+turns offer Reply…, an inline composer that types into the agent. Finished turns carry the
+agent's last message; long commands appear with a check/cross glyph and "Exited 0 · 4m 12s".
+The subtitle says "3 new · studio 2, devbox 1"; after 1.5 s on screen the dots fade (seen on
+every device). Optimistic: an answered request moves to Running at once. Swipe Mark Done;
+context menu Open Pane, Copy Prompt/Summary. New Agent sheet: agent, connected host and its
+directory, New Worktree (+ branch), prompt (optional); Start shows "Starting…" and the sheet
+closes as soon as the pane exists.
 
 ### Share session (`Screens/InviteSheet.swift`) and presence
 
@@ -341,27 +346,49 @@ green done.
 ### Links & paths (`Screens/LinksSheet.swift`)
 
 All / URLs / Paths, filter, rows with icon, path with file name emphasized and `:line:col`
-secondary, "3 lines up". Tap opens; context menu Copy, Open, Insert in Terminal.
+secondary, "on screen" / "in output", missing paths dimmed ("not found"). A path opens in VS Code
+at its line; a URL in the in-app browser. Context menu Open, Copy, Insert in Terminal.
 
 ### Diff review (`Screens/DiffReviewView.swift`)
 
-A page sheet: "Working tree vs HEAD", "3 files · +425 −4", per-file pinned headers (status
-letter, directory secondary + file name medium, counts, collapse), hunks on a subtle fill, old/new
-line numbers, 2 pt gutter bars, 12 % added/removed backgrounds, horizontal scroll per file, 18 pt
-lines. Toolbar Request Changes / Approve (⌘↩).
+A page sheet titled with the repository, the branch as subtitle; toolbar: scope menu
+(Uncommitted / Staged / each agent turn "Claude Code · turn 4 · 6 min ago"), Layout (automatic,
+unified, side by side), Reload ⌘R. "Uncommitted changes", "3 files · +425 −4 · ↑2". The code
+sits on the terminal background in SF Mono, syntax-neutral, Ghostty-quiet: per-file pinned
+headers on the raised background (status letter, directory secondary + file name, note count,
+counts, collapse), hunk headers dim, old/new numbers at 32 %, 2 pt gutter bars and 13 % fills in
+the palette's green/red. Side by side on iPad/Mac (lines wrap; empty cells a faint fill), unified
+on iPhone (horizontal scroll per file, 18 pt rows). Tap a line → an inline note composer; notes
+are accent-tinted cards under their line; a floating glass bar "2 notes · Goes to Claude Code as
+one prompt" with Copy and Send to Claude Code (⌘↩).
 
 ### Files (`Screens/FilesBrowserView.swift`) and editor (`Screens/EditorView.swift`)
 
-Files: directories first, monochrome SF Symbols per kind, git letter in its color, size and age,
-push to descend, filter, context menu Open / Copy Path / Reveal in Terminal / Insert Path. Editor:
-36 pt header (icon, name, directory in SF Mono, Edited dot, Save ⌘S, menu), SF Mono text with a
-line-number gutter, 22 pt status bar "Ln 1, Col 1 · UTF-8 · LF · TOML".
+Files: on the terminal background; directories first (folder glyph in `info`), monochrome SF
+Symbols per kind, the change letter in the palette's colour, size and age, symlink badge, push to
+descend, filter, pull to refresh; + menu Upload Files… / New Folder; drop files onto the list
+(dashed accent outline while targeted); a floating progress capsule for transfers. Context
+menu Open in VS Code, Share…/Download, Copy Path, Rename…, Reveal in Terminal, Insert Path, Move
+to Trash (confirmed). A file pushes a preview: text with a line-number gutter in SF Mono, images
+fit, others a card with size and Download.
 
-### In-app browser (`Screens/BrowserView.swift`)
+Editor: VS Code's own workbench, full screen on iPhone/iPad (a large sheet on Mac) under a 36 pt
+strip on the terminal background: close, `</>`, folder name, host in SF Mono, Reload, More (Copy
+Folder Path, Stop Editor on host). While it starts: a centred card of steps — Set up VS Code on
+host (first run only) / Start the editor / Open the workbench — each with a check, spinner or
+ring and its seconds, and one line saying what is happening ("First time on studio: VS Code is
+being set up there. It takes about 15 seconds, once."). No licence prompt, no sign-in, no editor
+choice; failures say why with Try Again. The workbench fades in once loaded.
 
-SwiftUI `WebView`. iPhone: Safari-26-style floating glass capsules at the bottom (back/forward,
-address, more). iPad/Mac: 36 pt bar with back, forward, reload, glass address field (lock for
-https, `localhost:5173` for local), share, open in default browser; 2 pt accent progress line.
+### In-app browser (`Screens/BrowserView.swift`, `Screens/BrowserPorts.swift`)
+
+Ports list first: "Dev servers" (globe in accent, `localhost:5173` in SF Mono, process · pane),
+"Other ports", an address field. A new server on the window's host is offered by a glass capsule
+over the terminal ("● localhost:5173 is up · node · pnpm dev [Open] ×", 15 s). The page: SwiftUI
+`WebView`. iPhone: Safari-26-style floating glass capsules at the bottom (Ports, back/forward,
+address, more). iPad/Mac: 36 pt bar on the terminal background with Ports, back, forward,
+reload, glass address field (lock for https, `localhost:5173` for local), share, Open in Safari;
+2 pt accent progress line.
 
 ### Settings (`Views/SettingsView.swift`)
 
@@ -435,12 +462,10 @@ host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn 
 - **Context-menu previews** of panes (live thumbnails) are not wired.
 - **Scan QR** runs VisionKit's scanner inside the viewfinder where a camera exists; untested on a
   device (the simulator has no camera and shows the hint instead).
-- **Search** is UI only: the bar shows the counts it is given; matching and highlights belong to
-  the renderer.
-- **Editor**: line numbers do not follow wrapped lines; Ln/Col is static.
-- **Real vs mock**: Hosts, pairing, reconnect, tab names, agent glyphs and Inbox approvals are
-  live; Diff, Files, Editor, Browser, Links, Share/presence and Inbox replies/launch still read
-  `MockData.swift` (docs/APP-ARCHITECTURE.md §10 lists each and the apple-ffi call to wire).
+- **Search** shows the daemon's total over the whole scrollback (daemon panes); stepping through
+  matches and highlights belong to the renderer and are not wired.
+- **Real vs mock**: everything but Share/presence reads the hosts (docs/APP-ARCHITECTURE.md §10);
+  `-mock` keeps the `MockData.swift` stand-ins for screenshots.
 - **Key bar screenshots** show main's hardware-keyboard strip (profile chip + esc), because the
   simulators have a hardware keyboard attached; the full row uses the same `KeyBarLook` keys.
 - **Light terminal themes** are supported by the chrome (window theme "Match Terminal", seamless

@@ -1,6 +1,7 @@
 import DesignSystem
 import SwiftUI
 import TerminalCore
+import UnnamedCore
 
 /// Ghostty's config surfaced as native settings. Each control shows the Ghostty key it mirrors, so
 /// a Ghostty user can map their config file; the values are the same names and defaults.
@@ -383,6 +384,16 @@ private struct AcknowledgementsView: View {
             ack("Nerd Fonts", "MIT and per-icon-set licenses · symbols in the terminal font")
             ack("iTerm2-Color-Schemes", "MIT · terminal themes, as bundled by Ghostty")
             ack("Orca", "MIT · key bar and reconnect behaviour")
+            Section {
+                ack("Visual Studio Code", "Microsoft Software License Terms · the editor. Its server and CLI are downloaded from Microsoft onto your own hosts when you open the editor; they are not part of this app.")
+                link("Visual Studio Code License", vscodeLicenseUrl())
+                link("Visual Studio Code Server License", vscodeServerLicenseUrl())
+                link("Microsoft Privacy Statement", microsoftPrivacyUrl())
+            } header: {
+                Text("Licenses")
+            } footer: {
+                Text("Opening the editor uses VS Code under these terms, for you, on hosts you control.")
+            }
         }
         .navigationTitle("Acknowledgements")
     }
@@ -392,5 +403,17 @@ private struct AcknowledgementsView: View {
             Text(name)
             Text(detail).font(.footnote).foregroundStyle(.secondary)
         }
+    }
+
+    private func link(_ title: String, _ url: String) -> some View {
+        Link(destination: URL(string: url)!) {
+            HStack {
+                Text(title)
+                Spacer()
+                Image(systemName: "arrow.up.forward.square")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("ack-\(title)")
     }
 }

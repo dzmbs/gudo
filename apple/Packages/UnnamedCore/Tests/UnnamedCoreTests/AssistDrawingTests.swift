@@ -99,7 +99,7 @@ private func line(_ state: PromptState?) -> String? {
         let client = try DaemonClient.connect(ticket: ticket, config: config(), listener: events)
         _ = try await attachFirstPane(client, events)
         let session = try await events.wait("attached") { all in
-            all.lazy.compactMap { if case let .attached(sessionId) = $0 { sessionId } else { nil } }.first
+            all.lazy.compactMap { if case let .attached(sessionId, _, _) = $0 { sessionId } else { nil } }.first
         }
 
         let rect = DrawElement(

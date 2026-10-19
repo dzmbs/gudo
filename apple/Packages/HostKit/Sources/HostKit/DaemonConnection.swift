@@ -50,6 +50,9 @@ public final class DaemonConnection: HostConnection {
     /// Something the user should hear about once (the remembered session was gone). The UI
     /// shows it and calls `dismissNotice()`.
     public private(set) var notice: HostNotice?
+    /// Every non-pane-stream event, on the main actor after the connection handled it (search,
+    /// links and command-output answers for `DaemonWorkspace`, `.connected` to re-watch).
+    @ObservationIgnored public var onEvent: ((ClientEvent) -> Void)?
     /// Who is here, roles, control leases, invites and the audit log (docs/DAEMON.md §6).
     public let multiplayer = MultiplayerSession()
     /// The daemon's workspace pushes (attention feed, ports, files), fanned out to observers.
@@ -67,7 +70,7 @@ public final class DaemonConnection: HostConnection {
 
     @ObservationIgnored private let ticket: String
     @ObservationIgnored private let dialer: DaemonDialer
-    @ObservationIgnored private var client: (any DaemonClientAPI)?
+    @ObservationIgnored private(set) var client: (any DaemonClientAPI)?
     @ObservationIgnored var pushClient: (any PushClientAPI)?
     @ObservationIgnored let router: PaneRouter
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
@@ -273,6 +276,7 @@ public final class DaemonConnection: HostConnection {
         default:
             break
         }
+        onEvent?(event)
     }
 
     private func noteOutput() {

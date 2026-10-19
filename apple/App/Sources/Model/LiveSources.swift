@@ -7,9 +7,8 @@ import UnnamedCore
 
 // The screens' data sources over the real models (HostKit's `HostsModel` and the daemons'
 // pane metadata). `MockData.swift` holds the `-mock` stand-ins; the screens cannot tell them
-// apart. Inbox approvals go to the daemon; the Inbox's other actions, Files, Diff, Links,
-// Browser, Editor and multiplayer are not exposed through apple-ffi yet
-// (docs/APP-ARCHITECTURE.md §10).
+// apart. The Inbox, Files, Diff, Editor, Browser and Links sources are in
+// `LiveWorkspaceSources.swift` (docs/APP-ARCHITECTURE.md §10).
 
 // MARK: - Hosts
 
@@ -193,74 +192,3 @@ final class LivePaneStatus: PaneStatusSource {
     }
 }
 
-/// The agents of every connected daemon, for the Inbox and the sidebar badge. Approve and deny
-/// answer the agent's request through the daemon (`DaemonConnection.decide`); replying with text
-/// and launching agents are not exposed through apple-ffi yet.
-@MainActor
-@Observable
-final class LiveAgentFeed: AgentFeed {
-    @ObservationIgnored let hosts: HostsModel
-    /// Items the user marked done (hidden until their state changes).
-    private var dismissed: [AgentItem.ID: DesignSystem.AgentState] = [:]
-    /// When each item entered its current state.
-    @ObservationIgnored private var since: [AgentItem.ID: (DesignSystem.AgentState, Date)] = [:]
-
-    init(hosts: HostsModel) {
-        self.hosts = hosts
-    }
-
-    var items: [AgentItem] {
-        var result: [AgentItem] = []
-        for (hostId, connection) in hosts.connections {
-            guard let daemon = connection as? DaemonConnection else { continue }
-            let hostName = hosts.record(hostId)?.name ?? hostId
-            for (pane, meta) in daemon.meta {
-                guard let agent = meta.agent else { continue }
-                let id = "\(hostId)/\(pane.rawValue)"
-                let state = DesignSystem.AgentState(agent.state)
-                if dismissed[id] == state { continue }
-                var request: AgentItem.Request?
-                var prompt = meta.title
-                if case .blocked(_, let summary, _) = agent.state {
-                    request = .permission(tool: AgentKind(agent.kind).title, detail: summary)
-                    prompt = summary
-                }
-                result.append(AgentItem(
-                    id: id, agent: AgentKind(agent.kind), hostName: hostName,
-                    sessionTitle: meta.cwd.map { ($0 as NSString).lastPathComponent } ?? meta.title,
-                    state: state, since: entered(id, state), prompt: prompt.isEmpty ? AgentKind(agent.kind).title : prompt,
-                    request: request))
-            }
-        }
-        return result.sorted { ($0.state.urgency, $1.since) < ($1.state.urgency, $0.since) }
-    }
-
-    private func entered(_ id: AgentItem.ID, _ state: DesignSystem.AgentState) -> Date {
-        if let (known, date) = since[id], known == state { return date }
-        since[id] = (state, .now)
-        return .now
-    }
-
-    func approve(_ id: AgentItem.ID) { decide(id, allow: true) }
-    func deny(_ id: AgentItem.ID) { decide(id, allow: false) }
-    func reply(_ id: AgentItem.ID, text: String) {}
-
-    func markDone(_ id: AgentItem.ID) {
-        if let item = items.first(where: { $0.id == id }) { dismissed[id] = item.state }
-    }
-
-    func launch(_ agent: AgentKind, host: String, prompt: String) {}
-
-    private func decide(_ id: AgentItem.ID, allow: Bool) {
-        let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]),
-              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
-              let agent = daemon.meta[PaneId(raw)]?.agent,
-              case .blocked(let request, _, let options) = agent.state, !options.isEmpty
-        else { return }
-        let words = allow ? ["allow", "yes", "approve", "accept", "proceed"] : ["deny", "no", "reject", "decline", "cancel"]
-        let match = options.first { option in words.contains { option.label.lowercased().contains($0) } }
-        let option = match ?? (allow ? options.first : options.last)
-        if let option { daemon.decide(requestId: request, optionId: option.id) }
-    }
-}

@@ -77,6 +77,13 @@ action handler, local content, prefs). Multiplayer: `MultiplayerSessionTests` an
 sheet, invite + QR, grants, revoke, audit against a local daemon with a guest joined by the `un`
 CLI).
 
+Developer-workflow screens (Inbox, Files, Diff, Editor, Browser, Links): `AppTests` (the models
+against a fake daemon client; `-only-testing:AppTests`), `DaemonWorkspaceTests` in HostKit, and
+`scripts/w3-ui-test.sh <udid> [test …]` (iPad against a local daemon on `w3-fixtures.sh`: a git
+repository, a `claude` stand-in that drives the daemon's hooks, a `code serve-web` stand-in).
+`scripts/w3-daemon.sh start <dir>` starts that daemon by itself; `scripts/w3-screenshots.sh
+<udid> <prefix> <dir>` captures the screens on its data.
+
 Remote hosts: `(cd Packages/HostKit && swift test)` (needs `cargo build -p hostd`),
 `scripts/daemon-ui-test.sh <udid>` (iPad UI test against a local daemon that is killed and restarted
 mid-test), and `RealHostUITests` with `TEST_RUNNER_SSH_TARGET` / `TEST_RUNNER_SSH_KEY`

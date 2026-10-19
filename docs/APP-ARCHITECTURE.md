@@ -141,6 +141,7 @@ disabled`; `-testMirror YES` (core VT mirror for pane text).
 | `cd apple/Packages/HostKit && swift test` | unit tests with a fake `DaemonClientAPI` (layout conversion, store revisions/optimism, connection state machine, routing/buffering, prediction feed, hosts sorting/persistence, ssh_config import, keys, secrets) and `DaemonIntegrationTests` against a real local `unnamed-hostd` (pair, echo, split, daemon restart → stale → live, suspend/resume, re-dial by saved ticket) |
 | `cd apple/Packages/TerminalKit && swift test --filter snapshot` | READY restore + history pages + live bytes |
 | `apple/scripts/daemon-ui-test.sh [udid]` | `DaemonUITests` on the iPad simulator against a local daemon, killed and restarted mid-test |
+| `apple/scripts/w3-ui-test.sh [udid] [test …]` | `W3UITests` on the iPad simulator against a local daemon set up by `w3-fixtures.sh` (HOME = a scratch dir with a git repo, a `claude` stand-in that drives the daemon's real hooks, a `code serve-web` stand-in): Files, Diff + notes, New Agent → Approve → finished summary → Reply → Open Pane → the turn's diff → review sent to the agent, Editor (workbench over the forward, ⌘P reaches the page, a path from Links opens at its line), a dev server offered and opened, Copy Last Command Output |
 | `TEST_RUNNER_SSH_TARGET=… TEST_RUNNER_SSH_KEY=… xcodebuild … -only-testing:AppUITests/RealHostUITests test` | just ssh → Install helper → daemon pane: ls, vim, Ctrl-C, htop, screenshots |
 | `MacDogfoodUITests` | Ctrl-C, Ctrl-Z, vim, resize during output, closing a tab kills its process (pgrep), local and daemon |
 
@@ -207,23 +208,49 @@ Real (HostKit / apple-ffi):
 | Sidebar header / footer, iPhone top bar | host name, `ConnectionDot`, status words |
 | Tab names and context lines | friendly names (renamed on the daemon so every device shows them); context from `PaneMeta.agent` (task), local PTY foreground program, OSC title, `.git/HEAD` (local), cwd |
 | Pane headers, tab strip, sidebar Agents section, palette | agent glyphs and program from `LivePaneStatus` (`DaemonConnection.meta[pane].agent`) |
-| Inbox | `LiveAgentFeed`: agents of every connected daemon from `PaneMeta.agent`; Approve / Deny call `DaemonConnection.decide` with the matching option; Mark Done hides the item locally |
 | Key bar profile | `Workspace.reportedProgram`: backend-reported program, else the local PTY's foreground, else the daemon's agent kind; the title stands in otherwise |
 | Share Session, presence, control, join, grants, audit | `MultiplayerSession` (§11): `Screens/InviteSheet.swift`, `Multiplayer/*` |
 | Local notifications, actions, Live Activity | `Notifications/*` over `DaemonConnection.workspaceEvents` (§12) |
 
-Still mock (the next agent's job; the apple-ffi calls now exist, docs/APPLE-FFI.md "Workspace",
-"Editor", "Multiplayer", "Push"):
 
-| Screen | File | Wire to |
+The developer-workflow screens read the daemon through `Model/LiveWorkspaceSources.swift`. Each
+source resolves where it acts when asked (`HostContext`): the window's host when it is a
+connected daemon, with its focused pane and that pane's directory (`PaneMeta.cwd`, OSC 7), else
+the first connected daemon; with none, the screen says so ("Connect one in Hosts") instead of
+failing. Per daemon, `HostKit.DaemonWorkspace` (`connection.workspace`) keeps ports, the
+attention feed and its unseen count from the connection's shared `workspaceEvents` hub (observed,
+as `AppNotifications` does; it never sets a `WorkspaceListener` of its own), relays them with
+`observePorts` / `observeAttention`, re-establishes directory watches after a reconnect, and
+pairs the pane RPCs' answers (`links`, `commands`, `commandOutput`, `search`, which arrive as `ClientEvent`s) with their
+requests. `DaemonWorkspaceAPI` is the slice of `DaemonClient` it and the sources use, so both are
+tested against fakes.
+
+| Screen | Source | Calls |
 |---|---|---|
-| Inbox: Reply…, New Agent, unseen counts, history (Finished) | `Screens/InboxView.swift` (`LiveAgentFeed.reply/launch` are no-ops) | `attentionList()` / `attentionSeen`, `WorkspaceEvent.attention`, `prompt(paneId:text:submit:)`, `launchAgentPane(launch:)` |
-| Diff review | `Screens/DiffReviewView.swift` (`MockDiffSource`) | `gitStatus`, `gitDiff`, `listTurns` / `turnDiff`, `sendReview` |
-| Files | `Screens/FilesBrowserView.swift` (`MockFileSource`) | `fsList / fsStat / fsRead / fsWatch`, `uploadFile / downloadFile` |
-| Editor | `Screens/EditorView.swift` (`MockFileSource`) | `openEditor` (serve-web over a forward, never a sign-in; tunnels opt-in only), `editorOpenInSession` |
-| Browser | `Screens/BrowserView.swift` (fixed URL) | `ports()` / `.portsChanged`, `forward(localPort:target:)` |
-| Links & paths | `Screens/LinksSheet.swift` (`MockLinks`) | daemon links extraction (DAEMON.md §5) |
-| Scrollback search counts | `TerminalSearchBar` in `SplitTreeView` (fixed 2/14) | renderer / daemon search |
+| Inbox (`Screens/InboxView.swift`) | `LiveAgentFeed` | live agents from `PaneMeta.agent` merged with each host's attention feed (`attentionList`, `.attention` pushes): summaries of finished turns (`body`), failed agents and long commands whose pane is gone (history, newest 40), unseen dots and the per-host unseen count in the subtitle; on screen 1.5 s → `attentionSeen(up_to:)` on every device; Approve / Deny → signed `decide` with the option whose label says yes/no (whole words), shown as working until the daemon moves on; Reply… → `prompt(paneId:text:submit:)` (composer path); Open Pane → switch host, focus the pane, `attentionSeen(pane_id:)`; Mark Done hides it locally and marks it seen |
+| New Agent (`LaunchAgentSheet`) | `LiveAgentFeed.launch` | connected daemons; `launchAgentPane` split off the host's focused pane in its directory, or in a fresh `worktreeCreate` (own branch and `PORT`); the sheet closes as soon as the pane exists and the window shows it; the first prompt is typed through `prompt` once the agent reports idle (≤ 60 s, a toast says if it could not be) |
+| Diff review (`Screens/DiffReviewView.swift`) | `LiveDiffSource` | `gitStatus` (repo, branch, ↑↓), `gitDiff` HEAD→worktree (untracked included) or staged, `listTurns` of the agent panes in the repo + `turnDiff` ("what this agent turn changed"); side by side on iPad/Mac (regular width; Layout menu: automatic/unified/side by side), unified on iPhone; monospace on the terminal background, palette green/red only; tap a line → note; notes → `sendReview` to the turn's agent (or the focused / first agent in the repo), Copy otherwise |
+| Files (`Screens/FilesBrowserView.swift`) | `LiveFileSource` | `fsList` + `gitStatus` letters (a directory with changes inside gets M), `fsStat` / `fsRead` preview (UTF-8 text up to 1 MiB with line numbers, images up to 24 MiB, else a card), `fsWatch` (reloads on change), New Folder `fsMkdir`, Rename `fsRename` (never overwrites), Move to Trash `fsDelete(.trash)`, upload from the Files picker or by drop `uploadFile(createNew)` ("name 2.ext" when taken) with progress, download `downloadFile` → share sheet (iOS) / ~/Downloads + Finder (Mac); Open in VS Code, Reveal in Terminal (`cd`), Insert Path |
+| Editor (`Screens/EditorView.swift`) | `LiveEditorSource` | `editorStatus` (is VS Code's CLI there?) → `openEditor(folder: <repo root or directory>, acceptVscodeLicense: true)` → WebKit `WebPage` on the forward; full screen on iPhone/iPad, a large sheet on Mac; steps "Set up VS Code on host (first run only) → Start the editor → Open the workbench" with seconds, never a licence prompt or sign-in, nothing about the VSCodium fallback; sessions kept per host+folder (closing leaves the server running; More → Stop Editor ends it, `closeEditor(stopServer:)`); a path from Links opens with `editorOpenInSession`; while it is up the app's ⌘ shortcuts are disabled so every key reaches VS Code |
+| Browser (`Screens/BrowserPorts.swift`, `BrowserView.swift`) | `LivePortSource` | `ports` / `.portsChanged` (HTTP first, process and pane); a new HTTP port on the window's host is offered ("localhost:5173 is up · Open", 15 s); Open → `forward(localPort: <same port>, .tcp)` (any free port when taken here; existing forwards reused) → in-app browser with back/forward/reload/share/Open in Safari; palette lists "Open localhost:N" |
+| Links & paths (`Screens/LinksSheet.swift`) | `LiveLinkSource` | `links(paneId:commands: 20)` (screen + the last 20 commands' output, paths resolved, missing ones dimmed); a path opens in VS Code at its line, a URL in the in-app browser (localhost through a forward); local panes: URLs and paths scanned from the visible text |
+| Palette | `PaletteCommands` | Copy Last Command Output (`commandOutput`, the output without the prompt), Open in VS Code, Dev Servers & Ports, Open localhost:N |
+| Scrollback search | `WindowModel.searchTotal` | the total over the whole scrollback from the daemon's `search` (debounced 180 ms); stepping through matches needs the renderer's highlights (not wired) |
+| Acknowledgements | `SettingsView` | VS Code licence, VS Code Server licence, Microsoft privacy statement (`vscodeLicenseUrl()` …) |
+
+Real host (Hetzner x86_64, 2026-10-19, iPad simulator, relays on): pair → connected 100 ms →
+first paint 391 ms → `openEditor` (the `code` CLI installed from Microsoft in that call,
+`installedCli: true`, VS Code itself, no fallback) ready 1066 ms after Open → workbench loaded
+The 10–15 s first run of DAEMON.md §5.3 is a host without a cached VS Code server; this host
+(`*-editor-first-run-*` is the `-mock` first-run state).
+
+a turn that goes blocked → (approved) → idle gets no `AgentDone` attention item from
+the daemon (DAEMON.md §5.8), so that row says "Waiting for your next prompt" without the agent's
+last message; scrollback search shows the daemon's total but cannot step through matches;
+uploads take files from the Files picker and drops (no Photos picker); "Open in Safari" for a
+forwarded localhost page works only while the app keeps the forward (iOS suspends it in the
+background); local (non-daemon) windows have no Files/Diff/Editor (they say so).
+
 
 
 `DaemonConnection.multiplayer: MultiplayerSession` (HostKit, `@MainActor @Observable`) follows
