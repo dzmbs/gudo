@@ -59,6 +59,10 @@ targets:
       - path: build/hostd/unnamed-hostd-aarch64-linux.gz
         buildPhase: resources
         optional: true
+      # What those builds are (build, time, protocol level), to offer "Update Helper".
+      - path: build/hostd/hostd-manifest.json
+        buildPhase: resources
+        optional: true
     info:
       path: App/Info.plist
       properties:

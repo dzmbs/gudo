@@ -386,3 +386,59 @@ Tests: `cd apple/Packages/VoiceKit && swift test` (fake recognizer: segment merg
 without newline, cancel, empty, second start, release while starting, permission and recognizer
 errors, finish timeout, routing, transcript stream, hold chord, settings). Only a device confirms
 the microphone, the SpeechAnalyzer model assets per language, and latency.
+
+## 14. Helper versions, updates and host names (DAEMON.md §2 "Version, host name and updating")
+
+Every connection learns what the daemon is before `Welcome`: `ClientEvent.daemonInfo(info:)`
+(build, `builtUnix`, protocol level, `selfUpgrade`, host name, OS, CPU; nil from daemons that
+predate it). `DaemonConnection` keeps `daemonInfo`, `daemonInfoReported`, `incompatibility` (from
+`ClientEvent.incompatible`: the daemon draws terminals in another format; status reads "This
+host's helper needs an update") and `epoch` (the daemon run).
+
+**What the app bundles.** `cargo xtask build-hostd-linux` writes `build/hostd/hostd-manifest.json`
+next to the two `.gz` daemons (file, OS, CPU, build, time, level); project.yml bundles it and
+`AppModel` loads it once (`BundledDaemons`, `-testBundledDaemons <dir>` for tests).
+
+**The rules** (`HelperCheck.assess`, HostKit, unit tested): guests get nothing; a daemon whose
+`minClientProtocol` is above the app's, or that is newer and incompatible → "Update the app";
+incompatible (or below `minDaemonProtocol()`) → `.required`, said plainly ("This host's helper is
+too old for this app. Update it to connect."); a bundled build for its OS/CPU at a higher level, or
+the same level from an earlier source with another build id → `.update`, offered quietly ("A newer
+helper is available."). A daemon from before version reporting is offered an update only over SSH.
+How: over the host's saved SSH login when it has one (set up by "just ssh" → Install Helper), else
+over the connection when the daemon offers `selfUpgrade`, else not at all.
+
+**Where it shows.** `HostEntry.helper` → `HostSummary.helper` (`HelperOffer`): the host row's
+subtitle when connected ("A newer helper is available." with an arrow glyph, secondary) and its
+menu action **Update Helper**; over the terminal, `HostNotices` shows one line with **Update** and
+a dismiss button (or, when required, the statement and **Update Helper**), then the progress
+(`HostsModel.helperUpdates[id].summary`: "Updating helper (3.1 MB of 7.0 MB)", "Restarting
+helper…"). A success toast says the host runs the new helper.
+
+**`HostsModel.updateHelper(id)`.** SSH: a short-lived `SshSession` with the saved credentials and
+host-key policy runs `bootstrap` (uploads the bundled build when its SHA-256 differs, restarts
+the service; the device stays paired). Connection: `DaemonConnection.updateHelper(path:build:)`
+→ `DaemonClient.upgradeDaemon` streams the gzip; the daemon checks it, swaps it in and execs it.
+Either way it returns once a new daemon run is live (epoch changed), within 60 s. Panes come back
+from the daemon's layout and agents resume; shell processes restart (DAEMON.md lists what is lost).
+
+**Host names.** `HostRecord.nameSource` (`placeholder` / `machine` / `user`) and `machine`
+(host name, OS name, OS, CPU). Pairing without a name and "just ssh" make placeholders ("Host
+1a2b3c4d", the address typed); a name given when pairing, an ssh_config alias, a guest's
+"Alex's host" and every rename are the user's. On each `daemonInfo`, `HostsModel.daemonReported`
+records the machine and renames a placeholder to `MachineName.display(hostname)` (first label:
+`ubuntu-32gb-hel1-2.example.com` → `ubuntu-32gb-hel1-2`; nothing for empty or `localhost`), once
+(source becomes `machine`). Records saved before this have no source: names that look like the
+app's ("Host …", "test daemon…", the SSH address without an alias) count as placeholders, any
+other name as the user's. The test hooks no longer name hosts "test daemon" (`-testTicketNames`
+still does). Hosts show "Ubuntu 24.04.1 LTS · x86_64" as their status line when idle.
+
+Tests: `HelperVersionTests` (the rules, the manifest, machine names, placeholders, renaming once,
+user names kept, advice following the connection, incompatible words) and
+`HelperUpdateIntegrationTests` (a real local daemon installed as a copy: named after this Mac,
+`.update` over the connection, `updateHelper` → restarted in place, layout and typing back;
+about 2.5–3 s). Daemon side: `cargo test -p daemon --test it upgrade`.
+
+Gaps: no release signing key (hash plus a run of the new build is the check); the SSH path has only
+been exercised by the existing bootstrap tests, not by an update of a paired host; macOS hosts get
+no offer (the app bundles Linux daemons only).

@@ -185,7 +185,7 @@ fn conn_err(e: iroh::endpoint::ConnectionError) -> NetError {
 }
 
 /// This daemon's build and machine, with what it offers.
-fn daemon_info(core: &Core) -> proto::DaemonInfo {
+pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
     let mut features = DaemonFeatures::EMPTY;
     if core.cfg.self_exe.is_some() {
         features |= DaemonFeatures::SELF_UPGRADE;

@@ -215,11 +215,7 @@ impl Daemon {
 
     /// This daemon's build and machine, as clients see it.
     pub fn info(&self) -> proto::DaemonInfo {
-        let mut features = proto::DaemonFeatures::EMPTY;
-        if self.core.cfg.self_exe.is_some() {
-            features |= proto::DaemonFeatures::SELF_UPGRADE;
-        }
-        info::build_info(features)
+        conn::daemon_info(&self.core)
     }
 
     /// Stops serving: saves the layout, closes connections and hangs up every pane.

@@ -1019,20 +1019,6 @@ fn follow(client: &Client, pane: PaneId) {
     client.set_view(Some(pane), vec![pane]);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::detach_position;
-
-    #[test]
-    fn detach_is_found_in_every_ctrl_bracket_encoding() {
-        assert_eq!(detach_position(b"ab\x1d"), Some(2));
-        assert_eq!(detach_position(b"x\x1b[93;5u"), Some(1));
-        assert_eq!(detach_position(b"\x1b[93;5:1u"), Some(0));
-        assert_eq!(detach_position(b"ls\x1b[27;5;93~"), Some(2));
-        assert_eq!(detach_position(b"\x1b[93u plain bracket"), None);
-    }
-}
-
 /// `un daemon …`: works without attaching, also against a daemon this build cannot otherwise
 /// talk to (it admits its owner to upgrade only).
 async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
@@ -1115,4 +1101,18 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detach_position;
+
+    #[test]
+    fn detach_is_found_in_every_ctrl_bracket_encoding() {
+        assert_eq!(detach_position(b"ab\x1d"), Some(2));
+        assert_eq!(detach_position(b"x\x1b[93;5u"), Some(1));
+        assert_eq!(detach_position(b"\x1b[93;5:1u"), Some(0));
+        assert_eq!(detach_position(b"ls\x1b[27;5;93~"), Some(2));
+        assert_eq!(detach_position(b"\x1b[93u plain bracket"), None);
+    }
 }
