@@ -66,7 +66,6 @@ struct WorkspaceSidebar: View {
             } trailing: {
                 trailing()
             }
-            .fontWeight(selected ? .medium : .regular)
             .sidebarRow(selected: selected)
         }
         .buttonStyle(.plain)
@@ -76,7 +75,7 @@ struct WorkspaceSidebar: View {
 }
 
 extension View {
-    /// (radius 10) inset 8 pt from the column edges. Hover fills on Mac and iPad pointer.
+    /// A sidebar row: 12 pt insets in a full-width hit area, and a soft selection fill (radius 8,
     func sidebarRow(selected: Bool) -> some View {
         modifier(SidebarRowStyle(selected: selected))
     }
@@ -96,11 +95,11 @@ private struct SidebarRowStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, DS.Space.m)
-            .padding(.vertical, DS.Space.s - 1)
+            .padding(.vertical, DS.Space.row)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
             .background(
-                RoundedRectangle(cornerRadius: DS.Radius.pane)
+                RoundedRectangle(cornerRadius: DS.Radius.control)
                     .fill(selected ? DS.Palette.selectedFill : hovered ? DS.Palette.hoverFill : .clear))
             .padding(.horizontal, DS.Space.s)
             .onHover { hovered = $0 }
@@ -111,7 +110,7 @@ struct SelectionFill: View {
     let isSelected: Bool
 
     var body: some View {
-        RoundedRectangle(cornerRadius: DS.Radius.pane)
+        RoundedRectangle(cornerRadius: DS.Radius.control)
             .fill(isSelected ? DS.Palette.selectedFill : .clear)
             .padding(.horizontal, DS.Space.s)
     }
@@ -194,13 +193,15 @@ private struct HostGroupHeader: View {
                 // Terminal. No dots, no status text.
                 ConnectionGlyph(
                     state,
-                    healthy: Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack").foregroundStyle(.secondary))
+                    healthy: Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack")
+                        .foregroundStyle(.secondary).opacity(DS.Opacity.mutedGlyph))
                     .font(.system(size: 13))
                     .frame(width: 16)
                     .help(group.failure ?? (live ? group.name : state.title))
                 Text(group.name)
                     .font(DS.Font.section)
-                    .foregroundStyle(live ? .primary : .tertiary)
+                    // Headers stay quiet; the rows under them lead.
+                    .foregroundStyle(live ? .secondary : .tertiary)
                     .lineLimit(1)
                 if group.kind == .ssh {
                     // Plain SSH: tabs do not outlive the connection (no daemon to keep them).
@@ -243,8 +244,8 @@ private struct HostGroupHeader: View {
         }
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.s + 2)
-        .padding(.top, DS.Space.l)
-        .padding(.bottom, DS.Space.xs + 2)
+        .padding(.top, DS.Space.m)
+        .padding(.bottom, DS.Space.xs)
         .contentShape(.rect)
         .onTapGesture { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(group.id) } }
         .onHover { hovered = $0 }
@@ -462,16 +463,16 @@ private struct TabRow: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: DS.Space.s + 2) {
                 Text("\(number)")
-                    .font(.callout.monospacedDigit())
+                    .font(DS.Font.sidebarSubtitle.monospacedDigit())
                     .foregroundStyle(isActive ? .secondary : .tertiary)
                     // Two digits fit (⌘-numbers run past 9 across hosts), so titles stay aligned.
                     .frame(width: 20, alignment: .trailing)
                     .lineLimit(1)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: DS.Space.xs + 2) {
                         TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
-                            .font(isActive ? DS.Font.rowTitleEmphasis : DS.Font.rowTitle)
+                            .font(DS.Font.sidebarTitle)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -481,10 +482,11 @@ private struct TabRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                    if let context {
+                    // Only a line that says something: not "~", not empty, not the title again.
+                    if let context, Self.isInformative(context, title: title) {
                         Text(context)
-                            .font(DS.Font.literalSmall)
-                            .foregroundStyle(.secondary)
+                            .font(DS.Font.sidebarSubtitle)
+                            .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .truncationMode(.head)
                             // Under the title, past the mark slot and its spacing.
@@ -492,14 +494,12 @@ private struct TabRow: View {
                     }
                 }
                 Spacer(minLength: DS.Space.xs)
-                #if os(macOS)
-                // Shortcut hints only where a keyboard is certain (iPad shows them on ⌘-hold).
-                if let shortcut = model.groups.shortcutNumber(of: ref) {
+                if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(shortcut)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
                 }
-                #endif
             }
             // A host that is down keeps its rows (and their last state), quieter.
             .opacity(group.status.isLive || group.isLocal ? 1 : 0.6)
@@ -528,6 +528,12 @@ private struct TabRow: View {
         .accessibilityValue(context ?? "")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
+    }
+
+    /// A context line worth a second line in the row.
+    static func isInformative(_ context: String, title: String) -> Bool {
+        let trimmed = context.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && trimmed != "~" && trimmed != title
     }
 }
 

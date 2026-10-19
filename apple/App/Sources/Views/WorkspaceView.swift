@@ -248,12 +248,13 @@ struct NewTabButton: View {
 private struct SidebarDivider: View {
     @Binding var width: Double
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.displayScale) private var displayScale
     @State private var start: Double?
 
     var body: some View {
         Rectangle()
             .fill(theme.splitDivider)
-            .frame(width: 1)
+            .frame(width: DS.Size.hairline(scale: displayScale))
             .ignoresSafeArea()
             .overlay {
                 Color.clear
@@ -406,21 +407,27 @@ private struct TerminalToolbar: ToolbarContent {
                 .disabled(model.destination != .terminal)
             Menu("Pane", systemImage: "rectangle.split.2x1") {
                 PaneMenuItems(workspace: workspace, model: model)
+                Divider()
+                #if os(macOS)
+                Button("Draw on Pane", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
+                    .disabled(!DrawingCommands.canDraw(in: workspace))
+                #endif
+                TabStyleToggle(style: $tabStyle)
             }
+            .help("Pane")
             .menuIndicator(.hidden)
             .disabled(workspace.focusedPane == nil || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
+            #if os(iOS)
+            // A Pencil device: drawing stays one tap away. On the Mac it is in the Pane menu.
             Button("Draw", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
                 .help("Draw on Pane (⌃⌘D)")
                 .disabled(!DrawingCommands.canDraw(in: workspace) || model.destination != .terminal)
                 .accessibilityIdentifier("draw-button")
+            #endif
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
                 .help("Command Palette (⌘K)")
                 .accessibilityIdentifier("open-palette")
-        }
-        ToolbarSpacer(.fixed, placement: .primaryAction)
-        ToolbarItem(placement: .primaryAction) {
-            TabStyleToggle(style: $tabStyle)
         }
     }
 }
@@ -441,8 +448,8 @@ private struct HostToolbarButton: View {
                     ConnectionGlyph(model.connection, healthy: Image(systemName: "server.rack"))
                     Text(model.hostName).lineLimit(1)
                 }
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(model.connection.isQuiet ? .primary : .secondary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 6)
             }
             .help(model.connection.isQuiet ? model.hostName : "\(model.hostName) · \(model.connection.title)")
