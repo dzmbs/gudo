@@ -45,6 +45,7 @@ struct PRToolbarButton: View {
         .font(.subheadline)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 6)
+        .fixedSize()
         .contentShape(.rect)
     }
 

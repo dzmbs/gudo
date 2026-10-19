@@ -218,6 +218,12 @@ struct NewTaskSheet: View {
                 repoPath = repos.first?.path
                 worktree = repo != nil
             }
+            // The host's repositories can arrive after the sheet opened.
+            .onChange(of: repos.map(\.path)) { old, paths in
+                guard old.isEmpty, repoPath == nil, !paths.isEmpty else { return }
+                repoPath = model.git.worktree?.repo ?? paths.first
+                worktree = true
+            }
         }
         #if os(iOS)
         .phoneDetents([.large])

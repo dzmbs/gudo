@@ -391,6 +391,59 @@ on iPhone (horizontal scroll per file, 18 pt rows). Tap a line → an inline not
 are accent-tinted cards under their line; a floating glass bar "2 notes · Goes to Claude Code as
 one prompt" with Copy and Send to Claude Code (⌘↩).
 
+
+The daemon's repository snapshot (docs/DAEMON.md §5.11) drives four surfaces. Values from
+
+- **Sidebar**: inside each host group, tabs outside a repository first (as before), then one
+  section per repository: the name in the section style, `.secondary`, sentence case, no icon,
+  + New Task (hover on the Mac, 0.6 on touch), padding top 12 / bottom 4. Under it one row per
+  worktree, main first: a 16 pt slot (18 on touch) with the branch glyph, or the pull request's
+  glyph in its state colour (open green, merged purple from the palette's magenta, closed red,
+  draft grey), at 0.6 with a 10 pt checks badge in the corner; the branch (body 13 on the Mac,
+  subheadline 15 on touch, regular weight always) with the worktree's name under it in
+  footnote `.tertiary`, hidden when it repeats the branch; then a fixed-size trailing cluster,
+  6 pt apart: `+N −M` (caption, monospaced digits, palette green/red), `#PR` (caption
+  cross-fades the cluster to the row's ⌘N (0.15 s, no reflow). Rows: 6 pt vertical insets, title
+  and subtitle touching, selection a neutral 10 % fill at radius 8, and on the selected row every
+  coloured glyph and count drops to `.secondary`. A worktree with one tab is that tab's row; with
+  several, the tabs follow one level in (14 pt); with none it is quiet and a click opens a tab
+  there. Context menu: New Tab Here, Open on GitHub, Run ▸, Copy Path, Copy Branch Name,
+  Rename/Close Tab, Archive Worktree…, Delete Worktree…. The ⌘1–9 order follows the rows.
+- **Needs you**: above the hosts, a highlight section (6 pt amber dot at 60 % with a hairline,
+  "Needs you") hoists every tab, on any host, whose agent waits or failed: glyph, tab, "host ·
+  branch", the state word in its colour. The rows also stay in place below.
+- **Toolbar**: next to the host button, the focused worktree's pull request: its glyph at 0.6
+  with the checks badge and `#42` in subheadline `.secondary` (or the branch when there is none).
+  Hover opens the popover and it closes 150 ms after the pointer leaves both (tap on touch; a
+  sheet on iPhone). Then one glass group: Open In ▾ (VS Code, Files, Diff, GitHub) and Run ▾
+  (the default script on click, ⌘R; the repository's scripts with their tinted symbols, then
+  Global, then Edit Scripts…).
+  Headline "Open Title #42" with the state word and number `.secondary`; a `.secondary` line
+  "branch · Ready to merge" (or why not: behind, blocked, conflicts, draft, still checking);
+  `+128 −17` in subheadline green/red (and "· Merge conflicts" in red); the checks ring (12 pt,
+  2 pt line: failed, in progress, skipped, passed) with "1 failed, 1 in progress, 3 successful";
+  a divider; one caption row per check: coloured symbol, name (opens its page), status word
+  right-aligned `.secondary`; then Open on GitHub, Re-run Failed (when an Actions run failed)
+  and Merge… (prominent, only when GitHub allows it). With no PR: "No Pull Request" and Create
+  Pull Request. When the host's `gh` is missing or signed out, the popover says so, once, with
+  the command (`gh auth login`) and Copy: no token is ever asked for in the app.
+- **Palette** (section "Git · branch"): Merge PR #42 (strategy from Settings, then a
+  confirmation naming it; an UNSTABLE PR says an optional check failed), Re-run Failed Checks,
+  Open PR on GitHub ⌃⌘G, Create Pull Request, Check Out Pull Request… (into a new worktree),
+  Run: <script> (badge "Script"), Archive Worktree, Delete Worktree…, Restore <branch>. A Git
+  menu carries the same, with ⌘R and ⌃⌘G.
+- **New Task** (replaces New Agent): Run (Claude Code · Codex · Shell, segmented), host,
+  repository, New Worktree, the name (a friendly generated one, shuffle) and the branch (its
+  placeholder is the branch the host derives from the name), "Runs setup first: `pnpm i`", the
+  prompt. Start makes the worktree and opens its tab at once; the prompt is typed when the agent
+  is ready.
+- **Archive and delete** ask only when there is something to lose: "It has 3 uncommitted
+  changes. They are kept with the archive and come back when you restore it." Settings ▸ Git:
+  merge strategy, Delete Merged Worktrees (Never, 1, 3, 7 (default), 14, 30 days; sent to each
+  host), global scripts (name, command, SF Symbol, tint, ⌘R).
+
+git fixture and a stand-in `gh`; Mac drawn by the app).
+
 ### Files (`Screens/FilesBrowserView.swift`) and editor (`Screens/EditorView.swift`)
 
 Files: on the terminal background; directories first (folder glyph in `info`), monochrome SF
