@@ -20,6 +20,7 @@ daemon = { path = "crates/daemon" }
 client-core = { path = "crates/client-core" }
 ssh = { path = "crates/ssh" }
 push = { path = "crates/push" }
+drawing = { path = "crates/drawing" }
 
 base64 = "0.23"
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
@@ -43,6 +44,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tempfile = "3.27.0"
 notify = "8"
+ignore = "0.4"
 
 # Apple FFI (crates/apple-ffi): proc-macro UniFFI, no UDL. xtask generates the Swift bindings
 # with uniffi_bindgen's library mode, so the app build never runs a Rust binary.

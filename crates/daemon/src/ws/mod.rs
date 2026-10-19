@@ -6,7 +6,7 @@
 mod attention;
 mod editor;
 mod files;
-mod git;
+pub(crate) mod git;
 mod paths;
 pub(crate) mod ports;
 mod review;

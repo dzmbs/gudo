@@ -39,6 +39,7 @@ use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+mod draw;
 mod mp;
 mod ws;
 
@@ -151,6 +152,11 @@ enum Cmd {
     Ws(ws::WsCmd),
     #[command(flatten)]
     Mp(mp::MpCmd),
+    /// Drawings and images: list, show, export, send to an agent.
+    Draw {
+        #[command(subcommand)]
+        action: draw::DrawCmd,
+    },
     /// Search a pane's whole scrollback on the daemon (newest match first).
     Search {
         pattern: String,
@@ -453,6 +459,7 @@ async fn run(cli: Cli) -> Result<()> {
     let outcome = match cli.command {
         Cmd::Pair { .. } | Cmd::Join { .. } => unreachable!("handled above"),
         Cmd::Mp(cmd) => return mp::run(&mut conn, cmd).await,
+        Cmd::Draw { action } => return draw::run(&mut conn, action).await,
         Cmd::Attach => return attach(conn).await,
         Cmd::SshProxy { port } => {
             conn.client

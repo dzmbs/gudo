@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::ArtifactId;
 use crate::ids::{PaneId, SessionId, TabId};
 
 /// The direction in which a split arranges its two children.
@@ -134,6 +135,13 @@ pub enum PaneLaunch {
         resume: Option<String>,
         /// Working directory, as for `Shell`.
         cwd: Option<String>,
+    },
+    /// A canvas pane showing a drawing (no process). `None` creates a new drawing in the
+    /// session. Clients learn which leaves are canvases from
+    /// [`ArtifactEvent::Canvases`](crate::ArtifactEvent::Canvases).
+    Canvas {
+        /// The drawing to show.
+        artifact_id: Option<ArtifactId>,
     },
 }
 

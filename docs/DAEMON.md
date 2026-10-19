@@ -3,7 +3,9 @@
 Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
 (key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
 roles enforced on every request, control lease, presence, signed approvals, audit log,
-revocation).
+anchors, send to agent) and input assistance for the mobile line editor (§8: foreground
+program, prompt state and input line, atomic submit, history, completion, file search,
+blocked-agent options).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -266,6 +268,9 @@ un git status [path] | diff [--staged|--index|--rev R|--merge-base B] [--stat] [
 un turns [--diff N] [--stat]      un review --pane P --note 'path:L[-L]:text' [--submit]
 un worktree create [--repo R] [--branch B] [--base B] | list | remove <path> [--force]
             [--delete-branch] | launch <path> [--agent claude|codex]
+un draw list | show <id> [--mode kitty|ascii] | export <id> --format png|svg|ascii [-o F]
+        | send <id> | --file img.png [--pane P] [--version V]
+        | place <id> [--pane P] | import <file.png|.excalidraw> [--pane P]
 un fs ls <dir> [-a] | stat | cat | put <local> <remote> [--if-match V] [--new] | get <remote>
       <local> | mkdir [-p] | mv <a> <b> [--force] | rm <path> [--permanent] [-r] | watch <dir>
 #   --no-relay for direct-only; --ticket to override the saved one
@@ -351,6 +356,8 @@ port_base = 4100                 # first PORT handed to a worktree
 [editor]
 code = "/usr/local/bin/code"     # default: PATH + usual app bundle locations
 openvscode = "/opt/openvscode-server"   # instead of the pinned download
+vscodium = "/opt/vscodium-reh-web"      # instead of the pinned VSCodium download
+default = "vscode"               # what `Auto` launches: "vscode" (default) | "vscodium"
 ```
 
 driver with a daemon- or session-wide grant; editor and tunnel launches need the owner.
@@ -394,7 +401,7 @@ replaces a LAN one). Scans run every 2 s while any client is connected, at once 
 prints a new URL or a command starts/ends, never with no client; the whole list is pushed when
 it changes. Gap: a URL that scrolls off within one tick is missed (the listener still is).
 
-### 5.3 Editor (VS Code tunnel; `code serve-web`; openvscode-server as explicit fallback)
+### 5.3 Editor (VS Code tunnel; `code serve-web`; VSCodium as automatic fallback; openvscode-server explicit only)
 
 **Main path since 2026-10-18: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
 their own GitHub or Microsoft account by device code. The app opens
@@ -465,6 +472,54 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   returns a `url_path` with `payload=[["openFile","vscode-remote://localhost:<port>/path:L:C"],
   ["gotoLineMode","true"]]` for the app to load (the authority assumes the in-app proxy keeps
   in tests); this is S-ED1 territory.
+
+no editor picker; VS Code is the editor and must just work).
+
+- **Fallback rule** (`DaemonClient::open_editor`, apple-ffi): with the VS Code licence accepted,
+  the host's default editor (VS Code) is tried first, installing the `code` CLI from Microsoft
+  if missing. If the CLI **cannot be obtained** (`VsCodeCliInstall` fails: download blocked,
+  offline or mirrored network, no Microsoft build for the OS/arch/libc) or **cannot run**
+  (`serve-web` exits before listening, e.g. a wrong libc), the same call launches
+  `Only(Vscodium)` with no prompt and returns `EditorSession.fallback_reason` (the VS Code
+  error) so the app can show a quiet note. It never falls back when the licence was not
+  accepted (`Unavailable`/`Denied` are returned as before), when the grant is not the owner's,
+  or when a kind was asked for explicitly. Both failing → `Failed` with both messages.
+- The explicit kind is internal: `open_editor_with(folder, accept, Some(kind))` (Rust only,
+  `#[doc(hidden)]`, for tests), `un ws editor launch --kind vscodium`, and the host's
+  `[editor] default = "vscodium"` (then `Auto` means VSCodium; for hosts where Microsoft's CLI
+  is known not to work). Proto: `EditorKind::Vscodium` appended (goldens added).
+- **What runs:** VSCodium's Web Host `vscodium-reh-web-<platform>-1.140.06880.tar.gz` from
+  <https://github.com/VSCodium/vscodium/releases> (pinned in `ws/editor.rs`, SHA-256 from the
+  release's `.sha256` files): linux-x64 `f16388ea…`, linux-arm64 `d21cccd1…`, darwin-arm64
+  `171645ce…`, darwin-x64 `76062c1a…`. curl, else wget; hash checked; the tarball has no
+  top-level directory, so it unpacks into `<state>/editors/vscodium-reh-web-<platform>-<version>/`
+  (atomic rename). `editor.vscodium` points at an existing one instead.
+- `bin/codium-server --host 127.0.0.1 --port <free> --connection-token <random 128-bit>
+  --telemetry-level off` in the folder. Same flags and token semantics as openvscode-server
+  (`?tkn=` → `vscode-tkn` cookie + 302; no token → 403; `--without-connection-token` exists and
+  is never used). Its `product.json` has an empty `serverLicense` and `serverLicensePrompt`, so
+  there is no licence flag, prompt or sign-in. Extensions come from Open VSX
+  (`extensionsGallery.serviceUrl = https://open-vsx.org/vscode/gallery`); server data in
+  `~/.vscodium-server`. One server per folder, own process group, killed on `EditorStop` and
+  daemon shutdown; `EditorOpen`'s remote-CLI path works the same (`bin/remote-cli/codium`).
+- **Verified live (2026-10-19)**, ignored test `real_vscodium_downloads_and_serves`
+  (download + verify + unpack + start + token redirect + workbench through an iroh forward):
+  macOS 26 arm64 (M5 Max) 14.6 s; Linux arm64 OrbStack VM (Ubuntu 24.04) 11.9 s. Both ~95–100 MB at ~9 MB/s from GitHub. The
+  workbench HTML has no `<title>` (the workbench sets it from script);
+  `apple-mobile-web-app-title` is `Code` and the served web manifest's `name` is `VSCodium`.
+  Without the token `/` is refused. Fake-binary e2e: `vscodium_launches_without_a_licence_and_as_the_default`
+  (daemon), `open_editor_falls_back_to_vscodium_when_vscode_cannot_be_had` (apple-ffi: blocked
+  CLI download, and a `code` that exits on start).
+
+| | VS Code (`code serve-web`, the editor) | VSCodium Web Host (fallback) |
+|---|---|---|
+| Licence | Microsoft VS Code + Server licence, accepted once in the app | MIT (<https://github.com/VSCodium/vscodium/blob/master/LICENSE>); no prompt |
+| Sign-in | none | none |
+| Extensions | Microsoft Marketplace | Open VSX only (Marketplace terms forbid non-Microsoft products) |
+| Not available | — | Pylance, C# Dev Kit, Remote-* (SSH, Containers, WSL), Live Share, GitHub Copilot (not on Open VSX; checked 2026-10-19, 404). Python, rust-analyzer, etc. are there |
+| Platforms | wherever Microsoft ships the CLI | Linux x64/arm64, macOS arm64/x64 (pinned) |
+| Who downloads | Microsoft's update service | VSCodium's GitHub releases, SHA-256 pinned |
+
 - Licences (ARCHITECTURE §9): Microsoft's VS Code Server licence
   (<https://code.visualstudio.com/license/server>, read 2026-10-18) allows use "with Microsoft
   Visual Studio Code" on the user's devices and internal network, and forbids hosting,
@@ -679,6 +734,14 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | Streams: `PortForward`, `Forward`, `Upload`, `Download` | driver | host |
 | `RegisterGrant` | owner, or the chain's leaf issuer | — |
 | `ListGrants`, `ListDevices`, `Revoke`, `Audit` | **owner** | daemon |
+| `Artifact`: `List`, `Get`, `Export`; blob download | any role | artifact visible (below) |
+| `Artifact`: `Create`, `Apply`, `Delete`, `SetAnchor`, `SetPreview`; `InkLive`; blob upload | **prompter or driver** | artifact visible; anchor pane / session in scope |
+| `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |
+| `Op` `Split`/`NewTab` with `PaneLaunch::Canvas` | driver (as any split) | session of the pane |
+| `Assist`: `Watch`, `State`, `BlockedOptions` / `SubmitLine` / `History`, `Complete`, `FileSearch` / `AnswerBlocked` | any role / **driver** + lease / **driver** / **approver** (§7.8) | pane in scope / pane / host / pane |
+
+An artifact is visible to daemon- and session-wide grants in its session; tab- and
+pane-scoped guests see only ink anchored to, or canvases shown in, panes inside their scope.
 
 Pushes are filtered the same way: layout (a tab-scoped guest sees only its tab, a pane-scoped
 guest a one-pane layout), pane meta, agent events, echo hints, command marks, decisions,
@@ -779,7 +842,426 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 - Unit tests: prompt sanitizer, audit chain (reopen, edit detection).
 - `proto` goldens for every new message and variant; invite text round trip.
 
-## 7. Known gaps / follow-ups
+
+`proto::artifact` (wire), `crates/drawing` (model shared with client-core and `un`: packed
+ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/src/art/`
+(store, send, blob streams), `crates/daemon/src/anchor.rs` (row anchors),
+`crates/client-core/src/artifacts.rs`, `crates/un/src/draw.rs`.
+
+### 7.1 Model
+
+- An **artifact** belongs to a session: a **drawing** (elements: strokes with packed points,
+  rect/ellipse/line/arrow shapes, text, placed images; canvas units or terminal cells), an
+  **Excalidraw scene** (§7.9) or an **image** (one blob). `ArtifactInfo` carries kind, title, coordinate space, creator, times,
+  `version`, element count, the image, a `preview` PNG (a client's render of one version), the
+  `anchor` and the canvas panes showing it.
+- **Op log**: every `Apply` is one `OpBatch{version, actor, at, ops}` (add/replace, move,
+  restyle, z, delete, clear, title). The daemon orders batches; `Scene::apply` takes exactly
+  `version + 1`, so all clients converge. Elements are add-wins (an existing id is replaced),
+  fields last-writer-wins.
+- **Blobs**: SHA-256 content addressed, PNG or JPEG only (sniffed from the header), shared by
+  all sessions, garbage-collected when no image artifact, preview or image element refers to
+  them (after a grace period, so an upload waiting for its `Create` survives).
+
+### 7.2 Protocol
+
+`ClientCtl::Artifact{req_id, ArtifactRequest}` → `ServerCtl::ArtifactResult{req_id,
+Result<ArtifactResponse, ArtifactError>}`: `List{session}`, `Create`, `Get{id, since}` (the
+batches after `since`, else every element), `Apply{id, base, ops}`, `Delete`, `SetAnchor`,
+`SetPreview{id, version, png}`, `Export{id, version, Png|Svg}`, `Send`. Pushes to the clients
+attached to the session (`ServerCtl::Artifact`): `Created`, `Changed{info, batch}`,
+`Info` (anchor detached, preview, canvas panes), `Deleted`, `Ink` (others' live strokes) and
+`Canvases{session, [pane → artifact]}` (also sent on `Attach`). `ClientCtl::InkLive` streams
+live points; the daemon stamps the actor and relays it to everyone else in the session.
+Blobs move on bidirectional streams at bulk priority, `StreamHeader::Blob(Put{session, size,
+media} | Get{hash})` → `BlobReply::{Ready, Stored, Found, Failed}`; QUIC flow control is the
+backpressure. `Caps::ARTIFACTS` marks clients that understand all this. Goldens for every new
+message in `crates/proto/tests/golden.rs`.
+
+**Canvas panes** are ordinary `LayoutNode::Leaf`s created by `Split`/`NewTab` with
+`PaneLaunch::Canvas{artifact: None}` (the daemon creates an Excalidraw scene) or `Some(id)`
+(a drawing or scene). They run
+no process; `Canvases` says which leaves they are. Not a new `LayoutNode` variant on purpose:
+an old client would fail to decode the whole layout; this way it shows an empty pane.
+Closing the pane keeps the drawing; deleting the drawing closes its canvas panes.
+
+### 7.3 Ink anchors
+
+`Create`/`SetAnchor` with `AnchorRequest{pane, at_seq, from_bottom}`: the daemon pins the row
+on its VT (accounting for rows scrolled since `at_seq`), answers `RowAnchor{screen, at_seq,
+from_bottom, command_id, state}` and clients track the row in their own VT. Anchors detach
+(`RowGone` after eviction or `clear`, `AltScreenExited`, `PaneClosed`, `DaemonRestart`) and a
+
+### 7.4 Send to agent
+
+`Send{pane, artifact?, version?, png: Inline | Blob | Artifact}`: the pane must run an agent
+(launched, detected or reporting hooks) or the answer is `NotAgentPane`. The PNG is the
+client's render (inline ≤ 1 MiB, else an uploaded blob), or for `Artifact` the image, the
+preview of that version, or the daemon's own rasterisation. It is written to
+`<state>/artifacts/<session>/send/<artifact>@<version>.png` (atomically) and the path is pasted
+character outside `[A-Za-z0-9_./@:-]`, e.g. `Application\ Support`), never followed by Enter.
+The answer (`Sent{path, pasted, bracketed}`) comes 120 ms after the paste so the client's next
+keystroke cannot overtake Claude's asynchronous attach. A bare image (no artifact) is kept as
+an image artifact. Each send is audited (`Prompt` kind, path only).
+
+### 7.5 Export
+
+`Ascii`: `drawing::to_ascii` — box glyphs (`┌─┐`, `├`, `┼`) with junctions where lines
+meet, arrows as orthogonal elbows ending in `▶◀▲▼`, ellipses `╭╮╰╯`, text in place, ink as
+dots; Excalidraw scenes map 10 × 20 scene px to a character. `Png`: passthrough of the image blob or of the preview at the asked version; with no preview
+the daemon rasterises (`drawing::rasterize`: anti-aliased pressure strokes, shapes; text and
+images as outlines) and keeps that as the preview. `Svg`: `drawing::to_svg`, deterministic
+(golden-tested), images inlined as data URIs up to 8 MiB each. Results over 1 MiB come back as
+a blob hash to download.
+
+### 7.6 Storage and caps
+
+`<state>/artifacts/`: `index.bin` (next id, canvas panes), `<session>/<id>/info.bin`,
+`<session>/<id>/ops.log` (length-prefixed postcard batches, appended and `fdatasync`ed per
+batch; a torn last frame is dropped on load), `blobs/<sha256>`, `<session>/send/`. Closing a
+session deletes its artifacts. Caps (`Config::artifacts`): blob 32 MiB, whole store 1 GiB,
+one drawing's log 8 MiB, one batch 1 MiB, 1000 artifacts per session, 20 000 elements per
+drawing, 16 KiB per text and per ink chunk; over a cap → `TooLarge`.
+
+### 7.7 Client core and CLI
+
+`Client::artifacts / artifact_create / artifact_get / artifact_apply / artifact_delete /
+artifact_set_anchor / artifact_set_preview / artifact_export / send_to_agent / blob_upload /
+blob_download / ink_live`; pushes go to an `ArtifactListener` (`ArtifactUpdate::Event` or
+`Synced`). The client caches a `drawing::Scene` per artifact it has seen: pushed batches apply
+in order, a gap or a reconnect fetches `Get{since}` (resync), `artifact_scene(id)` reads it.
+`un draw list | show | export | send` (show: kitty graphics when the terminal supports it,
+from the environment or an `a=q` query; else a braille render and a summary).
+
+### 7.8 Tests
+
+`cargo test -p daemon --test it artifacts` (macOS and Linux): Excalidraw scenes (a canvas pane
+creates one; concurrent puts reconcile with the version / nonce rule on both clients and the
+daemon, stale offers come back as winners, deletions, resync after a reconnect, ASCII/SVG/PNG
+export, a viewer reads but cannot put or import); inline placements (placed at the cursor
+row, followed through 40 lines of output, sent to a client attaching later, replaced after
+an edit, a kitty PNG printed by a program in the pane captured as an image artifact and
+placement with its `c`/`r` size, a dropped `.excalidraw` file and photo imported and placed,
+detached by `clear`, removed, kept detached after a restart with the scene intact); two
+clients — live ink fan-out
+(200 chunks, latency printed, no echo to the sender), batches from both converge, the second
+client suspended while the first draws resyncs to the same scene on reconnect, an anchor
+detaches after `clear`; a viewer lists, reads and exports but cannot create, apply, delete,
+send, upload or ink (and its ink never reaches the owner); send-to-agent into a fake agent
+(`cat -v` behind bracketed paste) from a state dir containing a space: escaped bracketed path,
+no Enter, file bytes, `NotAgentPane` for a shell, bare images and daemon renders; canvas pane,
+image blob, preview, PNG/SVG export, blob download, then a daemon restart keeps artifacts,
+versions, scenes, blobs and the canvas pane; caps. Unit/golden: `crates/drawing` (packing,
+simplification, scene convergence, SVG golden, rasteriser, PNG), anchors
+(`daemon::anchor`, `ghostty-vt` `anchors`), paste escaping, proto goldens.
+
+### 7.9 Excalidraw scenes
+
+The non-Pencil editor (finger, mouse, trackpad) is Excalidraw (MIT), bundled offline in a
+WKWebView; the daemon is its sync and persistence backend. Elements stay Excalidraw's JSON
+(`ExElement{id, version, version_nonce, deleted, json}`; the daemon checks the fields
+against the JSON). `ExcalidrawPut` reconciles each element with Excalidraw's own rule —
+higher `version` wins, a tie goes to the lower `versionNonce`, deletions are tombstones — and
+answers `ExcalidrawApplied{version, rejected}` (the stored winners for offers that lost); the
+winners go to everyone else as `ArtifactEvent::Excalidraw`. `ExcalidrawGet{since}` returns the
+elements changed after a revision (every element at 0), app state and files. Images are blobs
+(`ExFile{file_id, image}`), so a scene never carries data URLs over the wire. Scenes are
+written to `excalidraw.bin` once a second when changed and on shutdown; the whole scene is
+capped by `log_max`, an element by 512 KiB. client-core caches every scene it has seen
+(`excalidraw_scene`), applies pushes with the same rule and catches up after a reconnect.
+Export (SVG, PNG, ASCII) converts elements to vectors (rectangles, ellipses, diamonds, arrows
+and lines, freedraw with pressure, text, images); the hand-drawn look is the app's (its PNG
+render, uploaded as preview or with `Place`/`Send`).
+
+### 7.10 Inline placements ("never leave the terminal")
+
+A **placement** shows an artifact inside a terminal pane: a `cols × rows` cell box at column
+`col` of an anchored row, drawn by clients over the cells like kitty graphics, scrolling with
+the output (the anchor is a tracked pin, §7.3). The daemon owns image and placement state
+because Ghostty snapshots carry no images: placements are sent on every `Attach` (resume,
+reattach, a new device) and as `ArtifactEvent::Placed` / `Unplaced`, and persisted in
+`index.bin` (detached after a restart). Three ways in:
+
+- **Place** (`PlaceRequest{pane, artifact, version, anchor | cursor row, col, cols, rows,
+  png, replace}`): the overlay's "done". `png` is the device's render, else the image, the
+  preview or the daemon's render; sizes default from the image (pane cell pixels if known,
+  else 2× renders of 9 × 18 pt cells) clamped to the pane's width; `replace` swaps the
+  placement the overlay was re-opened from.
+- **Import** (`ImportRequest{pane, name, data | blob}`): a pasted or dropped image or
+  `.excalidraw` file becomes an artifact placed at the cursor row.
+- **kitty graphics in the output**: the output scanner (`kitty.rs`) recognises PNG images a
+  program displays with the kitty protocol (`a=T,f=100`, direct, chunked or not; `c`/`r`
+  sizes), pins the cursor row at the exact byte where the sequence ends (the VT write is split
+  there), and keeps the PNG as an image artifact plus a `Kitty` placement. So `un draw show`,
+  `kitten icat` or an agent printing an image inside our pane shows inline on every client
+  and survives snapshots. Not handled: transmit-then-place (`a=t` + `a=p`), raw RGB data,
+  file/shm transmission, animation, deletes. The daemon's and clients' VTs keep kitty storage
+  off, so both ignore the sequence identically.
+
+Roles: `Place`, `Unplace`, `Import` need the draw role on the pane; `Placements` any role.
+
+### 7.11 App-side contract (for the Swift app)
+
+**Draw mode on a terminal pane (the primary UX).**
+1. Enter with a Pencil touch on the pane (iPad, `drawingPolicy = .pencilOnly`), a
+   two-finger long press, or a key (key bar button / ⌘⇧D). Fingers keep scrolling and
+   selecting while Pencil inks.
+2. The overlay is a transparent layer over the pane, anchored to the row under the first
+   touch: `AnchorRequest{pane, at_seq: the VT's applied seq, from_bottom}`. It scrolls with
+   the output (pin that row in the app's own VT once it has applied `at_seq`).
+3. The overlay holds one **Excalidraw scene** (`artifact_create(kind: Excalidraw, anchor)`):
+   shapes, connected arrows and text from the embedded editor in transparent mode, and Pencil
+   strokes converted from `PKStroke` to Excalidraw `freedraw` elements (points + pressures).
+   Overlay scene units: **10 scene px = one column, 20 = one row**, origin at the anchor
+   row's left edge — the app maps to points with its own cell size, so ink stays on the text
+   across fonts and devices, and the ASCII export lines up with cells. While the pen moves,
+   stream `ink_live` every ~16 ms (peers draw it in the author's presence colour); commit
+   with `excalidraw_put`.
+4. **Done**: render the overlay (Excalidraw `exportToBlob` + ink) to PNG and
+   `place_png(PlaceRequest{anchor: same row, col, cols/rows: the covered cells,
+   replace: the placement it was re-opened from})`. The diagram is now part of the pane's
+   output for every client and device.
+5. **Tap a placement** to reopen the overlay in place: `excalidraw_get(placement.artifact_id)`
+   at `placement.anchor`, then Done again with `replace`.
+6. **Send to agent** from the overlay or a placement's menu:
+   `send_to_agent(pane, Some(id), Some(version), Some(png))`.
+
+**Rendering placements.** `Client::placements(pane)` (pushed on attach and on change). For
+each `Live` placement: once the VT has applied `anchor.at_seq`, pin the row `from_bottom`
+above the bottom; draw `image` (fetch with `blob_download`, cache by hash) as a quad over
+`cols × rows` cells from column `col`, in the "above text" layer (the same pass as kitty
+images and ink). `Detached` placements leave the grid and go to the pane's loose tray.
+
+**Canvas pane (secondary).** A `Canvas` leaf (`ArtifactEvent::Canvases`) hosts the same
+Excalidraw editor full-size, free scene units.
+
+**Paste / drop onto a pane.** Images and `.excalidraw` files → `import_to_pane(pane, name,
+bytes)`; with the "send" modifier onto an agent pane → `send_to_agent(pane, None, None,
+Some(png))`.
+
+**Excalidraw in WKWebView: the JS bridge.** The bundle (`@excalidraw/excalidraw`, MIT,
+fonts included) loads from app resources over a custom scheme (`<brand>-canvas://`), no
+network. Swift → JS calls `window.canvas.<fn>(json)` through `evaluateJavaScript`; JS → Swift
+posts to `window.webkit.messageHandlers.canvas.postMessage(msg)`:
+
+| Direction | Message | Meaning |
+|---|---|---|
+| JS → Swift | `{type: "ready", version}` | editor mounted |
+| Swift → JS | `load({elements, appState, files, mode: "overlay"\|"canvas", readOnly, theme, cell: {w, h}})` | initial scene from `excalidraw_get(id, 0)`; `files` are `{id, mimeType, dataURL}` built from blobs; `readOnly` for viewers (`viewModeEnabled`); overlay mode = transparent background, no grid, no menu |
+| JS → Swift | `{type: "change", elements: [changed], appState: {viewBackgroundColor, gridSize}}` | from `onChange`, only elements whose `version` grew since the last post, throttled to 50 ms (Excalidraw's collab cadence); Swift → `excalidraw_put` |
+| Swift → JS | `applyRemote({elements, files})` | pushes and `rejected` winners; JS runs `reconcileElements(local, remote, appState)` and `updateScene({elements, captureUpdate: NEVER})` so remote edits never enter the local undo stack |
+| JS → Swift | `{type: "files", files: [{id, mimeType, dataURL}]}` | images added in the editor; Swift decodes, `blob_upload`s, and sends `ExFile{file_id, image}` with the next put |
+| Swift → JS | `exportImage({requestId, format: "png"\|"svg", scale, exportPadding})` | JS answers `{type: "export", requestId, data: base64}` (`exportToBlob` / `exportToSvg`) for Done, `Send`, previews |
+| JS → Swift | `{type: "pointer", x, y, tool}` | optional, ≤ 10 Hz, for presence cursors |
+| JS → Swift | `{type: "done"}` / `{type: "cancel"}` | overlay toolbar buttons |
+
+Viewers get `readOnly`; the daemon refuses their puts anyway (`Forbidden`).
+
+D9). Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
+Requests are `ClientCtl::Assist{req_id, AssistRequest}` → `ServerCtl::AssistResult{req_id,
+Result<AssistResponse, AssistError>}`; pushes are `ServerCtl::Assist(AssistPush)`. A daemon
+without them never sends them, so an older daemon leaves the app in direct-typing mode.
+Code: `crates/daemon/src/assist/` (one module per need), `crates/client-core/src/assist.rs`
+(`Client::watch_prompt`, `pane_assist`, `submit_line`, `history`, `complete`, `file_search`,
+`blocked_options`, `answer_blocked`; pushes to an `AssistListener`, the latest foreground and
+prompt state per pane kept for `Client::foreground` / `Client::prompt_state`). Text positions
+(`cursor`, completion ranges, match positions) count Unicode scalar values.
+
+### 8.1 Foreground program (D1)
+
+One task samples every pane's foreground process group every 100 ms (`tcgetpgrp` on the PTY
+master; name from `argv[0]`, else the kernel's name; on macOS setuid programs such as `top` are
+named through `PROC_PIDT_SHORTBSDINFO`). A program is reported once it has stayed in front
+for 150 ms (so about 200 ms after it starts): `ls` or a prompt's `git` call never produce an
+event. `AssistPush::Foreground{pane_id, pid, name, argv, profile, since}` goes to every client
+whose attached session holds the pane; `AssistRequest::State` answers it too.
+`ProgramProfile::classify` (in `proto`, usable by the app): `Shell` (bash, zsh, fish, sh, dash,
+ksh, tcsh, nu, …), `Vim` (vi, vim, nvim, view, hx, kak), `Pager` (less, more, man, most),
+`Monitor` (top, htop, btop, btm, glances, atop, nvtop), `Tmux` (tmux, screen, zellij), `Repl`
+(python, node, irb, ghci, iex, lua, psql, sqlite3, redis-cli, … when started without a
+script), `Claude`, `Codex` (also as `node …/claude`), `Other`.
+
+### 8.2 Prompt state and the input line (D2)
+
+- **Prompt id**: changes whenever a command starts (`133;C`), so it names one prompt instance;
+  redraws of the same prompt (resize, Ctrl-L, `reset-prompt`) keep it. Phases: `AtPrompt`,
+  `Running{command_id}`, `Unknown` (no integration yet, alternate screen).
+- **Input line**: from the `133;B` pin to the end of the logical line the cursor is on (rows
+  up to the cursor joined: soft wraps with nothing, hard breaks with `\n`; then the cursor's row
+  and the rows it soft-wraps into). Cells libghostty-vt marked as prompt (`133;P` continuation
+  prompts) are dropped. Typed trailing spaces before the cursor are kept. The read happens
+  under the pane's VT lock (`Terminal::row`, new in `ghostty-vt`: text, width, style and OSC 133
+  role per cell), the parsing after it.
+- **Autosuggestions** (zsh-autosuggestions `POSTDISPLAY`, fish): text from the cursor to the end
+  drawn faint, in palette color 8, in the grey ramp 232–250, or in a dim grey RGB, when the text
+  before the cursor is not, is cut and reported as `suggestion`. Another single non-default
+  style after the cursor that the typed text does not use is kept but flagged
+  `PossibleGhostText`. Syntax highlighting (zsh-syntax-highlighting colours words before and
+  after the cursor alike) is not mistaken for it.
+- **Right prompt**: while the cursor still waits at the input start after the prompt is drawn
+  (it may arrive in several reads), text after a gap on that row is remembered as the right
+  prompt and cut from later readings while it is still there; zsh leaves `RPROMPT` on the line
+  when it runs it, so it is also cut from the command text of the mark (and history). Unknown
+  trailing text at the right edge after a gap of 3+ cells is cut as a guess
+  (`RightPromptGuess`).
+- **Multi-line prompts** are fine (their `133;P;k=s` comes before `133;B`). A continuation prompt
+  (PS2) after the input start flags `Continuation`; non-blank rows below the line (a completion
+  listing, the tail of a multi-line buffer) flag `ContentBelow`.
+- **fish 3** sends no `133;B`: the input start is inferred from where the cursor is once the
+  prompt is drawn (output within 25 ms of `133;A` still counts as prompt) and flagged
+  `NoInputMark`. The same inferred start gives fish's command marks their text.
+- **Confidence**: `confident` is true only when there is no doubt; the client prefills its
+  editor only then. Each state carries `shell` (from the foreground program), whether bracketed
+  paste is on, and `keymap` (always `Unknown` until the D2b hook exists).
+- **Pushes**: `AssistRequest::Watch{pane, true}` answers the state now and from then on the
+  connection gets `AssistPush::Prompt` whenever the state changes; watched panes are re-read
+  every 40 ms when output arrived since the last read (debounce), unwatched panes cost nothing.
+
+### 8.3 Atomic submit (D3)
+
+`SubmitLine{pane, prompt_id, text, run}`: the daemon re-reads the prompt and refuses with
+`AssistError::NotAtPrompt(state now)`, writing nothing, unless the pane is `AtPrompt` with the
+same id, no continuation prompt is up, no alternate screen, and the foreground group is a
+shell right now (sampled, not the debounced report). Text with control characters other than
+newline and tab is refused, and newlines without bracketed paste. Then, as **one** PTY write:
+`^E ^U` (end of line, kill to line start: `unix-line-discard` in readline, `kill-whole-line`
+in zsh's emacs keymap, `backward-kill-line` in fish), the text as the pane's paste (bracketed
+when mode 2004 is on), and `\r` when `run`. Same lease rule as raw input (a pane leased to
+someone else is refused). Answer: `Submitted{prompt_id, at_seq}`.
+
+### 8.4 History (D4)
+
+- Every finished command with text is appended to `<state>/history/commands.jsonl` (0600,
+  directory 0700): `{"c", "d": cwd, "x": exit, "ms": duration, "t": unix ms, "n": count}`. In
+  memory: one entry per distinct command (count, last run's cwd/exit/duration, up to 8
+  directories with their counts). Past twice `max_entries` lines the file is rewritten from
+  the entries (one line per command and directory) keeping the `max_entries` most recently
+  used, so duplicates fold away.
+- **Import, once** (marker `imported.json` lists sources and counts): `$ZDOTDIR/.zsh_history`,
+  `~/.zsh_history` or `~/.histfile` (plain or extended `: start:elapsed;cmd`, backslash-continued
+  multi-line commands, zsh metafication undone), `~/.bash_history` (`#epoch` lines honoured), and
+  fish's `fish_history` (`- cmd:` / `when:`, `\n` and `\\` escapes). Lines without a time get
+  the file's mtime, a second apart in file order.
+- **Privacy**: a command typed with leading whitespace is never recorded (bash `ignorespace`,
+  zsh `HIST_IGNORE_SPACE`), nor imported. `config.toml`:
+  `[history] enabled = true, ignore_space = true, max_entries = 50000, import = true`.
+- `History{cwd?, prefix?, contains?, since?, limit ≤ 1000}` → distinct commands ranked by
+  frecency: recency bucket (4 / 2 / 1 / 0.5 / 0.25 for < 1 h / day / week / month / older) ×
+  (1 + ln(1 + count)) × place (3 + ln(1 + n) when used in `cwd`, 1.5 in a parent or child
+  directory) × 0.7 when the last run failed.
+
+### 8.5 Completion (D5)
+
+`Complete{pane, line, cursor, limit ≤ 200}` → `Completions{cwd, items: [{text, display, kind,
+detail, start, end}]}` (replace `line[start..end]` with `text`). The line is split into shell
+words (quotes, backslashes, `; | & ( ) < >`; `sudo`, `env`, `time`, … and `VAR=x` keep the
+command position). Sources, in order: whole-line **history** (with the cursor at the end, top 4
+by frecency in the pane's directory), **git** (subcommands after `git`; branches, tags, remote
+branches after `checkout`/`switch`/`merge`/`rebase`/`log`/`diff`/…; changed and untracked
+files, relative to the pane's directory, after `add`/`restore`/`rm`/`diff`/…; refs and status
+cached 3 s per work tree), **commands** on the pane shell's initial `PATH` in command position
+(cached 30 s), **paths** relative to the pane's OSC 7 directory (`~` expanded, dot files only
+for a word starting with `.`, directories first with a trailing `/`, case-insensitive fallback,
+quoted for an open `'`/`"` or with backslashes).
+
+Measured (`completion_sources_and_latency_with_10k_history`, a 10 000-entry history, a git
+repo, 300 requests over the client, loopback; Linux: the OrbStack Ubuntu 24.04 arm64 VM).
+are warm; the cold costs are the first ref and `$PATH` lookups after their 3 s / 30 s expiry.
+
+| | macOS 26, M5 Max (release) | Linux VM (release) |
+|---|---|---|
+| warm, 300 mixed requests | p50 0.2 ms, p95 0.2 ms, max 0.4 ms | p50 0.3 ms, p95 0.7 ms, max 1.9 ms |
+| cold: first ref lookup (`for-each-ref` + `status`) | 30 ms | 2.7 ms |
+| cold: first `$PATH` scan | 8 ms | 4.2 ms |
+| `History` query over 10 000 entries | 0.3 ms | 0.3 ms |
+
+### 8.6 File search for `@` mentions (D7)
+
+`FileSearch{root, query, limit ≤ 200}` → `FileMatches{root, matches: [{path, kind, positions}],
+scanned, truncated}`. The root goes through the path policy (§5.0). The tree is walked in
+parallel with the `ignore` crate (ripgrep's walker: `.gitignore` even outside a repository,
+`.ignore`, global excludes, hidden files skipped), at most 200 000 entries, cached 10 s per root.
+The query is a smart-case ordered subsequence of the relative path, scored fzf-style (segment
+and word starts, consecutive runs, matches inside the file name; gaps and long paths cost).
+
+### 8.7 Blocked agent options (D9)
+
+What already existed: `PaneMeta.agent` = `Blocked{request_id, summary, options: [{id, label}]}`
+and the `AgentEvent` JSON (`blocked.options`, `answer_paths`), filled only from hook payloads,
+with no way to answer a dialog the hook does not hold. Added: `BlockedOptions{pane}` →
+`BlockedPrompt{request_id, summary, options: [{label, choice: AllowOnce | AllowSession | Deny |
+Other, option_id, keys, selected}], source: Hook | Screen}`. The numbered menu on screen
+(Claude's boxed `❯ 1. Yes` dialog, Codex's `› 1. Yes, proceed (y)`, wrapped labels joined) gives
+every option its keys (the digit, or the `(y)`/`(esc)` hint) and the selected row. With a hook
+holding the request open the hook's options come first, with `option_id` for the signed
+`Decide` path and keys matched from the screen; otherwise the screen's menu alone.
+`AnswerBlocked{pane, index, label}` re-reads the menu, refuses if that index no longer shows
+that label, then types the keys; it is audited as an `Approval`.
+
+### 8.8 Roles
+
+All requests go through `mp/policy.rs` (`policy::assist`), and pane-addressed ones must be in
+the grant's scope:
+
+| Request | Needs | Target |
+|---|---|---|
+| `Watch`, `State` (prompt state, foreground), `BlockedOptions` | any role | pane in scope |
+| `SubmitLine` | **driver** (+ the lease rule of raw input) | pane in scope |
+| `History`, `Complete`, `FileSearch` | **driver** | host (other panes' commands, the file system) |
+| `AnswerBlocked` | **approver** | pane in scope |
+
+Prompt pushes go only to connections watching the pane (and with it in scope); foreground pushes
+to connections whose attached session holds it.
+
+### 8.9 Tests
+
+- `cargo test -p daemon --lib assist`: line reading (cursor, trailing spaces, soft wraps and wide
+  characters, autosuggestions in colour 8 and faint, syntax highlighting, doubtful styled tails,
+  right prompts remembered and guessed, multi-line prompts, listings below, continuation
+  prompts, fish without `133;B`, prompt ids, leading-space privacy, right prompt kept out of
+  command marks), history (persistence, dedupe, directory ranking, compaction, the privacy
+  switch), the three history formats and a one-time import, the shell word splitter and
+  quoting, path/`$PATH`/history completion, fuzzy scoring and the ignore-aware walk, menu
+  parsing (Claude box, Codex hints), the foreground debounce, submit bytes.
+- `cargo test -p daemon --test it assist` (macOS: zsh; the Linux VM: zsh, bash 5.2, fish 3.7):
+  per shell, watch → typed line, cursor movement, (zsh) a fake zsh-autosuggestions suggestion and
+  `RPROMPT` cut with the reading still confident, atomic submit replacing a half-typed line,
+  stale prompt id and running command refused with nothing written, history with cwd and exit
+  and without the leading-space command, path and history completion; foreground profiles for
+  `less`, `top`, `vi` with `/bin/echo` never reported; git ref/path, `$PATH` and path
+  completion plus the latency benchmark above; file search honouring `.gitignore` and the path
+  policy; a fake Claude dialog answered by keys after a stale label is refused, and the hook's
+  options carrying decision ids and screen keys; a viewer reading state but refused submit,
+  history, completion, file search and answers.
+
+### 8.10 Limits
+
+- Keymaps are not known (D2b, the OSC 7702 buffer hook, is not built): submit assumes the emacs
+  keymap. In zsh's vi insert mode `^U` only kills back to where insert started, and `^E` is not
+  bound, so a line typed before entering vi command mode may survive.
+- Multi-line buffers: only the cursor's logical line is read when rows follow it, and `^U`
+  clears one line, so submit is refused at a continuation prompt; a multi-line zsh buffer
+  edited with the cursor on an earlier line reads as not confident.
+- Ghost text in an unusual colour (not faint, not grey) is reported as doubt, not removed;
+  ghost text in the same style as typed text cannot be told apart.
+- The right prompt is learnt when the prompt appears; one that changes while typing (a clock)
+  falls back to the guess rule.
+- Completion's `PATH` is the shell's environment at start (`/proc/<pid>/environ`, macOS
+  `KERN_PROCARGS2`): `PATH` changes made in rc files after that, aliases, functions and builtins
+  are not offered; flags and command-specific arguments are not completed (D5a). Git commands
+  are not interrupted at the 150 ms deadline; the first lookup in a large repository can exceed
+  it.
+- History records commands only from panes with shell integration; commands run while no
+  daemon ran come only from the one-time import.
+- fish 3 (no `133;B`): if its prompt reaches the PTY in reads more than 25 ms apart (a heavily
+  loaded host), the inferred input start lands inside the prompt, so the line and the command
+  text carry a prompt tail (fish 3 readings are never marked confident), and a leading-space
+  command may then not be recognised as private. fish 4 marks its input itself.
+- Foreground changes shorter than ~200 ms are never reported (by design); the app should not
+  rely on them for programs that exit at once.
+- D2b, D5a, D6 and D8 (Phase 2) are not built.
+
+## 9. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
@@ -813,6 +1295,10 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
   run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
   untested against a real browser; no transfer resume by offset for uploads (downloads take an
   offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
+  `.excalidraw` export (import works); kitty capture covers displayed PNGs only (§7.10);
+  Excalidraw scenes keep no history (only the current revision exports); live ink is relayed without per-connection
+  rate limiting; a session's artifacts are deleted with it; anchors detach on daemon restart;
+  the daemon's raster render draws text and images as outlines only.
 - `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
   leased). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.

@@ -155,6 +155,12 @@ payloads `Data`. Pushes go to a separate `WorkspaceListener` (`setWorkspaceListe
    reused.
 4. Returns `url` = `http://localhost:<local>/?tkn=…&folder=…` for the `WKWebView`, the
    `localPort`, the `EditorInstance` and whether the CLI was installed now.
+5. No editor choice in the app. `acceptVscodeLicense` defaults to `false`, so
+   `openEditor(folder:)` is the whole call. With the licence accepted, if Microsoft's CLI cannot
+   be obtained (download blocked, no build for the host) or cannot run there, the call falls
+   back to VSCodium's Web Host (MIT, Open VSX, no prompt, no sign-in) by itself:
+   `instance.kind == .vscodium` and `fallbackReason` says why (show a quiet note at most).
+   `EditorSession.fallbackReason` is a new field that defaults to `nil`.
 
 `acceptVscodeLicense` means the user accepted `vscodeLicenseUrl()` (the CLI) and
 `vscodeServerLicenseUrl()` (serve-web) in the app. `closeEditor(session:stopServer:)`,
@@ -313,7 +319,9 @@ source ../../../target/ssh-test/env && swift test --filter SshTests
   a viewer's keys refused with `inputRejected(.role)`, take-control forbidden, owner lists and
   revokes the grant, the guest gets `revoked`, audit chain ok); an agent turn's attention item
   marked seen and the push; editor status without a `code` CLI and `openEditor` without the
-  licence → `Unavailable` naming the fix, no forward left behind; push register / status /
+  licence → `Unavailable` naming the fix, no forward left behind; the VSCodium fallback (a
+  blocked CLI download, a `code` that cannot run) and VSCodium asked for explicitly, with a fake
+  `codium-server`; push register / status /
   unregister and the relay body.
 - Swift `WorkspaceTests` (daemon with `[files] allow` set to its state dir): forward to an
   echo server, `fsList` / `fsWrite` / `fsRead`, invite + join as a viewer with refused input.

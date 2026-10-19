@@ -34,12 +34,14 @@
 // Parts of this crate (result mapping, formatter options) are adapted from herdr's
 // `crates/ghostty-vt/src/lib.rs`, Copyright herdr contributors, licensed under Apache-2.0.
 
+mod cells;
 mod error;
 mod history;
 mod input;
 mod snapshot;
 mod terminal;
 
+pub use cells::{Cell, CellStyle, CellWidth, Color, Row, Semantic};
 pub use error::Error;
 pub use history::{StreamingRestore, count_pages, history_chunk, history_chunks};
 pub use input::{

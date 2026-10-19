@@ -1061,7 +1061,14 @@ async fn editor_servers_launch_per_folder_and_open_files() {
     std::fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
 
     let status = c.client.editor_status().await.unwrap();
-    assert!(status.available.iter().all(|a| a.installed), "{status:?}");
+    assert!(
+        status
+            .available
+            .iter()
+            .filter(|a| a.kind != EditorKind::Vscodium)
+            .all(|a| a.installed),
+        "{status:?}"
+    );
 
     // serve-web needs the licence accepted; Auto never falls back to openvscode, which has
     // to be chosen explicitly.
@@ -1144,6 +1151,201 @@ async fn editor_servers_launch_per_folder_and_open_files() {
     // The server stopped with the daemon.
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(TcpStream::connect(("127.0.0.1", e2.port)).await.is_err());
+}
+
+/// VSCodium: chosen explicitly or as the configured default, launched with a token and no
+/// licence flag, per folder, stopped with the daemon. A fake `codium-server` stands in.
+#[tokio::test(flavor = "multi_thread")]
+async fn vscodium_launches_without_a_licence_and_as_the_default() {
+    if !have("python3") {
+        eprintln!("skipping: python3 not installed");
+        return;
+    }
+    let (_state, state) = canonical_tempdir();
+    let (_home, home) = canonical_tempdir();
+    let codium = home.join("codium");
+    install_fake(&codium.join("bin/codium-server"));
+    let (codium2, home2, state2) = (codium.clone(), home.clone(), state.clone());
+    let daemon = start_with(&state, move |c| {
+        c.pane_env.push(("HOME".into(), s(&home2)));
+        c.fs_allow.push(home2);
+        c.code_cli = Some(state2.join("no-such-code"));
+        c.vscodium_dir = Some(codium2);
+        c.editor_default = EditorKind::Vscodium;
+    })
+    .await;
+    let c = connected(&daemon).await;
+    let (a, b) = (home.join("a"), home.join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+
+    let status = c.client.editor_status().await.unwrap();
+    let entry = status
+        .available
+        .iter()
+        .find(|e| e.kind == EditorKind::Vscodium)
+        .unwrap();
+    assert!(entry.installed, "{entry:?}");
+    assert!(entry.note.as_deref().unwrap().contains("Open VSX"));
+
+    let launch = |folder: &Path, choice| EditorLaunch {
+        folder: s(folder),
+        choice,
+        accept_vscode_license: false,
+    };
+    // Auto is the configured default: VSCodium, with no licence accepted and no `code` CLI.
+    let ea = c
+        .client
+        .editor_launch(launch(&a, EditorChoice::Auto))
+        .await
+        .unwrap();
+    assert_eq!(ea.kind, EditorKind::Vscodium);
+    let args = std::fs::read_to_string(codium.join("bin/args.txt")).unwrap();
+    assert!(args.contains("--host 127.0.0.1"), "{args}");
+    assert!(
+        args.contains(&format!("--connection-token {}", ea.token)),
+        "{args}"
+    );
+    assert!(args.contains("--telemetry-level off"), "{args}");
+    assert!(!args.contains("license"), "{args}");
+    // One server per folder; the same folder reuses it.
+    let eb = c
+        .client
+        .editor_launch(launch(&b, EditorChoice::Only(EditorKind::Vscodium)))
+        .await
+        .unwrap();
+    assert_ne!(eb.port, ea.port);
+    assert_ne!(eb.token, ea.token);
+    let again = c
+        .client
+        .editor_launch(launch(&a, EditorChoice::Only(EditorKind::Vscodium)))
+        .await
+        .unwrap();
+    assert_eq!(again.port, ea.port);
+
+    let local = c
+        .client
+        .forward(0, ForwardTarget::Tcp { port: ea.port })
+        .unwrap();
+    assert!(
+        http_get(local, &ea.url_path)
+            .await
+            .starts_with("HTTP/1.0 200")
+    );
+    assert!(http_get(local, "/").await.starts_with("HTTP/1.0 403"));
+
+    // VS Code asked for explicitly still needs its CLI and licence.
+    assert!(matches!(
+        c.client
+            .editor_launch(launch(&b, EditorChoice::Only(EditorKind::VsCode)))
+            .await,
+        Err(WsError::Unavailable(_))
+    ));
+
+    c.client.editor_stop(s(&b)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(TcpStream::connect(("127.0.0.1", eb.port)).await.is_err());
+    drop(c);
+    daemon.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(TcpStream::connect(("127.0.0.1", ea.port)).await.is_err());
+}
+
+/// Downloads the pinned VSCodium Web Host (about 95 MB), verifies it and serves a folder.
+/// Linux and macOS (x86_64, arm64); run with
+/// `cargo test -p daemon --test it real_vscodium -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "downloads VSCodium"]
+async fn real_vscodium_downloads_and_serves() {
+    let (_state, state) = canonical_tempdir();
+    let (_home, home) = canonical_tempdir();
+    let daemon = start_home(&state, &home).await;
+    let c = connected(&daemon).await;
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("main.rs"), "fn main() {}\n").unwrap();
+    let start = Instant::now();
+    let e = c
+        .client
+        .editor_launch(EditorLaunch {
+            folder: s(&project),
+            choice: EditorChoice::Only(EditorKind::Vscodium),
+            accept_vscode_license: false,
+        })
+        .await
+        .unwrap();
+    println!(
+        "VSCodium downloaded, verified and ready in {:.1} s",
+        start.elapsed().as_secs_f64()
+    );
+    let local = c
+        .client
+        .forward(0, ForwardTarget::Tcp { port: e.port })
+        .unwrap();
+    let page = http_get(local, &e.url_path).await;
+    assert!(
+        page.starts_with("HTTP/1.1 302"),
+        "{}",
+        &page[..page.len().min(300)]
+    );
+    assert!(page.contains(&format!("vscode-tkn={}", e.token)), "{page}");
+    let location = page
+        .lines()
+        .find_map(|l| l.strip_prefix("Location: "))
+        .unwrap()
+        .trim()
+        .to_owned();
+    let get = |path: String| {
+        let token = e.token.clone();
+        async move {
+            let mut tcp = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+            tcp.write_all(
+                format!(
+                    "GET {path} HTTP/1.0\r\nHost: localhost\r\nCookie: vscode-tkn={token}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+            let mut out = String::new();
+            tcp.read_to_string(&mut out).await.unwrap();
+            out
+        }
+    };
+    let workbench = get(location).await;
+    assert!(
+        workbench.starts_with("HTTP/1.1 200"),
+        "{}",
+        &workbench[..workbench.len().min(300)]
+    );
+    assert!(workbench.contains("workbench"), "not the workbench");
+    // The page sets its title from script; the web manifest names the product.
+    let manifest = workbench
+        .split('"')
+        .find(|p| p.ends_with("/manifest.json"))
+        .expect("manifest link")
+        .to_owned();
+    let manifest = get(manifest).await;
+    println!(
+        "apple-mobile-web-app-title: {:?}; manifest: {}",
+        workbench
+            .split("apple-mobile-web-app-title\" content=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next()),
+        manifest.split("\r\n\r\n").nth(1).unwrap_or_default().trim()
+    );
+    assert!(manifest.contains("VSCodium"), "{manifest}");
+    assert!(!http_get(local, "/").await.contains(" 200 "));
+    let opened = c
+        .client
+        .editor_open(None, s(&project.join("main.rs")), Some(1), None)
+        .await
+        .unwrap();
+    println!("open: in_window {}", opened.in_window);
+    drop(c);
+    daemon.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(TcpStream::connect(("127.0.0.1", e.port)).await.is_err());
 }
 
 // --- attention -----------------------------------------------------------------------------

@@ -21,7 +21,9 @@ use proto::{
 use pty::{EchoState, PtyActor, ReadError, SpawnOptions, Subscriber, WinSize};
 use tokio::sync::{mpsc, watch};
 
+use crate::anchor::{AnchorPos, Anchors, ScrollLog};
 use crate::commands::{CommandLog, CommandUpdate};
+use crate::kitty::KittyScanner;
 use crate::osc::{Osc, OscScanner};
 use crate::scan::{self, LinkCollector, ScreenText};
 
@@ -47,6 +49,15 @@ pub(crate) enum VtEvent {
     Activity,
     /// Shell integration reported a prompt or command step.
     Command(CommandUpdate),
+    /// A program displayed a PNG with the kitty graphics protocol; its top-left cell (the
+    /// cursor when the sequence ended) is pinned under `key`.
+    KittyImage {
+        key: u64,
+        png: Vec<u8>,
+        col: u16,
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// A resize applied at an output offset, numbered in order of application.
@@ -74,11 +85,37 @@ struct Vt {
     keys: KeyEncoder,
     mouse: MouseEncoder,
     events: mpsc::UnboundedSender<VtEvent>,
+    /// Rows scrolled per output chunk, for resolving client row positions.
+    scroll: ScrollLog,
+    anchors: Anchors,
+    kitty: KittyScanner,
+    next_kitty: u64,
 }
 
 impl Vt {
     fn feed(&mut self, seq: pty::Seq, data: &[u8]) {
-        self.term.write(data);
+        // Write up to the end of each kitty image so its cell can be pinned where the
+        // program put it (the cursor at that moment).
+        let images = self.kitty.feed(data);
+        let mut written = 0;
+        for img in images {
+            self.term.write(&data[written..img.end]);
+            written = img.end;
+            let key = (1 << 62) | self.next_kitty;
+            self.next_kitty += 1;
+            let at = seq.get() + img.end as u64;
+            let col = self.term.cursor().x;
+            if self.anchors.pin_cursor(&mut self.term, at, key).is_ok() {
+                let _ = self.events.send(VtEvent::KittyImage {
+                    key,
+                    png: img.png,
+                    col,
+                    cols: img.cols,
+                    rows: img.rows,
+                });
+            }
+        }
+        self.term.write(&data[written..]);
         self.seq = seq.get() + data.len() as u64;
         let prompts = self.term.take_semantic_prompts();
         if !prompts.is_empty() {
@@ -89,6 +126,7 @@ impl Vt {
                 let _ = self.events.send(VtEvent::Command(update));
             }
         }
+        self.commands.after_output(&mut self.term);
         let events = &self.events;
         self.scanner.feed(data, |osc| {
             let _ = events.send(VtEvent::Osc(osc));
@@ -98,6 +136,7 @@ impl Vt {
             self.alt = alt;
             let _ = self.events.send(VtEvent::AltScreen);
         }
+        self.scroll.observe(&mut self.term, self.seq);
         let now = Instant::now();
         if self
             .last_activity
@@ -210,6 +249,10 @@ impl Pane {
             keys: KeyEncoder::new().map_err(io::Error::other)?,
             mouse: MouseEncoder::new().map_err(io::Error::other)?,
             events,
+            scroll: ScrollLog::default(),
+            anchors: Anchors::default(),
+            kitty: KittyScanner::default(),
+            next_kitty: 0,
         }));
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
@@ -557,6 +600,26 @@ impl Pane {
         })
     }
 
+    pub fn line_snapshot(&self) -> crate::assist::LineSnapshot {
+        let vt = lock(&self.vt);
+        let view = vt.commands.line_marks();
+        let screen = (view.phase == crate::assist::marks::Phase::Prompt && !vt.alt)
+            .then(|| crate::assist::line::Screen::capture(&vt.term, &view))
+            .flatten();
+        crate::assist::LineSnapshot {
+            screen,
+            alt: vt.alt,
+            bracketed: vt.term.mode(ghostty_vt::Mode::BRACKETED_PASTE),
+            at_seq: Seq(vt.seq),
+            view,
+        }
+    }
+
+    /// Whether command `id` was typed with a leading space (kept out of history).
+    pub fn command_private(&self, id: u64) -> bool {
+        lock(&self.vt).commands.is_private(id)
+    }
+
     /// Queues input for the child. Returns the output offset at the time of writing, which
     /// the input's echo (if any) follows.
     pub async fn write(&self, data: Vec<u8>) -> Result<Seq, pty::Closed> {
@@ -565,6 +628,54 @@ impl Pane {
             self.pty.write(data).await?;
         }
         Ok(at)
+    }
+
+    /// Anchors ink `key` to the row `from_bottom` rows above the bottom at `at_seq`; also
+    /// returns the shell-integration command whose block holds the row.
+    pub fn anchor_create(
+        &self,
+        key: u64,
+        at_seq: Seq,
+        from_bottom: u64,
+    ) -> Result<(AnchorPos, Option<u64>), String> {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        let pos = vt
+            .anchors
+            .create(&mut vt.term, &vt.scroll, vt.seq, key, at_seq, from_bottom)?;
+        let command = match pos {
+            AnchorPos::Live { y: Some(y), .. } if !vt.alt => vt
+                .commands
+                .list(&vt.term)
+                .into_iter()
+                .filter(|c| c.rows.prompt.is_some_and(|p| p <= u64::from(y)))
+                .filter(|c| c.rows.end.is_none_or(|e| e >= u64::from(y)))
+                .map(|c| c.mark.command_id)
+                .next_back(),
+            _ => None,
+        };
+        Ok((pos, command))
+    }
+
+    /// Pins the cursor's row under `key`.
+    pub fn anchor_cursor(&self, key: u64) -> Result<AnchorPos, String> {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        vt.anchors.pin_cursor(&mut vt.term, vt.seq, key)
+    }
+
+    /// Where anchor `key` is now (`None`: unknown, or detached and already reported).
+    pub fn anchor_position(&self, key: u64) -> Option<AnchorPos> {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        vt.anchors.position(&mut vt.term, vt.seq, key)
+    }
+
+    /// Forgets anchor `key`.
+    pub fn anchor_remove(&self, key: u64) {
+        let mut guard = lock(&self.vt);
+        let vt = &mut *guard;
+        vt.anchors.remove(&mut vt.term, key);
     }
 
     /// Hangs up the child's session.

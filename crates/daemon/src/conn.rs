@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use proto::{
-    Actor, AuditKind, Bulk, ClientCtl, ClientInput, DeviceId, ForwardReply, Hello, InputPayload,
-    InputRejectReason, LeaseRequestKind, MpError, MpRequest, MpResponse, PaneId, PaneLaunch,
-    PaneSize, RefuseReason, ResumePoint, RpcError, Scope, Seq, ServerCtl, SessionId, SignedGrant,
-    StreamHeader, SubscribeMode, TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest,
-    WorkspaceResponse, WsError,
+    Actor, ArtifactError, ArtifactEvent, ArtifactInfo, ArtifactRequest, ArtifactResponse,
+    AuditKind, BlobHeader, BlobReply, Bulk, ClientCtl, ClientInput, DeviceId, ForwardReply, Hello,
+    InputPayload, InputRejectReason, LeaseRequestKind, MpError, MpRequest, MpResponse, PaneId,
+    PaneLaunch, PaneSize, RefuseReason, ResumePoint, RpcError, Scope, Seq, ServerCtl, SessionId,
+    SignedGrant, StreamHeader, SubscribeMode, TransferReply, WIRE_VERSION, Welcome,
+    WorkspaceRequest, WorkspaceResponse, WsError,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
@@ -291,6 +292,27 @@ async fn accept_bi(client: Arc<Client>) {
             let _ = send.finish();
             continue;
         }
+        if let Ok(Some(StreamHeader::Blob(blob))) = &header {
+            // Uploads need the draw role in the session; downloads any role (a blob is named
+            // by its SHA-256, which only someone who can see an artifact holding it learns).
+            let allowed = client.live().and_then(|()| match blob {
+                BlobHeader::Put { session_id, .. } => {
+                    client.allow(Need::Draw, Target::Session(*session_id))
+                }
+                BlobHeader::Get { .. } => client.allow(Need::View, Target::Any),
+            });
+            if let Err(e) = allowed {
+                let reply = BlobReply::Failed(ArtifactError::Forbidden(e.to_string()));
+                let _ = net::send(&mut send, &reply).await;
+                let _ = send.finish();
+                continue;
+            }
+            let _ = send.set_priority(crate::stream::priority::BULK);
+            let core = Arc::clone(&client.core);
+            let blob = blob.clone();
+            tokio::spawn(crate::art::send::serve_blob(core, blob, send, recv));
+            continue;
+        }
         match header {
             Ok(Some(StreamHeader::PortForward { port })) => {
                 tokio::spawn(forward::serve(port, send, recv));
@@ -523,7 +545,474 @@ impl Client {
                     self.send(ServerCtl::Lease(lease));
                 }
             }
+            Event::Artifact {
+                session,
+                event,
+                from,
+            } => {
+                if from == Some(self.id) || lock(&self.state).session != Some(session) {
+                    return;
+                }
+                let event = match &*event {
+                    ArtifactEvent::Created(info)
+                    | ArtifactEvent::Info(info)
+                    | ArtifactEvent::Changed { info, .. } => {
+                        if !self.artifact_visible(info) {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Deleted { .. } => {
+                        if !matches!(self.authz.scope, Scope::Daemon | Scope::Session(_)) {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Ink(ink) => {
+                        let visible = self
+                            .core
+                            .art
+                            .info(ink.artifact_id)
+                            .is_some_and(|i| self.artifact_visible(&i));
+                        if !visible {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Excalidraw { artifact_id, .. } => {
+                        let visible = self
+                            .core
+                            .art
+                            .info(*artifact_id)
+                            .is_some_and(|i| self.artifact_visible(&i));
+                        if !visible {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Placed(p) => {
+                        if !self.pane_allowed(p.pane_id) {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Unplaced { pane_id, .. } => {
+                        if !self.pane_allowed(*pane_id) {
+                            return;
+                        }
+                        (*event).clone()
+                    }
+                    ArtifactEvent::Canvases {
+                        session_id,
+                        canvases,
+                    } => ArtifactEvent::Canvases {
+                        session_id: *session_id,
+                        canvases: canvases
+                            .iter()
+                            .filter(|c| self.pane_allowed(c.pane_id))
+                            .copied()
+                            .collect(),
+                    },
+                };
+                self.send(ServerCtl::Artifact(event));
+            }
+            Event::Assist(push) => {
+                let send = match &push {
+                    proto::AssistPush::Foreground(fg) => self.in_session(fg.pane_id),
+                    proto::AssistPush::Prompt(state) => {
+                        self.core.assist.watching(self.id, state.pane_id)
+                            && self.pane_allowed(state.pane_id)
+                    }
+                };
+                if send {
+                    self.send(ServerCtl::Assist(push));
+                }
+            }
         }
+    }
+
+    /// Whether this connection may see an artifact: its session for daemon- and
+    /// session-wide grants; for tab- and pane-scoped guests only ink anchored to, or canvases
+    /// shown in, panes they can see.
+    fn artifact_visible(&self, info: &ArtifactInfo) -> bool {
+        match self.authz.scope {
+            Scope::Daemon => true,
+            Scope::Session(s) => info.session_id == s,
+            Scope::Tab(_) | Scope::Pane(_) => {
+                info.anchor.is_some_and(|a| self.pane_allowed(a.pane_id))
+                    || info.canvas_panes.iter().any(|p| self.pane_allowed(*p))
+                    || self
+                        .core
+                        .art
+                        .placement_panes(info.artifact_id)
+                        .into_iter()
+                        .any(|p| self.pane_allowed(p))
+            }
+        }
+    }
+
+    fn visible_artifact(&self, id: proto::ArtifactId) -> Result<ArtifactInfo, ArtifactError> {
+        self.core
+            .art
+            .info(id)
+            .filter(|i| self.artifact_visible(i))
+            .ok_or_else(|| ArtifactError::NotFound(format!("artifact {id}")))
+    }
+
+    async fn artifact(&self, req: ArtifactRequest) -> Result<ArtifactResponse, ArtifactError> {
+        let (need, target) = policy::artifact(&req);
+        self.allow(need, target)
+            .map_err(|e| ArtifactError::Forbidden(e.to_string()))?;
+        let core = &self.core;
+        let art = &core.art;
+        match req {
+            ArtifactRequest::List { session_id } => {
+                if !core.session_visible(session_id, self.authz.scope) {
+                    return Err(ArtifactError::NotFound(format!("session {session_id}")));
+                }
+                let _ = art.check_anchors(core);
+                Ok(ArtifactResponse::List(
+                    art.list(session_id)
+                        .into_iter()
+                        .filter(|i| self.artifact_visible(i))
+                        .collect(),
+                ))
+            }
+            ArtifactRequest::Create(create) => {
+                if lock(&core.layout).session(create.session_id).is_none() {
+                    return Err(ArtifactError::NotFound(format!(
+                        "session {}",
+                        create.session_id
+                    )));
+                }
+                if let Some(a) = create.anchor
+                    && core.session_of_pane(a.pane_id) != Some(create.session_id)
+                {
+                    return Err(ArtifactError::Invalid(
+                        "the anchor pane is in another session".into(),
+                    ));
+                }
+                let (mut info, _) = art.create(self.actor, &create, None)?;
+                if let Some(req) = create.anchor {
+                    match crate::art::Art::resolve_anchor(core, info.artifact_id, req) {
+                        Ok(anchor) => {
+                            info = art.update(info.artifact_id, |i| i.anchor = Some(anchor))?
+                        }
+                        Err(e) => {
+                            let _ = art.delete(info.artifact_id);
+                            return Err(e);
+                        }
+                    }
+                }
+                core.emit_artifact(
+                    info.session_id,
+                    ArtifactEvent::Created(info.clone()),
+                    Some(self.id),
+                );
+                Ok(ArtifactResponse::Created(info))
+            }
+            ArtifactRequest::Get { artifact_id, since } => {
+                self.visible_artifact(artifact_id)?;
+                art.scene(artifact_id, since).map(ArtifactResponse::Scene)
+            }
+            ArtifactRequest::Apply {
+                artifact_id, ops, ..
+            } => {
+                self.visible_artifact(artifact_id)?;
+                let (info, batch) = art.apply(artifact_id, self.actor, ops)?;
+                let version = info.version;
+                core.emit_artifact(
+                    info.session_id,
+                    ArtifactEvent::Changed { info, batch },
+                    None,
+                );
+                Ok(ArtifactResponse::Applied {
+                    artifact_id,
+                    version,
+                })
+            }
+            ArtifactRequest::Delete { artifact_id } => {
+                let info = self.visible_artifact(artifact_id)?;
+                if let Some(a) = info.anchor
+                    && let Some(entry) = core.pane(a.pane_id)
+                {
+                    entry.pane.anchor_remove(artifact_id.0);
+                }
+                let info = art.delete(artifact_id)?;
+                for pane in &info.canvas_panes {
+                    Arc::clone(core).apply_op(proto::LayoutOp::ClosePane { pane_id: *pane });
+                }
+                core.emit_artifact(
+                    info.session_id,
+                    ArtifactEvent::Deleted {
+                        session_id: info.session_id,
+                        artifact_id,
+                    },
+                    None,
+                );
+                Ok(ArtifactResponse::Done)
+            }
+            ArtifactRequest::SetAnchor {
+                artifact_id,
+                anchor,
+            } => {
+                let info = self.visible_artifact(artifact_id)?;
+                if info.kind == proto::ArtifactKind::Image {
+                    return Err(ArtifactError::Invalid(
+                        "images are placed (`Place`), not anchored".into(),
+                    ));
+                }
+                if let Some(old) = info.anchor
+                    && let Some(entry) = core.pane(old.pane_id)
+                {
+                    entry.pane.anchor_remove(artifact_id.0);
+                }
+                let anchor = match anchor {
+                    Some(req) => {
+                        if core.session_of_pane(req.pane_id) != Some(info.session_id) {
+                            return Err(ArtifactError::Invalid(
+                                "the anchor pane is in another session".into(),
+                            ));
+                        }
+                        Some(crate::art::Art::resolve_anchor(core, artifact_id, req)?)
+                    }
+                    None => None,
+                };
+                let info = art.update(artifact_id, |i| i.anchor = anchor)?;
+                core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
+                Ok(ArtifactResponse::Info(info))
+            }
+            ArtifactRequest::SetPreview {
+                artifact_id,
+                version,
+                png,
+            } => {
+                let info = self.visible_artifact(artifact_id)?;
+                if version > info.version {
+                    return Err(ArtifactError::NotFound(format!("version {version}")));
+                }
+                let (image, _) = art.read_blob(&png)?;
+                let info = art.update(artifact_id, |i| {
+                    i.preview = Some(proto::Preview { image, version });
+                })?;
+                core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
+                Ok(ArtifactResponse::Info(info))
+            }
+            ArtifactRequest::Export {
+                artifact_id,
+                version,
+                format,
+            } => {
+                self.visible_artifact(artifact_id)?;
+                let core = Arc::clone(core);
+                tokio::task::spawn_blocking(move || {
+                    crate::art::export(&core.art, artifact_id, version, format)
+                })
+                .await
+                .map_err(|e| ArtifactError::Failed(e.to_string()))?
+                .map(ArtifactResponse::Exported)
+            }
+            ArtifactRequest::ExcalidrawGet { artifact_id, since } => {
+                self.visible_artifact(artifact_id)?;
+                art.ex_get(artifact_id, since)
+                    .map(ArtifactResponse::Excalidraw)
+            }
+            ArtifactRequest::ExcalidrawPut(put) => {
+                self.visible_artifact(put.artifact_id)?;
+                let artifact_id = put.artifact_id;
+                let applied = art.ex_put(put)?;
+                if !applied.won.is_empty()
+                    || applied.app_state.is_some()
+                    || !applied.files.is_empty()
+                {
+                    core.emit_artifact(
+                        applied.info.session_id,
+                        ArtifactEvent::Excalidraw {
+                            artifact_id,
+                            version: applied.info.version,
+                            elements: applied.won,
+                            app_state: applied.app_state,
+                            files: applied.files,
+                        },
+                        Some(self.id),
+                    );
+                }
+                Ok(ArtifactResponse::ExcalidrawApplied {
+                    artifact_id,
+                    version: applied.info.version,
+                    rejected: applied.lost,
+                })
+            }
+            ArtifactRequest::Place(req) => {
+                self.visible_artifact(req.artifact_id)?;
+                if let Some(old) = req.replace {
+                    let mine = art
+                        .placement(old)
+                        .is_some_and(|p| self.pane_allowed(p.pane_id));
+                    if !mine {
+                        return Err(ArtifactError::NotFound(format!("placement {old}")));
+                    }
+                }
+                let core2 = Arc::clone(core);
+                let (placement, replaced) = tokio::task::spawn_blocking(move || {
+                    crate::art::place::place(&core2, req, proto::PlacementSource::User)
+                })
+                .await
+                .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                if let Some(session) = core.session_of_pane(placement.pane_id) {
+                    if let Some(old) = replaced {
+                        core.emit_artifact(
+                            session,
+                            ArtifactEvent::Unplaced {
+                                pane_id: old.pane_id,
+                                placement_id: old.placement_id,
+                            },
+                            None,
+                        );
+                    }
+                    core.emit_artifact(session, ArtifactEvent::Placed(placement.clone()), None);
+                }
+                Ok(ArtifactResponse::Placed(placement))
+            }
+            ArtifactRequest::Unplace { placement_id } => {
+                let p = art
+                    .placement(placement_id)
+                    .filter(|p| self.pane_allowed(p.pane_id))
+                    .ok_or_else(|| ArtifactError::NotFound(format!("placement {placement_id}")))?;
+                crate::art::place::unplace(core, placement_id);
+                if let Some(session) = core.session_of_pane(p.pane_id) {
+                    core.emit_artifact(
+                        session,
+                        ArtifactEvent::Unplaced {
+                            pane_id: p.pane_id,
+                            placement_id,
+                        },
+                        None,
+                    );
+                }
+                Ok(ArtifactResponse::Done)
+            }
+            ArtifactRequest::Placements { pane_id } => {
+                let _ = art.check_placements(core);
+                Ok(ArtifactResponse::Placements(art.placements(pane_id)))
+            }
+            ArtifactRequest::Import(req) => {
+                let (core2, actor) = (Arc::clone(core), self.actor);
+                let (placement, info) = tokio::task::spawn_blocking(move || {
+                    crate::art::place::import(&core2, actor, req)
+                })
+                .await
+                .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                core.emit_artifact(info.session_id, ArtifactEvent::Created(info.clone()), None);
+                core.emit_artifact(
+                    info.session_id,
+                    ArtifactEvent::Placed(placement.clone()),
+                    None,
+                );
+                Ok(ArtifactResponse::Placed(placement))
+            }
+            ArtifactRequest::Send(send) => {
+                if let Some(id) = send.artifact_id {
+                    self.visible_artifact(id)?;
+                }
+                let pane_id = send.pane_id;
+                let (sent, events) = crate::art::send::send(core, self.actor, send).await?;
+                for event in events {
+                    if let ArtifactEvent::Created(info) = &event {
+                        core.emit_artifact(info.session_id, event.clone(), None);
+                    }
+                }
+                core.mp.audit.append(
+                    AuditKind::Prompt,
+                    crate::mp::AuditEntry {
+                        pane_id: Some(pane_id),
+                        detail: format!(
+                            "sent artifact {} v{} to the agent as {}",
+                            sent.artifact_id, sent.version, sent.path
+                        ),
+                        ..self.authz.audit()
+                    },
+                );
+                Ok(ArtifactResponse::Sent(sent))
+            }
+        }
+    }
+
+    /// Live ink: drawers only, on a visible drawing; stamped with the actor and fanned out to
+    /// the session's other clients.
+    fn ink(&self, mut ink: proto::InkLive) {
+        let refuse = |reason: String| {
+            self.send(ServerCtl::Forbidden {
+                what: "InkLive".into(),
+                reason,
+            });
+        };
+        if let Err(e) = self.allow(Need::Draw, Target::Any) {
+            return refuse(e.to_string());
+        }
+        let Ok(info) = self.visible_artifact(ink.artifact_id) else {
+            return refuse(format!("no artifact {}", ink.artifact_id));
+        };
+        if ink.points.0.len() > 16 << 10 {
+            return refuse("ink chunks are at most 16 KiB".into());
+        }
+        ink.actor = self.actor;
+        self.core
+            .emit_artifact(info.session_id, ArtifactEvent::Ink(ink), Some(self.id));
+    }
+
+    /// Creates the drawing a new canvas pane will show (`PaneLaunch::Canvas { None }`).
+    fn prepare_canvas(
+        &self,
+        op: &mut proto::LayoutOp,
+    ) -> Result<Option<proto::ArtifactId>, String> {
+        use proto::LayoutOp as O;
+        let (session, launch) = match op {
+            O::Split {
+                pane_id, launch, ..
+            } => (self.core.session_of_pane(*pane_id), launch),
+            O::NewTab {
+                session_id, launch, ..
+            } => (Some(*session_id), launch),
+            O::CreateSession {
+                launch: PaneLaunch::Canvas { .. },
+                ..
+            } => return Err("a new session starts with a terminal pane".into()),
+            _ => return Ok(None),
+        };
+        let PaneLaunch::Canvas { artifact_id } = launch else {
+            return Ok(None);
+        };
+        let session = session.ok_or("no such pane or session")?;
+        if let Some(id) = artifact_id {
+            let info = self.visible_artifact(*id).map_err(|e| e.to_string())?;
+            if info.session_id != session {
+                return Err("the drawing belongs to another session".into());
+            }
+            return Ok(None);
+        }
+        let (info, _) = self
+            .core
+            .art
+            .create(
+                self.actor,
+                &proto::ArtifactCreate {
+                    session_id: session,
+                    // Canvas panes host the Excalidraw editor (finger, mouse, trackpad).
+                    kind: proto::ArtifactKind::Excalidraw,
+                    title: String::new(),
+                    space: proto::CoordSpace::Canvas,
+                    anchor: None,
+                    image: None,
+                    ops: Vec::new(),
+                },
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+        *artifact_id = Some(info.artifact_id);
+        self.core
+            .emit_artifact(session, ArtifactEvent::Created(info.clone()), None);
+        Ok(Some(info.artifact_id))
     }
 
     /// Ports of panes outside a scoped grant are hidden (host-wide ones too).
@@ -780,10 +1269,38 @@ impl Client {
                     client.send(ServerCtl::MultiplayerResult { req_id, result });
                 });
             }
-            ClientCtl::Op { op_id, op } => {
+            ClientCtl::Artifact { req_id, req } => {
+                let client = Arc::clone(self);
+                tokio::spawn(async move {
+                    let result = client.artifact(req).await;
+                    client.send(ServerCtl::ArtifactResult { req_id, result });
+                });
+            }
+            ClientCtl::InkLive(ink) => self.ink(ink),
+            ClientCtl::Assist { req_id, req } => {
+                let client = Arc::clone(self);
+                tokio::spawn(async move {
+                    let result = client.assist(req).await;
+                    client.send(ServerCtl::AssistResult { req_id, result });
+                });
+            }
+            ClientCtl::Op { op_id, mut op } => {
                 let (need, target) = policy::op(&op);
                 let outcome = match self.allow(need, target) {
-                    Ok(()) => Arc::clone(&self.core).apply_op(op),
+                    Ok(()) => match self.prepare_canvas(&mut op) {
+                        Ok(created) => {
+                            let outcome = Arc::clone(&self.core).apply_op(op);
+                            if let (Some(id), proto::OpOutcome::Failed { .. }) = (created, &outcome)
+                            {
+                                let _ = self.core.art.delete(id);
+                            }
+                            outcome
+                        }
+                        Err(message) => proto::OpOutcome::Failed {
+                            code: proto::OpError::Invalid,
+                            message,
+                        },
+                    },
                     Err(e) => proto::OpOutcome::Failed {
                         code: proto::OpError::Forbidden,
                         message: e.to_string(),
@@ -893,6 +1410,42 @@ impl Client {
             }
             other => other,
         })
+    }
+
+    /// An input-assistance request, gated by the policy table and the pane's scope.
+    async fn assist(
+        &self,
+        req: proto::AssistRequest,
+    ) -> Result<proto::AssistResponse, proto::AssistError> {
+        let (need, target) = policy::assist(&req);
+        self.allow(need, target)
+            .map_err(|e| proto::AssistError::Denied(e.to_string()))?;
+        if let Some(pane) = policy::assist_pane(&req)
+            && !self.pane_allowed(pane)
+        {
+            return Err(proto::AssistError::UnknownPane);
+        }
+        let audit = match &req {
+            proto::AssistRequest::AnswerBlocked(a) => Some((a.pane_id, a.label.clone())),
+            _ => None,
+        };
+        let caller = crate::assist::Caller {
+            conn: self.id,
+            actor: self.actor,
+        };
+        let result = crate::assist::handle(&self.core, caller, req).await;
+        if let (Some((pane, label)), Ok(_)) = (audit, &result) {
+            let name = self.core.mp.name_of(self.id);
+            self.core.mp.audit.append(
+                AuditKind::Approval,
+                crate::mp::AuditEntry {
+                    pane_id: Some(pane),
+                    detail: format!("{name} chose {label:?} on screen"),
+                    ..self.authz.audit()
+                },
+            );
+        }
+        result
     }
 
     /// A multiplayer request.
@@ -1078,6 +1631,25 @@ impl Client {
         self.send(ServerCtl::Participants {
             participants: self.core.mp.participants(&self.core, &self.authz),
         });
+        let canvases = self
+            .core
+            .art
+            .canvases(session)
+            .into_iter()
+            .filter(|c| self.pane_allowed(c.pane_id))
+            .collect();
+        self.send(ServerCtl::Artifact(ArtifactEvent::Canvases {
+            session_id: session,
+            canvases,
+        }));
+        // Inline images in the session's panes: not part of Ghostty snapshots, so the
+        // daemon hands them over itself on every attach (resume, reattach, new device).
+        let _ = self.core.art.check_placements(&self.core);
+        for pane in panes_of(&self.core, session, scope) {
+            for p in self.core.art.placements(pane) {
+                self.send(ServerCtl::Artifact(ArtifactEvent::Placed(p)));
+            }
+        }
     }
 
     fn reclassify(&self) {
@@ -1140,4 +1712,16 @@ impl Client {
             },
         );
     }
+}
+
+/// Panes of a session visible to `scope`.
+fn panes_of(core: &Core, session: SessionId, scope: Scope) -> Vec<PaneId> {
+    core.layout_for(session, scope)
+        .map(|l| {
+            l.tabs
+                .iter()
+                .flat_map(|t| crate::layout::leaves(&t.root).collect::<Vec<_>>())
+                .collect()
+        })
+        .unwrap_or_default()
 }

@@ -130,6 +130,12 @@ pub struct Config {
     /// An openvscode-server to use instead of the pinned download: a directory containing
     /// `bin/openvscode-server` (`editor.openvscode` in `config.toml`).
     pub openvscode_dir: Option<PathBuf>,
+    /// A VSCodium Web Host (REH web) to use instead of the pinned download: a directory
+    /// containing `bin/codium-server` (`editor.vscodium` in `config.toml`).
+    pub vscodium_dir: Option<PathBuf>,
+    /// The editor `EditorChoice::Auto` launches (`editor.default` in `config.toml`:
+    /// `"vscode"`, the default, or `"vscodium"`).
+    pub editor_default: proto::EditorKind,
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
@@ -137,6 +143,37 @@ pub struct Config {
     pub push: PushConfig,
     /// A pane's control lease moves to someone who asked for it once the holder has not typed
     pub lease_idle: Duration,
+    /// Command history for completion and the line editor (`[history]` in `config.toml`).
+    pub history: crate::assist::HistoryConfig,
+    pub artifacts: ArtifactLimits,
+}
+
+/// Size caps for the artifact store (drawings, images, op logs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactLimits {
+    /// Largest blob (image, PNG) in bytes. Claude Code refuses sources over 128 MB and
+    /// downscales anything over 2000 px, so 32 MiB is plenty.
+    pub blob_max: u64,
+    /// Everything stored (blobs and op logs) per daemon, in bytes.
+    pub total_max: u64,
+    /// One drawing's op log, in bytes (postcard).
+    pub log_max: u64,
+    /// One committed batch, in bytes.
+    pub batch_max: u64,
+    /// Artifacts per session.
+    pub per_session: usize,
+}
+
+impl Default for ArtifactLimits {
+    fn default() -> Self {
+        Self {
+            blob_max: 32 << 20,
+            total_max: 1 << 30,
+            log_max: 8 << 20,
+            batch_max: 1 << 20,
+            per_session: 1000,
+        }
+    }
 }
 
 impl Config {
@@ -161,9 +198,13 @@ impl Config {
             port_scan_interval: Duration::from_secs(2),
             code_cli: None,
             openvscode_dir: None,
+            vscodium_dir: None,
+            editor_default: proto::EditorKind::VsCode,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
+            artifacts: ArtifactLimits::default(),
+            history: crate::assist::HistoryConfig::default(),
         }
     }
 
@@ -180,8 +221,10 @@ impl Config {
     /// [editor]
     /// code = "/usr/local/bin/code"
     /// openvscode = "/opt/openvscode-server"
+    /// vscodium = "/opt/vscodium-reh-web"   # instead of the pinned download
+    /// default = "vscode"           # "vscode" | "vscodium": what `Auto` launches
     ///
-    /// [relay]                      # docs/RELAYS.md
+    /// [relay]                     # docs/RELAYS.md
     /// mode = "custom"              # "default" | "custom" | "local-only"
     /// urls = ["https://relay.example.com"]
     /// auth_token = "…"             # if the relays require one
@@ -194,6 +237,12 @@ impl Config {
     ///
     /// [multiplayer]
     /// lease_idle_secs = 5
+    ///
+    /// [history]                    # docs/DAEMON.md §7
+    /// enabled = true
+    /// ignore_space = true          # commands typed with a leading space are not kept
+    /// max_entries = 50000
+    /// import = true                # import zsh/bash/fish history once
     /// ```
     ///
     /// A relay mode set before this runs (`hostd run --no-relay`) wins over the file's.
@@ -223,6 +272,15 @@ impl Config {
         if let Some(dir) = file.editor.openvscode {
             self.openvscode_dir = Some(dir);
         }
+        if let Some(dir) = file.editor.vscodium {
+            self.vscodium_dir = Some(dir);
+        }
+        if let Some(default) = file.editor.default {
+            self.editor_default = match default {
+                DefaultEditor::Vscode => proto::EditorKind::VsCode,
+                DefaultEditor::Vscodium => proto::EditorKind::Vscodium,
+            };
+        }
         if self.relay == RelayMode::Default {
             self.relay = file
                 .relay
@@ -240,6 +298,19 @@ impl Config {
         }
         if let Some(secs) = file.multiplayer.lease_idle_secs {
             self.lease_idle = Duration::from_secs(secs);
+        }
+        let history = file.history;
+        if let Some(on) = history.enabled {
+            self.history.enabled = on;
+        }
+        if let Some(on) = history.ignore_space {
+            self.history.ignore_space = on;
+        }
+        if let Some(max) = history.max_entries {
+            self.history.max_entries = max.max(1);
+        }
+        if let Some(on) = history.import {
+            self.history.import = on;
         }
         Ok(())
     }
@@ -308,6 +379,16 @@ struct UserFile {
     relay: RelaySection,
     push: PushSection,
     multiplayer: MultiplayerSection,
+    history: HistorySection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct HistorySection {
+    enabled: Option<bool>,
+    ignore_space: Option<bool>,
+    max_entries: Option<usize>,
+    import: Option<bool>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -383,4 +464,14 @@ struct WorktreesSection {
 struct EditorSection {
     code: Option<PathBuf>,
     openvscode: Option<PathBuf>,
+    vscodium: Option<PathBuf>,
+    default: Option<DefaultEditor>,
+}
+
+/// `editor.default`.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum DefaultEditor {
+    Vscode,
+    Vscodium,
 }

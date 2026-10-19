@@ -155,6 +155,8 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 *lock(&inner.connection) = None;
                 inner.ws.fail_pending();
                 inner.mp.fail_pending();
+                inner.art.fail_pending();
+                inner.assist.fail_pending();
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -234,7 +236,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
-        caps: Caps::ECHO_PREDICTION,
+        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS,
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
     };
@@ -336,6 +338,9 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         }
     }
 
+    // Catch cached drawings up with what changed while away (queued behind the replay).
+    inner.art.on_connected(inner);
+
     let (ctl_out, ctl_out_rx) = mpsc::unbounded_channel();
     let ack_notify = Arc::new(Notify::new());
     let mut tasks = JoinSet::new();
@@ -421,6 +426,12 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             continue;
         };
         let Some(msg) = inner.mp.dispatch(msg) else {
+            continue;
+        };
+        let Some(msg) = inner.art.dispatch(&inner, msg) else {
+            continue;
+        };
+        let Some(msg) = inner.assist.dispatch(msg) else {
             continue;
         };
         let event = match msg {

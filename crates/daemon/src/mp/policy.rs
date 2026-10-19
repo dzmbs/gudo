@@ -1,7 +1,9 @@
 //! What each request needs: a role level and a scope target (docs/DAEMON.md §6.3 is the
 //! human-readable version of this file; keep them in sync).
 
-use proto::{LayoutOp, MpError, PaneId, Roles, Scope, SessionId, TabId, WorkspaceRequest};
+use proto::{
+    AssistRequest, LayoutOp, MpError, PaneId, Roles, Scope, SessionId, TabId, WorkspaceRequest,
+};
 
 use super::Authz;
 use crate::core::Core;
@@ -13,6 +15,7 @@ pub(crate) enum Need {
     View,
     /// Send prompts to agent panes through the composer path.
     Prompt,
+    Draw,
     /// Raw input, layout changes, host files and forwards.
     Drive,
     /// Answer agent approval requests.
@@ -27,6 +30,7 @@ impl Need {
         match self {
             Self::View => Roles::ALL,
             Self::Prompt => Roles::PROMPTER | Roles::DRIVER | Roles::APPROVER,
+            Self::Draw => Roles::PROMPTER | Roles::DRIVER,
             Self::Drive => Roles::DRIVER,
             Self::Approve => Roles::APPROVER,
             Self::Own => Roles::OWNER,
@@ -37,6 +41,7 @@ impl Need {
         match self {
             Self::View => "any role",
             Self::Prompt => "the prompter, driver or approver role",
+            Self::Draw => "the prompter or driver role",
             Self::Drive => "the driver role",
             Self::Approve => "the approver role",
             Self::Own => "the owner role",
@@ -119,6 +124,30 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
     }
 }
 
+/// edits and sends to agents. The artifact itself must also be visible to the scope
+/// (checked by the caller, which knows where it is anchored).
+pub(crate) fn artifact(req: &proto::ArtifactRequest) -> (Need, Target) {
+    use proto::ArtifactRequest as R;
+    match req {
+        R::List { .. } | R::Get { .. } | R::Export { .. } => (Need::View, Target::Any),
+        R::Create(c) => match c.anchor {
+            Some(a) => (Need::Draw, Target::Pane(a.pane_id)),
+            None => (Need::Draw, Target::Session(c.session_id)),
+        },
+        R::Apply { .. } | R::Delete { .. } | R::SetPreview { .. } => (Need::Draw, Target::Any),
+        R::SetAnchor { anchor, .. } => match anchor {
+            Some(a) => (Need::Draw, Target::Pane(a.pane_id)),
+            None => (Need::Draw, Target::Any),
+        },
+        R::Send(s) => (Need::Draw, Target::Pane(s.pane_id)),
+        R::ExcalidrawGet { .. } => (Need::View, Target::Any),
+        R::ExcalidrawPut(_) | R::Unplace { .. } => (Need::Draw, Target::Any),
+        R::Place(p) => (Need::Draw, Target::Pane(p.pane_id)),
+        R::Import(i) => (Need::Draw, Target::Pane(i.pane_id)),
+        R::Placements { pane_id } => (Need::View, Target::Pane(*pane_id)),
+    }
+}
+
 /// What a workspace request needs. List answers (ports, attention) are also filtered to the
 /// scope by the caller.
 pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
@@ -157,5 +186,34 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::PushRegister(_) | R::PushUnregister | R::PushStatus | R::PushAction(_) => {
             (Need::Own, Target::Daemon)
         }
+    }
+}
+
+/// foreground program is viewing it; submitting a line is driving it; history, completion and
+/// file search read the host beyond the pane (other panes' commands, the file system);
+/// answering a dialog on screen is approving.
+pub(crate) fn assist(req: &AssistRequest) -> (Need, Target) {
+    use AssistRequest as R;
+    match req {
+        R::Watch { pane_id, .. } | R::State { pane_id } | R::BlockedOptions { pane_id } => {
+            (Need::View, Target::Pane(*pane_id))
+        }
+        R::SubmitLine(s) => (Need::Drive, Target::Pane(s.pane_id)),
+        R::History(_) | R::Complete(_) | R::FileSearch(_) => (Need::Drive, Target::Host),
+        R::AnswerBlocked(a) => (Need::Approve, Target::Pane(a.pane_id)),
+    }
+}
+
+/// The pane an input-assistance request addresses, if any.
+pub(crate) fn assist_pane(req: &AssistRequest) -> Option<PaneId> {
+    use AssistRequest as R;
+    match req {
+        R::Watch { pane_id, .. } | R::State { pane_id } | R::BlockedOptions { pane_id } => {
+            Some(*pane_id)
+        }
+        R::SubmitLine(s) => Some(s.pane_id),
+        R::Complete(c) => Some(c.pane_id),
+        R::AnswerBlocked(a) => Some(a.pane_id),
+        R::History(_) | R::FileSearch(_) => None,
     }
 }

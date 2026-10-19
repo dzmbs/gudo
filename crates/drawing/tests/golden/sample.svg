@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8.75 -8.75 160.75 107.55" width="160.75" height="107.55">
+<title>a &amp; b</title>
+<path d="M5 30L60 30" fill="none" stroke="#2266dd" stroke-width="4" stroke-linecap="square" stroke-linejoin="round" stroke-opacity="0.35"/>
+<path d="M10 10Q20 14 25 13Q30 12 35 16L40 20" fill="none" stroke="#2266dd" stroke-width="2.71" stroke-linecap="round" stroke-linejoin="round"/>
+<image x="80" y="0" width="20" height="20" href="data:image/png;base64,AAAA"/>
+<rect x="90" y="40" width="20" height="15" fill="#00aa00"/>
+<line x1="70" y1="60" x2="45" y2="22" stroke="#dd2222" stroke-width="2" stroke-linecap="round"/>
+<path d="M45 22L52.74 26.48L46.06 30.88Z" fill="#dd2222"/>
+<ellipse cx="25" cy="20" rx="25" ry="20" fill="none" stroke="#000000" stroke-width="1.5" stroke-opacity="0.5"/>
+<text x="72" y="74" font-family="ui-monospace, monospace" font-size="12" fill="#111111"><tspan x="72" dy="0">fix &lt;this&gt;</tspan><tspan x="72" dy="14.4">&amp; that</tspan></text>
+</svg>
