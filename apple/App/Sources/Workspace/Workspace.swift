@@ -213,6 +213,7 @@ final class Workspace {
     /// What a pane runs, for headers and lists: the reported program, else what the PTY says,
     /// else "shell". Never the pane id, which UI tests use as the terminal's identifier.
     func programName(of pane: PaneId) -> String {
+        if PaneDrawing.of(pane)?.canvas != nil { return "canvas" }
         if let program = panes[pane]?.foregroundProgram { return program }
         if let program = foregrounds[pane]?.program, !program.isEmpty { return program }
         return "shell"
@@ -368,6 +369,7 @@ final class Workspace {
             if self?.cellSize != size { self?.cellSize = size }
         }
         applyKeyboardSettings(to: pane)
+        PaneDrawing.attach(to: pane, workspace: self)
         #if os(iOS)
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
@@ -378,6 +380,7 @@ final class Workspace {
             keyBar.assist = pane.backend as? any LineAssist
             keyBar.update(context: keyBarContext(of: pane))
             apply(.focus(id))
+            keyBar.onDraw = DrawingCommands.canDraw(in: self) ? { [weak self] in if let self { DrawingCommands.toggleDrawing(in: self) } } : nil
         }
         #if DEBUG
         // `-demoPreedit <text>` shows IME marked text in the first pane, for screenshots and UI

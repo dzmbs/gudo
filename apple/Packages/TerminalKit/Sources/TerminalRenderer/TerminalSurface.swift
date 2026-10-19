@@ -75,6 +75,19 @@ public final class TerminalSurface {
     /// Echo prediction for this surface, once `enablePrediction` was called (remote backends).
     public private(set) var predictor: EchoPredictor?
 
+    /// Inline images over the grid (placements), asked for before every frame so they follow
+    /// pinned rows as the output scrolls. Call `invalidateInlineImages()` when the set changes
+    /// without the terminal changing.
+    public var inlineImages: (() -> [InlineImagePlacement])? {
+        didSet { invalidateInlineImages() }
+    }
+
+    /// The placements drawn in the last frame and their frames in view points (hit testing).
+    public private(set) var inlineImageFrames: [(placement: InlineImagePlacement, rect: CGRect)] = []
+    private var imageTextures: [String: MTLTexture] = [:]
+    private var lastImages: [InlineImagePlacement] = []
+    private var imagesDirty = false
+
     private let renderer: MetalRenderer
     private var fonts: FontGrid?
     private let state = RenderState()
@@ -390,6 +403,63 @@ public final class TerminalSurface {
         setNeedsRender()
     }
 
+    // MARK: Inline images
+
+    /// Makes `pixels` available to placements under `key` (replacing an image with that key).
+    public func setInlineImage(_ pixels: InlineImagePixels, key: String) {
+        imageTextures[key] = renderer.makeTexture(pixels)
+        invalidateInlineImages()
+    }
+
+    public func hasInlineImage(key: String) -> Bool { imageTextures[key] != nil }
+
+    public func removeInlineImage(key: String) {
+        guard imageTextures.removeValue(forKey: key) != nil else { return }
+        invalidateInlineImages()
+    }
+
+    /// The placements changed (added, removed, re-anchored): draw again.
+    public func invalidateInlineImages() {
+        imagesDirty = true
+        setNeedsRender()
+    }
+
+    /// The placements the last frame drew whose frame contains `point` (view points), topmost
+    /// first.
+    public func inlineImages(at point: CGPoint) -> [InlineImagePlacement] {
+        inlineImageFrames.reversed().filter { $0.rect.contains(point) }.map(\.placement)
+    }
+
+    private func imageDraws(_ placements: [InlineImagePlacement], metrics m: CellMetrics) -> [ImageDraw] {
+        var draws: [ImageDraw] = []
+        var frames: [(placement: InlineImagePlacement, rect: CGRect)] = []
+        let gridRows = Int(grid?.rows ?? 0)
+        let scale = layer.contentsScale
+        for p in placements {
+            guard let texture = imageTextures[p.key], p.cols > 0, p.rows > 0, p.row + p.rows > 0, p.row < gridRows else { continue }
+            let size = SIMD2(Float(p.cols * m.cellWidth), Float(p.rows * m.cellHeight))
+            draws.append(ImageDraw(texture: texture, vertex: ImageVertex(
+                gridPos: SIMD2(Float(p.col), Float(p.row)), cellOffset: .zero,
+                sourceRect: SIMD4(0, 0, Float(texture.width), Float(texture.height)), destSize: size)))
+            frames.append((p, CGRect(
+                x: (CGFloat(paddingPx.w) + CGFloat(p.col * m.cellWidth)) / scale,
+                y: (CGFloat(paddingPx.x) + CGFloat(p.row * m.cellHeight)) / scale,
+                width: CGFloat(size.x) / scale, height: CGFloat(size.y) / scale)))
+        }
+        inlineImageFrames = frames
+        return draws
+    }
+
+    /// The grid area in drawable pixels: images never draw into the padding.
+    private var imageClip: MTLScissorRect? {
+        guard let grid, pixelSize.width > 0 else { return nil }
+        let x = max(0, Int(paddingPx.w)), y = max(0, Int(paddingPx.x))
+        let width = min(Int(grid.cols) * Int(grid.cellWidth), Int(pixelSize.width) - x)
+        let height = min(Int(grid.rows) * Int(grid.cellHeight), Int(pixelSize.height) - y)
+        guard width > 0, height > 0 else { return nil }
+        return MTLScissorRect(x: x, y: y, width: width, height: height)
+    }
+
     // MARK: Rendering
 
     /// Marks the terminal as changed. Safe to call from any thread; coalesces wakeups.
@@ -476,7 +546,9 @@ public final class TerminalSurface {
         let cursor = state.cursor
         let overlay = currentOverlay(cursor: cursor)
         let overlayChanged = overlay != lastOverlay || overlayDirty
-        guard state.dirty != .clean || needsFullRender || overlayChanged else { return false }
+        let images = inlineImages?() ?? []
+        let imagesChanged = imagesDirty || images != lastImages
+        guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged else { return false }
         if cursor.blinking != cursorBlinks {
             cursorBlinks = cursor.blinking
             restartBlink()
@@ -488,12 +560,18 @@ public final class TerminalSurface {
         needsFullRender = false
         overlayDirty = false
         lastOverlay = overlay
+        lastImages = images
+        imagesDirty = false
+        let draws = images.isEmpty && inlineImageFrames.isEmpty ? [] : imageDraws(images, metrics: fonts.metrics)
         let built = CACurrentMediaTime()
 
         let stats = stats
         let drawable = offscreen ? nil : layer.nextDrawable()
         if let target = drawable?.texture ?? (offscreen ? offscreenTarget() : nil) {
-            renderer.draw(frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: target, present: drawable) {
+            renderer.draw(
+                frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: target, present: drawable,
+                images: draws, imageClip: imageClip
+            ) {
                 stats.recordGPU(seconds: $0)
             }
         }
@@ -542,7 +620,10 @@ public final class TerminalSurface {
     public func snapshot() -> CGImage? {
         guard let fonts, let texture = offscreenTarget() else { return nil }
         let done = DispatchSemaphore(value: 0)
-        renderer.draw(frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: texture, present: nil) { _ in done.signal() }
+        let draws = lastImages.isEmpty ? [] : imageDraws(lastImages, metrics: fonts.metrics)
+        renderer.draw(
+            frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: texture, present: nil, images: draws, imageClip: imageClip
+        ) { _ in done.signal() }
         done.wait()
 
         let width = texture.width, height = texture.height

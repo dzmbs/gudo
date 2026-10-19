@@ -15,6 +15,12 @@ nonisolated final class PaneRouter: Sendable {
     private struct Route {
         var sink: (@Sendable (PaneEvent) -> Void)?
         var pending: [PaneEvent] = []
+        /// The output offset each `pending` event brings the terminal to (in step with it).
+        var pendingApplied: [Applied?] = []
+        /// Told after the pane applied output up to an offset (drawing anchors, `onApplied`).
+        var applied: (@Sendable (UInt64, Bool) -> Void)?
+        /// The last output offset the sink applied (told to a late `onApplied`).
+        var lastApplied: UInt64?
         var prediction: (@Sendable (PredictionUpdate) -> Void)?
         /// `seq` of the last snapshot, whose history `.history` events extend.
         var snapshotSeq: UInt64?
@@ -58,16 +64,23 @@ nonisolated final class PaneRouter: Sendable {
 
     func start(_ pane: UInt64, sink: @escaping @Sendable (PaneEvent) -> Void) {
         let state = connection.withLock { $0 }
-        let pending = routes.withLock { routes in
+        let (pending, offsets, applied) = routes.withLock { routes in
             var route = routes[pane] ?? Route()
             route.sink = sink
-            let pending = route.pending
+            let pending = (route.pending, route.pendingApplied, route.applied)
             route.pending = []
+            route.pendingApplied = []
             routes[pane] = route
             return pending
         }
         sink(.connection(state))
-        pending.forEach(sink)
+        for (event, offset) in zip(pending, offsets) {
+            sink(event)
+            if let offset {
+                routes.withLock { $0[pane]?.lastApplied = offset.seq }
+                applied?(offset.seq, offset.snapshot)
+            }
+        }
     }
 
     func startPrediction(_ pane: UInt64, _ onUpdate: @escaping @Sendable (PredictionUpdate) -> Void) {
@@ -137,11 +150,11 @@ nonisolated final class PaneRouter: Sendable {
                 }
             }
             if let echo { onEchoRoundTrip(echo) }
-            deliver(pane, .output(data))
+            deliver(pane, .output(data), applied: Applied(seq: seq + UInt64(data.count), snapshot: false))
             flushAck(pane, through: seq + UInt64(data.count))
         case .paneSnapshot(let pane, let seq, let data):
             routes.withLock { $0[pane]?.snapshotSeq = seq }
-            deliver(pane, .snapshot(data))
+            deliver(pane, .snapshot(data), applied: Applied(seq: seq, snapshot: true))
             flushAck(pane, through: seq)
         case .paneHistory(let pane, let snapshotSeq, let data, _, let done):
             let current = routes.withLock { $0[pane]?.snapshotSeq }
@@ -231,14 +244,39 @@ nonisolated final class PaneRouter: Sendable {
         if let update { update.feed?(update.update) }
     }
 
-    private func deliver(_ pane: UInt64, _ event: PaneEvent) {
-        let sink = routes.withLock { routes -> (@Sendable (PaneEvent) -> Void)? in
+    /// An output offset the pane's terminal reaches with an event.
+    struct Applied: Sendable {
+        var seq: UInt64
+        var snapshot: Bool
+    }
+
+    /// `callback` runs after the pane's sink applied output up to an offset (`snapshot`: a
+    /// snapshot taken there replaced the terminal), on the delivering thread, in order.
+    /// Output the sink applied before the callback was set is reported once, at once, as a
+    /// snapshot at the last offset (the terminal's state there; nothing earlier is known).
+    func onApplied(_ pane: UInt64, _ callback: (@Sendable (UInt64, Bool) -> Void)?) {
+        let last = routes.withLock { routes in
+            if routes[pane] == nil { routes[pane] = Route() }
+            routes[pane]?.applied = callback
+            return routes[pane]?.lastApplied
+        }
+        if let last { callback?(last, true) }
+    }
+
+    private func deliver(_ pane: UInt64, _ event: PaneEvent, applied offset: Applied? = nil) {
+        let target = routes.withLock { routes -> (sink: (@Sendable (PaneEvent) -> Void), applied: (@Sendable (UInt64, Bool) -> Void)?)? in
             guard routes[pane] != nil else { return nil }
-            if let sink = routes[pane]?.sink { return sink }
+            if let sink = routes[pane]?.sink { return (sink, routes[pane]?.applied) }
             routes[pane]?.pending.append(event)
+            routes[pane]?.pendingApplied.append(offset)
             return nil
         }
-        sink?(event)
+        guard let target else { return }
+        target.sink(event)
+        if let offset {
+            routes.withLock { $0[pane]?.lastApplied = offset.seq }
+            target.applied?(offset.seq, offset.snapshot)
+        }
     }
 }
 
@@ -248,7 +286,7 @@ nonisolated final class PaneRouter: Sendable {
 nonisolated public final class DaemonPaneBackend: PredictionFeed {
     public let pane: PaneId
     let client: any DaemonClientAPI
-    private let router: PaneRouter
+    let router: PaneRouter
     /// Bytes requested per history page.
     static let historyPageBytes: UInt32 = 256 * 1024
 

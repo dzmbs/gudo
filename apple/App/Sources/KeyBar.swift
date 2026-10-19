@@ -44,6 +44,11 @@ final class KeyBar: UIInputView {
     /// the resulting terminal resize like a keyboard slide (no cols × rows overlay).
     var onHeightChange: (() -> Void)?
 
+    /// Opens draw mode on the focused pane; nil when the pane cannot be drawn on (no daemon).
+    var onDraw: (() -> Void)? {
+        didSet { updateProfileButton() }
+    }
+
     /// The terminal that receives keys: the focused pane's view.
     weak var target: TerminalView? {
         didSet {
@@ -167,6 +172,7 @@ final class KeyBar: UIInputView {
         if isWide != wide {
             wide = isWide
             applyWidth()
+            updateProfileButton()
         }
     }
 
@@ -609,10 +615,18 @@ final class KeyBar: UIInputView {
             UIAction(title: "Arrow Pad", image: UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right"), state: arrowPadShown ? .on : .off) { [weak self] _ in
                 self?.toggleArrowPad()
             },
-        ])
-        profileButton.menu = UIMenu(title: "Keys for \(profile.name)", children: [
-            automatic, UIMenu(options: .displayInline, children: choices), panels,
-        ])
+        ] + (onDraw.map { draw in
+            [UIAction(title: "Draw on Pane", image: UIImage(systemName: "pencil.and.scribble")) { _ in draw() }]
+        } ?? []))
+        // Narrow bars (iPhone): panels first and the key sets in a submenu, so the menu fits
+        // without scrolling. Wide bars (iPad) have room for everything inline.
+        let keySets = [automatic, UIMenu(options: .displayInline, children: choices)]
+        profileButton.menu = wide
+            ? UIMenu(title: "Keys for \(profile.name)", children: keySets + [panels])
+            : UIMenu(title: "Keys for \(profile.name)", children: [
+                UIMenu(title: "Key Set", subtitle: profile.name, image: UIImage(systemName: "keyboard"), children: keySets),
+                panels,
+            ])
     }
 
     private func choose(_ profile: KeyBarProfile?) {

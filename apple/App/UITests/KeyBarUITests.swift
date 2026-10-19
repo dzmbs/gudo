@@ -54,11 +54,17 @@ final class KeyBarUITests: XCTestCase {
         let profile = app.buttons["keybar-profile"]
         XCTAssertTrue(profile.waitForExistence(timeout: 5))
         profile.tap()
-        let pager = app.buttons["Pager"].firstMatch
+        let keySet = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Key Set'")).firstMatch
+        // A submenu on iPhone, inline on iPad.
+        if keySet.waitForExistence(timeout: 2) { keySet.tap() }
+        // The submenu animates open; wait until its item can take the tap.
+        let pager = app.buttons.matching(NSPredicate(format: "label == 'Pager'")).firstMatch
         XCTAssertTrue(pager.waitForExistence(timeout: 5))
+        let deadline = Date().addingTimeInterval(5)
+        while !pager.isHittable, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
         pager.tap()
         XCTAssertTrue(waitFor(profile, value: "Pager"))
-        XCTAssertTrue(app.buttons["keybar-pgdn"].exists)
+        XCTAssertTrue(app.buttons["keybar-pgdn"].waitForExistence(timeout: 5))
     }
 
     @MainActor

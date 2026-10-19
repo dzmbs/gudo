@@ -31,7 +31,7 @@ enum PaletteCommands {
             (.newTab, "plus"), (.splitRight, "rectangle.split.2x1"), (.splitDown, "rectangle.split.1x2"),
             (.toggleZoom, "arrow.up.left.and.arrow.down.right"), (.closePane, "xmark"),
             (.nextTab, "chevron.right"), (.previousTab, "chevron.left"),
-        ]
+        ] + (DrawingCommands.canDraw(in: workspace) ? [(.draw, "pencil.and.scribble"), (.newCanvas, "scribble.variable")] : [])
         for (action, image) in actions {
             commands.append(PaletteCommand(
                 id: "action-\(action.title)", title: action.title, section: "Terminal", systemImage: image,

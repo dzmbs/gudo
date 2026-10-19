@@ -30,6 +30,8 @@ struct WorkspaceCommands: Commands {
         CommandMenu("Pane") {
             buttons(WorkspaceAction.paneActions)
             Divider()
+            buttons(WorkspaceAction.drawActions)
+            Divider()
             Button("Links & Paths…") { model?.sheet = .links }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(editorHasKeys)
