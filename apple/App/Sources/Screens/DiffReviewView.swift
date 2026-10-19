@@ -500,6 +500,7 @@ private struct FileDiffBody: View {
     let onDeleteNote: (ReviewNote) -> Void
 
     @Environment(\.terminalTheme) private var theme
+    @State private var viewport: CGFloat = 0
 
     static let numberWidth: CGFloat = 40
     static let lineHeight: CGFloat = 18
@@ -543,9 +544,11 @@ private struct FileDiffBody: View {
                         }
                     }
                 }
-                .frame(minWidth: 0, alignment: .leading)
+                .frame(minWidth: viewport, alignment: .leading)
             }
             .scrollIndicators(.automatic)
+            // Row fills reach the right edge even when every line is short.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewport = $0 }
             .background(theme.background)
         }
     }

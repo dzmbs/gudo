@@ -238,6 +238,13 @@ tested against fakes.
 | Scrollback search | `WindowModel.searchTotal` | the total over the whole scrollback from the daemon's `search` (debounced 180 ms); stepping through matches needs the renderer's highlights (not wired) |
 | Acknowledgements | `SettingsView` | VS Code licence, VS Code Server licence, Microsoft privacy statement (`vscodeLicenseUrl()` …) |
 
+Real host (Hetzner x86_64, 2026-10-19, iPad simulator, relays on): pair → connected 100 ms →
+first paint 391 ms → `openEditor` (the `code` CLI installed from Microsoft in that call,
+`installedCli: true`, VS Code itself, no fallback) ready 1066 ms after Open → workbench loaded
+The 10–15 s first run of DAEMON.md §5.3 is a host without a cached VS Code server; this host
+(`*-editor-first-run-*` is the `-mock` first-run state).
+
+a turn that goes blocked → (approved) → idle gets no `AgentDone` attention item from
 the daemon (DAEMON.md §5.8), so that row says "Waiting for your next prompt" without the agent's
 last message; scrollback search shows the daemon's total but cannot step through matches;
 uploads take files from the Files picker and drops (no Photos picker); "Open in Safari" for a

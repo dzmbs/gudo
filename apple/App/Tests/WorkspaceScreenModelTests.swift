@@ -39,7 +39,8 @@ final class WorkspaceScreenModelTests: XCTestCase {
 
         let blocked = try! XCTUnwrap(items.first { $0.id == "h/1" })
         XCTAssertEqual(blocked.state, .blocked)
-        XCTAssertEqual(blocked.request, .permission(tool: "Claude Code", detail: "rm -rf build"))
+        XCTAssertEqual(blocked.request, .permission(tool: "Wants to run", detail: "rm -rf build"))
+        XCTAssertEqual(blocked.prompt, "fix tests", "a title that is not the request stays")
         XCTAssertTrue(blocked.unseen)
         XCTAssertFalse(blocked.canReply, "a permission prompt is answered, not typed into")
 

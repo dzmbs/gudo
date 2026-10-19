@@ -512,6 +512,10 @@ struct LaunchAgentSheet: View {
                 hostID = hostID ?? hosts.first?.id
                 isPromptFocused = true
             }
+            // A host that connects while the sheet is up becomes the choice.
+            .onChange(of: hosts.map(\.id)) { _, ids in
+                if hostID == nil || !ids.contains(hostID!) { hostID = ids.first }
+            }
         }
         #if os(iOS)
         .phoneDetents([.large])

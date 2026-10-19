@@ -32,7 +32,7 @@ xcrun simctl ui "$device" appearance dark
 # links, and an agent that finishes one turn and asks for permission on the next.
 app
 sleep 6
-app -screen seed -typeOnStart 'echo "see src/main.rs:2, README.md and http://localhost:18766/"; (python3 -m http.server 18766 --bind 127.0.0.1 >/dev/null 2>&1 &)\n'
+app -screen seed -typeOnStart 'echo "see src/main.rs:2, README.md and http://localhost:18766/"; python3 -m http.server 18766 --bind 127.0.0.1 >/dev/null 2>&1 &\n'
 sleep 4
 app -screen seed -seedAgent "tidy the readme"
 sleep 8

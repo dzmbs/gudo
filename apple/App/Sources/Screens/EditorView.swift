@@ -206,7 +206,9 @@ private struct EditorProgress: View {
 
     private var title: String {
         if case .failed = phase { return "VS Code Didn't Open" }
-        return "Opening \((folder as NSString).lastPathComponent.nonEmpty ?? folder) in VS Code"
+        let name = (folder as NSString).lastPathComponent
+        if folder == "~" || name.isEmpty { return "Opening VS Code" }
+        return "Opening \(name) in VS Code"
     }
 
     private var footnote: String {

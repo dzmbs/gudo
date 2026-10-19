@@ -38,7 +38,12 @@ struct HostContext {
         if let workspace = window?.workspace, let id = workspace.hostId,
            let daemon = workspace.host as? DaemonConnection, daemon.status.isLive || daemon.isReady {
             let pane = workspace.focusedPane
-            let directory = pane.flatMap { daemon.meta[$0]?.cwd } ?? pane.flatMap { workspace.panes[$0]?.workingDirectory }
+            // An agent pane may not report a directory (no shell integration until it exits):
+            // then the tab's other panes say where the work is.
+            let tabPanes = workspace.session.activeTab?.root.panes ?? []
+            let directory = pane.flatMap { daemon.meta[$0]?.cwd?.nonEmpty }
+                ?? pane.flatMap { workspace.panes[$0]?.workingDirectory.nonEmpty }
+                ?? tabPanes.lazy.compactMap { daemon.meta[$0]?.cwd?.nonEmpty ?? workspace.panes[$0]?.workingDirectory.nonEmpty }.first
             return HostContext(
                 hostId: id, name: app.hosts.record(id)?.name ?? id, daemon: daemon, pane: pane?.rawValue,
                 directory: directory?.nonEmpty)
@@ -161,8 +166,12 @@ final class LiveAgentFeed: AgentFeed {
                 if answered[id] == requestId {
                     state = .working
                 } else {
-                    request = options.isEmpty ? .question(summary) : .permission(tool: AgentKind(agent.kind).title, detail: summary)
-                    prompt = meta.title.nonEmpty ?? summary
+                    request = options.isEmpty ? .question(summary) : .permission(tool: "Wants to run", detail: summary)
+                    // The title often repeats the request (Claude puts it there): say what it waits for.
+                    let title = meta.title.trimmingCharacters(in: .whitespaces)
+                    let repeats = title.isEmpty || summary.contains(title) || title.contains(summary)
+                        || title.lowercased() == agent.kind.lowercased() || title == AgentKind(agent.kind).title
+                    prompt = repeats ? (options.isEmpty ? "Has a question" : "Waiting for your approval") : title
                 }
             }
             let latest = byPane[pane.rawValue]
@@ -436,9 +445,11 @@ final class LiveFileSource: FileSource {
     static func entries(_ listing: DirListing, git: UnnamedCore.GitStatus?) -> [FileEntry] {
         var letters: [String: FileEntry.GitStatus] = [:]
         if let git {
-            let directory = listing.path.hasSuffix("/") ? String(listing.path.dropLast()) : listing.path
+            // Shell, git and the daemon may spell the same directory with or without /private.
+            let directory = PathMatch.normalized(listing.path)
+            let root = PathMatch.normalized(git.root)
             for file in git.files {
-                let absolute = git.root + "/" + file.path
+                let absolute = root + "/" + file.path
                 guard absolute.hasPrefix(directory + "/") else { continue }
                 let rest = absolute.dropFirst(directory.count + 1)
                 if let slash = rest.firstIndex(of: "/") {
@@ -455,7 +466,7 @@ final class LiveFileSource: FileSource {
                 path: stat.path, name: stat.name, isDirectory: isDirectory,
                 size: isDirectory ? nil : Int64(stat.size),
                 modified: Date(timeIntervalSince1970: Double(stat.modifiedMs) / 1000),
-                git: letters[stat.path], isSymlink: stat.kind == .symlink, isHidden: stat.hidden)
+                git: letters[PathMatch.normalized(stat.path)], isSymlink: stat.kind == .symlink, isHidden: stat.hidden)
         }
     }
 
@@ -805,6 +816,18 @@ final class LiveEditorSource: EditorSource {
     }
 
     private func performOpen() async {
+        // The window's host may still be connecting: wait for it (saying so) rather than fail.
+        if context == nil, window?.workspace?.host is DaemonConnection {
+            phase = .checking
+            hostName = window?.hostName ?? ""
+            for _ in 0..<150 where context == nil {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        // Just after connecting the panes may not have said where they are yet.
+        for _ in 0..<20 where context != nil && context?.directory == nil {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         guard let context else {
             phase = .failed(HostContext.noHost)
             return
