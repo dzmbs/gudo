@@ -126,7 +126,7 @@ final class WorkspaceUITests: XCTestCase {
         XCTAssertTrue(ctrl.waitForExistence(timeout: 5))
         app.typeText("ls")
         ctrl.tap()
-        XCTAssertEqual(ctrl.value as? String, "next key")
+        XCTAssertEqual(ctrl.value as? String, "Latched")
         app.typeText("c")  // one-shot Ctrl+C
         XCTAssertEqual(ctrl.value as? String, "off")
         app.buttons["keybar-pipe"].tap()

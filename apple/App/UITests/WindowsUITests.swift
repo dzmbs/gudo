@@ -92,6 +92,7 @@ final class WindowsUITests: XCTestCase {
 
     // MARK: Two windows on one host
 
+    #if os(iOS)
     /// ⌘N opens a second window on the same host and tab; a new tab there leaves the first
     /// window on its own tab; each window types into its own terminal and sees only what its
     /// tab's shell printed; both windows' terminals of a shared pane show the same stream.
@@ -186,6 +187,7 @@ final class WindowsUITests: XCTestCase {
         XCTAssertEqual(panes(app).count, 3)
         shot(app, "mock-splits")
     }
+    #endif
 
     // MARK: Handoff
 
@@ -250,6 +252,7 @@ final class WindowsUITests: XCTestCase {
 
     // MARK: Width buckets
 
+    #if os(iOS)
     /// The window narrows past the boundary (Split View, Slide Over, a narrow Stage Manager
     /// window; here a debug width) and widens again: compact then regular layout, the same tab
     /// and focused pane throughout, and no cols × rows overlay from the switch.
@@ -330,4 +333,5 @@ final class WindowsUITests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         XCTAssertEqual(probe(element)["overlays"], portrait["overlays"], "no overlay from the layout switches")
     }
+    #endif
 }

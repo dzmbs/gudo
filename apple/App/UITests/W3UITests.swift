@@ -174,11 +174,18 @@ final class W3UITests: XCTestCase {
 
     func testZAgentLaunchApproveReplyAndTurnReview() throws {
         try launch()
-        palette("New Agent")
+        palette("New Task")
         let prompt = app.textViews.matching(identifier: "launch-prompt").firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
         prompt.tap()
         prompt.typeText("please ask permission")
+        // In this checkout, beside the shell (a new worktree is the Git suite's case).
+        let worktree = app.switches["task-worktree"].firstMatch
+        XCTAssertTrue(worktree.waitForExistence(timeout: 5))
+        if worktree.value as? String == "1" {
+            worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(worktree.value as? String, "0", "no worktree")
         element("launch-start").tap()
         XCTAssertTrue(prompt.waitForNonExistence(timeout: 20), "the sheet closes once the pane exists")
         expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: panes)
