@@ -3,8 +3,11 @@ import XCTest
 
 /// ⌃⌘D opens the draw overlay on the focused pane, a rectangle is added through the embedded
 /// Excalidraw (the Debug "Rect" button runs the editor's own element factory), Done renders it on
-/// device and places it in the pane (`placePng` → `Placed`), it shows over the cells, and it is
-/// still there after the app is relaunched (the daemon re-sends placements on attach).
+/// device and places it in the pane (`placePng` → `Placed`), says so, it shows over the cells, and
+/// it is still there after the app is relaunched (the daemon re-sends placements on attach).
+/// Also: the toolbar never covers the first row, one finger draws with the chosen tool, one pane
+/// draws at a time, and Write keeps handwriting (typed here: Scribble cannot be synthesised) at
+/// the prompt until Send.
 /// Needs `PAIR_TICKET` (run with `TEST_RUNNER_PAIR_TICKET=$(apple/scripts/local-daemon.sh start)`).
 @MainActor
 final class DrawingUITests: XCTestCase {
@@ -26,48 +29,113 @@ final class DrawingUITests: XCTestCase {
         return app
     }
 
+    private func ticket() throws -> String {
+        let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
+        try XCTSkipIf(ticket.isEmpty, "no daemon ticket (TEST_RUNNER_PAIR_TICKET)")
+        return ticket
+    }
+
     private func placements(_ app: XCUIApplication) -> XCUIElementQuery {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'placement-'"))
     }
 
-    func testDrawRectangleDonePlacesItAndItSurvivesRelaunch() throws {
-        let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
-        try XCTSkipIf(ticket.isEmpty, "no daemon ticket (TEST_RUNNER_PAIR_TICKET)")
-        var app = launch(ticket)
+    private func panes(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'"))
+    }
 
-        let pane = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'")).firstMatch
+    private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {
+        app.descendants(matching: .any)[id]
+    }
+
+    /// Coordinate taps: the toolbar lives inside the pane view, which XCUITest cannot "scroll to".
+    private func tap(_ element: XCUIElement) {
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
+    /// A focused daemon pane with some output to annotate (⌃⌘D anchors at the last line of
+    /// output above the prompt).
+    private func preparePane(_ app: XCUIApplication) -> XCUIElement {
+        let pane = panes(app).firstMatch
         XCTAssertTrue(pane.waitForExistence(timeout: 30), "a daemon pane appears")
         pane.tap()
         sleep(2)  // the software keyboard resizes the pane
-        // Some output to annotate (⌃⌘D anchors at the last line of output above the prompt).
-        app.typeText("seq 1 12\n")
+        app.typeText("clear; seq 1 12\n")
         sleep(2)
-        let before = placements(app).count
+        return pane
+    }
 
-        // ⌃⌘D: draw mode at the cursor row.
+    /// Picks a tool from the strip, or from the tool menu on a narrow pane.
+    private func choose(_ app: XCUIApplication, tool: String, title: String) {
+        let button = app.buttons["drawing.tool.\(tool)"]
+        if button.exists {
+            tap(button)
+        } else {
+            let menu = app.buttons["drawing.tool"]
+            XCTAssertTrue(menu.exists, "a tool strip or a tool menu")
+            tap(menu)
+            let item = app.buttons[title]
+            XCTAssertTrue(item.waitForExistence(timeout: 3))
+            item.tap()
+        }
+        sleep(1)
+    }
+
+    /// The tool the toolbar shows as chosen.
+    private func isChosen(_ app: XCUIApplication, tool: String, title: String) -> Bool {
+        let button = app.buttons["drawing.tool.\(tool)"]
+        if button.exists { return button.isSelected }
+        return app.buttons["drawing.tool"].label == "Tool: \(title)"
+    }
+
+    private func openDrawMode(_ app: XCUIApplication) -> XCUIElement {
         app.typeKey("d", modifierFlags: [.command, .control])
         let done = app.buttons["drawing.done"]
         XCTAssertTrue(done.waitForExistence(timeout: 10), "the draw overlay opens")
+        sleep(2)  // the page loads its scene
+        return done
+    }
+
+    func testDrawRectangleDonePlacesItAndItSurvivesRelaunch() throws {
+        let ticket = try ticket()
+        var app = launch(ticket)
+        _ = preparePane(app)
+        let before = placements(app).count
+
+        let done = openDrawMode(app)
         XCTAssertTrue(app.buttons["drawing.cancel"].exists)
 
-        // A rectangle through the editor (wait for the page to load its scene).
+        // The toolbar is ours, at the bottom: never over the first row of text, and Excalidraw's
+        // own tool island is gone.
+        let toolbar = element(app, "drawing.toolbar")
+        let firstRow = element(app, "drawing.firstRow")
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
+        XCTAssertTrue(firstRow.exists)
+        XCTAssertFalse(toolbar.frame.intersects(firstRow.frame), "toolbar \(toolbar.frame) covers the first row \(firstRow.frame)")
+        XCTAssertGreaterThan(toolbar.frame.minY, firstRow.frame.maxY)
+        XCTAssertFalse(app.webViews.buttons["Rectangle — R or 2"].exists, "Excalidraw's tool island is hidden")
+        XCTAssertEqual(app.webViews.descendants(matching: .radioButton).count, 0, "no Excalidraw tool radios")
+
+        // A rectangle through the editor.
         let rect = app.buttons["drawing.debugRect"]
         XCTAssertTrue(rect.waitForExistence(timeout: 5))
-        sleep(2)
-        rect.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        tap(rect)
         sleep(1)
         shot(app, "draw-mode-rectangle")
 
-        // Done: rendered on device, placed in the pane's output.
-        // Coordinate taps: the toolbar lives inside the pane view, which XCUITest cannot "scroll to".
-        done.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        // Done: rendered on device, placed in the pane's output, and it says so.
+        tap(done)
         XCTAssertTrue(done.waitForNonExistence(timeout: 15), "the overlay closes")
+        let notice = element(app, "drawing.notice")
+        XCTAssertTrue(notice.waitForExistence(timeout: 5), "Done says where the drawing went")
+        XCTAssertTrue(app.staticTexts["Placed in terminal"].exists)
+        shot(app, "placed-notice")
         let placed = placements(app)
         expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
         waitForExpectations(timeout: 15)
         let frame = placed.element(boundBy: placed.count - 1).frame
         XCTAssertGreaterThan(frame.width, 20, "the placement covers cells")
         XCTAssertGreaterThan(frame.height, 10)
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 10), "the notice goes away by itself")
         shot(app, "placed")
 
         // Relaunch: the daemon re-sends placements on attach and the image downloads again.
@@ -77,6 +145,125 @@ final class DrawingUITests: XCTestCase {
         expectation(for: NSPredicate(format: "count >= %d", before + 1), evaluatedWith: again)
         waitForExpectations(timeout: 40)
         shot(app, "after-relaunch")
+    }
+
+    /// Once a tool is picked, one finger draws with it (and keeps drawing with it); with Pen a
+    /// finger inks through PencilKit, handed to the scene like the Pencil's strokes.
+    func testFingerDrawsWithTheChosenTool() throws {
+        let app = launch(try ticket())
+        let pane = preparePane(app)
+        let before = placements(app).count
+        let done = openDrawMode(app)
+
+        choose(app, tool: "rectangle", title: "Rectangle")
+        XCTAssertTrue(isChosen(app, tool: "rectangle", title: "Rectangle"), "the toolbar shows the chosen tool")
+
+        // Two rectangles with one finger: the tool stays picked after the first.
+        let frame = pane.frame
+        func drag(_ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat) {
+            let origin = pane.coordinate(withNormalizedOffset: .zero)
+            let a = origin.withOffset(CGVector(dx: frame.width * x0, dy: frame.height * y0))
+            let b = origin.withOffset(CGVector(dx: frame.width * x1, dy: frame.height * y1))
+            a.press(forDuration: 0.1, thenDragTo: b)
+        }
+        drag(0.10, 0.15, 0.35, 0.30)
+        sleep(1)
+        XCTAssertTrue(isChosen(app, tool: "rectangle", title: "Rectangle"), "still the rectangle after drawing one")
+        drag(0.45, 0.15, 0.70, 0.30)
+        sleep(1)
+
+        // Pen: a finger inks.
+        choose(app, tool: "pen", title: "Pen")
+        XCTAssertTrue(isChosen(app, tool: "pen", title: "Pen"))
+        drag(0.10, 0.40, 0.60, 0.45)
+        sleep(2)
+        shot(app, "finger-shapes-and-ink")
+
+        tap(done)
+        XCTAssertTrue(done.waitForNonExistence(timeout: 15))
+        let placed = placements(app)
+        expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
+        waitForExpectations(timeout: 15)
+        // Two rectangles side by side and an ink line under them: the placement spans them.
+        let image = placed.element(boundBy: placed.count - 1).frame
+        XCTAssertGreaterThan(image.width, frame.width * 0.45, "both rectangles and the ink were drawn")
+        shot(app, "finger-placed")
+    }
+
+    /// Draw mode in a second pane closes an empty overlay in the first, and asks about one with a
+    /// drawing: never two panes drawing at once.
+    func testOnlyOnePaneDrawsAtATime() throws {
+        let app = launch(try ticket())
+        _ = preparePane(app)
+        app.typeKey("d", modifierFlags: .command)  // split right; the new pane has focus
+        let split = panes(app)
+        expectation(for: NSPredicate(format: "count >= 2"), evaluatedWith: split)
+        waitForExpectations(timeout: 15)
+        sleep(2)
+        let overlays = app.buttons.matching(identifier: "drawing.done")
+
+        // Right pane draws, nothing on it; the left pane takes over quietly.
+        _ = openDrawMode(app)
+        app.typeKey(.leftArrow, modifierFlags: [.command, .option])
+        sleep(1)
+        app.typeKey("d", modifierFlags: [.command, .control])
+        sleep(3)
+        XCTAssertEqual(overlays.count, 1, "one pane draws")
+
+        // Something drawn in the left pane: the right pane asks first.
+        let rect = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(rect.waitForExistence(timeout: 5))
+        tap(rect)
+        sleep(1)
+        app.typeKey(.rightArrow, modifierFlags: [.command, .option])
+        sleep(1)
+        app.typeKey("d", modifierFlags: [.command, .control])
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "asked about the drawing in the other pane")
+        shot(app, "one-pane-ask")
+        XCTAssertEqual(overlays.count, 1)
+        alert.buttons["Discard It and Draw Here"].tap()
+        sleep(3)
+        XCTAssertEqual(overlays.count, 1, "still one pane drawing, now the right one")
+        tap(app.buttons["drawing.cancel"])
+        XCTAssertTrue(overlays.firstMatch.waitForNonExistence(timeout: 10))
+        app.typeKey("w", modifierFlags: .command)  // leave one pane for the next test
+        sleep(2)
+    }
+
+    /// Write: what is written shows at the prompt and reaches the shell only on Send (typed
+    /// here; the same field takes Scribble's text on a device).
+    func testWriteShowsAtThePromptUntilSent() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "Write is iPad only")
+        let app = launch(try ticket())
+        let pane = preparePane(app)
+        _ = openDrawMode(app)
+        let write = app.buttons["drawing.write"]
+        if write.exists {
+            tap(write)
+        } else {
+            tap(app.buttons["drawing.tool"])
+            let item = app.buttons["Write at Prompt"]
+            XCTAssertTrue(item.waitForExistence(timeout: 3))
+            item.tap()
+        }
+        let send = app.buttons["write.send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "Write mode opens")
+        XCTAssertFalse(send.isEnabled, "nothing to send yet")
+
+        app.typeText("echo drawn-$((6*7))")
+        let preview = element(app, "write.preview")
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        XCTAssertEqual(preview.value as? String, "echo drawn-$((6*7))", "shown at the prompt")
+        let screen = element(app, pane.identifier + "-screen")
+        XCTAssertFalse((screen.value as? String ?? "").contains("drawn-42"), "nothing reached the shell")
+        shot(app, "write-preview")
+
+        tap(send)
+        XCTAssertTrue(send.waitForNonExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "value CONTAINS 'drawn-42'"), evaluatedWith: screen)
+        waitForExpectations(timeout: 10)
+        shot(app, "write-sent")
     }
 }
 #endif

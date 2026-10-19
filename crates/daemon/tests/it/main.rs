@@ -11,5 +11,6 @@ mod relays;
 mod shell;
 mod support;
 mod terminal;
+mod upgrade;
 mod vscode;
 mod workspace;

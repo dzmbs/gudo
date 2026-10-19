@@ -25,7 +25,7 @@ struct SettingsView: View {
         TabView {
             SwiftUI.Tab("Appearance", systemImage: "paintpalette") { pane { AppearanceSection() } }
             SwiftUI.Tab("Terminal", systemImage: "terminal") { pane { FontSection(); CursorSection(); SplitsSection() } }
-            SwiftUI.Tab("Keyboard", systemImage: "keyboard") { pane { KeyboardSection() } }
+            SwiftUI.Tab("Keyboard", systemImage: "keyboard") { pane { KeyboardSection(); VoiceSettingsSection() } }
             SwiftUI.Tab("Notifications", systemImage: "bell.badge") { pane { NotificationsSection() } }
             SwiftUI.Tab("About", systemImage: "info.circle") { pane { AboutSection() } }
         }
@@ -41,6 +41,7 @@ struct SettingsView: View {
                 CursorSection().raisedRows()
                 SplitsSection().raisedRows()
                 KeyboardSection().raisedRows()
+                VoiceSettingsSection().raisedRows()
                 NotificationsSection().raisedRows()
                 AboutSection().raisedRows()
             }
@@ -191,6 +192,9 @@ private struct KeyboardSection: View {
     // The terminal reads these two keys (Workspace.applyKeyboardSettings).
     @AppStorage(KeyboardSettings.optionAsMeta) private var optionAsMeta = OptionAsMeta.none.rawValue
     @AppStorage(KeyboardSettings.asciiKeyboard) private var asciiKeyboard = false
+    #if os(iOS)
+    @AppStorage(KeyBar.hardwareModeKey) private var hardwareKeyBar = KeyBar.HardwareMode.minimal.rawValue
+    #endif
 
     var body: some View {
         Section {
@@ -204,12 +208,21 @@ private struct KeyboardSection: View {
             }
             #if os(iOS)
             Toggle("ASCII Keyboard", isOn: $asciiKeyboard)
+            Picker("With a Hardware Keyboard", selection: $hardwareKeyBar) {
+                Text("Esc Pill").tag(KeyBar.HardwareMode.minimal.rawValue)
+                Text("Hidden").tag(KeyBar.HardwareMode.hidden.rawValue)
+                Text("Full Key Bar").tag(KeyBar.HardwareMode.full.rawValue)
+            }
             NavigationLink("Key Bar Profiles") { KeyBarProfilesView() }
             #endif
         } header: {
             Text("Keyboard")
         } footer: {
+            #if os(iOS)
+            Text("⌘ shortcuts always go to the app, never to the terminal. The Magic Keyboard has no Esc key: ⌘. sends Esc, or set Caps Lock to Escape in Settings ▸ General ▸ Keyboard ▸ Hardware Keyboard.")
+            #else
             Text("⌘ shortcuts always go to the app, never to the terminal.")
+            #endif
         }
     }
 }
@@ -361,11 +374,11 @@ private struct KeyBarProfilesView: View {
     }
 
     private func caps(_ profile: KeyBarProfile) -> [AnyView] {
-        // The spine is the same in every profile; the wing follows it, "tap / flick".
-        let spine = ["esc", "ctl", "alt", "tab"].map { AnyView(KeyCap($0)) }
+        // Capsule A is the same in every profile; capsule B follows it, in priority order.
+        let spine = ["esc", "ctrl", "alt", "⇥"].map { AnyView(KeyCap($0)) }
         let wing = profile.keys.map { key -> AnyView in
             if let title = key.title {
-                return AnyView(KeyCap(key.alternateTitle.map { "\(title) \($0)" } ?? title))
+                return AnyView(KeyCap(title))
             }
             return AnyView(Image(systemName: key.symbol ?? "questionmark").font(.caption.weight(.medium))
                 .padding(.horizontal, 6).padding(.vertical, 3)

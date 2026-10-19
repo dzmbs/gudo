@@ -1,7 +1,9 @@
+import DesignSystem
 import DrawingKit
 import Foundation
 import HostKit
 import PaneLayout
+import SwiftUI
 import Synchronization
 import TerminalCore
 import TerminalRenderer
@@ -14,9 +16,10 @@ import AppKit
 
 /// placements as image quads pinned to rows, opens the draw overlay (Pencil, two-finger long
 /// press, ⌃⌘D), reopens a tapped placement, imports pasted or dropped images and `.excalidraw`
-/// files, draws other people's live ink, and turns the pane into a canvas when the daemon says
-/// it is one. Attached once per pane by `Workspace` (`PaneDrawing.attach`); local and plain-SSH
-/// panes have none.
+/// files, draws other people's live ink, turns the pane into a canvas when the daemon says it is
+/// one, keeps placements whose row is gone in a loose tray, and hosts Write (handwriting at the
+/// prompt, iPad). One pane draws or writes at a time. Attached once per pane by `Workspace`
+/// (`PaneDrawing.attach`); local and plain-SSH panes have none.
 @MainActor
 final class PaneDrawing: NSObject {
     let paneId: UInt64
@@ -42,9 +45,25 @@ final class PaneDrawing: NSObject {
     private var keyboardBeforeOverlay = false
     private(set) var canvas: CanvasPaneView?
     private var artifactPins: [UInt64: RowPin] = [:]
-    private var markers: [UInt64: PlatformView] = [:]
+    private var markers: [UInt64: PlacementMarker] = [:]
+    /// A placement Done just made: outlined once its marker exists.
+    private var flashPlacement: UInt64?
+    #if os(iOS)
+    private(set) var writer: WriteOverlay?
+    private var notice: UIHostingController<PlacedNotice>?
+    private var tray: UIHostingController<LooseTray>?
+    #else
+    private var notice: NSHostingView<PlacedNotice>?
+    private var tray: NSHostingView<LooseTray>?
+    #endif
+    private var noticeDismiss: Task<Void, Never>?
+    private let looseModel = LooseTrayModel()
+    private var looseTimer: Timer?
 
     private static let registry = NSMapTable<NSNumber, PaneDrawing>.strongToWeakObjects()
+
+    /// The pane in draw or write mode, across every window: one at a time.
+    private static weak var active: PaneDrawing?
 
     /// The drawing controller of a pane, if it is on a daemon.
     static func of(_ pane: PaneId) -> PaneDrawing? { registry.object(forKey: NSNumber(value: pane.rawValue)) }
@@ -98,6 +117,9 @@ final class PaneDrawing: NSObject {
         peerInk.frame = pane.view.bounds
         pane.view.addSubview(peerInk)
         installInput(on: pane.view)
+        looseModel.onPlace = { [weak self] in self?.placeLooseAtCursor($0) }
+        looseModel.onSend = { [weak self] in self?.sendLoose($0) }
+        looseModel.onRemove = { [weak self] in self?.removeLoose($0) }
         hub.register(self)
         canvasChanged()
     }
@@ -128,6 +150,7 @@ final class PaneDrawing: NSObject {
         let anchors = entries.values.map { "\($0.placement.anchor.state == .live ? "live" : "detached")@\($0.placement.anchor.atSeq)/\($0.placement.anchor.fromBottom)" }
         CanvasWebView.log.debug("placements pane \(self.paneId): \(self.entries.count) (\(pinned) pinned) applied \(self.tracker.appliedSeq) \(anchors.joined(separator: " "), privacy: .public)")
         surface?.invalidateInlineImages()
+        refreshLoose()
     }
 
     private func repinAll() {
@@ -136,6 +159,7 @@ final class PaneDrawing: NSObject {
         }
         artifactPins = artifactPins.filter { tracker.terminal.screenRow(of: $0.value) != nil }
         surface?.invalidateInlineImages()
+        refreshLoose()
     }
 
     func pin(_ anchor: RowAnchor) -> RowPin? {
@@ -183,7 +207,8 @@ final class PaneDrawing: NSObject {
         updateMarkers()
     }
 
-    /// Accessibility elements over drawn placements ("Drawing"), for VoiceOver and UI tests.
+    /// Accessibility elements over drawn placements ("Drawing"), for VoiceOver and UI tests; the
+    /// one Done just placed is outlined for a moment, so you see where it went.
     private func updateMarkers() {
         guard let surface, let view = pane?.view else { return }
         var seen: Set<UInt64> = []
@@ -199,6 +224,10 @@ final class PaneDrawing: NSObject {
                 return marker
             }()
             if marker.frame != rect { marker.frame = rect }
+            if flashPlacement == id {
+                flashPlacement = nil
+                marker.flash()
+            }
         }
         for (id, marker) in markers where !seen.contains(id) {
             marker.removeFromSuperview()
@@ -206,13 +235,158 @@ final class PaneDrawing: NSObject {
         }
     }
 
+    // MARK: Loose tray
+
+    /// Placements that can no longer be drawn at their row: listed in the tray, never dropped
+    /// silently.
+    private func refreshLoose() {
+        let applied = tracker.appliedSeq
+        let pins = entries.values.compactMap(\.pin)
+        let onScreen = Dictionary(zip(pins.map(ObjectIdentifier.init), tracker.terminal.screenRows(of: pins).map { $0 != nil }), uniquingKeysWith: { a, _ in a })
+        let loose = entries.values
+            .filter { entry in
+                let a = entry.placement.anchor
+                return PlacementPlace.classify(
+                    live: a.state == .live, pinned: entry.pin != nil,
+                    rowOnScreen: entry.pin.map { onScreen[ObjectIdentifier($0)] ?? false } ?? false,
+                    atSeq: a.atSeq, applied: applied) == .loose
+            }
+            .map(\.placement)
+            .sorted { $0.atMs < $1.atMs }
+        let items = loose.enumerated().map { index, p in
+            LooseTrayModel.Item(id: p.placementId, title: "Drawing \(index + 1) · \(Self.age(ms: p.atMs))")
+        }
+        if items != looseModel.items {
+            if items.count > looseModel.items.count {
+                CanvasWebView.log.info("loose: \(items.count - self.looseModel.items.count) drawing(s) lost their row on pane \(self.paneId)")
+            }
+            looseModel.items = items
+        }
+        looseModel.agentName = agentTarget()?.name
+        updateTray()
+        if entries.isEmpty {
+            looseTimer?.invalidate()
+            looseTimer = nil
+        } else if looseTimer == nil {
+            // Rows leave the scrollback ring with output; check now and then.
+            looseTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshLoose() }
+            }
+        }
+    }
+
+    private static func age(ms: UInt64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        return date.formatted(.relative(presentation: .named))
+    }
+
+    private func updateTray() {
+        guard let view = pane?.view else { return }
+        if looseModel.items.isEmpty {
+            #if os(iOS)
+            tray?.view.removeFromSuperview()
+            #else
+            tray?.removeFromSuperview()
+            #endif
+            tray = nil
+            return
+        }
+        #if os(iOS)
+        let host = tray ?? {
+            let host = UIHostingController(rootView: LooseTray(model: looseModel))
+            host.view.backgroundColor = .clear
+            host.sizingOptions = [.intrinsicContentSize]
+            host.overrideUserInterfaceStyle = isDarkTheme ? .dark : .light
+            host.view.autoresizingMask = [.flexibleLeftMargin, .flexibleBottomMargin]
+            view.addSubview(host.view)
+            tray = host
+            return host
+        }()
+        let size = host.view.intrinsicContentSize
+        host.view.frame = CGRect(x: view.bounds.width - size.width - 8, y: 8, width: size.width, height: size.height)
+        #else
+        let host = tray ?? {
+            let host = NSHostingView(rootView: LooseTray(model: looseModel))
+            host.appearance = NSAppearance(named: isDarkTheme ? .darkAqua : .aqua)
+            host.autoresizingMask = [.minXMargin, .maxYMargin]
+            view.addSubview(host)
+            tray = host
+            return host
+        }()
+        let size = host.fittingSize
+        host.frame = CGRect(x: view.bounds.width - size.width - 8, y: 8, width: size.width, height: size.height)
+        #endif
+    }
+
+    private func placeLooseAtCursor(_ id: UInt64) {
+        guard let placement = entries[id]?.placement, let surface, !isReadOnly else { return }
+        let cursor = min(max(surface.terminal.cursorPosition.y, 0), Int(surface.grid?.rows ?? 1) - 1)
+        guard let pin = tracker.terminal.pinRow(viewportRow: max(0, cursor - Int(placement.rows))) else { return }
+        let client = hub.client
+        let paneId = paneId
+        Task {
+            do {
+                let blob = try await client.blobDownload(hash: placement.image.hash, progress: nil)
+                let placed = try await anchored(pin) { anchor in
+                    try await client.placePng(
+                        request: PlaceRequest(
+                            paneId: paneId, artifactId: placement.artifactId, version: nil, anchor: anchor,
+                            col: placement.col, cols: placement.cols, rows: placement.rows, replace: placement.placementId),
+                        png: blob.data)
+                }
+                hub.seed(hash: placed.image.hash, png: blob.data)
+                hub.noteLocal(placed, replacing: placement.placementId)
+                flashPlacement = placed.placementId
+                CanvasWebView.log.info("loose: placed \(placement.placementId) again as \(placed.placementId) at the cursor")
+            } catch {
+                CanvasWebView.log.error("loose: place again: \(DrawOverlay.describe(error), privacy: .public)")
+            }
+        }
+    }
+
+    private func sendLoose(_ id: UInt64) {
+        guard let placement = entries[id]?.placement, let target = agentTarget() else { return }
+        let client = hub.client
+        Task {
+            do {
+                _ = try await client.sendToAgent(paneId: target.pane, artifactId: placement.artifactId, version: nil, png: nil)
+                showToast("Sent to \(target.name)")
+            } catch {
+                showToast("\(target.name) did not get it: \(DrawOverlay.describe(error))", failure: true)
+            }
+        }
+    }
+
+    private func removeLoose(_ id: UInt64) {
+        let client = hub.client
+        Task {
+            try? await client.unplace(placementId: id)
+            hub.noteRemoved(id, pane: paneId)
+        }
+    }
+
+    private func showToast(_ message: String, failure: Bool = false) {
+        ActiveWindow.model?.toasts.show(Toast(
+            message, systemImage: failure ? "exclamationmark.triangle.fill" : "arrow.up.circle.fill", style: failure ? .failure : .success))
+    }
+
     // MARK: Draw mode
 
     /// Opens the draw overlay anchored at the viewport row under `point` (view points), or the
-    /// cursor row.
-    func beginDrawing(at point: CGPoint? = nil) {
-        guard overlay == nil, canvas == nil, let pane, let surface = pane.view.surface as TerminalSurface? else { return }
+    /// cursor row. `tool` defaults to the last one used; `then` gets the overlay once it is up
+    /// (another pane drawing may be asked to finish first).
+    func beginDrawing(at point: CGPoint? = nil, tool: DrawTool? = nil, then: ((DrawOverlay) -> Void)? = nil) {
+        guard overlay == nil, canvas == nil, pane != nil else { return }
         if isReadOnly { return }
+        claim { [weak self] in
+            guard let self, self.overlay == nil else { return }
+            self.openOverlay(at: point, tool: tool ?? DrawOverlay.lastTool)
+            if let overlay = self.overlay { then?(overlay) }
+        }
+    }
+
+    private func openOverlay(at point: CGPoint?, tool: DrawTool) {
+        guard let pane, let surface = pane.view.surface as TerminalSurface? else { return }
         let row: Int
         if let point {
             row = surface.cell(at: point).y
@@ -228,20 +402,23 @@ final class PaneDrawing: NSObject {
             } ?? cursor
         }
         guard let origin = tracker.terminal.pinRow(viewportRow: row) else { return }
-        let overlay = DrawOverlay(drawing: self, origin: origin, reopened: nil)
-        present(overlay)
+        present(DrawOverlay(drawing: self, origin: origin, reopened: nil, tool: tool))
     }
 
     /// Reopens a placement's scene in place.
     func reopen(_ placement: Placement) {
-        guard overlay == nil, canvas == nil, let pin = entries[placement.placementId]?.pin else { return }
-        let overlay = DrawOverlay(drawing: self, origin: pin, reopened: placement)
-        present(overlay)
+        guard overlay == nil, canvas == nil else { return }
+        claim { [weak self] in
+            guard let self, self.overlay == nil, let pin = self.entries[placement.placementId]?.pin else { return }
+            self.present(DrawOverlay(drawing: self, origin: pin, reopened: placement, tool: DrawOverlay.lastTool))
+        }
     }
 
     private func present(_ overlay: DrawOverlay) {
         guard let view = pane?.view else { return }
+        dismissNotice()
         self.overlay = overlay
+        Self.active = self
         #if os(iOS)
         keyboardBeforeOverlay = view.isFirstResponder
         #else
@@ -249,13 +426,29 @@ final class PaneDrawing: NSObject {
         #endif
         overlay.view.frame = view.bounds
         view.addSubview(overlay.view)
+        if let tray = trayView {
+            #if os(iOS)
+            view.bringSubviewToFront(tray)
+            #else
+            view.addSubview(tray, positioned: .above, relativeTo: nil)
+            #endif
+        }
         overlay.start()
+    }
+
+    private var trayView: PlatformView? {
+        #if os(iOS)
+        tray?.view
+        #else
+        tray
+        #endif
     }
 
     func overlayClosed() {
         overlay?.view.removeFromSuperview()
         overlay = nil
         hiddenPlacement = nil
+        if Self.active === self, !isWriting { Self.active = nil }
         // Give the keyboard back only if the terminal had it (never pop up the software one).
         guard keyboardBeforeOverlay else { return }
         #if os(iOS)
@@ -272,6 +465,231 @@ final class PaneDrawing: NSObject {
         } else {
             beginDrawing()
         }
+    }
+
+    // MARK: One pane at a time
+
+    private var isWriting: Bool {
+        #if os(iOS)
+        writer != nil
+        #else
+        false
+        #endif
+    }
+
+    /// Unsaved drawing or handwriting here (what closing would lose).
+    var hasUnsavedWork: Bool {
+        #if os(iOS)
+        if let writer, !writer.isEmpty { return true }
+        if overlay?.ink?.hasStrokes == true { return true }
+        #endif
+        return overlay?.isEdited ?? false
+    }
+
+    /// Runs `open` once no other pane draws or writes: another pane with nothing on it closes
+    /// quietly; one holding a drawing or handwriting is asked about first.
+    func claim(_ open: @escaping () -> Void) {
+        let other = Self.active.flatMap { $0 !== self && ($0.overlay != nil || $0.isWriting) ? $0 : nil }
+        let decision = DrawExclusivity.decide(
+            requester: UInt64(UInt(bitPattern: ObjectIdentifier(self).hashValue)),
+            active: other.map { UInt64(UInt(bitPattern: ObjectIdentifier($0).hashValue)) },
+            activeHasContent: other?.hasUnsavedWork ?? false)
+        switch decision {
+        case .open, .alreadyOpen:
+            open()
+        case .closeOtherAndOpen:
+            CanvasWebView.log.info("draw: pane \(other?.paneId ?? 0) had nothing drawn; it closes for pane \(self.paneId)")
+            other?.discard()
+            open()
+        case .ask:
+            guard let other else { return open() }
+            CanvasWebView.log.info("draw: pane \(other.paneId) holds a drawing; asking before pane \(self.paneId) draws")
+            askToFinish(other, then: open)
+        }
+    }
+
+    /// Closes draw or write mode here without keeping anything.
+    func discard() {
+        #if os(iOS)
+        writer?.cancel()
+        #endif
+        overlay?.cancel()
+    }
+
+    private func askToFinish(_ other: PaneDrawing, then open: @escaping () -> Void) {
+        let writing = other.isWriting
+        let title = writing ? "Discard the handwriting in the other pane?" : "Finish the drawing in the other pane?"
+        let message = "One pane draws at a time."
+        var actions: [(String, Bool, () -> Void)] = []
+        if !writing, let overlay = other.overlay {
+            actions.append(("Place It and Draw Here", false, {
+                overlay.onClose { _ in open() }
+                overlay.commit()
+            }))
+        }
+        actions.append((writing ? "Discard It and Draw Here" : "Discard It and Draw Here", true, {
+            other.discard()
+            open()
+        }))
+        let keep = { [weak other, weak workspace = other.workspace] in
+            guard let other, let workspace else { return }
+            workspace.apply(.focus(PaneId(other.paneId)))
+        }
+        #if os(iOS)
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        for (label, destructive, action) in actions {
+            alert.addAction(UIAlertAction(title: label, style: destructive ? .destructive : .default) { _ in action() })
+        }
+        alert.addAction(UIAlertAction(title: writing ? "Keep Writing There" : "Keep Drawing There", style: .cancel) { _ in keep() })
+        guard var presenter = pane?.view.window?.rootViewController else { return }
+        while let next = presenter.presentedViewController { presenter = next }
+        presenter.present(alert, animated: true)
+        #else
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        for (label, destructive, _) in actions {
+            let button = alert.addButton(withTitle: label)
+            button.hasDestructiveAction = destructive
+        }
+        alert.addButton(withTitle: "Keep Drawing There")
+        let handle: (NSApplication.ModalResponse) -> Void = { response in
+            let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+            if actions.indices.contains(index) { actions[index].2() } else { keep() }
+        }
+        if let window = pane?.view.window {
+            alert.beginSheetModal(for: window, completionHandler: handle)
+        } else {
+            handle(alert.runModal())
+        }
+        #endif
+    }
+
+    // MARK: After Done
+
+    /// Says where the drawing went ("Placed in terminal", it scrolls with the output) and, when
+    /// an agent runs in the pane or its tab, offers Send to Claude/Codex. The placement is
+    /// outlined for a moment.
+    func showPlaced(_ placement: Placement, png: Data, sentTo: String? = nil) {
+        flashPlacement = placement.placementId
+        surface?.invalidateInlineImages()
+        guard let view = pane?.view else { return }
+        dismissNotice()
+        let model = PlacedNoticeModel()
+        let target = agentTarget()
+        model.agentName = sentTo ?? target?.name
+        model.sent = sentTo != nil
+        model.onDismiss = { [weak self] in self?.dismissNotice() }
+        model.onSend = { [weak self, weak model] in
+            guard let self, let model, let target else { return }
+            model.sending = true
+            Task {
+                do {
+                    _ = try await self.hub.client.sendToAgent(paneId: target.pane, artifactId: placement.artifactId, version: nil, png: png)
+                    model.sent = true
+                    model.sending = false
+                    self.workspace?.apply(.focus(PaneId(target.pane)))
+                    self.scheduleNoticeDismiss(after: .seconds(2))
+                } catch {
+                    model.sending = false
+                    self.dismissNotice()
+                    self.showToast("\(target.name) did not get it: \(DrawOverlay.describe(error))", failure: true)
+                }
+            }
+        }
+        #if os(iOS)
+        let host = UIHostingController(rootView: PlacedNotice(model: model))
+        host.view.backgroundColor = .clear
+        host.sizingOptions = [.intrinsicContentSize]
+        host.overrideUserInterfaceStyle = isDarkTheme ? .dark : .light
+        host.view.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin]
+        let size = host.view.intrinsicContentSize
+        host.view.frame = CGRect(
+            x: (view.bounds.width - size.width) / 2, y: view.bounds.height - view.safeAreaInsets.bottom - 12 - size.height,
+            width: size.width, height: size.height)
+        host.view.alpha = 0
+        view.addSubview(host.view)
+        UIView.animate(withDuration: 0.2) { host.view.alpha = 1 }
+        notice = host
+        #else
+        let host = NSHostingView(rootView: PlacedNotice(model: model))
+        host.appearance = NSAppearance(named: isDarkTheme ? .darkAqua : .aqua)
+        let size = host.fittingSize
+        host.frame = CGRect(x: (view.bounds.width - size.width) / 2, y: view.bounds.height - size.height - 12, width: size.width, height: size.height)
+        host.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
+        view.addSubview(host)
+        notice = host
+        #endif
+        CanvasWebView.log.info("done: notice shown (\(model.agentName.map { "with Send to \($0)" } ?? "no agent", privacy: .public))")
+        scheduleNoticeDismiss(after: model.agentName != nil && !model.sent ? .seconds(6) : .seconds(3))
+    }
+
+    private func scheduleNoticeDismiss(after delay: Duration) {
+        noticeDismiss?.cancel()
+        noticeDismiss = Task { [weak self] in
+            guard (try? await Task.sleep(for: delay)) != nil else { return }
+            self?.dismissNotice()
+        }
+    }
+
+    func dismissNotice() {
+        noticeDismiss?.cancel()
+        noticeDismiss = nil
+        guard let notice else { return }
+        self.notice = nil
+        #if os(iOS)
+        let view = notice.view
+        UIView.animate(withDuration: 0.2, animations: { view?.alpha = 0 }, completion: { _ in view?.removeFromSuperview() })
+        #else
+        notice.removeFromSuperview()
+        #endif
+    }
+
+    // MARK: Anchors
+
+    /// Runs a request naming `pin`'s row. While the pane is being resized (the software keyboard
+    /// coming up, a divider drag) the daemon's grid can briefly differ from ours and refuse the
+    /// row; the request is retried with the anchor taken again once sizes settle.
+    func anchored<T>(_ pin: RowPin, _ request: (AnchorRequest) async throws -> T) async throws -> T {
+        var attempt = 0
+        while true {
+            guard let a = tracker.anchor(of: pin) else { throw ArtifactError.Invalid(message: "that row is gone") }
+            do {
+                return try await request(AnchorRequest(paneId: paneId, atSeq: a.atSeq, fromBottom: a.fromBottom))
+            } catch ArtifactError.Invalid(let message) where attempt < 5 {
+                attempt += 1
+                CanvasWebView.log.info("anchor refused (\(message, privacy: .public)); retrying")
+                try? await Task.sleep(for: .milliseconds(250 * attempt))
+            }
+        }
+    }
+
+    // MARK: Write (handwriting at the prompt)
+
+    /// Write mode: Apple Pencil handwriting becomes text shown at the prompt, sent only on
+    /// Return or Send (iPad; elsewhere a no-op).
+    func startWriting() {
+        #if os(iOS)
+        guard writer == nil, overlay == nil, canvas == nil, !isReadOnly else { return }
+        claim { [weak self] in
+            guard let self, self.writer == nil, self.overlay == nil, let pane = self.pane else { return }
+            let writer = WriteOverlay(drawing: self, terminal: pane.view)
+            self.writer = writer
+            Self.active = self
+            self.dismissNotice()
+            writer.frame = pane.view.bounds
+            pane.view.addSubview(writer)
+            writer.start()
+        }
+        #endif
+    }
+
+    func writerClosed() {
+        #if os(iOS)
+        writer?.removeFromSuperview()
+        writer = nil
+        if Self.active === self, overlay == nil { Self.active = nil }
+        #endif
     }
 
     // MARK: Agents

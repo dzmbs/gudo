@@ -520,6 +520,7 @@ fn every_message_matches_its_frozen_bytes() {
     terminal_completeness(&mut c);
     workspace_messages(&mut c);
     attach_results(&mut c);
+    daemon_info_messages(&mut c);
     multiplayer_messages(&mut c);
     artifact_messages(&mut c);
     artifact_messages_2(&mut c);
@@ -560,6 +561,79 @@ fn attach_results(c: &mut Checker) {
         })),
         "090000000126010004676f6e65",
     );
+}
+
+fn daemon_info() -> DaemonInfo {
+    DaemonInfo {
+        version: "0.1.0".into(),
+        build: "3f2a9c1d7e4b".into(),
+        built_unix: 1_792_000_000,
+        protocol: 1,
+        min_client_protocol: 0,
+        features: DaemonFeatures::SELF_UPGRADE,
+        hostname: "ubuntu-32gb-hel1-2".into(),
+        os: "linux".into(),
+        os_name: "Ubuntu 24.04.1 LTS".into(),
+        arch: "x86_64".into(),
+    }
+}
+
+/// `Caps::DAEMON_INFO` (bit 5), `ServerCtl::DaemonInfo` (appended after `AttachResult`,
+/// variant 0x27), `StreamHeader::Upgrade` (appended after `Blob`, variant 7) and its replies.
+fn daemon_info_messages(c: &mut Checker) {
+    c.check("Caps::DAEMON_INFO", Caps::DAEMON_INFO, "020000000120");
+    c.check(
+        "DaemonFeatures::SELF_UPGRADE",
+        DaemonFeatures::SELF_UPGRADE,
+        "020000000101",
+    );
+    c.check("ServerCtl::DaemonInfo", ServerCtl::DaemonInfo(daemon_info()), "50000000012705302e312e300c3366326139633164376534628080bfd606010001127562756e74752d333267622d68656c312d32056c696e7578125562756e74752032342e30342e31204c5453067838365f3634");
+    c.check(
+        "StreamHeader::Upgrade",
+        StreamHeader::Upgrade(UpgradeHeader {
+            size: 7_000_000,
+            encoding: UpgradeEncoding::Gzip,
+            sha256: [0x44; 32],
+            build: "3f2a9c1d7e4b".into(),
+        }),
+        "340000000108c09fab030144444444444444444444444444444444444444444444444444444444444444440c336632613963316437653462",
+    );
+    c.check("UpgradeReply::Ready", UpgradeReply::Ready, "020000000100");
+    c.check(
+        "UpgradeReply::Installed",
+        UpgradeReply::Installed(daemon_info()),
+        "50000000010105302e312e300c3366326139633164376534628080bfd606010001127562756e74752d333267622d68656c312d32056c696e7578125562756e74752032342e30342e31204c5453067838365f3634",
+    );
+    c.check(
+        "UpgradeReply::Failed",
+        UpgradeReply::Failed {
+            code: UpgradeFailure::Forbidden,
+            message: "owner only".into(),
+        },
+        "0e0000000102000a6f776e6572206f6e6c79",
+    );
+    for (name, code, hex) in [
+        (
+            "UpgradeFailure::Unsupported",
+            UpgradeFailure::Unsupported,
+            "020000000101",
+        ),
+        ("UpgradeFailure::Busy", UpgradeFailure::Busy, "020000000102"),
+        (
+            "UpgradeFailure::Corrupt",
+            UpgradeFailure::Corrupt,
+            "020000000103",
+        ),
+        (
+            "UpgradeFailure::Rejected",
+            UpgradeFailure::Rejected,
+            "020000000104",
+        ),
+        ("UpgradeFailure::Io", UpgradeFailure::Io, "020000000105"),
+    ] {
+        c.check(name, code, hex);
+    }
+    c.check("UpgradeEncoding::Raw", UpgradeEncoding::Raw, "020000000100");
 }
 
 fn workspace_messages(c: &mut Checker) {

@@ -5,6 +5,7 @@
 // Built by apple/scripts/build-excalidraw.sh into apple/App/Resources/Excalidraw/.
 
 import React, { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   CaptureUpdateAction,
@@ -42,6 +43,16 @@ const state = {
   files: new Set(),
   viewport: null,
   lastPointer: 0,
+  // The editor has applied the loaded scene (initialData is applied asynchronously; elements
+  // added before that were replaced by the scene and lost: strokes vanished on a real iPad).
+  loaded: false,
+  // Ink and other work that arrived before the scene loaded.
+  waiting: [],
+  // The tool the host chose (Excalidraw type) and the last one reported back to it.
+  tool: null,
+  reportedTool: null,
+  // The scene as loaded, for Cancel on a reopened drawing (revert).
+  initial: [],
 };
 
 let setConfig = () => {};
@@ -49,6 +60,9 @@ let setConfig = () => {};
 // MARK: Swift → JS
 
 function load(config) {
+  state.api = null;
+  state.loaded = false;
+  state.initial = (config.elements || []).map((e) => ({ ...e }));
   state.known = new Map();
   state.pending = new Map();
   state.files = new Set((config.files || []).map((f) => f.id));
@@ -95,11 +109,37 @@ function applyRemote({ elements = [], files = [] }) {
   redrawTextWhenFontsLoad(remote);
 }
 
+function sceneLoaded() {
+  if (state.loaded || !state.api) return;
+  state.loaded = true;
+  // Never Excalidraw's pen mode: once a Pencil touched the page it stopped fingers from drawing
+  // shapes (App `allowOnPointerDown`). Touch routing belongs to the host.
+  state.api.updateScene({ appState: { penMode: false, penDetected: true }, captureUpdate: CaptureUpdateAction.NEVER });
+  if (state.tool) applyTool();
+  const waiting = state.waiting;
+  state.waiting = [];
+  for (const work of waiting) work();
+  post({ type: "loaded", count: state.api.getSceneElements().length });
+}
+
 // Ink converted from PencilKit: added as the user's own edit (undoable, posted back as a
 // change), then acknowledged once drawn so the host can drop its live stroke without a gap.
+// Ink that arrives before the scene has loaded waits for it.
 function addElements({ elements = [] }) {
+  if (!elements.length) return;
+  if (!state.api || !state.loaded) {
+    state.waiting.push(() => addElements({ elements }));
+    return;
+  }
   const api = state.api;
-  if (!api || !elements.length) return;
+  // A resend of an element already in the scene: confirm it again, never duplicate it.
+  const have = new Set(api.getSceneElementsIncludingDeleted().map((e) => e.id));
+  const fresh = elements.filter((e) => !have.has(e.id));
+  if (!fresh.length) {
+    post({ type: "inkApplied", ids: elements.map((e) => e.id), resent: true });
+    return;
+  }
+  elements = fresh;
   const restored = restoreElements(elements, null);
   api.updateScene({
     elements: [...api.getSceneElementsIncludingDeleted(), ...restored],
@@ -124,8 +164,47 @@ function applyViewport() {
   });
 }
 
+// The host's toolbar picks the tool; it stays picked after each shape (locked), so a finger
+// keeps drawing with it.
 function setTool({ type }) {
-  state.api?.setActiveTool({ type });
+  state.tool = type;
+  if (state.api && state.loaded) applyTool();
+}
+
+function applyTool() {
+  const api = state.api;
+  const type = state.tool;
+  if (!api || !type) return;
+  state.reportedTool = type;
+  api.setActiveTool(type === "selection" ? { type } : { type, locked: true });
+}
+
+// Cancel on a reopened drawing: every element goes back to how it was loaded (edits since are
+// overwritten with higher versions, new elements deleted), posted as the user's own change.
+function revert() {
+  const api = state.api;
+  if (!api) return post({ type: "reverted", count: 0 });
+  const initial = new Map(state.initial.map((e) => [e.id, e]));
+  const nonce = () => Math.floor(Math.random() * 2 ** 31);
+  let count = 0;
+  const next = api.getSceneElementsIncludingDeleted().map((el) => {
+    const was = initial.get(el.id);
+    initial.delete(el.id);
+    if (!was) {
+      if (el.isDeleted) return el;
+      count++;
+      return { ...el, isDeleted: true, version: el.version + 1, versionNonce: nonce(), updated: Date.now() };
+    }
+    if (was.version === el.version && !!was.isDeleted === !!el.isDeleted) return el;
+    count++;
+    return { ...was, isDeleted: false, version: Math.max(el.version, was.version) + 1, versionNonce: nonce(), updated: Date.now() };
+  });
+  for (const was of initial.values()) {
+    count++;
+    next.push({ ...was, version: was.version + 1, versionNonce: nonce(), updated: Date.now() });
+  }
+  api.updateScene({ elements: restoreElements(next, null), captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+  post({ type: "reverted", count });
 }
 
 function setTheme({ theme }) {
@@ -271,7 +350,7 @@ function snapshot() {
   return JSON.stringify({ elements: api ? api.getSceneElements() : [], tool: api?.getAppState().activeTool.type });
 }
 
-window.canvas = { load, applyRemote, addElements, setViewport, setTool, setTheme, exportImage, bounds, flushNow, debugRect, debugArrow, debugSkeleton, snapshot };
+window.canvas = { load, applyRemote, addElements, setViewport, setTool, setTheme, exportImage, bounds, flushNow, revert, debugRect, debugArrow, debugSkeleton, snapshot };
 
 // MARK: JS → Swift
 
@@ -288,7 +367,21 @@ function flush() {
   });
 }
 
-function onChange(elements, _appState, files) {
+function onChange(elements, appState, files) {
+  if (!state.loaded && state.api && appState && !appState.isLoading) queueMicrotask(sceneLoaded);
+  if (state.loaded && appState) {
+    if (appState.penMode) {
+      queueMicrotask(() => state.api?.updateScene({ appState: { penMode: false }, captureUpdate: CaptureUpdateAction.NEVER }));
+    }
+    // Keep the host's toolbar in step with the editor (keyboard letters, the editor going back
+    // to selection after text).
+    const type = appState.activeTool?.type;
+    if (type && type !== state.reportedTool && !pencilFallback) {
+      state.reportedTool = type;
+      state.tool = type;
+      post({ type: "tool", tool: type });
+    }
+  }
   for (const el of elements) {
     if ((state.known.get(el.id) ?? -1) < el.version) {
       state.known.set(el.id, el.version);
@@ -333,6 +426,85 @@ window.addEventListener(
   },
   { capture: true, passive: false },
 );
+
+// Two fingers scroll the terminal (the host's pan): the editor never sees a second finger (no
+// pinch zoom, no pan), and whatever the first finger started is removed when they lift. With
+// Select, a Pencil that reaches the page (the host could not tell it from a finger) draws with
+// freedraw for that stroke: the Pencil always draws.
+const touches = new Set();
+let multi = null;
+let pencilFallback = false;
+
+function overlayPointerDown(e) {
+  if (state.config?.mode !== "overlay" || !state.api) return;
+  if (e.pointerType === "pen" && state.api.getAppState().activeTool.type === "selection") {
+    pencilFallback = true;
+    flushSync(() => state.api.setActiveTool({ type: "freedraw" }));
+    post({ type: "log", message: "pencil reached the page with Select: freedraw for this stroke" });
+  }
+  if (e.pointerType !== "touch") return;
+  touches.add(e.pointerId);
+  if (touches.size === 1) {
+    multi = { before: new Set(state.api.getSceneElementsIncludingDeleted().map((el) => el.id)), first: e.pointerId, active: false };
+    return;
+  }
+  if (multi && !multi.active) {
+    multi.active = true;
+    post({ type: "log", message: "two fingers: the terminal scrolls" });
+  }
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}
+
+function overlayPointerMove(e) {
+  if (multi?.active && e.pointerType === "touch") e.stopImmediatePropagation();
+}
+
+function overlayPointerUp(e) {
+  if (e.pointerType === "pen" && pencilFallback) {
+    pencilFallback = false;
+    setTimeout(() => {
+      state.api?.setActiveTool({ type: "selection" });
+      state.reportedTool = "selection";
+    }, 0);
+  }
+  if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
+  touches.delete(e.pointerId);
+  const gesture = multi;
+  if (gesture?.active && e.pointerId !== gesture.first) e.stopImmediatePropagation();
+  if (touches.size) return;
+  multi = null;
+  if (!gesture?.active) return;
+  // After the editor has finished the first finger's element.
+  setTimeout(() => {
+    const api = state.api;
+    if (!api) return;
+    let removed = 0;
+    const next = api.getSceneElementsIncludingDeleted().map((el) => {
+      if (gesture.before.has(el.id) || el.isDeleted) return el;
+      removed++;
+      return { ...el, isDeleted: true, version: el.version + 1, updated: Date.now() };
+    });
+    if (removed) api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER });
+    if (state.tool) applyTool();
+  }, 0);
+}
+
+window.addEventListener("pointerdown", overlayPointerDown, { capture: true, passive: false });
+window.addEventListener("pointermove", overlayPointerMove, { capture: true });
+window.addEventListener("pointerup", overlayPointerUp, { capture: true });
+window.addEventListener("pointercancel", overlayPointerUp, { capture: true });
+for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+  window.addEventListener(
+    type,
+    (e) => {
+      if (state.config?.mode !== "overlay") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    },
+    { capture: true, passive: false },
+  );
+}
 
 window.addEventListener(
   "keydown",
@@ -390,6 +562,8 @@ function Editor() {
     ...(config.appState || {}),
     viewBackgroundColor: "transparent",
     theme: config.theme,
+    penMode: false,
+    penDetected: true,
     gridModeEnabled: false,
     ...(v ? { scrollX: v.originX / v.zoom, scrollY: v.originY / v.zoom, zoom: { value: v.zoom } } : {}),
   };
@@ -398,6 +572,13 @@ function Editor() {
       key={config.key}
       excalidrawAPI={(api) => {
         state.api = api;
+        // The scene from initialData is in once the editor stops loading.
+        const check = () => {
+          if (state.api !== api || state.loaded) return;
+          if (api.getAppState().isLoading) requestAnimationFrame(check);
+          else sceneLoaded();
+        };
+        requestAnimationFrame(check);
       }}
       initialData={{
         elements: restoreElements(config.elements || [], null),

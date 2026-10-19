@@ -33,6 +33,10 @@ nonisolated public protocol PaneBackend: Sendable {
     /// The foreground program and its working directory, for titles until the terminal reports
     /// OSC 0/2 titles and OSC 7 directories. Polled about once a second; keep it cheap.
     func foreground() -> PaneForeground?
+    /// The terminal takes its size from the stream (`.resized` events, where the remote PTY
+    /// changed size), never from the view's layout: output in flight was produced at the old
+    /// size, and a shell's redraw at the wrong size wipes its prompt line. Local PTYs: false.
+    var sizeFollowsStream: Bool { get }
 }
 
 nonisolated extension PaneBackend {
@@ -58,6 +62,8 @@ nonisolated extension PaneBackend {
     }
 
     public func requestHistory() -> Bool { false }
+
+    public var sizeFollowsStream: Bool { false }
 
     public func foreground() -> PaneForeground? { nil }
 }

@@ -145,6 +145,8 @@ pub(crate) struct Core {
     pub art: crate::art::Art,
     /// Input assistance: foreground programs, prompt watches, history, completion caches.
     pub assist: crate::assist::Assist,
+    /// Self upgrade: one at a time, and the restart it asks the host process for.
+    pub upgrade: crate::upgrade::Upgrade,
     connected: AtomicUsize,
 }
 
@@ -177,6 +179,7 @@ impl Core {
             mp,
             art: crate::art::Art::open(&cfg.state_dir, cfg.artifacts),
             assist: crate::assist::Assist::new(&cfg),
+            upgrade: crate::upgrade::Upgrade::default(),
             cfg,
             connected: AtomicUsize::new(0),
         })

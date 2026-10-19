@@ -621,6 +621,9 @@ public final class TerminalView: UIView {
         }
     }
     public var onAppKeyCommand: ((Int) -> Void)?
+    /// Sees each hardware key event before it is encoded; returning true consumes it (the app's
+    /// hold-to-talk chord).
+    public var keyInterceptor: ((KeyEvent) -> Bool)?
 
     override public var keyCommands: [UIKeyCommand]? {
         (super.keyCommands ?? []) + appKeyCommands
@@ -657,6 +660,11 @@ public final class TerminalView: UIView {
             if action == .press { heldOptionKeys.insert(uiKey.keyCode) } else { heldOptionKeys.remove(uiKey.keyCode) }
         }
         guard let key = PhysicalKey(hidUsage: UInt32(uiKey.keyCode.rawValue)) else { return false }
+        // ⌘. is Esc: the Magic Keyboard for iPad has no Esc key (Blink, Echo do the same).
+        if uiKey.keyCode == .keyboardPeriod, uiKey.modifierFlags.intersection([.command, .control, .alternate, .shift]) == .command {
+            if markedText == nil { send(KeyEvent(key: .escape, action: action, mods: [], consumedMods: [], text: "", unshiftedCodepoint: 0)) }
+            return true
+        }
         guard !uiKey.modifierFlags.contains(.command), markedText == nil, !inputSourceComposes else { return false }
 
         let mods = KeyModifiers(uiKey.modifierFlags)
@@ -674,6 +682,7 @@ public final class TerminalView: UIView {
             let consumed = text.isEmpty ? [] : mods.intersection([.shift, .alt])
             event = KeyEvent(key: key, action: action, mods: mods, consumedMods: consumed, text: text, unshiftedCodepoint: unshifted)
         }
+        if keyInterceptor?(event) == true { return true }
         if action == .press, surface.terminal.selection != nil, !Self.isModifier(uiKey.keyCode) { clearSelection() }
         send(event)
 

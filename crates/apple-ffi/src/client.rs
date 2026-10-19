@@ -86,6 +86,19 @@ pub fn generate_device_key() -> Bytes {
 /// [`ClientEventListener`]).
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum ClientEvent {
+    /// What the daemon said about itself, on every connection right before `connected`
+    /// (or `incompatible` / `refused`); `nil` from daemons that predate it.
+    DaemonInfo {
+        /// The daemon's build and machine.
+        info: Option<crate::upgrade::DaemonInfo>,
+    },
+    /// The daemon draws terminals in a format this core cannot read. Its owner is let in only
+    /// to update it (`upgrade_daemon`); daemons that predate this refuse instead (`refused`
+    /// follows).
+    Incompatible {
+        /// Why, in words.
+        reason: String,
+    },
     /// Connected (or reconnected) and authenticated; for an SSH pane, a shell is open.
     Connected {
         /// Daemon run (SSH pane: shell count); a change means resume state was invalid.
@@ -280,6 +293,10 @@ impl From<client_core::ClientEvent> for ClientEvent {
     fn from(e: client_core::ClientEvent) -> Self {
         use client_core::ClientEvent as E;
         match e {
+            E::DaemonInfo { info } => Self::DaemonInfo {
+                info: info.map(Into::into),
+            },
+            E::Incompatible { reason } => Self::Incompatible { reason },
             E::Connected { epoch, resumed } => Self::Connected { epoch, resumed },
             E::Disconnected { reason } => Self::Disconnected { reason },
             E::Refused { reason } => Self::Refused { reason },

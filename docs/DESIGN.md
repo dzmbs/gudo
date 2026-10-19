@@ -450,12 +450,19 @@ window; iOS: one grouped form. Values reach the renderer through `TerminalAppear
 ### Drawing in the terminal (`App/Sources/Drawing`)
 
 Draw mode lays a transparent Excalidraw over the pane: the terminal stays visible and keeps
-scrolling underneath, the scene is pinned to its row (a 2 pt accent bar marks the anchor row's
-left edge), Excalidraw's tool island at the top follows the terminal's light/dark theme, and one
-quiet glass capsule at the bottom carries Pen / Shapes, Cancel, Send to Claude/Codex and Done
-(prominent, ⌘↩). No dimming, no sheet: you never leave the terminal. Done turns the drawing into
-an image in the output at the same cells, drawn by the renderer like kitty graphics; a tap on it
-reopens it in place. Canvas panes show the same editor full size on the terminal background.
+scrolling underneath (two fingers scroll it), the scene is pinned to its row (a 2 pt accent bar
+marks the anchor row's left edge). Excalidraw's own chrome is hidden: nothing sits over the
+first rows. One quiet glass capsule at the bottom carries the tools as monochrome SF Symbols
+(Select, Pen, Rectangle, Ellipse, Arrow, Text, Eraser; the chosen one on a 14 % primary fill, no
+tint; one menu on narrow panes), Write on iPad, Cancel, and one prominent action: Send to
+Claude/Codex (⇧⌘↩) when an agent runs, else Done (⌘↩). One pane draws at a time. No dimming, no
+sheet: you never leave the terminal. Done turns the drawing into an image in the output at the
+same cells, drawn by the renderer like kitty graphics, outlines it in the accent for a moment and
+says "Placed in terminal · scrolls with the output" in a glass capsule where the toolbar was (with
+Send to Claude/Codex when an agent runs); a tap on it reopens it in place. Drawings whose row
+left the scrollback wait in a small glass chip (pin.slash + count) at the pane's top-right.
+Write (iPad) shows handwriting at the prompt as underlined marked text, like an IME, until
+Return. Canvas panes show the same editor full size on the terminal background. Screenshots:
 
 ## What makes it feel premium — checklist
 

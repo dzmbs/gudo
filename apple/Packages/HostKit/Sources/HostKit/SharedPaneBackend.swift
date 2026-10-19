@@ -252,6 +252,7 @@ nonisolated public final class SharedPaneBackend: Sendable {
             shared.resize(id, cols: cols, rows: rows, cellWidth: cellWidth, cellHeight: cellHeight)
         }
 
+        var sizeFollowsStream: Bool { shared.backend.sizeFollowsStream }
         func requestHistory() -> Bool { shared.backend.requestHistory() }
         func terminate() { shared.remove(id, park: false) }
         func detach() { shared.remove(id, park: true) }

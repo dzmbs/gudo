@@ -29,7 +29,7 @@ All are `@MainActor @Observable`. Views never hold a socket or a `DaemonClient` 
 | Model | What a view reads | What a view calls |
 |---|---|---|
 | `AppModel` (App) | `hosts`, `lastError`, `localLayout` (this device's tabs, shared by windows), `openWindows` | `makeWorkspace(for:selecting:)` (a window's own workspace on a host; resolve on target change, never in `body`), `isHostOpen(_:elsewhereThan:)`, `endSharedPanes(of:)`, `handle(url:)` |
-| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette (`paletteMode`: commands / go to tab / new tab on host) and search state, `groups: HostGroups`, `workspaces[groupId]` (one per open host, kept live), `target` / `workspace` (what the detail column shows), `currentTab: TabRef`, `connection: ConnectionState` (the shown host's status in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)`, `focus(TabRef)`, `focus(pane:onGroup:)`, `newTab(onGroup:)`, `selectTab(shortcut:)` / `selectTab(offset:)`, `showHostPicker()`, `showTabFinder()`, `closeHost`, `restore(openHosts:collapsed:focus:)`, `addHost(mode:destination:)`, `retryConnection()`, `disconnect()`; windows (§13): `widthBucket`, `newWindow()`, `openInNewWindow(_:)`, `open(_ request:)`, `continue(_ payload:)`, `handoffMissing`, `close()` |
+| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette (`paletteMode`: commands / go to tab / new tab on host) and search state, `groups: HostGroups`, `workspaces[groupId]` (one per open host, kept live), `target` / `workspace` (what the detail column shows), `currentTab: TabRef`, `connection: ConnectionState` (the shown host's status in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)`, `focus(TabRef)`, `focus(pane:onGroup:)`, `newTab(onGroup:)`, `selectTab(shortcut:)` / `selectTab(offset:)`, `showHostPicker()`, `showTabFinder()`, `closeHost`, `restore(openHosts:collapsed:focus:)`, `addHost(mode:destination:)`, `retryConnection()`, `disconnect()`; windows (§14): `widthBucket`, `newWindow()`, `openInNewWindow(_:)`, `open(_ request:)`, `continue(_ payload:)`, `handoffMissing`, `close()` |
 | `HostGroups` (HostKit, one per window) | `groups: [HostGroup]` (this device, then open hosts in open order, then hosts connected elsewhere: id, name, kind, `status`, `tabs`, `isReady`, `failure`), `tabs: [TabRef]` (the unified order), `openHosts`, `collapsed` | `open(id)` (never redials an open host), `close(id)`, `restore(ids)`, `tab(forShortcut:)`, `shortcutNumber(of:)`, `tab(after:offset:)`, `newTabHost(preferred:)` |
 | `Workspace` (App, one per window per host) | `session` (the window's view: `WindowLayoutStore`), `sharedLayout`, `panes` (this window's terminals), `title(of:)` (the tab's name), `context(of:)` (agent task → program → shell title → repo:branch → directory), `canOpenTabs` | `apply(op)`; unnamed tabs get a friendly name (`FriendlyName`, sent as a rename so a daemon keeps it for every device) |
 | `HostsModel` | `entries: [HostEntry]` (sorted: Needs you → pinned → recent), `installs[id]` (`InstallProgress.summary`), `installNotes[id]`, `sshConfigAliases`, `keys.keys`, `hostKeyPrompts.pending`, `network.isOffline` | `open(id)`, `pair(ticket, name:)`, `connectSSH(…)`, `installHelper(id)`, `loadSSHConfig(text)` / `loadUserSSHConfig()` (macOS) / `importSSHHosts(aliases)`, `rename`, `setPinned`, `disconnect`, `remove`, `foreground()/background()/networkChanged()` |
@@ -363,7 +363,87 @@ category from the payload, placeholder kept for the three rejects, an unpaired d
 key; the handler with a fake client for local and push Approve / Deny / Open, an expired
 token, a refusal; local content per kind; prefs; categories).
 
-## 13. Windows (iPad scenes, Stage Manager, external displays, Mac windows; Handoff; width buckets)
+## 13. Push-to-talk dictation (VoiceKit)
+
+`apple/Packages/VoiceKit` (no views, no terminal types) holds the engine and the logic;
+`App/Sources/Voice/` the glue. Speech is recognized on the device only: `SpeechAnalyzer` +
+`SpeechTranscriber` (iOS/macOS 26) when the language's model is installed, else
+`SFSpeechRecognizer` with `requiresOnDeviceRecognition`. No network during dictation, no paid
+entitlement. A missing SpeechAnalyzer model is never fetched mid-dictation: Settings › Voice shows
+its state and a Download button (`AssetInventory`, the system's own model download).
+
+| | |
+|---|---|
+| `PushToTalk` (VoiceKit, `@MainActor @Observable`) | `start(target:) -> Bool`, `stop() async -> Outcome`, `cancel()`, `transcripts() -> AsyncStream<Transcript>`; reads `phase` (`idle/starting/listening/finishing/failed(VoiceError)`), `isActive`, `transcript` (`finalized` + `volatile`, `text`), `settings` |
+| `VoiceDictation.shared.voice` (App) | the app's instance; plain `start()` targets the terminal that is first responder, else the key window's focused pane. **The key bar's mic button calls `start()` on touch down, `await stop()` on touch up, `cancel()` when the touch is cancelled** |
+| `DictationTarget` / `PaneDictationTarget` | the preview is the terminal's preedit (marked text at the cursor, `DictationPreview.fit` keeps the end that fits the row); nothing reaches the host before release. Release commits `Transcript.text` on one line, no Return: `surface.paste(_, source: .text)` (bracketed when the program enabled it); a guest who may prompt but not type gets `MultiplayerSession.prompt(_, _, submit: false)` on agent panes (`DictationRoute.resolve`) |
+| Hardware chord | hold ⌃⌥Space in a terminal (`TerminalView.keyInterceptor` → `VoiceDictation.handleKey`, `HoldShortcut`); releasing Space commits. On a Mac with several input sources the system may take ⌃⌥Space first |
+| Settings › Voice | `VoiceSettings.enabledKey` (default on), `VoiceSettings.localeKey` ("" = system language), model state and download |
+| Indicator | `dictationIndicator()` on the workspace: "Listening · English" while active, the error in words for 5 s |
+
+Info.plist: `NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription` (project.yml).
+Tests: `cd apple/Packages/VoiceKit && swift test` (fake recognizer: segment merging, preview, commit
+without newline, cancel, empty, second start, release while starting, permission and recognizer
+errors, finish timeout, routing, transcript stream, hold chord, settings). Only a device confirms
+the microphone, the SpeechAnalyzer model assets per language, and latency.
+
+## 14. Helper versions, updates and host names (DAEMON.md §2 "Version, host name and updating")
+
+Every connection learns what the daemon is before `Welcome`: `ClientEvent.daemonInfo(info:)`
+(build, `builtUnix`, protocol level, `selfUpgrade`, host name, OS, CPU; nil from daemons that
+predate it). `DaemonConnection` keeps `daemonInfo`, `daemonInfoReported`, `incompatibility` (from
+`ClientEvent.incompatible`: the daemon draws terminals in another format; status reads "This
+host's helper needs an update") and `epoch` (the daemon run).
+
+**What the app bundles.** `cargo xtask build-hostd-linux` writes `build/hostd/hostd-manifest.json`
+next to the two `.gz` daemons (file, OS, CPU, build, time, level); project.yml bundles it and
+`AppModel` loads it once (`BundledDaemons`, `-testBundledDaemons <dir>` for tests).
+
+**The rules** (`HelperCheck.assess`, HostKit, unit tested): guests get nothing; a daemon whose
+`minClientProtocol` is above the app's, or that is newer and incompatible → "Update the app";
+incompatible (or below `minDaemonProtocol()`) → `.required`, said plainly ("This host's helper is
+too old for this app. Update it to connect."); a bundled build for its OS/CPU at a higher level, or
+the same level from an earlier source with another build id → `.update`, offered quietly ("A newer
+helper is available."). A daemon from before version reporting is offered an update only over SSH.
+How: over the host's saved SSH login when it has one (set up by "just ssh" → Install Helper), else
+over the connection when the daemon offers `selfUpgrade`, else not at all.
+
+**Where it shows.** `HostEntry.helper` → `HostSummary.helper` (`HelperOffer`): the host row's
+subtitle when connected ("A newer helper is available." with an arrow glyph, secondary) and its
+menu action **Update Helper**; over the terminal, `HostNotices` shows one line with **Update** and
+a dismiss button (or, when required, the statement and **Update Helper**), then the progress
+(`HostsModel.helperUpdates[id].summary`: "Updating helper (3.1 MB of 7.0 MB)", "Restarting
+helper…"). A success toast says the host runs the new helper.
+
+**`HostsModel.updateHelper(id)`.** SSH: a short-lived `SshSession` with the saved credentials and
+host-key policy runs `bootstrap` (uploads the bundled build when its SHA-256 differs, restarts
+the service; the device stays paired). Connection: `DaemonConnection.updateHelper(path:build:)`
+→ `DaemonClient.upgradeDaemon` streams the gzip; the daemon checks it, swaps it in and execs it.
+Either way it returns once a new daemon run is live (epoch changed), within 60 s. Panes come back
+from the daemon's layout and agents resume; shell processes restart (DAEMON.md lists what is lost).
+
+**Host names.** `HostRecord.nameSource` (`placeholder` / `machine` / `user`) and `machine`
+(host name, OS name, OS, CPU). Pairing without a name and "just ssh" make placeholders ("Host
+1a2b3c4d", the address typed); a name given when pairing, an ssh_config alias, a guest's
+"Alex's host" and every rename are the user's. On each `daemonInfo`, `HostsModel.daemonReported`
+records the machine and renames a placeholder to `MachineName.display(hostname)` (first label:
+`ubuntu-32gb-hel1-2.example.com` → `ubuntu-32gb-hel1-2`; nothing for empty or `localhost`), once
+(source becomes `machine`). Records saved before this have no source: names that look like the
+app's ("Host …", "test daemon…", the SSH address without an alias) count as placeholders, any
+other name as the user's. The test hooks no longer name hosts "test daemon" (`-testTicketNames`
+still does). Hosts show "Ubuntu 24.04.1 LTS · x86_64" as their status line when idle.
+
+Tests: `HelperVersionTests` (the rules, the manifest, machine names, placeholders, renaming once,
+user names kept, advice following the connection, incompatible words) and
+`HelperUpdateIntegrationTests` (a real local daemon installed as a copy: named after this Mac,
+`.update` over the connection, `updateHelper` → restarted in place, layout and typing back;
+about 2.5–3 s). Daemon side: `cargo test -p daemon --test it upgrade`.
+
+Gaps: no release signing key (hash plus a run of the new build is the check); the SSH path has only
+been exercised by the existing bootstrap tests, not by an update of a paired host; macOS hosts get
+no offer (the app bundles Linux daemons only).
+
+## 14. Windows (iPad scenes, Stage Manager, external displays, Mac windows; Handoff; width buckets)
 
 Every window is independent: its own host, tab and pane selection, its own terminals, its own
 restore (`@SceneStorage`: open hosts, collapsed groups, focused tab, the request it opened).

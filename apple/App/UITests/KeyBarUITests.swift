@@ -27,7 +27,7 @@ final class KeyBarUITests: XCTestCase {
         app.buttons["keybar-esc"].tap()
         app.typeText("title claude\n")
         XCTAssertTrue(waitFor(profile, value: "Claude Code"))
-        XCTAssertTrue(app.buttons["keybar-shift-tab"].exists)
+        XCTAssertTrue(app.buttons["keybar-at"].waitForExistence(timeout: 5), "Claude's keys replace the shell's")
         let composer = element(app, "keybar-composer")
         XCTAssertTrue(composer.waitForExistence(timeout: 5), "agents default to the composer")
         XCTAssertEqual(app.buttons["keybar-composer-toggle"].value as? String, "on")
@@ -64,7 +64,7 @@ final class KeyBarUITests: XCTestCase {
         while !pager.isHittable, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
         pager.tap()
         XCTAssertTrue(waitFor(profile, value: "Pager"))
-        XCTAssertTrue(app.buttons["keybar-pgdn"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["keybar-q"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -99,32 +99,34 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
-    /// every profile, a vertical flick sends a key's second glyph, and tapping the joystick opens
-    /// and closes the arrow pad.
+    /// key's second character is in its long-press menu, and tapping ✥ opens the arrow pad.
     @MainActor
-    func testSpineIsFixedFlickSendsAlternateAndJoystickOpensPad() throws {
+    func testCapsuleAIsFixedLongPressSendsAlternateAndJoystickOpensPad() throws {
         let app = launch()
-        let spine = ["keybar-profile", "keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-joystick"]
+        let fixed = ["keybar-esc", "keybar-ctrl", "keybar-tab", "keybar-joystick"]
         XCTAssertTrue(element(app, "keybar-joystick").waitForExistence(timeout: 5))
-        let shellFrames = spine.map { element(app, $0).frame }
+        let shellFrames = fixed.map { element(app, $0).frame }
 
         app.typeText("title vim main.swift\n")
         XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Vim"))
         XCTAssertTrue(app.buttons["keybar-colon"].waitForExistence(timeout: 5))
-        XCTAssertEqual(spine.map { element(app, $0).frame }, shellFrames, "the spine never moves between profiles")
+        XCTAssertEqual(fixed.map { element(app, $0).frame }, shellFrames, "capsule A and ✥ never move between profiles")
 
         app.typeText("title zsh ~/src\n")
         XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Shell"))
         let pipe = app.buttons["keybar-pipe"]
         XCTAssertTrue(pipe.waitForExistence(timeout: 5))
-        // A flick: press, then drag 30 pt up before lifting.
-        let start = pipe.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -30)))
+        XCTAssertLessThanOrEqual(pipe.frame.height, 48, "a key in a slim capsule, not a slab: \(pipe.frame)")
+        // Long-press: the alternate (&) in a menu; tap: the key itself (|).
+        pipe.press(forDuration: 0.8)
+        let alternate = app.buttons["&"].firstMatch
+        XCTAssertTrue(alternate.waitForExistence(timeout: 5), "the long-press menu offers &")
+        alternate.tap()
         pipe.tap()
         let pane = element(app, "pane-1-screen")
         let predicate = NSPredicate(format: "value CONTAINS %@", "&|")
         XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: pane)], timeout: 5), .completed,
-                       "flick sent the alternate (&), tap the main glyph (|); pane: \(String(describing: pane.value))")
+                       "menu sent the alternate (&), tap the key (|); pane: \(String(describing: pane.value))")
 
         let joystick = element(app, "keybar-joystick")
         joystick.tap()
@@ -135,10 +137,49 @@ final class KeyBarUITests: XCTestCase {
         hold()
     }
 
-    /// With a hardware keyboard the bar is a slim strip, and what it keeps stays key-sized:
-    /// hiding the keys must not stretch a toggle across the row (seen with a Magic Keyboard).
+    /// Never fewer than four profile keys, whatever the width (the old bar collapsed to "~").
     @MainActor
-    func testHardwareKeyboardStripKeepsKeysCompact() throws {
+    func testProfileCapsuleKeepsAtLeastFourKeys() throws {
+        let app = launch()
+        XCTAssertTrue(app.buttons["keybar-tilde"].waitForExistence(timeout: 5))
+        for id in ["keybar-tilde", "keybar-pipe", "keybar-slash", "keybar-dash"] {
+            XCTAssertTrue(app.buttons[id].isHittable, "\(id) is on the bar")
+        }
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "capsules"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// overlaps, and alt joins capsule A.
+    @MainActor
+    func testLandscapeKeepsCapsulesApart() throws {
+        let app = launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let alt = app.buttons["keybar-alt"]
+        XCTAssertTrue(alt.waitForExistence(timeout: 5), "alt joins capsule A in landscape")
+        let ids = ["keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-tilde", "keybar-pipe", "keybar-slash", "keybar-dash", "keybar-joystick", "keybar-profile"]
+        let frames = ids.map { element(app, $0).frame }
+        let screen = app.windows.firstMatch.frame
+        for (id, frame) in zip(ids, frames) {
+            XCTAssertTrue(screen.contains(frame), "\(id) on screen: \(frame) in \(screen)")
+        }
+        for i in frames.indices {
+            for j in frames.indices where j > i {
+                XCTAssertFalse(frames[i].insetBy(dx: 1, dy: 1).intersects(frames[j].insetBy(dx: 1, dy: 1)), "\(ids[i]) overlaps \(ids[j])")
+            }
+        }
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "landscape"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// With a hardware keyboard (the Magic Keyboard has no Esc) only a slim `esc ⌃ ⋯` pill stays,
+    /// and it stays small.
+    @MainActor
+    func testHardwareKeyboardPillIsSmall() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "NO", "-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
@@ -148,15 +189,19 @@ final class KeyBarUITests: XCTestCase {
         let esc = app.buttons["keybar-esc"]
         XCTAssertTrue(esc.waitForExistence(timeout: 5))
         // The simulator reports the Mac's keyboard; without one the full bar shows instead.
-        try XCTSkipIf(app.buttons["keybar-ctrl"].exists, "no hardware keyboard: the full bar is shown")
-        XCTAssertFalse(app.buttons["keybar-composer-toggle"].exists && app.buttons["keybar-composer-toggle"].isHittable,
-                       "no composer toggle for a shell")
+        try XCTSkipIf(app.buttons["keybar-tilde"].exists, "no hardware keyboard: the full bar is shown")
+        XCTAssertTrue(app.buttons["keybar-ctrl"].exists)
+        XCTAssertLessThanOrEqual(esc.frame.height, 34, "a slim pill: \(esc.frame)")
+        XCTAssertFalse(app.buttons["keybar-composer-toggle"].exists, "no composer toggle for a shell")
         app.typeText("title claude\n")
         let toggle = app.buttons["keybar-composer-toggle"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5), "agents keep the composer toggle")
         XCTAssertLessThan(toggle.frame.width, 80, "a key, not the whole row: \(toggle.frame)")
         XCTAssertFalse(element(app, "keybar-composer").exists, "no composer by default with a hardware keyboard")
-        add(XCTAttachment(screenshot: app.screenshot()))
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "hardware-pill"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor

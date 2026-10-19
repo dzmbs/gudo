@@ -407,6 +407,8 @@ nonisolated final class PaneRouter: Sendable {
 /// subscribes once, when the first starts, and unsubscribes when the last ends.
 nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap {
     public let pane: PaneId
+    /// The daemon reports every PTY resize in the stream (`PaneResized`).
+    public var sizeFollowsStream: Bool { true }
     let client: any DaemonClientAPI
     let router: PaneRouter
     /// This window's tap on the pane's stream.

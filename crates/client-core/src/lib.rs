@@ -34,6 +34,7 @@ mod mirror;
 mod mp;
 pub mod push;
 mod ssh_pane;
+mod upgrade;
 pub mod vscode;
 mod workspace;
 
@@ -62,6 +63,7 @@ pub use mp::{MultiplayerEvent, MultiplayerEventQueue, MultiplayerListener, now_m
 pub use proto;
 pub use ssh;
 pub use ssh_pane::{RESTART_MARKER, SshPane, SshPaneOptions, ssh_runtime};
+pub use upgrade::{DaemonBuild, UpgradeError};
 pub use workspace::{TransferProgress, WorkspaceEvent, WorkspaceEventQueue, WorkspaceListener};
 
 /// Which relays the client's endpoint may use.
@@ -132,6 +134,21 @@ pub enum ClientError {
 /// Something the UI should know about. Delivered in order, on the core's threads.
 #[derive(Debug, Clone)]
 pub enum ClientEvent {
+    /// What the daemon said about itself, sent on every connection right before
+    /// [`ClientEvent::Connected`] (or [`ClientEvent::Incompatible`] / [`ClientEvent::Refused`]).
+    /// `None` from daemons built before [`proto::DaemonInfo`] existed.
+    DaemonInfo {
+        /// The daemon's build and machine.
+        info: Option<proto::DaemonInfo>,
+    },
+    /// The daemon encodes a terminal snapshot format this client cannot decode. It let this
+    /// owner device in only to upgrade it ([`Client::upgrade_daemon`]); nothing else works on
+    /// this connection. Daemons from before [`proto::DaemonInfo`] refuse instead
+    /// ([`ClientEvent::Refused`], preceded by this event).
+    Incompatible {
+        /// Why, in words.
+        reason: String,
+    },
     /// Connected (or reconnected) and authenticated.
     Connected {
         /// Daemon run; a change means every pane's resume state was invalid.
@@ -398,6 +415,10 @@ pub(crate) struct Inner {
     pub art: artifacts::ArtState,
     /// Input-assistance requests in flight, foreground and prompt pushes.
     pub assist: assist::AssistState,
+    /// What the daemon said about itself on the last connection.
+    pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
+    /// The last connection was for an upgrade only.
+    pub incompatible: Mutex<bool>,
 }
 
 /// How a client authenticates: as a paired device (pairing ticket) or a guest (invite).
@@ -570,6 +591,8 @@ impl Client {
             mp: mp::MpState::with_invite(invite),
             art: artifacts::ArtState::default(),
             assist: assist::AssistState::default(),
+            daemon_info: Mutex::new(None),
+            incompatible: Mutex::new(false),
         });
         let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {

@@ -21,6 +21,14 @@ nonisolated public protocol DaemonClientAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonClientAPI {}
 
+/// Updating the daemon over its connection (`DaemonClient.upgradeDaemon`), separate from
+/// `DaemonClientAPI` so test fakes need not implement it.
+nonisolated public protocol DaemonUpgradeAPI: AnyObject, Sendable {
+    func upgradeDaemon(path: String, build: String, progress: TransferProgress?) async throws -> DaemonInfo
+}
+
+extension DaemonClient: DaemonUpgradeAPI {}
+
 /// Dials a daemon. The real one is `DaemonClient.connect`; tests pass a fake.
 public typealias DaemonDialer = @Sendable (_ ticket: String, _ listener: any ClientEventListener) throws -> any DaemonClientAPI
 

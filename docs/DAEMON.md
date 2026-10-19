@@ -223,6 +223,45 @@ start the layout is restored with the same ids; shells restart in their last dir
 (OSC 7), agents resume, one-off commands come back as shells. An unreadable file is moved
 aside, never overwritten.
 
+### Version, host name and updating the daemon (`proto::info`)
+
+- **What the daemon is.** A client announcing `Caps::DAEMON_INFO` gets `ServerCtl::DaemonInfo`
+  as the first frame on `ctl`, before `Welcome` or `Refused`: version, build (the commit,
+  `-dirty`, or `dev`), `built_unix` (commit time of a clean release build, build time of a
+  dirty one, 0 for `dev`), protocol level (`proto::PROTOCOL_LEVEL`, bumped when clients start
+  relying on a daemon feature) and the oldest client level it serves, features
+  (`SELF_UPGRADE`), and the machine: `gethostname` (empty when refusing), OS, `os-release`
+  `PRETTY_NAME`, CPU. Older daemons ignore the bit and answer `Welcome` directly, so clients
+  treat "no info" as level 0. `unnamed-hostd build-info [--json]` prints the same for a binary
+  without running it as a daemon. Release stamps come from `cargo xtask build-hostd-linux`
+  (`UN_BUILD_ID`, `UN_BUILD_UNIX`), which also writes `apple/build/hostd/hostd-manifest.json`
+  (file, OS, CPU, build, time, level per bundled build) for the app.
+- **Incompatible clients.** A client with `DAEMON_INFO` whose snapshot format differs, presenting
+  the owner's device grant, gets `Welcome` (with the daemon's format) but a connection that
+  serves only upgrade streams; client-core reports `ClientEvent::Incompatible` and keeps it open.
+  Unpaired devices still get `Refused{SnapshotFormat}`. Daemons from before this refuse every
+  mismatching client, so only SSH can update them.
+- **Self upgrade** (owner only: a paired device, not a guest's chain whatever its roles;
+  `run` enables it when its executable's directory is writable, `Config::self_exe`): the client
+  opens a bidi stream with `StreamHeader::Upgrade{size, encoding raw|gzip, sha256, build}` →
+  `Ready` → exactly `size` bytes → the daemon decodes into `.<exe>.upgrade-<pid>` next to the
+  executable (streamed, flow controlled, ≤ 256 MiB), checks the SHA-256 of the decoded
+  executable, runs `<new> build-info --json` (15 s; must start and report this OS and CPU), keeps
+  the old file as `<exe>.prev` (hard link), renames the new one over the executable, fsyncs the
+  directory, answers `Installed(DaemonInfo of the new build)`, then `run` saves the layout, stops
+  the panes and `exec`s the new build with the same arguments: same PID, so systemd `--user`,
+  launchd or a detached start keep supervising it (if the exec fails it renames `.prev` back
+  and execs that). One upgrade at a time (`Busy`); any failure (`Forbidden`, `Unsupported`,
+  `Corrupt`, `Rejected`, `Io`) leaves the running daemon and its file untouched. There is no
+  release signing key yet: the bytes are vouched for by the owner device authenticated in the
+  QUIC handshake and checked by hash and by running them.
+- **What survives an update**: everything a restart keeps. The layout (sessions, tabs, splits,
+  ids), pane directories, paired devices, grants, history, drawings and Claude/Codex sessions
+  (`--resume`) come back; clients redial by themselves (backoff ≤ 5 s) and get snapshots.
+  **Lost**: the shell processes and whatever ran in them (they restart in their last directory),
+  (attention items, turn snapshots, editor servers; §9), and Codex sessions started by hand.
+- `un daemon info` / `un daemon upgrade <file> [--build ID]` drive it from a terminal.
+
 ### Port forwarding
 
 See §5.1. `Client::forward_port(local, remote)` (the original API) still works;
@@ -239,6 +278,7 @@ unnamed-hostd pair                # new one-time ticket (QR + text), valid 10 mi
 unnamed-hostd pair --json --wait 30   # the same as one JSON object, once a running daemon has
                                   # recorded its endpoint and relay (used by ssh::bootstrap)
 unnamed-hostd status
+unnamed-hostd build-info --json   # version, build, protocol level, OS, CPU, host name
 unnamed-hostd service install     # systemd --user (Linux) / LaunchAgent (macOS); (re)starts it
 unnamed-hostd service uninstall
 #   --state-dir DIR (or $UN_STATE_DIR), run: --bind ADDR, --no-relay, --shell PATH
@@ -1264,7 +1304,7 @@ to connections whose attached session holds it.
 
 ## 9. Known gaps / follow-ups
 
-- **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last
+- **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
   state are lost. Handing PTY masters and VT snapshots to the new process (fd passing over a
   Unix socket, then `exec`) is the design for a seamless upgrade; not built.

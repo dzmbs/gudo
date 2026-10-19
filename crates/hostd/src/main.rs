@@ -7,7 +7,11 @@
 //! unnamed-hostd status              is it running, where, how many devices
 //! unnamed-hostd service install     run at login (systemd --user / launchd)
 //! unnamed-hostd service uninstall
+//! unnamed-hostd build-info --json   this build (version, protocol level, OS, CPU, host name)
 //! ```
+//!
+//! `run` restarts itself in place (`exec`, same PID) when its owner installs a new build over
+//! the connection (docs/DAEMON.md "Updating the daemon").
 
 mod service;
 
@@ -67,6 +71,13 @@ enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Print this build's version, protocol level, OS, CPU and the host name. A running daemon
+    /// runs a new build with this before switching to it.
+    BuildInfo {
+        /// One JSON object instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -100,6 +111,7 @@ fn main() -> Result<()> {
             Duration::from_secs(wait),
         ),
         Command::Status => status(&state_dir),
+        Command::BuildInfo { json } => build_info(json),
         Command::Service { action } => match action {
             ServiceAction::Install => service::install(&state_dir),
             ServiceAction::Uninstall => service::uninstall(),
@@ -132,6 +144,10 @@ fn run(
         RelayMode::Default
     };
     config.shell = shell.or_else(login_shell);
+    // Captured now: once a new build is renamed over this file, /proc/self/exe reads
+    // "… (deleted)".
+    let exe = upgradable_exe();
+    config.self_exe.clone_from(&exe);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -153,11 +169,68 @@ fn run(
             );
             print_ticket(&daemon.pairing_link(daemon::PAIRING_TTL)?);
         }
-        wait_for_signal().await?;
-        eprintln!("shutting down");
+        let restart = tokio::select! {
+            signal = wait_for_signal() => {
+                signal?;
+                None
+            }
+            exe = daemon.restart_requested() => Some(exe),
+        };
+        eprintln!(
+            "{}",
+            if restart.is_some() {
+                "restarting into the new build"
+            } else {
+                "shutting down"
+            }
+        );
         daemon.shutdown().await;
+        if let Some(exe) = restart {
+            restart_into(&exe);
+        }
         anyhow::Ok(())
     })
+}
+
+/// The executable, if the daemon may replace it: it exists and its directory is writable
+/// (the new build is written next to it and renamed over it).
+fn upgradable_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let dir = exe.parent()?;
+    rustix::fs::access(dir, rustix::fs::Access::WRITE_OK).ok()?;
+    Some(exe)
+}
+
+/// Replaces this process with `exe` and the same arguments (same PID, so systemd or launchd
+/// keep supervising it). Falls back to the previous build if the new one cannot be executed,
+/// and exits with an error (the service manager restarts it) if neither can.
+fn restart_into(exe: &Path) -> ! {
+    use std::os::unix::process::CommandExt;
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let err = std::process::Command::new(exe).args(&args).exec();
+    eprintln!("could not start the new build {}: {err}", exe.display());
+    let prev = daemon::upgrade_prev_path(exe);
+    if std::fs::rename(&prev, exe).is_ok() {
+        let err = std::process::Command::new(exe).args(&args).exec();
+        eprintln!("could not start the previous build either: {err}");
+    }
+    std::process::exit(1)
+}
+
+fn build_info(json: bool) -> Result<()> {
+    let info = daemon::info::build_info(proto::DaemonFeatures::EMPTY);
+    if json {
+        println!("{}", serde_json::to_string(&info)?);
+    } else {
+        println!("{} {} ({})", brand::DAEMON_BIN, info.version, info.build);
+        println!(
+            "protocol:  {} (serves clients from {})",
+            info.protocol, info.min_client_protocol
+        );
+        println!("platform:  {} {} {}", info.os, info.arch, info.os_name);
+        println!("host name: {}", info.hostname);
+    }
+    Ok(())
 }
 
 async fn wait_for_signal() -> Result<()> {

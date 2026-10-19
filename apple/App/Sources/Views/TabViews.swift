@@ -45,9 +45,11 @@ struct WorkspaceSidebar: View {
         }
         .scrollIndicators(.never)
         .background(theme.sidebarBackground.ignoresSafeArea())
+        #if os(macOS)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
         }
+        #endif
         .overlay(alignment: .bottomLeading) { ConnectionProbe() }
     }
 
@@ -522,6 +524,8 @@ private struct GroupAgents: View {
 
 /// Settings, pinned under the list. No connection summary (status UX §3.2, §3.7 rule 1): each
 /// host's state is on its own header, once.
+/// The sidebar's footer on the Mac: Settings. On iPad Settings sits in the sidebar's top bar,
+/// clear of the keyboard and its glass key bar.
 private struct SidebarFooter: View {
     @Environment(WindowModel.self) private var model
     #if os(macOS)

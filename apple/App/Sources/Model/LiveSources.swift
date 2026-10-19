@@ -76,8 +76,10 @@ final class LiveHostDirectory: HostDirectory {
             connection: ConnectionState(listing: entry.status),
             sessionCount: sessions, agentCounts: counts, needsYou: needsYou,
             lastSeen: entry.lastConnected ?? .distantPast, isPinned: entry.pinned,
-            statusLine: statusLine, progress: app.hosts.installs[entry.id]?.summary,
-            canInstallHelper: entry.canInstallHelper)
+            statusLine: statusLine ?? entry.machine,
+            progress: app.hosts.installs[entry.id]?.summary ?? app.hosts.helperUpdates[entry.id]?.summary,
+            canInstallHelper: entry.canInstallHelper,
+            helper: entry.helper.map(HelperOffer.init))
     }
 
     func connect(_ id: HostSummary.ID) {
@@ -122,6 +124,10 @@ final class LiveHostDirectory: HostDirectory {
         try await app.hosts.installHelper(id)
     }
 
+    func updateHelper(_ id: HostSummary.ID) async throws {
+        try await app.hosts.updateHelper(id)
+    }
+
     func quickConnect(_ destination: String) {
         window?.addHost(mode: .ssh, destination: destination)
     }
@@ -130,6 +136,12 @@ final class LiveHostDirectory: HostDirectory {
         let trimmed = ticket.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = try URL(string: trimmed).flatMap(PairingTicket.init(url:)) ?? PairingTicket(trimmed)
         return try await app.hosts.pair(parsed, name: name)
+    }
+}
+
+extension HelperOffer {
+    init(_ advice: HelperAdvice) {
+        self.init(message: advice.message, required: advice.kind != .update, canUpdate: advice.canUpdate)
     }
 }
 
