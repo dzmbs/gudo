@@ -5,7 +5,8 @@ Status: MVP path working end to end on macOS and Linux (2026-10-18), plus termin
 roles enforced on every request, control lease, presence, signed approvals, audit log,
 anchors, send to agent) and input assistance for the mobile line editor (§8: foreground
 program, prompt state and input line, atomic submit, history, completion, file search,
-blocked-agent options).
+blocked-agent options), and native password prompts (§9: askpass helper, detected
+hidden-input prompts).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -1378,7 +1379,92 @@ to connections whose attached session holds it.
   rely on them for programs that exit at once.
 - D2b, D5a, D6 and D8 (Phase 2) are not built.
 
-## 9. Known gaps / follow-ups
+## 9. Native password prompts (`proto::askpass`)
+
+When a program in a pane asks for a secret, the app shows a secure prompt anchored to the pane
+instead of the user typing blind into the terminal. Two sources, one wire (`Caps::ASKPASS`,
+`ClientCtl::Askpass` → `ServerCtl::AskpassResult`, pushes `ServerCtl::Askpass`).
+
+### 9.1 Askpass
+
+- **Environment.** Every pane gets `SUDO_ASKPASS`, `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE=prefer`
+  (OpenSSH ≥ 8.4 then uses it even with a terminal) and `GIT_ASKPASS`, all naming
+  `<state>/askpass/un-askpass`: a two-line script, rewritten on start, that runs
+  `un-hook askpass "$@"` (also `unnamed-hostd askpass`). `UN_ASKPASS` names it too, and the
+  pane gets the hook socket's coordinates (`UN_SOCK`, `UN_TOKEN`, `UN_ENDPOINT_FILE`).
+  The user's dotfiles run after and can override any of them. `[askpass] enabled = false`
+  in `config.toml` turns all of this off.
+- **Helper.** `un-hook askpass <prompt>` sends one JSON line on the hook socket
+  (`AskpassCall{v, token, pane, askpass: {prompt, program, confirm, probe}}`; `program` is its
+  parent's command line, `confirm` is `SSH_ASKPASS_PROMPT=confirm`) and reads one line back:
+  `{"answer": "…"}` (printed with a newline, exit 0), `"cancelled"` (exit 1) or `"terminal"`.
+  On `"terminal"`, or when the daemon cannot be reached, it asks on `/dev/tty` itself with echo
+  off, so nothing is worse than without it. `SSH_ASKPASS_PROMPT=none` (a FIDO touch notice) is
+  printed on the terminal. `--available` only asks whether an app could answer (exit 0/1).
+- **Daemon.** Checks the hook token and the peer's uid (same user), cleans the prompt and
+  program text (control and bidi characters removed, ≤ 512 characters), classifies the program
+  (`Sudo`, `Ssh`, `Git`, `Gpg`, `Other`; a script's name, not its interpreter's), marks yes/no
+  questions `echo` (ssh's host key question, git's username) and a question repeated within
+  60 s of an answer as `retry`. With nobody able to answer it replies `"terminal"` at once.
+  Otherwise it pushes `AskpassPush::Prompt` and waits for the first of: an answer
+  (`Closed{Answered{by}}`), a cancel (`Cancelled{by}`), the timeout (`[askpass] timeout_secs`,
+  default 300: `TimedOut`, the program gets no answer), the helper's connection closing
+  (Ctrl-C: `Abandoned`), or nobody able to answer for 10 s (`MovedToTerminal`, the helper asks
+  on the terminal). Every connection's sheet closes with that `Closed`.
+- **Who sees it.** Connections that announced `Caps::ASKPASS` (the app; `client-core` with
+  `ConnectOptions::askpass`), are attached to the pane's session and hold Driver or Owner on the
+  pane. Guests who only watch never get the prompt text, and their `Answer`/`Cancel` are
+  `Denied`. Open prompts are sent again on attach (same ids), so a reconnecting app keeps its
+  sheet. The first `Answer` wins; later ones get `Gone`.
+- **Secrets.** `proto::Secret` redacts its `Debug` output and zeroes its bytes on drop; the
+  helper's reply buffer, the JSON line and the helper's stdout buffer are zeroed after use. The
+  daemon logs prompt ids, panes, sources and close reasons, never the answer. Answers with
+  control characters (a newline would end sudo's read early) are refused.
+
+### 9.2 `sudo` without `-A`
+
+sudo only uses `SUDO_ASKPASS` with `-A`. With shell integration (`[askpass] sudo = true`, the
+default), interactive bash, zsh and fish get a `sudo` function: zsh through our own `ZDOTDIR`
+whose `.zshenv` sources Ghostty's, bash through our `ENV` file that sources `ghostty.bash`,
+fish through `vendor_conf.d/un-askpass.fish` next to Ghostty's. It runs `sudo -A` only when
+`un-askpass --available` says an app could answer now; otherwise, and whenever the arguments
+before the command already include `-A`, `-S`/`--stdin` or `-n`, it is plain `sudo`.
+
+Trade-offs: the probe costs a few ms per `sudo`; aliases such as `sudo='sudo -E'` still reach
+the function, but one naming sudo by path, or a `sudo` function defined later in the user's
+dotfiles, replaces it; scripts,
+`env sudo …` and `command sudo` get plain sudo (asked on the terminal, where the detected prompt
+below still helps); sudo's credential cache works as usual (no prompt, no helper); `sudo -A`
+reads `SUDO_ASKPASS` from the caller's environment, so `env_reset` does not get in the way.
+Shells without integration (macOS `/bin/bash`, `sh`) only get the variables.
+
+### 9.3 Detected terminal prompts
+
+Whenever a pane's termios is `-echo icanon` (the S6 hidden-input shape) the daemon checks the
+cursor row on each output and termios change: a line ending in `:` that names a password,
+passphrase, passcode or PIN (`proto::looks_like_password_prompt`) is pushed as
+`AskpassPush::Detected{pane, prompt, at_seq}` and `DetectedGone` when echo comes back or the
+line changes (also sent on attach). The app offers "Enter Password Securely"; the answer is
+`AskpassRequest::TypeSecret{pane, secret}`, which needs Driver and the pane's lease, and is
+written with a Return only if echo is still off at that moment (`NotHidden` otherwise, nothing
+written): the secret can never be echoed, land in the shell's history, or run as a command.
+Programs that read passwords in raw mode (most TUIs, `pinentry-curses`) are not detected.
+
+### 9.4 Tests
+
+`tests/it/askpass.rs` (fake helper on the hook socket): the prompt reaches two askpass clients
+and not a plain one, first answer wins and the other sees `Answered`, a late answer is `Gone`,
+retry flag, cancel, control characters refused, yes/no questions; a viewer guest is never told
+and is `Denied` while a driver guest answers; timeout, abandoned (helper hangs up), bad token;
+no app → `"terminal"` and `--available` false, the app leaving mid-prompt → `"terminal"`
+after the grace; a program that turns echo off and prints `Password:` gets `Detected`,
+`TypeSecret` reaches it without echo, `NotHidden` at a shell prompt, a client attaching late is
+told. `crates/hostd/tests/askpass.rs` runs the real `un-hook`: sudo- and ssh-like scripts that
+call `$SUDO_ASKPASS`/`$SSH_ASKPASS` get the app's answer (or fail on Cancel), the terminal
+fallback reads with echo off, and interactive zsh's `sudo` becomes `sudo -A` only while an app
+can answer (`-S` left alone). Goldens: `proto/tests/golden_askpass.rs`.
+
+## 10. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
@@ -1416,6 +1502,11 @@ to connections whose attached session holds it.
   Excalidraw scenes keep no history (only the current revision exports); live ink is relayed without per-connection
   rate limiting; a session's artifacts are deleted with it; anchors detach on daemon restart;
   the daemon's raster render draws text and images as outlines only.
+- Native password prompts (§9): gpg's pinentry is not wired (it is configured in
+  `gpg-agent.conf`, not the environment; `pinentry-tty` and `--pinentry-mode loopback` prompts
+  are caught as detected prompts, curses pinentry is not); raw-mode password readers are not
+  detected; a prompt in a pane of another session than the one attached waits until the app
+  attaches there (or times out); the app does not yet badge a tab whose pane has an open prompt.
 - `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
   leased). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.

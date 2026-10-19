@@ -8,11 +8,13 @@
 //! unnamed-hostd service install     run at login (systemd --user / launchd)
 //! unnamed-hostd service uninstall
 //! unnamed-hostd build-info --json   this build (version, protocol level, OS, CPU, host name)
+//! unnamed-hostd askpass <prompt>    the askpass helper (normally run as `un-hook askpass`)
 //! ```
 //!
 //! `run` restarts itself in place (`exec`, same PID) when its owner installs a new build over
 //! the connection (docs/DAEMON.md "Updating the daemon").
 
+mod askpass;
 mod service;
 
 use std::fs::OpenOptions;
@@ -89,6 +91,11 @@ enum ServiceAction {
 }
 
 fn main() -> Result<()> {
+    // Not a clap subcommand: the prompt is free text that may start with `-`.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "askpass") {
+        std::process::exit(askpass::main(&args[1..]));
+    }
     let cli = Cli::parse();
     let state_dir = cli
         .state_dir

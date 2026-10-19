@@ -289,6 +289,23 @@ Requests are `async throws(AssistError)`; pushes go to an `AssistListener`
 | `fileSearch(query:root:limit:) -> FileMatches` | fuzzy, `.gitignore`-aware; `positions` for highlighting; `Denied` outside the allowed roots |
 | `blockedOptions(paneId:) -> BlockedPrompt?`, `answerBlocked(paneId:index:label:)` | a blocked agent's options (`optionId` for the signed `decide`, `keys` for the dialog on screen) |
 
+### Native password prompts (DAEMON.md §9)
+
+Connect with `ConnectOptions(relayCaDer:askpass: true)` (`connectWith` / `joinWith`) to be sent
+them. Pushes go to an `AskpassListener` (`setAskpassListener`): `AskpassEvent.prompt(prompt:)`,
+`.closed(id:paneId:reason:)` (`AskpassCloseReason.answered(by:) / .cancelled(by:) / .timedOut /
+.abandoned / .movedToTerminal`), `.detected(prompt:)`, `.detectedGone(paneId:)`, and `.reset`
+when the connection drops (open prompts come back with the same ids after reattaching).
+
+| | |
+|---|---|
+| `SecretPrompt(id:paneId:source:prompt:program:echo:retry:expiresAtMs:)` | `source: .sudo / .ssh / .git / .gpg / .other`; `echo` = a yes/no question (show what is typed); `retry` = the last answer was probably wrong |
+| `answerAskpass(id:secret:)`, `cancelAskpass(id:)` | first answer wins; `AskpassError.Gone` if it closed first, `.Denied` without Driver |
+| `typeSecret(paneId:secret:)` | secret + Return into a detected prompt; `.NotHidden` (nothing written) once the pane echoes again |
+| `openAskpass()`, `detectedPrompt(paneId:)` | last pushed, no round trip; `looksLikePasswordPrompt(line:)` offline |
+
+Secrets cross as `String` and are zeroed on the Rust side once sent.
+
 ### Relays
 
 `DaemonClient.connectWith(ticket:config:options:listener:)` with `ConnectOptions(relayCaDer:

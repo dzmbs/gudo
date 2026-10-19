@@ -35,6 +35,9 @@
 //!   [`ClientCtl::Multiplayer`] → [`ServerCtl::MultiplayerResult`]; see [`mp`].
 //! - Developer-workflow requests (ports, editor, git, worktrees, files, attention) are
 //!   [`ClientCtl::Workspace`] → [`ServerCtl::WorkspaceResult`]; see the [`workspace`] types.
+//! - Native password prompts (askpass answers, typing a secret at a detected prompt) are
+//!   [`ClientCtl::Askpass`] → [`ServerCtl::AskpassResult`], with pushes as
+//!   [`ServerCtl::Askpass`], for clients with [`Caps::ASKPASS`]; see [`askpass`].
 //! - The git-native workspace (repositories, worktrees and branches per pane, pull requests
 //!   through the host's `gh`, tasks, archive, scripts) is pushed as [`ServerCtl::Repos`] to
 //!   clients with [`Caps::REPO_STATUS`], with its requests in [`WorkspaceRequest`]; see [`repo`].
@@ -59,6 +62,7 @@
 //! acting principal.
 
 pub mod artifact;
+pub mod askpass;
 pub mod assist;
 pub mod frame;
 mod ids;
@@ -72,6 +76,7 @@ mod ticket;
 pub mod workspace;
 
 pub use artifact::*;
+pub use askpass::*;
 pub use assist::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{

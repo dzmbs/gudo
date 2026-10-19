@@ -181,7 +181,11 @@ public final class HostsModel {
         let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
         deviceKey = key
         let config = ClientConfig(secretKey: key, relay: configuration.relay, mirrorVt: configuration.mirrorVt)
-        return { ticket, listener in try DaemonClient.connect(ticket: ticket, config: config, listener: listener) }
+        // The app shows native password prompts (AskpassSession), so it asks the daemon for them.
+        let options = ConnectOptions(relayCaDer: [], askpass: true)
+        return { ticket, listener in
+            try DaemonClient.connectWith(ticket: ticket, config: config, options: options, listener: listener)
+        }
     }
 
     /// Dials with an invite (`DaemonClient.join`): the device key proves who redeemed it.
@@ -190,7 +194,10 @@ public final class HostsModel {
         let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
         deviceKey = key
         let config = ClientConfig(secretKey: key, relay: configuration.relay, mirrorVt: configuration.mirrorVt)
-        return { invite, listener in try DaemonClient.join(invite: invite, config: config, listener: listener) }
+        let options = ConnectOptions(relayCaDer: [], askpass: true)
+        return { invite, listener in
+            try DaemonClient.joinWith(invite: invite, config: config, options: options, listener: listener)
+        }
     }
 
     private func openSSH(_ record: HostRecord, password: String?) throws -> SshConnection {

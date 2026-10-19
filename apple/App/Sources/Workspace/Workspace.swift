@@ -408,18 +408,22 @@ final class Workspace {
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
         pane.view.takeLatchedModifiers = { [keyBar] in keyBar.takeLatchedModifiers() }
-        // The tab shortcuts span every host in the window; the terminal answers them itself so
-        // they work right after the window switched hosts (the menu commands, found through the
-        // responder chain, could miss them then).
-        let tabShortcuts: [WorkspaceAction] = [.newTab, .newTabOnHost] + WorkspaceAction.tabActions
-        pane.view.appKeyCommands = tabShortcuts.map { action in
+        // Every app shortcut: the terminal answers them itself, so they work right after the
+        // window switched hosts (the menu commands, found through the responder chain, could
+        // miss them then: ⌘K did nothing).
+        let shortcuts = WorkspaceAction.allShortcutActions
+        pane.view.appKeyCommands = shortcuts.map { action in
             UIKeyCommand(
-                input: String(action.shortcut.key.character), modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
+                input: action.shortcut.key.uiKeyInput, modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
                 action: #selector(TerminalView.performAppKeyCommand(_:)))
         }
+        pane.view.onFind = { [weak self] in
+            guard let self else { return }
+            ActiveWindow.model(for: self)?.isSearchShown = true
+        }
         pane.view.onAppKeyCommand = { [weak self] index in
-            guard let self, tabShortcuts.indices.contains(index) else { return }
-            tabShortcuts[index].perform(on: self, window: ActiveWindow.model(for: self))
+            guard let self, shortcuts.indices.contains(index) else { return }
+            shortcuts[index].perform(on: self, window: ActiveWindow.model(for: self))
         }
         pane.view.onFocus = { [weak self, weak pane] in
             guard let self, let pane else { return }

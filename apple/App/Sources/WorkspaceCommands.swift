@@ -23,18 +23,14 @@ struct WorkspaceCommands: Commands {
             buttons(WorkspaceAction.fileActions)
         }
         CommandGroup(after: .textEditing) {
-            Button("Find…") { model?.isSearchShown = true }
-                .keyboardShortcut("f")
-                .disabled(editorHasKeys)
+            buttons([.find])
         }
         CommandMenu("Pane") {
             buttons(WorkspaceAction.paneActions)
             Divider()
             buttons(WorkspaceAction.drawActions)
             Divider()
-            Button("Links & Paths…") { model?.sheet = .links }
-                .keyboardShortcut("l", modifiers: [.command, .shift])
-                .disabled(editorHasKeys)
+            buttons([.links])
         }
         CommandMenu("Tab") {
             buttons(WorkspaceAction.tabActions)
@@ -62,19 +58,7 @@ struct WorkspaceCommands: Commands {
             Button("Archive Worktree") { if let wt = model?.git.worktree { model?.git.archive(wt) } }
         }
         CommandGroup(before: .sidebar) {
-            // Ghostty binds the palette to ⇧⌘P; ⌘K is Raycast's and Linear's.
-            Button("Command Palette") { model?.isPaletteShown.toggle() }
-                .keyboardShortcut("k")
-                .disabled(editorHasKeys)
-            Button("Command Palette") { model?.isPaletteShown.toggle() }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
-                .disabled(editorHasKeys)
-            Button("Inbox") { model?.destination = .inbox }
-                .keyboardShortcut("i", modifiers: [.command, .shift])
-                .disabled(editorHasKeys)
-            Button("Hosts") { model?.destination = model?.destination == .hosts ? .terminal : .hosts }
-                .keyboardShortcut("h", modifiers: [.command, .shift])
-                .disabled(editorHasKeys)
+            buttons([.commandPalette, .commandPaletteGhostty, .inbox, .hosts])
             Button("Add Host…") { model?.addHost() }
             Divider()
         }
@@ -82,7 +66,13 @@ struct WorkspaceCommands: Commands {
 
     private func buttons(_ actions: [WorkspaceAction]) -> some View {
         ForEach(actions, id: \.self) { action in
-            Button(action.title) { if let workspace { action.perform(on: workspace, window: model ?? ActiveWindow.model(for: workspace)) } }
+            Button(action.title) {
+                if let workspace {
+                    action.perform(on: workspace, window: model ?? ActiveWindow.model(for: workspace))
+                } else if let model, let workspace = model.workspace {
+                    action.perform(on: workspace, window: model)
+                }
+            }
                 .keyboardShortcut(action.shortcut)
                 .disabled(editorHasKeys)
         }

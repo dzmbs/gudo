@@ -52,17 +52,22 @@ public extension ButtonStyle where Self == BarButtonStyle {
 /// inbox rows on Mac). On iPad the pointer gets the system lift/highlight effect.
 public struct RowButtonStyle: ButtonStyle {
     var isSelected: Bool
+    /// A solid accent selection (the palette) instead of the quiet 20 % one.
+    var isProminent = false
+    var cornerRadius = DS.Radius.control
     @State private var isHovered = false
 
-    public init(isSelected: Bool = false) {
+    public init(isSelected: Bool = false, isProminent: Bool = false, cornerRadius: CGFloat = DS.Radius.control) {
         self.isSelected = isSelected
+        self.isProminent = isProminent
+        self.cornerRadius = cornerRadius
     }
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .contentShape(.rect)
             .background(
-                RoundedRectangle(cornerRadius: DS.Radius.control)
+                RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(fill(configuration.isPressed)))
             .onHover { isHovered = $0 }
             #if os(iOS)
@@ -71,7 +76,7 @@ public struct RowButtonStyle: ButtonStyle {
     }
 
     private func fill(_ pressed: Bool) -> Color {
-        if isSelected { return DS.Palette.accent.opacity(0.2) }  // Ghostty palette selection: accent 20 %
+        if isSelected { return isProminent ? DS.Palette.selection : DS.Palette.accent.opacity(0.2) }
         if pressed { return DS.Palette.pressedFill }
         if isHovered { return DS.Palette.hoverFill }
         return .clear
@@ -81,4 +86,7 @@ public struct RowButtonStyle: ButtonStyle {
 public extension ButtonStyle where Self == RowButtonStyle {
     static var row: RowButtonStyle { RowButtonStyle() }
     static func row(selected: Bool) -> RowButtonStyle { RowButtonStyle(isSelected: selected) }
+    static func paletteRow(selected: Bool) -> RowButtonStyle {
+        RowButtonStyle(isSelected: selected, isProminent: true, cornerRadius: DS.Radius.paletteRow)
+    }
 }

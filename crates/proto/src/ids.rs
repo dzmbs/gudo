@@ -268,9 +268,13 @@ bitset! {
         /// the `Welcome` or `Refused`, and can be let in to upgrade a daemon whose snapshot
         /// format it does not decode (see `ServerCtl::DaemonInfo`).
         DAEMON_INFO = 5;
+        /// Shows native password prompts: wants `ServerCtl::Askpass` pushes and answers them
+        /// with `ClientCtl::Askpass` (see `proto::askpass`). Without it the daemon's askpass
+        /// helper asks on the terminal. (Bit 6 is the usage meters' `AGENT_USAGE`.)
+        ASKPASS = 7;
         /// Wants `ServerCtl::Repos` (repository, worktree, branch and pull request state of
         /// every pane); the daemon only watches repositories while such a client is connected.
-        REPO_STATUS = 6;
+        REPO_STATUS = 8;
     }
 }
 

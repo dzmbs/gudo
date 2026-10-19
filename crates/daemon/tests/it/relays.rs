@@ -85,6 +85,7 @@ async fn daemon_and_client_connect_through_a_self_hosted_relay() {
         config,
         ConnectOptions {
             relay_ca_der: vec![cert],
+            ..ConnectOptions::default()
         },
     );
     c.until("connected through the relay", |c| c.connected > 0)

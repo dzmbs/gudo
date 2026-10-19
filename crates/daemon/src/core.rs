@@ -69,6 +69,8 @@ pub(crate) enum Event {
     },
     /// A pane's foreground program, or a watched pane's prompt state, changed.
     Assist(proto::AssistPush),
+    /// A native password prompt opened or closed, or a detected one changed (`askpass`).
+    Askpass(proto::AskpassPush),
     /// The repository snapshot changed (read it from `ws.repos`).
     Repos,
 }
@@ -106,6 +108,8 @@ pub(crate) struct MetaState {
     pub sized_by: Option<(ConnId, PrincipalId)>,
     pub at_prompt: bool,
     pub last_hint: Option<(EchoHint, Prediction)>,
+    /// The password prompt on the cursor row while input is hidden (`askpass::detect`).
+    pub secret_prompt: Option<String>,
 }
 
 pub(crate) struct PaneEntry {
@@ -149,6 +153,8 @@ pub(crate) struct Core {
     pub assist: crate::assist::Assist,
     /// Self upgrade: one at a time, and the restart it asks the host process for.
     pub upgrade: crate::upgrade::Upgrade,
+    /// Native password prompts: the helper, open prompts, connections that may answer.
+    pub askpass: crate::askpass::Askpass,
     connected: AtomicUsize,
 }
 
@@ -182,6 +188,11 @@ impl Core {
             art: crate::art::Art::open(&cfg.state_dir, cfg.artifacts),
             assist: crate::assist::Assist::new(&cfg),
             upgrade: crate::upgrade::Upgrade::default(),
+            askpass: crate::askpass::Askpass::install(
+                &cfg.askpass,
+                &cfg.state_dir,
+                &cfg.hook_bin(),
+            ),
             cfg,
             connected: AtomicUsize::new(0),
         })
@@ -278,9 +289,15 @@ impl Core {
         self.emit(Event::Sessions);
     }
 
+    /// The session `conn` is attached to.
+    pub fn attached_session(&self, conn: ConnId) -> Option<SessionId> {
+        lock(&self.attached).get(&conn).copied()
+    }
+
     pub fn detach(&self, conn: ConnId) {
         lock(&self.views).remove(&conn);
         self.assist.forget_conn(conn);
+        self.askpass.forget_conn(conn);
         if lock(&self.attached).remove(&conn).is_some() {
             self.emit(Event::Sessions);
         }
@@ -712,7 +729,11 @@ impl Core {
             .shell
             .as_ref()
             .filter(|_| self.cfg.shell_integration)
-            .and_then(|si| si.injection(&shell, |name| self.cfg.pane_var(name)));
+            .and_then(|si| si.injection(&shell, |name| self.cfg.pane_var(name)))
+            .map(|mut inj| {
+                self.askpass.wrap_injection(&mut inj);
+                inj
+            });
         let mut inject_env = Vec::new();
         // `exec`s the login shell with shell integration, for panes that run something first.
         let then_shell = || {
@@ -831,6 +852,9 @@ impl Core {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env(brand::env_var("PANE_ID"), id.0.to_string());
+        for (k, v) in self.askpass.pane_env(self) {
+            cmd.env(k, v);
+        }
         for (k, v) in &self.cfg.pane_env {
             cmd.env(k, OsString::from(v));
         }
@@ -1099,11 +1123,19 @@ async fn pane_task(
                     }
                     VtEvent::Activity => {
                         screen_dirty = true;
+                        if lock(&entry.meta).secret_prompt.is_some()
+                            || pane.echo().is_hidden_input()
+                        {
+                            crate::askpass::detect(&core, &entry);
+                        }
                         if let Some(rt) = lock(&entry.agent).as_mut() {
                             rt.pty_output();
                         }
                     }
-                    VtEvent::AltScreen => refresh_hint(&core, &entry),
+                    VtEvent::AltScreen => {
+                        refresh_hint(&core, &entry);
+                        crate::askpass::detect(&core, &entry);
+                    }
                     VtEvent::Osc(osc) => handle_osc(&core, &entry, osc),
                     VtEvent::Command(update) => handle_command(&core, &entry, update),
                     VtEvent::KittyImage { key, png, col, cols, rows } => {
@@ -1120,6 +1152,7 @@ async fn pane_task(
                     continue;
                 }
                 refresh_hint(&core, &entry);
+                crate::askpass::detect(&core, &entry);
             }
             status = &mut exit => {
                 let code = status.ok().and_then(|s| s.code());

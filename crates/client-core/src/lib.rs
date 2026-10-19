@@ -28,6 +28,7 @@
 //! ```
 
 mod artifacts;
+mod askpass;
 mod assist;
 mod conn;
 mod mirror;
@@ -56,6 +57,7 @@ use tokio::sync::{Notify, mpsc};
 use crate::mirror::Mirror;
 
 pub use artifacts::{ArtifactEventQueue, ArtifactListener, ArtifactUpdate};
+pub use askpass::{AskpassEvent, AskpassEventQueue, AskpassListener};
 pub use assist::{AssistEvent, AssistEventQueue, AssistListener};
 pub use drawing;
 pub use grants::{self, GrantSpec};
@@ -119,6 +121,10 @@ pub struct ConnectOptions {
     /// Extra CA certificates (DER) to trust for the daemon's self-hosted relays, e.g. a
     /// private CA. The usual web roots stay trusted.
     pub relay_ca_der: Vec<Vec<u8>>,
+    /// Show native password prompts: announce `Caps::ASKPASS`, so the daemon sends this
+    /// connection the askpass prompts of panes it may drive (see [`AskpassListener`]).
+    /// Leave it off in clients that cannot show them: the helper then asks on the terminal.
+    pub askpass: bool,
 }
 
 /// Errors from the client API.
@@ -419,6 +425,8 @@ pub(crate) struct Inner {
     pub art: artifacts::ArtState,
     /// Input-assistance requests in flight, foreground and prompt pushes.
     pub assist: assist::AssistState,
+    /// Askpass requests in flight, open and detected password prompts.
+    pub askpass: askpass::AskpassState,
     /// What the daemon said about itself on the last connection.
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
     /// The last connection was for an upgrade only.
@@ -595,6 +603,7 @@ impl Client {
             mp: mp::MpState::with_invite(invite),
             art: artifacts::ArtState::default(),
             assist: assist::AssistState::default(),
+            askpass: askpass::AskpassState::default(),
             daemon_info: Mutex::new(None),
             incompatible: Mutex::new(false),
         });

@@ -12,6 +12,7 @@ brand.workspace = true
 postcard.workspace = true
 serde.workspace = true
 data-encoding.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

@@ -304,6 +304,25 @@ impl Pane {
             .unwrap_or_default()
     }
 
+    /// The text of the cursor's row on the primary screen, for spotting password prompts;
+    /// `None` on the alternate screen.
+    pub fn cursor_line(&self) -> Option<String> {
+        let vt = lock(&self.vt);
+        if vt.alt {
+            return None;
+        }
+        let at = vt.term.cursor_point();
+        let cols = vt.term.cols();
+        let region = TextRegion::Range {
+            start: ghostty_vt::Point { y: at.y, x: 0 },
+            end: ghostty_vt::Point {
+                y: at.y,
+                x: cols.saturating_sub(1),
+            },
+        };
+        vt.term.text(region).ok()
+    }
+
     /// A subscriber replaying from `seq`.
     pub fn subscribe_from(&self, seq: Seq) -> Result<Subscriber, ReadError> {
         self.pty.subscribe_from(pty::Seq::new(seq.0))

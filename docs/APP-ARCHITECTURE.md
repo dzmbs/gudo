@@ -442,3 +442,32 @@ about 2.5–3 s). Daemon side: `cargo test -p daemon --test it upgrade`.
 Gaps: no release signing key (hash plus a run of the new build is the check); the SSH path has only
 been exercised by the existing bootstrap tests, not by an update of a paired host; macOS hosts get
 no offer (the app bundles Linux daemons only).
+
+## 15. Native password prompts (DAEMON.md §9)
+
+`DaemonConnection.askpass` (`AskpassSession`, HostKit) follows the core's askpass pushes: open
+prompts (`prompts`, kept through a dropped connection as `stale` for 15 s so a sheet survives a
+blip), detected hidden-input prompts by pane (`detected`), and why prompts closed. Both dialers
+connect with `ConnectOptions.askpass = true`. In the pane (`App/Sources/Askpass`):
+
+- `AskpassPaneOverlay` (in `PaneSlot`) shows `SecretPromptCard` at the top of the prompt's pane:
+  the program's icon and "sudo needs your password" / "ssh needs a passphrase" (`AskpassCopy`),
+  the asking command and host in SF Mono, the program's own prompt as the field label, a
+  `SecureField` (`.password` content type, so password managers can fill it; a plain field for
+  yes/no questions), "Remember in Keychain", Cancel (Esc) and OK (Return). The card is glass
+  over the terminal, like the lease request; it takes focus and gives it back to the terminal.
+- At a detected prompt the pane shows the "Enter Password Securely" chip at its bottom edge,
+  just above the key bar; it opens the same card, whose OK types the secret and Return.
+- `SecretEntry` holds the typed text only until it is sent. "Remember in Keychain" is opt-in per
+  host and prompt: `AskpassVault` (`KeychainAskpassVault`, service `<bundle id>.askpass`) keeps
+  it under `.userPresence` access control, `WhenUnlockedThisDeviceOnly`, keyed by a SHA-256 of
+  host, program kind and prompt. A saved password is never sent by itself: the card shows a
+  Face ID button, and the system asks before it is read. If the same question comes back right
+  after it was used (`retry`), it is forgotten and the card says so. Settings › Passwords counts
+  them and has "Forget Saved Passwords". Builds without a usable Keychain hide the toggle.
+- Accessibility: the card is a container labelled with its title; the field is labelled with the
+  program's prompt; the chip, the Face ID button and the toggle have labels and hints.
+
+Tests: `AskpassSessionTests`, `AskpassCopyTests` (HostKit), `SecretEntryTests` (App), and
+`AskpassUITests` against a local daemon (`apple/scripts/askpass-ui-test.sh`): `$SSH_ASKPASS`
+answered in the card, Cancel, and the chip at a `stty -echo; read` prompt.

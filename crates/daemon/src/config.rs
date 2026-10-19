@@ -146,6 +146,8 @@ pub struct Config {
     /// Command history for completion and the line editor (`[history]` in `config.toml`).
     pub history: crate::assist::HistoryConfig,
     pub artifacts: ArtifactLimits,
+    /// Native password prompts (`[askpass]` in `config.toml`; docs/DAEMON.md §9).
+    pub askpass: AskpassConfig,
     /// The executable this daemon runs from, when its owner may replace it over the
     /// connection (`proto::info`): the new build is written next to it and renamed over it.
     /// `None` (the default; library users and tests opt in) refuses upgrades.
@@ -208,6 +210,34 @@ pub struct ArtifactLimits {
     pub per_session: usize,
 }
 
+/// Native password prompts: the askpass helper in every pane's environment, and how long a
+/// prompt waits for an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AskpassConfig {
+    /// Set `SUDO_ASKPASS`, `SSH_ASKPASS` (+ `SSH_ASKPASS_REQUIRE=prefer`) and `GIT_ASKPASS`
+    /// in panes, and push detected password prompts. On by default.
+    pub enabled: bool,
+    /// With shell integration, wrap `sudo` in interactive shells so it runs `sudo -A` while
+    /// an app that can answer is attached to the pane. On by default.
+    pub sudo: bool,
+    /// How long a prompt waits for an answer before the program gets none.
+    pub timeout: Duration,
+    /// How long a prompt survives with no connection left that could answer it before the
+    /// helper asks on the terminal instead (covers an app reconnecting).
+    pub grace: Duration,
+}
+
+impl Default for AskpassConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sudo: true,
+            timeout: Duration::from_secs(300),
+            grace: Duration::from_secs(10),
+        }
+    }
+}
+
 impl Default for ArtifactLimits {
     fn default() -> Self {
         Self {
@@ -248,6 +278,7 @@ impl Config {
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
             artifacts: ArtifactLimits::default(),
+            askpass: AskpassConfig::default(),
             history: crate::assist::HistoryConfig::default(),
             self_exe: None,
             test_snapshot_format: None,
@@ -290,6 +321,11 @@ impl Config {
     /// ignore_space = true          # commands typed with a leading space are not kept
     /// max_entries = 50000
     /// import = true                # import zsh/bash/fish history once
+    ///
+    /// [askpass]                    # docs/DAEMON.md §9
+    /// enabled = true               # askpass helper in panes, detected prompts
+    /// sudo = true                  # interactive `sudo` runs `sudo -A` while the app can answer
+    /// timeout_secs = 300
     /// ```
     ///
     /// A relay mode set before this runs (`hostd run --no-relay`) wins over the file's.
@@ -361,6 +397,15 @@ impl Config {
         }
         if let Some(on) = history.import {
             self.history.import = on;
+        }
+        if let Some(on) = file.askpass.enabled {
+            self.askpass.enabled = on;
+        }
+        if let Some(on) = file.askpass.sudo {
+            self.askpass.sudo = on;
+        }
+        if let Some(secs) = file.askpass.timeout_secs {
+            self.askpass.timeout = Duration::from_secs(secs.max(1));
         }
         Ok(())
     }
@@ -436,6 +481,15 @@ struct UserFile {
     push: PushSection,
     multiplayer: MultiplayerSection,
     history: HistorySection,
+    askpass: AskpassSection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AskpassSection {
+    enabled: Option<bool>,
+    sudo: Option<bool>,
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

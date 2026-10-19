@@ -183,6 +183,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]
@@ -1012,6 +1013,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webpki-roots",
+ "zeroize",
  "zstd",
 ]
 
@@ -1716,15 +1718,18 @@ dependencies = [
  "anyhow",
  "brand",
  "clap",
+ "client-core",
  "daemon",
  "libc",
  "proto",
  "qrcode",
  "rustix",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -3521,6 +3526,7 @@ dependencies = [
  "data-encoding",
  "postcard",
  "serde",
+ "zeroize",
 ]
 
 [[package]]

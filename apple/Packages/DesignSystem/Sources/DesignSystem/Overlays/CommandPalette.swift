@@ -29,9 +29,9 @@ public struct PaletteCommand: Identifiable {
     }
 }
 
-/// The command palette (Ghostty `CommandPaletteView`): a 20 pt light query field, a divider and a
-/// scrolling list. ↑/↓ and ⌃P/⌃N move, Return runs, Esc or clicking outside closes. Matched
-/// characters are bold in the accent color. With an empty query, entries are grouped by section
+/// query field, a divider and a fixed-height list. One row is always selected, in solid accent;
+/// ↑/↓ and ⌃P/⌃N move, Return runs, ⌘1–⌘5 run the first five matches, Esc or clicking outside
+/// closes. Matched characters are bold. With an empty query, entries are grouped by section
 /// (Raycast); with a query, they are ranked flat.
 public struct CommandPalette: View {
     @Binding var isPresented: Bool
@@ -73,7 +73,7 @@ public struct CommandPalette: View {
                 .textInputAutocapitalization(.never)
                 #endif
                 .padding(.horizontal, DS.Space.l)
-                .frame(height: 52)
+                .frame(height: 48)
                 .focused($isFocused)
                 .onSubmit { run(results.first { $0.id == selection } ?? results.first) }
                 .onKeyPress(.escape) { close(); return .handled }
@@ -84,6 +84,12 @@ public struct CommandPalette: View {
                     move(press.characters == "p" ? -1 : 1, in: results)
                     return .handled
                 }
+                // ⌘1–⌘5 run the first five results.
+                .onKeyPress(keys: ["1", "2", "3", "4", "5"], phases: .down) { press in
+                    guard press.modifiers == .command, let n = Int(press.characters), results.indices.contains(n - 1) else { return .ignored }
+                    run(results[n - 1])
+                    return .handled
+                }
                 .accessibilityIdentifier("palette-field")
 
             Divider()
@@ -91,12 +97,13 @@ public struct CommandPalette: View {
             if results.isEmpty {
                 Text("No matches")
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .top)
                     .padding(DS.Space.l)
+                    .frame(height: Self.listHeight, alignment: .top)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
+                        LazyVStack(alignment: .leading, spacing: 4) {
                             ForEach(Array(results.enumerated()), id: \.element.id) { index, command in
                                 if trimmed.isEmpty, let section = command.section,
                                    index == 0 || results[index - 1].section != section {
@@ -106,13 +113,15 @@ public struct CommandPalette: View {
                                         .padding(.top, index == 0 ? 2 : DS.Space.s)
                                         .padding(.bottom, 2)
                                 }
-                                row(command, selected: command.id == (selection ?? (trimmed.isEmpty ? nil : results.first?.id)))
+                                // Always one selected row, so Return always does something.
+                                row(command, index: index, selected: command.id == (selection ?? results.first?.id))
                                     .id(command.id)
                             }
                         }
                         .padding(DS.Space.s)
                     }
-                    .frame(maxHeight: 360)
+                    // A fixed height: the panel does not jump as the matches change.
+                    .frame(height: Self.listHeight)
                     .scrollBounceBehavior(.basedOnSize)
                     .onChange(of: selection) { _, id in
                         if let id { proxy.scrollTo(id) }
@@ -121,57 +130,74 @@ public struct CommandPalette: View {
             }
         }
         .frame(maxWidth: DS.Size.paletteWidth)
-        .floatingPanel(cornerRadius: 20)
+        .floatingPanel(cornerRadius: DS.Radius.panel)
         .padding()
         .onAppear { Task { isFocused = true } }
         .onChange(of: query) { selection = nil }
         .accessibilityIdentifier("command-palette")
     }
 
-    private func row(_ command: PaletteCommand, selected: Bool) -> some View {
+    /// Mac: five and a half rows; touch: seven and a half.
+    #if os(macOS)
+    static let listHeight: CGFloat = 230
+    #else
+    static let listHeight: CGFloat = 380
+    #endif
+
+    private func row(_ command: PaletteCommand, index: Int, selected: Bool) -> some View {
         Button { run(command) } label: {
             HStack(spacing: DS.Space.s) {
                 if let state = command.state {
-                    StatusIndicator(state, size: 14).frame(width: 20)
+                    StatusIndicator(state, size: 12).frame(width: 16)
                 } else if let image = command.systemImage {
                     Image(systemName: image)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                        .frame(width: 16)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    highlighted(command.title)
+                    highlighted(command.title, selected: selected)
+                        .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                     if let subtitle = command.subtitle {
-                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(subtitle).font(.caption)
+                            .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.75)) : AnyShapeStyle(.secondary))
+                            .lineLimit(1)
                     }
                 }
                 Spacer(minLength: DS.Space.s)
                 if let badge = command.badge {
                     Text(badge)
-                        .font(DS.Font.badge)
+                        .font(.caption2.weight(.medium))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(DS.Palette.accent.opacity(0.15), in: .capsule)
-                        .foregroundStyle(DS.Palette.accent)
+                        .background(Color.primary.opacity(0.08), in: .capsule)
+                        .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
                 }
-                if let shortcut = command.shortcut {
+                // The first five results run with ⌘1–⌘5 while a query narrows them.
+                if !trimmed.isEmpty, index < 5 {
+                    ShortcutLabel(["⌘", "\(index + 1)"])
+                        .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                } else if let shortcut = command.shortcut {
                     ShortcutLabel(shortcut)
+                        .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
                 }
             }
-            .padding(DS.Space.s)
+            .padding(.horizontal, DS.Space.s)
+            .padding(.vertical, DS.Space.row)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.row(selected: selected))
+        .buttonStyle(.paletteRow(selected: selected))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func highlighted(_ title: String) -> Text {
+    /// Matched characters in bold (white on the selected row, never the accent colour).
+    private func highlighted(_ title: String, selected: Bool) -> Text {
         guard !trimmed.isEmpty, let indices = FuzzyMatch.indices(trimmed, in: title) else { return Text(title) }
         var attributed = AttributedString(title)
         for offset in indices {
             let start = attributed.index(attributed.startIndex, offsetByCharacters: offset)
             let end = attributed.index(start, offsetByCharacters: 1)
             attributed[start..<end].inlinePresentationIntent = .stronglyEmphasized
-            attributed[start..<end].foregroundColor = DS.Palette.accent
         }
         return Text(attributed)
     }

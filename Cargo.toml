@@ -37,6 +37,8 @@ rustix = { version = "1", features = ["event", "fs", "pipe", "process", "pty", "
 thiserror = "2"
 tracing = "0.1.44"
 data-encoding = "2.11.1"
+# Clears secrets (askpass answers) from memory when they are dropped; already in the graph.
+zeroize = "1.8"
 getrandom = "0.4.3"
 zstd = { version = "0.14.3", default-features = false }
 qrcode = { version = "0.14.1", default-features = false }

@@ -72,9 +72,21 @@ struct WindowRoot: View {
     @SceneStorage("collapsedHosts") private var storedCollapsed: String?
     @SceneStorage("focusedTab") private var storedFocus: String?
     @State private var restored = false
-    @State private var model = WindowModel(app: AppModel.shared)
+    /// Created once, when the window first appears. A `@State` initial value is evaluated every
+    /// time SwiftUI re-creates this struct, and each spare `WindowModel` built its own local
+    /// workspace: the screen then showed one model's panes while shortcuts, fixtures and the
+    /// palette acted on another.
+    @State private var model: WindowModel?
 
     var body: some View {
+        if let model {
+            window(model)
+        } else {
+            Color.clear.onAppear { model = WindowModel(app: AppModel.shared) }
+        }
+    }
+
+    private func window(_ model: WindowModel) -> some View {
         Group {
             if let workspace = model.workspace {
                 // No `.id` per workspace: the sidebar (every host) stays put while the detail
@@ -94,12 +106,13 @@ struct WindowRoot: View {
             }
         }
         .environment(model)
+        .onAppear { ActiveWindow.register(model) }
         .onChange(of: app.lastError) { _, error in
             if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
         }
-        .onChange(of: model.groups.openHosts) { _, _ in persist() }
-        .onChange(of: model.groups.collapsed) { _, _ in persist() }
-        .onChange(of: model.currentTab) { _, _ in persist() }
+        .onChange(of: model.groups.openHosts) { _, _ in persist(model) }
+        .onChange(of: model.groups.collapsed) { _, _ in persist(model) }
+        .onChange(of: model.currentTab) { _, _ in persist(model) }
         .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
         .onOpenURL { url in
             // An invite opens the Join sheet: joining is always the user's tap.
@@ -130,7 +143,7 @@ struct WindowRoot: View {
                 for target in hooked { model.show(target) }
                 model.show(hooked[0])
             } else if shouldRestore {
-                restore()
+                restore(model)
             }
             // `-openHost <name or id>`: open that saved host (screenshots, manual checks).
             if let wanted = UserDefaults.standard.string(forKey: "openHost"),
@@ -158,7 +171,7 @@ struct WindowRoot: View {
     /// The window's open hosts and focused tab: the scene's own storage, else what the last
     /// window saved (a new scene on iPad, a Mac window restored without state), else the
     /// single host of a window saved before multi-host.
-    private func restore() {
+    private func restore(_ model: WindowModel) {
         let defaults = UserDefaults.standard
         let decoder = JSONDecoder()
         func decode<T: Decodable>(_ type: T.Type, _ text: String?) -> T? {
@@ -180,7 +193,7 @@ struct WindowRoot: View {
     private static let lastFocusKey = "window.focusedTab"
 
     /// Saves what a relaunch restores, per window and as the app's latest.
-    private func persist() {
+    private func persist(_ model: WindowModel) {
         guard restored, shouldRestore else { return }
         let encoder = JSONEncoder()
         func encode(_ value: some Encodable) -> String? {
