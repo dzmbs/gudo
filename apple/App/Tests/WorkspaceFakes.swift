@@ -6,7 +6,7 @@ import UnnamedCore
 
 /// A daemon client for the screens' models: the layout half does nothing, the workspace half
 /// answers from canned values and records what was asked.
-nonisolated final class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI, @unchecked Sendable {
+nonisolated final class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI, WorkspaceEventSource, @unchecked Sendable {
     struct State {
         var calls: [String] = []
         var listings: [String: DirListing] = [:]

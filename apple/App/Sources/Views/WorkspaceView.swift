@@ -60,6 +60,7 @@ struct WorkspaceView: View {
             .focusedSceneValue(model)
             .preferredColorScheme(preferredScheme)
             .renameTabPrompt(workspace)
+            .modifier(MultiplayerWindowHooks(workspace: workspace))
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 // Settings write UserDefaults; the terminals follow through `TerminalAppearance`.
                 let appearance = TerminalAppearance.fromPreferences()
@@ -306,13 +307,10 @@ private struct TerminalToolbar: ToolbarContent {
                 .accessibilityIdentifier("toggle-sidebar")
             }
         }
-        if LaunchOptions.mock {
+        if let session = workspace.multiplayer {
             ToolbarItem(placement: .primaryAction) {
-                Button { model.sheet = .invite } label: {
-                    PresenceStack(MockPresence.participants)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Share Session")
+                PresenceToolbarButton(session: session) { model.sheet = .invite }
+                    .buttonStyle(.plain)
             }
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -536,9 +534,9 @@ private struct SheetContent: View {
         case .launchAgent, .links, .diff, .files, .browser, .editor:
             ToolSheet(route: route)
         case .invite:
-            InviteSheet(
-                sessionTitle: workspace.session.activeTab.map(workspace.title(of:)) ?? Brand.name,
-                participants: MockPresence.participants)
+            InviteSheet(workspace: workspace)
+        case .join:
+            JoinSheet(invite: model.joinInvite.isEmpty ? UserDefaults.standard.string(forKey: "joinInvite") ?? "" : model.joinInvite)
         case .settings:
             SettingsView()
         }

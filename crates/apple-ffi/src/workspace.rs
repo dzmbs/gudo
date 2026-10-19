@@ -53,7 +53,7 @@ impl client_core::TransferProgress for ProgressForward {
     }
 }
 
-fn progress_adapter(
+pub(crate) fn progress_adapter(
     p: Option<Arc<dyn TransferProgress>>,
 ) -> Option<Arc<dyn client_core::TransferProgress>> {
     p.map(|p| Arc::new(ProgressForward(p)) as Arc<dyn client_core::TransferProgress>)

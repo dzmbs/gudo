@@ -11,6 +11,9 @@ One multiplatform SwiftUI app (iPhone, iPad, Mac; iOS/iPadOS/macOS 26+) over thr
 | `Packages/PaneLayout` | Layout model shared in spirit with the daemon: Session → Tab → split tree, `LayoutOp`, `LayoutStore` |
 | `Packages/DesignSystem` | Tokens, Liquid Glass components, Ghostty overlays (resize, search, palette, exit bar), agent status, the 463 Ghostty themes; spec in `docs/DESIGN.md` |
 | `App/Sources/Screens` | Hosts, pairing, Inbox, share, links, diff, files, browser, editor: views over the protocols in `App/Sources/Model/ScreenModels.swift` (mock data in `MockData.swift`) |
+| `Packages/NotifyKit` | Notification categories and actions, per-kind preferences, local notifications from the attention feed, the action handler, the Notification Service Extension's work (over `PushCrypto`) and the Live Activity attributes; no core, so the extensions stay small |
+| `Packages/PushCrypto` | Opens the daemons' sealed pushes (CryptoKit; shared vectors with `crates/push`) |
+| `NotificationService`, `AgentActivityWidget` | iOS app extensions: decrypts pushes; draws the agent-run Live Activity. Push registration needs a team: `PUSH_ENTITLEMENT` in `Brand.xcconfig` (docs/PUSH.md step 9) |
 | `Packages/TerminalKit` | libghostty-vt wrapper (`TerminalCore`), Metal renderer + AppKit/UIKit `TerminalView` (`TerminalRenderer`), `LocalPTY` (macOS) |
 | `Brand.xcconfig` | Product name and bundle id prefix; nothing else hard-codes them |
 | `project.yml` | XcodeGen spec; `App.xcodeproj` is generated and not committed |
@@ -65,6 +68,12 @@ Or open `App.xcodeproj` in Xcode and run the `App` scheme on "My Mac" or a simul
 (cd Packages/TerminalKit && swift test)   # renderer and key encoding
 xcodebuild -project App.xcodeproj -scheme App -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/DerivedData test
 ```
+
+Notifications: `(cd Packages/NotifyKit && swift test)` (NSE decrypt with the shared vectors,
+action handler, local content, prefs). Multiplayer: `MultiplayerSessionTests` and
+`MultiplayerIntegrationTests` in HostKit, and `scripts/multiplayer-ui-test.sh <udid>` (iPad: share
+sheet, invite + QR, grants, revoke, audit against a local daemon with a guest joined by the `un`
+CLI).
 
 Remote hosts: `(cd Packages/HostKit && swift test)` (needs `cargo build -p hostd`),
 `scripts/daemon-ui-test.sh <udid>` (iPad UI test against a local daemon that is killed and restarted

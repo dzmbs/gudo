@@ -167,6 +167,7 @@ struct PaneSlot: View {
                     SecureInputBadge()
                 }
                 BellBorder(ringing: notice.bell)
+                MultiplayerPaneOverlay(workspace: workspace, pane: id, isFocused: focused)
                 if model.isSearchShown && focused {
                     TerminalSearchBar(
                         needle: Bindable(model).searchNeedle,
@@ -236,6 +237,7 @@ private struct PaneHeader: View {
                     .foregroundStyle(state.color)
             }
             Spacer(minLength: 0)
+            PanePresence(workspace: workspace, pane: id)
             Menu {
                 PaneMenuItems(workspace: workspace, model: model, pane: id)
             } label: {

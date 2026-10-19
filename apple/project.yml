@@ -31,6 +31,10 @@ packages:
     path: Packages/UnnamedCore
   DesignSystem:
     path: Packages/DesignSystem
+  PushCrypto:
+    path: Packages/PushCrypto
+  NotifyKit:
+    path: Packages/NotifyKit
 targets:
   App:
     type: application
@@ -59,6 +63,11 @@ targets:
         # The editor and dev servers load over local forwards (http://localhost:<port>).
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Agent runs on the Lock Screen and in the Dynamic Island (AgentActivityWidget).
+        NSSupportsLiveActivities: true
+        # Shared with the Notification Service Extension in push builds (Brand.xcconfig).
+        PushKeychainGroup: $(PUSH_KEYCHAIN_GROUP)
+        PushAppGroup: $(PUSH_APP_GROUP)
     settings:
       base:
         PRODUCT_NAME: $(BRAND_NAME)
@@ -87,6 +96,9 @@ targets:
         # The macOS app spawns login shells on local PTYs, which the App Sandbox forbids.
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: NO
+        # Push only with a team (Brand.xcconfig): `#if PUSH_YES` registers with APNs.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PUSH_$(PUSH_ENTITLEMENT)"
+        CODE_SIGN_ENTITLEMENTS: $(PUSH_ENTITLEMENTS_FILE)
     dependencies:
       - package: TerminalKit
         product: TerminalCore
@@ -103,6 +115,70 @@ targets:
         product: UnnamedCore
       - package: DesignSystem
         product: DesignSystem
+      - package: NotifyKit
+        product: NotifyKit
+      - package: PushCrypto
+        product: PushCrypto
+      - target: NotificationService
+        destinationFilters: [iOS]
+      - target: AgentActivityWidget
+        destinationFilters: [iOS]
+  # Opens the daemons' sealed pushes (PushCrypto) and sets title, body, thread and category.
+  # Builds and runs without the push entitlement (the payload then keeps the relay's text).
+  NotificationService:
+    type: app-extension
+    platform: iOS
+    sources: [NotificationService]
+    info:
+      path: NotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: $(BRAND_NAME) Notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        PushKeychainGroup: $(PUSH_KEYCHAIN_GROUP)
+        PushAppGroup: $(PUSH_APP_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.notification-service
+        PRODUCT_NAME: NotificationService
+        CODE_SIGN_IDENTITY: "-"
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: $(PUSH_ENTITLEMENTS_FILE)
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: NotifyKit
+        product: NotifyKit
+  # The agent-run Live Activity (Lock Screen, Dynamic Island); updated locally by the app.
+  AgentActivityWidget:
+    type: app-extension
+    platform: iOS
+    sources: [AgentActivityWidget]
+    info:
+      path: AgentActivityWidget/Info.plist
+      properties:
+        CFBundleDisplayName: $(BRAND_NAME) Agents
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        BrandURLScheme: $(BRAND_URL_SCHEME)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.agent-activity
+        PRODUCT_NAME: AgentActivityWidget
+        CODE_SIGN_IDENTITY: "-"
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: NotifyKit
+        product: NotifyKit
   AppTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]
@@ -142,6 +218,7 @@ schemes:
       targets:
         - package: PaneLayout/PaneLayoutTests
         - package: DesignSystem/DesignSystemTests
+        - package: NotifyKit/NotifyKitTests
         - AppTests
         - AppUITests
     run:

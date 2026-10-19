@@ -101,7 +101,7 @@ struct DaemonWorkspaceTests {
 }
 
 /// The workspace half of a daemon client, answering from `state`.
-nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, @unchecked Sendable {
+nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, WorkspaceEventSource, @unchecked Sendable {
     struct State {
         var listeners: [any WorkspaceListener] = []
         var events: (any ClientEventListener)?

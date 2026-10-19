@@ -8,6 +8,9 @@
 //!   [`SshSession::bootstrap`] installs the daemon and returns a ticket.
 //! - [`SshConfigFile`], [`KnownHostsStore`], [`generate_ed25519_key`]: config, host keys
 //!   and keys, with persistence left to the app.
+//! - Drawings, images, Excalidraw scenes and inline placements (`artifacts.rs`, an
+//!   [`ArtifactListener`]); input assistance for the mobile line editor (`assist.rs`, an
+//!   [`AssistListener`]).
 //! - [`inspect_pair_ticket`], [`install_log_sink`]: read a ticket offline; core logs to
 //!   the app's logger.
 //!
@@ -23,6 +26,9 @@
 //! Byte payloads cross as `Data` with bulk copies ([`Bytes`], not UniFFI's byte-by-byte
 //! `Vec<u8>` converter), no serialization format. Input (`send_input`) is borrowed from Swift.
 
+mod art_types;
+mod artifacts;
+mod assist;
 mod bytes;
 mod client;
 mod editor;
@@ -38,6 +44,18 @@ use std::sync::OnceLock;
 
 use tokio::runtime::Runtime;
 
+pub use art_types::*;
+pub use artifacts::{
+    ArtifactListener, DownloadedBlob, excalidraw_element, excalidraw_wins, pack_ink_points,
+    render_ascii, render_excalidraw_ascii, render_png, render_svg, simplify_ink_points,
+    sniff_image, unpack_ink_points,
+};
+pub use assist::{
+    AssistError, AssistEvent, AssistListener, BlockedChoice, BlockedOption, BlockedPrompt,
+    BlockedSource, Completion, CompletionKind, Completions, FileMatch, FileMatches, Foreground,
+    HistoryEntry, HistoryQuery, InputDoubt, Keymap, PaneAssist, ProgramProfile, PromptInput,
+    PromptPhase, PromptState, ShellKind, classify_program,
+};
 pub use bytes::Bytes;
 pub use client::{
     ClientConfig, ClientError, ClientEvent, ClientEventListener, ClientStats, ConnectOptions,

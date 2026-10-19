@@ -21,6 +21,14 @@ struct KeyBarStyle {
     var buttonHeight: CGFloat
     var compactButtonHeight: CGFloat
     var minimumButtonWidth: CGFloat
+    var spineKeyWidth: CGFloat
+    /// The arrow joystick: 52 pt, at the trailing edge.
+    var joystickWidth: CGFloat
+    /// The small flick glyph in a key's corner.
+    var alternateFont: UIFont
+    /// Key labels (`esc`, `~`, `^C`): monospaced so `ctl` and `alt` line up.
+    var keyFont: UIFont
+    var alternateColor: UIColor
     var spacing: CGFloat
     var horizontalInset: CGFloat
     /// Snippet chips row height.
@@ -44,7 +52,12 @@ struct KeyBarStyle {
             compactRowHeight: 28,
             buttonHeight: isPad ? 40 : 34,
             compactButtonHeight: 24,
-            minimumButtonWidth: 44,
+            minimumButtonWidth: 40,
+            spineKeyWidth: isPad ? 52 : 42,
+            joystickWidth: 52,
+            alternateFont: .monospacedSystemFont(ofSize: 10, weight: .medium),
+            keyFont: .monospacedSystemFont(ofSize: isPad ? 16 : 15, weight: .medium),
+            alternateColor: .secondaryLabel,
             spacing: 6,
             horizontalInset: 8,
             snippetRowHeight: isPad ? 44 : 40,

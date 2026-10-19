@@ -6,8 +6,6 @@ import UnnamedCore
 /// docs/APPLE-FFI.md "Workspace", "Editor"), so the screens' models can be tested against a
 /// fake. The names are the generated ones: `DaemonClient` conforms as is.
 nonisolated public protocol DaemonWorkspaceAPI: AnyObject, Sendable {
-    func setWorkspaceListener(listener: WorkspaceListener)
-
     // Ports and forwards
     func ports() -> [PortInfo]
     func listPorts() async throws -> [PortInfo]
@@ -64,9 +62,9 @@ extension DaemonClient: DaemonWorkspaceAPI {}
 /// ports, the attention feed with its unseen count, directory watches, and the request/answer
 /// pairing for `links` / `search` / `commandOutput` (answers arrive as `ClientEvent`s).
 ///
-/// One per `DaemonConnection` (`connection.workspace`). It owns the client's
-/// `WorkspaceListener` and fans pushes out: `observePorts` / `observeAttention` for other
-/// features (notifications) instead of setting a second listener, which would replace this one.
+/// One per `DaemonConnection` (`connection.workspace`). Pushes come from the connection's shared
+/// `workspaceEvents` hub (the daemon takes one `WorkspaceListener` per connection; never set
+/// another); `observePorts` / `observeAttention` relay the parsed state to other screens.
 @MainActor
 @Observable
 public final class DaemonWorkspace {
@@ -84,27 +82,29 @@ public final class DaemonWorkspace {
     @ObservationIgnored private var installedOn: ObjectIdentifier?
     @ObservationIgnored private var watches: [UInt64: (path: String, handler: (FsChange) -> Void)] = [:]
     @ObservationIgnored private var pending: [UInt64: CheckedContinuation<ClientEvent, Never>] = [:]
-    @ObservationIgnored private var events: AsyncStream<WorkspaceEvent>.Continuation?
+    @ObservationIgnored private var hubToken: UUID?
+    @ObservationIgnored private weak var hub: WorkspaceEventHub?
     @ObservationIgnored private var portObservers: [UUID: ([PortInfo]) -> Void] = [:]
     @ObservationIgnored private var attentionObservers: [UUID: (AttentionUpdate) -> Void] = [:]
 
     private static let log = Logger(subsystem: Log.subsystem, category: "workspace")
 
-    /// - Parameter resolve: the daemon client of the moment (nil while not connected).
-    public init(hostId: String, resolve: @escaping () -> (any DaemonWorkspaceAPI)?) {
+    /// - Parameters:
+    ///   - events: the connection's workspace push hub (observed, never replaced).
+    ///   - resolve: the daemon client of the moment (nil while not connected).
+    public init(hostId: String, events: WorkspaceEventHub, resolve: @escaping () -> (any DaemonWorkspaceAPI)?) {
         self.hostId = hostId
         self.resolve = resolve
-        let (stream, continuation) = AsyncStream.makeStream(of: WorkspaceEvent.self)
-        events = continuation
-        Task { [weak self] in
-            for await event in stream {
-                self?.receive(event)
-            }
-        }
+        hub = events
+        hubToken = events.observe { [weak self] event in self?.receive(event) }
         install()
     }
 
-    /// The client, with this hub's listener installed on it.
+    isolated deinit {
+        if let hubToken { hub?.remove(hubToken) }
+    }
+
+    /// The client of the moment.
     public var api: (any DaemonWorkspaceAPI)? {
         install()
         return resolve()
@@ -121,8 +121,6 @@ public final class DaemonWorkspace {
         let identity = ObjectIdentifier(client)
         guard installedOn != identity else { return }
         installedOn = identity
-        let continuation = events
-        client.setWorkspaceListener(listener: WorkspaceEventForwarder { continuation?.yield($0) })
         ports = client.ports()
     }
 
@@ -337,19 +335,6 @@ public struct PaneRpcError: Error, LocalizedError, Equatable {
     public var errorDescription: String? { message }
 }
 
-/// `WorkspaceListener` → closure (runtime thread).
-nonisolated final class WorkspaceEventForwarder: WorkspaceListener {
-    private let handler: @Sendable (WorkspaceEvent) -> Void
-
-    init(_ handler: @escaping @Sendable (WorkspaceEvent) -> Void) {
-        self.handler = handler
-    }
-
-    func onWorkspaceEvent(event: WorkspaceEvent) {
-        handler(event)
-    }
-}
-
 /// `TransferProgress` → closure (runtime thread, every 64 KiB).
 nonisolated public final class TransferProgressHandler: TransferProgress {
     private let handler: @Sendable (UInt64, UInt64) -> Void
@@ -367,7 +352,7 @@ extension DaemonConnection {
     /// This daemon's workspace hub (created on first use; one per connection).
     public var workspace: DaemonWorkspace {
         if let existing = existingWorkspace { return existing }
-        let hub = DaemonWorkspace(hostId: hostId) { [weak self] in self?.client as? any DaemonWorkspaceAPI }
+        let hub = DaemonWorkspace(hostId: hostId, events: workspaceEvents) { [weak self] in self?.client as? any DaemonWorkspaceAPI }
         DaemonWorkspaceRegistry.hubs = DaemonWorkspaceRegistry.hubs.filter { $0.value.connection != nil }
         DaemonWorkspaceRegistry.hubs[ObjectIdentifier(self)] = .init(hub: hub, connection: self)
         let previous = onEvent

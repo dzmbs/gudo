@@ -35,6 +35,11 @@ nonisolated final class PaneRouter: Sendable {
     private let connection = Mutex(PaneConnection.stale(reason: "Connecting…"))
     /// Set by `suspend`: the disconnect the suspension causes keeps the "Paused" reason.
     private let suspended = Mutex(false)
+    /// Multiplayer: panes this connection may not type into (a viewer's role, another
+    /// person's lease). Gated input is dropped here, never predicted, and reported.
+    private let gate = Mutex(MultiplayerSession.InputGate.open)
+    /// Called (on the input thread) when gated input was dropped.
+    private let blocked = Mutex<(@Sendable (UInt64) -> Void)?>(nil)
     /// Keystroke-to-echo round trips (for the host's latency readout).
     let onEchoRoundTrip: @Sendable (Duration) -> Void
     /// How long an ack waits for the echo it implies before it is delivered anyway (input that
@@ -71,7 +76,7 @@ nonisolated final class PaneRouter: Sendable {
             return (routes[pane]?.hint, routes[pane]?.rtt)
         }
         if let rtt { onUpdate(.rtt(rtt)) }
-        onUpdate(.hint(hint))
+        onUpdate(.hint(isGated(pane) ? nil : hint))
     }
 
     func remove(_ pane: UInt64) {
@@ -79,6 +84,36 @@ nonisolated final class PaneRouter: Sendable {
     }
 
     var panes: [UInt64] { routes.withLock { Array($0.keys) } }
+
+    /// Whether raw input to a pane may be sent; reports the drop otherwise.
+    func admitsInput(_ pane: UInt64) -> Bool {
+        let gate = gate.withLock { $0 }
+        guard gate.all || gate.panes.contains(pane) else { return true }
+        blocked.withLock { $0 }?(pane)
+        return false
+    }
+
+    /// Sets the multiplayer input gate. Gated panes get no echo prediction (nothing they type
+    /// is sent, so nothing would ever be acknowledged).
+    func setGate(_ new: MultiplayerSession.InputGate, onBlocked: (@Sendable (UInt64) -> Void)? = nil) {
+        let old = gate.withLock { old in
+            defer { old = new }
+            return old
+        }
+        if let onBlocked { blocked.withLock { $0 = onBlocked } }
+        guard old != new else { return }
+        let targets = routes.withLock { routes in
+            routes.map { pane, route in
+                let gated = new.all || new.panes.contains(pane)
+                return (route.prediction, gated ? nil : route.hint)
+            }
+        }
+        for (prediction, hint) in targets { prediction?(.hint(hint)) }
+    }
+
+    private func isGated(_ pane: UInt64) -> Bool {
+        gate.withLock { $0.all || $0.panes.contains(pane) }
+    }
 
     /// Records an input frame about to be sent (`predicted`: the predictor's sequence number).
     func noteInput(_ pane: UInt64, predicted: UInt64? = nil) {
@@ -123,7 +158,7 @@ nonisolated final class PaneRouter: Sendable {
                 routes[hint.paneId]?.hint = mapped
                 return routes[hint.paneId]?.prediction
             }
-            feed?(.hint(mapped))
+            feed?(.hint(isGated(hint.paneId) ? nil : mapped))
         case .paneHistoryGone:
             break
         case .connected:
@@ -154,7 +189,7 @@ nonisolated final class PaneRouter: Sendable {
                 routes[pane]?.unacked.removeAll()
                 routes[pane]?.pendingAck = nil
                 routes[pane]?.echoPending = nil
-                return (routes[pane]?.sink, routes[pane]?.prediction, routes[pane]?.hint)
+                return (routes[pane]?.sink, routes[pane]?.prediction, isGated(pane) ? nil : routes[pane]?.hint)
             }
         }
         for (sink, prediction, hint) in targets {
@@ -212,7 +247,7 @@ nonisolated final class PaneRouter: Sendable {
 /// (the daemon ends the process), so `terminate` only stops following it.
 nonisolated public final class DaemonPaneBackend: PredictionFeed {
     public let pane: PaneId
-    private let client: any DaemonClientAPI
+    let client: any DaemonClientAPI
     private let router: PaneRouter
     /// Bytes requested per history page.
     static let historyPageBytes: UInt32 = 256 * 1024
@@ -234,18 +269,19 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed {
     }
 
     public func write(_ bytes: UnsafeRawBufferPointer) {
-        guard !bytes.isEmpty else { return }
+        guard !bytes.isEmpty, router.admitsInput(pane.rawValue) else { return }
         router.noteInput(pane.rawValue)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
 
     public func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
-        guard !bytes.isEmpty else { return }
+        guard !bytes.isEmpty, router.admitsInput(pane.rawValue) else { return }
         router.noteInput(pane.rawValue, predicted: inputSeq)
         client.sendInput(paneId: pane.rawValue, data: Data(bytes))
     }
 
     public func paste(_ text: String) {
+        guard router.admitsInput(pane.rawValue) else { return }
         router.noteInput(pane.rawValue)
         client.sendPaste(paneId: pane.rawValue, text: text)
     }

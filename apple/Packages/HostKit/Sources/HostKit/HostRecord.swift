@@ -23,6 +23,13 @@ nonisolated public struct HostRecord: Codable, Identifiable, Hashable, Sendable 
     public var lastConnected: Date?
     public var pinned = false
     public var created = Date()
+    /// Joined with an invite (multiplayer guest) rather than paired: dialled with the invite
+    /// (`DaemonClient.join`), never as the owner. Optional so older `hosts.json` files decode.
+    public var guest: Bool?
+    /// Who invited, for guest hosts ("Alex").
+    public var inviter: String?
+
+    public var isGuest: Bool { guest == true }
 
     public init(id: String = UUID().uuidString, name: String, kind: Kind, ssh: SSHEndpoint? = nil, daemonId: String? = nil) {
         self.id = id
@@ -35,6 +42,7 @@ nonisolated public struct HostRecord: Codable, Identifiable, Hashable, Sendable 
     /// Secret-store keys for this host.
     public var ticketKey: String { "host.\(id).ticket" }
     public var passwordKey: String { "host.\(id).password" }
+    public var inviteKey: String { "host.\(id).invite" }
 }
 
 /// Where and how to SSH to a host.

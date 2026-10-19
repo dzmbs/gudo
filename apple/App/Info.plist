@@ -34,6 +34,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>PushAppGroup</key>
+	<string>$(PUSH_APP_GROUP)</string>
+	<key>PushKeychainGroup</key>
+	<string>$(PUSH_KEYCHAIN_GROUP)</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
