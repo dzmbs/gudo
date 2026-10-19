@@ -242,7 +242,10 @@ final class KeyBar: UIInputView {
     private func applyWidth() {
         let inline = wide && !compact
         arrowCluster.isHidden = !inline
-        composerToggle.isHidden = !(wide || compact)
+        // Agents keep the composer toggle in reach even on iPhone; other panels live in the
+        // profile menu there.
+        let agent = profile.id == "claude" || profile.id == "codex"
+        composerToggle.isHidden = !(wide || compact || agent)
         snippetsToggle.isHidden = !inline
         hideKeyboard.isHidden = !inline
     }

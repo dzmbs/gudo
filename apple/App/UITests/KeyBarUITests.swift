@@ -64,15 +64,31 @@ final class KeyBarUITests: XCTestCase {
     @MainActor
     func testSnippetsRow() throws {
         let app = launch()
+        // Inline on iPad; in the profile menu on iPhone.
         let toggle = app.buttons["keybar-snippets"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        func toggleSnippets() {
+            if toggle.exists, toggle.isHittable {
+                toggle.tap()
+            } else {
+                app.buttons["keybar-profile"].tap()
+                let item = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Snippets'")).firstMatch
+                if !item.waitForExistence(timeout: 5) {
+                    let tree = XCTAttachment(string: app.debugDescription)
+                    tree.lifetime = .keepAlways
+                    add(tree)
+                    XCTFail("Snippets in the profile menu")
+                }
+                item.tap()
+            }
+        }
+        XCTAssertTrue(app.buttons["keybar-profile"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["keybar-snippet-0"].exists)
-        toggle.tap()
+        toggleSnippets()
         let first = app.buttons["keybar-snippet-0"]
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         first.tap()  // runs "git status" in the echo pane
         add(XCTAttachment(screenshot: app.screenshot()))
-        toggle.tap()
+        toggleSnippets()
         XCTAssertTrue(first.waitForNonExistence(timeout: 5))
         hold()
     }
