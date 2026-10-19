@@ -221,9 +221,11 @@ public final class DaemonConnection: HostConnection {
         case .refused(let reason):
             status = .needsAttention(reason: "Refused: \(reason)")
             Self.log.error("refused host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
-        case .attached(let session):
-            attachSession = session
-            onAttached?(session)
+        case .attached(let result):
+            // Compile shim for the typed AttachResult (154e11d); the coordinator owns attach
+            // handling (fallback reporting via `result.via` / `result.missing`).
+            attachSession = result.sessionId
+            onAttached?(result.sessionId)
         case .layout(let layout):
             self.layout.receive(layout)
             if timings.firstLayout == nil, let start = timings.dialStarted { timings.firstLayout = .now - start }

@@ -180,20 +180,32 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - Inbox (count badge, red only when something needs you) and Hosts at the top.
 - One group per host the window shows, all at once (owner, 2026-10-18: switching hosts never
   goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
-  host in the order it was opened. Group header: disclosure chevron (tap the header to collapse;
-  a collapsed group shows its tab count), connection dot, the host's name (primary when it is the
-  host on screen), an "SSH" outline badge for plain-SSH hosts, + on hover (always on touch) for a
-  new tab there. While a host is not live, its state in words under the name in its color
-  ("Reconnecting · attempt 2", the reason it could not open) and its rows at 60 % — never hidden.
-  Context menu: New Tab, Collapse, Retry Now, Show in Hosts, Disconnect.
+  (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font
+  (`.primary` when live, `.tertiary` when not), an "SSH" outline badge for plain-SSH hosts, the
+  host's aggregate agent glyph, a state glyph **only when not live** (§3.3: reconnecting
+  `arrow.triangle.2.circlepath` amber, offline `wifi.slash`, can't connect
+  `exclamationmark.triangle.fill` red, a mini spinner after 1 s while dialling; each labelled with
+  its copy), and + "New Terminal" (quiet until hover on the Mac, always on touch). No dots, no
+  status text. Tapping the header collapses the group (a collapsed group shows its tab count).
+  Rows of a host that is down stay, at 60 %. Context menu: New Terminal, Collapse, Retry Now
+  (only when not live), Show in Hosts, Disconnect.
+- A host with no tabs shows one row "New Terminal" (`plus` in `.secondary`) under its header
+  (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
 - One row per tab: its number across all hosts (tertiary, monospaced), the tab's name (medium
-  when selected) with the most urgent agent glyph, the live context in SF Mono underneath, ⌘N on
-  the Mac (⌘1–8 index the unified list; numbers do not change when a group collapses or a host
-  goes down). Selection is a 9 % fill with radius 10 (hover 6 %), never the accent. Drag to
-  reorder within a host; context menu Rename / Close. Under a group's tabs, its agents.
-- Tab strip with several hosts: each host's run of tabs starts with its dot and name.
-- iPhone: the title menu lists every host as a section (name, and its state when not live) with
-  its tabs and "New Tab on …".
+  when selected) with its agent glyph (§3.4: working = mini spinner, needs input = amber
+  `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`; none
+  on the focused tab), the live context in SF Mono underneath, ⌘N on the Mac (⌘1–8 index the
+  unified list; numbers do not change when a group collapses or a host goes down). Selection is a
+  9 % fill with radius 10 (hover 6 %), never the accent. Drag to reorder within a host; context
+  menu Rename / Close. Under a group's tabs, its agents.
+- Footer: Settings only (no connection summary, §3.7 rule 1).
+- Tab strip: a single-host window shows no host; with tabs from several hosts, each tab gets the
+  host's name as a second line (`meta`, `.tertiary`).
+- iPhone: the bar shows the tab's title with the host's name as a second line (state glyph after
+  it only when not live); the title menu lists every host as a section with its tabs and
+  "New Terminal on …".
+- Inbox: + is a menu, New Terminal (default) then New Agent. Terminal toolbar: a pencil "Draw"
+  button next to the pane menu (⌃⌘D), disabled where the focused pane cannot be drawn on.
 - Tab names: every new tab gets a short friendly adjective-noun name ("quiet-otter",
   `Workspace/FriendlyName.swift`, curated lists), stable, and sent to the daemon as a rename so
   every device shows it. A user rename always wins. The context line is the agent's task, else
@@ -202,8 +214,6 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   generated name.
 - A group's agents: every pane of that host whose program reports status, across its tabs:
   focuses the pane, switching hosts if needed.
-- Footer: the host on screen when it is down, else every host at a glance ("3 hosts connected",
-  "hetzner · Reconnecting"), and Settings.
 
 ### Tab strip (horizontal tabs) — Ghostty native tabs
 
