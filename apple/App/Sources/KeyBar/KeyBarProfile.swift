@@ -8,6 +8,7 @@ struct KeyBarContext: Equatable {
     var title: String
 }
 
+/// small menu (no glyphs drawn in the key's corner).
 /// Built from a key or a character plus modifiers, never from raw escape strings, so it goes
 /// through the terminal's encoder (application-cursor mode, kitty keyboard protocol).
 struct KeySpec: Identifiable {
@@ -18,16 +19,18 @@ struct KeySpec: Identifiable {
         case text(String, KeyModifiers)
         /// Several events in a row ("esc esc", a prefix then a key).
         case sequence([Output])
+        /// The clipboard, pasted the way the terminal pastes (bracketed when the program asks).
+        case paste
     }
 
     var id: String
     var title: String?
     var symbol: String?
     var accessibilityLabel: String
-    /// Only keys without an alternate may repeat while held (a flick needs the touch-up).
+    /// Repeats while held (⌫, arrows). Repeating keys have no long-press menu.
     var repeatable = false
     var output: Output
-    /// What a vertical flick sends, with the small glyph shown in the key's corner.
+    /// What the long-press menu offers, titled `alternateTitle`.
     var alternate: Output?
     var alternateTitle: String?
 
@@ -45,13 +48,14 @@ struct KeySpec: Identifiable {
         switch output {
         case .key(let key, let mods): [.press(key, mods: mods.union(latched))]
         case .text(let text, let mods): [.typing(text, mods: mods.union(latched))]
+        case .paste: []
         // Latched modifiers apply to the first event only (a prefix key, then a plain key).
         case .sequence(let parts):
             parts.enumerated().flatMap { index, part in events(part, latched: index == 0 ? latched : []) }
         }
     }
 
-    /// The same key with a flick alternate.
+    /// The same key with an alternate in its long-press menu.
     func flick(_ alternate: Output, title: String) -> KeySpec {
         var key = self
         key.alternate = alternate
@@ -75,6 +79,7 @@ extension KeySpec {
         .text("ctrl-\(letter)", letter, mods: .control, title: "^\(letter.uppercased())", label: label)
     }
 
+    /// A key that types `tap`, with `flick` in its long-press menu.
     static func pair(_ id: String, _ tap: String, _ flick: String, label: String) -> KeySpec {
         text(id, tap, label: label).flick(.text(flick, []), title: flick)
     }
@@ -97,6 +102,10 @@ extension KeySpec {
     static let end = key("end", PhysicalKey(hidUsage: 0x4D)!, title: "End", label: "End")
     static let pageUp = key("pgup", PhysicalKey(hidUsage: 0x4B)!, title: "PgUp", label: "Page up", repeatable: true)
     static let pageDown = key("pgdn", PhysicalKey(hidUsage: 0x4E)!, title: "PgDn", label: "Page down", repeatable: true)
+    static let backspace = key("backspace", .backspace, symbol: "delete.left", label: "Delete", repeatable: true)
+    static let paste = KeySpec(id: "paste", symbol: "doc.on.clipboard", accessibilityLabel: "Paste", output: .paste)
+    static let rewind = KeySpec(id: "rewind", title: "esc²", accessibilityLabel: "Escape twice, rewind",
+                                output: .sequence([.key(.escape, []), .key(.escape, [])]))
 
     /// F1–F12 (HID usages 0x3A–0x45).
     static func function(_ n: Int) -> Output {
@@ -109,7 +118,8 @@ extension KeySpec {
     }
 }
 
-/// (`esc ctl alt tab … ✥`) is the same everywhere. Matched by foreground program, else by title.
+/// (`esc ctrl alt ⇥`) and the arrow circle are the same everywhere. Matched by foreground program,
+/// else by title.
 struct KeyBarProfile: Identifiable, Equatable {
     var id: String
     var name: String
@@ -117,7 +127,7 @@ struct KeyBarProfile: Identifiable, Equatable {
     var programs: Set<String>
     /// Matched against the lowercased title when the program is unknown.
     var titlePattern: String?
-    /// The wing, most-used first: the first four keys are visible without scrolling on iPhone.
+    /// Capsule B, in priority order: narrow bars show the first ones (never fewer than four) and
     var keys: [KeySpec]
     /// Agents default to the composer; shells and TUIs to direct input.
     var prefersComposer = false
@@ -127,38 +137,34 @@ struct KeyBarProfile: Identifiable, Equatable {
     static let shell = KeyBarProfile(
         id: "shell", name: "Shell", programs: ["bash", "zsh", "fish", "sh", "dash", "nu", "pwsh"], titlePattern: nil,
         keys: [
-            .pair("tilde", "~", "$", label: "Tilde"), .pair("pipe", "|", "&", label: "Pipe"),
-            .pair("dash", "-", "_", label: "Dash"), .pair("slash", "/", "\\", label: "Slash"),
-            .pair("gt", ">", "<", label: "Greater than"), .pair("star", "*", "?", label: "Star"),
-            .pair("eq", "=", "+", label: "Equals"), .pair("quote", "\"", "'", label: "Quote"),
-            .pair("lbracket", "[", "{", label: "Left bracket"), .pair("rbracket", "]", "}", label: "Right bracket"),
-            .ctrlPair("r", "s", label: "Control R, history search"), .ctrlPair("c", "z", label: "Control C"),
-            .ctrlPair("d", "l", label: "Control D"), .ctrlPair("a", "e", label: "Control A, line start"),
-            .ctrlPair("w", "u", label: "Control W, delete word"),
+            .pair("tilde", "~", "$", label: "Tilde"), .pair("pipe", "|", "&", label: "Vertical bar"),
+            .pair("slash", "/", "\\", label: "Slash"), .pair("dash", "-", "_", label: "Hyphen"),
+            .backspace, .paste, .text("backslash", "\\", label: "Backslash"),
+            .pair("backtick", "`", "'", label: "Backtick"), .pair("star", "*", "?", label: "Star"),
+            .pair("dollar", "$", "#", label: "Dollar"), .pair("gt", ">", "<", label: "Greater than"),
+            .ctrlPair("r", "s", label: "Control R, history search"),
         ])
 
     static let vim = KeyBarProfile(
-        id: "vim", name: "Vim", programs: ["vim", "nvim", "vi", "view", "vimdiff"], titlePattern: #"\bn?vim?\b"#,
+        id: "vim", name: "Vim", programs: ["vim", "nvim", "vi", "view", "vimdiff", "hx", "micro"], titlePattern: #"\bn?vim?\b"#,
         keys: [
             .pair("colon", ":", ";", label: "Colon"), .pair("slash", "/", "?", label: "Search"),
+            .pair("dot", ".", "%", label: "Repeat"),
             .text("u", "u", label: "Undo").flick(.text("r", .control), title: "^R"),
+            .backspace, .paste, .pair("star", "*", "#", label: "Search word"), .text("percent", "%", label: "Match bracket"),
+            .ctrl("r", label: "Control R, redo"), .ctrlPair("v", "a", label: "Control V, block select"),
             .ctrlPair("w", "o", label: "Control W, window"), .ctrlPair("d", "u", label: "Control D, half page down"),
-            .ctrlPair("f", "b", label: "Control F, page down"), .pair("star", "*", "#", label: "Search word"),
-            .pair("n", "n", "N", label: "Next match"), .pair("zero", "0", "$", label: "Line start"),
-            .pair("g", "g", "G", label: "Go"), .pair("dot", ".", "%", label: "Repeat"),
-            .ctrlPair("v", "a", label: "Control V, block select"),
         ])
 
     static let pager = KeyBarProfile(
         id: "pager", name: "Pager", programs: ["less", "more", "man", "most", "bat"],
         titlePattern: #"\b(less|more|man)\b"#,
         keys: [
-            .pair("q", "q", "Q", label: "Quit"),
+            .pair("q", "q", "Q", label: "Quit"), .pair("slash", "/", "?", label: "Search"),
+            .text("n", "n", label: "Next match"), .text("N", "N", label: "Previous match"),
+            .backspace, .pair("g", "g", "G", label: "Top"), .text("G", "G", label: "Bottom"),
             .text("space", " ", title: "␣", label: "Space, next page").flick(.text("b", []), title: "b"),
-            .pair("slash", "/", "?", label: "Search"), .pair("n", "n", "N", label: "Next match"),
-            .pair("g", "g", "G", label: "Top"), .ctrlPair("d", "u", label: "Control D, half page"),
-            KeySpec.pageDown.flick(.key(PhysicalKey(hidUsage: 0x4B)!, []), title: "PgUp"),
-            .pair("F", "F", "&", label: "Follow"),
+            .pageDown, .pageUp,
         ])
 
     static let monitor = KeyBarProfile(
@@ -166,11 +172,10 @@ struct KeyBarProfile: Identifiable, Equatable {
         titlePattern: #"\b(htop|top|btop|glances)\b"#,
         keys: [
             .fkey(10, flick: "q", label: "F10, quit"), .fkey(6, flick: ">", label: "F6, sort"),
-            .fkey(3, flick: "/", label: "F3, search"), .fkey(4, flick: "\\", label: "F4, filter"),
-            .fkey(9, flick: "k", label: "F9, kill"), .fkey(5, flick: "t", label: "F5, tree"),
-            .fkey(2, flick: "S", label: "F2, setup"),
+            .fkey(3, flick: "/", label: "F3, search"), .fkey(9, flick: "k", label: "F9, kill"),
             .text("space", " ", title: "␣", label: "Space, tag").flick(.text("u", []), title: "u"),
-            .pair("plus", "+", "-", label: "Expand"),
+            .fkey(4, flick: "\\", label: "F4, filter"), .fkey(5, flick: "t", label: "F5, tree"),
+            .fkey(2, flick: "S", label: "F2, setup"), .pair("plus", "+", "-", label: "Expand"),
         ])
 
     static let tmux = KeyBarProfile(
@@ -178,7 +183,7 @@ struct KeyBarProfile: Identifiable, Equatable {
         keys: [
             .ctrlPair("b", "a", label: "Control B, tmux prefix"),
             prefixed("c", ",", label: "New window"), prefixed("n", "p", label: "Next window"),
-            prefixed("%", "\"", label: "Split"), prefixed("o", ";", label: "Next pane"),
+            prefixed("%", "\"", label: "Split"), .backspace, prefixed("o", ";", label: "Next pane"),
             prefixed("z", "x", label: "Zoom pane"), prefixed("[", "]", label: "Copy mode"),
             prefixed("d", "$", label: "Detach"), prefixed("w", "s", label: "Choose window"),
         ])
@@ -188,26 +193,20 @@ struct KeyBarProfile: Identifiable, Equatable {
         // Claude Code titles its terminal "✳ <task>" (a spinner glyph while working).
         titlePattern: #"\bclaude\b|^[✳✻✽✶✢·]\s"#,
         keys: [
-            KeySpec.shiftTab.flick(.text("t", .control), title: "^T"),
-            .text("1", "1", label: "Choice 1").flick(.key(.enter, []), title: "⏎"),
-            .pair("2", "2", "3", label: "Choice 2"), .pair("slash", "/", "#", label: "Slash command"),
-            .pair("at", "@", "!", label: "Mention file"), .ctrlPair("c", "r", label: "Control C"),
-            .ctrlPair("o", "b", label: "Control O"),
-            KeySpec(id: "rewind", title: "esc²", accessibilityLabel: "Escape twice, rewind",
-                    output: .sequence([.key(.escape, []), .key(.escape, [])]))
-                .flick(.key(.arrowUp, []), title: "↑"),
+            .pair("slash", "/", "#", label: "Slash command"), .pair("at", "@", "!", label: "Mention file"),
+            .text("bang", "!", label: "Bash mode"), .backspace, .ctrlPair("c", "r", label: "Control C"),
+            .paste, .text("hash", "#", label: "Memory"), .ctrlPair("o", "b", label: "Control O, expand"),
+            .rewind.flick(.key(.arrowUp, []), title: "↑"),
         ],
         prefersComposer: true)
 
     static let codex = KeyBarProfile(
         id: "codex", name: "Codex", programs: ["codex"], titlePattern: #"\bcodex\b"#,
         keys: [
-            .pair("y", "y", "n", label: "Yes, approve"), .pair("slash", "/", "@", label: "Slash command"),
-            .ctrlPair("c", "j", label: "Control C"), .ctrlPair("t", "o", label: "Control T, transcript"),
-            .pair("1", "1", "2", label: "Choice 1"),
-            KeySpec(id: "rewind", title: "esc²", accessibilityLabel: "Escape twice, back",
-                    output: .sequence([.key(.escape, []), .key(.escape, [])]))
-                .flick(.key(.arrowUp, []), title: "↑"),
+            .pair("slash", "/", "@", label: "Slash command"), .text("at", "@", label: "Mention file"),
+            .backspace, .ctrlPair("c", "j", label: "Control C"), .enter,
+            .paste, .ctrl("j", label: "Control J, newline"), .ctrlPair("t", "o", label: "Control T, transcript"),
+            .rewind.flick(.key(.arrowUp, []), title: "↑"),
         ],
         prefersComposer: true)
 
@@ -216,10 +215,10 @@ struct KeyBarProfile: Identifiable, Equatable {
         programs: ["python", "python3", "ipython", "node", "irb", "psql", "sqlite3", "ghci", "iex", "deno", "bun"],
         titlePattern: #"\b(python3?|ipython|irb|psql|sqlite3)\b"#,
         keys: [
-            .pair("lparen", "(", ")", label: "Parenthesis"), .pair("lbracket", "[", "]", label: "Bracket"),
-            .pair("lbrace", "{", "}", label: "Brace"), .pair("colon", ":", ";", label: "Colon"),
-            .pair("quote", "\"", "'", label: "Quote"), .pair("eq", "=", "+", label: "Equals"),
-            .ctrlPair("d", "l", label: "Control D"), .ctrlPair("r", "c", label: "Control R"),
+            .pair("lparen", "(", ")", label: "Parenthesis"), .pair("quote", "\"", "'", label: "Quote"),
+            .pair("colon", ":", ";", label: "Colon"), .pair("lbracket", "[", "]", label: "Bracket"),
+            .backspace, .pair("lbrace", "{", "}", label: "Brace"), .pair("eq", "=", "+", label: "Equals"),
+            .paste, .ctrlPair("d", "l", label: "Control D"), .ctrlPair("r", "c", label: "Control R"),
         ])
 
     /// tmux's prefix (^B) followed by a key; the flick sends the prefix and the alternate.

@@ -15,6 +15,7 @@ struct HostNotices: View {
     @Environment(WindowModel.self) private var model
     @Environment(AppModel.self) private var app
     @State private var offerDismissed = false
+    @State private var updateDismissed = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: DS.Space.s) {
@@ -38,6 +39,20 @@ struct HostNotices: View {
                     }
                 } else if workspace.host is SshConnection, !offerDismissed {
                     InstallHelperOffer(hostId: hostId) { offerDismissed = true }
+                }
+                if let progress = app.hosts.helperUpdates[hostId] {
+                    notice(systemImage: nil, tint: nil) {
+                        HStack(spacing: DS.Space.s) {
+                            Spinner(color: DS.Palette.working)
+                                .frame(width: 12, height: 12)
+                            Text(progress.summary)
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .accessibilityIdentifier("helper-update-progress")
+                        }
+                    }
+                } else if let advice = app.hosts.helperAdvice(hostId), advice.kind != .update || !updateDismissed {
+                    HelperUpdateNotice(hostId: hostId, advice: advice) { updateDismissed = true }
                 }
                 if let notes = app.hosts.installNotes[hostId] {
                     notice(systemImage: "info.circle", tint: DS.Palette.info) {
@@ -120,6 +135,61 @@ private struct InstallHelperOffer: View {
         .frame(width: 320)
         .floatingPanel(cornerRadius: DS.Radius.panel)
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
+/// The host's helper version (`HostsModel.helperAdvice`): one quiet line with "Update" when the
+/// app has a newer build; a plain statement when the app cannot work with it, with "Update
+/// Helper" when that can be done from here (docs/APP-ARCHITECTURE.md §14).
+private struct HelperUpdateNotice: View {
+    let hostId: String
+    let advice: HelperAdvice
+    let onDismiss: () -> Void
+    @Environment(WindowModel.self) private var model
+    @State private var error: String?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+            Image(systemName: advice.kind == .update ? "arrow.down.circle" : "exclamationmark.triangle")
+                .foregroundStyle(advice.kind == .update ? AnyShapeStyle(.secondary) : AnyShapeStyle(DS.Palette.error))
+            Text(error ?? advice.message)
+                .foregroundStyle(error == nil ? AnyShapeStyle(.primary) : AnyShapeStyle(DS.Palette.error))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("helper-update-message")
+            if advice.canUpdate {
+                if advice.kind == .update {
+                    Button("Update", action: update)
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("update-helper")
+                } else {
+                    Button("Update Helper", action: update)
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("update-helper")
+                }
+            }
+            if advice.kind == .update {
+                Button("Not Now", systemImage: "xmark", action: onDismiss)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bar)
+            }
+        }
+        .padding(.horizontal, DS.Space.m + 2)
+        .padding(.vertical, DS.Space.s + 1)
+        .floatingPanel(cornerRadius: DS.Radius.panel)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private func update() {
+        error = nil
+        Task {
+            do {
+                try await model.hosts.updateHelper(hostId)
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 }
 

@@ -28,8 +28,44 @@ nonisolated public struct HostRecord: Codable, Identifiable, Hashable, Sendable 
     public var guest: Bool?
     /// Who invited, for guest hosts ("Alex").
     public var inviter: String?
+    /// Where `name` came from. nil for records from before it was tracked (decided once, by
+    /// `MachineName.looksDefault`).
+    public var nameSource: NameSource?
+    /// What the daemon last said about its machine.
+    public var machine: Machine?
 
     public var isGuest: Bool { guest == true }
+
+    /// Where a host's name came from: the app's placeholder, the machine's host name, or the
+    /// user. Only placeholders are replaced by the machine's name, and only once.
+    public enum NameSource: String, Codable, Sendable {
+        /// The app made it up ("Host 1a2b3c4d", the address typed).
+        case placeholder
+        /// The machine's host name (`DaemonInfo.hostname`, domain stripped).
+        case machine
+        /// Typed or chosen by the user (rename, a name given when pairing, an ssh_config
+        /// alias): never changed by the app.
+        case user
+    }
+
+    /// The machine behind a daemon host.
+    public struct Machine: Codable, Hashable, Sendable {
+        /// Host name as the system reports it.
+        public var hostname: String
+        /// "Ubuntu 24.04.1 LTS".
+        public var osName: String
+        /// `linux`, `macos`.
+        public var os: String
+        /// `x86_64`, `aarch64`.
+        public var arch: String
+
+        public init(hostname: String, osName: String, os: String, arch: String) {
+            self.hostname = hostname
+            self.osName = osName
+            self.os = os
+            self.arch = arch
+        }
+    }
 
     public init(id: String = UUID().uuidString, name: String, kind: Kind, ssh: SSHEndpoint? = nil, daemonId: String? = nil) {
         self.id = id

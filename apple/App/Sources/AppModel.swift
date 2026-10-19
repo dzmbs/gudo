@@ -40,6 +40,13 @@ final class AppModel {
         if defaults.string(forKey: "testRelay") == "disabled" { configuration.relay = .disabled }
         configuration.mirrorVt = defaults.bool(forKey: "testMirror")
         configuration.hostdBinaries = { Self.bundledDaemons() }
+        // `-testBundledDaemons <dir>`: a hostd-manifest.json and builds elsewhere (tests that
+        // update a local daemon).
+        let manifest = defaults.string(forKey: "testBundledDaemons").map {
+            URL(fileURLWithPath: $0).appending(path: "hostd-manifest.json")
+        } ?? Bundle.main.url(forResource: "hostd-manifest", withExtension: "json")
+        let bundled = manifest.flatMap(BundledDaemons.load(manifest:))
+        configuration.bundledDaemons = { bundled }
         hosts = HostsModel(secrets: secrets, repository: repository, configuration: configuration)
         hosts.hostKeyPrompts.trustNewHostsAutomatically = defaults.bool(forKey: "testTrustHostKeys")
     }
@@ -69,6 +76,9 @@ final class AppModel {
             return workspace
         }
     }
+
+    /// Every open workspace (dictation looks for the pane that has the keyboard).
+    var openWorkspaces: [Workspace] { workspaces.values.map(\.workspace) }
 
     /// The workspace already open for a target, without creating or connecting anything.
     func existingWorkspace(for target: WorkspaceTarget) -> Workspace? {
@@ -112,7 +122,7 @@ final class AppModel {
             var targets: [WorkspaceTarget] = []
             for (index, ticket) in tickets.enumerated() {
                 do {
-                    let name = names.indices.contains(index) ? names[index] : "test daemon \(index + 1)"
+                    let name = names.indices.contains(index) ? names[index] : nil
                     targets.append(.host(try await hosts.pair(try PairingTicket(ticket), name: name)))
                 } catch {
                     lastError = "pairing failed: \(error.localizedDescription)"
@@ -128,7 +138,7 @@ final class AppModel {
         let defaults = UserDefaults.standard
         if let ticket = defaults.string(forKey: "testTicket"), !ticket.isEmpty {
             do {
-                return .host(try await hosts.pair(try PairingTicket(ticket), name: "test daemon"))
+                return .host(try await hosts.pair(try PairingTicket(ticket)))
             } catch {
                 lastError = "pairing failed: \(error.localizedDescription)"
                 Self.log.error("test pairing failed: \(String(describing: error), privacy: .public)")

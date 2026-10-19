@@ -1,5 +1,6 @@
 #if os(iOS)
 import HostKit
+import SwiftUI
 import UIKit
 import UnnamedCore
 
@@ -24,7 +25,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
     let editorRow = UIView()
     let smartRow = UIScrollView()
     let decisionStrip = UIStackView()
-    let field = UITextField()
+    let field = ShortcutTextField()
 
     /// The terminal the line belongs to (keys fall back to it).
     weak var terminal: UIResponder?
@@ -415,6 +416,42 @@ private final class ChipButton: UIButton {
         let point = touch.location(in: self)
         let flicked = abs(point.y - start.y) >= 12
         if flicked || bounds.contains(point) { onPick?(flicked) }
+    }
+}
+
+/// The line editor's field. It lives in the keyboard's own window, outside the app's menu
+/// commands, so it answers the workspace shortcuts itself (⌘T, ⌘D, ⌘W, tabs, panes): otherwise
+/// every ⌘ shortcut was dead while it held the keyboard.
+final class ShortcutTextField: UITextField {
+    private static let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.tabActions
+
+    override var keyCommands: [UIKeyCommand]? {
+        Self.actions.enumerated().compactMap { index, action in
+            let shortcut = action.shortcut
+            let input: String = switch shortcut.key {
+            case .upArrow: UIKeyCommand.inputUpArrow
+            case .downArrow: UIKeyCommand.inputDownArrow
+            case .leftArrow: UIKeyCommand.inputLeftArrow
+            case .rightArrow: UIKeyCommand.inputRightArrow
+            case .return: "\r"
+            default: String(shortcut.key.character)
+            }
+            var flags: UIKeyModifierFlags = []
+            if shortcut.modifiers.contains(.command) { flags.insert(.command) }
+            if shortcut.modifiers.contains(.shift) { flags.insert(.shift) }
+            if shortcut.modifiers.contains(.option) { flags.insert(.alternate) }
+            if shortcut.modifiers.contains(.control) { flags.insert(.control) }
+            let command = UIKeyCommand(title: action.title, action: #selector(performShortcut(_:)), input: input,
+                                       modifierFlags: flags, propertyList: index)
+            command.wantsPriorityOverSystemBehavior = true
+            return command
+        }
+    }
+
+    @objc private func performShortcut(_ command: UIKeyCommand) {
+        guard let index = command.propertyList as? Int, Self.actions.indices.contains(index),
+              let workspace = ActiveWindow.workspace else { return }
+        Self.actions[index].perform(on: workspace)
     }
 }
 #endif

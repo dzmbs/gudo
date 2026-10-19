@@ -34,11 +34,16 @@ nonisolated final class LocalDaemon {
         return UInt16(bigEndian: address.sin_port)
     }
 
-    init() throws {
-        binary = ProcessInfo.processInfo.environment["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
+    /// The daemon build the tests run (`UN_HOSTD_BIN`, else the workspace's debug build).
+    static var defaultBinary: URL {
+        ProcessInfo.processInfo.environment["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
             ?? repoRoot.appending(path: "target/debug/unnamed-hostd")
-        guard FileManager.default.isExecutableFile(atPath: binary.path) else {
-            throw TestError("no daemon at \(binary.path): run `cargo build -p hostd` first")
+    }
+
+    init(binary: URL? = nil) throws {
+        self.binary = binary ?? Self.defaultBinary
+        guard FileManager.default.isExecutableFile(atPath: self.binary.path) else {
+            throw TestError("no daemon at \(self.binary.path): run `cargo build -p hostd` first")
         }
         stateDir = temporaryDirectory()
         port = try Self.freePort()

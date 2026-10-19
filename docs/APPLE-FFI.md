@@ -97,8 +97,10 @@ moves bytes one at a time (§5). `sendInput` takes `&[u8]`, which Swift passes w
 | `reconnect()`, `suspend()` | network change / foreground; app suspended |
 | `forwardPort(localPort:remotePort:) throws -> UInt16` | `127.0.0.1` → daemon host's `localhost` |
 | `stats()` | counters |
+| `daemonInfo() -> DaemonInfo?`, `isIncompatible()`, `protocolLevel()`, `minDaemonProtocol()` | what the daemon said before `Welcome` (build, level, `selfUpgrade`, host name, OS, CPU); also `ClientEvent.daemonInfo`, `.incompatible` |
+| `upgradeDaemon(path:build:progress:) async throws(UpgradeError)` | send a daemon build (raw or .gz) to the daemon, which checks, swaps and restarts into it (owner only); returns the new build's `DaemonInfo` |
 
-`ClientEvent` mirrors `client_core::ClientEvent`: `connected, disconnected, refused, sessions,
+`ClientEvent` mirrors `client_core::ClientEvent`: `daemonInfo, incompatible, connected, disconnected, refused, sessions,
 attached, layout, paneMeta, paneClosed, paneBytes, paneSnapshot, paneResized, inputAck, echoHint,
 agentEvent, opResult, paneHistory, paneHistoryGone, commandMark, commandFinishedUnseen,
 searchResult, links, commands, commandOutput`. Split trees are flattened: `TabLayout.nodes[0]` is

@@ -6,7 +6,9 @@
 //!   Rust's std cannot clash with the app's), strips, and assembles
 //!   `apple/Packages/UnnamedCore/UnnamedCore.xcframework` plus the generated Swift source.
 //! - `build-hostd-linux`: stripped, gzipped static musl daemons (aarch64 + x86_64) for the
-//!   app bundle's SSH bootstrap, in `apple/build/hostd/`.
+//!   app bundle's SSH bootstrap and self upgrade, in `apple/build/hostd/`, stamped with the
+//!   build id and time (`UN_BUILD_ID`, `UN_BUILD_UNIX`; see `daemon::info`) and described in
+//!   `hostd-manifest.json` so the app knows what it bundles without running it.
 //!
 //! See docs/APPLE-FFI.md.
 
@@ -433,9 +435,36 @@ fn check_exports(slice: &Slice, library: &Path, allowed: &[String]) -> Result<()
     Ok(())
 }
 
+/// The build id and time for release builds: the commit (with `-dirty` and the current time
+/// when the tree has uncommitted changes), else the commit time.
+fn build_stamp() -> Result<(String, u64)> {
+    let vcs = |args: &[&str]| -> Result<String> {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(root())
+            .output()
+            .with_context(|| format!("git {args:?}"))?;
+        ensure!(out.status.success(), "git {args:?} failed");
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    let commit = vcs(&["rev-parse", "--short=12", "HEAD"])?;
+    let dirty = !vcs(&["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    if dirty {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        Ok((format!("{commit}-dirty"), now))
+    } else {
+        Ok((commit, vcs(&["log", "-1", "--format=%ct"])?.parse()?))
+    }
+}
+
 fn build_hostd_linux() -> Result<()> {
     let out_dir = root().join("apple/build/hostd");
     fs::create_dir_all(&out_dir)?;
+    let (build_id, built_unix) = build_stamp()?;
+    eprintln!("==> build {build_id} ({built_unix})");
+    let mut manifest = Vec::new();
     for arch in ["aarch64", "x86_64"] {
         let triple = format!("{arch}-unknown-linux-musl");
         eprintln!("==> cargo zigbuild {triple}");
@@ -444,7 +473,9 @@ fn build_hostd_linux() -> Result<()> {
             .args(["zigbuild", "--release", "-p", "hostd", "--target"])
             .arg(&triple)
             .env("CARGO_PROFILE_RELEASE_STRIP", "symbols")
-            .env("CARGO_PROFILE_RELEASE_DEBUG", "false"))?;
+            .env("CARGO_PROFILE_RELEASE_DEBUG", "false")
+            .env("UN_BUILD_ID", &build_id)
+            .env("UN_BUILD_UNIX", built_unix.to_string()))?;
         let binary = target_dir()
             .join(&triple)
             .join("release")
@@ -455,7 +486,13 @@ fn build_hostd_linux() -> Result<()> {
             "{} is not ELF",
             binary.display()
         );
-        let dest = out_dir.join(format!("{}-{arch}-linux.gz", brand::DAEMON_BIN));
+        let file = format!("{}-{arch}-linux.gz", brand::DAEMON_BIN);
+        let dest = out_dir.join(&file);
+        manifest.push(format!(
+            "    {{\"file\": \"{file}\", \"os\": \"linux\", \"arch\": \"{arch}\", \"build\": \"{build_id}\", \"built_unix\": {built_unix}, \"protocol\": {protocol}, \"size\": {size}}}",
+            protocol = proto::PROTOCOL_LEVEL,
+            size = data.len(),
+        ));
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
         gz.write_all(&data)?;
         fs::write(&dest, gz.finish()?)?;
@@ -467,6 +504,9 @@ fn build_hostd_linux() -> Result<()> {
             size_mb(&dest)
         );
     }
+    // What the app bundles, so it can tell an older daemon without running the build.
+    let manifest = format!("{{\n  \"builds\": [\n{}\n  ]\n}}\n", manifest.join(",\n"));
+    fs::write(out_dir.join("hostd-manifest.json"), manifest)?;
     eprintln!("bundle {} as app resources", out_dir.display());
     Ok(())
 }

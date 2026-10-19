@@ -9,6 +9,7 @@
 //! | `bulk` (uni)      | either    | [`StreamHeader::Bulk`]    | [`Bulk`]                 |
 //! | forward (bidi)    | both      | [`StreamHeader::PortForward`] / [`StreamHeader::Forward`] | [`ForwardReply`], then raw bytes |
 //! | transfer (bidi)   | both      | [`StreamHeader::Upload`] / [`StreamHeader::Download`] | [`TransferReply`] and raw bytes |
+//! | upgrade (bidi)    | both      | [`StreamHeader::Upgrade`] | [`UpgradeReply`] and raw bytes (owner only; see [`info`]) |
 //!
 //! Every frame is `[u32 LE body length][body]`, and every body starts with the wire version
 //! ([`WIRE_VERSION`]) followed by one postcard-encoded message. See [`frame`].
@@ -58,6 +59,7 @@ pub mod artifact;
 pub mod assist;
 pub mod frame;
 mod ids;
+pub mod info;
 mod layout;
 pub mod mp;
 mod msg;
@@ -69,9 +71,11 @@ pub use artifact::*;
 pub use assist::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
-    Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
-    ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, TabId, UnixMillis,
+    Actor, Caps, DaemonFeatures, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId,
+    PrincipalId, RequestId, ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, TabId,
+    UnixMillis,
 };
+pub use info::*;
 pub use layout::{
     AgentKind, Axis, Direction, LayoutNode, LayoutOp, OpError, OpOutcome, PaneLaunch,
     SessionLayout, SessionSummary, TabLayout,

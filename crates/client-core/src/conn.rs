@@ -189,9 +189,32 @@ struct Live {
     ctl_tx: SendStream,
     ctl_rx: RecvStream,
     epoch: u64,
+    /// Admitted for an upgrade only (the daemon's snapshot format differs).
+    incompatible: bool,
 }
 
 async fn connect_once(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError> {
+    let result = dial(inner, endpoint).await;
+    // What the daemon said about itself, once per dial (not per grant tried), whenever it
+    // answered at all.
+    if let Ok(_) | Err(ConnError::Refused(_)) = &result {
+        let info = lock(&inner.daemon_info).clone();
+        inner.emit(ClientEvent::DaemonInfo { info });
+    }
+    if let Err(ConnError::Refused(
+        reason @ (proto::RefuseReason::SnapshotFormat { .. }
+        | proto::RefuseReason::WireVersion { .. }),
+    )) = &result
+    {
+        *lock(&inner.incompatible) = true;
+        inner.emit(ClientEvent::Incompatible {
+            reason: incompatible_words(reason),
+        });
+    }
+    result
+}
+
+async fn dial(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError> {
     let addr = daemon_addr(inner)?;
     // Try as a paired device first; fall back to the ticket's one-time secret.
     let paired = *lock(&inner.paired);
@@ -237,23 +260,51 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
-        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS | Caps::ATTACH_RESULT,
+        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS | Caps::ATTACH_RESULT | Caps::DAEMON_INFO,
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
     };
     send(&mut ctl_tx, &ClientCtl::Hello(hello)).await?;
-    match recv::<ServerCtl>(&mut ctl_rx).await? {
+    // Daemons that know `Caps::DAEMON_INFO` describe themselves first; older ones answer
+    // with `Welcome` or `Refused` straight away.
+    let mut first = recv::<ServerCtl>(&mut ctl_rx).await?;
+    let info = match first {
+        Some(ServerCtl::DaemonInfo(info)) => {
+            first = recv::<ServerCtl>(&mut ctl_rx).await?;
+            Some(info)
+        }
+        _ => None,
+    };
+    *lock(&inner.daemon_info) = info;
+    let ours = u32::from(ghostty_vt::snapshot_format());
+    match first {
         Some(ServerCtl::Welcome(welcome)) => {
-            *lock(&inner.resume_token) = Some(welcome.resume_token);
+            let incompatible = welcome.snapshot_format != ours;
+            *lock(&inner.incompatible) = incompatible;
+            if !incompatible {
+                *lock(&inner.resume_token) = Some(welcome.resume_token);
+            }
             Ok(Live {
                 conn,
                 ctl_tx,
                 ctl_rx,
                 epoch: welcome.session_epoch.0,
+                incompatible,
             })
         }
         Some(ServerCtl::Refused { reason }) => Err(ConnError::Refused(reason)),
         other => Err(ConnError::Net(format!("expected Welcome, got {other:?}"))),
+    }
+}
+
+/// Why a daemon and this client cannot work together, in words.
+fn incompatible_words(reason: &proto::RefuseReason) -> String {
+    match reason {
+        proto::RefuseReason::WireVersion { supported } => format!(
+            "the host's helper speaks protocol version {supported}, this app {}",
+            proto::WIRE_VERSION
+        ),
+        _ => "the host's helper draws terminals in a format this app does not read".into(),
     }
 }
 
@@ -277,11 +328,15 @@ fn resume_points(inner: &Inner) -> Vec<ResumePoint> {
 
 /// Runs one live connection; returns why it ended.
 async fn run(inner: &Arc<Inner>, live: Live) -> String {
+    if live.incompatible {
+        return run_incompatible(inner, live).await;
+    }
     let Live {
         conn,
         mut ctl_tx,
         ctl_rx,
         epoch,
+        incompatible: _,
     } = live;
     let resumed = {
         let mut e = lock(&inner.epoch);
@@ -391,6 +446,26 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         }
     };
     tasks.abort_all();
+    conn.close(0u32.into(), b"");
+    reason
+}
+
+/// Holds a connection the daemon admitted for an upgrade only: requests are dropped, the
+/// connection stays up for [`Client::upgrade_daemon`](crate::Client::upgrade_daemon).
+async fn run_incompatible(inner: &Arc<Inner>, live: Live) -> String {
+    let Live { conn, ctl_tx, .. } = live;
+    *lock(&inner.connection) = Some(conn.clone());
+    inner.emit(ClientEvent::Incompatible {
+        reason: incompatible_words(&proto::RefuseReason::SnapshotFormat { daemon: 0 }),
+    });
+    let mut outgoing = inner.outgoing_rx.lock().await;
+    let reason = loop {
+        tokio::select! {
+            msg = outgoing.recv() => if msg.is_none() { break "client dropped".to_owned() },
+            closed = conn.closed() => break closed.to_string(),
+        }
+    };
+    drop(ctl_tx);
     conn.close(0u32.into(), b"");
     reason
 }

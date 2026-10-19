@@ -38,6 +38,7 @@ public struct PhysicalKey: Hashable, Sendable {
     public static let arrowDown = Self(GHOSTTY_KEY_ARROW_DOWN)
     public static let arrowLeft = Self(GHOSTTY_KEY_ARROW_LEFT)
     public static let arrowRight = Self(GHOSTTY_KEY_ARROW_RIGHT)
+    public static let space = Self(GHOSTTY_KEY_SPACE)
 
     /// The key that types `character` on a US ANSI layout, and whether that needs Shift. Text that
     /// arrives without a physical key (software keyboard, key bar) is mapped through this so that

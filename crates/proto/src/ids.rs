@@ -264,5 +264,18 @@ bitset! {
         ARTIFACTS = 3;
         /// Understands `ServerCtl::AttachResult` (how the session was chosen, or why not).
         ATTACH_RESULT = 4;
+        /// Wants `ServerCtl::DaemonInfo` (version, build, protocol level, host name) before
+        /// the `Welcome` or `Refused`, and can be let in to upgrade a daemon whose snapshot
+        /// format it does not decode (see `ServerCtl::DaemonInfo`).
+        DAEMON_INFO = 5;
+    }
+}
+
+bitset! {
+    /// What a daemon can do beyond the base protocol, in [`DaemonInfo`](crate::DaemonInfo).
+    DaemonFeatures: u32 {
+        /// Accepts a new build of itself over the connection from its owner
+        /// ([`StreamHeader::Upgrade`](crate::StreamHeader::Upgrade)) and restarts into it.
+        SELF_UPGRADE = 0;
     }
 }
