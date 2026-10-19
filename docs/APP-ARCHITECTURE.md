@@ -98,6 +98,15 @@ The iOS lifecycle is per app, not per window: `HostsModel.background()` suspends
 reopens them and selects the tab once its host's layout arrives (`-restoreLastTarget NO`
 disables restore; design fixtures, `-mock` and dogfood runs skip it).
 
+Keyboard across hosts (iOS): one `KeyBar` for the app (`Workspace.sharedKeyBar`), so a host
+switch keeps the same input accessory view (no input-view reload, no second line editor competing
+for first responder); the old host's terminal resigns first responder before its view leaves the
+window and the new host's focused pane inherits the keyboard (`Workspace.inheritsKeyboardFocus`);
+the terminal answers the tab shortcuts itself (`TerminalView.appKeyCommands`), so ⌘1…⌘9,
+⇧⌘[ ], ⌘T, ⌥⌘T and ⌘P never depend on the responder chain reaching the scene's menu commands.
+Known gap (key bar): while the prompt line editor's text field holds the keyboard, ⌘ shortcuts
+do not reach the app (the field lives in the keyboard's accessory window).
+
 Threading: `ClientEvent`s arrive on the Rust runtime thread. Pane-stream events (bytes,
 snapshots, resizes, history, acks, hints, connection state) are routed directly to the pane's
 handler on that thread, in order (no main-actor hop on the keystroke path); everything else

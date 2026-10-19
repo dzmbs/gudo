@@ -117,12 +117,15 @@ final class MultiHostUITests: XCTestCase {
         let alpha = env["PAIR_TICKET_A"] ?? "", beta = env["PAIR_TICKET_B"] ?? ""
         try XCTSkipIf(alpha.isEmpty || beta.isEmpty, "no daemon tickets (run apple/scripts/multihost-ui-test.sh)")
         let app = XCUIApplication()
-        // The prompt line editor is off: with it on, XCUITest's typed text at a daemon prompt
-        // does not reach the shell (main's own DaemonUITests fails the same way; reported).
+        // The prompt line editor is off (a plist `<false/>`: the editor reads `as? Bool`, and a
+        // plain "NO" argument is a string). With it on, its text field holds the keyboard at a
+        // daemon prompt, inside the keyboard's accessory window, so ⌘ shortcuts never reach the
+        // scene's commands, and typed text goes to the field (main's DaemonUITests fails the
+        // same way). Reported to the key bar's owner.
         app.launchArguments += extra + [
             "-testTickets", "\(alpha),\(beta)", "-testTicketNames", names, "-testRelay", "disabled",
             "-hostsDirectory", NSTemporaryDirectory() + "multihost-\(alpha.suffix(10))\(beta.suffix(10))", "-connectionProbe", "YES",
-            "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES", "-keyBar.lineEditor", "NO",
+            "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES", "-keyBar.lineEditor", "<false/>",
         ]
         app.launch()
         return app

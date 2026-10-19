@@ -454,7 +454,8 @@ host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn 
 Multi-host sidebar (2026-10-19, real local daemons, `-testTickets a,b -testTicketNames …`):
 itself), `ipad-alpha.png` / `ipad-beta.png` (switching by click), `ipad-new-tab.png` (⌘T on the
 current host), `ipad-alpha-down.png` (one host reconnecting, the other live), `ipad-alpha-back.png`,
-`iphone-switcher.png` (the title menu grouped by host), `iphone-hetzner.png`.
+`ipad-no-tabs.png` (New Terminal in the sidebar and the welcome view), `iphone-switcher.png` (the
+title menu grouped by host), `iphone-hetzner.png` (title + host line).
 
 ## Known gaps
 

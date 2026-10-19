@@ -601,6 +601,28 @@ public final class TerminalView: UIView {
 
     // MARK: Hardware keyboard
 
+    /// App shortcuts the terminal answers itself while it is first responder (the app's tab
+    /// switching: ⌘1…⌘9, ⇧⌘[ ], ⌘T…), each sent to `onAppKeyCommand` with its index. UIKit asks
+    /// the first responder before walking up the chain, so these never depend on the chain
+    /// reaching the scene's menu commands, which a pane moved between hosts can lose.
+    public var appKeyCommands: [UIKeyCommand] = [] {
+        didSet {
+            for command in appKeyCommands { command.wantsPriorityOverSystemBehavior = true }
+        }
+    }
+    public var onAppKeyCommand: ((Int) -> Void)?
+
+    override public var keyCommands: [UIKeyCommand]? {
+        (super.keyCommands ?? []) + appKeyCommands
+    }
+
+    @objc public func performAppKeyCommand(_ sender: UIKeyCommand) {
+        guard let index = appKeyCommands.firstIndex(where: {
+            $0.input == sender.input && $0.modifierFlags == sender.modifierFlags
+        }) else { return }
+        onAppKeyCommand?(index)
+    }
+
     override public func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let unhandled = presses.filter { !handle($0, action: .press) }
         if !unhandled.isEmpty { super.pressesBegan(unhandled, with: event) }

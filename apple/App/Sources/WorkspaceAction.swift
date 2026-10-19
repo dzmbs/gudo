@@ -97,6 +97,22 @@ enum WorkspaceAction: Hashable {
     }
 }
 
+#if os(iOS)
+import UIKit
+
+extension EventModifiers {
+    /// The same modifiers as UIKit key-command flags.
+    var uiKeyModifierFlags: UIKeyModifierFlags {
+        var flags: UIKeyModifierFlags = []
+        if contains(.command) { flags.insert(.command) }
+        if contains(.shift) { flags.insert(.shift) }
+        if contains(.option) { flags.insert(.alternate) }
+        if contains(.control) { flags.insert(.control) }
+        return flags
+    }
+}
+#endif
+
 private extension Direction {
     var name: String {
         switch self {

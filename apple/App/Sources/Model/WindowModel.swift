@@ -338,8 +338,7 @@ final class WindowModel {
             #if os(iOS)
             // Typing went to a terminal: the new host's focused pane takes the keyboard as it
             // appears (iOS has no window first responder to fall back to).
-            let handoff = UserDefaults.standard.object(forKey: "keyboardHandoff") as? Bool ?? true
-            let typing = handoff ? workspace?.panes.values.filter { $0.view.isFirstResponder } ?? [] : []
+            let typing = workspace?.panes.values.filter { $0.view.isFirstResponder } ?? []
             // The old host's terminal leaves the window but would stay first responder,
             // detached: keys (⌘ shortcuts included) would go to a responder chain that no
             // longer reaches the scene, and be lost. Resign it before switching.

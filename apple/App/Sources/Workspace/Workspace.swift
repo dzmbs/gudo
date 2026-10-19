@@ -62,8 +62,7 @@ final class Workspace {
     /// the app, not one per workspace: switching hosts in the multi-host sidebar keeps the same
     /// input accessory view, so the keyboard never reloads its input views (a reload drops
     /// hardware keys, ⌘ shortcuts included, while it runs).
-    @ObservationIgnored let keyBar = UserDefaults.standard.object(forKey: "sharedKeyBar") as? Bool ?? true
-        ? Workspace.sharedKeyBar : KeyBar(style: .designSystem)
+    @ObservationIgnored let keyBar = Workspace.sharedKeyBar
     static var sharedKeyBar: KeyBar {
         // Created on first use, not as a `static let`: its UIKit setup must not run inside a
         // one-time initializer (it crashed there, `_dispatch_once_wait`).
@@ -409,6 +408,19 @@ final class Workspace {
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
         pane.view.takeLatchedModifiers = { [keyBar] in keyBar.takeLatchedModifiers() }
+        // The tab shortcuts span every host in the window; the terminal answers them itself so
+        // they work right after the window switched hosts (the menu commands, found through the
+        // responder chain, could miss them then).
+        let tabShortcuts: [WorkspaceAction] = [.newTab, .newTabOnHost] + WorkspaceAction.tabActions
+        pane.view.appKeyCommands = tabShortcuts.map { action in
+            UIKeyCommand(
+                input: String(action.shortcut.key.character), modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
+                action: #selector(TerminalView.performAppKeyCommand(_:)))
+        }
+        pane.view.onAppKeyCommand = { [weak self] index in
+            guard let self, tabShortcuts.indices.contains(index) else { return }
+            tabShortcuts[index].perform(on: self, window: ActiveWindow.model(for: self))
+        }
         pane.view.onFocus = { [weak self, weak pane] in
             guard let self, let pane else { return }
             keyBar.target = pane.view
