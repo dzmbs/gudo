@@ -14,12 +14,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use proto::{
-    AttentionList, AttentionSeen, AttentionUpdate, Axis, DeleteMode, DirListing, DownloadHeader,
-    EditorInstance, EditorLaunch, EditorList, EditorOpened, FileChunk, FileStat, ForwardReply,
-    ForwardTarget, FsChange, GitDiff, GitDiffRequest, GitStatus, PaneId, PortInfo, ReviewRequest,
-    ServerCtl, StreamHeader, TransferReply, TurnInfo, UploadHeader, VsCodeCliInstall,
-    VsCodeTunnelOpen, VsCodeTunnelOpened, VsCodeTunnelStart, VsCodeTunnelStatus, WorkspaceRequest,
-    WorkspaceResponse, WorktreeCreate, WorktreeInfo, WriteTarget, WsError,
+    AgentUsageReport, AttentionList, AttentionSeen, AttentionUpdate, Axis, DeleteMode, DirListing,
+    DownloadHeader, EditorInstance, EditorLaunch, EditorList, EditorOpened, FileChunk, FileStat,
+    ForwardReply, ForwardTarget, FsChange, GitDiff, GitDiffRequest, GitStatus, PaneId, PortInfo,
+    ReviewRequest, ServerCtl, StreamHeader, TransferReply, TurnInfo, UploadHeader,
+    VsCodeCliInstall, VsCodeTunnelOpen, VsCodeTunnelOpened, VsCodeTunnelStart, VsCodeTunnelStatus,
+    WorkspaceRequest, WorkspaceResponse, WorktreeCreate, WorktreeInfo, WriteTarget, WsError,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -56,6 +56,11 @@ pub enum WorkspaceEvent {
     VsCodeTunnel {
         /// The whole status.
         status: VsCodeTunnelStatus,
+    },
+    /// Agent plan usage changed (while watching, [`Client::usage_watch`]).
+    AgentUsage {
+        /// The whole report.
+        report: AgentUsageReport,
     },
 }
 
@@ -119,6 +124,7 @@ impl WsState {
             ServerCtl::FsChanged(change) => WorkspaceEvent::FsChanged { change },
             ServerCtl::Attention(update) => WorkspaceEvent::Attention { update },
             ServerCtl::VsCodeTunnel(status) => WorkspaceEvent::VsCodeTunnel { status },
+            ServerCtl::AgentUsage(report) => WorkspaceEvent::AgentUsage { report },
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
@@ -292,6 +298,31 @@ impl Client {
             column,
         };
         expect!(self.workspace(req).await?, WorkspaceResponse::EditorOpened(o) => o)
+    }
+
+    // --- agent usage ----------------------------------------------------------------------
+
+    /// Agent plan usage on the host now, and its changes as [`WorkspaceEvent::AgentUsage`]
+    /// until [`Client::usage_unwatch`]. Only for daemons offering
+    /// [`DaemonFeatures::AGENT_USAGE`](proto::DaemonFeatures::AGENT_USAGE); older ones drop a
+    /// connection that sends it. `api_fallback` lets the daemon ask the providers' usage
+    /// endpoints with the host's own sign-in when the tools' local data says nothing.
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WsError`] (owners only).
+    pub async fn usage_watch(&self, api_fallback: bool) -> Result<AgentUsageReport, WsError> {
+        let req = WorkspaceRequest::UsageWatch(proto::UsageWatch { api_fallback });
+        expect!(self.workspace(req).await?, WorkspaceResponse::AgentUsage(r) => r)
+    }
+
+    /// Stops this connection's usage pushes.
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WsError`].
+    pub async fn usage_unwatch(&self) -> Result<(), WsError> {
+        expect!(self.workspace(WorkspaceRequest::UsageUnwatch).await?, WorkspaceResponse::Done => ())
     }
 
 

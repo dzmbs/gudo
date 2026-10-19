@@ -260,7 +260,11 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
-        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS | Caps::ATTACH_RESULT | Caps::DAEMON_INFO,
+        caps: Caps::ECHO_PREDICTION
+            | Caps::ARTIFACTS
+            | Caps::ATTACH_RESULT
+            | Caps::DAEMON_INFO
+            | Caps::AGENT_USAGE,
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
     };

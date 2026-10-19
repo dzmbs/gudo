@@ -46,6 +46,7 @@ pub(crate) struct Ws {
     pub tunnel: tunnel::Tunnel,
     pub worktrees: worktree::Worktrees,
     worktree_root: PathBuf,
+    pub usage: Arc<crate::usage::Usage>,
 }
 
 impl Ws {
@@ -63,6 +64,7 @@ impl Ws {
                 .worktree_root
                 .clone()
                 .unwrap_or_else(|| home.join(format!(".{}", brand::DIR_NAME)).join("worktrees")),
+            usage: Arc::new(crate::usage::Usage::new(cfg)),
         }
     }
 
@@ -79,6 +81,8 @@ pub(crate) struct ConnCtx {
     pub watches: Arc<Mutex<HashMap<u64, Watch>>>,
     /// Who is asking (push registration and notification actions are per device).
     pub actor: proto::Actor,
+    /// The client's optional features (`Caps::AGENT_USAGE` takes usage pushes).
+    pub caps: proto::Caps,
 }
 
 /// Runs `f` on the blocking pool.
@@ -360,6 +364,13 @@ pub(crate) async fn handle(
                 core.emit(Event::Attention(update));
             }
             Ok(A::Attention(ws.attention.list()))
+        }
+        R::UsageWatch(opts) => Ok(A::AgentUsage(
+            ws.usage.watch(&conn.ctl, conn.caps, opts).await,
+        )),
+        R::UsageUnwatch => {
+            ws.usage.unwatch(&conn.ctl);
+            Ok(A::Done)
         }
     }
 }

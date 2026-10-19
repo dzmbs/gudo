@@ -50,6 +50,7 @@ mod scan;
 mod shell;
 mod stream;
 mod upgrade;
+mod usage;
 mod ws;
 
 pub mod info;
@@ -65,7 +66,7 @@ use iroh::endpoint::presets;
 use proto::{DaemonId, Ticket};
 use tokio::task::JoinHandle;
 
-pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT};
+pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT, STATUS_LINE_EVENT};
 pub use assist::HistoryConfig;
 pub use config::{ArtifactLimits, Config, RelayMode, default_state_dir};
 pub use config::{CustomRelays, PushConfig};
@@ -73,6 +74,7 @@ pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
 };
 pub use upgrade::prev_path as upgrade_prev_path;
+pub use usage::UsageConfig;
 
 use crate::agent::HookServer;
 use crate::core::Core;

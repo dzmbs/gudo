@@ -108,7 +108,7 @@ impl Push {
 
 /// An HTTPS client on rustls/ring with the web roots (reqwest is built without a default
 /// crypto provider, as iroh-relay uses it).
-fn http_client() -> reqwest::Client {
+pub(crate) fn http_client() -> reqwest::Client {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let tls = rustls::ClientConfig::builder_with_provider(Arc::new(

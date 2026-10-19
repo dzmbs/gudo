@@ -592,6 +592,9 @@ pub enum ServerCtl {
     /// (with its own format, which tells the client) but serves nothing on that connection
     /// except [`StreamHeader::Upgrade`], so an incompatible daemon can still be upgraded.
     DaemonInfo(DaemonInfo),
+    /// Agent plan usage changed. Sent to clients with [`Caps::AGENT_USAGE`] that watch it
+    /// ([`WorkspaceRequest::UsageWatch`]).
+    AgentUsage(crate::AgentUsageReport),
 }
 
 /// A successful [`ClientCtl::Attach`].
