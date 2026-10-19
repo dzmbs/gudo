@@ -77,6 +77,9 @@ public final class DaemonWorkspace {
     public private(set) var unseen = 0
     /// Bumped on each (re)connect, so screens can reload.
     public private(set) var generation = 0
+    /// Repositories, worktrees, branches and pull requests of the host's panes, as last pushed
+    /// (`WorkspaceEvent.repos`); nil until the first snapshot.
+    public internal(set) var repos: RepoSnapshot?
 
     @ObservationIgnored private let resolve: () -> (any DaemonWorkspaceAPI)?
     @ObservationIgnored private var installedOn: ObjectIdentifier?
@@ -122,6 +125,7 @@ public final class DaemonWorkspace {
         guard installedOn != identity else { return }
         installedOn = identity
         ports = client.ports()
+        if let repoClient = client as? any DaemonRepoAPI, let snapshot = repoClient.repos() { repos = snapshot }
     }
 
     // MARK: Observers (other features)
@@ -162,7 +166,45 @@ public final class DaemonWorkspace {
             for observer in attentionObservers.values { observer(update) }
         case .vsCodeTunnel:
             break
+        case .repos(let snapshot):
+            repos = snapshot
         }
+    }
+
+    // MARK: Repositories (git-native workspace)
+
+    /// The repository API of the client of the moment, or `HostError.notConnected`.
+    public func repoClient() throws -> any DaemonRepoAPI {
+        guard let api = api as? any DaemonRepoAPI else { throw HostError.notConnected }
+        return api
+    }
+
+    /// Re-reads git state now and the pull request of `path` (every one when nil).
+    public func refreshRepos(path: String? = nil) async {
+        guard let api = try? repoClient() else { return }
+        do {
+            repos = try await api.repoRefresh(path: path)
+        } catch {
+            Self.log.error("repo refresh host=\(self.hostId, privacy: .public): \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// The worktree a pane is in.
+    public func worktree(ofPane pane: UInt64) -> WorktreeState? {
+        guard let repos, let path = repos.panes.first(where: { $0.paneId == pane })?.worktree else { return nil }
+        return repos.worktrees.first { $0.path == path }
+    }
+
+    /// A worktree by path.
+    public func worktree(_ path: String) -> WorktreeState? {
+        repos?.worktrees.first { $0.path == path }
+    }
+
+    /// Applies a pull request a request returned, so the UI shows it before the next push.
+    public func applyPR(_ pr: PullRequest?, to path: String) {
+        guard var snapshot = repos, let i = snapshot.worktrees.firstIndex(where: { $0.path == path }) else { return }
+        snapshot.worktrees[i].pr = pr
+        repos = snapshot
     }
 
     func apply(_ update: AttentionUpdate) {

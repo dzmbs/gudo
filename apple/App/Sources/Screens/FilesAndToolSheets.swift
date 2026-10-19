@@ -31,7 +31,7 @@ struct ToolSheet: View {
     @ViewBuilder private var content: some View {
         switch route {
         case .launchAgent:
-            LaunchAgentSheet(feed: model.agents)
+            NewTaskSheet(feed: model.agents)
         case .links:
             LinksSheet(
                 source: model.links,

@@ -335,7 +335,8 @@ pub struct TaskCreated {
 }
 
 /// Runs a script in a new tab of `session_id` → [`WorkspaceResponse::PaneCreated`](crate::WorkspaceResponse::PaneCreated).
-/// The tab stays open as a shell when the command ends.
+/// The tab stays open as a shell when the command ends; an empty command opens a plain shell
+/// tab in `cwd`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptRun {
     /// Working directory (a worktree).

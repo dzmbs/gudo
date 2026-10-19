@@ -43,6 +43,24 @@ struct WorkspaceCommands: Commands {
                 .disabled(workspace?.session.activeTab == nil)
             Toggle("Vertical Tabs", isOn: Binding(get: { tabStyle == .sidebar }, set: { tabStyle = $0 ? .sidebar : .bar }))
         }
+        CommandMenu("Git") {
+            Button("New Task…") { model?.sheet = .launchAgent }
+                .disabled(editorHasKeys)
+            Button("Run Script") { model?.git.runDefault() }
+                .keyboardShortcut("r")
+                // Sheets with their own ⌘R (Diff, Browser reload) keep it.
+                .disabled(editorHasKeys || model?.sheet != nil)
+            Divider()
+            Button("Open Pull Request on GitHub") { model?.git.openOnGitHub() }
+                .keyboardShortcut("g", modifiers: [.command, .control])
+                .disabled(editorHasKeys)
+            Button("Merge Pull Request…") { model?.git.requestMerge() }
+            Button("Re-run Failed Checks") { model?.git.rerunFailed() }
+            Button("Create Pull Request") { model?.git.createPR() }
+            Button("Check Out Pull Request…") { model?.git.isCheckoutPromptShown = true }
+            Divider()
+            Button("Archive Worktree") { if let wt = model?.git.worktree { model?.git.archive(wt) } }
+        }
         CommandGroup(before: .sidebar) {
             // Ghostty binds the palette to ⇧⌘P; ⌘K is Raycast's and Linear's.
             Button("Command Palette") { model?.isPaletteShown.toggle() }

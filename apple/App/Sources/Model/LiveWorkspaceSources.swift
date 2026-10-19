@@ -296,13 +296,41 @@ final class LiveAgentFeed: AgentFeed {
             throw WorkspaceError.Unavailable(message: "Open a terminal on \(hosts.record(request.hostId)?.name ?? "the host") first.")
         }
         let directory = launchHosts.first { $0.id == request.hostId }?.directory ?? daemon.meta[splitFrom]?.cwd
-        var worktree: String?
+        let worktree: String? = nil
         if request.worktree {
-            guard let directory else { throw WorkspaceError.Invalid(message: "The pane has no directory to make a worktree of.") }
-            let status = try await api.gitStatus(path: directory)
-            let created = try await api.worktreeCreate(create: WorktreeCreate(
-                repo: status.root, branch: request.branch?.nonEmpty, base: nil, path: nil))
-            worktree = created.path
+            // A new task (git workspace): worktree, branch and its own tab, setup first.
+            guard let repo = request.repo ?? directory else {
+                throw WorkspaceError.Invalid(message: "The pane has no directory to make a worktree of.")
+            }
+            guard let session = daemon.layout.sessionId else { throw HostError.notConnected }
+            let used = Set(daemon.layout.session.tabs.compactMap(\.title))
+            let made = try await daemon.workspace.repoClient().taskCreate(task: TaskCreate(
+                repo: repo, sessionId: session, name: request.name?.nonEmpty ?? FriendlyName.make(avoiding: used),
+                branch: request.branch?.nonEmpty, base: nil,
+                agent: request.shell ? nil : (request.agent == .codex ? .codex : .claude), prompt: nil))
+            window?.reveal(host: request.hostId, pane: made.paneId)
+            if !request.shell, let prompt = request.prompt.nonEmpty {
+                let pane = made.paneId
+                let title = request.agent.title
+                Task { [weak self] in
+                    do {
+                        // Setup may run first.
+                        try await Self.typeWhenReady(prompt, pane: pane, daemon: daemon, timeout: .seconds(600))
+                    } catch {
+                        self?.window?.toasts.show(Toast(
+                            "\(title) is running, but the prompt was not typed: \(ScreenError.describe(error))",
+                            systemImage: "exclamationmark.circle", style: .failure))
+                    }
+                }
+            }
+            return made.setup.map { "Running setup first: \($0)" }
+        }
+        if request.shell {
+            guard let session = daemon.layout.sessionId else { throw HostError.notConnected }
+            let pane = try await daemon.workspace.repoClient().scriptRun(
+                cwd: request.repo ?? directory ?? "~", sessionId: session, name: request.name ?? "", command: "")
+            window?.reveal(host: request.hostId, pane: pane)
+            return nil
         }
         let started = ContinuousClock.now
         // The pane first (the sheet closes and the pane shows at once); the first prompt is

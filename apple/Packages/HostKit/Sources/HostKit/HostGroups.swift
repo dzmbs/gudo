@@ -123,9 +123,27 @@ public final class HostGroups {
         groups.first { $0.id == id }
     }
 
-    /// Every tab of every group in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk.
+    /// Every tab of every group in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk. A
+    /// daemon's tabs follow its repository grouping (tabs outside a repository, then by
+    /// repository and worktree), as the sidebar draws them.
     public var tabs: [TabRef] {
-        groups.flatMap { group in group.tabs.map { group.ref($0.id) } }
+        groups.flatMap { group -> [TabRef] in
+            if let sidebar = repoSidebar(for: group) {
+                return sidebar.orderedTabs.map { group.ref($0) }
+            }
+            return group.tabs.map { group.ref($0.id) }
+        }
+    }
+
+    /// A daemon group's tabs grouped by repository and worktree, once the daemon has sent its
+    /// repository snapshot (nil otherwise: draw the tabs flat).
+    public func repoSidebar(for group: HostGroup) -> RepoSidebar? {
+        guard group.kind == .daemon,
+              let connection = hosts.connection(group.id) as? DaemonConnection,
+              let snapshot = connection.existingWorkspace?.repos,
+              !snapshot.worktrees.isEmpty
+        else { return nil }
+        return RepoSidebar.build(tabs: group.tabs, snapshot: snapshot)
     }
 
     // MARK: Opening and closing hosts

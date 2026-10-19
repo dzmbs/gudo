@@ -27,6 +27,7 @@ struct SettingsView: View {
             SwiftUI.Tab("Terminal", systemImage: "terminal") { pane { FontSection(); CursorSection(); SplitsSection() } }
             SwiftUI.Tab("Keyboard", systemImage: "keyboard") { pane { KeyboardSection(); VoiceSettingsSection() } }
             SwiftUI.Tab("Notifications", systemImage: "bell.badge") { pane { NotificationsSection() } }
+            SwiftUI.Tab("Git", systemImage: "arrow.triangle.branch") { pane { GitSettingsSection() } }
             SwiftUI.Tab("About", systemImage: "info.circle") { pane { AboutSection() } }
         }
         .frame(width: 560, height: 520)
@@ -43,6 +44,7 @@ struct SettingsView: View {
                 KeyboardSection().raisedRows()
                 VoiceSettingsSection().raisedRows()
                 NotificationsSection().raisedRows()
+                GitSettingsSection().raisedRows()
                 AboutSection().raisedRows()
             }
             .terminalGrouped()

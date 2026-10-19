@@ -359,10 +359,11 @@ pub(crate) async fn handle(
         }
         R::ScriptRun(run) => {
             let dir = existing_dir(policy, &run.cwd)?;
-            if run.command.trim().is_empty() {
-                return Err(WsError::Invalid("empty command".into()));
+            // An empty command opens a plain shell tab in the directory.
+            let script = !run.command.trim().is_empty();
+            if script {
+                repos.queue_pre_command(&dir, &run.command);
             }
-            repos.queue_pre_command(&dir, &run.command);
             match core.apply_op(LayoutOp::NewTab {
                 session_id: run.session_id,
                 name: run.name,
@@ -372,7 +373,9 @@ pub(crate) async fn handle(
             }) {
                 OpOutcome::TabCreated { pane_id, .. } => Ok(A::PaneCreated { pane_id }),
                 other => {
-                    let _ = repos.take_pre_command(&dir);
+                    if script {
+                        let _ = repos.take_pre_command(&dir);
+                    }
                     Err(WsError::Failed(match other {
                         OpOutcome::Failed { message, .. } => message,
                         o => format!("unexpected outcome {o:?}"),
