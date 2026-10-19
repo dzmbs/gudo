@@ -6,13 +6,18 @@ import UIKit
 import AppKit
 #endif
 
-/// Links and paths found in the focused pane's scrollback, newest first.
+/// Links and paths in the focused pane: on screen and in the output of its recent commands
+/// (the daemon's link extraction, paths resolved against the pane's directory). A path opens in
+/// VS Code at its line; a URL in the in-app browser (localhost through a forward).
 struct LinksSheet: View {
-    let links: [DetectedLink]
+    let source: any LinkSource
     var onOpen: (DetectedLink) -> Void = { _ in }
+    var onShowInFiles: ((DetectedLink) -> Void)?
     var onInsert: (DetectedLink) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
+    @State private var links: [DetectedLink]?
+    @State private var failure: String?
     @State private var filter = Filter.all
     @State private var query = ""
 
@@ -22,7 +27,7 @@ struct LinksSheet: View {
     }
 
     private var visible: [DetectedLink] {
-        links
+        (links ?? [])
             .filter {
                 switch filter {
                 case .all: true
@@ -31,7 +36,6 @@ struct LinksSheet: View {
                 }
             }
             .filter { query.isEmpty || $0.text.localizedCaseInsensitiveContains(query) }
-            .sorted { $0.line > $1.line }
     }
 
     var body: some View {
@@ -46,31 +50,44 @@ struct LinksSheet: View {
                             LinkRow(link: link)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("link-\(link.text)")
                         .contextMenu {
-                            Button("Open", systemImage: "arrow.up.forward.app") {
+                            Button(link.kind == .path ? "Open in VS Code" : "Open", systemImage: "arrow.up.forward.app") {
                                 onOpen(link)
                                 dismiss()
                             }
-                            Button("Copy", systemImage: "doc.on.doc") { LinksPasteboard.copy(link.text) }
+                            if link.kind == .path, let onShowInFiles {
+                                Button("Show in Files", systemImage: "folder") { onShowInFiles(link) }
+                            }
+                            Button("Copy", systemImage: "doc.on.doc") { LinksPasteboard.copy(link.resolved) }
                             Button("Insert in Terminal", systemImage: "text.insert") {
                                 onInsert(link)
                                 dismiss()
                             }
                         }
                         .swipeActions(edge: .trailing) {
-                            Button("Copy", systemImage: "doc.on.doc") { LinksPasteboard.copy(link.text) }
+                            Button("Copy", systemImage: "doc.on.doc") { LinksPasteboard.copy(link.resolved) }
                                 .tint(.gray)
                         }
                     }
                 } footer: {
-                    Text("Found in the focused pane's scrollback. ⌘-click a link in the terminal to open it directly.")
+                    if links?.isEmpty == false {
+                        Text("Found on screen and in the output of the pane's recent commands.")
+                    }
                 }
+                .raisedRows()
             }
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif
+            .terminalGrouped()
             .overlay {
-                if visible.isEmpty {
+                if let failure {
+                    EmptyState("Couldn't Read Links", systemImage: "exclamationmark.triangle", message: failure) {
+                        Button("Try Again") { Task { await load() } }
+                            .buttonStyle(.glass)
+                    }
+                } else if links != nil, visible.isEmpty {
                     if query.isEmpty {
                         EmptyState(
                             "No Links", systemImage: "link",
@@ -99,11 +116,23 @@ struct LinksSheet: View {
                     Button("Done", systemImage: "xmark") { dismiss() }
                 }
             }
+            .task { await load() }
+            .accessibilityIdentifier("links-list")
         }
         .phoneDetents([.medium, .large])
         #if os(macOS)
         .frame(minWidth: 520, minHeight: 420)
         #endif
+    }
+
+    private func load() async {
+        failure = nil
+        do {
+            let loaded = try await source.links()
+            withAnimation(links == nil ? nil : DS.Motion.snappy) { links = loaded }
+        } catch {
+            failure = ScreenError.describe(error)
+        }
     }
 }
 
@@ -115,8 +144,9 @@ private struct LinkRow: View {
             Image(systemName: link.kind == .url ? "link" : "doc.text")
                 .foregroundStyle(.secondary)
         }) {
-            Text(offset)
+            Text(where_)
         }
+        .opacity(link.exists == false ? 0.55 : 1)
         .contentShape(.rect)
     }
 
@@ -132,18 +162,20 @@ private struct LinkRow: View {
         }
     }
 
-    private var offset: String {
+    private var where_: String {
+        if link.exists == false { return "not found" }
+        if link.fromCommand { return "in output" }
         switch link.line {
-        case 0: "visible"
-        case -1: "1 line up"
-        case ..<0: "\(-link.line) lines up"
-        default: "line \(link.line)"
+        case 0: return "on screen"
+        case -1: return "1 line up"
+        case ..<0: return "\(-link.line) lines up"
+        default: return "line \(link.line)"
         }
     }
 }
 
 /// `dir/name.ext:12:7` split into directory, file name and the `:line:col` suffix.
-private struct PathParts {
+struct PathParts {
     var directory: String
     var name: String
     var position: String
@@ -167,6 +199,12 @@ private struct PathParts {
         }
         position = suffix
     }
+
+    /// The `:line` and `:col` numbers.
+    var numbers: (line: Int?, column: Int?) {
+        let parts = position.split(separator: ":").compactMap { Int($0) }
+        return (parts.first, parts.count > 1 ? parts[1] : nil)
+    }
 }
 
 private enum LinksPasteboard {
@@ -177,5 +215,42 @@ private enum LinksPasteboard {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(string, forType: .string)
         #endif
+    }
+}
+
+extension WindowModel {
+    /// A link from a pane: a path opens in VS Code at its line (a host pane), a URL in the
+    /// in-app browser.
+    func open(_ link: DetectedLink) {
+        switch link.kind {
+        case .url:
+            Task { await openURL(link.resolved) }
+        case .path:
+            let numbers = PathParts(link.text).numbers
+            let path = link.target ?? PathParts(link.text).directory + PathParts(link.text).name
+            if workspace?.isRemote == true || LaunchOptions.mock {
+                openEditor(path: path, line: link.targetLine ?? numbers.line, column: link.targetColumn ?? numbers.column)
+            } else {
+                #if os(macOS)
+                NSWorkspace.shared.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+                #endif
+            }
+        }
+    }
+
+    /// Types text into the focused pane (as a paste: no newline, nothing runs).
+    func insertInTerminal(_ text: String) {
+        guard let workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else { return }
+        let quoted = text.contains(" ") ? "'\(text)'" : text
+        pane.backend.paste(quoted)
+    }
+
+    /// `cd` into a directory in the focused pane.
+    func revealInTerminal(_ directory: String) {
+        guard let workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else { return }
+        let escaped = directory.replacingOccurrences(of: "'", with: "'\\''")
+        Data("cd '\(escaped)'\r".utf8).withUnsafeBytes { pane.backend.write($0) }
+        sheet = nil
+        destination = .terminal
     }
 }

@@ -48,6 +48,8 @@ struct WorkspaceView: View {
             }
             .animation(DS.Motion.overlay, value: model.isPaletteShown)
             .toastHost(model.toasts)
+            .portOffers(model)
+            .editorPresentation(model)
             .sheet(item: $model.sheet) { route in
                 SheetContent(route: route, workspace: workspace)
                     .environment(model)
@@ -531,28 +533,12 @@ private struct SheetContent: View {
         switch route {
         case .pairing:
             PairingSheet(directory: model.hosts, live: LaunchOptions.mock ? nil : model.app.hosts, initialMode: model.pairingMode, destination: model.pairingDestination)
-        case .launchAgent:
-            LaunchAgentSheet(feed: model.agents, hosts: model.hosts.hosts)
+        case .launchAgent, .links, .diff, .files, .browser, .editor:
+            ToolSheet(route: route)
         case .invite:
             InviteSheet(
                 sessionTitle: workspace.session.activeTab.map(workspace.title(of:)) ?? Brand.name,
                 participants: MockPresence.participants)
-        case .links:
-            LinksSheet(links: MockLinks.links)
-        case .diff:
-            sheetStack { DiffReviewView(source: model.diffs) }
-        case .files:
-            sheetStack {
-                FilesBrowserView(source: model.files) { _ in model.sheet = .editor }
-            }
-        case .browser:
-            BrowserView(initialURL: URL(string: "https://ghostty.org/docs")!)
-                .macMinimumSize(width: 640, height: 480)
-                .presentationSizing(.page)
-        case .editor:
-            EditorView(source: model.files, path: "~/projects/unnamed/Cargo.toml")
-                .macMinimumSize(width: 640, height: 480)
-                .presentationSizing(.page)
         case .settings:
             SettingsView()
         }

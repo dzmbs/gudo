@@ -47,6 +47,9 @@ public final class DaemonConnection: HostConnection {
     public private(set) var timings = Timings()
     /// Called when a layout or connection change should be persisted (the attached session).
     @ObservationIgnored public var onAttached: ((UInt64) -> Void)?
+    /// Every non-pane-stream event, on the main actor after the connection handled it (search,
+    /// links and command-output answers for `HostWorkspace`, `.connected` to re-watch).
+    @ObservationIgnored public var onEvent: ((ClientEvent) -> Void)?
 
     public struct Timings: Sendable, Equatable {
         public var dialStarted: ContinuousClock.Instant?
@@ -60,7 +63,7 @@ public final class DaemonConnection: HostConnection {
 
     @ObservationIgnored private let ticket: String
     @ObservationIgnored private let dialer: DaemonDialer
-    @ObservationIgnored private var client: (any DaemonClientAPI)?
+    @ObservationIgnored private(set) var client: (any DaemonClientAPI)?
     @ObservationIgnored let router: PaneRouter
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
     @ObservationIgnored private var pump: Task<Void, Never>?
@@ -216,6 +219,7 @@ public final class DaemonConnection: HostConnection {
         default:
             break
         }
+        onEvent?(event)
     }
 
     private func noteOutput() {

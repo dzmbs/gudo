@@ -8,8 +8,12 @@ import WebKit
 struct BrowserView: View {
     var initialURL: URL
     var onOpenExternally: (URL) -> Void = { _ in }
+    /// Shows a leading "Done" / back control (the browser sheet, the ports list).
+    var onDone: (() -> Void)?
+    var doneTitle = "Done"
 
     @State private var page = WebPage()
+    @Environment(\.terminalTheme) private var theme
     @State private var address = ""
     @FocusState private var isEditing: Bool
     @Environment(\.openURL) private var openURL
@@ -53,20 +57,27 @@ struct BrowserView: View {
     /// iPad and Mac: back, forward, reload, address field, open externally.
     private var regularBar: some View {
         HStack(spacing: DS.Space.xs) {
+            if let onDone {
+                Button(doneTitle, action: onDone)
+                    .labelStyle(.titleOnly)
+                    .buttonStyle(.borderless)
+                    .padding(.trailing, DS.Space.s)
+                    .accessibilityIdentifier("browser-done")
+            }
             navigationButtons
             reloadButton
             addressField
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
             shareButton
-            Button("Open in Default Browser", systemImage: "safari", action: openExternally)
-                .help("Open in Default Browser")
+            Button("Open in Safari", systemImage: "safari", action: openExternally)
+                .help("Open in Safari")
         }
         .buttonStyle(.bar)
         .padding(.horizontal, DS.Space.s)
         .frame(height: DS.Size.tabBar)
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
+        .background(theme.background)
+        .overlay(alignment: .bottom) { theme.splitDivider.frame(height: 1) }
     }
 
     /// iPhone: one floating glass capsule with the controls around the address.
@@ -75,6 +86,10 @@ struct BrowserView: View {
             HStack(spacing: DS.Space.s) {
                 if !isEditing {
                     HStack(spacing: 0) {
+                        if let onDone {
+                            Button(doneTitle, systemImage: "xmark", action: onDone)
+                                .accessibilityIdentifier("browser-done")
+                        }
                         navigationButtons
                     }
                     .padding(.horizontal, DS.Space.xs)

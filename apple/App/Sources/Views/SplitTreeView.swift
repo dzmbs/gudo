@@ -170,8 +170,10 @@ struct PaneSlot: View {
                 if model.isSearchShown && focused {
                     TerminalSearchBar(
                         needle: Bindable(model).searchNeedle,
-                        selected: model.searchNeedle.isEmpty ? nil : 2,
-                        total: model.searchNeedle.isEmpty ? nil : 14,
+                        // Totals over the whole scrollback from the daemon's search; stepping
+                        // through matches needs the renderer's highlights (not wired yet).
+                        selected: model.searchNeedle.isEmpty || !LaunchOptions.mock ? nil : 2,
+                        total: model.searchNeedle.isEmpty ? nil : model.searchTotal,
                         onNext: {}, onPrevious: {},
                         onClose: { model.isSearchShown = false })
                 }

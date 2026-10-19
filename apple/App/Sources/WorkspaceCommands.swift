@@ -14,6 +14,9 @@ struct WorkspaceCommands: Commands {
     /// nothing. The actions resolve the window when they run.
     private var workspace: Workspace? { focusedWorkspace ?? ActiveWindow.workspace }
     private var model: WindowModel? { focusedModel ?? ActiveWindow.model }
+    /// VS Code is in front: every key goes to it (⌘P, ⌘⇧P, ⌘F, ⌘D, ⌘K chords…), so the app's
+    /// own shortcuts step aside.
+    private var editorHasKeys: Bool { model?.isEditorShown == true }
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
@@ -22,12 +25,14 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .textEditing) {
             Button("Find…") { model?.isSearchShown = true }
                 .keyboardShortcut("f")
+                .disabled(editorHasKeys)
         }
         CommandMenu("Pane") {
             buttons(WorkspaceAction.paneActions)
             Divider()
             Button("Links & Paths…") { model?.sheet = .links }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(editorHasKeys)
         }
         CommandMenu("Tab") {
             buttons(WorkspaceAction.tabActions)
@@ -40,12 +45,16 @@ struct WorkspaceCommands: Commands {
             // Ghostty binds the palette to ⇧⌘P; ⌘K is Raycast's and Linear's.
             Button("Command Palette") { model?.isPaletteShown.toggle() }
                 .keyboardShortcut("k")
+                .disabled(editorHasKeys)
             Button("Command Palette") { model?.isPaletteShown.toggle() }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(editorHasKeys)
             Button("Inbox") { model?.destination = .inbox }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
+                .disabled(editorHasKeys)
             Button("Hosts") { model?.destination = model?.destination == .hosts ? .terminal : .hosts }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(editorHasKeys)
             Button("Add Host…") { model?.addHost() }
             Divider()
         }
@@ -55,6 +64,7 @@ struct WorkspaceCommands: Commands {
         ForEach(actions, id: \.self) { action in
             Button(action.title) { workspace.map(action.perform) }
                 .keyboardShortcut(action.shortcut)
+                .disabled(editorHasKeys)
         }
     }
 }
