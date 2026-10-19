@@ -43,10 +43,12 @@ public extension DS {
         /// Used for focus, selection and the single primary action, nothing decorative.
         public static let accent = Color(light: Color(hex: "#2F6DB5"), dark: Color(hex: "#7AA6DA"))
 
-        /// Agent working (Ghostty yellow, palette 3).
-        public static let working = Color(light: Color(hex: "#A87A00"), dark: Color(hex: "#F0C674"))
-        /// Agent blocked / needs you (Ghostty bright red, palette 9).
-        public static let blocked = Color(light: Color(hex: "#C8323A"), dark: Color(hex: "#E8686C"))
+        /// Your turn: an agent waiting for input, a slow or reconnecting link (Ghostty yellow,
+        public static let attention = Color(light: Color(hex: "#A87A00"), dark: Color(hex: "#F0C674"))
+        /// Agent working. A working agent is a neutral spinner; kept for charts and legacy uses.
+        public static let working = attention
+        /// Agent blocked / needs you.
+        public static let blocked = attention
         /// Agent done (Ghostty green, palette 2).
         public static let done = Color(light: Color(hex: "#4E7A12"), dark: Color(hex: "#B5BD68"))
         /// Failure (Ghostty red, palette 1).

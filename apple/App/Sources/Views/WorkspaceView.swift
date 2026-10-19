@@ -257,6 +257,12 @@ private struct DetailColumn: View {
                 HostsScreen()
             }
         }
+        // Every destination fills the column, whatever its content's own size (an empty Inbox
+        // is only as wide as its message, which shrank and centred the whole window).
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if DEBUG
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }, action: { model.detailFrame = $0 })
+        #endif
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -276,12 +282,10 @@ private struct DetailColumn: View {
         }
     }
 
+    /// The split state only: the host is named once, by the toolbar's host button.
     private var subtitle: String {
-        let place = workspace.isRemote ? model.hostName : "Local"
-        guard let tab = workspace.session.activeTab else { return place }
-        let count = tab.root.panes.count
-        let panes = count > 1 ? (tab.zoomed == nil ? " · \(count) panes" : " · zoomed") : ""
-        return "\(place)\(panes)"
+        guard let tab = workspace.session.activeTab, tab.root.panes.count > 1 else { return "" }
+        return tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed"
     }
 }
 
@@ -313,12 +317,12 @@ private struct TerminalToolbar: ToolbarContent {
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.fixed, placement: .primaryAction)
         }
+        // On its own, so the host's name shows (a glass group shows icons only).
+        ToolbarItem(placement: .primaryAction) {
+            HostToolbarButton(workspace: workspace)
+        }
+        ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItemGroup(placement: .primaryAction) {
-            Button("Hosts", systemImage: "server.rack") {
-                withAnimation(DS.Motion.snappy) { model.destination = model.destination == .hosts ? .terminal : .hosts }
-            }
-            .help("Hosts (⇧⌘H)")
-            .accessibilityIdentifier("hosts-button")
             Button("Find", systemImage: "magnifyingglass") { model.isSearchShown.toggle() }
                 .help("Find (⌘F)")
                 .disabled(model.destination != .terminal)
@@ -339,6 +343,75 @@ private struct TerminalToolbar: ToolbarContent {
     }
 }
 
+
+/// name, the icon replaced by the state glyph only while the link is not healthy. The popover is
+/// the one place the round trip is shown. On this device's own window it opens Hosts.
+private struct HostToolbarButton: View {
+    let workspace: Workspace
+    @Environment(WindowModel.self) private var model
+    @State private var showsDetails = false
+
+    var body: some View {
+        if workspace.isRemote {
+            Button { showsDetails.toggle() } label: {
+                Label {
+                    Text(model.hostName)
+                } icon: {
+                    ConnectionGlyph(model.connection, healthy: Image(systemName: "server.rack"))
+                }
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(model.connection.isQuiet ? .primary : .secondary)
+            }
+            .help(model.connection.isQuiet ? model.hostName : "\(model.hostName) · \(model.connection.title)")
+            .accessibilityIdentifier("hosts-button")
+            .popover(isPresented: $showsDetails) { details }
+        } else {
+            Button("Hosts", systemImage: "server.rack") { toggleHosts() }
+                .help("Hosts (⇧⌘H)")
+                .accessibilityIdentifier("hosts-button")
+        }
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            Text(model.hostName).font(.headline)
+            if let address = model.hosts.hosts.first(where: { $0.id == workspace.hostId })?.address, !address.isEmpty {
+                Text(address)
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: DS.Space.xs + 2) {
+                ConnectionGlyph(model.connection)
+                Text(workspace.host?.status.summary ?? model.connection.title)
+                    .monospacedDigit()
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            Divider().padding(.vertical, DS.Space.xs)
+            HStack {
+                Button("All Hosts") {
+                    showsDetails = false
+                    toggleHosts()
+                }
+                Spacer()
+                Button("Disconnect", role: .destructive) {
+                    showsDetails = false
+                    model.disconnect()
+                }
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(DS.Space.l)
+        .frame(minWidth: 260)
+        .presentationCompactAdaptation(.popover)
+        .accessibilityIdentifier("host-details")
+    }
+
+    private func toggleHosts() {
+        withAnimation(DS.Motion.snappy) { model.destination = model.destination == .hosts ? .terminal : .hosts }
+    }
+}
 
 #if os(iOS)
 /// iPhone: Terminal, Inbox and Hosts as tabs in the system's floating Liquid Glass tab bar.
@@ -396,10 +469,10 @@ struct ActiveTabView: View {
                         model.connection, hostName: model.hostName,
                         onRetry: { model.retryConnection() },
                         onDisconnect: { model.disconnect() })
-            } else if let host = workspace.host, !host.isReady {
-                ConnectingView(hostName: model.hostName, status: model.connection, summary: host.status.summary) {
-                    model.retryConnection()
-                }
+            } else if workspace.host?.isReady == false {
+                ConnectingView(
+                    hostName: model.hostName, state: model.connection,
+                    onRetry: { model.retryConnection() }, onDisconnect: { model.disconnect() })
             } else {
                 WelcomeView(workspace: workspace)
             }
@@ -411,37 +484,81 @@ struct ActiveTabView: View {
     }
 }
 
-/// A host's window before its first layout: what is happening, in words, with Retry once it
+/// words, the system spinner only after a 1 s grace, and actions only when something failed
 private struct ConnectingView: View {
     let hostName: String
-    let status: ConnectionState
-    let summary: String
+    let state: ConnectionState
     let onRetry: () -> Void
+    let onDisconnect: () -> Void
     @Environment(\.terminalTheme) private var theme
 
     var body: some View {
         VStack(spacing: DS.Space.m) {
-            ConnectionDot(status)
-                .scaleEffect(1.6)
-                .padding(.bottom, DS.Space.xs)
-            Text(status == .connecting ? "Connecting to \(hostName)" : "\(hostName) · \(status.title)")
+            ConnectionGlyph(state)
+                .font(.title2)
+                .frame(height: 28)
+            Text(title)
                 .font(DS.Font.title)
                 .foregroundStyle(theme.foreground)
-            Text(summary)
-                .font(.callout)
-                .foregroundStyle(theme.foreground.opacity(0.6))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            if status != .connecting {
-                Button("Retry Now", action: onRetry)
-                    .buttonStyle(.glassProminent)
-                    .padding(.top, DS.Space.s)
+            if let detail {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(detail(context.date))
+                        .font(.callout)
+                        .foregroundStyle(theme.foreground.opacity(0.6))
+                        .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 360)
+                }
+            }
+            if let action {
+                HStack(spacing: DS.Space.s) {
+                    Button("Disconnect", action: onDisconnect)
+                        .buttonStyle(.glass)
+                    Button(action, action: onRetry)
+                        .buttonStyle(.glassProminent)
+                        .keyboardShortcut(.defaultAction)
+                }
+                .padding(.top, DS.Space.s)
             }
         }
         .padding(DS.Space.xxxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("connecting")
+    }
+
+    private var title: String {
+        switch state {
+        case .reconnecting: "Reconnecting to \(hostName)…"
+        case .offline: "Offline"
+        case .needsAttention: "Can't connect to \(hostName)"
+        case .unreachable: "Can't reach \(hostName)"
+        default: "Connecting to \(hostName)…"
+        }
+    }
+
+    /// The second line: the phase or the reason, never a repeat of the title.
+    private var detail: ((Date) -> String)? {
+        switch state {
+        case .connecting(let phase?): { _ in phase }
+        case .reconnecting(_, let since): { now in "Last contact \(Self.ago(now.timeIntervalSince(since)))" }
+        case .offline: { _ in "Waiting for the network. Sessions keep running on \(hostName)." }
+        case .needsAttention(let reason, _): { _ in reason }
+        case .unreachable(let reason, let hint): { _ in [reason, hint].compactMap(\.self).joined(separator: " ") }
+        default: nil
+        }
+    }
+
+    private var action: String? {
+        switch state {
+        case .needsAttention(_, let action): action ?? "Retry"
+        case .unreachable: "Retry"
+        default: nil
+        }
+    }
+
+    private static func ago(_ seconds: TimeInterval) -> String {
+        Duration.seconds(max(0, Int(seconds))).formatted(.units(allowed: [.minutes, .seconds], width: .narrow)) + " ago"
     }
 }
 
@@ -456,21 +573,24 @@ private struct WelcomeView: View {
                 Image(systemName: workspace.canOpenTabs ? "terminal" : "server.rack")
                     .font(.system(size: 34, weight: .regular))
                     .foregroundStyle(theme.foreground.opacity(0.5))
-                Text(workspace.canOpenTabs ? "No Open Tabs" : "Connect a Host")
+                Text(title)
                     .font(DS.Font.title)
                     .foregroundStyle(theme.foreground)
-                Text(workspace.canOpenTabs
-                    ? "Open a shell here, or connect to a host to pick up its sessions."
-                    : "Pair a machine running the helper, or connect to any SSH host. Sessions keep running there while this device sleeps.")
+                Text(message)
                     .font(.callout)
                     .foregroundStyle(theme.foreground.opacity(0.6))
                     .multilineTextAlignment(.center)
             }
             VStack(spacing: 2) {
                 if workspace.canOpenTabs {
-                    welcomeRow("New Tab", systemImage: "plus", keys: ["⌘", "T"]) { workspace.apply(.newTab) }
-                    welcomeRow("Connect to a Host…", systemImage: "server.rack", keys: nil) { model.addHost() }
+                    welcomeRow("New Terminal", systemImage: "plus", keys: ["⌘", "T"]) { workspace.apply(.newTab) }
+                        .disabled(!workspace.isLayoutLive)
+                        .help(workspace.isLayoutLive ? "" : model.layoutUnavailableHelp)
+                        .accessibilityIdentifier("welcome-new-terminal")
                     welcomeRow("Start an Agent…", systemImage: "sparkle", keys: nil) { model.sheet = .launchAgent }
+                    if !workspace.isRemote {
+                        welcomeRow("Connect to a Host…", systemImage: "server.rack", keys: nil) { model.addHost() }
+                    }
                 } else {
                     welcomeRow("Connect with SSH…", systemImage: "terminal", keys: nil) { model.addHost(mode: .ssh) }
                         .accessibilityIdentifier("welcome-ssh")
@@ -490,6 +610,18 @@ private struct WelcomeView: View {
         // A container, so the rows keep their own identifiers.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("welcome")
+    }
+
+    private var title: String {
+        if workspace.isRemote { return "No sessions on \(model.hostName)" }
+        return workspace.canOpenTabs ? "No Open Tabs" : "Connect a Host"
+    }
+
+    private var message: String {
+        if workspace.isRemote { return "Open a new tab to start a terminal." }
+        return workspace.canOpenTabs
+            ? "Open a shell here, or connect to a host to pick up its sessions."
+            : "Pair a machine running the helper, or connect to any SSH host. Sessions keep running there while this device sleeps."
     }
 
     /// Shortcut hints only where a hardware keyboard is likely (not on iPhone).

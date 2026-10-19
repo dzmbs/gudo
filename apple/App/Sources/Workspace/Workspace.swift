@@ -131,10 +131,18 @@ final class Workspace {
     var canOpenTabs: Bool { isRemote || LaunchOptions.hasLocalShell }
     /// What "New Tab" does where no shell can open (iOS without a host): offer Add Host.
     @ObservationIgnored var onNewTabUnavailable: (() -> Void)?
+    /// Whether the layout can change now: always here, on a host only while the link is live.
+    var isLayoutLive: Bool { host?.status.isLive ?? true }
+    /// What a layout change does while the host is not live: say so (never a silent no-op).
+    @ObservationIgnored var onLayoutUnavailable: (() -> Void)?
 
     func apply(_ op: LayoutOp) {
         if case .newTab = op, !canOpenTabs {
             onNewTabUnavailable?()
+            return
+        }
+        if op.opensPane, !isLayoutLive {
+            onLayoutUnavailable?()
             return
         }
         layout.apply(op)
@@ -421,5 +429,15 @@ struct PaneNotice: Equatable {
     static func == (lhs: PaneNotice, rhs: PaneNotice) -> Bool {
         lhs.exit?.message == rhs.exit?.message && lhs.exit?.failed == rhs.exit?.failed
             && lhs.secureInput == rhs.secureInput && lhs.bell == rhs.bell && lhs.hoveredURL == rhs.hoveredURL
+    }
+}
+
+private extension LayoutOp {
+    /// Starts a new shell on the host (and so needs a live link).
+    var opensPane: Bool {
+        switch self {
+        case .newTab, .split: true
+        default: false
+        }
     }
 }

@@ -481,6 +481,13 @@ final class DogfoodRunner {
             }
             return message
 
+        case "destination":
+            // Switches the window's screen (terminal, inbox, hosts) as the sidebar rows do.
+            let name = try string(step, "to")
+            guard let destination = Destination(rawValue: name) else { throw Failure("unknown destination \(name)") }
+            ActiveWindow.model?.destination = destination
+            try await Task.sleep(for: .milliseconds(400))
+            return name
         case "sleep":
             try await Task.sleep(for: .seconds(step["seconds"] as? Double ?? 1))
             return nil
@@ -562,6 +569,18 @@ final class DogfoodRunner {
             let pane = workspace.focusedPane.flatMap { workspace.panes[$0] }
             let actual = pane.map { $0.view.window?.firstResponder === $0.view } ?? false
             return (actual == first, "first responder is focused pane: \(actual)")
+        }
+        if step["detailFillsWindow"] as? Bool == true {
+            // Whatever the screen shows, the detail column runs from the sidebar to the window's
+            // right edge (an empty Inbox once shrank and centred the whole window).
+            guard let window, let content = window.contentView, let frame = ActiveWindow.model?.detailFrame else {
+                return (false, "no window or detail frame")
+            }
+            let sidebar = UserDefaults.standard.bool(forKey: "sidebarShown") || UserDefaults.standard.object(forKey: "sidebarShown") == nil
+            let width = UserDefaults.standard.object(forKey: "sidebarWidth") as? Double ?? 248
+            let leading = sidebar ? width + 1 : 0
+            let ok = abs(frame.maxX - content.bounds.width) <= 2 && frame.minX <= leading + 2
+            return (ok, "detail \(frame), window \(content.bounds.size), sidebar \(sidebar ? "\(width)" : "hidden")")
         }
         let pane = focusedPaneOrNil
         if step["ptySizeMatchesGrid"] as? Bool == true {

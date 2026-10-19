@@ -67,7 +67,6 @@ final class LiveHostDirectory: HostDirectory {
             needsYou = entry.status.summary
         }
         let statusLine: String? = switch entry.status {
-        case .connected(let rtt?): "Connected · \(Int((rtt / .milliseconds(1)).rounded())) ms"
         case .idle: entry.lastConnected == nil ? "Not connected yet" : nil
         case .suspended: "Paused while in the background"
         default: nil

@@ -23,15 +23,18 @@ import UnnamedCore
 
     @Test func connectAttachAndShowTheLayout() async throws {
         let (connection, client) = try makeConnection()
-        #expect(connection.status == .connecting)
+        #expect(connection.status == .connecting(.dialing))
         #expect(!connection.isReady)
 
+        // Connected is not live yet: there is no session to show until its layout arrives.
         client().send(.connected(epoch: 1, resumed: false))
-        try await eventually("connected") { connection.status.isLive }
+        try await eventually("opening the session") { connection.status == .connecting(.openingSession) }
         #expect(client().calls.contains(.attach(7)), "attaches the saved session")
 
+        client().send(.attached(sessionId: 7, via: .requested, missing: nil))
         client().send(.layout(layout: sampleLayout()))
-        try await eventually("layout") { connection.isReady }
+        try await eventually("layout") { connection.isReady && connection.status.isLive }
+        #expect(connection.notice == nil)
         #expect(connection.layout.session.panes.count == 3)
         try await eventually("view pushed") { client().calls.contains(.setView(3, [1, 2, 3])) }
 
@@ -142,7 +145,34 @@ import UnnamedCore
         try await eventually("needs attention") { connection.status.needsUser }
         connection.retry()
         #expect(client().calls.last == .reconnect)
-        #expect(connection.status == .connecting)
+        #expect(connection.status == .connecting(.dialing))
+    }
+
+    /// The remembered session is gone (closed elsewhere, or the daemon's state was reset): the
+    /// daemon attaches the most recent one, and the user is told once.
+    @Test func goneSessionIsReplacedAndTheUserIsTold() async throws {
+        let (connection, client) = try makeConnection()
+        var saved: UInt64?
+        connection.onAttached = { saved = $0 }
+        client().send(.connected(epoch: 1, resumed: false))
+        client().send(.attached(sessionId: 2, via: .mostRecent, missing: 7))
+        client().send(.layout(layout: sampleLayout()))
+        try await eventually("live") { connection.status.isLive }
+        #expect(saved == 2, "the host record remembers the new session")
+        #expect(connection.notice?.text == "Your previous session ended. Showing the most recent one.")
+        connection.dismissNotice()
+        #expect(connection.notice == nil)
+    }
+
+    /// Nothing to attach to (a guest whose session ended): needs the user, with words, never
+    /// "Connected" with nothing on screen.
+    @Test func attachFailureNeedsTheUser() async throws {
+        let (connection, client) = try makeConnection()
+        client().send(.connected(epoch: 1, resumed: false))
+        client().send(.attachFailed(code: .notFound, message: "nothing to attach to in this grant's scope"))
+        try await eventually("needs attention") { connection.status.needsUser }
+        #expect(connection.status == .needsAttention(reason: "The session you were invited to has ended."))
+        #expect(!connection.isReady)
     }
 
     @Test func blockedAgentsAreTracked() async throws {

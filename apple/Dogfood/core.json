@@ -214,6 +214,20 @@
         { "do": "shortcut", "keys": "cmd+c" },
         { "do": "assert", "pasteboard": "SELECT-42-ME" }
       ]
+    },
+    {
+      "name": "screens-fill-the-window",
+      "steps": [
+        { "do": "destination", "to": "inbox" },
+        { "do": "assert", "detailFillsWindow": true, "name": "the Inbox (empty) fills the window" },
+        { "do": "destination", "to": "hosts" },
+        { "do": "assert", "detailFillsWindow": true, "name": "Hosts fills the window" },
+        { "do": "destination", "to": "terminal" },
+        { "do": "assert", "detailFillsWindow": true, "name": "the terminal fills the window" },
+        { "do": "waitIdle" },
+        { "do": "type", "text": "echo back-$((7*6))\n" },
+        { "do": "waitText", "regex": "^back-42$" }
+      ]
     }
   ]
 }
