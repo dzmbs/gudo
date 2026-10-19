@@ -24,7 +24,7 @@ struct SettingsView: View {
         #if os(macOS)
         TabView {
             SwiftUI.Tab("Appearance", systemImage: "paintpalette") { pane { AppearanceSection() } }
-            SwiftUI.Tab("Terminal", systemImage: "terminal") { pane { FontSection(); CursorSection(); SplitsSection() } }
+            SwiftUI.Tab("Terminal", systemImage: "terminal") { pane { FontSection(); CursorSection(); SplitsSection(); PasswordsSection() } }
             SwiftUI.Tab("Keyboard", systemImage: "keyboard") { pane { KeyboardSection(); VoiceSettingsSection() } }
             SwiftUI.Tab("Notifications", systemImage: "bell.badge") { pane { NotificationsSection() } }
             SwiftUI.Tab("About", systemImage: "info.circle") { pane { AboutSection() } }
@@ -41,6 +41,7 @@ struct SettingsView: View {
                 CursorSection().raisedRows()
                 SplitsSection().raisedRows()
                 KeyboardSection().raisedRows()
+                PasswordsSection().raisedRows()
                 VoiceSettingsSection().raisedRows()
                 NotificationsSection().raisedRows()
                 AboutSection().raisedRows()
