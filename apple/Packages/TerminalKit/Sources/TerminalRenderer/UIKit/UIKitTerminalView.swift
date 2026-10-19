@@ -554,8 +554,17 @@ public final class TerminalView: UIView {
         case #selector(copy(_:)): surface.terminal.selection != nil
         case #selector(paste(_:)): UIPasteboard.general.hasStrings || (onPasteAttachment != nil && UIPasteboard.general.hasImages)
         case #selector(selectAll(_:)): true
+        case #selector(find(_:)): onFind != nil
         default: super.canPerformAction(action, withSender: sender)
         }
+    }
+
+    /// The app's Find (⌘F). iOS routes ⌘F to the text input's standard `find:` action before any
+    /// key command, so a terminal that does not answer it swallowed the shortcut.
+    public var onFind: (() -> Void)?
+
+    override public func find(_ sender: Any?) {
+        onFind?()
     }
 
     /// Copies the selection as plain text, soft-wrapped lines joined.

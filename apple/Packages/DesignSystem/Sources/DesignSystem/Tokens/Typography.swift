@@ -23,7 +23,7 @@ public extension DS {
         public static let literal = SwiftUI.Font.system(.callout, design: .monospaced)
         public static let literalSmall = SwiftUI.Font.system(.caption, design: .monospaced)
         /// The command palette query (Ghostty CommandPalette.swift: 20 pt light).
-        public static let paletteQuery = SwiftUI.Font.system(size: 20, weight: .light)
+        public static let paletteQuery = SwiftUI.Font.title3.weight(.light)
         /// Key caps (Ghostty SurfaceView.swift `KeyCap`: 12 pt medium rounded).
         public static let keyCap = SwiftUI.Font.system(size: 12, weight: .medium, design: .rounded)
         /// Terminal overlays drawn over the grid: the cols × rows readout and the exit bar.

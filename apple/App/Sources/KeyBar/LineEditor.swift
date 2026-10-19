@@ -423,26 +423,12 @@ private final class ChipButton: UIButton {
 /// commands, so it answers the workspace shortcuts itself (⌘T, ⌘D, ⌘W, tabs, panes): otherwise
 /// every ⌘ shortcut was dead while it held the keyboard.
 final class ShortcutTextField: UITextField {
-    private static let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.tabActions
+    private static let actions = WorkspaceAction.allShortcutActions
 
     override var keyCommands: [UIKeyCommand]? {
-        Self.actions.enumerated().compactMap { index, action in
-            let shortcut = action.shortcut
-            let input: String = switch shortcut.key {
-            case .upArrow: UIKeyCommand.inputUpArrow
-            case .downArrow: UIKeyCommand.inputDownArrow
-            case .leftArrow: UIKeyCommand.inputLeftArrow
-            case .rightArrow: UIKeyCommand.inputRightArrow
-            case .return: "\r"
-            default: String(shortcut.key.character)
-            }
-            var flags: UIKeyModifierFlags = []
-            if shortcut.modifiers.contains(.command) { flags.insert(.command) }
-            if shortcut.modifiers.contains(.shift) { flags.insert(.shift) }
-            if shortcut.modifiers.contains(.option) { flags.insert(.alternate) }
-            if shortcut.modifiers.contains(.control) { flags.insert(.control) }
-            let command = UIKeyCommand(title: action.title, action: #selector(performShortcut(_:)), input: input,
-                                       modifierFlags: flags, propertyList: index)
+        Self.actions.enumerated().map { index, action in
+            let command = UIKeyCommand(title: action.title, action: #selector(performShortcut(_:)), input: action.shortcut.key.uiKeyInput,
+                                       modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags, propertyList: index)
             command.wantsPriorityOverSystemBehavior = true
             return command
         }
@@ -451,7 +437,7 @@ final class ShortcutTextField: UITextField {
     @objc private func performShortcut(_ command: UIKeyCommand) {
         guard let index = command.propertyList as? Int, Self.actions.indices.contains(index),
               let workspace = ActiveWindow.workspace else { return }
-        Self.actions[index].perform(on: workspace)
+        Self.actions[index].perform(on: workspace, window: ActiveWindow.model(for: workspace))
     }
 }
 #endif

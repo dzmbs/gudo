@@ -142,7 +142,8 @@ final class WindowModel {
             ports.window = self
             links.window = self
         }
-        ActiveWindow.register(self)
+        // Registered by the window when it appears (`WindowRoot`), not here: SwiftUI can create
+        // spare models it never shows, and the shortcuts found one of those (⌘K opened nothing).
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
         followGroups()

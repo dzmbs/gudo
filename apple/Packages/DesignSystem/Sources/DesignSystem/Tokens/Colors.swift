@@ -42,6 +42,9 @@ public extension DS {
         /// The brand accent: Ghostty's bright blue (palette 12, #7AA6DA) on dark, darkened for light.
         /// Used for focus, selection and the single primary action, nothing decorative.
         public static let accent = Color(light: Color(hex: "#2F6DB5"), dark: Color(hex: "#7AA6DA"))
+        /// A solid selection under white text (the palette's selected row): the accent deepened
+        /// to pass 4.5:1 with white in both modes.
+        public static let selection = Color(light: Color(hex: "#2F6DB5"), dark: Color(hex: "#2E5E91"))
 
         /// Your turn: an agent waiting for input, a slow or reconnecting link (Ghostty yellow,
         public static let attention = Color(light: Color(hex: "#A87A00"), dark: Color(hex: "#F0C674"))
