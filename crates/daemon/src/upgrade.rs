@@ -1,0 +1,443 @@
+//! Self upgrade: the owner streams a new build over the connection, the daemon verifies it and
+//! swaps it in, then asks the host process to restart into it (`proto::info`).
+//!
+//! Verification, in order: the stream carries exactly the announced size; the decoded
+//! executable's SHA-256 matches the header (the owner's device, authenticated by the QUIC
+//! handshake, vouches for the bytes; there is no release signing key yet); the new file runs
+//! on this host (`<new> build-info --json` within 15 s) and reports this OS and CPU. Only then
+//! is it renamed over the running executable (atomic within the directory; the old one is
+//! kept as `<exe>.prev`), and the host process `exec`s it after saving the layout and stopping
+//! the panes. Any failure leaves the running daemon and its file untouched.
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use iroh::endpoint::{RecvStream, SendStream};
+use proto::{
+    Actor, AuditKind, DaemonInfo, UpgradeEncoding, UpgradeFailure, UpgradeHeader, UpgradeReply,
+};
+use tokio::sync::watch;
+
+use crate::core::Core;
+use crate::net;
+
+/// Largest build accepted, encoded or decoded.
+const MAX_SIZE: u64 = 256 << 20;
+/// How long the new build may take to report itself.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Upgrade state kept by the core.
+pub(crate) struct Upgrade {
+    busy: AtomicBool,
+    restart: watch::Sender<Option<PathBuf>>,
+}
+
+impl Default for Upgrade {
+    fn default() -> Self {
+        Self {
+            busy: AtomicBool::new(false),
+            restart: watch::channel(None).0,
+        }
+    }
+}
+
+impl Upgrade {
+    /// Resolves with the executable to restart into once an upgrade was installed.
+    pub fn restart_requested(&self) -> impl Future<Output = PathBuf> + Send + 'static {
+        let mut rx = self.restart.subscribe();
+        async move {
+            loop {
+                if let Some(path) = rx.borrow_and_update().clone() {
+                    return path;
+                }
+                if rx.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    }
+}
+
+type Failure = (UpgradeFailure, String);
+
+fn fail(code: UpgradeFailure, message: impl Into<String>) -> Failure {
+    (code, message.into())
+}
+
+/// Serves one upgrade stream. `owner` is whether the connection is the daemon's owner (a
+/// paired device, not a guest), checked by the caller.
+pub(crate) async fn serve(
+    core: Arc<Core>,
+    actor: Actor,
+    owner: bool,
+    header: UpgradeHeader,
+    mut send: SendStream,
+    mut recv: RecvStream,
+) {
+    let result = if owner {
+        install(&core, &header, &mut send, &mut recv).await
+    } else {
+        core.mp.audit.append(
+            AuditKind::Denied,
+            crate::mp::AuditEntry {
+                actor: Some(actor),
+                detail: "refused a daemon upgrade: owner only".into(),
+                ..crate::mp::AuditEntry::default()
+            },
+        );
+        Err(fail(
+            UpgradeFailure::Forbidden,
+            "only the host's owner can update its helper",
+        ))
+    };
+    let (reply, restart) = match result {
+        Ok((info, exe)) => {
+            tracing::info!(build = %info.build, protocol = info.protocol, "upgrade installed; restarting");
+            (UpgradeReply::Installed(info), Some(exe))
+        }
+        Err((code, message)) => {
+            tracing::warn!(?code, "upgrade failed: {message}");
+            let _ = recv.stop(0u32.into());
+            (UpgradeReply::Failed { code, message }, None)
+        }
+    };
+    let _ = net::send(&mut send, &reply).await;
+    let _ = send.finish();
+    // Let the answer reach the client before the restart closes the connection.
+    let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
+    if let Some(exe) = restart {
+        core.upgrade.restart.send_replace(Some(exe));
+    }
+}
+
+/// Holds the one-upgrade-at-a-time flag; released on drop unless the upgrade went through
+/// (the daemon is about to restart, so later attempts stay refused).
+struct Busy<'a>(&'a AtomicBool);
+
+impl<'a> Busy<'a> {
+    fn acquire(flag: &'a AtomicBool) -> Option<Self> {
+        (!flag.swap(true, Ordering::AcqRel)).then_some(Self(flag))
+    }
+
+    fn keep(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+async fn install(
+    core: &Arc<Core>,
+    header: &UpgradeHeader,
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+) -> Result<(DaemonInfo, PathBuf), Failure> {
+    let exe = core.cfg.self_exe.clone().ok_or_else(|| {
+        fail(
+            UpgradeFailure::Unsupported,
+            "this helper cannot replace itself; update it over SSH",
+        )
+    })?;
+    if header.size == 0 || header.size > MAX_SIZE {
+        return Err(fail(
+            UpgradeFailure::Corrupt,
+            format!("a build of {} bytes is not plausible", header.size),
+        ));
+    }
+    let busy = Busy::acquire(&core.upgrade.busy)
+        .ok_or_else(|| fail(UpgradeFailure::Busy, "an update is already running"))?;
+    tracing::info!(
+        build = %header.build,
+        size = header.size,
+        encoding = ?header.encoding,
+        "receiving an upgrade"
+    );
+    let staged = Staged::create(&exe).map_err(|e| {
+        fail(
+            UpgradeFailure::Unsupported,
+            format!("cannot write next to {}: {e}", exe.display()),
+        )
+    })?;
+    net::send(send, &UpgradeReply::Ready)
+        .await
+        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?;
+    let staged = receive(staged, header, recv).await?;
+    let info = check(&staged.path).await?;
+    let path = staged.path.clone();
+    let exe2 = exe.clone();
+    tokio::task::spawn_blocking(move || swap(&path, &exe2))
+        .await
+        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?
+        .map_err(|e| {
+            fail(
+                UpgradeFailure::Io,
+                format!("swapping in the new build: {e}"),
+            )
+        })?;
+    staged.keep();
+    busy.keep();
+    Ok((info, exe))
+}
+
+/// The new build's file next to the executable; removed unless kept.
+struct Staged {
+    path: PathBuf,
+    kept: bool,
+}
+
+impl Staged {
+    fn create(exe: &Path) -> io::Result<(Self, File)> {
+        let dir = exe.parent().unwrap_or(Path::new("."));
+        let name = exe.file_name().map_or_else(
+            || brand::DAEMON_BIN.to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let path = dir.join(format!(".{name}.upgrade-{}", std::process::id()));
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o755)
+            .open(&path)?;
+        Ok((Self { path, kept: false }, file))
+    }
+
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.kept {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// A writer that hashes what passes through it.
+struct Hashing<W> {
+    inner: W,
+    digest: ring::digest::Context,
+    written: u64,
+}
+
+impl<W: Write> Write for Hashing<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.digest.update(&buf[..n]);
+        self.written += n as u64;
+        if self.written > MAX_SIZE {
+            return Err(io::Error::other("the decoded build is too large"));
+        }
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Reads exactly `header.size` bytes, decodes them into the staged file and checks the hash.
+async fn receive(
+    (staged, file): (Staged, File),
+    header: &UpgradeHeader,
+    recv: &mut RecvStream,
+) -> Result<Staged, Failure> {
+    let encoding = header.encoding;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+    // Decoding and writing happen on a blocking thread fed through a small channel, so a slow
+    // disk slows the stream (QUIC flow control) instead of buffering the build in memory.
+    let writer = tokio::task::spawn_blocking(move || -> io::Result<(File, [u8; 32])> {
+        let hashing = Hashing {
+            inner: io::BufWriter::new(file),
+            digest: ring::digest::Context::new(&ring::digest::SHA256),
+            written: 0,
+        };
+        let finish = |h: Hashing<io::BufWriter<File>>| -> io::Result<(File, [u8; 32])> {
+            let digest = h.digest.finish();
+            let file = h
+                .inner
+                .into_inner()
+                .map_err(io::IntoInnerError::into_error)?;
+            let mut sha = [0u8; 32];
+            sha.copy_from_slice(digest.as_ref());
+            Ok((file, sha))
+        };
+        match encoding {
+            UpgradeEncoding::Raw => {
+                let mut out = hashing;
+                while let Some(chunk) = rx.blocking_recv() {
+                    out.write_all(&chunk)?;
+                }
+                finish(out)
+            }
+            UpgradeEncoding::Gzip => {
+                let mut gz = flate2::write::GzDecoder::new(hashing);
+                while let Some(chunk) = rx.blocking_recv() {
+                    gz.write_all(&chunk)?;
+                }
+                finish(gz.finish()?)
+            }
+        }
+    });
+    let mut received: u64 = 0;
+    let mut buf = vec![0; 64 * 1024];
+    let read = loop {
+        match recv.read(&mut buf).await {
+            Ok(Some(n)) => {
+                received += n as u64;
+                if received > header.size {
+                    break Err(fail(
+                        UpgradeFailure::Corrupt,
+                        format!("more than the announced {} bytes", header.size),
+                    ));
+                }
+                if tx.send(buf[..n].to_vec()).await.is_err() {
+                    break Ok(());
+                }
+            }
+            Ok(None) => break Ok(()),
+            Err(e) => break Err(fail(UpgradeFailure::Io, format!("upgrade stream: {e}"))),
+        }
+    };
+    drop(tx);
+    let written = writer
+        .await
+        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?;
+    read?;
+    if received != header.size {
+        return Err(fail(
+            UpgradeFailure::Corrupt,
+            format!("the stream ended after {received} of {} bytes", header.size),
+        ));
+    }
+    let (file, sha) = written.map_err(|e| {
+        fail(
+            UpgradeFailure::Corrupt,
+            format!("decoding the build failed: {e}"),
+        )
+    })?;
+    if sha != header.sha256 {
+        return Err(fail(
+            UpgradeFailure::Corrupt,
+            "the build's SHA-256 does not match what was announced",
+        ));
+    }
+    file.sync_all()
+        .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?;
+    Ok(staged)
+}
+
+/// Runs `<new> build-info --json`: the build must start on this host and report this OS and
+/// CPU.
+async fn check(path: &Path) -> Result<DaemonInfo, Failure> {
+    let run = tokio::process::Command::new(path)
+        .args(["build-info", "--json"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(CHECK_TIMEOUT, run)
+        .await
+        .map_err(|_| fail(UpgradeFailure::Rejected, "the new build did not answer"))?
+        .map_err(|e| {
+            fail(
+                UpgradeFailure::Rejected,
+                format!("the new build does not run on this host: {e}"),
+            )
+        })?;
+    if !out.status.success() {
+        return Err(fail(
+            UpgradeFailure::Rejected,
+            format!(
+                "the new build failed its self-check ({}): {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        ));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or_default();
+    let info: DaemonInfo = serde_json::from_str(line).map_err(|e| {
+        fail(
+            UpgradeFailure::Rejected,
+            format!("the new build reported nonsense ({e})"),
+        )
+    })?;
+    if info.os != std::env::consts::OS || info.arch != std::env::consts::ARCH {
+        return Err(fail(
+            UpgradeFailure::Rejected,
+            format!(
+                "the new build is for {} {}, this host is {} {}",
+                info.os,
+                info.arch,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ),
+        ));
+    }
+    Ok(info)
+}
+
+/// Keeps the running executable as `<exe>.prev` and renames the new build over it.
+fn swap(new: &Path, exe: &Path) -> io::Result<()> {
+    let prev = prev_path(exe);
+    let _ = fs::remove_file(&prev);
+    if fs::hard_link(exe, &prev).is_err() {
+        // Not fatal: a filesystem without hard links just keeps no fallback copy.
+        let _ = fs::copy(exe, &prev);
+    }
+    fs::rename(new, exe)?;
+    if let Some(dir) = exe.parent()
+        && let Ok(d) = File::open(dir)
+    {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
+/// Where the previous build is kept.
+pub fn prev_path(exe: &Path) -> PathBuf {
+    let mut name = exe.file_name().unwrap_or_default().to_os_string();
+    name.push(".prev");
+    exe.with_file_name(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prev_sits_next_to_the_executable() {
+        assert_eq!(
+            prev_path(Path::new("/home/u/.local/bin/unnamed-hostd")),
+            PathBuf::from("/home/u/.local/bin/unnamed-hostd.prev")
+        );
+    }
+
+    #[test]
+    fn swap_keeps_the_old_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("hostd");
+        let new = dir.path().join(".hostd.upgrade-1");
+        fs::write(&exe, b"old").unwrap();
+        fs::write(&new, b"new").unwrap();
+        swap(&new, &exe).unwrap();
+        assert_eq!(fs::read(&exe).unwrap(), b"new");
+        assert_eq!(fs::read(prev_path(&exe)).unwrap(), b"old");
+        assert!(!new.exists());
+    }
+}

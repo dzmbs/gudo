@@ -20,6 +20,11 @@ public struct HostEntry: Identifiable, Equatable, Sendable {
     public var pinned: Bool
     /// SSH hosts without the helper: offer "Install helper".
     public var canInstallHelper: Bool
+    /// The helper is older than the app's, or too old (or new) to work with: what to say and
+    /// whether "Update Helper" can do it (`HostsModel.updateHelper`).
+    public var helper: HelperAdvice?
+    /// "Ubuntu 24.04.1 LTS · x86_64", from the daemon.
+    public var machine: String?
 }
 
 /// Everything about hosts the UI binds to: the saved hosts, their live connections, pairing,
@@ -36,6 +41,8 @@ public final class HostsModel {
     /// What the last helper install said the user may want to know (e.g. lingering is off), by
     /// host id; cleared with `dismissNotes`.
     public private(set) var installNotes: [String: [String]] = [:]
+    /// Helper updates in progress, by host id.
+    public private(set) var helperUpdates: [String: HelperUpdateProgress] = [:]
     public let keys: KeyStore
     public let hostKeyPrompts = HostKeyPrompts()
     public let network = NetworkMonitor()
@@ -49,6 +56,9 @@ public final class HostsModel {
         public var mirrorVt = false
         /// The daemon builds to install (the app bundles gzipped Linux builds).
         public var hostdBinaries: @Sendable () -> HostdBinaries = { HostdBinaries(linuxAarch64: nil, linuxX8664: nil, macosAarch64: nil, macosX8664: nil) }
+        /// What those builds are (`hostd-manifest.json`), to tell an older helper; nil when
+        /// the app bundles none.
+        public var bundledDaemons: @Sendable () -> BundledDaemons? = { nil }
         public init() {}
     }
 
@@ -104,7 +114,23 @@ public final class HostsModel {
             address: record.ssh?.display ?? record.daemonId.map { String($0.prefix(16)) } ?? "",
             status: status, needsYou: needsYou, blockedAgents: blocked.count,
             lastConnected: record.lastConnected, pinned: record.pinned,
-            canInstallHelper: record.kind == .ssh)
+            canInstallHelper: record.kind == .ssh,
+            helper: helperAdvice(record.id),
+            machine: record.machine.map { machine in
+                [machine.osName.isEmpty ? machine.os : machine.osName, machine.arch]
+                    .filter { !$0.isEmpty }.joined(separator: " · ")
+            })
+    }
+
+    /// What to say about a daemon host's helper version, from its latest connection.
+    public func helperAdvice(_ id: String) -> HelperAdvice? {
+        guard let record = record(id), record.kind == .daemon,
+              let daemon = connections[id] as? DaemonConnection
+        else { return nil }
+        return HelperCheck.assess(
+            info: daemon.daemonInfo, reported: daemon.daemonInfoReported, incompatible: daemon.incompatibility,
+            bundled: configuration.bundledDaemons(), canSSH: record.ssh != nil, isGuest: record.isGuest,
+            appProtocol: protocolLevel(), minDaemonProtocol: minDaemonProtocol())
     }
 
     // MARK: Connections
@@ -138,6 +164,7 @@ public final class HostsModel {
             hostId: record.id, ticket: ticket, session: record.sessionId,
             dialer: record.isGuest ? try guestDialer() : try daemonDialer())
         connection.onAttached = { [weak self] session in self?.update(record.id) { $0.sessionId = session } }
+        connection.onDaemonInfo = { [weak self] info in self?.daemonReported(record.id, info) }
         connections[record.id] = connection
         do {
             try connection.connect()
@@ -224,8 +251,33 @@ public final class HostsModel {
         persist()
     }
 
+    /// A name the user chose: the app never changes it.
     public func rename(_ id: String, to name: String) {
-        update(id) { $0.name = name }
+        update(id) {
+            $0.name = name
+            $0.nameSource = .user
+        }
+    }
+
+    /// The daemon described itself (on every connection): remember the machine, and name a
+    /// host the app named (placeholder) after it, once. Names the user chose stay.
+    func daemonReported(_ id: String, _ info: DaemonInfo?) {
+        guard let info, !info.hostname.isEmpty, let record = record(id) else { return }
+        let machine = HostRecord.Machine(hostname: info.hostname, osName: info.osName, os: info.os, arch: info.arch)
+        let source = record.nameSource ?? (MachineName.looksDefault(record) ? .placeholder : .user)
+        let name = source == .placeholder ? MachineName.display(info.hostname) : nil
+        guard record.machine != machine || record.nameSource != source || name != nil else { return }
+        if let name {
+            Self.log.info("naming host=\(id, privacy: .public) \(name, privacy: .public) (was \(record.name, privacy: .public))")
+        }
+        update(id) {
+            $0.machine = machine
+            $0.nameSource = source
+            if let name {
+                $0.name = name
+                $0.nameSource = .machine
+            }
+        }
     }
 
     public func setPinned(_ id: String, _ pinned: Bool) {
@@ -241,10 +293,14 @@ public final class HostsModel {
     public func pair(_ ticket: PairingTicket, name: String? = nil, replacing hostId: String? = nil) async throws -> String {
         let existing = hostId.flatMap(record) ?? records.first { $0.daemonId == ticket.info.daemonId }
         var record = existing ?? HostRecord(name: name ?? ticket.defaultName, kind: .daemon, daemonId: ticket.info.daemonId)
+        if existing == nil { record.nameSource = .placeholder }
         record.kind = .daemon
         record.daemonId = ticket.info.daemonId
         record.guest = nil
-        if let name { record.name = name }
+        if let name {
+            record.name = name
+            record.nameSource = .user
+        }
         try secrets.set(ticket.text, for: record.ticketKey)
         let previous = connections[record.id]
         connections[record.id] = nil
@@ -275,6 +331,8 @@ public final class HostsModel {
         let info = try inspectInvite(invite: text)
         let existing = records.first { $0.daemonId == info.daemonId && $0.isGuest }
         var record = existing ?? HostRecord(name: name ?? Self.guestHostName(info), kind: .daemon, daemonId: info.daemonId)
+        // "Alex's host" says more to a guest than the owner's machine name: keep it.
+        if existing == nil { record.nameSource = .user }
         record.guest = true
         record.inviter = info.inviter.isEmpty ? nil : info.inviter
         if let name { record.name = name }
@@ -333,8 +391,9 @@ public final class HostsModel {
     public func connectSSH(
         _ endpoint: SSHEndpoint, name: String? = nil, password: String? = nil, rememberPassword: Bool = true
     ) throws -> String {
-        var record = records.first { $0.ssh?.host == endpoint.host && $0.ssh?.user == endpoint.user && $0.ssh?.port == endpoint.port }
-            ?? HostRecord(name: name ?? endpoint.host, kind: .ssh, ssh: endpoint)
+        let existing = records.first { $0.ssh?.host == endpoint.host && $0.ssh?.user == endpoint.user && $0.ssh?.port == endpoint.port }
+        var record = existing ?? HostRecord(name: name ?? endpoint.host, kind: .ssh, ssh: endpoint)
+        if existing == nil { record.nameSource = name == nil ? .placeholder : .user }
         record.ssh = endpoint
         if let password, rememberPassword { try secrets.set(password, for: record.passwordKey) }
         upsert(record)
@@ -371,6 +430,85 @@ public final class HostsModel {
         return report
     }
 
+    // MARK: Helper updates
+
+    /// Updates a daemon host's helper to the app's build (docs/APP-ARCHITECTURE.md §14): over
+    /// its saved SSH login when it was set up from SSH (upload and restart, as "Install Helper"
+    /// does), else over the daemon connection (the daemon checks the build, swaps it in and
+    /// restarts itself; owner only). Returns once the host is back on the new build. Panes come
+    /// back from the daemon's saved layout and agents resume; shells restart.
+    public func updateHelper(_ id: String) async throws {
+        guard let record = record(id), let advice = helperAdvice(id), advice.canUpdate else {
+            throw HelperUpdateError.unavailable
+        }
+        guard helperUpdates[id] == nil else { return }
+        let started = ContinuousClock.now
+        helperUpdates[id] = HelperUpdateProgress(step: .preparing)
+        defer { helperUpdates[id] = nil }
+        let daemon = connections[id] as? DaemonConnection
+        let previous = daemon?.epoch
+        switch advice.method {
+        case .ssh:
+            guard try await updateOverSSH(record) else { return }
+        case .connection:
+            guard let daemon, let bundled = advice.bundled, let manifest = configuration.bundledDaemons() else {
+                throw HelperUpdateError.unavailable
+            }
+            helperUpdates[id]?.step = .uploading(sent: 0, total: 0)
+            _ = try await daemon.updateHelper(path: manifest.path(of: bundled), build: bundled.build) { [weak self] sent, total in
+                Task { @MainActor in
+                    if case .uploading = self?.helperUpdates[id]?.step {
+                        self?.helperUpdates[id]?.step = .uploading(sent: sent, total: total)
+                    }
+                }
+            }
+        case .none:
+            throw HelperUpdateError.unavailable
+        }
+        helperUpdates[id]?.step = .restarting
+        connections[id]?.retry()
+        // Back when a new daemon run answers and the session is open again.
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
+            if let daemon = connections[id] as? DaemonConnection, daemon.status.isLive,
+               daemon.epoch != previous || previous == nil {
+                Self.log.info("helper updated host=\(id, privacy: .public) to \(daemon.daemonInfo?.build ?? "?", privacy: .public) in \((ContinuousClock.now - started) / .milliseconds(1), format: .fixed(precision: 0)) ms")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw HelperUpdateError.didNotComeBack
+    }
+
+    /// Runs the SSH bootstrap with the host's saved login: it uploads the bundled build when
+    /// it differs and restarts the service. The device stays paired. Returns whether the
+    /// helper restarted (false: it already ran the bundled build).
+    private func updateOverSSH(_ record: HostRecord) async throws -> Bool {
+        guard let endpoint = record.ssh else { throw HelperUpdateError.unavailable }
+        let session = try SshSession.start(
+            target: try target(for: endpoint), auth: try auth(for: record, password: nil), knownHosts: knownHosts,
+            hostKeys: .ask(delegate: hostKeyPrompts.delegate()), options: defaultSshOptions(), listener: SshStateStream())
+        defer { session.close() }
+        helperUpdates[record.id]?.step = .connectingSSH
+        try await session.connected()
+        let id = record.id
+        let listener = BootstrapProgressListener { [weak self] step in
+            Task { @MainActor in
+                guard self?.helperUpdates[id] != nil else { return }
+                switch step {
+                case .uploading(let size, let sent): self?.helperUpdates[id]?.step = .uploading(sent: sent, total: size)
+                case .starting: self?.helperUpdates[id]?.step = .restarting
+                case .probing, .pairing: break
+                }
+            }
+        }
+        let report = try await session.bootstrap(
+            binaries: configuration.hostdBinaries(), ticketMinutes: 1, waitSecs: nil, listener: listener)
+        Self.log.info("helper update over ssh host=\(id, privacy: .public) action=\(String(describing: report.action), privacy: .public)")
+        installNotes[id] = report.notes.isEmpty ? nil : report.notes
+        return report.action != .reused
+    }
+
     // MARK: ~/.ssh/config
 
     /// Reads `~/.ssh/config` text (pasted, from Files, or read directly on macOS) and lists its
@@ -394,7 +532,9 @@ public final class HostsModel {
             #endif
             let endpoint = SSHEndpoint(
                 user: host.user ?? NSUserName(), host: host.hostName, port: host.port, alias: host.alias, identity: identity)
-            upsert(HostRecord(name: host.alias, kind: .ssh, ssh: endpoint))
+            var record = HostRecord(name: host.alias, kind: .ssh, ssh: endpoint)
+            record.nameSource = .user
+            upsert(record)
         }
     }
 
@@ -482,6 +622,45 @@ public struct InstallProgress: Equatable, Sendable {
             "Uploading helper (\(ByteCountFormatter.string(fromByteCount: Int64(sent), countStyle: .file)) sent, \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) binary)"
         case .starting: "Starting the service…"
         case .pairing: "Pairing…"
+        }
+    }
+}
+
+/// A helper update's progress.
+public struct HelperUpdateProgress: Equatable, Sendable {
+    public enum Step: Equatable, Sendable {
+        case preparing
+        case connectingSSH
+        case uploading(sent: UInt64, total: UInt64)
+        /// Swapped in; the helper restarts and the connection comes back.
+        case restarting
+    }
+
+    public var step: Step
+
+    /// One line for the progress row and notice.
+    public var summary: String {
+        switch step {
+        case .preparing: "Preparing the update…"
+        case .connectingSSH: "Signing in over SSH…"
+        case .uploading(let sent, let total) where total > 0:
+            "Updating helper (\(ByteCountFormatter.string(fromByteCount: Int64(sent), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)))"
+        case .uploading: "Updating helper…"
+        case .restarting: "Restarting helper…"
+        }
+    }
+}
+
+public enum HelperUpdateError: Error, Equatable, LocalizedError {
+    /// Nothing to update, or no way to reach the host's helper from here.
+    case unavailable
+    /// The helper was updated but the host did not answer within a minute.
+    case didNotComeBack
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable: "This host's helper can't be updated from here. Reinstall it over SSH."
+        case .didNotComeBack: "The helper was updated but the host hasn't come back yet. It retries on its own."
         }
     }
 }

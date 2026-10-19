@@ -12,6 +12,7 @@ use crate::ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
     ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
 };
+use crate::info::{DaemonInfo, UpgradeHeader};
 use crate::layout::{LayoutOp, OpError, OpOutcome, SessionLayout, SessionSummary};
 use crate::mp::{JoinInfo, MpError, MpRequest, MpResponse, Participant};
 use crate::workspace::{
@@ -61,6 +62,9 @@ pub enum StreamHeader {
     /// Client → daemon, bidirectional, bulk priority: store or fetch an artifact blob. See
     /// [`BlobReply`](crate::BlobReply).
     Blob(BlobHeader),
+    /// Client → daemon, bidirectional, bulk priority: replace the daemon with a new build of
+    /// itself (owner only). See [`UpgradeReply`](crate::UpgradeReply) and [`crate::info`].
+    Upgrade(UpgradeHeader),
 }
 
 /// The daemon's answer on a [`StreamHeader::PortForward`] stream.
@@ -581,6 +585,13 @@ pub enum ServerCtl {
     Assist(AssistPush),
     /// Answers [`ClientCtl::Attach`] for clients with [`Caps::ATTACH_RESULT`].
     AttachResult(Result<Attachment, AttachFailure>),
+    /// The daemon's build and machine. Sent to clients with [`Caps::DAEMON_INFO`] as the
+    /// first frame on `ctl`, before [`ServerCtl::Welcome`] or [`ServerCtl::Refused`] (with an
+    /// empty host name when refusing). When such a client's snapshot format differs from the
+    /// daemon's and it presents the owner's device grant, the daemon still sends `Welcome`
+    /// (with its own format, which tells the client) but serves nothing on that connection
+    /// except [`StreamHeader::Upgrade`], so an incompatible daemon can still be upgraded.
+    DaemonInfo(DaemonInfo),
 }
 
 /// A successful [`ClientCtl::Attach`].

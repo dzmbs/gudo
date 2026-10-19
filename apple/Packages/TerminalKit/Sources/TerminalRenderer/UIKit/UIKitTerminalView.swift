@@ -616,6 +616,9 @@ public final class TerminalView: UIView {
         }
     }
     public var onAppKeyCommand: ((Int) -> Void)?
+    /// Sees each hardware key event before it is encoded; returning true consumes it (the app's
+    /// hold-to-talk chord).
+    public var keyInterceptor: ((KeyEvent) -> Bool)?
 
     override public var keyCommands: [UIKeyCommand]? {
         (super.keyCommands ?? []) + appKeyCommands
@@ -674,6 +677,7 @@ public final class TerminalView: UIView {
             let consumed = text.isEmpty ? [] : mods.intersection([.shift, .alt])
             event = KeyEvent(key: key, action: action, mods: mods, consumedMods: consumed, text: text, unshiftedCodepoint: unshifted)
         }
+        if keyInterceptor?(event) == true { return true }
         if action == .press, surface.terminal.selection != nil, !Self.isModifier(uiKey.keyCode) { clearSelection() }
         send(event)
 

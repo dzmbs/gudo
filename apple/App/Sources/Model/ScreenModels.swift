@@ -15,6 +15,16 @@ nonisolated enum HostKind: String, Sendable {
     case local
 }
 
+/// What a host row and the window's notice say about the host's helper version.
+nonisolated struct HelperOffer: Hashable, Sendable {
+    /// One line: "A newer helper is available.", "This host's helper is too old for this app…".
+    var message: String
+    /// The app cannot work with the helper until it is updated (or the app is).
+    var required: Bool
+    /// "Update Helper" can do it from here.
+    var canUpdate: Bool
+}
+
 nonisolated struct HostSummary: Identifiable, Hashable, Sendable {
     var id: String
     var name: String
@@ -37,6 +47,8 @@ nonisolated struct HostSummary: Identifiable, Hashable, Sendable {
     var progress: String?
     /// A plain-SSH host that can be upgraded to the daemon ("Install Helper").
     var canInstallHelper = false
+    /// The host's helper is older than the app's, or cannot work with it ("Update Helper").
+    var helper: HelperOffer?
 
     var needsYouCount: Int {
         max((agentCounts[.blocked] ?? 0) + (agentCounts[.error] ?? 0), needsYou == nil ? 0 : 1)
@@ -62,6 +74,9 @@ protocol HostDirectory: AnyObject, Observable {
     func disconnect(_ id: HostSummary.ID)
     /// Upgrades a plain-SSH host to the daemon (upload, start, pair) and switches to it.
     func installHelper(_ id: HostSummary.ID) async throws
+    /// Updates a daemon host's helper to the app's build (over SSH or the connection); returns
+    /// once the host is back.
+    func updateHelper(_ id: HostSummary.ID) async throws
     /// `user@host[:port]` typed into the quick-connect field: asks how to sign in, then connects.
     func quickConnect(_ destination: String)
     /// A pairing ticket pasted, scanned from the host's QR code or from a deep link; returns the

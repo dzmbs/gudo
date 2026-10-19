@@ -37,6 +37,8 @@ packages:
     path: Packages/NotifyKit
   DrawingKit:
     path: Packages/DrawingKit
+  VoiceKit:
+    path: Packages/VoiceKit
 targets:
   App:
     type: application
@@ -55,6 +57,10 @@ targets:
         buildPhase: resources
         optional: true
       - path: build/hostd/unnamed-hostd-aarch64-linux.gz
+        buildPhase: resources
+        optional: true
+      # What those builds are (build, time, protocol level), to offer "Update Helper".
+      - path: build/hostd/hostd-manifest.json
         buildPhase: resources
         optional: true
     info:
@@ -96,6 +102,9 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: Scan a host's pairing QR code.
         # The daemon is reached over the local network too (direct iroh paths, LAN hosts).
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your hosts on the local network.
+        # Push-to-talk dictation (VoiceKit): on-device speech only.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Hear what you dictate into the terminal while you hold the mic key.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Turn what you dictate into text, on this device only.
         # ProMotion: lets the terminal's display link run at 120 Hz on iPhone too (iPad needs no key).
         INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
@@ -125,6 +134,8 @@ targets:
         product: DesignSystem
       - package: DrawingKit
         product: DrawingKit
+      - package: VoiceKit
+        product: VoiceKit
       - package: NotifyKit
         product: NotifyKit
       - package: PushCrypto

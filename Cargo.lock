@@ -711,6 +711,7 @@ dependencies = [
  "brand",
  "daemon",
  "drawing",
+ "flate2",
  "getrandom 0.4.3",
  "ghostty-vt",
  "grants",
@@ -984,6 +985,7 @@ dependencies = [
  "client-core",
  "data-encoding",
  "drawing",
+ "flate2",
  "getrandom 0.4.3",
  "ghostty-vt",
  "grants",
@@ -5882,6 +5884,7 @@ dependencies = [
  "brand",
  "camino",
  "flate2",
+ "proto",
  "uniffi_bindgen",
 ]
 

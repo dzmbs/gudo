@@ -37,6 +37,7 @@ mod mp;
 mod notify;
 mod ssh_api;
 mod types;
+mod upgrade;
 mod workspace;
 mod ws_types;
 
@@ -93,6 +94,9 @@ pub use ssh_api::{
     private_key_is_encrypted,
 };
 pub use types::*;
+pub use upgrade::{
+    DaemonInfo, UpgradeError, UpgradeFailureCode, min_daemon_protocol, protocol_level,
+};
 pub use workspace::{AgentLaunch, AgentLaunched, TransferProgress, WorkspaceListener};
 pub use ws_types::*;
 

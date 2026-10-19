@@ -20,6 +20,8 @@
 //! un links [--commands N]      un marks      un output [--command N]
 //! un invite [--role R+R] [--scope daemon|session|tab|pane[:ID]] [--ttl 24h] [--uses N]
 //!           [--name N] [--delegate]           un join <invite>
+//! un daemon info              the daemon's build, protocol level and host
+//! un daemon upgrade <file>    send a new build (raw or .gz) to the daemon, which restarts
 //! un who [--watch]            un take-control [--force] [--wait]   un release-control
 //! un prompt <text>            un grants [--devices]   un revoke <grant>|--device K   un audit
 //! ```
@@ -186,6 +188,11 @@ enum Cmd {
         #[arg(long)]
         pane: Option<u64>,
     },
+    /// The daemon itself: what build it runs, and replacing it with another.
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonCmd,
+    },
     /// Print a command's output (default: the last finished command).
     Output {
         /// Command number from `marks`.
@@ -212,6 +219,21 @@ enum TabCmd {
     Select { index: usize },
     Move { index: u32 },
     Rename { name: String },
+}
+
+#[derive(Subcommand)]
+enum DaemonCmd {
+    /// Version, build, protocol level, OS, CPU and host name.
+    Info,
+    /// Send a new build (an `unnamed-hostd` executable or its .gz) to the daemon, which
+    /// checks it, swaps it in and restarts into it. Panes come back from its saved layout;
+    /// shells restart.
+    Upgrade {
+        file: PathBuf,
+        /// Build id to log on the daemon.
+        #[arg(long, default_value = "")]
+        build: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -419,6 +441,9 @@ impl Conn {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    if let Cmd::Daemon { action } = &cli.command {
+        return daemon_cmd(&cli, action).await;
+    }
     if let Cmd::Pair { ticket } = &cli.command {
         ticket
             .parse::<client_core::proto::Ticket>()
@@ -457,7 +482,9 @@ async fn run(cli: Cli) -> Result<()> {
     let mut conn = Conn::open(&cli).await?;
     let shell = PaneLaunch::Shell { cwd: None };
     let outcome = match cli.command {
-        Cmd::Pair { .. } | Cmd::Join { .. } => unreachable!("handled above"),
+        Cmd::Pair { .. } | Cmd::Join { .. } | Cmd::Daemon { .. } => {
+            unreachable!("handled above")
+        }
         Cmd::Mp(cmd) => return mp::run(&mut conn, cmd).await,
         Cmd::Draw { action } => return draw::run(&mut conn, action).await,
         Cmd::Attach => return attach(conn).await,
@@ -990,6 +1017,90 @@ fn follow(client: &Client, pane: PaneId) {
     client.resize(pane, local_size());
     client.subscribe(pane);
     client.set_view(Some(pane), vec![pane]);
+}
+
+/// `un daemon …`: works without attaching, also against a daemon this build cannot otherwise
+/// talk to (it admits its owner to upgrade only).
+async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
+    let (listener, mut events) = EventQueue::channel();
+    let mut config = ClientConfig::new(device_key()?);
+    if cli.no_relay {
+        config.relay = RelayMode::Disabled;
+    }
+    let client = match dial(cli)? {
+        Dial::Ticket(ticket) => Client::connect(&ticket, config, listener)?,
+        Dial::Invite(invite) => Client::join(&invite, config, listener)?,
+    };
+    let mut incompatible = None;
+    let info = tokio::time::timeout(TIMEOUT, async {
+        let mut info = None;
+        loop {
+            match events.recv().await.context("client stopped")? {
+                ClientEvent::DaemonInfo { info: i } => info = Some(i),
+                ClientEvent::Connected { .. } => return anyhow::Ok(info.flatten()),
+                ClientEvent::Incompatible { reason } => {
+                    incompatible = Some(reason);
+                    return Ok(info.flatten());
+                }
+                ClientEvent::Refused { reason } => bail!("daemon refused the connection: {reason}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .context("timed out connecting to the daemon")??;
+    match action {
+        DaemonCmd::Info => {
+            let Some(i) = info else {
+                println!("the daemon predates version reporting (protocol level 0)");
+                return Ok(());
+            };
+            println!(
+                "{} {} ({}, built {})",
+                brand::DAEMON_BIN,
+                i.version,
+                i.build,
+                i.built_unix
+            );
+            println!(
+                "protocol:  {} (this client {}; serves clients from {})",
+                i.protocol,
+                client_core::proto::PROTOCOL_LEVEL,
+                i.min_client_protocol
+            );
+            println!("platform:  {} {} {}", i.os, i.arch, i.os_name);
+            println!("host name: {}", i.hostname);
+            println!(
+                "self upgrade: {}",
+                if i.features
+                    .contains(client_core::proto::DaemonFeatures::SELF_UPGRADE)
+                {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
+            if let Some(reason) = incompatible {
+                println!("incompatible: {reason}");
+            }
+        }
+        DaemonCmd::Upgrade { file, build } => {
+            let data =
+                std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+            let build = client_core::DaemonBuild::new(data, build.clone())?;
+            let size = build.data.len();
+            let started = std::time::Instant::now();
+            let new = client.upgrade_daemon(build, None).await?;
+            println!(
+                "installed {} {} ({} bytes sent in {:.1}s); the daemon is restarting",
+                new.version,
+                new.build,
+                size,
+                started.elapsed().as_secs_f64()
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

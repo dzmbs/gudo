@@ -18,6 +18,7 @@ ghostty-vt.workspace = true
 iroh.workspace = true
 proto.workspace = true
 drawing.workspace = true
+flate2.workspace = true
 push.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

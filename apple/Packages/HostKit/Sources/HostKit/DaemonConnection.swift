@@ -60,6 +60,17 @@ public final class DaemonConnection: HostConnection {
     public let multiplayer = MultiplayerSession()
     /// The daemon's workspace pushes (attention feed, ports, files), fanned out to observers.
     @ObservationIgnored public let workspaceEvents = WorkspaceEventHub()
+    /// What the daemon said about itself on the latest connection (build, protocol level,
+    /// machine); nil for daemons that predate it (`daemonInfoReported` tells them apart from
+    /// "not yet").
+    public private(set) var daemonInfo: DaemonInfo?
+    /// A `daemonInfo` event arrived (with or without info).
+    public private(set) var daemonInfoReported = false
+    /// Why the core cannot work with this daemon (it draws terminals in another format), until
+    /// a connection works again. The daemon may still accept an update over this connection.
+    public private(set) var incompatibility: String?
+    /// Called on the main actor with every `daemonInfo` event (host names, helper versions).
+    @ObservationIgnored public var onDaemonInfo: ((DaemonInfo?) -> Void)?
 
     public struct Timings: Sendable, Equatable {
         public var dialStarted: ContinuousClock.Instant?
@@ -78,7 +89,8 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored let router: PaneRouter
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
     @ObservationIgnored private var pump: Task<Void, Never>?
-    @ObservationIgnored private var epoch: UInt64?
+    /// The daemon run (changes when the daemon restarts).
+    @ObservationIgnored public private(set) var epoch: UInt64?
     @ObservationIgnored private var attachSession: UInt64?
     @ObservationIgnored private var lastView: (UInt64?, [UInt64])?
     @ObservationIgnored private var attempt: UInt32 = 0
@@ -213,6 +225,18 @@ public final class DaemonConnection: HostConnection {
         }
     }
 
+    /// The status line while the core and the daemon cannot work together.
+    static let incompatibleWords = "This host's helper needs an update"
+
+    /// Sends a daemon build (an executable or its gzip) to the daemon, which checks it, swaps
+    /// it in and restarts; the connection then drops and comes back by itself on the new
+    /// build. Owner devices only.
+    public func updateHelper(path: String, build: String, progress: (@Sendable (UInt64, UInt64) -> Void)? = nil) async throws -> DaemonInfo {
+        guard let upgrader = client as? any DaemonUpgradeAPI else { throw HostError.notConnected }
+        Self.log.info("updating helper host=\(self.hostId, privacy: .public) to \(build, privacy: .public)")
+        return try await upgrader.upgradeDaemon(path: path, build: build, progress: progress.map { TransferProgressHandler($0) })
+    }
+
     /// Answers a blocked agent.
     public func decide(requestId: UInt64, optionId: UInt32) {
         client?.decide(requestId: requestId, optionId: optionId)
@@ -228,7 +252,17 @@ public final class DaemonConnection: HostConnection {
 
     func handle(_ event: ClientEvent) {
         switch event {
+        case .daemonInfo(let info):
+            daemonInfo = info
+            daemonInfoReported = true
+            onDaemonInfo?(info)
+        case .incompatible(let reason):
+            incompatibility = reason
+            attaching = false
+            status = .needsAttention(reason: Self.incompatibleWords)
+            Self.log.error("incompatible host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
         case .connected(let epoch, let resumed):
+            incompatibility = nil
             if let previous = self.epoch, previous != epoch { layout.resetRevision() }
             self.epoch = epoch
             attempt = 0
@@ -251,7 +285,7 @@ public final class DaemonConnection: HostConnection {
             status = .reconnecting(attempt: attempt, reason: reason)
             Self.log.info("disconnected host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
         case .refused(let reason):
-            status = .needsAttention(reason: "Refused: \(reason)")
+            status = .needsAttention(reason: incompatibility == nil ? "Refused: \(reason)" : Self.incompatibleWords)
             Self.log.error("refused host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
         case .attached(let session, let via, let missing):
             attachSession = session

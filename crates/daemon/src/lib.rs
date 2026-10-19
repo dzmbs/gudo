@@ -49,7 +49,10 @@ mod procinfo;
 mod scan;
 mod shell;
 mod stream;
+mod upgrade;
 mod ws;
+
+pub mod info;
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -69,6 +72,7 @@ pub use config::{CustomRelays, PushConfig};
 pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
 };
+pub use upgrade::prev_path as upgrade_prev_path;
 
 use crate::agent::HookServer;
 use crate::core::Core;
@@ -199,6 +203,19 @@ impl Daemon {
     /// Number of paired devices.
     pub fn paired_devices(&self) -> usize {
         self.core.identity.device_count()
+    }
+
+    /// Resolves once the owner installed a new build of the daemon over a connection
+    /// ([`Config::self_exe`], `proto::info`), with the executable to run instead. The host
+    /// process then calls [`Daemon::shutdown`] (which saves the layout and stops the panes) and
+    /// `exec`s it with its own arguments; never resolves otherwise.
+    pub fn restart_requested(&self) -> impl Future<Output = std::path::PathBuf> + Send + 'static {
+        self.core.upgrade.restart_requested()
+    }
+
+    /// This daemon's build and machine, as clients see it.
+    pub fn info(&self) -> proto::DaemonInfo {
+        conn::daemon_info(&self.core)
     }
 
     /// Stops serving: saves the layout, closes connections and hangs up every pane.
