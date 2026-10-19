@@ -18,7 +18,8 @@ final class MockHostDirectory: HostDirectory {
         HostSummary(
             id: "devbox", name: "devbox", address: "devbox.tail3f2c.ts.net", kind: .daemon,
             connection: .reconnecting(attempt: 3, since: ago(14)), sessionCount: 2, agentCounts: [.working: 1],
-            lastLine: "Compiling quinn-proto v0.11.9", lastSeen: ago(14), isPinned: true),
+            lastLine: "Compiling quinn-proto v0.11.9", lastSeen: ago(14), isPinned: true,
+            helper: HelperOffer(message: "A newer helper is available.", required: false, canUpdate: true)),
         HostSummary(
             id: "build-01", name: "build-01", address: "ci@build-01.internal:2222", kind: .ssh, connection: .connected,
             sessionCount: 1, agentCounts: [:], lastLine: "$ journalctl -fu runner", lastSeen: ago(60 * 3), isPinned: false,
@@ -37,6 +38,9 @@ final class MockHostDirectory: HostDirectory {
     func retry(_ id: HostSummary.ID) {}
     func disconnect(_ id: HostSummary.ID) {}
     func installHelper(_ id: HostSummary.ID) async throws {}
+    func updateHelper(_ id: HostSummary.ID) async throws {
+        if let index = hosts.firstIndex(where: { $0.id == id }) { hosts[index].helper = nil }
+    }
     func forget(_ id: HostSummary.ID) { hosts.removeAll { $0.id == id } }
     func togglePin(_ id: HostSummary.ID) {
         if let index = hosts.firstIndex(where: { $0.id == id }) { hosts[index].isPinned.toggle() }

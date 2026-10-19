@@ -174,6 +174,9 @@ struct HostsView: View {
             if host.canInstallHelper, host.progress == nil {
                 Button("Install Helper", systemImage: "bolt.horizontal.circle") { installHelper(host) }
             }
+            if let helper = host.helper, helper.canUpdate, host.progress == nil {
+                Button("Update Helper", systemImage: "arrow.down.circle") { updateHelper(host) }
+            }
             Button(host.isPinned ? "Unpin" : "Pin", systemImage: host.isPinned ? "pin.slash" : "pin") {
                 withAnimation(DS.Motion.snappy) { directory.togglePin(host.id) }
             }
@@ -236,6 +239,17 @@ struct HostsView: View {
                 model.toasts.show(Toast("\(host.name) now runs the helper", systemImage: "checkmark.circle.fill", style: .success))
             } catch {
                 model.report(error, "Couldn't install the helper")
+            }
+        }
+    }
+
+    private func updateHelper(_ host: HostSummary) {
+        Task {
+            do {
+                try await directory.updateHelper(host.id)
+                model.toasts.show(Toast("\(host.name) runs the new helper", systemImage: "checkmark.circle.fill", style: .success))
+            } catch {
+                model.report(error, "Couldn't update the helper")
             }
         }
     }
@@ -404,7 +418,15 @@ private struct HostRow: View {
                     .font(DS.Font.rowSubtitle)
                     .foregroundStyle(.tertiary)
             case .connected, .slow, .paused:
-                if let line = host.lastLine {
+                if let helper = host.helper, helper.canUpdate {
+                    // Quiet: a newer helper is an offer, not a problem (the menu has the action).
+                    Label(helper.message, systemImage: "arrow.down.circle")
+                        .labelStyle(.titleAndIcon)
+                        .font(DS.Font.rowSubtitle)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("helper-update-\(host.name)")
+                } else if let line = host.lastLine {
                     Text(line)
                         .font(DS.Font.literalSmall)
                         .foregroundStyle(.tertiary)

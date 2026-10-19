@@ -146,6 +146,14 @@ pub struct Config {
     /// Command history for completion and the line editor (`[history]` in `config.toml`).
     pub history: crate::assist::HistoryConfig,
     pub artifacts: ArtifactLimits,
+    /// The executable this daemon runs from, when its owner may replace it over the
+    /// connection (`proto::info`): the new build is written next to it and renamed over it.
+    /// `None` (the default; library users and tests opt in) refuses upgrades.
+    pub self_exe: Option<PathBuf>,
+    /// Tests only: announce this snapshot format instead of libghostty-vt's, to exercise a
+    /// client that cannot decode it.
+    #[doc(hidden)]
+    pub test_snapshot_format: Option<u32>,
 }
 
 /// Size caps for the artifact store (drawings, images, op logs).
@@ -205,6 +213,8 @@ impl Config {
             lease_idle: Duration::from_secs(5),
             artifacts: ArtifactLimits::default(),
             history: crate::assist::HistoryConfig::default(),
+            self_exe: None,
+            test_snapshot_format: None,
         }
     }
 
@@ -338,6 +348,12 @@ impl Config {
             .clone()
             .or_else(|| std::env::var_os("SHELL").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("/bin/sh"))
+    }
+
+    /// The Ghostty snapshot format this daemon encodes (and announces).
+    pub(crate) fn snapshot_format(&self) -> u32 {
+        self.test_snapshot_format
+            .unwrap_or_else(|| u32::from(ghostty_vt::snapshot_format()))
     }
 
     pub(crate) fn hook_bin(&self) -> PathBuf {

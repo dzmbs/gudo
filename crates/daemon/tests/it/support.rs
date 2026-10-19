@@ -79,6 +79,10 @@ pub struct TestClient {
     pub attached: Vec<(SessionId, AttachVia, Option<SessionId>)>,
     /// Attach failures (`ClientEvent::AttachFailed` messages).
     pub attach_failed: Vec<String>,
+    /// `ClientEvent::DaemonInfo`, one per connection.
+    pub infos: Vec<Option<client_core::proto::DaemonInfo>>,
+    /// `ClientEvent::Incompatible` reasons.
+    pub incompatible: Vec<String>,
     mp_events: UnboundedReceiver<MultiplayerEvent>,
     /// Multiplayer pushes received so far.
     pub mp: Vec<MultiplayerEvent>,
@@ -135,6 +139,8 @@ impl TestClient {
             refused: Vec::new(),
             attached: Vec::new(),
             attach_failed: Vec::new(),
+            infos: Vec::new(),
+            incompatible: Vec::new(),
             mp_events,
             mp: Vec::new(),
         }
@@ -179,6 +185,8 @@ impl TestClient {
                 missing,
             } => self.attached.push((session_id, via, missing)),
             ClientEvent::AttachFailed { message, .. } => self.attach_failed.push(message),
+            ClientEvent::DaemonInfo { info } => self.infos.push(info),
+            ClientEvent::Incompatible { reason } => self.incompatible.push(reason),
             _ => {}
         }
     }

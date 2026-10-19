@@ -7,10 +7,11 @@ use iroh::endpoint::{Connection, RecvStream, SendStream};
 use proto::{
     Actor, ArtifactError, ArtifactEvent, ArtifactInfo, ArtifactRequest, ArtifactResponse,
     AttachFailure, AttachVia, Attachment, AuditKind, BlobHeader, BlobReply, Bulk, Caps, ClientCtl,
-    ClientInput, DeviceId, ForwardReply, Hello, InputPayload, InputRejectReason, LeaseRequestKind,
-    MpError, MpRequest, MpResponse, PaneId, PaneLaunch, PaneSize, RefuseReason, ResumePoint,
-    RpcError, Scope, Seq, ServerCtl, SessionId, SignedGrant, StreamHeader, SubscribeMode,
-    TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest, WorkspaceResponse, WsError,
+    ClientInput, DaemonFeatures, DeviceId, ForwardReply, Hello, InputPayload, InputRejectReason,
+    LeaseRequestKind, MpError, MpRequest, MpResponse, PaneId, PaneLaunch, PaneSize, RefuseReason,
+    ResumePoint, RpcError, Scope, Seq, ServerCtl, SessionId, SignedGrant, StreamHeader,
+    SubscribeMode, TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest, WorkspaceResponse,
+    WsError,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
@@ -82,7 +83,15 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         return Ok(());
     };
     let device = DeviceId(*conn.remote_id().as_bytes());
-    let authz = match handshake(&core, &hello, device) {
+    let handshake = handshake(&core, &hello, device);
+    if hello.caps.contains(Caps::DAEMON_INFO) {
+        let mut info = daemon_info(&core);
+        if handshake.is_err() {
+            info.hostname.clear();
+        }
+        net::send(&mut ctl_tx, &ServerCtl::DaemonInfo(info)).await?;
+    }
+    let (authz, maintenance) = match handshake {
         Ok(a) => a,
         Err(reason) => {
             net::send(&mut ctl_tx, &ServerCtl::Refused { reason }).await?;
@@ -96,16 +105,22 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         daemon_id: core.identity.daemon_id(),
         session_epoch: core.epoch,
         roles: authz.roles,
-        snapshot_format: u32::from(ghostty_vt::snapshot_format()),
-        panes: core
-            .pane_entries()
-            .into_iter()
-            .filter(|(id, _)| core.scope_within(Scope::Pane(*id), authz.scope))
-            .filter_map(|(id, _)| core.pane_meta(id))
-            .collect(),
+        snapshot_format: core.cfg.snapshot_format(),
+        panes: if maintenance {
+            Vec::new()
+        } else {
+            core.pane_entries()
+                .into_iter()
+                .filter(|(id, _)| core.scope_within(Scope::Pane(*id), authz.scope))
+                .filter_map(|(id, _)| core.pane_meta(id))
+                .collect()
+        },
         resume_token: proto::ResumeToken(core.epoch.0.to_le_bytes().to_vec()),
     };
     net::send(&mut ctl_tx, &ServerCtl::Welcome(welcome)).await?;
+    if maintenance {
+        return serve_upgrade_only(core, conn, authz.actor, ctl_rx).await;
+    }
 
     let (ctl, ctl_out) = mpsc::unbounded_channel();
     let ws = crate::ws::ConnCtx {
@@ -169,19 +184,34 @@ fn conn_err(e: iroh::endpoint::ConnectionError) -> NetError {
     NetError::Frame(proto::FrameError::Io(std::io::Error::other(e)))
 }
 
-fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Authz, RefuseReason> {
+/// This daemon's build and machine, with what it offers.
+fn daemon_info(core: &Core) -> proto::DaemonInfo {
+    let mut features = DaemonFeatures::EMPTY;
+    if core.cfg.self_exe.is_some() {
+        features |= DaemonFeatures::SELF_UPGRADE;
+    }
+    crate::info::build_info(features)
+}
+
+/// Checks a `Hello`. `Ok((authz, true))` admits an owner device whose snapshot format does
+/// not match, for an upgrade only (clients announcing [`Caps::DAEMON_INFO`]).
+fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<(Authz, bool), RefuseReason> {
     if hello.device_id != device {
         return Err(RefuseReason::DeviceMismatch);
     }
-    let format = u32::from(ghostty_vt::snapshot_format());
-    if hello.snapshot_format != format {
+    let format = core.cfg.snapshot_format();
+    let maintenance = hello.snapshot_format != format;
+    if maintenance
+        && !(hello.caps.contains(Caps::DAEMON_INFO) && hello.grant.v == SignedGrant::DEVICE)
+    {
         return Err(RefuseReason::SnapshotFormat { daemon: format });
     }
     let _ = WIRE_VERSION;
     if hello.grant.v == SignedGrant::CHAIN {
         return core
             .mp
-            .redeem(core, device, hello.principal_id, &hello.grant.token);
+            .redeem(core, device, hello.principal_id, &hello.grant.token)
+            .map(|authz| (authz, false));
     }
     if core.mp.device_revoked(device) {
         return Err(RefuseReason::Revoked);
@@ -200,7 +230,55 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Authz, Refu
             },
         );
     }
-    Ok(Authz::owner(actor))
+    Ok((Authz::owner(actor), maintenance))
+}
+
+/// Whether `authz` is the daemon's owner: a paired owner device on the whole daemon, not a
+/// guest's chain (whatever roles it delegates).
+fn is_owner(core: &Core, authz: &Authz) -> bool {
+    authz.grant_ids.is_empty()
+        && authz.scope == Scope::Daemon
+        && authz.roles.contains(proto::Roles::OWNER)
+        && core.identity.is_owner_device(authz.actor.device)
+}
+
+/// A connection admitted only to upgrade an incompatible daemon: serves upgrade streams from
+/// its owner and ignores everything else until the client leaves.
+async fn serve_upgrade_only(
+    core: Arc<Core>,
+    conn: Connection,
+    actor: Actor,
+    mut ctl_rx: RecvStream,
+) -> Result<(), NetError> {
+    tracing::info!(device = ?actor.device, "an owner with another snapshot format connected to upgrade");
+    let owner = is_owner(&core, &Authz::owner(actor));
+    let accept = {
+        let core = Arc::clone(&core);
+        let conn = conn.clone();
+        tokio::spawn(async move {
+            while let Ok((mut send, mut recv)) = conn.accept_bi().await {
+                match net::recv::<StreamHeader>(&mut recv).await {
+                    Ok(Some(StreamHeader::Upgrade(header))) => {
+                        let _ = send.set_priority(crate::stream::priority::BULK);
+                        tokio::spawn(crate::upgrade::serve(
+                            Arc::clone(&core),
+                            actor,
+                            owner,
+                            header,
+                            send,
+                            recv,
+                        ));
+                    }
+                    _ => {
+                        let _ = send.finish();
+                    }
+                }
+            }
+        })
+    };
+    while net::recv::<ClientCtl>(&mut ctl_rx).await?.is_some() {}
+    accept.abort();
+    Ok(())
 }
 
 async fn write_ctl(mut send: SendStream, mut out: mpsc::UnboundedReceiver<ServerCtl>) {
@@ -293,6 +371,19 @@ async fn accept_bi(client: Arc<Client>) {
                 }
             };
             let _ = send.finish();
+            continue;
+        }
+        if let Ok(Some(StreamHeader::Upgrade(header))) = header {
+            let owner = client.live().is_ok() && is_owner(&client.core, &client.authz);
+            let _ = send.set_priority(crate::stream::priority::BULK);
+            tokio::spawn(crate::upgrade::serve(
+                Arc::clone(&client.core),
+                client.actor,
+                owner,
+                header,
+                send,
+                recv,
+            ));
             continue;
         }
         if let Ok(Some(StreamHeader::Blob(blob))) = &header {
