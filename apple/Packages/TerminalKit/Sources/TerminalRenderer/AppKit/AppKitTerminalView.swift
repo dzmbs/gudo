@@ -16,6 +16,9 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     public let surface: TerminalSurface
     /// Bytes to write to the PTY (encoded keys, mouse and focus reports).
     public var onInput: (([UInt8]) -> Void)?
+    /// Sees each key event before it is encoded; returning true consumes it (the app's
+    /// hold-to-talk chord).
+    public var keyInterceptor: ((KeyEvent) -> Bool)?
     /// Called when the view becomes first responder (a click, or a programmatic focus change).
     public var onFocus: (() -> Void)?
     /// Which Option keys act as Meta (Ghostty's `macos-option-as-alt`).
@@ -348,8 +351,9 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func keyDown(with event: NSEvent) {
         guard !event.modifierFlags.contains(.command) else { return super.keyDown(with: event) }
-        if surface.terminal.selection != nil { surface.terminal.clearSelection() }
         let action: KeyEvent.Action = event.isARepeat ? .repeat : .press
+        if !hasMarkedText(), keyInterceptor?(keyEvent(event, action: action)) == true { return }
+        if surface.terminal.selection != nil { surface.terminal.clearSelection() }
         if !hasMarkedText(), let meta = metaEvent(event, action: action) {
             send(meta)
             return
@@ -372,6 +376,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func keyUp(with event: NSEvent) {
         guard !event.modifierFlags.contains(.command), !hasMarkedText() else { return }
+        if keyInterceptor?(keyEvent(event, action: .release)) == true { return }
         send(keyEvent(event, action: .release))
     }
 

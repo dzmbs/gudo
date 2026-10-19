@@ -51,6 +51,8 @@ final class Pane {
         view = TerminalView(surface: surface)
         view.onInput = { bytes in bytes.withUnsafeBytes { backend.write($0) } }
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
+        // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).
+        view.keyInterceptor = { [weak self] event in self.map { VoiceDictation.shared.handleKey(event, pane: $0) } ?? false }
 
         var events = Terminal.Events()
         events.titleChanged = { [weak self] in Task { @MainActor in self?.refreshTitle() } }
