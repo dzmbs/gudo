@@ -21,7 +21,7 @@ enum PaletteMode: Equatable {
 
 /// Modal surfaces. One at a time, like the system's own sheets.
 enum SheetRoute: String, Identifiable {
-    case pairing, launchAgent, invite, links, diff, files, browser, editor, settings
+    case pairing, launchAgent, invite, join, links, diff, files, browser, editor, settings
     var id: String { rawValue }
 }
 
@@ -47,6 +47,8 @@ final class WindowModel {
     /// The Add Host sheet's starting mode and destination (quick connect pre-fills SSH).
     var pairingMode = PairingSheet.Mode.ssh
     var pairingDestination = ""
+    /// The invite link the Join sheet starts with (a `<scheme>://join/…` deep link).
+    var joinInvite = ""
     /// Every host this window shows at once (sidebar groups, the unified tab order).
     let groups: HostGroups
     /// What the detail column shows: this device or a host (`show`, `focus`).
@@ -230,7 +232,9 @@ final class WindowModel {
 
     /// ⌘1…⌘8 across every host's tabs; ⌘9 the last.
     func selectTab(shortcut number: Int) {
-        if let ref = groups.tab(forShortcut: number) { focus(ref) }
+        let ref = groups.tab(forShortcut: number)
+        AppModel.log.debug("⌘\(number) → \(ref?.description ?? "none", privacy: .public) from \(self.currentTab?.description ?? "none", privacy: .public)")
+        if let ref { focus(ref) }
     }
 
     /// ⇧⌘] / ⇧⌘[: the next or previous tab, across host boundaries.
@@ -320,7 +324,26 @@ final class WindowModel {
         case .local: next[HostGroups.localId]
         case .host(let id): next[id] ?? app.workspace(for: target)
         }
-        if shown !== workspace { workspace = shown }
+        if shown !== workspace {
+            #if os(iOS)
+            // Typing went to a terminal: the new host's focused pane takes the keyboard as it
+            // appears (iOS has no window first responder to fall back to).
+            let handoff = UserDefaults.standard.object(forKey: "keyboardHandoff") as? Bool ?? true
+            let typing = handoff ? workspace?.panes.values.filter { $0.view.isFirstResponder } ?? [] : []
+            // The old host's terminal leaves the window but would stay first responder,
+            // detached: keys (⌘ shortcuts included) would go to a responder chain that no
+            // longer reaches the scene, and be lost. Resign it before switching.
+            for pane in typing { pane.view.resignFirstResponder() }
+            if let shown, !typing.isEmpty {
+                shown.inheritsKeyboardFocus = true
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(1))
+                    shown.inheritsKeyboardFocus = false
+                }
+            }
+            #endif
+            workspace = shown
+        }
     }
 
     /// Re-syncs when hosts open, close, are forgotten or swap their connection.

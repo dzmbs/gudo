@@ -144,6 +144,8 @@ One activity aggregates all agents of all hosts (04 open question 3). Channel:
   Keychain group.
 
 Remaining: the daemon side (aggregate per host, send on change with rate limiting, end when
+per-run activity (`AgentRunAttributes`: working / needs you / done / failed) it updates while
+alive.
 
 ## 7. Local development (no Apple account)
 
@@ -198,10 +200,21 @@ Cloudflare:
 8. Debug builds get sandbox tokens: the app must send `"env": "sandbox"` for Development
    builds and `"production"` for TestFlight/App Store.
 
-App work (other agents / later): the NSE target using `PushCrypto.PushContent.decrypt`,
-notification categories/actions, registration calls (`/v1/register`, then
-`push_register` — needs apple-ffi exposure of the `client_core::push` API), the action
-handler calling `send_action_blocking`, and Live Activities.
+App side (2026-10-19, docs/APP-ARCHITECTURE.md §12): the `NotificationService` extension
+(`NotifyKit.ServiceExtensionCore` over `PushContent.decrypt`, paired daemons and the sealing key
+from the shared app group / Keychain group), the four categories with Approve / Deny / Open,
+the action handler (`NotificationActionHandler`: local notifications → signed `decide`,
+pushes → `sendPushAction` on a one-shot connection), registration
+(`HostsModel.registerPush`: `/v1/register`, then `pushRegister`) and a local-only agent-run
+Live Activity (`AgentRunAttributes`, `AgentActivityWidget`). Everything builds and runs with a
+free account; APNs registration activates only with `PUSH_ENTITLEMENT = YES` and the groups in
+`apple/Brand.xcconfig` (step 9).
+
+9. App: in `apple/Brand.xcconfig` set `PUSH_ENTITLEMENT = YES`,
+   `PUSH_ENTITLEMENTS_FILE = App/Push.entitlements`, `PUSH_KEYCHAIN_GROUP =
+   <TEAMID>.dev.unnamed.shared`, `PUSH_APP_GROUP = group.dev.unnamed.app`; give the App and
+   NotificationService targets the team (`DEVELOPMENT_TEAM`, automatic signing) and the same
+   entitlements; `xcodegen`. Release builds need `aps-environment = production`.
 
 ## 9. Security notes
 

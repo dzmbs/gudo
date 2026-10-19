@@ -17,7 +17,7 @@ daemon() { local port=$1; shift; PORT=$port SHELL_ARGS= "$apple/scripts/local-da
 
 ticket_a="$(daemon "${PORT_A:-47021}" start "$a")"
 ticket_b="$(daemon "${PORT_B:-47022}" start "$b")"
-trap 'daemon "${PORT_A:-47021}" stop "$a"; daemon "${PORT_B:-47022}" stop "$b"; rm -rf "$root"' EXIT
+trap 'daemon "${PORT_A:-47021}" stop "$a"; daemon "${PORT_B:-47022}" stop "$b"' EXIT
 
 log="$root/xcodebuild.log"
 markers="$root/markers"

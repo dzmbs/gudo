@@ -73,7 +73,7 @@ final class MultiHostUITests: XCTestCase {
         app.launchArguments += extra + [
             "-testTickets", "\(alpha),\(beta)", "-testTicketNames", names, "-testRelay", "disabled",
             "-hostsDirectory", NSTemporaryDirectory() + "multihost-\(UUID().uuidString)", "-connectionProbe", "YES",
-            "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES",
+            "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES", "-keyBar.lineEditor", "NO",
         ]
         app.launch()
         return app

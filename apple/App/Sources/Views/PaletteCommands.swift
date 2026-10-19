@@ -51,6 +51,7 @@ enum PaletteCommands {
             ("files", "Browse Files", "folder", nil, { model.sheet = .files }),
             ("browser", "Open Browser", "safari", nil, { model.sheet = .browser }),
             ("share", "Share Session", "person.crop.circle.badge.plus", nil, { model.sheet = .invite }),
+            ("join", "Join a Session…", "person.2.badge.plus", nil, { model.joinInvite = ""; model.sheet = .join }),
             ("agent", "New Agent", "sparkle", nil, { model.sheet = .launchAgent }),
             ("inbox", "Go to Inbox", "tray", ["⇧", "⌘", "I"], { model.destination = .inbox }),
             ("hosts", "Go to Hosts", "server.rack", nil, { model.destination = .hosts }),

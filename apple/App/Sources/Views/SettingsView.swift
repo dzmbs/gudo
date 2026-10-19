@@ -213,21 +213,16 @@ private struct KeyboardSection: View {
     }
 }
 
+/// Per-kind notification choices (`NotificationPrefsSection`, Notifications/) plus the bell.
 private struct NotificationsSection: View {
-    @AppStorage("notify-needs-you") private var needsYou = true
-    @AppStorage("notify-when-away") private var whenAway = true
     @AppStorage(TerminalPreferences.Key.bellFeatures) private var bellBorder = false
 
     var body: some View {
+        NotificationPrefsSection()
         Section {
-            Toggle("When an Agent Needs You", isOn: $needsYou)
-            Toggle("Only When Away from the Host", isOn: $whenAway)
-                .disabled(!needsYou)
             Toggle(isOn: $bellBorder) { ConfigLabel("Flash Border on Bell", key: "bell-features = border") }
         } header: {
-            Text("Notifications")
-        } footer: {
-            Text("Away means the host has been idle or locked for three minutes.")
+            Text("Bell")
         }
     }
 }
@@ -365,15 +360,18 @@ private struct KeyBarProfilesView: View {
     }
 
     private func caps(_ profile: KeyBarProfile) -> [AnyView] {
-        var caps = profile.keys.map { key -> AnyView in
-            if let title = key.title { return AnyView(KeyCap(title)) }
+        // The spine is the same in every profile; the wing follows it, "tap / flick".
+        let spine = ["esc", "ctl", "alt", "tab"].map { AnyView(KeyCap($0)) }
+        let wing = profile.keys.map { key -> AnyView in
+            if let title = key.title {
+                return AnyView(KeyCap(key.alternateTitle.map { "\(title) \($0)" } ?? title))
+            }
             return AnyView(Image(systemName: key.symbol ?? "questionmark").font(.caption.weight(.medium))
                 .padding(.horizontal, 6).padding(.vertical, 3)
                 .background(.background.secondary, in: .rect(cornerRadius: DS.Radius.chip))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5)))
         }
-        if profile.showsCtrl { caps.insert(AnyView(KeyCap("ctrl")), at: min(profile.ctrlPosition, caps.count)) }
-        return caps
+        return spine + wing
     }
 }
 

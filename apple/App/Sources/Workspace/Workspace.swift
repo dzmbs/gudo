@@ -6,6 +6,7 @@ import TerminalCore
 import TerminalRenderer
 #if os(iOS)
 import GameController
+import HostKit
 import UIKit
 #endif
 
@@ -39,7 +40,14 @@ final class Workspace {
     /// What runs in each pane (program and directory), refreshed about once a second.
     private(set) var foregrounds: [PaneId: PaneForeground] = [:]
     /// Until when grid changes come from the software keyboard rather than the user.
-    @ObservationIgnored private(set) var keyboardResizeUntil = ContinuousClock.now
+    var keyboardResizeUntil: ContinuousClock.Instant {
+        #if os(iOS)
+        max(keyboardFrameChangeUntil, Self.keyBarResizeUntil)
+        #else
+        keyboardFrameChangeUntil
+        #endif
+    }
+    @ObservationIgnored private var keyboardFrameChangeUntil = ContinuousClock.now
     /// Terminal appearance for every pane (the design layer may replace it).
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
         // Font, padding and cursor apply to open panes at once; colors to panes opened after.
@@ -50,8 +58,23 @@ final class Workspace {
     private(set) var cellSize: CGSize?
 
     #if os(iOS)
-    /// The key bar shared by this window's panes; it follows the first responder.
-    @ObservationIgnored let keyBar = KeyBar(style: .designSystem)
+    /// The key bar shared by every workspace's panes; it follows the first responder. One for
+    /// the app, not one per workspace: switching hosts in the multi-host sidebar keeps the same
+    /// input accessory view, so the keyboard never reloads its input views (a reload drops
+    /// hardware keys, ⌘ shortcuts included, while it runs).
+    @ObservationIgnored let keyBar = UserDefaults.standard.object(forKey: "sharedKeyBar") as? Bool ?? true
+        ? Workspace.sharedKeyBar : KeyBar(style: .designSystem)
+    static var sharedKeyBar: KeyBar {
+        // Created on first use, not as a `static let`: its UIKit setup must not run inside a
+        // one-time initializer (it crashed there, `_dispatch_once_wait`).
+        if let existing = sharedKeyBarStorage { return existing }
+        let created = KeyBar(style: .designSystem)
+        sharedKeyBarStorage = created
+        return created
+    }
+    private static var sharedKeyBarStorage: KeyBar?
+    /// Until when the shared key bar's height change resizes the grids.
+    static var keyBarResizeUntil = ContinuousClock.now
     #endif
 
     /// Tabs already given a friendly name (or left unnamed by the user's choice).
@@ -99,8 +122,9 @@ final class Workspace {
         NotificationCenter.default.addObserver(
             forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.keyboardResizeUntil = .now + .milliseconds(800) }
+            MainActor.assumeIsolated { self?.keyboardFrameChangeUntil = .now + .milliseconds(800) }
         }
+        keyBar.onHeightChange = { Workspace.keyBarResizeUntil = .now + .milliseconds(800) }
         #endif
         _ = settingsObserver
     }
@@ -295,11 +319,16 @@ final class Workspace {
     /// Whether the focused pane should take first responder when it appears or gains focus. On iOS
     /// only while typing already goes to a terminal or a hardware keyboard is attached, so that
     /// focusing a pane never pops up the software keyboard unasked (04-mobile-ux A1.5, R6).
+    /// Set when the window switches here from another host's workspace while typing went to a
+    /// terminal: the focused pane takes the keyboard as it appears, so switching hosts never
+    /// drops typing (or the ⌘ shortcuts that need a responder) on iPhone and iPad.
+    @ObservationIgnored var inheritsKeyboardFocus = false
+
     var claimsKeyboardFocus: Bool {
         #if os(iOS)
         // `-noAutoFocus YES` (screenshots): never raise the software keyboard by itself.
         if UserDefaults.standard.bool(forKey: "noAutoFocus") { return false }
-        return GCKeyboard.coalesced != nil || panes.values.contains { $0.view.isFirstResponder }
+        return GCKeyboard.coalesced != nil || inheritsKeyboardFocus || panes.values.contains { $0.view.isFirstResponder }
         #else
         true
         #endif
@@ -373,6 +402,7 @@ final class Workspace {
         pane.view.onFocus = { [weak self, weak pane] in
             guard let self, let pane else { return }
             keyBar.target = pane.view
+            keyBar.assist = pane.backend as? any LineAssist
             keyBar.update(context: keyBarContext(of: pane))
             apply(.focus(id))
         }

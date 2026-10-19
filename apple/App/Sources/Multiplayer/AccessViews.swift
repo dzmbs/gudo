@@ -1,0 +1,457 @@
+import DesignSystem
+import HostKit
+import SwiftUI
+import UnnamedCore
+
+/// The owner's access list: every invite (grant) with who redeemed it, and every device, each
+/// revocable. Revoking disconnects at once (DAEMON.md §6.2).
+struct GrantsView: View {
+    let session: MultiplayerSession
+    @State private var confirm: Confirm?
+    @State private var loaded = false
+
+    private enum Confirm: Identifiable {
+        case grant(GrantInfo)
+        case device(DeviceInfo)
+        var id: String {
+            switch self {
+            case .grant(let g): "g" + g.grant.grantId
+            case .device(let d): "d" + d.device
+            }
+        }
+        var name: String {
+            switch self {
+            case .grant(let g): g.grant.label.isEmpty ? "this invite" : g.grant.label
+            case .device(let d): d.name.isEmpty ? "this device" : d.name
+            }
+        }
+    }
+
+    private var active: [GrantInfo] { session.grants.filter { !$0.revoked && !isExpired($0) }.sorted { $0.grant.issuedAtMs > $1.grant.issuedAtMs } }
+    private var ended: [GrantInfo] { session.grants.filter { $0.revoked || isExpired($0) }.sorted { $0.grant.issuedAtMs > $1.grant.issuedAtMs } }
+
+    var body: some View {
+        List {
+            Section {
+                if active.isEmpty {
+                    Text(loaded ? "No active invites. Create one in Share Session." : "Loading invites…")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(active, id: \.grant.grantId) { info in
+                    GrantRow(info: info, session: session)
+                        .swipeActions { Button("Revoke", role: .destructive) { confirm = .grant(info) } }
+                        .contextMenu {
+                            Button("Copy Grant ID", systemImage: "doc.on.doc") { Pasteboard.copy(info.grant.grantId) }
+                            Button("Revoke…", systemImage: "xmark.circle", role: .destructive) { confirm = .grant(info) }
+                        }
+                }
+            } header: {
+                SectionTitle("Active Invites", count: active.count)
+            }
+            .raisedRows()
+
+            Section {
+                ForEach(session.devices.sorted { ($0.kind == .owner ? 0 : 1, $1.firstSeenMs) < ($1.kind == .owner ? 0 : 1, $0.firstSeenMs) }, id: \.device) { device in
+                    DeviceRow(device: device, isMe: device.device == session.me?.actor.device)
+                        .swipeActions {
+                            if device.device != session.me?.actor.device && !device.revoked {
+                                Button("Revoke", role: .destructive) { confirm = .device(device) }
+                            }
+                        }
+                }
+            } header: {
+                SectionTitle("Devices", count: session.devices.count)
+            } footer: {
+                Text("Revoking an owner device unpairs it. Processes a guest started keep running.")
+            }
+            .raisedRows()
+
+            if !ended.isEmpty {
+                Section {
+                    ForEach(ended, id: \.grant.grantId) { info in
+                        GrantRow(info: info, session: session)
+                    }
+                } header: {
+                    SectionTitle("Ended", count: ended.count)
+                }
+                .raisedRows()
+            }
+        }
+        .terminalGrouped()
+        .navigationTitle("Access & Grants")
+        .refreshable { await session.refreshGrants() }
+        .task {
+            await session.refreshGrants()
+            loaded = true
+        }
+        .confirmationDialog(
+            "Revoke \(confirm?.name ?? "")?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+            titleVisibility: .visible, presenting: confirm
+        ) { target in
+            Button("Revoke", role: .destructive) {
+                Task {
+                    switch target {
+                    case .grant(let info): await session.revoke(.grant(grantId: info.grant.grantId))
+                    case .device(let device): await session.revoke(.device(device: device.device))
+                    }
+                }
+            }
+        } message: { target in
+            switch target {
+            case .grant: Text("Everyone who joined with it, and anyone they invited, is disconnected now.")
+            case .device: Text("The device is disconnected now and cannot reconnect with any invite or pairing.")
+            }
+        }
+        .accessibilityIdentifier("grants-list")
+    }
+
+    private func isExpired(_ info: GrantInfo) -> Bool {
+        guard let expires = info.grant.expiresMs else { return false }
+        return Double(expires) / 1000 < Date.now.timeIntervalSince1970
+    }
+}
+
+private struct GrantRow: View {
+    let info: GrantInfo
+    let session: MultiplayerSession
+
+    var body: some View {
+        let grant = info.grant
+        HStack(alignment: .top, spacing: DS.Space.m) {
+            Image(systemName: info.revoked ? "xmark.circle" : grant.roles.contains(.driver) ? "keyboard" : grant.roles.contains(.prompter) ? "text.bubble" : "eye")
+                .foregroundStyle(info.revoked ? DS.Palette.error : .secondary)
+                .frame(width: 22)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: DS.Space.xs + 2) {
+                    Text(grant.label.isEmpty ? "Guest" : grant.label)
+                        .font(DS.Font.rowTitleEmphasis)
+                    if grant.delegate {
+                        Text("Can invite")
+                            .font(DS.Font.badge)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.fill.secondary, in: .capsule)
+                    }
+                }
+                Text("\(roleWords(grant.roles)) · \(grant.scope.title)")
+                    .font(DS.Font.rowSubtitle)
+                    .foregroundStyle(.secondary)
+                Text(statusLine)
+                    .font(DS.Font.meta)
+                    .foregroundStyle(info.revoked ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.tertiary))
+            }
+            Spacer(minLength: 0)
+            Text(groupedHex(grant.grantId, groups: 2))
+                .font(DS.Font.literalSmall)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("grant-\(grant.label)")
+    }
+
+    private var statusLine: String {
+        let grant = info.grant
+        var parts: [String] = []
+        if info.revoked {
+            parts.append("Revoked")
+        } else if let expires = grant.expiresMs {
+            let date = Date(timeIntervalSince1970: Double(expires) / 1000)
+            parts.append(date < .now ? "Expired \(RelativeTime.string(date))" : "Expires \(RelativeTime.string(date))")
+        } else {
+            parts.append("Never expires")
+        }
+        let used = info.bound.count
+        parts.append(grant.maxUses.map { "\(used) of \($0) used" } ?? "\(used) joined")
+        if info.parent != nil { parts.append("delegated") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct DeviceRow: View {
+    let device: DeviceInfo
+    let isMe: Bool
+
+    var body: some View {
+        HStack(spacing: DS.Space.m) {
+            Image(systemName: device.kind == .owner ? "laptopcomputer.and.iphone" : "person.crop.circle")
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isMe ? "\(device.name) (this device)" : device.name.isEmpty ? "Device" : device.name)
+                    .font(DS.Font.rowTitle)
+                Text("\(device.kind == .owner ? "Owner" : "Guest") · first seen \(RelativeTime.string(ms: device.firstSeenMs) ?? "")")
+                    .font(DS.Font.rowSubtitle)
+                    .foregroundStyle(.secondary)
+                Text(groupedHex(device.device))
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            if device.revoked {
+                Text("Revoked").font(DS.Font.badge).foregroundStyle(DS.Palette.error)
+            } else if device.connected > 0 {
+                HStack(spacing: 4) {
+                    Circle().fill(DS.Palette.done).frame(width: 7, height: 7)
+                    Text("Connected").font(DS.Font.meta).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Audit log
+
+/// The host's append-only audit log (DAEMON.md §6.6), newest first: joins and refusals, leases,
+/// prompts (length only), revocations, and signed approvals with the signer and signature. The
+/// header says whether the daemon re-verified the whole hash chain and every signature.
+struct AuditLogView: View {
+    let session: MultiplayerSession
+    @State private var filter = Filter.all
+    @State private var query = ""
+    @State private var expanded: Set<UInt64> = []
+
+    enum Filter: String, CaseIterable, Identifiable {
+        case all, approvals, access, control
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .all: "All"
+            case .approvals: "Approvals"
+            case .access: "Access"
+            case .control: "Control"
+            }
+        }
+
+        func matches(_ kind: AuditKind) -> Bool {
+            switch self {
+            case .all: true
+            case .approvals: kind == .approval
+            case .access: [.join, .leave, .paired, .grantRegistered, .grantRedeemed, .revoked, .denied].contains(kind)
+            case .control: kind == .lease || kind == .prompt
+            }
+        }
+    }
+
+    private var records: [AuditRecord] {
+        let all = session.auditPage?.records ?? []
+        return all.reversed().filter { record in
+            guard filter.matches(record.kind) else { return false }
+            guard !query.isEmpty else { return true }
+            let haystack = [record.detail, session.name(of: record.actor), record.approval?.summary ?? "", record.approval?.tool ?? ""].joined(separator: " ")
+            return haystack.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                chainStatus
+                Picker("Show", selection: $filter) {
+                    ForEach(Filter.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityIdentifier("audit-filter")
+            }
+            .raisedRows()
+            Section {
+                if session.auditPage == nil {
+                    Text("Reading the log…").foregroundStyle(.secondary)
+                } else if records.isEmpty {
+                    Text(query.isEmpty ? "Nothing recorded yet." : "No records match “\(query)”.").foregroundStyle(.secondary)
+                }
+                ForEach(records, id: \.seq) { record in
+                    AuditRow(record: record, session: session, isExpanded: expanded.contains(record.seq))
+                        .contentShape(.rect)
+                        .onTapGesture {
+                            guard record.approval != nil else { return }
+                            withAnimation(DS.Motion.snappy) {
+                                if expanded.contains(record.seq) { expanded.remove(record.seq) } else { expanded.insert(record.seq) }
+                            }
+                        }
+                }
+            } header: {
+                SectionTitle(filter == .all ? "Newest First" : filter.title, count: records.count)
+            }
+            .raisedRows()
+        }
+        .terminalGrouped()
+        .navigationTitle("Audit Log")
+        .searchable(text: $query, prompt: "Filter by person, tool or command")
+        .refreshable { await session.loadAudit() }
+        .task { await session.loadAudit() }
+        .accessibilityIdentifier("audit-list")
+    }
+
+    @ViewBuilder private var chainStatus: some View {
+        if let page = session.auditPage {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: page.chainOk ? "checkmark.seal.fill" : "exclamationmark.octagon.fill")
+                    .font(.title2)
+                    .foregroundStyle(page.chainOk ? DS.Palette.done : DS.Palette.error)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(page.chainOk ? "Log intact" : "Log was altered")
+                        .font(DS.Font.rowTitleEmphasis)
+                    Text(page.chainOk
+                         ? "\(page.total) records; every hash and approval signature re-verified on the host."
+                         : "A record does not match the hash chain or a signature failed. Treat this host's history as untrusted.")
+                        .font(DS.Font.rowSubtitle)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 2)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(page.chainOk ? "audit-chain-ok" : "audit-chain-broken")
+        }
+    }
+}
+
+private struct AuditRow: View {
+    let record: AuditRecord
+    let session: MultiplayerSession
+    let isExpanded: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.m) {
+                Image(systemName: glyph)
+                    .foregroundStyle(tint)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(DS.Font.rowTitle)
+                        .lineLimit(2)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(DS.Font.rowSubtitle)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: DS.Space.s)
+                VStack(alignment: .trailing, spacing: 2) {
+                    let date = Date(timeIntervalSince1970: Double(record.atMs) / 1000)
+                    Text(date, format: Calendar.current.isDateInToday(date) ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day().hour().minute())
+                        .font(DS.Font.meta)
+                        .foregroundStyle(.secondary)
+                    Text("#\(record.seq)")
+                        .font(DS.Font.meta)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            if let approval = record.approval {
+                approvalCard(approval)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("audit-\(record.seq)")
+    }
+
+    private var actorName: String { session.name(of: record.actor) }
+
+    private var title: String {
+        switch record.kind {
+        case .approval:
+            let approved = record.approval.map { Self.isApproval($0.option) } ?? true
+            return "\(actorName) \(approved ? "approved" : "denied") \(record.approval?.tool ?? "a request")"
+        case .join: return "\(actorName) joined"
+        case .leave: return "\(actorName) left"
+        case .paired: return "\(actorName) paired a device"
+        case .grantRegistered: return "Invite created"
+        case .grantRedeemed: return "\(actorName) used an invite"
+        case .revoked: return "Access revoked"
+        case .lease: return "\(actorName) took control"
+        case .prompt: return "\(actorName) prompted an agent"
+        case .denied: return "Refused"
+        }
+    }
+
+    /// The daemon's line without repeating the title: "Mira Holt joined as viewer on
+    /// session:1" under "Mira Holt joined" reads "As viewer on session:1"; "Mira Holt left"
+    /// under "Mira Holt left" disappears.
+    private var subtitle: String? {
+        // An approval's command is in its card below.
+        if record.approval != nil { return nil }
+        var detail = record.detail.trimmingCharacters(in: .whitespaces)
+        for name in [actorName, record.actor.map { session.name(of: $0) } ?? ""] where !name.isEmpty && detail.hasPrefix(name) {
+            detail = String(detail.dropFirst(name.count)).trimmingCharacters(in: .whitespaces)
+        }
+        let verb = title.hasPrefix(actorName) ? String(title.dropFirst(actorName.count)).trimmingCharacters(in: .whitespaces) : title
+        if detail.lowercased() == verb.lowercased() || detail.isEmpty { return nil }
+        if detail.lowercased().hasPrefix(verb.lowercased() + " ") { detail = String(detail.dropFirst(verb.count + 1)) }
+        return detail.prefix(1).uppercased() + detail.dropFirst()
+    }
+
+    static func isApproval(_ label: String) -> Bool {
+        let lower = label.lowercased()
+        return !["no", "deny", "reject", "decline", "cancel", "abort"].contains { lower.hasPrefix($0) }
+    }
+
+    private var glyph: String {
+        switch record.kind {
+        case .approval: record.approval.map { Self.isApproval($0.option) ? "checkmark.seal.fill" : "xmark.seal.fill" } ?? "checkmark.seal"
+        case .join: "person.crop.circle.badge.checkmark"
+        case .leave: "person.crop.circle.badge.minus"
+        case .paired: "link"
+        case .grantRegistered: "link.badge.plus"
+        case .grantRedeemed: "ticket"
+        case .revoked: "person.crop.circle.badge.xmark"
+        case .lease: "keyboard"
+        case .prompt: "text.bubble"
+        case .denied: "hand.raised.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch record.kind {
+        case .approval: record.approval.map { Self.isApproval($0.option) ? DS.Palette.done : DS.Palette.blocked } ?? .secondary
+        case .denied, .revoked: DS.Palette.error
+        default: .secondary
+        }
+    }
+
+    @ViewBuilder private func approvalCard(_ approval: ApprovalAudit) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs + 2) {
+            Text(approval.summary)
+                .font(DS.Font.literalSmall)
+                .lineLimit(isExpanded ? nil : 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: DS.Space.s) {
+                Label("Signed by \(actorName)", systemImage: "signature")
+                Spacer()
+                Text("Option “\(approval.option)”")
+            }
+            .font(DS.Font.meta)
+            .foregroundStyle(.secondary)
+            if isExpanded {
+                Divider()
+                field("Signer device", groupedHex(record.actor?.device ?? "", groups: 8))
+                field("Signature", groupedHex(Self.hex(approval.sig), groups: 8) + "…")
+                field("Agent request", approval.agentRequest)
+                field("Record hash", groupedHex(Self.hex(record.hash), groups: 6) + "…")
+            } else {
+                Text("Tap for the signer's key and signature")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(DS.Space.s + 2)
+        .background(.fill.quaternary, in: .rect(cornerRadius: DS.Radius.control))
+        .padding(.leading, 22 + DS.Space.m)
+    }
+
+    private func field(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.caption2).foregroundStyle(.tertiary)
+            Text(value).font(DS.Font.literalSmall).foregroundStyle(.secondary).textSelection(.enabled)
+        }
+    }
+
+    static func hex(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
+}

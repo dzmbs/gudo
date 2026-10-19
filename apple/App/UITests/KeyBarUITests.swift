@@ -64,16 +64,68 @@ final class KeyBarUITests: XCTestCase {
     @MainActor
     func testSnippetsRow() throws {
         let app = launch()
+        // Inline on iPad; in the profile menu on iPhone.
         let toggle = app.buttons["keybar-snippets"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        func toggleSnippets() {
+            if toggle.exists, toggle.isHittable {
+                toggle.tap()
+            } else {
+                app.buttons["keybar-profile"].tap()
+                let item = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Snippets'")).firstMatch
+                if !item.waitForExistence(timeout: 5) {
+                    let tree = XCTAttachment(string: app.debugDescription)
+                    tree.lifetime = .keepAlways
+                    add(tree)
+                    XCTFail("Snippets in the profile menu")
+                }
+                item.tap()
+            }
+        }
+        XCTAssertTrue(app.buttons["keybar-profile"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["keybar-snippet-0"].exists)
-        toggle.tap()
+        toggleSnippets()
         let first = app.buttons["keybar-snippet-0"]
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         first.tap()  // runs "git status" in the echo pane
         add(XCTAttachment(screenshot: app.screenshot()))
-        toggle.tap()
+        toggleSnippets()
         XCTAssertTrue(first.waitForNonExistence(timeout: 5))
+        hold()
+    }
+
+    /// every profile, a vertical flick sends a key's second glyph, and tapping the joystick opens
+    /// and closes the arrow pad.
+    @MainActor
+    func testSpineIsFixedFlickSendsAlternateAndJoystickOpensPad() throws {
+        let app = launch()
+        let spine = ["keybar-profile", "keybar-esc", "keybar-ctrl", "keybar-alt", "keybar-tab", "keybar-joystick"]
+        XCTAssertTrue(element(app, "keybar-joystick").waitForExistence(timeout: 5))
+        let shellFrames = spine.map { element(app, $0).frame }
+
+        app.typeText("title vim main.swift\n")
+        XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Vim"))
+        XCTAssertTrue(app.buttons["keybar-colon"].waitForExistence(timeout: 5))
+        XCTAssertEqual(spine.map { element(app, $0).frame }, shellFrames, "the spine never moves between profiles")
+
+        app.typeText("title zsh ~/src\n")
+        XCTAssertTrue(waitFor(app.buttons["keybar-profile"], value: "Shell"))
+        let pipe = app.buttons["keybar-pipe"]
+        XCTAssertTrue(pipe.waitForExistence(timeout: 5))
+        // A flick: press, then drag 30 pt up before lifting.
+        let start = pipe.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -30)))
+        pipe.tap()
+        let pane = element(app, "pane-1-screen")
+        let predicate = NSPredicate(format: "value CONTAINS %@", "&|")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: pane)], timeout: 5), .completed,
+                       "flick sent the alternate (&), tap the main glyph (|); pane: \(String(describing: pane.value))")
+
+        let joystick = element(app, "keybar-joystick")
+        joystick.tap()
+        XCTAssertTrue(app.buttons["keybar-pad-home"].waitForExistence(timeout: 5), "tap opens the arrow pad")
+        joystick.tap()
+        XCTAssertTrue(app.buttons["keybar-pad-home"].waitForNonExistence(timeout: 5), "tap again closes it")
+        add(XCTAttachment(screenshot: app.screenshot()))
         hold()
     }
 
