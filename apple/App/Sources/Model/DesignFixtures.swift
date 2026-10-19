@@ -19,6 +19,20 @@ enum DesignFixtures {
         case "single":
             name(workspace)
             return
+        case "programs":
+            // The first pane opens a moment after the window on iOS.
+            for _ in 0..<50 where workspace.focusedPane == nil {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            // iPad launches build a second window model whose local workspace replaces the first
+            // one in `AppModel` (on main too): fill the one the app holds now, which is on screen.
+            try? await Task.sleep(for: .seconds(1))
+            let shown = model.app.workspace(for: .local) ?? workspace
+            for _ in 0..<50 where shown.focusedPane == nil {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            programs(shown)
+            return
         case "live-splits":
             // A real host's tab split in three, names and titles left as they are.
             if let tab = workspace.session.activeTab, tab.root.panes.count == 1 {
@@ -101,6 +115,32 @@ enum DesignFixtures {
         workspace.apply(.newTab)
         if let id = workspace.session.activeTabId { workspace.apply(.rename(id, "build-01 · journalctl")) }
         if let tab = workspace.session.tabs.first { workspace.selectTab(tab.id) }
+    }
+
+    /// tab that needs input (its glyph replaces the mark), the first tab selected.
+    private static func programs(_ workspace: Workspace) {
+        let tabs: [(name: String, program: String, state: AgentState?)] = [
+            ("~/projects/unnamed", "claude", .working), ("notes.txt", "vim", nil), ("build-01", "htop", nil),
+            ("scratch", "python3.12", nil), ("review", "codex", .blocked), ("README.md", "nvim", nil),
+            ("Cargo.toml", "hx", nil), ("work", "tmux", nil), ("history", "git", nil), ("load", "btop", nil),
+            ("console", "irb", nil), ("~", "-zsh", nil),
+        ]
+        var fixture: [String: (program: String, state: AgentState?)] = [:]
+        // `-fixtureTabs N`: the first N only (the tab strip has room for about six).
+        let count = UserDefaults.standard.integer(forKey: "fixtureTabs")
+        for (index, tab) in tabs.prefix(count > 0 ? count : tabs.count).enumerated() {
+            if index > 0 { workspace.apply(.newTab) }
+            guard let id = workspace.session.activeTabId, let pane = workspace.focusedPane else { continue }
+            workspace.apply(.rename(id, tab.name))
+            fixture[pane.description] = (tab.program, tab.state)
+        }
+        if let first = workspace.session.tabs.first {
+            workspace.selectTab(first.id)
+            // Claude beside a shell, so the pane headers show their marks too.
+            workspace.apply(.split(first.focused, .horizontal))
+            workspace.apply(.focus(first.focused))
+        }
+        MockPaneStatus.fixture = fixture
     }
 
     private static func name(_ workspace: Workspace) {
