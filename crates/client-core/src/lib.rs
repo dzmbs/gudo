@@ -27,6 +27,7 @@
 //! # }
 //! ```
 
+mod assist;
 mod conn;
 mod mirror;
 mod mp;
@@ -51,6 +52,7 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::mirror::Mirror;
 
+pub use assist::{AssistEvent, AssistEventQueue, AssistListener};
 pub use grants::{self, GrantSpec};
 pub use mp::{MultiplayerEvent, MultiplayerEventQueue, MultiplayerListener, now_millis};
 pub use proto;
@@ -376,6 +378,8 @@ pub(crate) struct Inner {
     pub ws: workspace::WsState,
     /// Multiplayer requests in flight, pushes, and the invite a guest joined with.
     pub mp: mp::MpState,
+    /// Input-assistance requests in flight, foreground and prompt pushes.
+    pub assist: assist::AssistState,
 }
 
 /// How a client authenticates: as a paired device (pairing ticket) or a guest (invite).
@@ -546,6 +550,7 @@ impl Client {
             stats: Mutex::new(ClientStats::default()),
             ws: workspace::WsState::default(),
             mp: mp::MpState::with_invite(invite),
+            assist: assist::AssistState::default(),
         });
         let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {

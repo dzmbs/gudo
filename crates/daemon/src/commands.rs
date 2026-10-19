@@ -31,6 +31,8 @@ pub(crate) enum CommandUpdate {
 #[derive(Debug)]
 struct Command {
     mark: CommandMark,
+    /// Typed with leading whitespace (`HISTCONTROL=ignorespace`): kept out of history.
+    private: bool,
     started: Instant,
     prompt: Option<PinId>,
     input: Option<PinId>,
@@ -53,6 +55,8 @@ pub(crate) struct CommandLog {
     prompt: Option<PinId>,
     input: Option<PinId>,
     commands: VecDeque<Command>,
+    /// The current prompt's input state, for the mobile line editor.
+    line: crate::assist::marks::LineMarks,
 }
 
 impl CommandLog {
@@ -71,11 +75,19 @@ impl CommandLog {
                 SemanticPromptKind::PromptStart(PromptKind::Primary) => {
                     replace(term, &mut self.prompt, event.pin);
                     replace(term, &mut self.input, None);
+                    self.line.prompt_started(term);
                     // Shells that never send 133;B (fish 3) are at their prompt from here.
                     updates.push(CommandUpdate::AtPrompt(true));
                 }
-                SemanticPromptKind::PromptStart(_) => release(term, event.pin),
+                SemanticPromptKind::PromptStart(_) => {
+                    // After the input start: a continuation prompt (PS2).
+                    if self.input.is_some() {
+                        self.line.continuation = true;
+                    }
+                    release(term, event.pin);
+                }
                 SemanticPromptKind::InputStart => {
+                    self.line.input_started(term);
                     // Continuation prompts report input starts too; keep the first.
                     if self.input.is_none() {
                         self.input = event.pin;
@@ -85,10 +97,11 @@ impl CommandLog {
                     updates.push(CommandUpdate::AtPrompt(true));
                 }
                 SemanticPromptKind::OutputStart { command } => {
-                    let command = command
-                        .or_else(|| self.typed_command(term, event.pin))
-                        .filter(|c| !c.is_empty());
+                    let raw = command.or_else(|| self.typed_command(term, event.pin));
+                    let private = raw.as_deref().is_some_and(|c| c.starts_with([' ', '\t']));
+                    let command = raw.map(|c| c.trim().to_owned()).filter(|c| !c.is_empty());
                     self.next_id += 1;
+                    self.line.output_started(term, self.next_id);
                     let mark = CommandMark {
                         pane_id: pane,
                         command_id: self.next_id,
@@ -102,6 +115,7 @@ impl CommandLog {
                     updates.push(CommandUpdate::Mark(mark.clone()));
                     self.commands.push_back(Command {
                         mark,
+                        private,
                         started: Instant::now(),
                         prompt: self.prompt.take(),
                         input: self.input.take(),
@@ -128,6 +142,7 @@ impl CommandLog {
                                 duration_ms: cmd.started.elapsed().as_millis() as u64,
                             });
                             updates.push(CommandUpdate::Mark(cmd.mark.clone()));
+                            self.line.command_ended();
                         }
                         // A prompt without a command (empty Enter, the first prompt).
                         None => release(term, event.pin),
@@ -135,12 +150,32 @@ impl CommandLog {
                 }
             }
         }
+        self.line.after_batch(term, self.prompt, self.input);
         updates
+    }
+
+    /// Called after every chunk of output (with or without events): tracks the prompt's
+    /// input start and right prompt while they are drawn.
+    pub fn after_output(&mut self, term: &mut Terminal) {
+        self.line.after_output(term, self.input);
+    }
+
+    /// The current prompt's marks, for reading the input line.
+    pub fn line_marks(&self) -> crate::assist::marks::LineView {
+        self.line.view(self.prompt, self.input, self.next_id)
+    }
+
+    /// Whether command `id` was typed with a leading space (kept out of history).
+    pub fn is_private(&self, id: u64) -> bool {
+        self.commands
+            .iter()
+            .any(|c| c.mark.command_id == id && c.private)
     }
 
     /// The command line as typed: the cells from the input start to just before `output`.
     fn typed_command(&self, term: &Terminal, output: Option<PinId>) -> Option<String> {
-        let start = term.pin_point(self.input?)?;
+        // Shells without `133;B` (fish 3): from where the cursor was after the prompt.
+        let start = term.pin_point(self.input.or(self.line.inferred())?)?;
         let end = before(term, term.pin_point(output?)?)?;
         if end < start {
             return None;
@@ -148,7 +183,8 @@ impl CommandLog {
         let text = term
             .text_wrapped(TextRegion::Range { start, end }, Wrap::Join)
             .ok()?;
-        let text = text.trim();
+        // Leading whitespace is kept for the history privacy rule; the caller trims.
+        let text = self.line.strip_right_prompt(text.trim_end());
         Some(text.chars().take(MAX_COMMAND_LINE).collect())
     }
 

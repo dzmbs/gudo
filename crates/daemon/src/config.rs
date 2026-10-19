@@ -137,6 +137,8 @@ pub struct Config {
     pub push: PushConfig,
     /// A pane's control lease moves to someone who asked for it once the holder has not typed
     pub lease_idle: Duration,
+    /// Command history for completion and the line editor (`[history]` in `config.toml`).
+    pub history: crate::assist::HistoryConfig,
 }
 
 impl Config {
@@ -164,6 +166,7 @@ impl Config {
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
+            history: crate::assist::HistoryConfig::default(),
         }
     }
 
@@ -194,6 +197,12 @@ impl Config {
     ///
     /// [multiplayer]
     /// lease_idle_secs = 5
+    ///
+    /// [history]                    # docs/DAEMON.md §7
+    /// enabled = true
+    /// ignore_space = true          # commands typed with a leading space are not kept
+    /// max_entries = 50000
+    /// import = true                # import zsh/bash/fish history once
     /// ```
     ///
     /// A relay mode set before this runs (`hostd run --no-relay`) wins over the file's.
@@ -240,6 +249,19 @@ impl Config {
         }
         if let Some(secs) = file.multiplayer.lease_idle_secs {
             self.lease_idle = Duration::from_secs(secs);
+        }
+        let history = file.history;
+        if let Some(on) = history.enabled {
+            self.history.enabled = on;
+        }
+        if let Some(on) = history.ignore_space {
+            self.history.ignore_space = on;
+        }
+        if let Some(max) = history.max_entries {
+            self.history.max_entries = max.max(1);
+        }
+        if let Some(on) = history.import {
+            self.history.import = on;
         }
         Ok(())
     }
@@ -308,6 +330,16 @@ struct UserFile {
     relay: RelaySection,
     push: PushSection,
     multiplayer: MultiplayerSection,
+    history: HistorySection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct HistorySection {
+    enabled: Option<bool>,
+    ignore_space: Option<bool>,
+    max_entries: Option<usize>,
+    import: Option<bool>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

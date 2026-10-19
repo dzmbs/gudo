@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::assist::{AssistError, AssistPush, AssistRequest, AssistResponse};
 use crate::ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
     ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
@@ -233,6 +234,14 @@ pub enum ClientCtl {
         req_id: u64,
         /// The request.
         req: MpRequest,
+    },
+    /// An input-assistance request (prompt state, submit, history, completion, file search,
+    /// blocked-agent options), answered by [`ServerCtl::AssistResult`].
+    Assist {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: AssistRequest,
     },
 }
 
@@ -533,6 +542,15 @@ pub enum ServerCtl {
         /// Why, naming the role needed.
         reason: String,
     },
+    /// Answers [`ClientCtl::Assist`].
+    AssistResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<AssistResponse, AssistError>,
+    },
+    /// A pane's foreground program or (for watched panes) prompt state changed.
+    Assist(AssistPush),
 }
 
 /// The daemon's answer to a successful `Hello`.

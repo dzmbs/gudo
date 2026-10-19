@@ -27,12 +27,35 @@ pub(super) fn terminal_pgid_of(pid: u32) -> Option<u32> {
 }
 
 pub(super) fn process_name(pid: u32) -> Option<String> {
-    let info = bsdinfo(pid)?;
+    let Some(info) = bsdinfo(pid) else {
+        // libproc refuses other users' processes (setuid `top`); sysctl does not.
+        return kinfo_comm(pid);
+    };
     // `pbi_name` (up to 2 * MAXCOMLEN) is the longer form; `pbi_comm` is truncated at 16.
     [&info.pbi_name[..], &info.pbi_comm[..]]
         .into_iter()
         .map(c_chars_to_string)
         .find(|name| !name.is_empty())
+}
+
+/// `pbsi_comm` from `PROC_PIDT_SHORTBSDINFO`, which libproc answers for any process.
+fn kinfo_comm(pid: u32) -> Option<String> {
+    let size = mem::size_of::<libc::proc_bsdshortinfo>() as c_int;
+    // SAFETY: proc_bsdshortinfo is plain old data, so all-zero is a valid value.
+    let mut info: libc::proc_bsdshortinfo = unsafe { mem::zeroed() };
+    // SAFETY: the buffer is a properly aligned proc_bsdshortinfo of exactly `size` bytes.
+    let ret = unsafe {
+        libc::proc_pidinfo(
+            pid as c_int,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            (&raw mut info).cast::<c_void>(),
+            size,
+        )
+    };
+    (ret == size)
+        .then(|| c_chars_to_string(&info.pbsi_comm))
+        .filter(|name| !name.is_empty())
 }
 
 fn c_chars_to_string(chars: &[libc::c_char]) -> String {

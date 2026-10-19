@@ -302,6 +302,28 @@ impl AgentRuntime {
         })
     }
 
+    /// The dialog the agent is blocked on, for the decision strip (D9). `None` unless blocked.
+    pub fn blocked_detail(&mut self) -> Option<BlockedDetail> {
+        let blocked = self.arbiter.status().blocked()?.clone();
+        let wire = self.wire_request(&blocked.request_id);
+        Some(BlockedDetail {
+            wire,
+            summary: blocked
+                .blocker
+                .summary
+                .clone()
+                .or(blocked.blocker.tool.clone())
+                .unwrap_or_default(),
+            options: blocked
+                .blocker
+                .options
+                .iter()
+                .map(|o| (o.label.clone(), o.id))
+                .collect(),
+            request: blocked.request_id,
+        })
+    }
+
     pub fn knows_request(&self, id: RequestId) -> bool {
         self.requests.iter().any(|(w, _)| *w == id)
     }
@@ -360,6 +382,18 @@ impl AgentRuntime {
             Err(_) => Err(None),
         }
     }
+}
+
+/// What a blocked agent waits for (D9).
+#[derive(Debug, Clone)]
+pub(crate) struct BlockedDetail {
+    /// The wire id clients decide with.
+    pub wire: RequestId,
+    /// The arbiter's id.
+    pub request: agents::RequestId,
+    pub summary: String,
+    /// The hook's options, in order: `(label, choice)`.
+    pub options: Vec<(String, ApprovalChoice)>,
 }
 
 /// An accepted decision, with what the audit log records about it.
@@ -468,6 +502,13 @@ impl HookServer {
                 stdout: Some(stdout),
             });
         }
+    }
+
+    /// Whether a hook holds request `request` of `pane` open, so a decision reaches the agent.
+    pub fn is_pending(&self, pane: PaneId, request: &agents::RequestId) -> bool {
+        lock(&self.pending)
+            .get(&pane)
+            .is_some_and(|p| &p.request == request)
     }
 
     pub fn cancel_pending(&self, pane: PaneId) {

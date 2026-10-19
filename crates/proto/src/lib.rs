@@ -25,6 +25,9 @@
 //!   use, lowest priority) by [`Bulk::HistoryPage`] or [`Bulk::HistoryGone`], keyed by
 //!   `(pane, snapshot_seq, offset)`: the records after a [`PaneOutput::SnapshotZstd`]'s READY
 //!   section, newest page first, ready for a streaming snapshot decoder.
+//! - Input-assistance requests (prompt state, atomic submit, history, completion, file search,
+//!   blocked-agent options) are [`ClientCtl::Assist`] → [`ServerCtl::AssistResult`], with
+//!   pushes as [`ServerCtl::Assist`]; see [`assist`].
 //! - Multiplayer requests (grants, revocation, leases, prompts, audit) are
 //!   [`ClientCtl::Multiplayer`] → [`ServerCtl::MultiplayerResult`]; see [`mp`].
 //! - Developer-workflow requests (ports, editor, git, worktrees, files, attention) are
@@ -49,6 +52,7 @@
 //! every client message is checked against a [`GrantId`], and input and decisions carry the
 //! acting principal.
 
+pub mod assist;
 pub mod frame;
 mod ids;
 mod layout;
@@ -58,6 +62,7 @@ mod serde_bytes;
 mod ticket;
 pub mod workspace;
 
+pub use assist::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
