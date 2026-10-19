@@ -154,6 +154,42 @@ pub struct Config {
     /// client that cannot decode it.
     #[doc(hidden)]
     pub test_snapshot_format: Option<u32>,
+    /// The git-native workspace: repository watching, `gh`, worktree housekeeping.
+    pub repos: RepoConfig,
+}
+
+/// Timings and tools of the git-native workspace (`ws::repo`).
+#[derive(Debug, Clone)]
+pub struct RepoConfig {
+    /// The GitHub CLI; found on `PATH` and the usual install locations when `None`
+    /// (`worktrees.gh` in `config.toml`).
+    pub gh: Option<PathBuf>,
+    /// Quiet period after a file change before a worktree is re-read.
+    pub debounce: Duration,
+    /// How often worktrees with panes are re-read without a file event (a safety net).
+    pub poll: Duration,
+    /// How often worktrees without panes are re-read.
+    pub idle_poll: Duration,
+    /// Pull requests with running checks are asked about this often; others less often.
+    pub pr_poll: Duration,
+    /// How often merged worktrees are swept for auto-delete.
+    pub sweep: Duration,
+    /// Length of the "day" in the auto-delete setting (tests shorten it).
+    pub day: Duration,
+}
+
+impl Default for RepoConfig {
+    fn default() -> Self {
+        Self {
+            gh: None,
+            debounce: Duration::from_millis(300),
+            poll: Duration::from_secs(10),
+            idle_poll: Duration::from_secs(60),
+            pr_poll: Duration::from_secs(30),
+            sweep: Duration::from_secs(3600),
+            day: Duration::from_secs(86_400),
+        }
+    }
 }
 
 /// Size caps for the artifact store (drawings, images, op logs).
@@ -215,6 +251,7 @@ impl Config {
             history: crate::assist::HistoryConfig::default(),
             self_exe: None,
             test_snapshot_format: None,
+            repos: RepoConfig::default(),
         }
     }
 
@@ -275,6 +312,9 @@ impl Config {
         }
         if let Some(base) = file.worktrees.port_base {
             self.worktree_port_base = base;
+        }
+        if let Some(gh) = file.worktrees.gh {
+            self.repos.gh = Some(gh);
         }
         if let Some(code) = file.editor.code {
             self.code_cli = Some(code);
@@ -473,6 +513,7 @@ struct FilesSection {
 struct WorktreesSection {
     root: Option<PathBuf>,
     port_base: Option<u16>,
+    gh: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

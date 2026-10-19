@@ -35,6 +35,9 @@
 //!   [`ClientCtl::Multiplayer`] → [`ServerCtl::MultiplayerResult`]; see [`mp`].
 //! - Developer-workflow requests (ports, editor, git, worktrees, files, attention) are
 //!   [`ClientCtl::Workspace`] → [`ServerCtl::WorkspaceResult`]; see the [`workspace`] types.
+//! - The git-native workspace (repositories, worktrees and branches per pane, pull requests
+//!   through the host's `gh`, tasks, archive, scripts) is pushed as [`ServerCtl::Repos`] to
+//!   clients with [`Caps::REPO_STATUS`], with its requests in [`WorkspaceRequest`]; see [`repo`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -63,6 +66,7 @@ pub mod info;
 mod layout;
 pub mod mp;
 mod msg;
+pub mod repo;
 mod serde_bytes;
 mod ticket;
 pub mod workspace;
@@ -82,6 +86,7 @@ pub use layout::{
 };
 pub use mp::*;
 pub use msg::*;
+pub use repo::*;
 pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
 pub use workspace::*;
 

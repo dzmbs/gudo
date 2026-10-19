@@ -6,9 +6,12 @@
 mod attention;
 mod editor;
 mod files;
+mod gh;
 pub(crate) mod git;
 mod paths;
 pub(crate) mod ports;
+pub(crate) mod repo;
+mod repo_ops;
 mod review;
 pub(crate) mod tunnel;
 pub(crate) mod turns;
@@ -45,6 +48,8 @@ pub(crate) struct Ws {
     pub editors: editor::Editors,
     pub tunnel: tunnel::Tunnel,
     pub worktrees: worktree::Worktrees,
+    /// The git-native workspace: repositories of panes, pull requests, scripts.
+    pub repos: repo::Repos,
     worktree_root: PathBuf,
 }
 
@@ -59,6 +64,7 @@ impl Ws {
             editors: editor::Editors::default(),
             tunnel: tunnel::Tunnel::new(events),
             worktrees: worktree::Worktrees::load(&cfg.state_dir, cfg.worktree_port_base),
+            repos: repo::Repos::new(),
             worktree_root: cfg
                 .worktree_root
                 .clone()
@@ -210,9 +216,9 @@ pub(crate) async fn handle(
             }
             let core2 = Arc::clone(core);
             let root = ws.worktree_root.clone();
-            blocking(move || core2.ws.worktrees.create(&create, &root))
-                .await
-                .map(A::Worktree)
+            let made = blocking(move || core2.ws.worktrees.create(&create, &root)).await;
+            ws.repos.relist();
+            made.map(A::Worktree)
         }
         R::WorktreeList { repo } => {
             let dir = existing_dir(&policy, &repo)?;
@@ -228,7 +234,15 @@ pub(crate) async fn handle(
         } => {
             let path = policy.resolve(&path)?;
             let core2 = Arc::clone(core);
-            blocking(move || core2.ws.worktrees.remove(&path, force, delete_branch)).await?;
+            blocking(move || {
+                let (_, hooks) = repo::read_config(&path, None);
+                core2
+                    .ws
+                    .worktrees
+                    .remove(&path, force, delete_branch, hooks.teardown.as_deref())
+            })
+            .await?;
+            ws.repos.relist();
             Ok(A::Done)
         }
         R::WorktreeLaunch {
@@ -353,6 +367,20 @@ pub(crate) async fn handle(
         R::PushStatus => Ok(A::Push(crate::notifier::status(core, conn.actor.device))),
         R::PushAction(action) => {
             crate::notifier::action(core, conn.actor, &action).map(A::PushDecided)
+        }
+        R::RepoRefresh { .. }
+        | R::PrMerge(_)
+        | R::PrRerunFailed { .. }
+        | R::PrCreate(_)
+        | R::PrCheckout(_)
+        | R::WorktreeArchive { .. }
+        | R::WorktreeArchived { .. }
+        | R::WorktreeRestore { .. }
+        | R::WorktreeSettings(_)
+        | R::TaskCreate(_)
+        | R::ScriptRun(_) => {
+            let root = ws.worktree_root.clone();
+            repo_ops::handle(core, &policy, &root, req).await
         }
         R::AttentionList => Ok(A::Attention(ws.attention.list())),
         R::AttentionSeen(seen) => {

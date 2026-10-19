@@ -115,7 +115,7 @@ impl DaemonClient {
     }
 
     /// Waits until `pane_id`'s agent reports [`proto::AgentState::Idle`].
-    async fn agent_idle(&self, pane_id: u64, timeout: Duration) -> bool {
+    pub(crate) async fn agent_idle(&self, pane_id: u64, timeout: Duration) -> bool {
         let tap = Arc::clone(&self.tap);
         on_runtime(async move {
             let deadline = tokio::time::Instant::now() + timeout;

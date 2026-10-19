@@ -268,6 +268,9 @@ bitset! {
         /// the `Welcome` or `Refused`, and can be let in to upgrade a daemon whose snapshot
         /// format it does not decode (see `ServerCtl::DaemonInfo`).
         DAEMON_INFO = 5;
+        /// Wants `ServerCtl::Repos` (repository, worktree, branch and pull request state of
+        /// every pane); the daemon only watches repositories while such a client is connected.
+        REPO_STATUS = 6;
     }
 }
 

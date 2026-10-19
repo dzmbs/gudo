@@ -260,7 +260,15 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
-        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS | Caps::ATTACH_RESULT | Caps::DAEMON_INFO,
+        caps: {
+            let base =
+                Caps::ECHO_PREDICTION | Caps::ARTIFACTS | Caps::ATTACH_RESULT | Caps::DAEMON_INFO;
+            if inner.config.repo_status {
+                base | Caps::REPO_STATUS
+            } else {
+                base
+            }
+        },
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
     };

@@ -8,6 +8,7 @@ mod e2e;
 mod multiplayer;
 mod notify;
 mod relays;
+mod repos;
 mod shell;
 mod support;
 mod terminal;

@@ -69,6 +69,8 @@ pub(crate) enum Event {
     },
     /// A pane's foreground program, or a watched pane's prompt state, changed.
     Assist(proto::AssistPush),
+    /// The repository snapshot changed (read it from `ws.repos`).
+    Repos,
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -712,14 +714,43 @@ impl Core {
             .filter(|_| self.cfg.shell_integration)
             .and_then(|si| si.injection(&shell, |name| self.cfg.pane_var(name)));
         let mut inject_env = Vec::new();
-        match &launch {
-            PaneLaunch::Shell { .. } => {
-                if let Some(inj) = &injection {
-                    cmd.args(&inj.args);
-                    inject_env.clone_from(&inj.env);
-                }
-                cmd.arg("-l");
+        // `exec`s the login shell with shell integration, for panes that run something first.
+        let then_shell = || {
+            let mut then = vec!["exec".to_owned()];
+            if let Some(inj) = &injection {
+                then.push("env".into());
+                then.extend(
+                    inj.env
+                        .iter()
+                        .map(|(k, v)| shell_quote(&format!("{k}={v}"))),
+                );
             }
+            then.push(shell_quote(&shell.to_string_lossy()));
+            if let Some(inj) = &injection {
+                then.extend(inj.args.iter().map(|a| shell_quote(a)));
+            }
+            then.push("-l".into());
+            then.join(" ")
+        };
+        // A setup or repository script queued for this directory runs first (git workspace).
+        let pre = self
+            .ws
+            .repos
+            .take_pre_command(std::path::Path::new(&cwd))
+            .map(|c| format!("{c}\n"));
+        match &launch {
+            PaneLaunch::Shell { .. } => match &pre {
+                Some(pre) => {
+                    cmd.args(["-l", "-c", &format!("{pre}{}", then_shell())]);
+                }
+                None => {
+                    if let Some(inj) = &injection {
+                        cmd.args(&inj.args);
+                        inject_env.clone_from(&inj.env);
+                    }
+                    cmd.arg("-l");
+                }
+            },
             PaneLaunch::Command { argv, .. } => {
                 if argv.is_empty() {
                     return Err((OpError::Invalid, "empty argv".into()));
@@ -729,7 +760,8 @@ impl Core {
                     .map(|a| shell_quote(a))
                     .collect::<Vec<_>>()
                     .join(" ");
-                cmd.args(["-l", "-c", &format!("exec {line}")]);
+                let pre = pre.as_deref().unwrap_or_default();
+                cmd.args(["-l", "-c", &format!("{pre}exec {line}")]);
             }
             PaneLaunch::Agent {
                 agent: kind,
@@ -770,21 +802,8 @@ impl Core {
                     .collect::<Vec<_>>()
                     .join(" ");
                 // integration for that shell.
-                let mut then = vec!["exec".to_owned()];
-                if let Some(inj) = &injection {
-                    then.push("env".into());
-                    then.extend(
-                        inj.env
-                            .iter()
-                            .map(|(k, v)| shell_quote(&format!("{k}={v}"))),
-                    );
-                }
-                then.push(shell_quote(&shell.to_string_lossy()));
-                if let Some(inj) = &injection {
-                    then.extend(inj.args.iter().map(|a| shell_quote(a)));
-                }
-                then.push("-l".into());
-                cmd.args(["-l", "-c", &format!("{line}; {}", then.join(" "))]);
+                let pre = pre.as_deref().unwrap_or_default();
+                cmd.args(["-l", "-c", &format!("{pre}{line}; {}", then_shell())]);
                 for (k, v) in &spec.env {
                     cmd.env(k, v);
                 }

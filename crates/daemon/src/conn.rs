@@ -144,6 +144,11 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         ws,
     });
     core.client_connected(true);
+    let repo_watch = client.caps.contains(Caps::REPO_STATUS);
+    if repo_watch {
+        core.ws.repos.watch(true);
+        client.forward(Event::Repos);
+    }
     let mut tasks = JoinSet::new();
     tasks.spawn(write_ctl(ctl_tx, ctl_out));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
@@ -176,6 +181,9 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     core.detach(client.id);
     core.mp.leave(&core, client.id);
     core.client_connected(false);
+    if repo_watch {
+        core.ws.repos.watch(false);
+    }
     lock(&client.ws.watches).clear();
     result
 }
@@ -722,7 +730,38 @@ impl Client {
                     self.send(ServerCtl::Assist(push));
                 }
             }
+            Event::Repos => {
+                if let Some(snapshot) = self.scoped_repos() {
+                    self.send(ServerCtl::Repos(snapshot));
+                }
+            }
         }
+    }
+
+    /// The repository snapshot as this connection may see it: clients with
+    /// `Caps::REPO_STATUS` that may read the host's repositories, panes within the scope and
+    /// the repositories those panes are in. `None` before the first snapshot.
+    fn scoped_repos(&self) -> Option<proto::RepoSnapshot> {
+        if !self.caps.contains(Caps::REPO_STATUS) || self.allow(Need::Drive, Target::Host).is_err()
+        {
+            return None;
+        }
+        let snapshot = self.core.ws.repos.snapshot();
+        if snapshot.rev == 0 {
+            return None;
+        }
+        let mut snapshot = (*snapshot).clone();
+        if self.authz.scope != Scope::Daemon {
+            snapshot.panes.retain(|p| self.pane_allowed(p.pane_id));
+            let repos: std::collections::BTreeSet<String> = snapshot
+                .worktrees
+                .iter()
+                .filter(|w| snapshot.panes.iter().any(|p| p.worktree == w.path))
+                .map(|w| w.repo.clone())
+                .collect();
+            snapshot.worktrees.retain(|w| repos.contains(&w.repo));
+        }
+        Some(snapshot)
     }
 
     /// Whether this connection may see an artifact: its session for daemon- and

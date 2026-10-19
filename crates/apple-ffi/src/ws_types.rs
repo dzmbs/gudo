@@ -1435,6 +1435,11 @@ pub enum WorkspaceEvent {
         /// The whole status.
         status: VsCodeTunnelStatus,
     },
+    /// The repositories, worktrees, branches and pull requests of the panes (whole).
+    Repos {
+        /// The snapshot.
+        snapshot: crate::repo::RepoSnapshot,
+    },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
@@ -1456,6 +1461,9 @@ impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
             },
             E::VsCodeTunnel { status } => Self::VsCodeTunnel {
                 status: status.into(),
+            },
+            E::Repos { snapshot } => Self::Repos {
+                snapshot: snapshot.into(),
             },
         }
     }
