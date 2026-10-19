@@ -36,6 +36,10 @@
 	</dict>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).terminal</string>
+	</array>
 	<key>PushAppGroup</key>
 	<string>$(PUSH_APP_GROUP)</string>
 	<key>PushKeychainGroup</key>

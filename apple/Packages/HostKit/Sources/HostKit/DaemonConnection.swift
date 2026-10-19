@@ -305,9 +305,36 @@ public final class DaemonConnection: HostConnection {
         }
     }
 
+    /// What each window shows of this host (`setWindowView`), most recent last. Empty: the
+    /// layout's own active tab stands in (a single window that never reported).
+    @ObservationIgnored private var windowViews: [(owner: ObjectIdentifier, focused: UInt64?, visible: [UInt64])] = []
+
+    /// A window shows `visible` of this host with `focused` taking keys (nil focused and empty
+    /// visible: the window does not show the host now). The daemon hears the union of every
+    /// window's panes and the focus of the window that reported last.
+    public func setWindowView(_ window: AnyObject, focused: PaneId?, visible: [PaneId]) {
+        let owner = ObjectIdentifier(window)
+        windowViews.removeAll { $0.owner == owner }
+        if focused != nil || !visible.isEmpty {
+            windowViews.append((owner, focused?.rawValue, visible.map(\.rawValue)))
+        }
+        pushView()
+    }
+
+    /// The view this connection last told the daemon (tests, diagnostics).
+    public var reportedView: (focused: UInt64?, visible: [UInt64])? { lastView.map { ($0.0, $0.1) } }
+
+    private var combinedView: (focused: UInt64?, visible: [UInt64]) {
+        guard !windowViews.isEmpty else { return layout.view }
+        var visible: [UInt64] = []
+        for view in windowViews { for pane in view.visible where !visible.contains(pane) { visible.append(pane) } }
+        let focused = windowViews.last { $0.focused != nil }?.focused
+        return (focused, visible)
+    }
+
     private func pushView() {
         guard let client else { return }
-        let view = layout.view
+        let view = combinedView
         if let lastView, lastView.0 == view.focused, lastView.1 == view.visible { return }
         lastView = (view.focused, view.visible)
         client.setView(focused: view.focused, visible: view.visible)

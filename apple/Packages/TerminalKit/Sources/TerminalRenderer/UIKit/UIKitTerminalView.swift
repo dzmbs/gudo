@@ -126,7 +126,12 @@ public final class TerminalView: UIView {
             stopMomentum()
             return
         }
-        surface.startDisplayLink { CADisplayLink(target: $0, selector: $1) }
+        // The display link of the screen the window is on (an external display has its own
+        // refresh rate); the scale follows `traitCollection.displayScale` in `layoutSubviews`.
+        let screen = window?.windowScene?.screen
+        surface.startDisplayLink { target, selector in
+            screen?.displayLink(withTarget: target, selector: selector) ?? CADisplayLink(target: target, selector: selector)
+        }
     }
 
     /// Sends a key as if typed here (key bar, menu actions).

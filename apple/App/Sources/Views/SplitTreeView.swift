@@ -156,6 +156,11 @@ struct PaneSlot: View {
                 ResizeOverlay(size: workspace.grids[id], mode: resizeOverlay) { [workspace] in
                     ContinuousClock.now < workspace.keyboardResizeUntil
                 }
+                .onChange(of: workspace.grids[id]) { old, new in
+                    // UI tests count the overlays a grid change shows (`-windowProbe`).
+                    guard WindowProbe.isEnabled, old != nil, new != old, ContinuousClock.now >= workspace.keyboardResizeUntil else { return }
+                    model.resizeOverlayShows += 1
+                }
                 if let url = notice.hoveredURL {
                     URLHoverBanner(url: url)
                 }

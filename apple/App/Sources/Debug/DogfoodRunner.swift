@@ -586,7 +586,7 @@ final class DogfoodRunner {
         if step["ptySizeMatchesGrid"] as? Bool == true {
             // The kernel's window size on the PTY (what the shell's SIGWINCH reads) vs the grid
             // the view laid out.
-            guard let pane, let pty = (pane.backend as? LocalPTYBackend)?.pty, let grid = pane.view.surface.grid else {
+            guard let pane, let pty = (SharedPaneBackend.underlying(pane.backend) as? LocalPTYBackend)?.pty, let grid = pane.view.surface.grid else {
                 let view = pane?.view
                 return (false, "no pty or grid (view in window: \(view?.window != nil), superview: \(view?.superview.map { "\(type(of: $0))" } ?? "nil"), hosts: \(pane?.hosts.allObjects.map { "window=\($0.window != nil) size=\($0.bounds.size)" } ?? []), size \(view?.bounds.size ?? .zero))")
             }
@@ -621,7 +621,7 @@ final class DogfoodRunner {
     }
 
     private func shellPid(_ pane: Pane) -> Int32? {
-        (pane.backend as? LocalPTYBackend)?.pty.pid
+        (SharedPaneBackend.underlying(pane.backend) as? LocalPTYBackend)?.pty.pid
     }
 
     private func string(_ step: [String: Any], _ key: String) throws -> String {

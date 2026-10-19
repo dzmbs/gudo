@@ -73,6 +73,10 @@ targets:
           NSAllowsLocalNetworking: true
         # Agent runs on the Lock Screen and in the Dynamic Island (AgentActivityWidget).
         NSSupportsLiveActivities: true
+        # A window's host, tab and pane: Handoff to the owner's other devices, and a tab dragged
+        # out into a new iPad window (App/Sources/Windows). Multiple windows (iPad scenes,
+        # Stage Manager, external displays) come from the generated scene manifest.
+        NSUserActivityTypes: [$(PRODUCT_BUNDLE_IDENTIFIER).terminal]
         # Shared with the Notification Service Extension in push builds (Brand.xcconfig).
         PushKeychainGroup: $(PUSH_KEYCHAIN_GROUP)
         PushAppGroup: $(PUSH_APP_GROUP)

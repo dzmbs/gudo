@@ -22,12 +22,18 @@ enum KeyboardSettings {
     static let asciiKeyboard = "asciiKeyboard"
 }
 
-/// One window's state: the layout (behind `LayoutStore`) and the live panes it references.
-/// Views read `session` and `panes`; every change goes through `apply`, which keeps the pane set
-/// in step with the layout (creating panes for new leaves, terminating closed ones).
+/// One window's view of one host (or this device): the host's layout, seen through the window's
+/// own tab and pane selection (`WindowLayoutStore`), and this window's live panes. Two windows on
+/// the same host share the host's layout store and its pane streams but each has its own
+/// `Workspace`, so each has its own terminals, renderers and views (docs/APP-ARCHITECTURE.md
+/// "Windows"). Views read `session` and `panes`; every change goes through `apply`, which keeps
+/// the pane set in step with the layout (creating panes for new leaves, terminating closed ones).
 @Observable
 final class Workspace {
-    let layout: any LayoutStore
+    /// The window's view of the host's layout.
+    let layout: WindowLayoutStore
+    /// The host's layout store, shared by every window on the host.
+    var sharedLayout: any LayoutStore { layout.base }
     private(set) var panes: [PaneId: Pane] = [:]
     /// Panes whose terminal or backend failed to start, with the reason.
     private(set) var failures: [PaneId: String] = [:]
@@ -42,11 +48,14 @@ final class Workspace {
     /// Until when grid changes come from the software keyboard rather than the user.
     var keyboardResizeUntil: ContinuousClock.Instant {
         #if os(iOS)
-        max(keyboardFrameChangeUntil, Self.keyBarResizeUntil)
+        max(keyboardFrameChangeUntil, Self.keyBarResizeUntil, layoutChangeUntil)
         #else
-        keyboardFrameChangeUntil
+        max(keyboardFrameChangeUntil, layoutChangeUntil)
         #endif
     }
+    /// Until when grid changes come from the window switching layouts (compact <-> regular
+    /// width), which must not flash the cols x rows overlay.
+    @ObservationIgnored var layoutChangeUntil = ContinuousClock.now
     @ObservationIgnored private var keyboardFrameChangeUntil = ContinuousClock.now
     /// Terminal appearance for every pane (the design layer may replace it).
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
@@ -85,24 +94,48 @@ final class Workspace {
     /// The host id (for the hosts list and persistence), nil for the local workspace.
     let hostId: String?
 
-    init(layout: any LayoutStore = LocalLayoutStore(), makeBackend: @escaping @MainActor (PaneId) throws -> any PaneBackend = makeLocalBackend) {
-        self.layout = layout
+    /// This device's workspace in a window: `layout` is the device's shared store.
+    init(
+        layout: any LayoutStore = LocalLayoutStore(), selecting tab: TabId? = nil,
+        makeBackend: @escaping @MainActor (PaneId) throws -> any PaneBackend = makeLocalBackend
+    ) {
+        self.layout = WindowLayoutStore(base: layout, selecting: tab)
         self.makeBackend = makeBackend
         host = nil
         hostId = nil
         start()
+        followLayout()
     }
 
     /// A window on a remote host: its layout store (the daemon's, or a local one for plain SSH)
-    /// and its pane backends.
-    init(hostId: String, connection: any HostConnection) {
-        layout = connection.layoutStore
-        makeBackend = { try connection.makeBackend(for: $0) }
+    /// and its pane backends (`makeBackend`: a tap of the pane's shared stream; the
+    /// connection's own backends when nil).
+    init(
+        hostId: String, connection: any HostConnection, selecting tab: TabId? = nil,
+        makeBackend: (@MainActor (PaneId) throws -> any PaneBackend)? = nil
+    ) {
+        layout = WindowLayoutStore(base: connection.layoutStore, selecting: tab)
+        self.makeBackend = makeBackend ?? { try connection.makeBackend(for: $0) }
         host = connection
         self.hostId = hostId
         start()
         followLayout()
     }
+
+    /// The window closed (or stopped showing this host): its terminals stop, the panes stay in
+    /// the host's layout for other windows and devices. `ending`: the host is closing (or its
+    /// connection was replaced), so streams no other window shows end instead of being parked.
+    func close(ending: Bool = false) {
+        guard !isClosed else { return }
+        isClosed = true
+        for pane in panes.values {
+            if ending { pane.terminate() } else { pane.detach() }
+        }
+        panes = [:]
+    }
+
+    /// Set by `close()`: a closed workspace creates no panes.
+    @ObservationIgnored private(set) var isClosed = false
 
     private func start() {
         reconcilePanes()
@@ -134,6 +167,7 @@ final class Workspace {
     /// A daemon's layout changes on its own (other clients, the daemon's answers to our ops, a
     /// pane whose process exited): keep the panes in step.
     private func followLayout() {
+        guard !isClosed else { return }
         withObservationTracking {
             _ = layout.session
         } onChange: { [weak self] in
@@ -225,7 +259,7 @@ final class Workspace {
             used.insert(name)
             // After this turn: `reconcilePanes` runs inside `apply`.
             Task { @MainActor [weak self] in
-                guard let self, let current = self.session.tabs.first(where: { $0.id == tab.id }), current.title == nil else { return }
+                guard let self, !self.isClosed, let current = self.session.tabs.first(where: { $0.id == tab.id }), current.title == nil else { return }
                 self.layout.apply(.rename(tab.id, name))
             }
         }
@@ -370,6 +404,7 @@ final class Workspace {
     // MARK: Panes
 
     private func reconcilePanes() {
+        guard !isClosed else { return }
         nameNewTabs()
         let live = session.panes
         for (id, pane) in panes where !live.contains(id) {
@@ -411,7 +446,7 @@ final class Workspace {
         // The tab shortcuts span every host in the window; the terminal answers them itself so
         // they work right after the window switched hosts (the menu commands, found through the
         // responder chain, could miss them then).
-        let tabShortcuts: [WorkspaceAction] = [.newTab, .newTabOnHost] + WorkspaceAction.tabActions
+        let tabShortcuts: [WorkspaceAction] = [.newTab, .newTabOnHost, .newWindow] + WorkspaceAction.tabActions
         pane.view.appKeyCommands = tabShortcuts.map { action in
             UIKeyCommand(
                 input: String(action.shortcut.key.character), modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
@@ -426,6 +461,7 @@ final class Workspace {
             keyBar.target = pane.view
             keyBar.assist = pane.backend as? any LineAssist
             keyBar.update(context: keyBarContext(of: pane))
+            pane.claimSize()
             apply(.focus(id))
             keyBar.onDraw = DrawingCommands.canDraw(in: self) ? { [weak self] in if let self { DrawingCommands.toggleDrawing(in: self) } } : nil
         }
@@ -445,8 +481,9 @@ final class Workspace {
         }
         #else
         pane.view.setAccessibilityIdentifier(id.description)
-        pane.view.onFocus = { [weak self] in
+        pane.view.onFocus = { [weak self, weak pane] in
             ActiveWindow.workspace = self
+            pane?.claimSize()
             self?.apply(.focus(id))
         }
         #endif

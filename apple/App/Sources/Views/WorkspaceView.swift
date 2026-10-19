@@ -23,9 +23,7 @@ struct WorkspaceView: View {
     @AppStorage("sidebarWidth") private var sidebarWidth = 248.0
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    #else
+    #if os(macOS)
     @Environment(\.dismiss) private var dismiss
     #endif
 
@@ -114,7 +112,9 @@ struct WorkspaceView: View {
 
     @ViewBuilder private var content: some View {
         #if os(iOS)
-        if sizeClass == .compact {
+        // By the window's width, never the device (`WidthBucket`): an iPhone, a foldable, Split
+        // View, Slide Over and Stage Manager windows all get the layout their width fits.
+        if model.widthBucket == .compact {
             CompactRoot(workspace: workspace)
         } else {
             regular
@@ -531,6 +531,10 @@ struct ActiveTabView: View {
             if workspace.host != nil { HostNotices(workspace: workspace) }
         }
         .background(theme.background, ignoresSafeAreaEdges: [])
+        .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
+            // An external display showing this window's tab scales to this area.
+            if !model.isPresentation, model.terminalArea != size { model.terminalArea = size }
+        }
     }
 }
 

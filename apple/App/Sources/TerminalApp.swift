@@ -27,15 +27,20 @@ struct TerminalApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            WindowRoot()
+        // One window per scene (iPad windows and Stage Manager, an external display's own
+        // windows, Mac windows). A window opened with a request starts on its hosts and tab
+        // (New Window, Open in New Window); otherwise it restores its own, else the last
+        // window's (docs/APP-ARCHITECTURE.md "Windows").
+        WindowGroup(for: WindowRequest.self) { $request in
+            WindowRoot(request: request)
                 .environment(app)
         }
         .commands { WorkspaceCommands() }
         .onChange(of: scenePhase) { _, phase in
             // 04-mobile-ux C3 "background and foreground contract": suspend with resume state
             // kept, probe and resume at once on return (R1, R5, R10). macOS keeps connections
-            // up in the background.
+            // up in the background. The app's phase, not a window's: one window in the
+            // background while another is on screen keeps every host live.
             AppNotifications.shared.appIsActive = phase == .active
             switch phase {
             case .active: app.hosts.foreground()
@@ -63,88 +68,172 @@ struct TerminalApp: App {
 /// detail column, inside the design's chrome. Deep links, the hosts list, the sidebar and the
 /// launch test hooks pick the target; the window model (sidebar destination, sheets, palette,
 /// open hosts) survives switching targets. Which hosts were open, which groups were collapsed and
-/// the last-focused tab are restored on launch.
+/// the last-focused tab are restored per window. The window publishes what it shows for Handoff
+/// and continues other devices' (and dragged-out tabs') activities.
 struct WindowRoot: View {
+    /// What this window was opened for (New Window, Open in New Window), if anything.
+    var request: WindowRequest?
     @Environment(AppModel.self) private var app
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.scenePhase) private var scenePhase
     /// Legacy single-target restore (before multi-host windows).
     @SceneStorage("target") private var storedTarget: String?
     @SceneStorage("openHosts") private var storedHosts: String?
     @SceneStorage("collapsedHosts") private var storedCollapsed: String?
     @SceneStorage("focusedTab") private var storedFocus: String?
+    /// The request this scene already opened (a restored scene must not open it again).
+    @SceneStorage("openedRequest") private var openedRequest: String?
     @State private var restored = false
     @State private var model = WindowModel(app: AppModel.shared)
+    #if DEBUG
+    /// UI tests: a narrower window than the simulator's screen (`<scheme>://debug/width/<pt>`,
+    /// `-windowWidth <pt>`), to cross the width boundary as Split View and Stage Manager do.
+    @State private var debugWidth: Double? = UserDefaults.standard.object(forKey: "windowWidth") as? Double
+    #endif
 
     var body: some View {
-        Group {
-            if let workspace = model.workspace {
-                // No `.id` per workspace: the sidebar (every host) stays put while the detail
-                // column switches hosts; the panes are keyed by their workspace inside.
-                WorkspaceView(workspace: workspace)
-            } else {
-                EmptyState(
-                    "Host Unavailable", systemImage: "exclamationmark.triangle",
-                    message: app.lastError ?? "The host could not be opened."
-                ) {
-                    Button("Show Hosts") {
-                        model.show(.local)
-                        model.destination = .hosts
-                    }
-                    .buttonStyle(.glassProminent)
+        sized
+            .environment(model)
+            .onChange(of: app.lastError) { _, error in
+                if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
+            }
+            .onChange(of: model.groups.openHosts) { _, _ in persist() }
+            .onChange(of: model.groups.collapsed) { _, _ in persist() }
+            .onChange(of: model.currentTab) { _, _ in persist() }
+            .onChange(of: scenePhase, initial: true) { _, phase in model.isOnScreen = phase != .background }
+            .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
+            .modifier(HandoffActivity(model: model, onContinue: continueActivity))
+            .onOpenURL(perform: open(url:))
+            .onDisappear { model.close() }
+            .task {
+                guard !restored else { return }
+                restored = true
+                model.openWindow = { request in openWindow(value: request) }
+                app.hosts.foreground()
+                let hooked = await app.runLaunchHooks()
+                if !hooked.isEmpty {
+                    // Open every hooked host (they stay connected), show the first.
+                    for target in hooked { model.show(target) }
+                    model.show(hooked[0])
+                } else if let request, openedRequest != request.id.uuidString {
+                    openedRequest = request.id.uuidString
+                    model.open(request)
+                } else if model.lastContinued == nil, shouldRestore {
+                    restore()
+                }
+                // `-openHost <name or id>`: open that saved host (screenshots, manual checks).
+                if let wanted = UserDefaults.standard.string(forKey: "openHost"),
+                   let record = app.hosts.records.first(where: { $0.id == wanted || $0.name == wanted })
+                {
+                    model.show(.host(record.id))
+                }
+                // `-destination hosts|inbox`: open on that screen (screenshots of live data).
+                switch UserDefaults.standard.string(forKey: "destination") {
+                case "hosts": model.destination = .hosts
+                case "inbox": model.destination = .inbox
+                default: break
+                }
+                #if DEBUG
+                // `-continueActivity <json>`: continue a Handoff payload as if another device sent it.
+                if let json = UserDefaults.standard.string(forKey: "continueActivity"),
+                   let payload = try? JSONDecoder().decode(HandoffPayload.self, from: Data(json.utf8))
+                {
+                    continueActivity(payload)
+                }
+                #endif
+            }
+    }
+
+    /// The window's content at its width bucket: compact (the iPhone layout) or regular (sidebar
+    /// and splits), measured on the window, never the device (iOS: the whole window's size
+    /// class follows it, so every screen agrees).
+    @ViewBuilder private var sized: some View {
+        #if os(iOS)
+        content
+            .environment(\.horizontalSizeClass, model.widthBucket == .compact ? .compact : .regular)
+            #if DEBUG
+            .frame(maxWidth: debugWidth.map { CGFloat($0) } ?? .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.black.ignoresSafeArea())
+            #endif
+            .background {
+                // The window's width, from the first layout on (`onGeometryChange` only reports
+                // changes).
+                GeometryReader { proxy in
+                    Color.clear.onChange(of: Double(proxy.size.width), initial: true) { _, width in widthChanged(width) }
                 }
             }
-        }
-        .environment(model)
-        .onChange(of: app.lastError) { _, error in
-            if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
-        }
-        .onChange(of: model.groups.openHosts) { _, _ in persist() }
-        .onChange(of: model.groups.collapsed) { _, _ in persist() }
-        .onChange(of: model.currentTab) { _, _ in persist() }
-        .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
-        .onOpenURL { url in
-            // An invite opens the Join sheet: joining is always the user's tap.
-            if AppLinks.isInvite(url) {
-                model.joinInvite = url.absoluteString
-                model.sheet = .join
-                return
-            }
-            if let (host, pane) = AppLinks.openTarget(url) {
-                AppNotifications.openPane(hostId: host, pane: pane)
-                return
-            }
-            Task {
-                if let target = await app.handle(url: url) {
-                    model.show(target)
-                    model.destination = .terminal
-                    model.toasts.show(Toast("Paired with \(model.hostName)", systemImage: "checkmark.circle.fill", style: .success))
+            .overlay(alignment: .bottomTrailing) { WindowProbe() }
+        #else
+        content
+            .overlay(alignment: .bottomTrailing) { WindowProbe() }
+        #endif
+    }
+
+    @ViewBuilder private var content: some View {
+        if let workspace = model.workspace {
+            // No `.id` per workspace: the sidebar (every host) stays put while the detail
+            // column switches hosts; the panes are keyed by their workspace inside.
+            WorkspaceView(workspace: workspace)
+        } else {
+            EmptyState(
+                "Host Unavailable", systemImage: "exclamationmark.triangle",
+                message: app.lastError ?? "The host could not be opened."
+            ) {
+                Button("Show Hosts") {
+                    model.show(.local)
+                    model.destination = .hosts
                 }
+                .buttonStyle(.glassProminent)
             }
         }
-        .task {
-            guard !restored else { return }
-            restored = true
-            app.hosts.foreground()
-            let hooked = await app.runLaunchHooks()
-            if !hooked.isEmpty {
-                // Open every hooked host (they stay connected), show the first.
-                for target in hooked { model.show(target) }
-                model.show(hooked[0])
-            } else if shouldRestore {
-                restore()
-            }
-            // `-openHost <name or id>`: open that saved host (screenshots, manual checks).
-            if let wanted = UserDefaults.standard.string(forKey: "openHost"),
-               let record = app.hosts.records.first(where: { $0.id == wanted || $0.name == wanted })
-            {
-                model.show(.host(record.id))
-            }
-            // `-destination hosts|inbox`: open on that screen (screenshots of live data).
-            switch UserDefaults.standard.string(forKey: "destination") {
-            case "hosts": model.destination = .hosts
-            case "inbox": model.destination = .inbox
-            default: break
+    }
+
+    /// A width change that crosses the boundary switches the layout; the terminals' grids then
+    /// change with it, which is not a resize the user asked for (no cols × rows overlay).
+    private func widthChanged(_ width: Double) {
+        guard width > 0 else { return }
+        let next = WidthBucket.of(width: width, current: model.widthBucket)
+        guard next != model.widthBucket else { return }
+        if model.widthBucket != nil {
+            AppModel.log.info("window width \(Int(width)) pt: \(next.rawValue, privacy: .public) layout")
+            for workspace in model.workspaces.values { workspace.layoutChangeUntil = .now + .seconds(1) }
+        }
+        model.widthBucket = next
+    }
+
+    private func open(url: URL) {
+        #if DEBUG
+        // `<scheme>://debug/width/<pt>` (0: the full width): UI tests narrow the window.
+        if url.host() == "debug", url.pathComponents.count >= 3, url.pathComponents[1] == "width" {
+            let value = Double(url.pathComponents[2]) ?? 0
+            debugWidth = value > 0 ? value : nil
+            return
+        }
+        #endif
+        // An invite opens the Join sheet: joining is always the user's tap.
+        if AppLinks.isInvite(url) {
+            model.joinInvite = url.absoluteString
+            model.sheet = .join
+            return
+        }
+        if let (host, pane) = AppLinks.openTarget(url) {
+            AppNotifications.openPane(hostId: host, pane: pane)
+            return
+        }
+        Task {
+            if let target = await app.handle(url: url) {
+                model.show(target)
+                model.destination = .terminal
+                model.toasts.show(Toast("Paired with \(model.hostName)", systemImage: "checkmark.circle.fill", style: .success))
             }
         }
+    }
+
+    /// Another device's window (Handoff), or a tab dragged out of another window here.
+    private func continueActivity(_ payload: HandoffPayload) {
+        AppModel.log.info("continue \(payload.kind.rawValue, privacy: .public) \(payload.hostName, privacy: .public) from \(payload.device, privacy: .public)")
+        model.continue(payload)
     }
 
     /// Restore by default in normal launches; never for design fixtures, `-mock` or dogfood

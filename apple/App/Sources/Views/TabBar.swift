@@ -133,10 +133,11 @@ private struct TabChip: View {
                     model.focus(ref)
                     workspace.renamingTab = tab.id
                 }
+                Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
                 Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }
             }
         }
-        .draggable(ref.description)
+        .tabDrag(ref, model: model)
         .dropDestination(for: String.self) { items, _ in
             guard let item = items.first, let slash = item.lastIndex(of: "/"),
                   String(item[..<slash]) == group.id, let raw = UInt64(item[item.index(after: slash)...]),

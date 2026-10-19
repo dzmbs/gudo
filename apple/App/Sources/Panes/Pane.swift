@@ -69,7 +69,7 @@ final class Pane {
                 Task { @MainActor in surface?.applyPrediction(update) }
             }
         }
-        backend.start { [weak self] event in
+        let handle: @Sendable (PaneEvent) -> Void = { [weak self] event in
             switch event {
             case .output(let data):
                 data.withUnsafeBytes { terminal.write($0) }
@@ -100,6 +100,13 @@ final class Pane {
                 onExit()
             }
         }
+        if let shared = backend as? any SharedPaneTap {
+            // Another window may show this pane already: start from its terminal, and let
+            // windows opened later start from this one.
+            shared.start(events: handle) { [weak terminal] in terminal?.seedEvents() ?? [] }
+        } else {
+            backend.start(events: handle)
+        }
         // Scrolling to the top of what the pane holds asks the host for older scrollback.
         surface.onScroll = { [weak surface] rows in
             guard rows < 0, let terminal = surface?.terminal, terminal.scrollbar.offset == 0 else { return }
@@ -122,6 +129,17 @@ final class Pane {
     func terminate() {
         resizeTask?.cancel()
         backend.terminate()
+    }
+
+    /// The window closed; the pane stays in its host's layout (other windows, later windows).
+    func detach() {
+        resizeTask?.cancel()
+        if let shared = backend as? any SharedPaneTap { shared.detach() } else { backend.terminate() }
+    }
+
+    /// This window's view of the pane drives its size (it took focus): the PTY follows it.
+    func claimSize() {
+        (backend as? any SharedPaneTap)?.claimSize()
     }
 
     private func refreshTitle() {

@@ -14,6 +14,6 @@ extension DaemonPaneBackend {
     /// (`snapshot`: a snapshot taken at `seq` replaced its state), on the connection's thread,
     /// in stream order. Pass nil to stop.
     public func onOutputApplied(_ callback: (@Sendable (_ seq: UInt64, _ snapshot: Bool) -> Void)?) {
-        router.onApplied(pane.rawValue, callback)
+        router.onApplied(pane.rawValue, tap: tap, callback)
     }
 }

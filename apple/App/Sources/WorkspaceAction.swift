@@ -9,6 +9,8 @@ enum WorkspaceAction: Hashable {
     case toggleZoom, focus(Direction), resize(Direction)
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
     case draw, newCanvas
+    /// A new window with this window's hosts, on its tab (⌘N).
+    case newWindow
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .closePane]
     static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
@@ -32,6 +34,7 @@ enum WorkspaceAction: Hashable {
         case .goToTab: "Go to Tab…"
         case .draw: "Draw on Pane"
         case .newCanvas: "New Canvas Split"
+        case .newWindow: "New Window"
         }
     }
 
@@ -53,6 +56,7 @@ enum WorkspaceAction: Hashable {
         // ⇧⌘D is Ghostty's Split Down.
         case .draw: KeyboardShortcut("d", modifiers: [.command, .control])
         case .newCanvas: KeyboardShortcut("d", modifiers: [.command, .control, .shift])
+        case .newWindow: KeyboardShortcut("n")
         }
     }
 
@@ -72,6 +76,7 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): window.selectTab(shortcut: number)
         case .lastTab: window.selectTab(shortcut: 9)
         case .goToTab: window.showTabFinder()
+        case .newWindow: window.newWindow()
         default: perform(on: window.workspace ?? workspace)
         }
     }
@@ -90,7 +95,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab: break
+        case .goToTab, .newWindow: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         }

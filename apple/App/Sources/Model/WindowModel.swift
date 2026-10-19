@@ -26,17 +26,22 @@ enum SheetRoute: String, Identifiable {
 }
 
 /// One window's UI state and the data sources behind its screens. App-wide data (hosts,
-/// connections, workspaces) lives in `AppModel`; this holds what the window shows and adapts
-/// those models to the screens' protocols (`ScreenModels.swift`). With `-mock` the screens read
-/// `MockData.swift` instead, for screenshots.
+/// connections, layouts, pane streams) lives in `AppModel`; this holds what the window shows,
+/// its own workspace per host, and adapts those models to the screens' protocols
+/// (`ScreenModels.swift`). With `-mock` the screens read `MockData.swift` instead, for
+/// screenshots.
 ///
-/// A window shows every open host at once (`groups`): each host keeps its connection and its
-/// workspace while it is open, and the window's `target` only picks which one the detail column
-/// shows. Selecting a tab on another host is a switch of `target`, never a reconnect.
+/// A window shows every open host at once (`groups`): each host keeps its connection and this
+/// window's workspace on it while it is open, and the window's `target` only picks which one the
+/// detail column shows. Selecting a tab on another host is a switch of `target`, never a
+/// reconnect. Windows are independent (iPad scenes, Stage Manager, Mac windows): each selects its
+/// own host, tab and pane, and has its own terminals on the shared streams.
 @MainActor
 @Observable
 final class WindowModel {
-    var destination = Destination.terminal
+    var destination = Destination.terminal {
+        didSet { if destination != oldValue { reportViews() } }
+    }
     var sheet: SheetRoute?
     var isPaletteShown = false {
         didSet { if !isPaletteShown { paletteMode = .commands } }
@@ -58,14 +63,28 @@ final class WindowModel {
     let groups: HostGroups
     /// What the detail column shows: this device or a host (`show`, `focus`).
     private(set) var target = WorkspaceTarget.local
-    /// The workspace of each group (this device and every open host), kept for as long as the
-    /// host is open so switching to it is instant: its panes keep streaming in the background.
+    /// This window's workspace on each group (this device and every open host), kept for as
+    /// long as the host is open so switching to it is instant: its panes keep streaming in the
+    /// background.
     private(set) var workspaces: [String: Workspace] = [:]
+    /// The connection each host's workspace was made on (a new connection, plain SSH upgraded
+    /// to the daemon, gets a new workspace).
+    @ObservationIgnored private var workspaceConnections: [String: ObjectIdentifier] = [:]
+    /// The window closed: its terminals stopped (`close()`).
+    @ObservationIgnored private(set) var isClosed = false
+    /// Whether the window is on screen (its scene is not in the background): the daemon only
+    /// hears about panes a window shows.
+    var isOnScreen = true {
+        didSet { if isOnScreen != oldValue { reportViews() } }
+    }
     /// The workspace on screen (the target's).
     private(set) var workspace: Workspace? {
         didSet {
-            if workspace !== oldValue { followConnection() }
-            if workspace != nil { ActiveWindow.workspace = workspace }
+            if workspace !== oldValue {
+                followConnection()
+                followView()
+            }
+            if workspace != nil, !isPresentation { ActiveWindow.workspace = workspace }
             workspace?.onNewTabUnavailable = { [weak self] in self?.newTab() }
             workspace?.onLayoutUnavailable = { [weak self] in
                 guard let self else { return }
@@ -101,12 +120,19 @@ final class WindowModel {
     /// A restored tab to select once its host's layout arrives.
     @ObservationIgnored private var pendingFocus: TabRef?
 
-    init(app: AppModel) {
+    /// An external display's presentation of another window (`ExternalDisplayRoot`): never the
+    /// window menu commands act on.
+    let isPresentation: Bool
+    /// The size of the area the active tab's panes fill (the external display scales to it).
+    var terminalArea = CGSize.zero
+
+    init(app: AppModel, isPresentation: Bool = false) {
         self.app = app
-        let local = app.workspace(for: .local)
+        self.isPresentation = isPresentation
+        let local = app.makeWorkspace(for: .local)
         groups = HostGroups(
             hosts: app.hosts,
-            local: LaunchOptions.hasLocalShell ? local.map { HostGroups.Local(name: Self.deviceName, layout: $0.layout) } : nil)
+            local: LaunchOptions.hasLocalShell ? HostGroups.Local(name: Self.deviceName, layout: app.localLayout) : nil)
         if LaunchOptions.mock {
             hosts = MockHostDirectory()
             agents = MockAgentFeed()
@@ -142,10 +168,34 @@ final class WindowModel {
             ports.window = self
             links.window = self
         }
-        ActiveWindow.register(self)
+        if !isPresentation { ActiveWindow.register(self) }
+        app.register(self)
+        groups.isOpenElsewhere = { [weak self, weak app] id in
+            guard let self, let app else { return false }
+            return app.isHostOpen(id, elsewhereThan: self)
+        }
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
+        #if os(iOS)
+        // A first guess from the screen until the window is measured (`WindowRoot`), so an
+        // iPhone never draws the regular layout for a frame.
+        if !isPresentation { widthBucket = WidthBucket.of(width: Double(UIScreen.main.bounds.width), current: nil) }
+        #endif
         followGroups()
+    }
+
+    /// The window closed: its terminals stop and the daemons stop counting its panes as shown.
+    /// Hosts stay connected and every pane stays in its host's layout (other windows, a window
+    /// opened later, other devices).
+    func close() {
+        guard !isClosed else { return }
+        isClosed = true
+        for open in workspaces.values {
+            (open.host as? DaemonConnection)?.setWindowView(self, focused: nil, visible: [])
+            open.close()
+        }
+        app.windowsChanged += 1
+        AppModel.log.info("window closed")
     }
 
     var connection: ConnectionState { connectionOverride ?? liveConnection }
@@ -289,8 +339,15 @@ final class WindowModel {
     func closeHost(_ id: String) {
         let wasShown = currentGroupId == id
         let others = groups.tabs.filter { $0.hostId != id }
+        let elsewhere = app.isHostOpen(id, elsewhereThan: self)
+        if let closing = workspaces[id] {
+            (closing.host as? DaemonConnection)?.setWindowView(self, focused: nil, visible: [])
+            closing.close(ending: !elsewhere)
+            if !elsewhere, let connection = closing.host { app.endSharedPanes(of: connection) }
+        }
         groups.close(id)
         workspaces[id] = nil
+        workspaceConnections[id] = nil
         guard wasShown else { return }
         if let next = others.first { focus(next) } else { show(.local) }
     }
@@ -299,7 +356,9 @@ final class WindowModel {
     func forgetHost(_ id: String) {
         let wasShown = currentGroupId == id
         groups.forget(id)
+        workspaces[id]?.close(ending: true)
         workspaces[id] = nil
+        workspaceConnections[id] = nil
         if wasShown { show(.local) }
     }
 
@@ -321,20 +380,113 @@ final class WindowModel {
             return
         }
         guard groups.group(ref.hostId) != nil else { return }
-        show(.host(ref.hostId))
+        select(ref, pane: nil)
+    }
+
+    /// Shows a tab (and a pane in it) as soon as its host's layout has it: at once for this
+    /// device, after connecting for a host. A tab the host no longer has leaves the host shown.
+    func select(_ ref: TabRef, pane: PaneId?) {
+        destination = .terminal
+        show(ref.hostId == HostGroups.localId ? .local : .host(ref.hostId))
         pendingFocus = ref
         Task { [weak self] in
             for _ in 0..<300 {
-                guard let self, let pending = self.pendingFocus else { return }
-                if let tabs = self.workspaces[pending.hostId]?.session.tabs, !tabs.isEmpty {
-                    if tabs.contains(where: { $0.id == pending.tab }), self.currentGroupId == pending.hostId {
-                        self.workspaces[pending.hostId]?.selectTab(pending.tab)
+                guard let self, let pending = self.pendingFocus, pending == ref else { return }
+                if let workspace = self.workspaces[pending.hostId], !workspace.session.tabs.isEmpty {
+                    if workspace.session.tabs.contains(where: { $0.id == pending.tab }), self.currentGroupId == pending.hostId {
+                        if let pane, workspace.session.tab(containing: pane)?.id == pending.tab {
+                            workspace.apply(.focus(pane))
+                        } else {
+                            workspace.selectTab(pending.tab)
+                        }
                     }
                     self.pendingFocus = nil
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(100))
             }
+        }
+    }
+
+    // MARK: Windows
+
+    /// Opens a new window (`WindowRoot` sets it from SwiftUI's `openWindow`).
+    @ObservationIgnored var openWindow: ((WindowRequest) -> Void)?
+
+    /// The window's width bucket (`WindowRoot` measures it): compact or regular layout.
+    var widthBucket: WidthBucket?
+    /// How many times a grid change would have shown the cols × rows overlay (`-windowProbe`
+    /// only): a layout switch must not add to it.
+    var resizeOverlayShows = 0
+
+    /// New Window (⌘N): the same hosts, on the same tab; from then on its own.
+    func newWindow() {
+        openWindow?(.like(self))
+    }
+
+    /// Open in New Window from a tab's context menu (or a tab dragged out on iPad).
+    func openInNewWindow(_ ref: TabRef) {
+        var request = WindowRequest(hosts: ref.hostId == HostGroups.localId ? [] : [ref.hostId], tab: ref)
+        if let workspace = workspaces[ref.hostId], let tab = workspace.session.tabs.first(where: { $0.id == ref.tab }) {
+            request.pane = tab.focused.rawValue
+        }
+        openWindow?(request)
+    }
+
+    /// Open in New Window from a host group's context menu.
+    func openInNewWindow(host id: String) {
+        let tab = workspaces[id]?.session.activeTab.map { TabRef(hostId: id, tab: $0.id) }
+        openWindow?(WindowRequest(hosts: [id], tab: tab))
+    }
+
+    /// A new window's request: open its hosts and show its tab.
+    func open(_ request: WindowRequest) {
+        groups.restore(request.hosts)
+        syncWorkspaces()
+        if let tab = request.tab {
+            select(tab, pane: request.pane.map(PaneId.init))
+        } else if let first = request.hosts.first {
+            show(.host(first))
+        }
+    }
+
+    /// A Handoff (or a tab dragged out of another window): the same host, tab and pane, or the
+    /// words for why not and a way to add the host.
+    func `continue`(_ payload: HandoffPayload) {
+        lastContinued = payload
+        switch payload.resolve(records: app.hosts.records) {
+        case .host(let id, let tab, let pane):
+            if let tab {
+                select(TabRef(hostId: id, tab: tab), pane: pane)
+            } else {
+                destination = .terminal
+                show(.host(id))
+            }
+        case .local(let tab, let pane):
+            if let tab { select(TabRef(hostId: HostGroups.localId, tab: tab), pane: pane) }
+        case .notPaired:
+            handoffMissing = payload
+        case .elsewhere:
+            toasts.show(Toast(
+                "That terminal runs on \(payload.device) itself, so it can't continue here",
+                systemImage: "laptopcomputer.and.iphone", style: .neutral))
+        }
+    }
+
+    /// A continued activity whose host is not paired here (the window offers to add it).
+    var handoffMissing: HandoffPayload?
+    /// The last activity continued here (UI tests read it through the probe).
+    @ObservationIgnored private(set) var lastContinued: HandoffPayload?
+
+    /// Add Host for a host another device continued from: SSH pre-filled with its address, a
+    /// pairing ticket for a daemon.
+    func addMissingHost() {
+        guard let payload = handoffMissing else { return }
+        handoffMissing = nil
+        if let ssh = payload.ssh {
+            addHost(mode: .ssh, destination: ssh)
+        } else {
+            addHost(mode: .ticket)
         }
     }
 
@@ -351,20 +503,36 @@ final class WindowModel {
         return (app.hosts.connection(id) as? DaemonConnection)?.meta[pane]?.agent?.kind
     }
 
-    /// Keeps a workspace for every open host whose connection exists (a new one when a host's
-    /// connection object is replaced, plain SSH → daemon), and the target's on screen.
+    /// Keeps this window's workspace for every host it has open whose connection exists (a new
+    /// one when a host's connection object is replaced, plain SSH → daemon), and the target's on
+    /// screen. Hosts other windows opened are listed, but get a workspace here only once shown.
     func syncWorkspaces() {
+        guard !isClosed else { return }
         var next: [String: Workspace] = [:]
-        if let local = app.workspace(for: .local) { next[HostGroups.localId] = local }
-        for group in groups.groups where !group.isLocal && app.hosts.connection(group.id) != nil {
-            next[group.id] = app.workspace(for: .host(group.id))
+        if let local = workspaces[HostGroups.localId] ?? app.makeWorkspace(for: .local) { next[HostGroups.localId] = local }
+        var wanted = Set(groups.openHosts)
+        if case .host(let id) = target { wanted.insert(id) }
+        for group in groups.groups where !group.isLocal && wanted.contains(group.id) {
+            guard let connection = app.hosts.connection(group.id) else { continue }
+            let identity = ObjectIdentifier(connection)
+            if let existing = workspaces[group.id], workspaceConnections[group.id] == identity {
+                next[group.id] = existing
+            } else if let made = app.makeWorkspace(for: .host(group.id)) {
+                next[group.id] = made
+                workspaceConnections[group.id] = identity
+            }
+        }
+        // Workspaces on a replaced connection (or a host gone from this window) end here.
+        for (id, old) in workspaces where next[id] !== old {
+            old.close(ending: true)
+            if next[id] == nil { workspaceConnections[id] = nil }
         }
         if next.count != workspaces.count || next.contains(where: { workspaces[$0.key] !== $0.value }) {
             workspaces = next
         }
         let shown: Workspace? = switch target {
         case .local: next[HostGroups.localId]
-        case .host(let id): next[id] ?? app.workspace(for: target)
+        case .host(let id): next[id]
         }
         if shown !== workspace {
             #if os(iOS)
@@ -387,6 +555,35 @@ final class WindowModel {
         }
     }
 
+    // MARK: What the daemons hear
+
+    /// Tells each daemon what this window shows of it: the shown host's visible panes and
+    /// focus, nothing for the hosts it does not show (stream priorities, attention seen, push
+    /// suppression; DAEMON.md).
+    private func reportViews() {
+        for open in workspaces.values {
+            guard let daemon = open.host as? DaemonConnection else { continue }
+            let shows = open === workspace && destination == .terminal && isOnScreen && !isClosed
+            let view: (focused: PaneId?, visible: [PaneId]) = shows ? open.layout.view : (nil, [])
+            daemon.setWindowView(self, focused: view.focused, visible: view.visible)
+        }
+    }
+
+    /// Re-reports when the shown workspace's tab, focus or splits change.
+    private func followView() {
+        guard !isClosed else { return }
+        let observed = workspace
+        reportViews()
+        withObservationTracking {
+            _ = observed?.layout.view
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.workspace === observed else { return }
+                self.followView()
+            }
+        }
+    }
+
     /// Re-syncs when hosts open, close, are forgotten or swap their connection.
     private func followGroups() {
         withObservationTracking {
@@ -395,8 +592,9 @@ final class WindowModel {
             for connection in app.hosts.connections.values { _ = ObjectIdentifier(connection) }
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                self?.syncWorkspaces()
-                self?.followGroups()
+                guard let self, !self.isClosed else { return }
+                self.syncWorkspaces()
+                self.followGroups()
             }
         }
     }
