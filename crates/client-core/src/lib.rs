@@ -28,6 +28,7 @@
 //! ```
 
 mod artifacts;
+mod assist;
 mod conn;
 mod mirror;
 mod mp;
@@ -53,6 +54,7 @@ use tokio::sync::{Notify, mpsc};
 use crate::mirror::Mirror;
 
 pub use artifacts::{ArtifactEventQueue, ArtifactListener, ArtifactUpdate};
+pub use assist::{AssistEvent, AssistEventQueue, AssistListener};
 pub use drawing;
 pub use grants::{self, GrantSpec};
 pub use mp::{MultiplayerEvent, MultiplayerEventQueue, MultiplayerListener, now_millis};
@@ -381,6 +383,8 @@ pub(crate) struct Inner {
     pub mp: mp::MpState,
     /// Drawings and images: requests in flight, pushes, the scene cache.
     pub art: artifacts::ArtState,
+    /// Input-assistance requests in flight, foreground and prompt pushes.
+    pub assist: assist::AssistState,
 }
 
 /// How a client authenticates: as a paired device (pairing ticket) or a guest (invite).
@@ -552,6 +556,7 @@ impl Client {
             ws: workspace::WsState::default(),
             mp: mp::MpState::with_invite(invite),
             art: artifacts::ArtState::default(),
+            assist: assist::AssistState::default(),
         });
         let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {

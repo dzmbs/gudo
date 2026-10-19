@@ -616,6 +616,18 @@ impl Client {
                 };
                 self.send(ServerCtl::Artifact(event));
             }
+            Event::Assist(push) => {
+                let send = match &push {
+                    proto::AssistPush::Foreground(fg) => self.in_session(fg.pane_id),
+                    proto::AssistPush::Prompt(state) => {
+                        self.core.assist.watching(self.id, state.pane_id)
+                            && self.pane_allowed(state.pane_id)
+                    }
+                };
+                if send {
+                    self.send(ServerCtl::Assist(push));
+                }
+            }
         }
     }
 
@@ -1265,6 +1277,13 @@ impl Client {
                 });
             }
             ClientCtl::InkLive(ink) => self.ink(ink),
+            ClientCtl::Assist { req_id, req } => {
+                let client = Arc::clone(self);
+                tokio::spawn(async move {
+                    let result = client.assist(req).await;
+                    client.send(ServerCtl::AssistResult { req_id, result });
+                });
+            }
             ClientCtl::Op { op_id, mut op } => {
                 let (need, target) = policy::op(&op);
                 let outcome = match self.allow(need, target) {
@@ -1391,6 +1410,42 @@ impl Client {
             }
             other => other,
         })
+    }
+
+    /// An input-assistance request, gated by the policy table and the pane's scope.
+    async fn assist(
+        &self,
+        req: proto::AssistRequest,
+    ) -> Result<proto::AssistResponse, proto::AssistError> {
+        let (need, target) = policy::assist(&req);
+        self.allow(need, target)
+            .map_err(|e| proto::AssistError::Denied(e.to_string()))?;
+        if let Some(pane) = policy::assist_pane(&req)
+            && !self.pane_allowed(pane)
+        {
+            return Err(proto::AssistError::UnknownPane);
+        }
+        let audit = match &req {
+            proto::AssistRequest::AnswerBlocked(a) => Some((a.pane_id, a.label.clone())),
+            _ => None,
+        };
+        let caller = crate::assist::Caller {
+            conn: self.id,
+            actor: self.actor,
+        };
+        let result = crate::assist::handle(&self.core, caller, req).await;
+        if let (Some((pane, label)), Ok(_)) = (audit, &result) {
+            let name = self.core.mp.name_of(self.id);
+            self.core.mp.audit.append(
+                AuditKind::Approval,
+                crate::mp::AuditEntry {
+                    pane_id: Some(pane),
+                    detail: format!("{name} chose {label:?} on screen"),
+                    ..self.authz.audit()
+                },
+            );
+        }
+        result
     }
 
     /// A multiplayer request.

@@ -1,7 +1,9 @@
 //! What each request needs: a role level and a scope target (docs/DAEMON.md §6.3 is the
 //! human-readable version of this file; keep them in sync).
 
-use proto::{LayoutOp, MpError, PaneId, Roles, Scope, SessionId, TabId, WorkspaceRequest};
+use proto::{
+    AssistRequest, LayoutOp, MpError, PaneId, Roles, Scope, SessionId, TabId, WorkspaceRequest,
+};
 
 use super::Authz;
 use crate::core::Core;
@@ -184,5 +186,34 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::PushRegister(_) | R::PushUnregister | R::PushStatus | R::PushAction(_) => {
             (Need::Own, Target::Daemon)
         }
+    }
+}
+
+/// foreground program is viewing it; submitting a line is driving it; history, completion and
+/// file search read the host beyond the pane (other panes' commands, the file system);
+/// answering a dialog on screen is approving.
+pub(crate) fn assist(req: &AssistRequest) -> (Need, Target) {
+    use AssistRequest as R;
+    match req {
+        R::Watch { pane_id, .. } | R::State { pane_id } | R::BlockedOptions { pane_id } => {
+            (Need::View, Target::Pane(*pane_id))
+        }
+        R::SubmitLine(s) => (Need::Drive, Target::Pane(s.pane_id)),
+        R::History(_) | R::Complete(_) | R::FileSearch(_) => (Need::Drive, Target::Host),
+        R::AnswerBlocked(a) => (Need::Approve, Target::Pane(a.pane_id)),
+    }
+}
+
+/// The pane an input-assistance request addresses, if any.
+pub(crate) fn assist_pane(req: &AssistRequest) -> Option<PaneId> {
+    use AssistRequest as R;
+    match req {
+        R::Watch { pane_id, .. } | R::State { pane_id } | R::BlockedOptions { pane_id } => {
+            Some(*pane_id)
+        }
+        R::SubmitLine(s) => Some(s.pane_id),
+        R::Complete(c) => Some(c.pane_id),
+        R::AnswerBlocked(a) => Some(a.pane_id),
+        R::History(_) | R::FileSearch(_) => None,
     }
 }

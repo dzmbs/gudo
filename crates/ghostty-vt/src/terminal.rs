@@ -791,7 +791,7 @@ impl Terminal {
         Ok(String::from_utf8_lossy(&out).into_owned())
     }
 
-    fn grid_ref(
+    pub(crate) fn grid_ref(
         &self,
         tag: ffi::GhosttyPointTag,
         x: u16,

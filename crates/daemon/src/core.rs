@@ -67,6 +67,8 @@ pub(crate) enum Event {
         event: Arc<proto::ArtifactEvent>,
         from: Option<ConnId>,
     },
+    /// A pane's foreground program, or a watched pane's prompt state, changed.
+    Assist(proto::AssistPush),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -141,6 +143,8 @@ pub(crate) struct Core {
     /// Multiplayer: grants, leases, presence, audit.
     pub mp: crate::mp::Mp,
     pub art: crate::art::Art,
+    /// Input assistance: foreground programs, prompt watches, history, completion caches.
+    pub assist: crate::assist::Assist,
     connected: AtomicUsize,
 }
 
@@ -172,6 +176,7 @@ impl Core {
             push: crate::notifier::Push::load(&cfg.state_dir),
             mp,
             art: crate::art::Art::open(&cfg.state_dir, cfg.artifacts),
+            assist: crate::assist::Assist::new(&cfg),
             cfg,
             connected: AtomicUsize::new(0),
         })
@@ -270,6 +275,7 @@ impl Core {
 
     pub fn detach(&self, conn: ConnId) {
         lock(&self.views).remove(&conn);
+        self.assist.forget_conn(conn);
         if lock(&self.attached).remove(&conn).is_some() {
             self.emit(Event::Sessions);
         }
@@ -1179,6 +1185,7 @@ fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
             }
             // A command starting or ending is when servers come and go.
             core.ws.ports.trigger.notify_one();
+            crate::assist::command_finished(core, entry, &mark);
             core.emit(Event::Command(mark));
         }
     }

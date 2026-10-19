@@ -2,6 +2,7 @@
 
 mod agents;
 mod artifacts;
+mod assist;
 mod codex;
 mod e2e;
 mod multiplayer;

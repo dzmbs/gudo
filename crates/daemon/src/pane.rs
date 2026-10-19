@@ -126,6 +126,7 @@ impl Vt {
                 let _ = self.events.send(VtEvent::Command(update));
             }
         }
+        self.commands.after_output(&mut self.term);
         let events = &self.events;
         self.scanner.feed(data, |osc| {
             let _ = events.send(VtEvent::Osc(osc));
@@ -597,6 +598,26 @@ impl Pane {
             text,
             truncated,
         })
+    }
+
+    pub fn line_snapshot(&self) -> crate::assist::LineSnapshot {
+        let vt = lock(&self.vt);
+        let view = vt.commands.line_marks();
+        let screen = (view.phase == crate::assist::marks::Phase::Prompt && !vt.alt)
+            .then(|| crate::assist::line::Screen::capture(&vt.term, &view))
+            .flatten();
+        crate::assist::LineSnapshot {
+            screen,
+            alt: vt.alt,
+            bracketed: vt.term.mode(ghostty_vt::Mode::BRACKETED_PASTE),
+            at_seq: Seq(vt.seq),
+            view,
+        }
+    }
+
+    /// Whether command `id` was typed with a leading space (kept out of history).
+    pub fn command_private(&self, id: u64) -> bool {
+        lock(&self.vt).commands.is_private(id)
     }
 
     /// Queues input for the child. Returns the output offset at the time of writing, which

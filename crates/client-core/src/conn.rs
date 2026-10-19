@@ -156,6 +156,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 inner.ws.fail_pending();
                 inner.mp.fail_pending();
                 inner.art.fail_pending();
+                inner.assist.fail_pending();
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -428,6 +429,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             continue;
         };
         let Some(msg) = inner.art.dispatch(&inner, msg) else {
+            continue;
+        };
+        let Some(msg) = inner.assist.dispatch(msg) else {
             continue;
         };
         let event = match msg {

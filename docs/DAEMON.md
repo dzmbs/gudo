@@ -3,7 +3,9 @@
 Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
 (key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
 roles enforced on every request, control lease, presence, signed approvals, audit log,
-anchors, send to agent).
+anchors, send to agent) and input assistance for the mobile line editor (§8: foreground
+program, prompt state and input line, atomic submit, history, completion, file search,
+blocked-agent options).
 Crates: `daemon` (library),
 `hostd` (binaries `unnamed-hostd` and the `un-hook` shim), `client-core` (library), `un` (dev CLI).
 Wire types live in `proto`; see its crate docs for the frame format and compatibility rules.
@@ -736,6 +738,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Artifact`: `Create`, `Apply`, `Delete`, `SetAnchor`, `SetPreview`; `InkLive`; blob upload | **prompter or driver** | artifact visible; anchor pane / session in scope |
 | `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |
 | `Op` `Split`/`NewTab` with `PaneLaunch::Canvas` | driver (as any split) | session of the pane |
+| `Assist`: `Watch`, `State`, `BlockedOptions` / `SubmitLine` / `History`, `Complete`, `FileSearch` / `AnswerBlocked` | any role / **driver** + lease / **driver** / **approver** (§7.8) | pane in scope / pane / host / pane |
 
 An artifact is visible to daemon- and session-wide grants in its session; tab- and
 pane-scoped guests see only ink anchored to, or canvases shown in, panes inside their scope.
@@ -1054,7 +1057,211 @@ posts to `window.webkit.messageHandlers.canvas.postMessage(msg)`:
 
 Viewers get `readOnly`; the daemon refuses their puts anyway (`Forbidden`).
 
-## 8. Known gaps / follow-ups
+D9). Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
+Requests are `ClientCtl::Assist{req_id, AssistRequest}` → `ServerCtl::AssistResult{req_id,
+Result<AssistResponse, AssistError>}`; pushes are `ServerCtl::Assist(AssistPush)`. A daemon
+without them never sends them, so an older daemon leaves the app in direct-typing mode.
+Code: `crates/daemon/src/assist/` (one module per need), `crates/client-core/src/assist.rs`
+(`Client::watch_prompt`, `pane_assist`, `submit_line`, `history`, `complete`, `file_search`,
+`blocked_options`, `answer_blocked`; pushes to an `AssistListener`, the latest foreground and
+prompt state per pane kept for `Client::foreground` / `Client::prompt_state`). Text positions
+(`cursor`, completion ranges, match positions) count Unicode scalar values.
+
+### 8.1 Foreground program (D1)
+
+One task samples every pane's foreground process group every 100 ms (`tcgetpgrp` on the PTY
+master; name from `argv[0]`, else the kernel's name; on macOS setuid programs such as `top` are
+named through `PROC_PIDT_SHORTBSDINFO`). A program is reported once it has stayed in front
+for 150 ms (so about 200 ms after it starts): `ls` or a prompt's `git` call never produce an
+event. `AssistPush::Foreground{pane_id, pid, name, argv, profile, since}` goes to every client
+whose attached session holds the pane; `AssistRequest::State` answers it too.
+`ProgramProfile::classify` (in `proto`, usable by the app): `Shell` (bash, zsh, fish, sh, dash,
+ksh, tcsh, nu, …), `Vim` (vi, vim, nvim, view, hx, kak), `Pager` (less, more, man, most),
+`Monitor` (top, htop, btop, btm, glances, atop, nvtop), `Tmux` (tmux, screen, zellij), `Repl`
+(python, node, irb, ghci, iex, lua, psql, sqlite3, redis-cli, … when started without a
+script), `Claude`, `Codex` (also as `node …/claude`), `Other`.
+
+### 8.2 Prompt state and the input line (D2)
+
+- **Prompt id**: changes whenever a command starts (`133;C`), so it names one prompt instance;
+  redraws of the same prompt (resize, Ctrl-L, `reset-prompt`) keep it. Phases: `AtPrompt`,
+  `Running{command_id}`, `Unknown` (no integration yet, alternate screen).
+- **Input line**: from the `133;B` pin to the end of the logical line the cursor is on (rows
+  up to the cursor joined: soft wraps with nothing, hard breaks with `\n`; then the cursor's row
+  and the rows it soft-wraps into). Cells libghostty-vt marked as prompt (`133;P` continuation
+  prompts) are dropped. Typed trailing spaces before the cursor are kept. The read happens
+  under the pane's VT lock (`Terminal::row`, new in `ghostty-vt`: text, width, style and OSC 133
+  role per cell), the parsing after it.
+- **Autosuggestions** (zsh-autosuggestions `POSTDISPLAY`, fish): text from the cursor to the end
+  drawn faint, in palette color 8, in the grey ramp 232–250, or in a dim grey RGB, when the text
+  before the cursor is not, is cut and reported as `suggestion`. Another single non-default
+  style after the cursor that the typed text does not use is kept but flagged
+  `PossibleGhostText`. Syntax highlighting (zsh-syntax-highlighting colours words before and
+  after the cursor alike) is not mistaken for it.
+- **Right prompt**: while the cursor still waits at the input start after the prompt is drawn
+  (it may arrive in several reads), text after a gap on that row is remembered as the right
+  prompt and cut from later readings while it is still there; zsh leaves `RPROMPT` on the line
+  when it runs it, so it is also cut from the command text of the mark (and history). Unknown
+  trailing text at the right edge after a gap of 3+ cells is cut as a guess
+  (`RightPromptGuess`).
+- **Multi-line prompts** are fine (their `133;P;k=s` comes before `133;B`). A continuation prompt
+  (PS2) after the input start flags `Continuation`; non-blank rows below the line (a completion
+  listing, the tail of a multi-line buffer) flag `ContentBelow`.
+- **fish 3** sends no `133;B`: the input start is inferred from where the cursor is once the
+  prompt is drawn (output within 25 ms of `133;A` still counts as prompt) and flagged
+  `NoInputMark`. The same inferred start gives fish's command marks their text.
+- **Confidence**: `confident` is true only when there is no doubt; the client prefills its
+  editor only then. Each state carries `shell` (from the foreground program), whether bracketed
+  paste is on, and `keymap` (always `Unknown` until the D2b hook exists).
+- **Pushes**: `AssistRequest::Watch{pane, true}` answers the state now and from then on the
+  connection gets `AssistPush::Prompt` whenever the state changes; watched panes are re-read
+  every 40 ms when output arrived since the last read (debounce), unwatched panes cost nothing.
+
+### 8.3 Atomic submit (D3)
+
+`SubmitLine{pane, prompt_id, text, run}`: the daemon re-reads the prompt and refuses with
+`AssistError::NotAtPrompt(state now)`, writing nothing, unless the pane is `AtPrompt` with the
+same id, no continuation prompt is up, no alternate screen, and the foreground group is a
+shell right now (sampled, not the debounced report). Text with control characters other than
+newline and tab is refused, and newlines without bracketed paste. Then, as **one** PTY write:
+`^E ^U` (end of line, kill to line start: `unix-line-discard` in readline, `kill-whole-line`
+in zsh's emacs keymap, `backward-kill-line` in fish), the text as the pane's paste (bracketed
+when mode 2004 is on), and `\r` when `run`. Same lease rule as raw input (a pane leased to
+someone else is refused). Answer: `Submitted{prompt_id, at_seq}`.
+
+### 8.4 History (D4)
+
+- Every finished command with text is appended to `<state>/history/commands.jsonl` (0600,
+  directory 0700): `{"c", "d": cwd, "x": exit, "ms": duration, "t": unix ms, "n": count}`. In
+  memory: one entry per distinct command (count, last run's cwd/exit/duration, up to 8
+  directories with their counts). Past twice `max_entries` lines the file is rewritten from
+  the entries (one line per command and directory) keeping the `max_entries` most recently
+  used, so duplicates fold away.
+- **Import, once** (marker `imported.json` lists sources and counts): `$ZDOTDIR/.zsh_history`,
+  `~/.zsh_history` or `~/.histfile` (plain or extended `: start:elapsed;cmd`, backslash-continued
+  multi-line commands, zsh metafication undone), `~/.bash_history` (`#epoch` lines honoured), and
+  fish's `fish_history` (`- cmd:` / `when:`, `\n` and `\\` escapes). Lines without a time get
+  the file's mtime, a second apart in file order.
+- **Privacy**: a command typed with leading whitespace is never recorded (bash `ignorespace`,
+  zsh `HIST_IGNORE_SPACE`), nor imported. `config.toml`:
+  `[history] enabled = true, ignore_space = true, max_entries = 50000, import = true`.
+- `History{cwd?, prefix?, contains?, since?, limit ≤ 1000}` → distinct commands ranked by
+  frecency: recency bucket (4 / 2 / 1 / 0.5 / 0.25 for < 1 h / day / week / month / older) ×
+  (1 + ln(1 + count)) × place (3 + ln(1 + n) when used in `cwd`, 1.5 in a parent or child
+  directory) × 0.7 when the last run failed.
+
+### 8.5 Completion (D5)
+
+`Complete{pane, line, cursor, limit ≤ 200}` → `Completions{cwd, items: [{text, display, kind,
+detail, start, end}]}` (replace `line[start..end]` with `text`). The line is split into shell
+words (quotes, backslashes, `; | & ( ) < >`; `sudo`, `env`, `time`, … and `VAR=x` keep the
+command position). Sources, in order: whole-line **history** (with the cursor at the end, top 4
+by frecency in the pane's directory), **git** (subcommands after `git`; branches, tags, remote
+branches after `checkout`/`switch`/`merge`/`rebase`/`log`/`diff`/…; changed and untracked
+files, relative to the pane's directory, after `add`/`restore`/`rm`/`diff`/…; refs and status
+cached 3 s per work tree), **commands** on the pane shell's initial `PATH` in command position
+(cached 30 s), **paths** relative to the pane's OSC 7 directory (`~` expanded, dot files only
+for a word starting with `.`, directories first with a trailing `/`, case-insensitive fallback,
+quoted for an open `'`/`"` or with backslashes).
+
+Measured (`completion_sources_and_latency_with_10k_history`, a 10 000-entry history, a git
+repo, 300 requests over the client, loopback; Linux: the OrbStack Ubuntu 24.04 arm64 VM).
+are warm; the cold costs are the first ref and `$PATH` lookups after their 3 s / 30 s expiry.
+
+| | macOS 26, M5 Max (release) | Linux VM (release) |
+|---|---|---|
+| warm, 300 mixed requests | p50 0.2 ms, p95 0.2 ms, max 0.4 ms | p50 0.3 ms, p95 0.7 ms, max 1.9 ms |
+| cold: first ref lookup (`for-each-ref` + `status`) | 30 ms | 2.7 ms |
+| cold: first `$PATH` scan | 8 ms | 4.2 ms |
+| `History` query over 10 000 entries | 0.3 ms | 0.3 ms |
+
+### 8.6 File search for `@` mentions (D7)
+
+`FileSearch{root, query, limit ≤ 200}` → `FileMatches{root, matches: [{path, kind, positions}],
+scanned, truncated}`. The root goes through the path policy (§5.0). The tree is walked in
+parallel with the `ignore` crate (ripgrep's walker: `.gitignore` even outside a repository,
+`.ignore`, global excludes, hidden files skipped), at most 200 000 entries, cached 10 s per root.
+The query is a smart-case ordered subsequence of the relative path, scored fzf-style (segment
+and word starts, consecutive runs, matches inside the file name; gaps and long paths cost).
+
+### 8.7 Blocked agent options (D9)
+
+What already existed: `PaneMeta.agent` = `Blocked{request_id, summary, options: [{id, label}]}`
+and the `AgentEvent` JSON (`blocked.options`, `answer_paths`), filled only from hook payloads,
+with no way to answer a dialog the hook does not hold. Added: `BlockedOptions{pane}` →
+`BlockedPrompt{request_id, summary, options: [{label, choice: AllowOnce | AllowSession | Deny |
+Other, option_id, keys, selected}], source: Hook | Screen}`. The numbered menu on screen
+(Claude's boxed `❯ 1. Yes` dialog, Codex's `› 1. Yes, proceed (y)`, wrapped labels joined) gives
+every option its keys (the digit, or the `(y)`/`(esc)` hint) and the selected row. With a hook
+holding the request open the hook's options come first, with `option_id` for the signed
+`Decide` path and keys matched from the screen; otherwise the screen's menu alone.
+`AnswerBlocked{pane, index, label}` re-reads the menu, refuses if that index no longer shows
+that label, then types the keys; it is audited as an `Approval`.
+
+### 8.8 Roles
+
+All requests go through `mp/policy.rs` (`policy::assist`), and pane-addressed ones must be in
+the grant's scope:
+
+| Request | Needs | Target |
+|---|---|---|
+| `Watch`, `State` (prompt state, foreground), `BlockedOptions` | any role | pane in scope |
+| `SubmitLine` | **driver** (+ the lease rule of raw input) | pane in scope |
+| `History`, `Complete`, `FileSearch` | **driver** | host (other panes' commands, the file system) |
+| `AnswerBlocked` | **approver** | pane in scope |
+
+Prompt pushes go only to connections watching the pane (and with it in scope); foreground pushes
+to connections whose attached session holds it.
+
+### 8.9 Tests
+
+- `cargo test -p daemon --lib assist`: line reading (cursor, trailing spaces, soft wraps and wide
+  characters, autosuggestions in colour 8 and faint, syntax highlighting, doubtful styled tails,
+  right prompts remembered and guessed, multi-line prompts, listings below, continuation
+  prompts, fish without `133;B`, prompt ids, leading-space privacy, right prompt kept out of
+  command marks), history (persistence, dedupe, directory ranking, compaction, the privacy
+  switch), the three history formats and a one-time import, the shell word splitter and
+  quoting, path/`$PATH`/history completion, fuzzy scoring and the ignore-aware walk, menu
+  parsing (Claude box, Codex hints), the foreground debounce, submit bytes.
+- `cargo test -p daemon --test it assist` (macOS: zsh; the Linux VM: zsh, bash 5.2, fish 3.7):
+  per shell, watch → typed line, cursor movement, (zsh) a fake zsh-autosuggestions suggestion and
+  `RPROMPT` cut with the reading still confident, atomic submit replacing a half-typed line,
+  stale prompt id and running command refused with nothing written, history with cwd and exit
+  and without the leading-space command, path and history completion; foreground profiles for
+  `less`, `top`, `vi` with `/bin/echo` never reported; git ref/path, `$PATH` and path
+  completion plus the latency benchmark above; file search honouring `.gitignore` and the path
+  policy; a fake Claude dialog answered by keys after a stale label is refused, and the hook's
+  options carrying decision ids and screen keys; a viewer reading state but refused submit,
+  history, completion, file search and answers.
+
+### 8.10 Limits
+
+- Keymaps are not known (D2b, the OSC 7702 buffer hook, is not built): submit assumes the emacs
+  keymap. In zsh's vi insert mode `^U` only kills back to where insert started, and `^E` is not
+  bound, so a line typed before entering vi command mode may survive.
+- Multi-line buffers: only the cursor's logical line is read when rows follow it, and `^U`
+  clears one line, so submit is refused at a continuation prompt; a multi-line zsh buffer
+  edited with the cursor on an earlier line reads as not confident.
+- Ghost text in an unusual colour (not faint, not grey) is reported as doubt, not removed;
+  ghost text in the same style as typed text cannot be told apart.
+- The right prompt is learnt when the prompt appears; one that changes while typing (a clock)
+  falls back to the guess rule.
+- Completion's `PATH` is the shell's environment at start (`/proc/<pid>/environ`, macOS
+  `KERN_PROCARGS2`): `PATH` changes made in rc files after that, aliases, functions and builtins
+  are not offered; flags and command-specific arguments are not completed (D5a). Git commands
+  are not interrupted at the 150 ms deadline; the first lookup in a large repository can exceed
+  it.
+- History records commands only from panes with shell integration; commands run while no
+  daemon ran come only from the one-time import.
+- fish 3 (no `133;B`): if its prompt reaches the PTY in reads more than 25 ms apart (a heavily
+  loaded host), the inferred input start lands inside the prompt, so the line and the command
+  text carry a prompt tail (fish 3 readings are never marked confident), and a leading-space
+  command may then not be recognised as private. fish 4 marks its input itself.
+- Foreground changes shorter than ~200 ms are never reported (by design); the app should not
+  rely on them for programs that exit at once.
+- D2b, D5a, D6 and D8 (Phase 2) are not built.
+
+## 9. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal

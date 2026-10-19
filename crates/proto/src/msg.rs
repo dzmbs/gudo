@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::{
     ArtifactError, ArtifactEvent, ArtifactRequest, ArtifactResponse, BlobHeader, InkLive,
 };
+use crate::assist::{AssistError, AssistPush, AssistRequest, AssistResponse};
 use crate::ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
     ResumeToken, Roles, Seq, SessionEpoch, SessionId, SnapGen, UnixMillis,
@@ -250,6 +251,14 @@ pub enum ClientCtl {
     /// Points of a stroke being drawn; fanned out to the session's other clients as
     /// [`ArtifactEvent::Ink`](crate::ArtifactEvent::Ink).
     InkLive(InkLive),
+    /// An input-assistance request (prompt state, submit, history, completion, file search,
+    /// blocked-agent options), answered by [`ServerCtl::AssistResult`].
+    Assist {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: AssistRequest,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -558,6 +567,15 @@ pub enum ServerCtl {
     },
     /// A drawing or image in the attached session changed (or live ink from someone else).
     Artifact(ArtifactEvent),
+    /// Answers [`ClientCtl::Assist`].
+    AssistResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<AssistResponse, AssistError>,
+    },
+    /// A pane's foreground program or (for watched panes) prompt state changed.
+    Assist(AssistPush),
 }
 
 /// The daemon's answer to a successful `Hello`.

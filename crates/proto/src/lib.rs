@@ -27,6 +27,9 @@
 //!   section, newest page first, ready for a streaming snapshot decoder.
 //!   pushes [`ServerCtl::Artifact`], live ink [`ClientCtl::InkLive`], blobs on
 //!   [`StreamHeader::Blob`] streams; see [`artifact`].
+//! - Input-assistance requests (prompt state, atomic submit, history, completion, file search,
+//!   blocked-agent options) are [`ClientCtl::Assist`] → [`ServerCtl::AssistResult`], with
+//!   pushes as [`ServerCtl::Assist`]; see [`assist`].
 //! - Multiplayer requests (grants, revocation, leases, prompts, audit) are
 //!   [`ClientCtl::Multiplayer`] → [`ServerCtl::MultiplayerResult`]; see [`mp`].
 //! - Developer-workflow requests (ports, editor, git, worktrees, files, attention) are
@@ -52,6 +55,7 @@
 //! acting principal.
 
 pub mod artifact;
+pub mod assist;
 pub mod frame;
 mod ids;
 mod layout;
@@ -62,6 +66,7 @@ mod ticket;
 pub mod workspace;
 
 pub use artifact::*;
+pub use assist::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
     Actor, Caps, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId, PrincipalId, RequestId,
