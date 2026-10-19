@@ -268,6 +268,9 @@ bitset! {
         /// the `Welcome` or `Refused`, and can be let in to upgrade a daemon whose snapshot
         /// format it does not decode (see `ServerCtl::DaemonInfo`).
         DAEMON_INFO = 5;
+        /// Wants `ServerCtl::AgentUsage` pushes while it watches agent usage
+        /// (`WorkspaceRequest::UsageWatch`).
+        AGENT_USAGE = 6;
         /// Shows native password prompts: wants `ServerCtl::Askpass` pushes and answers them
         /// with `ClientCtl::Askpass` (see `proto::askpass`). Without it the daemon's askpass
         /// helper asks on the terminal. (Bit 6 is the usage meters' `AGENT_USAGE`.)
@@ -281,5 +284,7 @@ bitset! {
         /// Accepts a new build of itself over the connection from its owner
         /// ([`StreamHeader::Upgrade`](crate::StreamHeader::Upgrade)) and restarts into it.
         SELF_UPGRADE = 0;
+        /// Answers `WorkspaceRequest::UsageWatch` / `UsageUnwatch` (agent plan usage).
+        AGENT_USAGE = 1;
     }
 }

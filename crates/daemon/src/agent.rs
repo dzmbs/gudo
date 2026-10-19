@@ -36,6 +36,9 @@ use crate::identity::now_millis;
 /// How long a `PermissionRequest` hook waits for a decision (Claude allows 600 s; the
 /// recipe's hook timeout is 590 s).
 pub const PERMISSION_WAIT: Duration = Duration::from_secs(585);
+/// The event name the shim sends for Claude Code's status-line input (`un-hook claude
+/// StatusLine`, the `statusLine` command in the settings the daemon launches Claude with).
+pub const STATUS_LINE_EVENT: &str = "StatusLine";
 /// Longest hook request line accepted.
 const MAX_REQUEST: usize = 1024 * 1024;
 
@@ -556,6 +559,11 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
 async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     if request.token != core.hooks.token {
         tracing::warn!("hook with a bad token");
+        return HookResponse::default();
+    }
+    // shim prints the user's own status line itself.
+    if request.event == STATUS_LINE_EVENT {
+        core.ws.usage.status_line(&request.payload);
         return HookResponse::default();
     }
     let Some(pane_id) = request.pane.parse().ok().map(PaneId) else {

@@ -610,6 +610,9 @@ pub enum ServerCtl {
     /// A native password prompt opened or closed, or a detected one appeared or went away.
     /// Sent only to clients with [`Caps::ASKPASS`] holding Driver on the pane.
     Askpass(crate::askpass::AskpassPush),
+    /// Agent plan usage changed. Sent to clients with [`Caps::AGENT_USAGE`] that watch it
+    /// ([`WorkspaceRequest::UsageWatch`]).
+    AgentUsage(crate::AgentUsageReport),
 }
 
 /// A successful [`ClientCtl::Attach`].

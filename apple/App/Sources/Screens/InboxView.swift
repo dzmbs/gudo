@@ -38,6 +38,7 @@ struct InboxView: View {
                 list(items)
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { InboxUsageStrip() }
         .navigationTitle("Inbox")
         .navigationSubtitle(unseenLine)
         .toolbar {

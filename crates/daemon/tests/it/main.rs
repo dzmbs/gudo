@@ -13,5 +13,6 @@ mod shell;
 mod support;
 mod terminal;
 mod upgrade;
+mod usage;
 mod vscode;
 mod workspace;

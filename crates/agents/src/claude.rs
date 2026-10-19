@@ -19,7 +19,7 @@ const BUNDLED_MANIFEST: &str = include_str!("../manifests/claude.toml");
 
 /// Version of the hook settings file we generate. Bump when its contents change so a running
 /// session keeps the file it was launched with.
-const SETTINGS_VERSION: u32 = 1;
+const SETTINGS_VERSION: u32 = 2;
 
 /// Seconds a `PermissionRequest` hook may wait for a phone decision. Claude's own limit is 600.
 const PERMISSION_TIMEOUT_SECS: u32 = 590;
@@ -54,7 +54,9 @@ impl ClaudeCode {
     /// Builds the settings file passed with `--settings`. Hook arrays merge with the user's own
     /// settings levels, so this adds our hooks without editing user config.
     ///
-    /// Every hook runs `<hook_bin> claude <Event>`.
+    /// Every hook runs `<hook_bin> claude <Event>`. The status line runs `<hook_bin> claude
+    /// StatusLine`: the shim hands its input (which carries the plan's `rate_limits`) to the
+    /// daemon, then runs and prints the user's own `statusLine` command, so the user's status
     pub fn hook_settings(ctx: &LaunchContext) -> Value {
         let bin = shell_quote(&ctx.hook_bin.to_string_lossy());
         let entry = |event: &str, matcher: Option<&str>, timeout: Option<u32>| {
@@ -73,6 +75,10 @@ impl ClaudeCode {
         };
         let short = Some(HOOK_TIMEOUT_SECS);
         json!({
+            "statusLine": {
+                "type": "command",
+                "command": format!("{bin} claude StatusLine"),
+            },
             "hooks": {
                 "SessionStart": entry("SessionStart", Some("startup|resume|clear|compact|fork"), short),
                 "UserPromptSubmit": entry("UserPromptSubmit", None, short),
@@ -587,7 +593,7 @@ mod tests {
                 "--session-id",
                 "0b4f…uuid",
                 "--settings",
-                "/state/claude/settings.v1.json"
+                "/state/claude/settings.v2.json"
             ]
         );
         assert_eq!(spec.cwd, ctx.cwd);
@@ -601,6 +607,10 @@ mod tests {
         assert_eq!(
             settings["hooks"]["PermissionRequest"][0]["hooks"][0]["command"],
             "/opt/un/bin/un-hook claude PermissionRequest"
+        );
+        assert_eq!(
+            settings["statusLine"]["command"],
+            "/opt/un/bin/un-hook claude StatusLine"
         );
         assert_eq!(
             settings["hooks"]["PreToolUse"][0]["matcher"],
@@ -623,7 +633,7 @@ mod tests {
                 "--resume",
                 "abc123",
                 "--settings",
-                "/state/claude/settings.v1.json"
+                "/state/claude/settings.v2.json"
             ]
         );
     }

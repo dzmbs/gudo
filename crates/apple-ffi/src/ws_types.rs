@@ -1435,6 +1435,11 @@ pub enum WorkspaceEvent {
         /// The whole status.
         status: VsCodeTunnelStatus,
     },
+    /// Agent plan usage changed (while watching, `DaemonClient::usage_watch`).
+    AgentUsage {
+        /// The whole report.
+        report: crate::usage::AgentUsageReport,
+    },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
@@ -1456,6 +1461,9 @@ impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
             },
             E::VsCodeTunnel { status } => Self::VsCodeTunnel {
                 status: status.into(),
+            },
+            E::AgentUsage { report } => Self::AgentUsage {
+                report: report.into(),
             },
         }
     }

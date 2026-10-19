@@ -222,6 +222,14 @@ pub enum WorkspaceRequest {
     PushStatus,
     /// Answers an approval from a notification action → [`WorkspaceResponse::PushDecided`].
     PushAction(PushActionRequest),
+    /// Agent plan usage now → [`WorkspaceResponse::AgentUsage`]; while watching, changes
+    /// arrive as [`ServerCtl::AgentUsage`](crate::ServerCtl::AgentUsage) (clients with
+    /// [`Caps::AGENT_USAGE`](crate::Caps::AGENT_USAGE)). Sending it again refreshes (at most
+    /// once a minute) and replaces the options. Only daemons offering
+    /// [`DaemonFeatures::AGENT_USAGE`](crate::DaemonFeatures::AGENT_USAGE) understand it.
+    UsageWatch(crate::UsageWatch),
+    /// Stops this connection's usage pushes → [`WorkspaceResponse::Done`].
+    UsageUnwatch,
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -278,6 +286,8 @@ pub enum WorkspaceResponse {
     Push(PushStatus),
     /// A notification action's decision was applied.
     PushDecided(crate::Decided),
+    /// Agent plan usage.
+    AgentUsage(crate::AgentUsageReport),
 }
 
 /// Why a workspace request failed.

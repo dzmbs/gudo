@@ -683,6 +683,25 @@ URLs with token and private CA, local-only) and how pairing tickets carry them:
 `docs/RELAYS.md`. Tests: `cargo test -p daemon --test it notify relays`.
 
 
+`crates/daemon/src/usage/` reports Claude Code's and Codex's plan windows (5h, weekly, per-model)
+to owner connections that watch: `WorkspaceRequest::UsageWatch { api_fallback }` answers with the
+report at once, then `ServerCtl::AgentUsage` pushes changes (clients with `Caps::AGENT_USAGE`);
+`UsageUnwatch` stops. Offered as `DaemonFeatures::AGENT_USAGE`.
+
+Sources, preferred first: Codex's `token_count` rate limits in its rollouts; Claude's status-line
+input (Claude panes launched by the daemon run `un-hook claude StatusLine` as their status line,
+which forwards the JSON as hook event `StatusLine` and then runs the user's own status line);
+when those are missing or older than 10 min, `claude -p /usage --output-format stream-json`
+(+ `claude auth status --json` for the plan) and `codex app-server` → `account/rateLimits/read`,
+in the background, at most every 5 min per agent; only for a watcher that opted in, the
+providers' undocumented usage endpoints with the host's sign-in (`~/.claude/.credentials.json`,
+`~/.codex/auth.json`), at most every 5 min. The report refreshes at most once a minute and only
+while a connection watches; the last status-line snapshot survives restarts
+(`<state>/usage/claude-status-line.json`). Tools are found through the panes' `PATH` (plus
+`~/.local/bin`), `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Tests: `cargo test -p daemon --test it usage`
+(fixture rollouts, status-line hook, fake `claude` / `codex`, a local HTTP endpoint).
+
+
 Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
 hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, end to end
 encrypted, with no account: an invite is a link or QR code, roles are per person, a pane has

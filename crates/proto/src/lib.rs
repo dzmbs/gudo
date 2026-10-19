@@ -38,6 +38,8 @@
 //! - Native password prompts (askpass answers, typing a secret at a detected prompt) are
 //!   [`ClientCtl::Askpass`] → [`ServerCtl::AskpassResult`], with pushes as
 //!   [`ServerCtl::Askpass`], for clients with [`Caps::ASKPASS`]; see [`askpass`].
+//! - Agent plan usage: [`WorkspaceRequest::UsageWatch`] → [`WorkspaceResponse::AgentUsage`],
+//!   then pushes [`ServerCtl::AgentUsage`] for clients with [`Caps::AGENT_USAGE`]; see [`usage`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -69,6 +71,7 @@ pub mod mp;
 mod msg;
 mod serde_bytes;
 mod ticket;
+pub mod usage;
 pub mod workspace;
 
 pub use artifact::*;
@@ -88,6 +91,7 @@ pub use layout::{
 pub use mp::*;
 pub use msg::*;
 pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
+pub use usage::*;
 pub use workspace::*;
 
 /// QUIC ALPN identifier this crate's messages are spoken under.

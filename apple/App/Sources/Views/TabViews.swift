@@ -144,6 +144,13 @@ private struct HostGroupSection: View {
         let collapsed = model.groups.collapsed.contains(group.id)
         VStack(alignment: .leading, spacing: 0) {
             HostGroupHeader(group: group, collapsed: collapsed)
+            // Agent plan usage, one quiet line per agent, aligned with the host's name.
+            if group.kind == .daemon || LaunchOptions.fakeUsage {
+                HostUsageMeters(hostId: group.id, hostName: group.name)
+                    .padding(.leading, DS.Space.l + 16 + DS.Space.s)
+                    .padding(.trailing, DS.Space.s + 2)
+                    .padding(.bottom, DS.Space.xs)
+            }
             if !collapsed {
                 VStack(spacing: 1) {
                     ForEach(group.tabs) { tab in
@@ -216,6 +223,12 @@ private struct HostGroupHeader: View {
                     .help("New Terminal on \(group.name)")
                     .accessibilityIdentifier("new-tab-\(group.name)")
             }
+        }
+        .popover(isPresented: Binding(
+            get: { model.usageDetailHost == group.id },
+            set: { if !$0, model.usageDetailHost == group.id { model.usageDetailHost = nil } })
+        ) {
+            UsageDetailView(hostName: group.name, report: model.usage.usage(forHost: group.id))
         }
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.s + 2)
@@ -322,6 +335,9 @@ private struct GroupMenu: View {
                 Button("Retry Now", systemImage: "arrow.clockwise") { model.hosts.retry(group.id) }
             }
             Divider()
+            if group.kind == .daemon {
+                Button("Agent Usage", systemImage: "gauge.with.dots.needle.33percent") { model.usageDetailHost = group.id }
+            }
             Button("Show in Hosts", systemImage: "server.rack") { model.destination = .hosts }
             Button("Disconnect", systemImage: "xmark.circle", role: .destructive) { model.closeHost(group.id) }
         }
