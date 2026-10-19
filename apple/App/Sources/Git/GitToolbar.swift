@@ -28,7 +28,7 @@ struct PRToolbarButton: View {
         HStack(spacing: 6) {
             Image(systemName: pr?.kind.systemImage ?? "arrow.triangle.branch")
                 .foregroundStyle(pr?.kind.color ?? .secondary)
-                .opacity(DS.Git.mutedGlyph)
+                .opacity(DS.Opacity.mutedGlyph)
                 .overlay(alignment: .bottomTrailing) {
                     if let pr {
                         CheckBadge(pr.checkKinds)

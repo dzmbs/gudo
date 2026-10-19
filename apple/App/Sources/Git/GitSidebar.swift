@@ -38,7 +38,7 @@ final class CommandKeyState {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
             MainActor.assumeIsolated {
-                if self?.held != held { withAnimation(.easeInOut(duration: 0.15)) { self?.held = held } }
+                if self?.held != held { withAnimation(DS.Motion.quick) { self?.held = held } }
             }
             return event
         }
@@ -97,7 +97,7 @@ struct RepoSectionHeader: View {
             #if os(macOS)
             .opacity(hovered ? 1 : 0)
             #else
-            .opacity(DS.Git.mutedGlyph)
+            .opacity(DS.Opacity.mutedGlyph)
             #endif
             .help("New Task in \(repo.name)")
             .accessibilityIdentifier("repo-new-task-\(repo.name)")
@@ -230,7 +230,7 @@ private struct BranchGlyph: View {
         Image(systemName: pr?.kind.systemImage ?? "arrow.triangle.branch")
             .font(GitRow.subtitle.weight(.medium))
             .foregroundStyle(selected || pr == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(pr!.kind.color))
-            .opacity(selected ? 1 : DS.Git.mutedGlyph)
+            .opacity(selected ? 1 : DS.Opacity.mutedGlyph)
             .overlay(alignment: .bottomTrailing) {
                 if let pr, pr.state == .open {
                     CheckBadge(pr.checkKinds, selected: selected)
@@ -255,7 +255,7 @@ private struct Accessories: View {
     var body: some View {
         let held = CommandKeyState.shared.held && number != nil
         ZStack(alignment: .trailing) {
-            HStack(spacing: DS.Git.accessorySpacing) {
+            HStack(spacing: DS.Space.row) {
                 DiffStat(added: worktree.added, removed: worktree.removed, selected: selected)
                 if let pr {
                     Text("#\(pr.number)")

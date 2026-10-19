@@ -11,10 +11,6 @@ public extension DS.Palette {
 
 public extension DS {
     nonisolated enum Git {
-        /// follows").
-        public static let mutedGlyph: Double = 0.6
-        /// Space between a row's trailing accessories.
-        public static let accessorySpacing: CGFloat = 6
         public static let popoverMinWidth: CGFloat = 260
         public static let popoverMaxWidth: CGFloat = 480
         public static let popoverMaxHeight: CGFloat = 400
@@ -286,7 +282,7 @@ public struct SectionDot: View {
     public var body: some View {
         Circle()
             .fill(color.opacity(0.6))
-            .overlay(Circle().strokeBorder(color, lineWidth: 1 / scale))
+            .overlay(Circle().strokeBorder(color, lineWidth: DS.Size.hairline(scale: scale)))
             .frame(width: 6, height: 6)
             .accessibilityHidden(true)
     }
