@@ -1,7 +1,7 @@
 # Apple FFI (`crates/apple-ffi` → `UnnamedCore`)
 
 Status: working on macOS (Swift tests against a local daemon and the Linux VM), iOS device and
-simulator slices build and link; 2026-10-18. ARCHITECTURE D6: the Swift app talks to the Rust core
+simulator slices build and link; 2026-10-19. ARCHITECTURE D6: the Swift app talks to the Rust core
 through UniFFI (0.32, proc-macro mode, no UDL). Swift owns UI, rendering, lifecycle, keys and
 persistence; the core owns connections, SSH, resume.
 
@@ -22,6 +22,13 @@ crates/apple-ffi (lib name unnamed_core)        apple/Packages/UnnamedCore (Swif
               grants, audit
   notify.rs   push keys, register, NSE open,
               lock-screen actions
+  artifacts.rs  drawings, images, Excalidraw,
+                placements, send to agent, blobs,
+                on-device drawing helpers
+  art_types.rs  mirrors of proto::artifact
+  assist.rs   input assistance (prompt state,
+              submit, history, completion,
+              file search, blocked options)
 ```
 
 ## 1. Building
@@ -218,6 +225,61 @@ Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerE
 | `openPushNotification(deviceSecret:sealed:) throws(PushError) -> PushNotification` | NSE: decrypt + verify the daemon's signature (check `daemon` is paired); `category` is the `UNNotificationCategory` id |
 | `pushActionToken(token:)`, `sendPushAction(…) async`, `sendPushActionBlocking(…)` | lock-screen Approve/Deny on a one-shot connection signed with the device key → `Decided`; `PushActionError` |
 
+
+Requests are `async throws(ArtifactError)` methods on `DaemonClient`; pushes go to an
+`ArtifactListener` (`setArtifactListener`). Ids are `UInt64`, blob hashes 64 hex digits,
+payloads `Data`. Types mirror `proto::artifact` (`art_types.rs`); the element types are
+prefixed so they do not shadow Swift names: `DrawElement`, `DrawElementKind`
+(`.stroke(tool:points:) / .shape / .text / .image`), `DrawStyle`, `InkTool`, `Pt`, `DrawOp`
+(`.add / .move / .restyle / .setZ / .delete / .clear / .setTitle`), `ArtifactPreview`,
+`SentToAgent`.
+
+| | |
+|---|---|
+| `listArtifacts(sessionId:)`, `artifactCreate(create: ArtifactCreate)`, `artifactDelete` | `ArtifactCreate(sessionId:kind:title:space:anchor:image:ops:)`; `kind: .drawing / .image / .excalidraw`, `space: .canvas / .cells` |
+| `artifactGet(artifactId:since:) -> ArtifactScene`, `artifactApply(artifactId:base:ops:) -> UInt64` | batches after `since` or every element; apply commits one batch, everyone gets `.changed` |
+| `artifactScene(artifactId:) -> CachedScene?` | the client's cached copy (version, elements in draw order), kept in step with pushes and resynced after gaps / reconnects (`.synced`) |
+| `artifactSetAnchor(artifactId:anchor:)`, `artifactSetPreview(artifactId:version:png:)` | `AnchorRequest(paneId:atSeq:fromBottom:)`; `RowAnchor.state` `.live / .detached(reason:)` |
+| `artifactExport(artifactId:version:format:) -> ExportedFile` | `.png / .svg / .ascii`; `data` is PNG bytes or UTF-8 text; large PNGs come via the blob stream transparently |
+| `inkLive(chunk: InkChunk)` | live points every ~16 ms (fire and forget); others get `.ink(InkLive)` with the author's `actor` |
+| `blobUpload(sessionId:data:progress:) -> ImageRef`, `blobDownload(hash:progress:) -> DownloadedBlob` | own stream at bulk priority; `TransferProgress` per 64 KiB |
+| `excalidrawGet(artifactId:since:)`, `excalidrawPut(artifactId:elements:appState:files:) -> ExcalidrawApplied`, `excalidrawScene(artifactId:) -> CachedExcalidraw?` | per-element reconcile (higher `version`, tie → lower `versionNonce`); `rejected` are the stored winners to `applyRemote`; remote changes arrive as `.excalidraw` |
+| `place(request:)`, `placePng(request:png:)`, `unplace(placementId:)`, `listPlacements(paneId:)`, `placements(paneId:)` | inline placements (`PlaceRequest(paneId:artifactId:version:anchor:col:cols:rows:replace:)`); `placements` is the pushed state, no round trip |
+| `importToPane(paneId:name:data:) -> Placement` | pasted / dropped image or `.excalidraw` file |
+| `sendToAgent(paneId:artifactId:version:png:) -> SentToAgent` | `ArtifactError.NotAgentPane` for a pane without an agent |
+| `canvasPanes(sessionId:)` | canvas leaves, as last pushed (`.canvases`) |
+
+`ArtifactEvent`: `created, changed(info:batch:), info, deleted, ink, canvases, excalidraw,
+placed, unplaced, synced(artifactId:version:)`.
+
+On-device helpers (the `drawing` crate, no connection): `packInkPoints(points:) -> Data` /
+`unpackInkPoints(packed:)` (`InkPoint(x:y:pressure:altitude:azimuth:tMs:)`, ~6 B a point,
+1/32 unit), `simplifyInkPoints(points:epsilon:)` (RDP keeping pressure swells),
+`renderAscii(elements:space:maxCols:)`, `renderSvg(elements:space:title:)`,
+`renderPng(elements:space:scale:background:)` (the daemon's CPU rasteriser),
+`renderExcalidrawAscii(elements:maxCols:)`, `excalidrawElement(json:)` (reads `id`,
+`version`, `versionNonce`, `isDeleted` for a put), `excalidrawWins(incoming:current:)`,
+`sniffImage(data:) -> ImageInfo?`.
+
+### Input assistance (DAEMON.md §8)
+
+Requests are `async throws(AssistError)`; pushes go to an `AssistListener`
+(`setAssistListener`): `AssistEvent.foreground(Foreground)` for panes of the attached session,
+`.prompt(PromptState)` for watched panes. Text positions count Unicode scalars (use
+`String.unicodeScalars`), not UTF-16 units.
+
+| | |
+|---|---|
+| `watchPrompt(paneId:watch:) -> PaneAssist` | start/stop prompt pushes; returns the state now. Watches end with the connection: re-watch after `.connected` |
+| `paneAssist(paneId:)`, `promptState(paneId:)`, `foreground(paneId:)` | state now (round trip) / last pushed (no round trip) |
+| `PromptState(paneId:promptId:atSeq:phase:)` | `phase: .atPrompt(input: PromptInput) / .running(commandId:) / .unknown`; `PromptInput` has `text`, `cursor`, `confident` (prefill only when true), `doubt`, `suggestion`, `rightPrompt`, `shell`, `bracketedPaste`, `keymap` |
+| `Foreground(paneId:pid:name:argv:profile:sinceMs:)` | `profile: .shell / .vim / .pager / .monitor / .tmux / .repl / .claude / .codex / .other` for the key bar; `classifyProgram(name:argv:)` offline |
+| `submitLine(paneId:promptId:text:run:) -> UInt64` | atomic replace + Return as one write; refused with `AssistError.NotAtPrompt(state:)` (the state now, nothing written) when the prompt id is stale |
+| `history(query: HistoryQuery) -> [HistoryEntry]` | `HistoryQuery(cwd:prefix:contains:sinceMs:limit:)`, frecency order |
+| `complete(paneId:line:cursor:limit:) -> Completions` | replace `line[start..<end]` with `text`; `kind: .history / .path / .dir / .gitRef / .gitPath / .command / .flag / .snippet` |
+| `fileSearch(query:root:limit:) -> FileMatches` | fuzzy, `.gitignore`-aware; `positions` for highlighting; `Denied` outside the allowed roots |
+| `blockedOptions(paneId:) -> BlockedPrompt?`, `answerBlocked(paneId:index:label:)` | a blocked agent's options (`optionId` for the signed `decide`, `keys` for the dialog on screen) |
+
 ### Relays
 
 `DaemonClient.connectWith(ticket:config:options:listener:)` with `ConnectOptions(relayCaDer:
@@ -231,7 +293,9 @@ Errors are typed Swift enums: `ClientError` (`Ticket`, `Key`, `Io`), `SshError` 
 `Config`, `Remote{status,stderr}`, `ChecksumMismatch`, `Bootstrap`, `Closed`), `SignerError`
 (`Cancelled`, `Failed`) for the signer to throw, `WorkspaceError` (`Denied`, `NotFound`,
 `Conflict`, `Invalid`, `Unavailable`, `Failed`, `Disconnected`, mirroring `proto::WsError`),
-`MultiplayerError`, `PushError` (`Malformed`, `Open`, `Signature`, `Json`, `TooLarge`,
+`MultiplayerError`, `ArtifactError` (`NotFound`, `Forbidden`, `TooLarge`, `Invalid`,
+`NotAgentPane`, `Failed`, `Disconnected`), `AssistError` (`Denied`, `UnknownPane`,
+`NotAtPrompt{state}`, `Invalid`, `NotFound`, `Failed`, `Disconnected`), `PushError` (`Malformed`, `Open`, `Signature`, `Json`, `TooLarge`,
 `Expired`) and `PushActionError` (`Client`, `Token`, `Unreachable`, `Refused`, `Rejected`).
 
 ## 3. Threading
@@ -246,7 +310,8 @@ Errors are typed Swift enums: `ClientError` (`Ticket`, `Key`, `Io`), `SshError` 
   alive) closes it.
 - **Callbacks** arrive on runtime threads, never the main thread:
   - `ClientEventListener.onEvent`, `WorkspaceListener.onWorkspaceEvent`,
-    `MultiplayerListener.onMultiplayerEvent`, `TransferProgress.onProgress`,
+    `MultiplayerListener.onMultiplayerEvent`, `ArtifactListener.onArtifactEvent`,
+    `AssistListener.onAssistEvent`, `TransferProgress.onProgress`,
     `SshSessionListener.onState`, `BootstrapListener.onStep`, `KnownHostsListener.changed`: a
     runtime worker, in order, one at a time per client / pane / session / transfer. Return quickly (hop to the main actor or a render queue);
     a slow listener stalls that connection.
@@ -323,6 +388,20 @@ source ../../../target/ssh-test/env && swift test --filter SshTests
   blocked CLI download, a `code` that cannot run) and VSCodium asked for explicitly, with a fake
   `codium-server`; push register / status /
   unregister and the relay body.
+- Rust, `tests/drawing_assist.rs` (same in-process daemon): **assist** with zsh — watch a
+  pane, the shell's foreground profile, `echo h` typed and pushed, then `echo hi` read back
+  (cursor, confident), `submitLine` runs it exactly once, a stale prompt id refused with
+  `NotAtPrompt` carrying the new prompt, history has it once with exit 0, `complete("ec")`
+  offers echo over `0..<2`, `fileSearch` finds a temp file (and `/etc` is `Denied`), no
+  blocked options in a shell; **drawing** with two clients — create seen by the other, live
+  ink (packed points, author actor, no echo to the sender), a stroke + rectangle batch arrives
+  as `changed` and in the other client's cache, SVG and ASCII export (plus local ASCII), a
+  device-rendered PNG uploaded and downloaded with progress, `placePng` seen as `placed`
+  (`placements` and `listPlacements` agree), `unplace`, `sendToAgent` into the shell pane →
+  `NotAgentPane`, an Excalidraw put pushed to and cached by the other client, delete.
+- Swift `AssistDrawingTests` (zsh daemon with `HOME`/`ZDOTDIR` in its state dir): prompt
+  state of a typed `echo hi`, `submitLine`, stale-prompt refusal, history, completion; a
+  drawing created with a rectangle and an ink stroke, exported as SVG and ASCII.
 - Swift `WorkspaceTests` (daemon with `[files] allow` set to its state dir): forward to an
   echo server, `fsList` / `fsWrite` / `fsRead`, invite + join as a viewer with refused input.
 - Offline: keys, ssh_config + ProxyJump + destinations, known_hosts persistence callback, typed

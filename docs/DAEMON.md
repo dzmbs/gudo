@@ -927,8 +927,8 @@ drawing, 16 KiB per text and per ink chunk; over a cap → `TooLarge`.
 
 `Client::artifacts / artifact_create / artifact_get / artifact_apply / artifact_delete /
 artifact_set_anchor / artifact_set_preview / artifact_export / send_to_agent / blob_upload /
-blob_download / ink_live`; pushes go to an `ArtifactListener` (`ArtifactUpdate::Event` or
-`Synced`). The client caches a `drawing::Scene` per artifact it has seen: pushed batches apply
+blob_download / ink_live` (blob transfers also as `*_with_progress`, reporting every
+64 KiB); pushes go to an `ArtifactListener` (`ArtifactUpdate::Event` or `Synced`). The client caches a `drawing::Scene` per artifact it has seen: pushed batches apply
 in order, a gap or a reconnect fetches `Get{since}` (resync), `artifact_scene(id)` reads it.
 `un draw list | show | export | send` (show: kitty graphics when the terminal supports it,
 from the environment or an `a=q` query; else a braille render and a summary).

@@ -92,8 +92,15 @@ final class LocalDaemon {
     let process = Process()
 
     /// `config` is written as the daemon's `config.toml` first; `{state}` in it is replaced by
-    /// the state directory's path (e.g. `[files] allow = ["{state}"]`).
-    init(config: String? = nil) throws {
+    /// the state directory's path (e.g. `[files] allow = ["{state}"]`). Panes run `shell`;
+    /// `environment` overrides the daemon's (and so its panes') environment, with `{state}`
+    /// replaced the same way. `setup` runs with the state directory before the daemon starts.
+    init(
+        config: String? = nil,
+        shell: String = "/bin/sh",
+        environment: [String: String] = [:],
+        setup: (URL) throws -> Void = { _ in }
+    ) throws {
         let env = ProcessInfo.processInfo.environment
         binary = env["UN_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
             ?? repoRoot.appending(path: "target/debug/unnamed-hostd")
@@ -108,11 +115,19 @@ final class LocalDaemon {
             try config.replacingOccurrences(of: "{state}", with: stateDir.path)
                 .write(to: stateDir.appending(path: "config.toml"), atomically: true, encoding: .utf8)
         }
+        try setup(stateDir)
         process.executableURL = binary
         process.arguments = [
             "--state-dir", stateDir.path, "run",
-            "--no-relay", "--bind", "127.0.0.1:0", "--shell", "/bin/sh",
+            "--no-relay", "--bind", "127.0.0.1:0", "--shell", shell,
         ]
+        if !environment.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            for (key, value) in environment {
+                env[key] = value.replacingOccurrences(of: "{state}", with: stateDir.path)
+            }
+            process.environment = env
+        }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()

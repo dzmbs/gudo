@@ -25,9 +25,11 @@ use proto::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{Client, Inner, lock};
+use crate::{Client, Inner, TransferProgress, lock};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// Blob bytes between progress reports.
+const CHUNK: usize = 64 * 1024;
 
 /// Something an [`ArtifactListener`] hears.
 #[derive(Debug, Clone)]
@@ -666,6 +668,17 @@ impl Client {
         session_id: SessionId,
         bytes: Vec<u8>,
     ) -> Result<ImageRef, ArtifactError> {
+        self.blob_upload_with_progress(session_id, bytes, None)
+            .await
+    }
+
+    /// [`blob_upload`](Self::blob_upload), reporting progress after every 64 KiB written.
+    pub async fn blob_upload_with_progress(
+        &self,
+        session_id: SessionId,
+        bytes: Vec<u8>,
+        progress: Option<Arc<dyn TransferProgress>>,
+    ) -> Result<ImageRef, ArtifactError> {
         let media = drawing::sniff(&bytes)
             .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?
             .0;
@@ -692,7 +705,15 @@ impl Client {
                     other => return Err(failed(format!("unexpected {other:?}"))),
                 }
                 // QUIC flow control paces the upload.
-                send.write_all(&bytes).await.map_err(failed)?;
+                let total = bytes.len() as u64;
+                let mut done = 0u64;
+                for chunk in bytes.chunks(CHUNK) {
+                    send.write_all(chunk).await.map_err(failed)?;
+                    done += chunk.len() as u64;
+                    if let Some(p) = &progress {
+                        p.on_progress(done, total);
+                    }
+                }
                 let _ = send.finish();
                 match crate::conn::recv::<BlobReply>(&mut recv)
                     .await
@@ -711,6 +732,15 @@ impl Client {
     pub async fn blob_download(
         &self,
         hash: BlobHash,
+    ) -> Result<(ImageRef, Vec<u8>), ArtifactError> {
+        self.blob_download_with_progress(hash, None).await
+    }
+
+    /// [`blob_download`](Self::blob_download), reporting progress after every 64 KiB read.
+    pub async fn blob_download_with_progress(
+        &self,
+        hash: BlobHash,
+        progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<(ImageRef, Vec<u8>), ArtifactError> {
         let inner = Arc::clone(&self.inner);
         self.handle
@@ -731,7 +761,15 @@ impl Client {
                     other => return Err(failed(format!("unexpected {other:?}"))),
                 };
                 let mut bytes = vec![0; image.size as usize];
-                recv.read_exact(&mut bytes).await.map_err(failed)?;
+                let total = image.size;
+                let mut done = 0u64;
+                for chunk in bytes.chunks_mut(CHUNK) {
+                    recv.read_exact(chunk).await.map_err(failed)?;
+                    done += chunk.len() as u64;
+                    if let Some(p) = &progress {
+                        p.on_progress(done, total);
+                    }
+                }
                 Ok((image, bytes))
             })
             .await
