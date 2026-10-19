@@ -144,6 +144,13 @@ private struct HostGroupSection: View {
         let collapsed = model.groups.collapsed.contains(group.id)
         VStack(alignment: .leading, spacing: 0) {
             HostGroupHeader(group: group, collapsed: collapsed)
+            // Agent plan usage, one quiet line per agent, aligned with the host's name.
+            if group.kind == .daemon || LaunchOptions.fakeUsage {
+                HostUsageMeters(hostId: group.id, hostName: group.name)
+                    .padding(.leading, DS.Space.l + 16 + DS.Space.s)
+                    .padding(.trailing, DS.Space.s + 2)
+                    .padding(.bottom, DS.Space.xs)
+            }
             if !collapsed {
                 VStack(spacing: 1) {
                     ForEach(group.tabs) { tab in
@@ -216,6 +223,12 @@ private struct HostGroupHeader: View {
                     .help("New Terminal on \(group.name)")
                     .accessibilityIdentifier("new-tab-\(group.name)")
             }
+        }
+        .popover(isPresented: Binding(
+            get: { model.usageDetailHost == group.id },
+            set: { if !$0, model.usageDetailHost == group.id { model.usageDetailHost = nil } })
+        ) {
+            UsageDetailView(hostName: group.name, report: model.usage.usage(forHost: group.id))
         }
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.s + 2)
@@ -304,6 +317,40 @@ struct AgentGlyph: View {
     }
 }
 
+/// §4): the program's mark, replaced by the agent glyph while an unfocused tab has something to
+/// say. Every row has the slot, so titles line up across rows and a swap never moves them. Symbols
+/// draw at the muted 0.6 (the text leads); logos at the text's size, never louder than the title.
+struct TabLeadingMark: View {
+    let program: ProgramIdentity
+    /// The agent state to show instead, nil on the focused tab (§3.4) or when nothing reports.
+    let state: AgentState?
+
+    var body: some View {
+        ZStack {
+            if let state, state != .idle, state != .unknown {
+                AgentGlyph(state: state)
+                    .transition(.opacity)
+            } else {
+                ProgramMark(program)
+                    .foregroundStyle(.primary)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: ProgramMark.rowSlot, height: ProgramMark.rowSlot)
+        // One baseline whatever the slot holds (a spinner reports its own), so the row's number
+        // and title stay on the same line in every state.
+        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+        .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 3 }
+        .animation(DS.Motion.indicator, value: state)
+    }
+
+    /// The row's spoken label: name, then the agent's state or the program, then the host.
+    static func label(title: String, program: ProgramIdentity, state: AgentState?, host: String?) -> String {
+        let shown = state.flatMap { $0 == .idle || $0 == .unknown ? nil : "\(program.displayName), \($0.title)" } ?? program.displayName
+        return [title, shown, host].compactMap(\.self).joined(separator: ", ")
+    }
+}
+
 /// A group's context menu: New Tab, collapse, retry, and closing the host in this window.
 private struct GroupMenu: View {
     let group: HostGroup
@@ -322,6 +369,9 @@ private struct GroupMenu: View {
                 Button("Retry Now", systemImage: "arrow.clockwise") { model.hosts.retry(group.id) }
             }
             Divider()
+            if group.kind == .daemon {
+                Button("Agent Usage", systemImage: "gauge.with.dots.needle.33percent") { model.usageDetailHost = group.id }
+            }
             Button("Show in Hosts", systemImage: "server.rack") { model.destination = .hosts }
             Button("Disconnect", systemImage: "xmark.circle", role: .destructive) { model.closeHost(group.id) }
         }
@@ -394,6 +444,7 @@ private struct TabRow: View {
         let state = states.min { $0.urgency < $1.urgency }
         let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
         let context = workspace?.context(of: tab)
+        let program = model.programIdentity(of: tab, onGroup: group.id)
 
         Button {
             withAnimation(DS.Motion.snappy) { model.focus(ref) }
@@ -402,18 +453,17 @@ private struct TabRow: View {
                 Text("\(number)")
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(isActive ? .secondary : .tertiary)
-                    .frame(width: 16, alignment: .trailing)
+                    // Two digits fit (⌘-numbers run past 9 across hosts), so titles stay aligned.
+                    .frame(width: 20, alignment: .trailing)
+                    .lineLimit(1)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.xs + 2) {
+                        TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
                             .font(isActive ? DS.Font.rowTitleEmphasis : DS.Font.rowTitle)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        // §3.4: the focused tab shows no indicator.
-                        if let state, !isActive {
-                            AgentGlyph(state: state)
-                        }
                         if tab.zoomed != nil {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.caption2)
@@ -426,6 +476,8 @@ private struct TabRow: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.head)
+                            // Under the title, past the mark slot and its spacing.
+                            .padding(.leading, ProgramMark.rowSlot + DS.Space.xs + 2)
                     }
                 }
                 Spacer(minLength: DS.Space.xs)
@@ -461,7 +513,7 @@ private struct TabRow: View {
             return true
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title), \(group.name)")
+        .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
         .accessibilityValue(context ?? "")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
@@ -493,13 +545,17 @@ private struct GroupAgents: View {
                     Button {
                         model.focus(pane: row.pane, onGroup: group.id)
                     } label: {
+                        let program = model.programIdentity(ofPane: row.pane, onGroup: group.id)
                         HStack(spacing: DS.Space.s + 2) {
                             AgentGlyph(state: row.state)
                                 .frame(width: 16)
-                            Text(model.agentProgram(ofPane: row.pane, onGroup: group.id)
-                                ?? model.workspace(ofGroup: group.id)?.programName(of: row.pane) ?? "agent")
-                                .font(DS.Font.rowSubtitle)
-                                .lineLimit(1)
+                            HStack(spacing: DS.Space.xs + 1) {
+                                ProgramMark(program, size: 12)
+                                    .foregroundStyle(.primary)
+                                Text(program.isShell ? "agent" : program.displayName)
+                                    .font(DS.Font.rowSubtitle)
+                                    .lineLimit(1)
+                            }
                             Text("\(row.number)")
                                 .font(DS.Font.meta)
                                 .foregroundStyle(.tertiary)
@@ -622,10 +678,16 @@ struct CompactTerminalView: View {
                             let title = model.workspace(ofGroup: group.id)?.title(of: tab) ?? tab.title ?? "Shell"
                             if model.currentTab == ref {
                                 Label(title, systemImage: "checkmark")
-                            } else if let state = tab.root.panes.compactMap({ model.agentState(ofPane: $0, onGroup: group.id) }).min(by: { $0.urgency < $1.urgency }) {
+                            } else if let state = tab.root.panes.compactMap({ model.agentState(ofPane: $0, onGroup: group.id) }).min(by: { $0.urgency < $1.urgency }),
+                                      state != .idle, state != .unknown
+                            {
                                 Label(title, systemImage: state == .blocked ? "questionmark.circle.fill" : state == .error ? "xmark.circle.fill" : state == .done ? "checkmark.circle.fill" : "circle.dotted")
                             } else {
-                                Text(title)
+                                // The program's mark in the menu's icon column (§3.4: the state
+                                // glyph above replaces it while an agent has something to say).
+                                let program = model.programIdentity(of: tab, onGroup: group.id)
+                                Label { Text(title) } icon: { program.image }
+                                    .accessibilityLabel("\(title), \(program.displayName)")
                             }
                         }
                     }
@@ -643,6 +705,10 @@ struct CompactTerminalView: View {
             }
         } label: {
             HStack(spacing: DS.Space.xs + 2) {
+                if let tab = workspace.session.activeTab {
+                    ProgramMark(model.programIdentity(of: tab, onGroup: workspace.groupId))
+                        .foregroundStyle(.primary)
+                }
                 // Status UX §3.2 iPhone bar: the tab's title, the host's name as a second line,
                 // a state glyph after it only when the host is not live. No dot.
                 VStack(alignment: .leading, spacing: 0) {
@@ -683,8 +749,8 @@ struct CompactTerminalView: View {
         Menu {
             Picker("Pane", selection: Binding(get: { tab.focused }, set: { workspace.apply(.focus($0)) })) {
                 ForEach(Array(tab.root.panes.enumerated()), id: \.element) { index, pane in
-                    Label(model.paneStatus.program(of: pane.description) ?? "Pane \(index + 1)",
-                          systemImage: model.paneStatus.state(of: pane.description) == nil ? "terminal" : "sparkle")
+                    let program = model.programIdentity(ofPane: pane, onGroup: workspace.groupId)
+                    Label { Text(program.isShell ? "Pane \(index + 1)" : program.displayName) } icon: { program.image }
                         .tag(pane)
                 }
             }

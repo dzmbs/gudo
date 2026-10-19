@@ -2,7 +2,7 @@ import Foundation
 import PaneLayout
 import UnnamedCore
 
-/// The git-native workspace half of `UnnamedCore.DaemonClient` (docs/DAEMON.md §5.11,
+/// The git-native workspace half of `UnnamedCore.DaemonClient` (docs/DAEMON.md §5.12,
 /// `proto::repo`): the repository snapshot, pull request actions through the host's `gh`, the
 /// worktree lifecycle and scripts. Kept apart from `DaemonWorkspaceAPI` so fakes of that one
 /// need not grow; `DaemonClient` conforms as is.

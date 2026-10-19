@@ -265,6 +265,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | Caps::ARTIFACTS
             | Caps::ATTACH_RESULT
             | Caps::DAEMON_INFO
+            | Caps::AGENT_USAGE
             | if inner.options.askpass {
                 Caps::ASKPASS
             } else {

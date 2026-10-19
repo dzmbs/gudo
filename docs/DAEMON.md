@@ -613,7 +613,7 @@ with the count), and can `branch -d` the branch. Each worktree gets a stable `PO
 worktree is started with `PORT` and `UN_WORKTREE`, recorded in `layout.json`
 (`worktree: {path, port}`). `WorktreeLaunch{path, split_from, axis, agent?}` splits a pane into
 a shell or Claude/Codex in the worktree. Setup and teardown commands come from
-`.unnamed.json` (§5.11).
+`.unnamed.json` (§5.12).
 
 ### 5.6 Files
 
@@ -683,7 +683,25 @@ daemon's signature; approvals carry a daemon-signed action token that the app re
 URLs with token and private CA, local-only) and how pairing tickets carry them:
 `docs/RELAYS.md`. Tests: `cargo test -p daemon --test it notify relays`.
 
-### 5.11 Git-native workspace (`proto::repo`)
+
+`crates/daemon/src/usage/` reports Claude Code's and Codex's plan windows (5h, weekly, per-model)
+to owner connections that watch: `WorkspaceRequest::UsageWatch { api_fallback }` answers with the
+report at once, then `ServerCtl::AgentUsage` pushes changes (clients with `Caps::AGENT_USAGE`);
+`UsageUnwatch` stops. Offered as `DaemonFeatures::AGENT_USAGE`.
+
+Sources, preferred first: Codex's `token_count` rate limits in its rollouts; Claude's status-line
+input (Claude panes launched by the daemon run `un-hook claude StatusLine` as their status line,
+which forwards the JSON as hook event `StatusLine` and then runs the user's own status line);
+when those are missing or older than 10 min, `claude -p /usage --output-format stream-json`
+(+ `claude auth status --json` for the plan) and `codex app-server` → `account/rateLimits/read`,
+in the background, at most every 5 min per agent; only for a watcher that opted in, the
+providers' undocumented usage endpoints with the host's sign-in (`~/.claude/.credentials.json`,
+`~/.codex/auth.json`), at most every 5 min. The report refreshes at most once a minute and only
+while a connection watches; the last status-line snapshot survives restarts
+(`<state>/usage/claude-status-line.json`). Tools are found through the panes' `PATH` (plus
+`~/.local/bin`), `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Tests: `cargo test -p daemon --test it usage`
+(fixture rollouts, status-line hook, fake `claude` / `codex`, a local HTTP endpoint).
+### 5.12 Git-native workspace (`proto::repo`)
 
 The sidebar's picture of the host's repositories, pushed whole as `ServerCtl::Repos(RepoSnapshot)`
 to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests opt in with

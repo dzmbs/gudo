@@ -222,6 +222,14 @@ pub enum WorkspaceRequest {
     PushStatus,
     /// Answers an approval from a notification action → [`WorkspaceResponse::PushDecided`].
     PushAction(PushActionRequest),
+    /// Agent plan usage now → [`WorkspaceResponse::AgentUsage`]; while watching, changes
+    /// arrive as [`ServerCtl::AgentUsage`](crate::ServerCtl::AgentUsage) (clients with
+    /// [`Caps::AGENT_USAGE`](crate::Caps::AGENT_USAGE)). Sending it again refreshes (at most
+    /// once a minute) and replaces the options. Only daemons offering
+    /// [`DaemonFeatures::AGENT_USAGE`](crate::DaemonFeatures::AGENT_USAGE) understand it.
+    UsageWatch(crate::UsageWatch),
+    /// Stops this connection's usage pushes → [`WorkspaceResponse::Done`].
+    UsageUnwatch,
     /// Re-reads the git state of every watched worktree (and the pull request of `path`'s, or
     /// of all of them) now → [`WorkspaceResponse::Repos`].
     RepoRefresh {
@@ -323,6 +331,8 @@ pub enum WorkspaceResponse {
     Push(PushStatus),
     /// A notification action's decision was applied.
     PushDecided(crate::Decided),
+    /// Agent plan usage.
+    AgentUsage(crate::AgentUsageReport),
     /// The repositories of the panes.
     Repos(crate::repo::RepoSnapshot),
     /// A worktree's pull request after the request (`None`: it has none).

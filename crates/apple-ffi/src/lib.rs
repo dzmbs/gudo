@@ -40,6 +40,7 @@ mod repo;
 mod ssh_api;
 mod types;
 mod upgrade;
+mod usage;
 mod workspace;
 mod ws_types;
 
@@ -104,6 +105,7 @@ pub use types::*;
 pub use upgrade::{
     DaemonInfo, UpgradeError, UpgradeFailureCode, min_daemon_protocol, protocol_level,
 };
+pub use usage::{AgentUsage, AgentUsageReport, UsageSource, UsageWindow};
 pub use workspace::{AgentLaunch, AgentLaunched, TransferProgress, WorkspaceListener};
 pub use ws_types::*;
 

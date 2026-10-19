@@ -32,6 +32,8 @@ pub struct DaemonInfo {
     pub os_name: String,
     /// `x86_64`, `aarch64`.
     pub arch: String,
+    /// It answers `usage_watch` (agent plan usage).
+    pub agent_usage: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -47,6 +49,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             os: i.os,
             os_name: i.os_name,
             arch: i.arch,
+            agent_usage: i.features.contains(proto::DaemonFeatures::AGENT_USAGE),
         }
     }
 }

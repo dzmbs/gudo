@@ -123,7 +123,7 @@ fn repo_messages_match_their_frozen_bytes() {
         failures: vec![],
     };
     c.check("Caps::REPO_STATUS", Caps::REPO_STATUS, "03000000018002");
-    c.check("ServerCtl::Repos", ServerCtl::Repos(snapshot()), "80000000012a070103042f722f7701042f722f77022f72017201770001016201016801086f726967696e2f62010203040501012a034669780000017501620a02010202636902010163010177046c696e740000000501034465760b6e706d2072756e206465760104706c61790105677265656e0101056e706d2069000100090101026d65");
+    c.check("ServerCtl::Repos", ServerCtl::Repos(snapshot()), "80000000012b070103042f722f7701042f722f77022f72017201770001016201016801086f726967696e2f62010203040501012a034669780000017501620a02010202636902010163010177046c696e740000000501034465760b6e706d2072756e206465760104706c61790105677265656e0101056e706d2069000100090101026d65");
     for (name, gh, golden) in [
         ("GhStatus::Unknown", GhStatus::Unknown, "020000000100"),
         ("GhStatus::Missing", GhStatus::Missing, "020000000102"),
@@ -161,7 +161,7 @@ fn repo_messages_match_their_frozen_bytes() {
             WorkspaceRequest::RepoRefresh {
                 path: Some("/r/w".into()),
             },
-            "0a0000000115052201042f722f77",
+            "0a0000000115052401042f722f77",
         ),
         (
             "PrMerge",
@@ -170,14 +170,14 @@ fn repo_messages_match_their_frozen_bytes() {
                 number: 42,
                 strategy: MergeStrategy::Squash,
             }),
-            "0b00000001150523042f722f772a01",
+            "0b00000001150525042f722f772a01",
         ),
         (
             "PrRerunFailed",
             WorkspaceRequest::PrRerunFailed {
                 path: "/r/w".into(),
             },
-            "0900000001150524042f722f77",
+            "0900000001150526042f722f77",
         ),
         (
             "PrCreate",
@@ -186,7 +186,7 @@ fn repo_messages_match_their_frozen_bytes() {
                 draft: true,
                 base: None,
             }),
-            "0b00000001150525042f722f770100",
+            "0b00000001150527042f722f770100",
         ),
         (
             "PrCheckout",
@@ -194,7 +194,7 @@ fn repo_messages_match_their_frozen_bytes() {
                 repo: "/r".into(),
                 number: 42,
             }),
-            "0800000001150526022f722a",
+            "0800000001150528022f722a",
         ),
         (
             "WorktreeArchive",
@@ -202,24 +202,24 @@ fn repo_messages_match_their_frozen_bytes() {
                 path: "/r/w".into(),
                 force: false,
             },
-            "0a00000001150527042f722f7700",
+            "0a00000001150529042f722f7700",
         ),
         (
             "WorktreeArchived",
             WorkspaceRequest::WorktreeArchived { repo: None },
-            "050000000115052800",
+            "050000000115052a00",
         ),
         (
             "WorktreeRestore",
             WorkspaceRequest::WorktreeRestore { id: 3 },
-            "050000000115052903",
+            "050000000115052b03",
         ),
         (
             "WorktreeSettings",
             WorkspaceRequest::WorktreeSettings(Some(WorktreeSettings {
                 auto_delete_merged_days: 7,
             })),
-            "060000000115052a0107",
+            "060000000115052c0107",
         ),
         (
             "TaskCreate",
@@ -231,7 +231,7 @@ fn repo_messages_match_their_frozen_bytes() {
                 base: None,
                 agent: Some(AgentKind::Claude),
             }),
-            "180000000115052b022f72010b71756965742d6f7474657200000100",
+            "180000000115052d022f72010b71756965742d6f7474657200000100",
         ),
         (
             "ScriptRun",
@@ -241,7 +241,7 @@ fn repo_messages_match_their_frozen_bytes() {
                 name: "Dev".into(),
                 command: "npm run dev".into(),
             }),
-            "1a0000000115052c042f722f7701034465760b6e706d2072756e20646576",
+            "1a0000000115052e042f722f7701034465760b6e706d2072756e20646576",
         ),
     ] {
         c.check(name, req(r), golden);
@@ -265,17 +265,17 @@ fn repo_messages_match_their_frozen_bytes() {
                 worktrees: vec![],
                 gh: GhStatus::Missing,
             })),
-            "09000000011805001501000002",
+            "09000000011805001601000002",
         ),
         (
             "WorkspaceResponse::Pr",
             Ok(WorkspaceResponse::Pr(Some(pr()))),
-            "280000000118050016012a034669780000017501620a02010202636902010163010177046c696e7400000005",
+            "280000000118050017012a034669780000017501620a02010202636902010163010177046c696e7400000005",
         ),
         (
             "WorkspaceResponse::Pr(None)",
             Ok(WorkspaceResponse::Pr(None)),
-            "06000000011805001600",
+            "06000000011805001700",
         ),
         (
             "WorkspaceResponse::Archived",
@@ -289,14 +289,14 @@ fn repo_messages_match_their_frozen_bytes() {
                 saved_changes: true,
                 archived_at: UnixMillis(8),
             }])),
-            "1900000001180500170103022f720172042f722f770101620101680108",
+            "1900000001180500180103022f720172042f722f770101620101680108",
         ),
         (
             "WorkspaceResponse::WorktreeSettings",
             Ok(WorkspaceResponse::WorktreeSettings(WorktreeSettings {
                 auto_delete_merged_days: 0,
             })),
-            "06000000011805001800",
+            "06000000011805001900",
         ),
         (
             "WorkspaceResponse::TaskCreated",
@@ -306,7 +306,7 @@ fn repo_messages_match_their_frozen_bytes() {
                 pane_id: PaneId(3),
                 setup: Some("npm i".into()),
             })),
-            "1d0000000118050019042f722f7701016200000000018420020301056e706d2069",
+            "1d000000011805001a042f722f7701016200000000018420020301056e706d2069",
         ),
     ] {
         c.check(name, answer(r), golden);

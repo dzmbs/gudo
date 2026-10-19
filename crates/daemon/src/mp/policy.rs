@@ -201,6 +201,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::PushRegister(_) | R::PushUnregister | R::PushStatus | R::PushAction(_) => {
             (Need::Own, Target::Daemon)
         }
+        // The owner's plan and its limits; a guest has no business there.
+        R::UsageWatch(_) | R::UsageUnwatch => (Need::Own, Target::Daemon),
     }
 }
 

@@ -127,6 +127,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         ctl: ctl.clone(),
         watches: Arc::default(),
         actor: authz.actor,
+        caps: hello.caps,
     };
     let id = core.next_conn_id();
     let _ = ctl.send(ServerCtl::Joined(authz.join_info(&authz.name)));
@@ -199,6 +200,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
     if core.cfg.self_exe.is_some() {
         features |= DaemonFeatures::SELF_UPGRADE;
     }
+    features |= DaemonFeatures::AGENT_USAGE;
     crate::info::build_info(features)
 }
 

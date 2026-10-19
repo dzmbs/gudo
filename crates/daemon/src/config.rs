@@ -156,6 +156,7 @@ pub struct Config {
     /// client that cannot decode it.
     #[doc(hidden)]
     pub test_snapshot_format: Option<u32>,
+    pub usage: crate::usage::UsageConfig,
     /// The git-native workspace: repository watching, `gh`, worktree housekeeping.
     pub repos: RepoConfig,
 }
@@ -282,6 +283,7 @@ impl Config {
             history: crate::assist::HistoryConfig::default(),
             self_exe: None,
             test_snapshot_format: None,
+            usage: crate::usage::UsageConfig::default(),
             repos: RepoConfig::default(),
         }
     }
