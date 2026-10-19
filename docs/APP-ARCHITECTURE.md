@@ -362,3 +362,27 @@ Tests: `cd apple/Packages/NotifyKit && swift test` (NSE decrypt of every shared 
 category from the payload, placeholder kept for the three rejects, an unpaired daemon and no
 key; the handler with a fake client for local and push Approve / Deny / Open, an expired
 token, a refusal; local content per kind; prefs; categories).
+
+## 13. Push-to-talk dictation (VoiceKit)
+
+`apple/Packages/VoiceKit` (no views, no terminal types) holds the engine and the logic;
+`App/Sources/Voice/` the glue. Speech is recognized on the device only: `SpeechAnalyzer` +
+`SpeechTranscriber` (iOS/macOS 26) when the language's model is installed, else
+`SFSpeechRecognizer` with `requiresOnDeviceRecognition`. No network during dictation, no paid
+entitlement. A missing SpeechAnalyzer model is never fetched mid-dictation: Settings › Voice shows
+its state and a Download button (`AssetInventory`, the system's own model download).
+
+| | |
+|---|---|
+| `PushToTalk` (VoiceKit, `@MainActor @Observable`) | `start(target:) -> Bool`, `stop() async -> Outcome`, `cancel()`, `transcripts() -> AsyncStream<Transcript>`; reads `phase` (`idle/starting/listening/finishing/failed(VoiceError)`), `isActive`, `transcript` (`finalized` + `volatile`, `text`), `settings` |
+| `VoiceDictation.shared.voice` (App) | the app's instance; plain `start()` targets the terminal that is first responder, else the key window's focused pane. **The key bar's mic button calls `start()` on touch down, `await stop()` on touch up, `cancel()` when the touch is cancelled** |
+| `DictationTarget` / `PaneDictationTarget` | the preview is the terminal's preedit (marked text at the cursor, `DictationPreview.fit` keeps the end that fits the row); nothing reaches the host before release. Release commits `Transcript.text` on one line, no Return: `surface.paste(_, source: .text)` (bracketed when the program enabled it); a guest who may prompt but not type gets `MultiplayerSession.prompt(_, _, submit: false)` on agent panes (`DictationRoute.resolve`) |
+| Hardware chord | hold ⌃⌥Space in a terminal (`TerminalView.keyInterceptor` → `VoiceDictation.handleKey`, `HoldShortcut`); releasing Space commits. On a Mac with several input sources the system may take ⌃⌥Space first |
+| Settings › Voice | `VoiceSettings.enabledKey` (default on), `VoiceSettings.localeKey` ("" = system language), model state and download |
+| Indicator | `dictationIndicator()` on the workspace: "Listening · English" while active, the error in words for 5 s |
+
+Info.plist: `NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription` (project.yml).
+Tests: `cd apple/Packages/VoiceKit && swift test` (fake recognizer: segment merging, preview, commit
+without newline, cancel, empty, second start, release while starting, permission and recognizer
+errors, finish timeout, routing, transcript stream, hold chord, settings). Only a device confirms
+the microphone, the SpeechAnalyzer model assets per language, and latency.

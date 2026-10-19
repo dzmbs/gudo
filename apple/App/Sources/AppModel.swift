@@ -77,6 +77,9 @@ final class AppModel {
         }
     }
 
+    /// Every open workspace (dictation looks for the pane that has the keyboard).
+    var openWorkspaces: [Workspace] { workspaces.values.map(\.workspace) }
+
     /// The workspace already open for a target, without creating or connecting anything.
     func existingWorkspace(for target: WorkspaceTarget) -> Workspace? {
         workspaces[target]?.workspace

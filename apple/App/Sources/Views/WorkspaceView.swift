@@ -52,6 +52,7 @@ struct WorkspaceView: View {
             }
             .animation(DS.Motion.overlay, value: model.isPaletteShown)
             .toastHost(model.toasts)
+            .dictationIndicator()
             .portOffers(model)
             .editorPresentation(model)
             .sheet(item: $model.sheet) { route in
