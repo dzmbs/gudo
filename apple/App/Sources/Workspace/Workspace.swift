@@ -1,17 +1,25 @@
+import DesignSystem
 import Foundation
 import Observation
 import PaneLayout
 import TerminalCore
 import TerminalRenderer
+#if os(iOS)
+import GameController
+import UIKit
+#endif
+
+/// User-default keys for tab titles.
+enum TabNaming {
+    /// A program's OSC 0/2 title replaces the generated tab name (off: it shows as context).
+    static let titleFromShell = "titleFromShell"
+}
 
 /// User-default keys for keyboard behaviour.
 enum KeyboardSettings {
     static let optionAsMeta = "optionAsMeta"
     static let asciiKeyboard = "asciiKeyboard"
 }
-#if os(iOS)
-import GameController
-#endif
 
 /// One window's state: the layout (behind `LayoutStore`) and the live panes it references.
 /// Views read `session` and `panes`; every change goes through `apply`, which keeps the pane set
@@ -24,18 +32,31 @@ final class Workspace {
     private(set) var failures: [PaneId: String] = [:]
     /// The tab whose rename prompt is showing.
     var renamingTab: TabId?
+    /// Each pane's terminal grid, for the resize overlay.
+    private(set) var grids: [PaneId: GridSize] = [:]
+    /// Transient per-pane states drawn over the terminal (Ghostty's surface overlays).
+    var notices: [PaneId: PaneNotice] = [:]
+    /// What runs in each pane (program and directory), refreshed about once a second.
+    private(set) var foregrounds: [PaneId: PaneForeground] = [:]
+    /// Until when grid changes come from the software keyboard rather than the user.
+    @ObservationIgnored private(set) var keyboardResizeUntil = ContinuousClock.now
     /// Terminal appearance for every pane (the design layer may replace it).
-    @ObservationIgnored var appearance = TerminalAppearance()
+    @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
+        // Font, padding and cursor apply to open panes at once; colors to panes opened after.
+        didSet { for pane in panes.values { pane.view.surface.appearance = appearance } }
+    }
     /// One terminal cell in points, once a pane has laid out: split sizes snap to whole cells so
     /// panes waste no partial cells (the remainder becomes padding).
     private(set) var cellSize: CGSize?
 
     #if os(iOS)
     /// The key bar shared by this window's panes; it follows the first responder.
-    @ObservationIgnored let keyBar = KeyBar()
+    @ObservationIgnored let keyBar = KeyBar(style: .designSystem)
     #endif
 
-    @ObservationIgnored private let makeBackend: @MainActor (PaneId) throws -> any PaneBackend
+    /// Tabs already given a friendly name (or left unnamed by the user's choice).
+    @ObservationIgnored private var namingRequested: Set<TabId> = []
+    @ObservationIgnored private let makeBackend:@MainActor (PaneId) throws -> any PaneBackend
     /// The remote host this window shows (nil: the local workspace). Its status drives the
     /// connection banner and retry (04-mobile-ux R8, R9).
     @ObservationIgnored let host: (any HostConnection)?
@@ -47,8 +68,7 @@ final class Workspace {
         self.makeBackend = makeBackend
         host = nil
         hostId = nil
-        reconcilePanes()
-        _ = settingsObserver
+        start()
     }
 
     /// A window on a remote host: its layout store (the daemon's, or a local one for plain SSH)
@@ -58,9 +78,31 @@ final class Workspace {
         makeBackend = { try connection.makeBackend(for: $0) }
         host = connection
         self.hostId = hostId
-        reconcilePanes()
-        _ = settingsObserver
+        start()
         followLayout()
+    }
+
+    private func start() {
+        reconcilePanes()
+        #if os(iOS)
+        // The terminal's keyboard is dark (TerminalView.keyboardAppearance); its key bar matches.
+        keyBar.overrideUserInterfaceStyle = .dark
+        #endif
+        // Weak across the sleep, so a closed window's workspace is freed and the loop ends.
+        Task { [weak self] in
+            while self != nil {
+                self?.refreshForegrounds()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        #if os(iOS)
+        NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.keyboardResizeUntil = .now + .milliseconds(800) }
+        }
+        #endif
+        _ = settingsObserver
     }
 
     /// Whether this window is on a remote host.
@@ -82,17 +124,134 @@ final class Workspace {
     var session: Session { layout.session }
     var focusedPane: PaneId? { session.activeTab?.focused }
 
+    /// Whether new tabs can open here: a host, the Mac's own shell, or the iOS echo stand-in in
+    /// tests and fixtures. Otherwise "New Tab" asks for a host (`onNewTabUnavailable`).
+    var canOpenTabs: Bool { isRemote || LaunchOptions.hasLocalShell }
+    /// What "New Tab" does where no shell can open (iOS without a host): offer Add Host.
+    @ObservationIgnored var onNewTabUnavailable: (() -> Void)?
+
     func apply(_ op: LayoutOp) {
+        if case .newTab = op, !canOpenTabs {
+            onNewTabUnavailable?()
+            return
+        }
         layout.apply(op)
         reconcilePanes()
     }
 
+    /// The tab's name: the user's rename, else the friendly name it got when it was created
+    /// ("quiet-otter"). With Settings ▸ "Title from shell", a program's OSC 0/2 title replaces a
+    /// generated name (never a rename).
     func title(of tab: Tab) -> String {
-        // A user rename wins; then the focused pane's OSC 0/2 title, as Ghostty does.
-        if let title = tab.title { return title }
+        if let title = tab.title {
+            if UserDefaults.standard.bool(forKey: TabNaming.titleFromShell), FriendlyName.isGenerated(title),
+               let shell = panes[tab.focused]?.title, !shell.isEmpty
+            {
+                return shell
+            }
+            return title
+        }
         if let title = panes[tab.focused]?.title, !title.isEmpty { return title }
-        return "Tab \((session.tabs.firstIndex(of: tab) ?? 0) + 1)"
+        if let foreground = foregrounds[tab.focused], !foreground.title.isEmpty { return foreground.title }
+        return "Shell"
     }
+
+    /// The live line under a tab's name: what its agent is doing, else the program running in the
+    /// focused pane, else the program's own title (OSC 0/2), else the git checkout as
+    /// `repo:branch`, else the directory.
+    func context(of tab: Tab) -> String? {
+        let pane = tab.focused
+        let name = title(of: tab)
+        if let daemon = host as? DaemonConnection, let agent = daemon.meta[pane]?.agent {
+            let kind = agent.kind.prefix(1).uppercased() + agent.kind.dropFirst()
+            switch agent.state {
+            case .blocked(_, let summary, _): return "\(kind): \(summary)"
+            case .running: return daemon.meta[pane].map { $0.title.isEmpty ? "\(kind) working" : "\(kind): \($0.title)" }
+            case .idle, .done: break
+            }
+        }
+        if let program = panes[pane]?.foregroundProgram ?? foregrounds[pane]?.program, !program.isEmpty,
+           !PaneForeground.shells.contains(program)
+        {
+            return program
+        }
+        if let shellTitle = panes[pane]?.title, !shellTitle.isEmpty, shellTitle != name { return shellTitle }
+        if !isRemote, let directory = absoluteDirectory(of: tab), let repo = GitContext.repoBranch(at: directory) { return repo }
+        if let directory = directory(of: tab), directory != name { return directory }
+        let count = tab.root.panes.count
+        return count > 1 ? "\(count) panes" : nil
+    }
+
+    /// Gives every unnamed tab a friendly name, once. On a daemon the rename goes to the host, so
+    /// all devices show the same name.
+    private func nameNewTabs() {
+        let unnamed = session.tabs.filter { $0.title == nil && !namingRequested.contains($0.id) }
+        guard !unnamed.isEmpty else { return }
+        var used = Set(session.tabs.compactMap(\.title))
+        for tab in unnamed {
+            namingRequested.insert(tab.id)
+            let name = FriendlyName.make(avoiding: used)
+            used.insert(name)
+            // After this turn: `reconcilePanes` runs inside `apply`.
+            Task { @MainActor [weak self] in
+                guard let self, let current = self.session.tabs.first(where: { $0.id == tab.id }), current.title == nil else { return }
+                self.layout.apply(.rename(tab.id, name))
+            }
+        }
+    }
+
+    /// The focused pane's directory (OSC 7, else the PTY's cwd), with ~ for home.
+    func directory(of tab: Tab) -> String? {
+        if let pwd = panes[tab.focused]?.workingDirectory, !pwd.isEmpty {
+            return PaneForeground(program: "", directory: pwd).shortDirectory
+        }
+        return foregrounds[tab.focused]?.shortDirectory
+    }
+
+    /// What a pane runs, for headers and lists: the reported program, else what the PTY says,
+    /// else "shell". Never the pane id, which UI tests use as the terminal's identifier.
+    func programName(of pane: PaneId) -> String {
+        if let program = panes[pane]?.foregroundProgram { return program }
+        if let program = foregrounds[pane]?.program, !program.isEmpty { return program }
+        return "shell"
+    }
+
+    /// The focused pane's absolute directory, for the window's represented folder.
+    func absoluteDirectory(of tab: Tab) -> String? {
+        if let pwd = panes[tab.focused]?.workingDirectory, !pwd.isEmpty { return pwd }
+        return foregrounds[tab.focused]?.directory
+    }
+
+    private func refreshForegrounds() {
+        let daemon = host as? DaemonConnection
+        for (id, pane) in panes {
+            // Local panes ask the kernel; daemon panes take what the daemon reports (the agent
+            // running there, the shell's cwd) until it reports the foreground program itself.
+            let current = pane.foreground() ?? daemon?.meta[id].flatMap { meta in
+                meta.agent.map { PaneForeground(program: $0.kind, directory: meta.cwd) }
+                    ?? meta.cwd.map { PaneForeground(program: "", directory: $0) }
+            }
+            guard foregrounds[id] != current else { continue }
+            foregrounds[id] = current
+            #if os(iOS)
+            if keyBar.target === pane.view { keyBar.update(context: keyBarContext(of: pane)) }
+            #endif
+        }
+    }
+
+    /// The foreground program when known (a backend that reports it, the local PTY, or the
+    /// daemon's agent), which picks the key bar profile; the title stands in otherwise.
+    func reportedProgram(of pane: Pane) -> String? {
+        if let program = pane.foregroundProgram { return program }
+        if let program = foregrounds[pane.id]?.program, !program.isEmpty { return program }
+        return nil
+    }
+
+    #if os(iOS)
+    private func keyBarContext(of pane: Pane) -> KeyBarContext {
+        KeyBarContext(program: reportedProgram(of: pane), title: pane.title)
+    }
+    #endif
 
     // MARK: Commands on the focused pane / active tab
 
@@ -168,10 +327,14 @@ final class Workspace {
     // MARK: Panes
 
     private func reconcilePanes() {
+        nameNewTabs()
         let live = session.panes
         for (id, pane) in panes where !live.contains(id) {
             pane.terminate()
             panes[id] = nil
+            grids[id] = nil
+            notices[id] = nil
+            foregrounds[id] = nil
         }
         failures = failures.filter { live.contains($0.key) }
         for id in live where panes[id] == nil && failures[id] == nil {
@@ -188,6 +351,11 @@ final class Workspace {
             // The process exited: close its pane, as Ghostty does.
             Task { @MainActor in self?.apply(.close(id)) }
         }
+        pane.onGridChange = { [weak self] grid in
+            let size = GridSize(cols: Int(grid.cols), rows: Int(grid.rows))
+            if self?.grids[id] != size { self?.grids[id] = size }
+        }
+        pane.isFocusedPane = { [weak self] in self?.focusedPane == id }
         pane.onCellSize = { [weak self] size in
             if self?.cellSize != size { self?.cellSize = size }
         }
@@ -199,7 +367,7 @@ final class Workspace {
         pane.view.onFocus = { [weak self, weak pane] in
             guard let self, let pane else { return }
             keyBar.target = pane.view
-            keyBar.update(context: KeyBarContext(program: pane.foregroundProgram, title: pane.title))
+            keyBar.update(context: keyBarContext(of: pane))
             apply(.focus(id))
         }
         #if DEBUG
@@ -214,12 +382,32 @@ final class Workspace {
         #endif
         pane.onContextChange = { [weak self, weak pane] in
             guard let self, let pane, keyBar.target === pane.view else { return }
-            keyBar.update(context: KeyBarContext(program: pane.foregroundProgram, title: pane.title))
+            keyBar.update(context: keyBarContext(of: pane))
         }
         #else
         pane.view.setAccessibilityIdentifier(id.description)
-        pane.view.onFocus = { [weak self] in self?.apply(.focus(id)) }
+        pane.view.onFocus = { [weak self] in
+            ActiveWindow.workspace = self
+            self?.apply(.focus(id))
+        }
         #endif
         return pane
+    }
+}
+
+/// What Ghostty draws over a surface besides the grid.
+struct PaneNotice: Equatable {
+    /// "Process exited" bar; the pane stays open showing its last output.
+    var exit: (message: String, failed: Bool)?
+    /// The terminal is reading a password with echo off.
+    var secureInput = false
+    /// The bell rang recently.
+    var bell = false
+    /// The link under the pointer.
+    var hoveredURL: String?
+
+    static func == (lhs: PaneNotice, rhs: PaneNotice) -> Bool {
+        lhs.exit?.message == rhs.exit?.message && lhs.exit?.failed == rhs.exit?.failed
+            && lhs.secureInput == rhs.secureInput && lhs.bell == rhs.bell && lhs.hoveredURL == rhs.hoveredURL
     }
 }

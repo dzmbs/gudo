@@ -202,7 +202,10 @@ final class DogfoodEventPump {
     /// that got the press.
     func sendMouse(_ events: [NSEvent], window: NSWindow) async {
         for event in events {
-            if NSApp.keyWindow === window {
+            // A CGEvent-made scroll event has no window and carries screen coordinates, which
+            // `NSWindow.sendEvent` reads as window coordinates: the wheel then lands wherever
+            // that point falls (often outside the pane). Hit-test it ourselves, always.
+            if NSApp.keyWindow === window, event.type != .scrollWheel {
                 window.sendEvent(event)
             } else {
                 deliverMouseInactive(event, window: window)

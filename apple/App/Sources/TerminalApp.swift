@@ -1,3 +1,4 @@
+import DesignSystem
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -12,6 +13,16 @@ struct TerminalApp: App {
         #if os(macOS)
         // Tabs are ours (⌘T); AppKit's window tabbing would compete for the same shortcuts.
         NSWindow.allowsAutomaticWindowTabbing = false
+        // SwiftUI refreshes its menu items' enabled state lazily (when a menu opens). After a
+        // window rebuilds its content (target switch, layout change) a ⌘ shortcut can meet a
+        // stale, disabled item and do nothing. Validate the menus before AppKit matches the key.
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.modifierFlags.contains(.command) { NSApp.mainMenu?.update() }
+            return event
+        }
+        #if DEBUG
+        WindowSnapshot.scheduleIfRequested()
+        #endif
         #endif
     }
 
@@ -35,19 +46,27 @@ struct TerminalApp: App {
             }
         }
         #if os(macOS)
-        .defaultSize(width: 1100, height: 700)
+        .defaultSize(width: 1180, height: 760)
+        .windowToolbarStyle(.unified(showsTitle: true))
+        #endif
+
+        #if os(macOS)
+        Settings {
+            SettingsView()
+        }
         #endif
     }
 }
 
-/// One window: the workspace it shows (local or a host) and the hosts list. Deep links and the
-/// launch test hooks pick the target.
+/// One window: the workspace it shows (this device or a host) inside the design's chrome. Deep
+/// links, the hosts list and the launch test hooks pick the target; the window model (sidebar
+/// destination, sheets, palette) survives switching targets.
 struct WindowRoot: View {
     @Environment(AppModel.self) private var app
     @SceneStorage("target") private var storedTarget: String?
     @State private var target = WorkspaceTarget.local
-    @State private var showingHosts = false
     @State private var restored = false
+    @State private var model = WindowModel(app: AppModel.shared)
     /// The workspace on screen, resolved when the target changes (never during `body`).
     @State private var workspace: Workspace?
 
@@ -57,43 +76,43 @@ struct WindowRoot: View {
                 WorkspaceView(workspace: workspace)
                     .id(ObjectIdentifier(workspace))
             } else {
-                ContentUnavailableView {
-                    Label("Host unavailable", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(app.lastError ?? "")
-                } actions: {
-                    Button("Hosts") { showingHosts = true }
+                EmptyState(
+                    "Host Unavailable", systemImage: "exclamationmark.triangle",
+                    message: app.lastError ?? "The host could not be opened."
+                ) {
+                    Button("Show Hosts") { show(.local, destination: .hosts) }
+                        .buttonStyle(.glassProminent)
                 }
             }
         }
+        .environment(model)
         .onChange(of: connectionIdentity) { _, _ in
             // A host whose connection was replaced (plain SSH upgraded to the daemon) gets a
             // workspace on the new connection; the window stays on the host.
             refresh()
         }
-        .environment(\.showHosts, ShowHostsAction { showingHosts = true })
-        .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
-        .sheet(isPresented: $showingHosts) {
-            HostsView { selected in
-                showingHosts = false
-                show(selected)
-            }
-            .environment(app)
-            #if os(macOS)
-            .frame(minWidth: 520, minHeight: 520)
-            #endif
+        .onChange(of: app.lastError) { _, error in
+            if let error { model.toasts.show(Toast(error, systemImage: "exclamationmark.triangle.fill", style: .failure)) }
         }
+        .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
         .onOpenURL { url in
-            Task { if let target = await app.handle(url: url) { show(target) } }
+            Task {
+                if let target = await app.handle(url: url) {
+                    show(target)
+                    model.toasts.show(Toast("Paired with \(model.hostName)", systemImage: "checkmark.circle.fill", style: .success))
+                }
+            }
         }
         .task {
             guard !restored else { return }
             restored = true
+            model.show = { show($0) }
             refresh()
             app.hosts.foreground()
             if let hooked = await app.runLaunchHooks() {
                 show(hooked)
-            } else if UserDefaults.standard.object(forKey: "restoreLastTarget") == nil || UserDefaults.standard.bool(forKey: "restoreLastTarget"),
+            } else if LaunchOptions.screen == nil, !LaunchOptions.mock,
+                      UserDefaults.standard.object(forKey: "restoreLastTarget") == nil || UserDefaults.standard.bool(forKey: "restoreLastTarget"),
                       let storedTarget, let data = storedTarget.data(using: .utf8),
                       let saved = try? JSONDecoder().decode(WorkspaceTarget.self, from: data),
                       case .host(let id) = saved, app.hosts.record(id) != nil
@@ -111,9 +130,11 @@ struct WindowRoot: View {
 
     private func refresh() {
         workspace = app.workspace(for: target)
+        model.workspace = workspace
     }
 
-    private func show(_ selected: WorkspaceTarget) {
+    private func show(_ selected: WorkspaceTarget, destination: Destination = .terminal) {
+        model.destination = destination
         AppModel.log.info("show \(String(describing: selected), privacy: .public)")
         target = selected
         refresh()

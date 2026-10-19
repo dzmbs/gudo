@@ -8,10 +8,11 @@ final class WorkspaceUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    #if os(iOS)
     @MainActor
     func testShortcutsSplitZoomAndSwitchTabs() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))
@@ -69,7 +70,7 @@ final class WorkspaceUITests: XCTestCase {
     func testRotationAndDividerResize() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane1 = element(app, "pane-1")
         let pane3 = element(app, "pane-3")
@@ -82,7 +83,7 @@ final class WorkspaceUITests: XCTestCase {
         app.typeKey(.rightArrow, modifierFlags: [.command, .control])
         XCTAssertGreaterThan(pane1.frame.width, initial + 20, "⌃⌘→ moves the divider right")
 
-        let divider = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Split divider'")).firstMatch
+        let divider = app.descendants(matching: .any).matching(NSPredicate(format: "label ENDSWITH[c] 'split divider'")).firstMatch
         XCTAssertTrue(divider.waitForExistence(timeout: 5))
         let beforeDrag = pane1.frame.width
         let grip = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -113,7 +114,7 @@ final class WorkspaceUITests: XCTestCase {
         let app = XCUIApplication()
         // The simulator reports the Mac's keyboard, which collapses the bar to its slim strip.
         app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "YES"]
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))
@@ -135,12 +136,36 @@ final class WorkspaceUITests: XCTestCase {
         hold()
     }
 
+    #endif
+
+    #if os(macOS)
+    /// Owner bug: switching from the tab strip to vertical tabs showed no sidebar on macOS.
+    @MainActor
+    func testSidebarAppearsAfterSwitchingFromTabStrip() throws {
+        let app = XCUIApplication()
+        // Not `-tabStyle bar`: a launch argument outranks the toggle's write to user defaults.
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-localEcho", "YES"]
+        app.launch()
+        XCTAssertTrue(element(app, "hosts-button").waitForExistence(timeout: 20))
+        let onTop = app.buttons["Tabs on Top"].firstMatch
+        if onTop.exists { onTop.click() }
+        XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 10))
+        app.buttons["Tabs in Sidebar"].firstMatch.click()
+        let inbox = element(app, "sidebar-inbox")
+        XCTAssertTrue(inbox.waitForExistence(timeout: 5), "the sidebar shows after switching")
+        XCTAssertTrue(inbox.isHittable, "the sidebar is on screen, not collapsed")
+        XCTAssertTrue(element(app, "tab-bar").waitForNonExistence(timeout: 5))
+        add(XCTAttachment(screenshot: app.windows.firstMatch.screenshot()))
+    }
+    #endif
+
     /// `pane`'s share of the width it splits with `next` (side by side).
     @MainActor
     private func share(of pane: XCUIElement, next: XCUIElement) -> CGFloat {
         pane.frame.width / (pane.frame.width + next.frame.width)
     }
 
+    #if os(iOS)
     @MainActor
     private func toggleZoom(_ app: XCUIApplication) {
         element(app, "pane-menu").tap()
@@ -149,6 +174,7 @@ final class WorkspaceUITests: XCTestCase {
         item.tap()
         XCTAssertTrue(item.waitForNonExistence(timeout: 5))
     }
+    #endif
 
     @MainActor
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {

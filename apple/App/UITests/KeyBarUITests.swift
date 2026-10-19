@@ -82,7 +82,7 @@ final class KeyBarUITests: XCTestCase {
         let app = XCUIApplication()
         // The simulator may report a hardware keyboard; these tests are about the full bar.
         app.launchArguments += ["-keyBar.fullWithHardwareKeyboard", "YES"]
-        app.launchArguments += ["-restoreLastTarget", "NO"]
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
         let pane1 = element(app, "pane-1")
         XCTAssertTrue(pane1.waitForExistence(timeout: 10))

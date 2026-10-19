@@ -165,11 +165,11 @@
         { "do": "assert", "panes": 1 },
         { "do": "waitIdle" },
         { "do": "type", "text": "printf '\\e]2;dogfood-title-%d\\a' 7\n" },
-        { "do": "assert", "tabTitle": "dogfood-title-7", "timeout": 3 },
+        { "do": "assert", "tabContext": "dogfood-title-7", "timeout": 3, "name": "a program title is the tab's context line; the tab keeps its name" },
         { "do": "shortcut", "keys": "cmd+shift+[" },
         { "do": "assert", "panes": 3 },
         { "do": "shortcut", "keys": "cmd+shift+]" },
-        { "do": "assert", "tabTitle": "dogfood-title-7" },
+        { "do": "assert", "tabContext": "dogfood-title-7" },
         { "do": "screenshot", "name": "10-new-tab" }
       ]
     },

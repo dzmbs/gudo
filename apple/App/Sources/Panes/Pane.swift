@@ -28,10 +28,14 @@ final class Pane {
     @ObservationIgnored var onContextChange: (() -> Void)?
     /// The cell size in points after a layout (split sizes snap to it).
     @ObservationIgnored var onCellSize: ((CGSize) -> Void)?
+    /// Whether this pane is its tab's focused pane on screen (set by `Workspace`).
+    @ObservationIgnored var isFocusedPane: () -> Bool = { false }
 
     @ObservationIgnored let backend: any PaneBackend
     @ObservationIgnored private var appliedGrid: TerminalSurface.Grid?
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
+    /// Every grid change, undebounced, for the cols × rows overlay.
+    @ObservationIgnored var onGridChange: ((TerminalSurface.Grid) -> Void)?
 
     nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "pane")
 
@@ -111,6 +115,10 @@ final class Pane {
         }
     }
 
+    func foreground() -> PaneForeground? {
+        backend.foreground()
+    }
+
     func terminate() {
         resizeTask?.cancel()
         backend.terminate()
@@ -129,6 +137,7 @@ final class Pane {
     }
 
     private func gridChanged(_ grid: TerminalSurface.Grid) {
+        onGridChange?(grid)
         if let size = view.surface.cellSize { onCellSize?(size) }
         resizeTask?.cancel()
         // The first layout applies at once, so the shell starts at the real size.

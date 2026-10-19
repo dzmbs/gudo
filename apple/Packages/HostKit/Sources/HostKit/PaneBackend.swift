@@ -30,6 +30,9 @@ nonisolated public protocol PaneBackend: Sendable {
     /// Ends the pane's process (local backends) or stops following it (remote ones: closing a
     /// remote pane is a layout op); called when the pane leaves the layout.
     func terminate()
+    /// The foreground program and its working directory, for titles until the terminal reports
+    /// OSC 0/2 titles and OSC 7 directories. Polled about once a second; keep it cheap.
+    func foreground() -> PaneForeground?
 }
 
 nonisolated extension PaneBackend {
@@ -55,6 +58,41 @@ nonisolated extension PaneBackend {
     }
 
     public func requestHistory() -> Bool { false }
+
+    public func foreground() -> PaneForeground? { nil }
+}
+
+/// What runs in a pane right now.
+nonisolated public struct PaneForeground: Equatable, Sendable {
+    /// Executable name, e.g. `zsh`, `nvim`, `claude`.
+    public var program: String
+    /// Absolute working directory.
+    public var directory: String?
+
+    public init(program: String, directory: String?) {
+        self.program = program
+        self.directory = directory
+    }
+
+    public static let shells: Set<String> = ["zsh", "bash", "fish", "sh", "dash", "nu", "elvish", "xonsh", "-zsh", "-bash", "login"]
+
+    public var isShell: Bool { Self.shells.contains(program) }
+
+    /// The directory with the home directory as `~`.
+    public var shortDirectory: String? {
+        guard let directory else { return nil }
+        let home = NSHomeDirectory()
+        if directory == home { return "~" }
+        if directory.hasPrefix(home + "/") { return "~" + directory.dropFirst(home.count) }
+        return directory
+    }
+
+    /// Ghostty's default title with shell integration: the directory at a prompt, the command
+    /// while one runs.
+    public var title: String {
+        if isShell { return shortDirectory ?? program }
+        return program
+    }
 }
 
 /// Everything a backend tells its pane, in stream order.
