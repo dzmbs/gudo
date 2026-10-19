@@ -158,6 +158,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 inner.mp.fail_pending();
                 inner.art.fail_pending();
                 inner.assist.fail_pending();
+                inner.askpass.fail_pending();
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -260,7 +261,15 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
         grant: SignedGrant { v, grant_id, token },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume,
-        caps: Caps::ECHO_PREDICTION | Caps::ARTIFACTS | Caps::ATTACH_RESULT | Caps::DAEMON_INFO,
+        caps: Caps::ECHO_PREDICTION
+            | Caps::ARTIFACTS
+            | Caps::ATTACH_RESULT
+            | Caps::DAEMON_INFO
+            | if inner.options.askpass {
+                Caps::ASKPASS
+            } else {
+                Caps::EMPTY
+            },
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
     };
@@ -508,6 +517,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             continue;
         };
         let Some(msg) = inner.assist.dispatch(msg) else {
+            continue;
+        };
+        let Some(msg) = inner.askpass.dispatch(msg) else {
             continue;
         };
         let event = match msg {

@@ -9,8 +9,8 @@ use client_core::proto::{
     TabLayout,
 };
 use client_core::{
-    Client, ClientConfig, ClientEvent, EventQueue, MultiplayerEvent, MultiplayerEventQueue,
-    RelayMode,
+    AskpassEvent, AskpassEventQueue, Client, ClientConfig, ClientEvent, EventQueue,
+    MultiplayerEvent, MultiplayerEventQueue, RelayMode,
 };
 use daemon::{Config, Daemon};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -86,6 +86,9 @@ pub struct TestClient {
     mp_events: UnboundedReceiver<MultiplayerEvent>,
     /// Multiplayer pushes received so far.
     pub mp: Vec<MultiplayerEvent>,
+    askpass_events: UnboundedReceiver<AskpassEvent>,
+    /// Askpass pushes received so far (connections made with `askpass: true`).
+    pub askpass: Vec<AskpassEvent>,
 }
 
 impl TestClient {
@@ -107,6 +110,30 @@ impl TestClient {
         Self::wrap(client, events)
     }
 
+    /// A client that shows native password prompts (`ConnectOptions::askpass`).
+    pub fn connect_askpass(ticket: &str, key: Vec<u8>) -> Self {
+        let mut config = ClientConfig::new(key);
+        config.relay = RelayMode::Disabled;
+        let options = client_core::ConnectOptions {
+            askpass: true,
+            ..client_core::ConnectOptions::default()
+        };
+        Self::connect_with(ticket, config, options)
+    }
+
+    /// A guest joining with an invite, showing native password prompts.
+    pub fn join_askpass(invite: &str, key: Vec<u8>) -> Self {
+        let (listener, events) = EventQueue::channel();
+        let mut config = ClientConfig::new(key);
+        config.relay = RelayMode::Disabled;
+        let options = client_core::ConnectOptions {
+            askpass: true,
+            ..client_core::ConnectOptions::default()
+        };
+        let client = Client::join_with(invite, config, options, listener).expect("client starts");
+        Self::wrap(client, events)
+    }
+
     /// A guest joining with an invite.
     pub fn join(invite: &str, key: Vec<u8>) -> Self {
         let (listener, events) = EventQueue::channel();
@@ -119,6 +146,8 @@ impl TestClient {
     fn wrap(client: Client, events: UnboundedReceiver<ClientEvent>) -> Self {
         let (mp_listener, mp_events) = MultiplayerEventQueue::channel();
         client.set_multiplayer_listener(mp_listener);
+        let (askpass_listener, askpass_events) = AskpassEventQueue::channel();
+        client.set_askpass_listener(askpass_listener);
         Self {
             client,
             events,
@@ -143,6 +172,8 @@ impl TestClient {
             incompatible: Vec::new(),
             mp_events,
             mp: Vec::new(),
+            askpass_events,
+            askpass: Vec::new(),
         }
     }
 
@@ -215,6 +246,11 @@ impl TestClient {
                 self.log
                     .push(format!("{event:?}").chars().take(120).collect());
                 self.mp.push(event);
+            }
+            while let Ok(event) = self.askpass_events.try_recv() {
+                self.log
+                    .push(format!("{event:?}").chars().take(120).collect());
+                self.askpass.push(event);
             }
         }
     }

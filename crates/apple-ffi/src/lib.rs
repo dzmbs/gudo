@@ -28,6 +28,7 @@
 
 mod art_types;
 mod artifacts;
+mod askpass;
 mod assist;
 mod bytes;
 mod client;
@@ -50,6 +51,10 @@ pub use artifacts::{
     ArtifactListener, DownloadedBlob, excalidraw_element, excalidraw_wins, pack_ink_points,
     render_ascii, render_excalidraw_ascii, render_png, render_svg, simplify_ink_points,
     sniff_image, unpack_ink_points,
+};
+pub use askpass::{
+    AskpassCloseReason, AskpassError, AskpassEvent, AskpassListener, DetectedPrompt, SecretPrompt,
+    SecretSource, looks_like_password_prompt,
 };
 pub use assist::{
     AssistError, AssistEvent, AssistListener, BlockedChoice, BlockedOption, BlockedPrompt,

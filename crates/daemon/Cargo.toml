@@ -37,6 +37,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "fs", "process"] }
 tracing.workspace = true
 zstd.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 client-core.workspace = true

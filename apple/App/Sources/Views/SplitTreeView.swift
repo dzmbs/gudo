@@ -168,6 +168,7 @@ struct PaneSlot: View {
                 }
                 BellBorder(ringing: notice.bell)
                 MultiplayerPaneOverlay(workspace: workspace, pane: id, isFocused: focused)
+                AskpassPaneOverlay(workspace: workspace, pane: id)
                 if model.isSearchShown && focused {
                     TerminalSearchBar(
                         needle: Bindable(model).searchNeedle,

@@ -4,6 +4,10 @@
 //!
 //! It never fails the agent: any error prints nothing and exits 0, so a missing daemon only
 //! means the agent falls back to its own prompts.
+//!
+//! `un-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`).
+
+mod askpass;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -13,6 +17,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use daemon::{HookRequest, HookResponse};
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "askpass") {
+        std::process::exit(askpass::main(&args[1..]));
+    }
     if let Err(e) = relay()
         && std::env::var_os(brand::env_var("HOOK_DEBUG")).is_some()
     {
