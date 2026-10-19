@@ -444,7 +444,12 @@ The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. V
   merge strategy, Delete Merged Worktrees (Never, 1, 3, 7 (default), 14, 30 days; sent to each
   host), global scripts (name, command, SF Symbol, tint, ⌘R).
 
-git fixture and a stand-in `gh`; Mac drawn by the app).
+with a stand-in `gh`): `ipad-sidebar-dark`, `ipad-sidebar-fix-login-dark`, `ipad-toolbar-pr-dark`,
+`ipad-pr-popover-dark`, `ipad-merge-confirm-dark`, `ipad-new-task-dark` from `GitUITests`
+(`apple/scripts/git-ui-test.sh`); `mac-sidebar-dark` drawn by the app
+(`apple/scripts/git-mac-screenshot.sh`; glass toolbar items come out as white shapes in that
+path). `ipad-before-sidebar-dark` and `mac-before-sidebar-dark` are the same data before the
+grouping.
 
 ### Files (`Screens/FilesBrowserView.swift`) and editor (`Screens/EditorView.swift`)
 

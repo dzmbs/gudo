@@ -32,6 +32,8 @@ struct WorkspaceSidebar: View {
                 }
                 .padding(.top, DS.Space.s)
 
+                NeedsYouSection()
+
                 ForEach(groups) { group in
                     HostGroupSection(group: group, numbers: numbers)
                 }
@@ -153,9 +155,18 @@ private struct HostGroupSection: View {
             }
             if !collapsed {
                 VStack(spacing: 1) {
-                    ForEach(group.tabs) { tab in
-                        let ref = group.ref(tab.id)
-                        TabRow(tab: tab, ref: ref, number: numbers[ref] ?? 0, group: group)
+                    // A daemon's tabs the git way once it has sent its repositories
+                    // (Git/GitSidebar.swift): loose tabs, then repository → worktree.
+                    if let sidebar = model.groups.repoSidebar(for: group) {
+                        RepoGroupsView(group: group, sidebar: sidebar, numbers: numbers) { tab in
+                            let ref = group.ref(tab.id)
+                            TabRow(tab: tab, ref: ref, number: numbers[ref] ?? 0, group: group)
+                        }
+                    } else {
+                        ForEach(group.tabs) { tab in
+                            let ref = group.ref(tab.id)
+                            TabRow(tab: tab, ref: ref, number: numbers[ref] ?? 0, group: group)
+                        }
                     }
                     if group.tabs.isEmpty {
                         GroupPlaceholder(group: group)

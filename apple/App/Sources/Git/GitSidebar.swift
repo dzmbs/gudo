@@ -191,17 +191,15 @@ struct WorktreeTabRow: View {
             withAnimation(DS.Motion.snappy) { model.focus(TabRef(hostId: host, tab: tab.id)) }
         } label: {
             HStack(spacing: 6) {
-                Color.clear.frame(width: GitRow.slot, height: 1)
+                // The program's mark (the agent glyph while it has something to say).
+                TabLeadingMark(program: model.programIdentity(of: tab, onGroup: host), state: isActive ? nil : agent)
                 Text(title)
                     .font(GitRow.subtitle)
                     .foregroundStyle(isActive ? .primary : .secondary)
                     .lineLimit(1)
                 Spacer(minLength: DS.Space.xs)
-                ZStack(alignment: .trailing) {
-                    if let agent, !isActive { AgentGlyph(state: agent).opacity(CommandKeyState.shared.held ? 0 : 1) }
-                    if CommandKeyState.shared.held, let number {
-                        Text("⌘\(number)").font(.caption).foregroundStyle(.secondary)
-                    }
+                if CommandKeyState.shared.held, let number {
+                    Text("⌘\(number)").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .modifier(GitRowStyle(selected: isActive, depth: 1))
