@@ -284,8 +284,59 @@ menu Open Pane, Copy Prompt. New Agent sheet: agent (Claude Code / Codex), conne
 
 ### Share session (`Screens/InviteSheet.swift`) and presence
 
-Toolbar avatars (≤ 3 + N, typing ring) open Share Session: people with roles (Can type / Can
-view; owner fixed), access segment for the link, SF Mono link, Copy (✓ swap) and Share.
+Toolbar avatars (≤ 3 + N, typing ring; a share glyph when alone) open Share Session (live since
+
+- **Header**: tab name, "You and 3 others · you own this host", the others' avatars.
+- **Invite** (owner): a name field; four role tiles (Viewer locked on, Prompter, Driver,
+  Approver — SF Symbol, title, one line of what it allows; selected = accent hairline + 10 %
+  accent fill, the only accent on the screen besides the primary button); scope segment Host /
+  Session / Tab / Pane with its sentence; Expires (1 h, 24 h, 7 d, never) and Who Can Use It
+  (1 person, 5 people, anyone) menus; Can Invite Others; "Create Invite Link" (prominent glass;
+  "Signing invite…" in words). The result replaces the composer: a QR code (Core Image, dark
+  on white, quiet zone, 168 pt) beside the summary ("Driver · Session · 24 hours · 1 person"),
+  the link in SF Mono (middle-truncated, selectable) and "Expires in 23 hr"; Copy Link (✓ swap)
+  and Share (system share sheet); "New Invite" in the header.
+- **People Here**: avatar (dimmed when away), name, "Driving" pill in their own hue, where they
+  are ("In cargo test · Claude Code · typing…" in their hue while typing), role words and
+  scope right-aligned. Swipe or context menu: Revoke Access (confirmation that says what it
+  does and does not undo), Give Control, Copy Device Key.
+- **Access & Grants**: active invites (glyph by strongest role, label, "Can invite" pill, roles
+  · scope, "Expires in 6 days · 1 of 1 used", grant id in SF Mono), devices (owner/guest,
+  first seen, key, connected dot), ended invites; swipe Revoke with confirmation.
+- **Audit Log**: a seal header ("Log intact · 10 records; every hash and approval signature
+  re-verified on the host", or red "Log was altered"), All / Approvals / Access / Control,
+  search; rows with a glyph per kind (approvals green seal / red seal), who did what, time and
+  `#seq`; approvals carry the command in SF Mono and "Signed by Mira Holt · Option “Yes”", tap
+  for signer key, signature, agent request id and record hash.
+- **Guests** see Your Access (role, scope, expiry, what each role allows) instead of Invite.
+
+On the terminal, nothing shows while the owner is alone. With others: split headers show the
+avatars of people in that pane (14 pt, typing dots in their hue, a keyboard glyph in the
+driver's hue). The control chip (top-trailing glass capsule) says "Mira is driving · Take
+Control", then "Asked Mira · yours if idle 4 s · Cancel" (owner: "Take Now"), or "You're
+driving · Release" when someone watches your pane. The holder gets a glass card at the top of
+the pane: avatar, "Mira wants control", "Hands over in 4 s unless you keep typing", Keep /
+Hand Over (prominent), with the attention haptic. A viewer's focused pane has a bottom capsule
+"View only · Alex invited you to watch · ends in 23 hr"; a prompter's agent pane has the
+composer (glass, "Prompt Claude Code…", round send button, ⌘↩), other panes the "prompts go
+to agent panes" capsule. Refusals and hand-overs arrive as toasts in words ("Mira is driving.
+Take control to type.", "Needs an owner: …").
+
+Join a Session (deep link `<scheme>://join/…`, palette, paste): the link field, then a card
+read before dialling — inviter avatar, "Alex Kim invites you as Mira", each granted role with
+its sentence, scope, expiry, devices, the host key — a display-name field, and "Join as
+Driver" (prominent). Refusals say why (expired or used up, revoked, offline).
+
+`ipad-presence`, `ipad-lease-request`, `ipad-viewer`, `ipad-prompter`, `ipad-driver-share`,
+`ipad-join`, `iphone-*` (`-mock`, `-mockPresence YES`, `-mockRole …`, `-shareRoute …`), and
+`ipad-live-1…5` from `MultiplayerUITests` against a real daemon (presence, signed invite with QR,
+grants, revoked guest, audit log).
+
+Notifications: Settings ▸ Notifications lists the five kinds with a sentence each and "Only
+When the App Is in the Background"; the footer says whether this build can receive pushes.
+Approval notifications carry Approve / Deny (Face ID first) / Open. The agent-run Live Activity
+is terminal-dark with state hue only: amber working (with a running timer), red "Needs you",
+green done.
 
 ### Links & paths (`Screens/LinksSheet.swift`)
 

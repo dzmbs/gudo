@@ -209,6 +209,8 @@ Real (HostKit / apple-ffi):
 | Pane headers, tab strip, sidebar Agents section, palette | agent glyphs and program from `LivePaneStatus` (`DaemonConnection.meta[pane].agent`) |
 | Inbox | `LiveAgentFeed`: agents of every connected daemon from `PaneMeta.agent`; Approve / Deny call `DaemonConnection.decide` with the matching option; Mark Done hides the item locally |
 | Key bar profile | `Workspace.reportedProgram`: backend-reported program, else the local PTY's foreground, else the daemon's agent kind; the title stands in otherwise |
+| Share Session, presence, control, join, grants, audit | `MultiplayerSession` (§11): `Screens/InviteSheet.swift`, `Multiplayer/*` |
+| Local notifications, actions, Live Activity | `Notifications/*` over `DaemonConnection.workspaceEvents` (§12) |
 
 Still mock (the next agent's job; the apple-ffi calls now exist, docs/APPLE-FFI.md "Workspace",
 "Editor", "Multiplayer", "Push"):
@@ -221,5 +223,87 @@ Still mock (the next agent's job; the apple-ffi calls now exist, docs/APPLE-FFI.
 | Editor | `Screens/EditorView.swift` (`MockFileSource`) | `openEditor` (serve-web over a forward, never a sign-in; tunnels opt-in only), `editorOpenInSession` |
 | Browser | `Screens/BrowserView.swift` (fixed URL) | `ports()` / `.portsChanged`, `forward(localPort:target:)` |
 | Links & paths | `Screens/LinksSheet.swift` (`MockLinks`) | daemon links extraction (DAEMON.md §5) |
-| Share session, presence avatars | `Screens/InviteSheet.swift`, toolbar `PresenceStack` (`MockPresence`, shown only with `-mock`) | `createInvite`, `participants`, `MultiplayerEvent.presence`, `takeControl` … |
 | Scrollback search counts | `TerminalSearchBar` in `SplitTreeView` (fixed 2/14) | renderer / daemon search |
+
+
+`DaemonConnection.multiplayer: MultiplayerSession` (HostKit, `@MainActor @Observable`) follows
+the connection's `MultiplayerListener` pushes in order (an `AsyncStream` pumped on the main
+actor) and wraps the requests. Views never hold the client; `MultiplayerClientAPI` is the seam
+(tests use `FakeMultiplayerClient`, `-mock` uses `MockMultiplayerClient`).
+
+| Reads | Calls |
+|---|---|
+| `me` (`JoinInfo`), `roles`, `isOwner`, `isGuest`, `canDrive`, `canPrompt`, `canApprove`, `isViewOnly`; `participants` (one per device), `others` (one per principal), `people(in:)`; `leases`, `holder(of:)`, `isDriving`, `isDrivenByOther`; `leaseRequests` (the holder's prompt), `pendingTakes`; `grants`, `devices`, `auditPage`, `invites`; `notice` (refusals, hand-overs, revocation in words); `inputGate` | `takeControl(pane, force:)`, `answer(request, give:)`, `releaseControl`, `giveControl`, `cancelTake`; `prompt(pane, text)`, `setTyping(pane?)`; `createInvite(InviteOptions)`, `refreshGrants()`, `revoke(RevokeTarget)`, `loadAudit()`, `setName` |
+
+- **Input gate.** `inputGate` (no driver role → every pane; another connected principal holds
+  the lease → that pane) is pushed into `PaneRouter`: gated keys, pastes and mouse bytes are
+  dropped before they leave the device, echo prediction is off for gated panes (nothing would
+  be acknowledged), and a throttled `notice` says why ("Mira is driving. Take control to
+  type."). The daemon still enforces everything (`InputRejected`, `Forbidden` → `notice`).
+- **Joining.** `HostsModel.join(invite:name:)`: `inspectInvite` → a guest `HostRecord`
+  (`guest == true`, `inviter`, invite in the secret store under `host.<id>.invite`) dialled with
+  `DaemonClient.join`; a refused first join leaves nothing behind. Deep links
+  `<scheme>://join/…` open `JoinSheet` pre-filled (who invites, roles with what they allow,
+  scope, expiry, uses); joining is always a tap. The palette has "Join a Session…".
+- **Invite model.** `InviteDraft` (HostKit): name, roles beyond viewing, scope Host / Session /
+  Tab / Pane (ids from the live layout), expiry 1 h / 24 h / 7 d / never, uses 1 / 5 /
+  unlimited, delegate → `InviteOptions`; `summary` is the line the sheet shows.
+- **Screens.** Toolbar `PresenceToolbarButton` (others' avatars with typing rings, or a share
+  glyph) → `InviteSheet`: people here (role, where they are, typing, driving; swipe / context
+  menu Revoke, Give Control), the invite composer (role tiles, scope, expiry, uses, "Can Invite
+  Others") → link + QR (Core Image) + Copy + Share; owners get Access & Grants (`GrantsView`:
+  active / ended invites with uses and expiry, devices, revoke with confirmation) and the Audit
+  Log (`AuditLogView`: chain status, filters, search, approvals with signer key and
+  signature). Guests see Your Access instead. On the panes (`SplitTreeView` hooks):
+  `PanePresence` in split headers, `MultiplayerPaneOverlay` with the control chip ("Mira is
+  driving · Take Control", "Asked Alex · yours if idle 4 s", owner "Take Now"), the holder's
+  `LeaseRequestCard` (Keep / Hand Over with the idle countdown), a viewer's banner and a
+  prompter's composer on agent panes. `MultiplayerWindowHooks` turns notices into toasts.
+- **Mock.** `-mock` gives every window `MockMultiplayer.session` (owner + three guests, grants,
+  devices, a ten-record audit log); `-mockPresence YES` also draws it on the panes,
+  `-mockRole viewer|prompter|driver` shows a guest's side, `-mockLeaseRequest YES` the holder's
+  prompt, `-shareRoute grants|audit` opens the sheet there.
+
+Tests: `MultiplayerSessionTests` (fake client: role gates, lease gate, presence, take control
+pending → granted, the holder's answer, invite options, prompt refusal and revocation words),
+`MultiplayerIntegrationTests` (three `HostsModel`s against a local daemon: owner invites a
+viewer by link, the viewer sees output, its keys are gated and, sent raw, refused with
+`.role`; a driver asks for control, the owner is asked and hands over, the driver's keys
+arrive; the owner revokes the driver; the audit chain verifies with join, redeem, lease and
+revoke records), `MultiplayerUITests` via `apple/scripts/multiplayer-ui-test.sh` (iPad, a
+guest joined through the `un` CLI: presence, invite + QR, grants, revoke, audit; the script
+then checks the guest's `un who --watch` was disconnected).
+
+
+`NotifyKit` (package, no core): categories `AGENT_APPROVAL` (Approve / Deny with
+`.authenticationRequired`, Deny destructive, Open foreground), `AGENT_BLOCKED`, `AGENT_DONE`,
+`COMMAND_DONE`; `NotificationPrefs` per kind (+ only in the background); `AttentionNote` →
+`LocalNotifications.content` (one request per pane, thread per host, time-sensitive for
+approvals); `NotificationActionHandler` over `NotificationActionClient` (local → signed
+`decide` on the live connection, push → `sendPushAction` on a one-shot connection, Open →
+the pane); `ServiceExtensionCore` (PushCrypto + paired-daemon check) and `SharedPushStore`
+(Keychain group + app group, nil without the entitlement); `AgentRunAttributes` /
+`AgentRunState` (ActivityKit).
+
+App: `AppNotifications` (delegate set in `AppDelegate` before launch finishes) subscribes to
+every daemon's `DaemonConnection.workspaceEvents` (`WorkspaceEventHub`, one
+`WorkspaceListener` fanned out; other features can `observe` it too), posts
+`.attention(.added)` items that are unseen and not `whileViewed` when the app is not active
+(approval options from `PaneMeta.agent`), clears a host's delivered notes and sets the badge
+from `unseen`. Permission is asked the first time something would be posted. Settings ▸
+Notifications edits the prefs. `AgentLiveActivities` (iOS) starts an activity per agent run,
+updates it on blocked / done and ends it ten minutes after; `AgentActivityWidget` draws it.
+`<scheme>://open/<host>/<pane>` (activity, notification tap) focuses the pane.
+
+Push: `NotificationService` (app extension, iOS) calls `ServiceExtensionCore.shared()`.
+Registration (`HostsModel.registerPush`: relay `/v1/register` → `pushRegister` with the
+sealing key; `sendPushDecision` for the lock screen) runs only when the build has the
+entitlement: `Brand.xcconfig` `PUSH_ENTITLEMENT = YES` (→ Swift `PUSH_YES`,
+`registerForRemoteNotifications`), `PUSH_ENTITLEMENTS_FILE = App/Push.entitlements`,
+`PUSH_KEYCHAIN_GROUP`, `PUSH_APP_GROUP`. The default (`NO`, free account) builds and runs
+everything else unchanged.
+
+Tests: `cd apple/Packages/NotifyKit && swift test` (NSE decrypt of every shared vector,
+category from the payload, placeholder kept for the three rejects, an unpaired daemon and no
+key; the handler with a fake client for local and push Approve / Deny / Open, an expired
+token, a refusal; local content per kind; prefs; categories).

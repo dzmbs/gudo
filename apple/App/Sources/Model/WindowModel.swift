@@ -11,7 +11,7 @@ enum Destination: Hashable {
 
 /// Modal surfaces. One at a time, like the system's own sheets.
 enum SheetRoute: String, Identifiable {
-    case pairing, launchAgent, invite, links, diff, files, browser, editor, settings
+    case pairing, launchAgent, invite, join, links, diff, files, browser, editor, settings
     var id: String { rawValue }
 }
 
@@ -30,6 +30,8 @@ final class WindowModel {
     /// The Add Host sheet's starting mode and destination (quick connect pre-fills SSH).
     var pairingMode = PairingSheet.Mode.ssh
     var pairingDestination = ""
+    /// The invite link the Join sheet starts with (a `<scheme>://join/…` deep link).
+    var joinInvite = ""
     /// The workspace on screen (set by `WindowRoot` when the target changes).
     var workspace: Workspace? {
         didSet {

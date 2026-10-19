@@ -6,3 +6,16 @@ BRAND_NAME = unnamed
 BRAND_BUNDLE_ID_PREFIX = dev.unnamed
 // Deep links (`<scheme>://pair/<ticket>`); must match crates/brand URL_SCHEME.
 BRAND_URL_SCHEME = unnamed
+
+// Push notifications (docs/PUSH.md §8). They need a paid team: the APNs entitlement, a Keychain
+// access group and an App Group shared with the Notification Service Extension. With a free
+// account keep PUSH_ENTITLEMENT = NO: the app and the extensions build and run, local
+// notifications work, and nothing registers with APNs. With a team:
+//   PUSH_ENTITLEMENT = YES
+//   PUSH_ENTITLEMENTS_FILE = App/Push.entitlements
+//   PUSH_KEYCHAIN_GROUP = <TEAMID>.dev.unnamed.shared
+//   PUSH_APP_GROUP = group.dev.unnamed.app
+PUSH_ENTITLEMENT = NO
+PUSH_ENTITLEMENTS_FILE =
+PUSH_KEYCHAIN_GROUP =
+PUSH_APP_GROUP =

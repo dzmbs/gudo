@@ -29,6 +29,12 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>PushAppGroup</key>
+	<string>$(PUSH_APP_GROUP)</string>
+	<key>PushKeychainGroup</key>
+	<string>$(PUSH_KEYCHAIN_GROUP)</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
