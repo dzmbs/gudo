@@ -223,15 +223,17 @@ private struct PaneHeader: View {
 
     var body: some View {
         let state = model.paneStatus.state(of: id.description)
+        let program = model.programIdentity(ofPane: id, onGroup: workspace.groupId)
         HStack(spacing: DS.Space.xs + 2) {
-            if let state {
-                StatusIndicator(state, size: 10)
-            }
-            Text(model.paneStatus.program(of: id.description) ?? workspace.programName(of: id))
+            ProgramMark(program, size: 12)
+                .foregroundStyle(theme.foreground.opacity(isFocused ? 1 : 0.7))
+            // Shells keep their own word ("zsh", "canvas"); programs their display name.
+            Text(program.isShell ? workspace.programName(of: id) : program.displayName)
                 .font(.caption.weight(isFocused ? .semibold : .regular))
                 .foregroundStyle(theme.foreground.opacity(isFocused ? 0.9 : 0.6))
                 .lineLimit(1)
             if let state, state != .idle {
+                StatusIndicator(state, size: 10)
                 Text(state.title)
                     .font(.caption)
                     .foregroundStyle(state.color)

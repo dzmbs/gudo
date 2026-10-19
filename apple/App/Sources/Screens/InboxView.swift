@@ -234,10 +234,18 @@ private struct InboxRow: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
-            Text(item.isCommand ? "Command" : item.agent.title)
-                .font(DS.Font.rowTitleEmphasis)
-                .lineLimit(1)
-                .layoutPriority(1)
+            HStack(spacing: DS.Space.xs + 2) {
+                // The agent's mark before its name (the state glyph leads the row).
+                if !item.isCommand {
+                    ProgramMark(item.agent.identity)
+                        .foregroundStyle(.primary)
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
+                }
+                Text(item.isCommand ? "Command" : item.agent.title)
+                    .font(DS.Font.rowTitleEmphasis)
+                    .lineLimit(1)
+            }
+            .layoutPriority(1)
             Text("\(item.hostName) · \(item.sessionTitle)")
                 .font(DS.Font.rowSubtitle)
                 .foregroundStyle(.secondary)

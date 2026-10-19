@@ -4,7 +4,8 @@ import PaneLayout
 import SwiftUI
 
 /// Horizontal tabs, after Ghostty's macOS native tab bar: equal-width tabs across the whole row,
-/// each with a centered title (and the agent glyph when a pane reports one), ⌘N right-aligned,
+/// each with a centered title led by the program's mark (the agent glyph instead while an
+/// unfocused tab's pane reports one), ⌘N right-aligned,
 /// a close button on hover at the leading edge, thin separators between unselected tabs, a slightly
 /// lighter rounded pill for the selected tab, and + at the end. It sits on the terminal background
 /// like Ghostty's transparent titlebar, so tabs and terminal read as one surface.
@@ -72,6 +73,7 @@ private struct TabChip: View {
         let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
         let state = states.min { $0.urgency < $1.urgency }
         let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
+        let program = model.programIdentity(of: tab, onGroup: group.id)
         ZStack {
             if isActive {
                 RoundedRectangle(cornerRadius: 7)
@@ -86,10 +88,8 @@ private struct TabChip: View {
             }
 
             HStack(spacing: DS.Space.xs + 2) {
-                // §3.4: the focused tab shows no indicator.
-                if let state, !isActive {
-                    AgentGlyph(state: state)
-                }
+                // §3.4: the program's mark; the agent glyph instead on an unfocused tab.
+                TabLeadingMark(program: program, state: isActive ? nil : state)
                 VStack(spacing: 0) {
                     Text(title)
                         .lineLimit(1)
@@ -147,7 +147,7 @@ private struct TabChip: View {
         }
         .help([group.isLocal ? nil : group.name, workspace?.directory(of: tab) ?? title].compactMap(\.self).joined(separator: " · "))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
+        .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: nil))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tabbar-\(ref)")
     }

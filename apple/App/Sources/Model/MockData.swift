@@ -120,8 +120,13 @@ final class MockAgentFeed: AgentFeed {
 /// Pane statuses for the design screenshots (`-mock`): the second pane runs Claude, the third Codex.
 @Observable
 final class MockPaneStatus: PaneStatusSource {
+    /// A fixture's own programs and states by pane (the `programs` screen); replaces the defaults.
+    /// Static: every window model reads it (iPad launches make two).
+    static var fixture: [String: (program: String, state: AgentState?)]?
+
     func state(of pane: String) -> AgentState? {
-        switch pane {
+        if let fixture = Self.fixture { return fixture[pane]?.state }
+        return switch pane {
         case "pane-3": .working
         case "pane-4": .blocked
         case "pane-6": .done
@@ -130,7 +135,8 @@ final class MockPaneStatus: PaneStatusSource {
     }
 
     func program(of pane: String) -> String? {
-        switch pane {
+        if let fixture = Self.fixture { return fixture[pane]?.program ?? "zsh" }
+        return switch pane {
         case "pane-3": "claude"
         case "pane-4": "codex"
         case "pane-6": "cargo"

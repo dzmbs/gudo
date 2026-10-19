@@ -191,10 +191,11 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   (only when not live), Show in Hosts, Disconnect.
 - A host with no tabs shows one row "New Terminal" (`plus` in `.secondary`) under its header
   (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
-- One row per tab: its number across all hosts (tertiary, monospaced), the tab's name (medium
-  when selected) with its agent glyph (§3.4: working = mini spinner, needs input = amber
-  `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`; none
-  on the focused tab), the live context in SF Mono underneath, ⌘N on the Mac (⌘1–8 index the
+- One row per tab: its number across all hosts (tertiary, monospaced), a leading slot (16 pt on
+  holds the focused pane's program mark (14 / 16 pt: the official logo where its terms allow,
+  replaced by the agent glyph on unfocused tabs (§3.4: working = mini spinner, needs input =
+  amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
+  every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1–8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
   9 % fill with radius 10 (hover 6 %), never the accent. Drag to reorder within a host; context
   menu Rename / Close. Under a group's tabs, its agents.
@@ -217,7 +218,8 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 
 ### Tab strip (horizontal tabs) — Ghostty native tabs
 
-Equal-width tabs across the row; centered title with the agent glyph; ⌘N right-aligned; close
+Equal-width tabs across the row; centered title led by the same slot as the sidebar
+(program mark, the agent glyph instead on unfocused tabs); ⌘N right-aligned; close
 button on hover at the leading edge; 1 pt separators between unselected tabs (none beside the
 selected one); the selected tab a slightly lighter rounded pill (primary 11 %, radius 7, 0.5 pt
 hairline), moved with `matchedGeometryEffect`; + at the end. The strip sits under the shared
@@ -230,8 +232,8 @@ tabs to reorder.
   pointer highlight on iPad; double-click/tap equalizes; adjustable for VoiceOver ("Horizontal
   split divider", ±2.5 %). Split sizes snap to whole cells (main's `SplitSnapping`).
 - No focus ring. Unfocused panes are dimmed with the background at 1 − `unfocused-split-opacity`.
-- Pane header (only in splits, 24 pt, on the terminal background): status glyph, program, state
-  word in its color, and the pane menu (… on hover/focus). Tap focuses.
+- Pane header (only in splits, 24 pt, on the terminal background): program mark (12 pt),
+  program's display name, status glyph and state word in its color, and the pane menu (… on hover/focus). Tap focuses.
 - Overlays on the grid: cols × rows centered while resizing (hidden while the software keyboard
   moves, so it only answers user resizes); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
@@ -305,7 +307,7 @@ hint (e.g. Tailscale). The sidebar footer and connection dots show the same stat
 
 ### Agent Inbox (`Screens/InboxView.swift`)
 
-Needs you / Running / Finished. Row: status glyph, agent, host · session, an accent dot while
+Needs you / Running / Finished. Row: status glyph, the agent's mark (14 pt) and name, host · session, an accent dot while
 unseen, age (ticking for running), an open-pane arrow, prompt. Permission requests show the tool
 and command in an SF Mono block with Deny (glass) and Approve (prominent); questions and finished
 turns offer Reply…, an inline composer that types into the agent. Finished turns carry the
@@ -478,7 +480,7 @@ Return. Canvas panes show the same editor full size on the terminal background. 
 with `-snapshot`, so it works on a locked Mac — glass and the sidebar list are not captured by
 `cacheDisplay` and show as white). Screens: `single splits bar hosts inbox palette search
 keybar reconnect overlays welcome pairing launchAgent invite links diff files browser editor
-settings toggle`.
+settings toggle programs` (`programs`: one tab per program for the marks, `-fixtureTabs N` for
 
 `hosts` (live hosts list), `hetzner-splits` / `hetzner` (the Hetzner daemon session, split on the
 host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn by the app itself
