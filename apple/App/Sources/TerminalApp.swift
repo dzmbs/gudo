@@ -13,13 +13,7 @@ struct TerminalApp: App {
         #if os(macOS)
         // Tabs are ours (⌘T); AppKit's window tabbing would compete for the same shortcuts.
         NSWindow.allowsAutomaticWindowTabbing = false
-        // SwiftUI refreshes its menu items' enabled state lazily (when a menu opens). After a
-        // window rebuilds its content (target switch, layout change) a ⌘ shortcut can meet a
-        // stale, disabled item and do nothing. Validate the menus before AppKit matches the key.
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.modifierFlags.contains(.command) { NSApp.mainMenu?.update() }
-            return event
-        }
+        WorkspaceShortcuts.install()
         #if DEBUG
         WindowSnapshot.scheduleIfRequested()
         #endif
@@ -111,13 +105,25 @@ struct WindowRoot: View {
             app.hosts.foreground()
             if let hooked = await app.runLaunchHooks() {
                 show(hooked)
-            } else if LaunchOptions.screen == nil, !LaunchOptions.mock,
-                      UserDefaults.standard.object(forKey: "restoreLastTarget") == nil || UserDefaults.standard.bool(forKey: "restoreLastTarget"),
+            } else if UserDefaults.standard.bool(forKey: "restoreLastTarget")
+                        || (LaunchOptions.screen == nil && !LaunchOptions.mock && UserDefaults.standard.object(forKey: "restoreLastTarget") == nil),
                       let storedTarget, let data = storedTarget.data(using: .utf8),
                       let saved = try? JSONDecoder().decode(WorkspaceTarget.self, from: data),
                       case .host(let id) = saved, app.hosts.record(id) != nil
             {
                 show(saved)
+            }
+            // `-openHost <name or id>`: open that saved host (screenshots, manual checks).
+            if let wanted = UserDefaults.standard.string(forKey: "openHost"),
+               let record = app.hosts.records.first(where: { $0.id == wanted || $0.name == wanted })
+            {
+                show(.host(record.id))
+            }
+            // `-destination hosts|inbox`: open on that screen (screenshots of live data).
+            switch UserDefaults.standard.string(forKey: "destination") {
+            case "hosts": model.destination = .hosts
+            case "inbox": model.destination = .inbox
+            default: break
             }
         }
     }

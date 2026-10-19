@@ -289,7 +289,7 @@ private struct SidebarFooter: View {
 
     /// "Local", or the host's health in words ("studio · Reconnecting").
     private var footerText: String {
-        guard model.isRemote || model.connectionOverride != nil else { return "Local" }
+        guard model.isRemote || model.connectionOverride != nil else { return LaunchOptions.hasLocalShell ? "Local" : "No host connected" }
         if model.connection.isLive, let status = model.workspace?.host?.status.summary { return status }
         return "\(model.hostName) · \(model.connection.title)"
     }
@@ -342,7 +342,7 @@ struct CompactTerminalView: View {
         } label: {
             HStack(spacing: DS.Space.xs + 2) {
                 ConnectionDot(model.connection)
-                Text(workspace.session.activeTab.map(workspace.title(of:)) ?? "No Tabs")
+                Text(workspace.session.activeTab.map(workspace.title(of:)) ?? (workspace.canOpenTabs ? "No Tabs" : Brand.name))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)

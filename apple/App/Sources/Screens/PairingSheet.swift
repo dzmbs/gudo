@@ -81,13 +81,14 @@ struct PairingSheet: View {
                 }
                 switch mode {
                 case .ssh:
-                    sshSection
-                    if let flow, let live { SSHAuthSections(flow: flow, keys: live.keys.keys, importingKey: $importingKey, confirm: confirm) }
-                case .ticket: ticketSection
+                    sshSection.raisedRows()
+                    if let flow, let live { SSHAuthSections(flow: flow, keys: live.keys.keys, importingKey: $importingKey, confirm: confirm).raisedRows() }
+                case .ticket: ticketSection.raisedRows()
                 case .scan: scanSection
                 }
             }
             .formStyle(.grouped)
+            .terminalGrouped()
             .navigationTitle("Add Host")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

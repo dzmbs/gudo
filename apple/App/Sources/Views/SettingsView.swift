@@ -31,17 +31,19 @@ struct SettingsView: View {
         .frame(width: 560, height: 520)
         // The window follows the terminal theme, like the workspace (Ghostty `window-theme`).
         .preferredColorScheme(scheme)
+        .environment(\.terminalTheme, ThemeCatalog.theme(named: themeName))
         #else
         NavigationStack {
             Form {
-                AppearanceSection()
-                FontSection()
-                CursorSection()
-                SplitsSection()
-                KeyboardSection()
-                NotificationsSection()
-                AboutSection()
+                AppearanceSection().raisedRows()
+                FontSection().raisedRows()
+                CursorSection().raisedRows()
+                SplitsSection().raisedRows()
+                KeyboardSection().raisedRows()
+                NotificationsSection().raisedRows()
+                AboutSection().raisedRows()
             }
+            .terminalGrouped()
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -55,7 +57,7 @@ struct SettingsView: View {
 
     private func pane(@ViewBuilder _ content: () -> some View) -> some View {
         NavigationStack {
-            Form { content() }.formStyle(.grouped)
+            Form { content().raisedRows() }.formStyle(.grouped).terminalGrouped()
         }
     }
 }

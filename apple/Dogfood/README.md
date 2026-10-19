@@ -67,7 +67,7 @@ fresh tab (as does any case with `"fresh": true`). `pane` is an index into the a
 | `rememberScreen` / `waitScreenChanged` | `as` / `from` |
 | `waitProcess` | `name`, `state`: `running` (default), `stopped`, `exists`, `gone`; `timeout`, `pane` |
 | `capturePids` / `waitPidsGone` | `as` / `of`: the pane's shell and descendants |
-| `assert` | one of `panes`, `tabs`, `focusIs`, `focusIsNot`, `focusIndex`, `tabTitle`, `pasteboard`, `firstResponderIsFocusedPane`, `bracketedPaste`, `altScreen`, `ptySizeMatchesGrid`; polled for `timeout` (2 s) |
+| `assert` | one of `panes`, `tabs`, `focusIs`, `focusIsNot`, `focusIndex`, `tabTitle` (the tab's name), `tabContext` (its context line, which must differ from the name), `pasteboard`, `firstResponderIsFocusedPane`, `bracketedPaste`, `altScreen`, `ptySizeMatchesGrid`; polled for `timeout` (2 s) |
 | `remember` | `focus`: label for the focused pane |
 | `click` / `selectText` / `scroll` | `pane`; `text` (drag across its last occurrence); `lines` |
 | `resize` / `resizeLoop` | `width`, `height` / `sizes`, `count`, `intervalMs` |

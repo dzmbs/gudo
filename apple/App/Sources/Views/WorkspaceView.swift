@@ -64,7 +64,7 @@ struct WorkspaceView: View {
                 if appearance != workspace.appearance { workspace.appearance = appearance }
             }
             .task {
-                DesignFixtures.apply(LaunchOptions.screen, workspace: workspace, model: model)
+                await DesignFixtures.apply(LaunchOptions.screen, workspace: workspace, model: model)
                 if LaunchOptions.screen == "toggle" {
                     // Regression fixture: strip first, then vertical tabs, as a user would switch.
                     tabStyle = .bar
@@ -161,6 +161,8 @@ private struct SidebarColumn: View {
         }
         .background(theme.sidebarBackground.ignoresSafeArea())
         .environment(\.colorScheme, theme.colorScheme)
+        // The keyboard and its key bar float over the sidebar; its footer stays at the bottom.
+        .ignoresSafeArea(.keyboard)
         #else
         WorkspaceSidebar(workspace: workspace)
             .background(theme.sidebarBackground.ignoresSafeArea())

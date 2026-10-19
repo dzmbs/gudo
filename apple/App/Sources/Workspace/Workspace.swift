@@ -243,7 +243,11 @@ final class Workspace {
     /// daemon's agent), which picks the key bar profile; the title stands in otherwise.
     func reportedProgram(of pane: Pane) -> String? {
         if let program = pane.foregroundProgram { return program }
-        if let program = foregrounds[pane.id]?.program, !program.isEmpty { return program }
+        // A shell in the foreground says nothing about what runs in it (an agent can set the
+        // title from a shell, the echo stand-in always reports zsh): the title decides then.
+        if let program = foregrounds[pane.id]?.program, !program.isEmpty, !PaneForeground.shells.contains(program) {
+            return program
+        }
         return nil
     }
 
@@ -293,7 +297,9 @@ final class Workspace {
     /// focusing a pane never pops up the software keyboard unasked (04-mobile-ux A1.5, R6).
     var claimsKeyboardFocus: Bool {
         #if os(iOS)
-        GCKeyboard.coalesced != nil || panes.values.contains { $0.view.isFirstResponder }
+        // `-noAutoFocus YES` (screenshots): never raise the software keyboard by itself.
+        if UserDefaults.standard.bool(forKey: "noAutoFocus") { return false }
+        return GCKeyboard.coalesced != nil || panes.values.contains { $0.view.isFirstResponder }
         #else
         true
         #endif

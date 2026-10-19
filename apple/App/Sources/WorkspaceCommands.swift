@@ -8,9 +8,10 @@ struct WorkspaceCommands: Commands {
     @FocusedValue(WindowModel.self) private var focusedModel
     @AppStorage("tabStyle") private var tabStyle = TabStyle.sidebar
 
-    /// The focused window's workspace, else the one last worked in. SwiftUI briefly reports no
-    /// focused scene value while a window rebuilds its content, and a menu item disabled at that
-    /// moment can stay disabled, so ⌘D or ⌘T would silently do nothing.
+    /// The focused window's workspace, else the one last worked in. The items are never disabled
+    /// for a missing focused value: SwiftUI reports none at times while a window is key (after it
+    /// rebuilds its content), and an item disabled then stayed disabled, so ⌘D or ⌘T silently did
+    /// nothing. The actions resolve the window when they run.
     private var workspace: Workspace? { focusedWorkspace ?? ActiveWindow.workspace }
     private var model: WindowModel? { focusedModel ?? ActiveWindow.model }
 
@@ -21,14 +22,12 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .textEditing) {
             Button("Find…") { model?.isSearchShown = true }
                 .keyboardShortcut("f")
-                .disabled(model == nil)
         }
         CommandMenu("Pane") {
             buttons(WorkspaceAction.paneActions)
             Divider()
             Button("Links & Paths…") { model?.sheet = .links }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
-                .disabled(model == nil)
         }
         CommandMenu("Tab") {
             buttons(WorkspaceAction.tabActions)
@@ -41,18 +40,13 @@ struct WorkspaceCommands: Commands {
             // Ghostty binds the palette to ⇧⌘P; ⌘K is Raycast's and Linear's.
             Button("Command Palette") { model?.isPaletteShown.toggle() }
                 .keyboardShortcut("k")
-                .disabled(model == nil)
             Button("Command Palette") { model?.isPaletteShown.toggle() }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
-                .disabled(model == nil)
             Button("Inbox") { model?.destination = .inbox }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
-                .disabled(model == nil)
             Button("Hosts") { model?.destination = model?.destination == .hosts ? .terminal : .hosts }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
-                .disabled(model == nil)
             Button("Add Host…") { model?.addHost() }
-                .disabled(model == nil)
             Divider()
         }
     }
@@ -61,7 +55,6 @@ struct WorkspaceCommands: Commands {
         ForEach(actions, id: \.self) { action in
             Button(action.title) { workspace.map(action.perform) }
                 .keyboardShortcut(action.shortcut)
-                .disabled(workspace == nil)
         }
     }
 }
@@ -80,4 +73,16 @@ enum ActiveWindow {
     static var model: WindowModel? {
         models.allObjects.first { workspace != nil && $0.workspace === workspace } ?? models.allObjects.first
     }
+
+    #if os(macOS)
+    /// The workspace shown in `window`: the one whose panes live there, else the last active.
+    static func workspace(in window: NSWindow) -> Workspace? {
+        for model in models.allObjects {
+            if let candidate = model.workspace, candidate.panes.values.contains(where: { $0.view.window === window }) {
+                return candidate
+            }
+        }
+        return workspace
+    }
+    #endif
 }

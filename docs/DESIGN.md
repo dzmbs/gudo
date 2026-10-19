@@ -43,7 +43,7 @@ darkened to ≥ 4.5:1 on white.
 | `info` | `#3F6E99` | `#81A2BE` | informational | palette 4 |
 | `bell` | `#FFCC00` 50 % | same | bell border | Ghostty `BellBorderOverlay` |
 | terminal background | `#282C34` | same | grid, pane headers, tab strip, iPhone top bar | Ghostty `background` |
-| split divider | background × 0.6 brightness (`#181A1F`) | same | 1 pt dividers, header rules | Ghostty `splitDividerColor` (darken 40 %) |
+| split divider | background × 0.6 brightness (`#181A1F`) | same | 1 pt dividers, header rules, sidebar edge | Ghostty `splitDividerColor` (darken 40 %) |
 | unfocused dim | background at 30 % | same | over unfocused panes | Ghostty `unfocused-split-opacity` 0.7 |
 
 The asset catalog's `AccentColor` mirrors `accent`; `LaunchBackground` is the terminal
@@ -94,12 +94,15 @@ titles align to one column.
    groups do this already).
 3. Tint glass only to carry state: the prominent primary action (`.glassProminent`) and a latched
    key-bar modifier. Never for decoration.
-4. Where chrome touches the terminal (tab strip, pane headers, iPhone top bar, the toolbar band
-   when the window and terminal agree on dark/light) it is painted with the terminal background,
-   seamless like Ghostty's transparent titlebar. When they disagree (light mode, dark theme) the
-   toolbar band keeps the window background so the title and status bar stay legible.
-5. The iPad sidebar is opaque `secondarySystemBackground`: the floating glass sidebar sampled the
-   dark terminal and turned grey in light mode.
+4. The window chrome follows the terminal, not the system (Ghostty `window-theme = auto`, the
+   default "Match Terminal"): a dark theme gives dark chrome everywhere (sidebar, toolbar and
+   title bar, tab strip, sheets, key bar) even with the system in light mode, and the reverse.
+   Where chrome touches the terminal (toolbar band, tab strip, pane headers, iPhone top bar) it
+   is painted with the terminal background, seamless like Ghostty's transparent titlebar.
+   flush with the window edge, on `TerminalTheme.sidebarBackground` (the terminal background
+   at 0.82 brightness for dark themes, 0.955 for light), separated by a 1 pt split-divider line.
+   It is drawn by hand (a scroll view of rows), because the system sidebar list paints its own
+   material.
 
 ### Motion
 
@@ -160,21 +163,32 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 
 ### Window and title bar (Mac)
 
-- Sidebar layout: a standard `NavigationSplitView`; the toolbar carries the tab title (OSC 0/2
-  title, else the focused pane's program or directory) with a subtitle ("Local · 3 panes"), then
-  presence avatars, Find, the pane menu, the command palette and the tab-placement toggle.
-- Tabs-on-top layout (Ghostty): the window title is the focused pane's directory with its folder
-  as proxy icon (`navigationDocument`); the window takes the terminal's light/dark (Ghostty
-  `window-theme = auto`), the toolbar background is the terminal background.
-- Switching to vertical tabs always shows the sidebar (`columnVisibility = .all`); covered by
-  `testSidebarAppearsAfterSwitchingFromTabStrip` and the `toggle` screenshot fixture.
+- One layout for both tab placements: the integrated sidebar (vertical tabs only) beside a
+  detail column whose toolbar is the same in both: the sidebar toggle leading; the tab's name
+  with a subtitle ("Local · 3 panes", or the host's name); presence avatars; one monochrome glass
+  group with Hosts, Find, the pane menu and the command palette; the tab-placement toggle on its
+  own. Never accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
+  buttons' frames in both placements and attaches screenshots.
+- The toolbar background is hidden: the sidebar color runs up behind the traffic lights and the
+  terminal background behind the rest. The window title's folder is the proxy icon
+  (`navigationDocument`) for local tabs.
+- Switching to vertical tabs always shows the sidebar; covered by
+  `testSidebarAppearsAfterSwitchingFromTabStrip` and the `toggle` screenshot fixture. The divider
+  drags to resize (200–360 pt, double-click restores 248).
 
 
 - Inbox (count badge, red only when something needs you) and Hosts at the top.
-- Section "This iPad / This Mac" with the connection dot. One row per tab: tab number (tertiary,
-  monospaced), title (medium when selected) with the most urgent agent glyph, the directory in SF
-  Mono underneath (or "3 panes"), ⌘N on the Mac. Selection is a 9 % fill with radius 10, never the
-  accent. Drag to reorder; context menu Rename / Close.
+- Section with the window's place ("This Mac", or the host's name) and its connection dot (+ New
+  Tab on the Mac; the iPad sidebar has it in its own bar, level with the detail's). One row per
+  tab: tab number (tertiary, monospaced), the tab's name (medium when selected) with the most
+  urgent agent glyph, the live context in SF Mono underneath, ⌘N on the Mac. Selection is a 9 %
+  fill with radius 10 (hover 6 %), never the accent. Drag to reorder; context menu Rename / Close.
+- Tab names: every new tab gets a short friendly adjective-noun name ("quiet-otter",
+  `Workspace/FriendlyName.swift`, curated lists), stable, and sent to the daemon as a rename so
+  every device shows it. A user rename always wins. The context line is the agent's task, else
+  the foreground program, else the program's OSC 0/2 title, else `repo:branch` (local), else the
+  directory. Settings ▸ "Tab Title from Shell" (`title-from-shell`) lets an OSC title replace a
+  generated name.
 - Section "Agents": every pane whose program reports status, across tabs: glyph, program, tab
 - Footer: connection state and Settings.
 
@@ -183,9 +197,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 Equal-width tabs across the row; centered title with the agent glyph; ⌘N right-aligned; close
 button on hover at the leading edge; 1 pt separators between unselected tabs (none beside the
 selected one); the selected tab a slightly lighter rounded pill (primary 11 %, radius 7, 0.5 pt
-hairline), moved with `matchedGeometryEffect`; + at the end. On iPad the pane menu, palette and
-placement toggle follow at the row's end. The strip sits on the terminal background with a
-divider-colored bottom rule. Drag tabs to reorder.
+hairline), moved with `matchedGeometryEffect`; + at the end. The strip sits under the shared
+toolbar (Mac and iPad alike) on the terminal background with a divider-colored bottom rule. Drag
+tabs to reorder.
 
 ### Splits, panes, overlays — Ghostty 1:1
 
@@ -219,6 +233,11 @@ Settings is in Hosts' toolbar.
 
 No tabs: terminal glyph, "No Open Tabs", one sentence, then four rows with shortcuts: New Tab ⌘T,
 Connect to a Host…, Start an Agent…, Command Palette ⌘K.
+
+iPhone and iPad have no shell of their own: a fresh install opens here with "Connect a Host",
+one sentence, and Connect with SSH…, Paste a Pairing Ticket…, Scan a QR Code…, Command Palette.
+New Tab there opens Add Host. The local echo backend is only for UI tests (`-localEcho YES`),
+`-mock` and the design fixtures; `ChromeUITests.testFirstLaunchShowsWelcomeNotAShell` guards it.
 
 ### Command palette (⌘K, ⇧⌘P)
 
@@ -337,7 +356,10 @@ with `-snapshot`, so it works on a locked Mac — glass and the sidebar list are
 keybar reconnect overlays welcome pairing launchAgent invite links diff files browser editor
 settings toggle`.
 
-`-light`.
+`hosts` (live hosts list), `hetzner-splits` / `hetzner` (the Hetzner daemon session, split on the
+host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn by the app itself
+(`-snapshot`; glass controls come out as white shapes in that path). Live-data launch options:
+`-openHost <name>`, `-destination hosts|inbox`, `-screen live-splits`, `-noAutoFocus YES`.
 
 ## Known gaps
 
@@ -345,18 +367,19 @@ settings toggle`.
   live through `TerminalAppearance`; colors (background, palette) are fixed when a terminal is
   created, so a new theme shows in new panes. Needs a live `Terminal.Configuration` update in
   TerminalKit.
-- **Mac verification is partial.** The Mac was locked: screenshots come from the app drawing
-  itself, which leaves glass and the vibrant sidebar white (the sidebar's list is present: 10 rows,
-  248 pt, checked from the view tree), and the Mac UI test
-  (`testSidebarAppearsAfterSwitchingFromTabStrip`) is written but could not run ("Authentication
-  cancelled"). Re-run both on an unlocked Mac.
+- **Mac verification is partial.** The Mac was locked during the merge run: Mac screenshots come
+  from the app drawing itself (glass toolbar buttons show as white shapes; the integrated sidebar
+  draws correctly), and the Mac UI tests (`ChromeUITests`, `testSidebarAppearsAfterSwitchingFromTabStrip`,
+  `MacDogfoodUITests`) are written but could not activate the app. Re-run on an unlocked Mac.
 - **Context-menu previews** of panes (live thumbnails) are not wired.
-- **Scan QR** draws a viewfinder only; no camera (`DataScannerViewController`) behind it.
+- **Scan QR** runs VisionKit's scanner inside the viewfinder where a camera exists; untested on a
+  device (the simulator has no camera and shows the hint instead).
 - **Search** is UI only: the bar shows the counts it is given; matching and highlights belong to
   the renderer.
 - **Editor**: line numbers do not follow wrapped lines; Ln/Col is static.
-- **Inbox/Hosts/Links/Diff/Files/Browser** run on mock data behind protocols
-  (`App/Sources/Model/ScreenModels.swift`); the wiring replaces `MockData.swift`.
+- **Real vs mock**: Hosts, pairing, reconnect, tab names, agent glyphs and Inbox approvals are
+  live; Diff, Files, Editor, Browser, Links, Share/presence and Inbox replies/launch still read
+  `MockData.swift` (docs/APP-ARCHITECTURE.md §10 lists each and the apple-ffi call to wire).
 - **Key bar screenshots** show main's hardware-keyboard strip (profile chip + esc), because the
   simulators have a hardware keyboard attached; the full row uses the same `KeyBarLook` keys.
 - **Light terminal themes** are supported by the chrome (window theme "Match Terminal", seamless

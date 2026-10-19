@@ -135,7 +135,8 @@ final class WindowModel {
         } else if downSince == nil {
             downSince = .now
         }
-        let next = status.map { ConnectionState($0, since: downSince ?? .now) } ?? .connected
+        // No host: this device's own shell is "connected"; an iPhone or iPad without one is not.
+        let next = status.map { ConnectionState($0, since: downSince ?? .now) } ?? (LaunchOptions.hasLocalShell ? .connected : .disconnected)
         if next != liveConnection { liveConnection = next }
         guard let host = workspace?.host else { return }
         withObservationTracking {

@@ -1,9 +1,10 @@
 
 Status: 2026-10-18. The Apple app talks to real hosts: paired daemons over iroh and plain SSH,
 with "just ssh" → "Install helper" → daemon. This document is the contract between the data
-layer (`apple/Packages/HostKit`, the `Workspace`/`Pane` glue in `apple/App`) and the views. The
-views in `App/Sources/Views/HostsView.swift` and `HostChrome.swift` are deliberately plain; the
-design layer replaces them by binding to the same models.
+layer (`apple/Packages/HostKit`, the `Workspace`/`Pane` glue in `apple/App`) and the views.
+Since 2026-10-19 the views are the design system's (docs/DESIGN.md), bound to these models
+through `WindowModel` and the adapters in `App/Sources/Model/LiveSources.swift`; §10 lists what
+is real and what still shows mock data.
 
 ```
                  ┌──────────── App (SwiftUI) ───────────────────────────────────────────┐
@@ -27,7 +28,9 @@ All are `@MainActor @Observable`. Views never hold a socket or a `DaemonClient` 
 
 | Model | What a view reads | What a view calls |
 |---|---|---|
-| `AppModel` (App) | `hosts`, `lastError` | `workspace(for:)` (resolve on target change, never in `body`), `handle(url:)` |
+| `AppModel` (App) | `hosts`, `lastError` | `workspace(for:)` (resolve on target change, never in `body`), `existingWorkspace(for:)`, `handle(url:)` |
+| `WindowModel` (App, one per window) | `destination` (terminal / inbox / hosts), `sheet`, palette and search state, `connection: ConnectionState` (the window host's `ConnectionStatus` in design words, with when it went down), `hostName`, `hosts: any HostDirectory`, `agents: any AgentFeed`, `paneStatus: any PaneStatusSource`, `toasts` | `show(target)` (set by `WindowRoot`), `addHost(mode:destination:)`, `retryConnection()`, `disconnect()` |
+| `Workspace` (App) | `session`, `panes`, `title(of:)` (the tab's name), `context(of:)` (agent task → program → shell title → repo:branch → directory), `canOpenTabs` | `apply(op)`; unnamed tabs get a friendly name (`FriendlyName`, sent as a rename so a daemon keeps it for every device) |
 | `HostsModel` | `entries: [HostEntry]` (sorted: Needs you → pinned → recent), `installs[id]` (`InstallProgress.summary`), `installNotes[id]`, `sshConfigAliases`, `keys.keys`, `hostKeyPrompts.pending`, `network.isOffline` | `open(id)`, `pair(ticket, name:)`, `connectSSH(…)`, `installHelper(id)`, `loadSSHConfig(text)` / `loadUserSSHConfig()` (macOS) / `importSSHHosts(aliases)`, `rename`, `setPinned`, `disconnect`, `remove`, `foreground()/background()/networkChanged()` |
 | `HostEntry` (value) | `name`, `kind` (`.daemon`/`.ssh`), `address`, `status: ConnectionStatus`, `needsYou: String?`, `blockedAgents`, `canInstallHelper`, `pinned`, `lastConnected` | — |
 | `ConnectionStatus` (value) | `.idle/.connecting/.connected(rtt)/.reconnecting(attempt, reason)/.offline/.suspended/.needsAttention(reason)`; `summary` (words, A22), `isLive`, `needsUser` | — |
@@ -157,21 +160,66 @@ disabled`; `-testMirror YES` (core VT mirror for pane text).
 
 ## 9. Gaps
 
-- macOS UI automation needs an interactive authentication approval for the ad-hoc signed test
-  runner; `MacDogfoodUITests` is written but was not run here. The same behaviours are covered
-  below the UI: LocalPTY tests (Ctrl-C, Ctrl-Z, terminate ends foreground and background jobs)
-  and HostKit integration (Ctrl-C and close-kills-process on a daemon pane).
+- macOS UI automation is approved now, but the Mac was locked for the whole 2026-10-19 merge run
+  ("Failed to activate application … Running Background"), so `MacDogfoodUITests`,
+  `ChromeUITests` and `testSidebarAppearsAfterSwitchingFromTabStrip` did not run on macOS. The
+  same behaviours run in-app: `apple/scripts/dogfood.sh Dogfood/core.json` (13/13). Run
+  `xcodebuild … -destination 'platform=macOS' -only-testing:AppUITests/MacDogfoodUITests
+  -only-testing:AppUITests/ChromeUITests -only-testing:AppUITests/WorkspaceUITests test` on an
+  unlocked Mac.
 - Keychain on ad-hoc signed Mac builds: no entitlement, so secrets fall back to owner-only files.
 - QR scanning is untested (no camera in the simulator). Tailscale hints are not implemented.
-- The daemon does not report the foreground program, so key-bar profiles use the title.
-- `RealHostUITests` passes but takes ≈14 min: XCUITest waits for the app to idle between
-  synthesized keys; the app-side timings above are from os_log, not the test's duration.
+- The daemon does not report the foreground program: key-bar profiles use the daemon's agent
+  kind (`PaneMeta.agent`), else the title.
+- XCUITest idle waits are gone: on 2026-10-19 the longest "Wait for app to idle" in the whole iOS
+  suite was 0.9 s (≤ 0.1 s in most tests); `RealHostUITests` went from ≈14 min to 53 s,
+  `DaemonUITests` runs in 34 s, the 16 iOS UI tests in 280 s. Most likely, the repeating animations that kept
+  the app busy were the plain-SSH banner's `ProgressView` (a spinning `UIActivityIndicatorView`,
+  shown while a connection or install was in progress) and the design branch's mock spinners;
+  the design's `Spinner` draws from a `TimelineView` instead of a repeating Core Animation, and
+  the banner is gone. The secure-input badge still loops its gradient (only while a password is
+  read).
 - Plain-SSH panes cannot be suspended on iOS (no serialized state); they reconnect instead.
 - Switching a host from SSH to daemon replaces the window's workspace (same window, same host):
   the plain-SSH shell is closed once the daemon's layout is ready, so its scrollback is not
   carried over.
-- `TerminalInputUITests.testMultilinePasteAsksForConfirmation` fails on the dedicated iOS 27.0
-  simulator used here, also with the window root reduced to a bare `WorkspaceView`, so it is not
-  caused by the host wiring; not yet checked on main or on iOS 27.1. All other iOS UI tests pass.
+- `RealHostUITests` needs a clean app container (uninstall first): with the host already saved
+  as a daemon, "just ssh" opens the daemon directly and there is no Install Helper button. One
+  run of three failed to see the first echo in the daemon pane within 30 s; the next clean run
+  passed (53 s).
 - macOS remote host: the app paired with a local daemon by `-testTicket` and attached (hosts.json,
   session 1); typing into it on macOS was not driven (no UI automation, see above).
+
+## 10. Design screens: real data vs mock (2026-10-19)
+
+`WindowModel` picks the sources: the live adapters in `App/Sources/Model/LiveSources.swift`, or,
+with `-mock` (screenshots, `-screen <name>` fixtures), `App/Sources/Model/MockData.swift`. The
+screens only see the protocols in `ScreenModels.swift`.
+
+Real (HostKit / apple-ffi):
+
+| Screen / element | Source |
+|---|---|
+| Hosts (`Screens/HostsView.swift`) | `LiveHostDirectory` over `HostsModel.entries`: this Mac first (macOS only), daemon + SSH hosts, "Needs you" (blocked agent summary or a connection that needs the user), Active / Pinned / Other, status dots and words from `ConnectionStatus` (RTT when known), tab counts, agent glyph counts from `PaneMeta.agent`, helper install progress (`installs[id].summary`). Menu: Connect, Retry, Install Helper, Pin, Rename, Copy Address, Disconnect, Forget. Import menu: `~/.ssh/config` (Mac), file, paste → `SSHConfigImportSheet` |
+| Add Host (`Screens/PairingSheet.swift`) | SSH: `JustSSHFlow` (password, saved keys, ssh-agent on Mac, generate ed25519 / Secure Enclave, import key file, public key + install / ssh-copy-id commands); host-key TOFU / changed-key alert from `HostKeyPrompts` (also presented inside the sheet). Ticket: paste → `HostsModel.pair`. Scan (iOS): VisionKit `QRScannerView` inside the viewfinder when a camera exists. Deep link `<scheme>://pair/<ticket>` (`WindowRoot.onOpenURL`, success/failure toast) |
+| Plain-SSH upgrade | `HostNotices` over the terminal: "Plain SSH · Install Helper" (`install-helper`), install progress in words, install notes, offline notice |
+| Reconnect | `connectionOverlay` (design card: dimmed/desaturated last frame, "Attempt N · last output Ns ago", Retry Now → `HostConnection.retry()`, Disconnect → back to this device) from the window host's `ConnectionStatus`; `StalePaneOverlay` marks stale panes (`stale-<pane>`); first connect shows `ConnectingView` |
+| Sidebar header / footer, iPhone top bar | host name, `ConnectionDot`, status words |
+| Tab names and context lines | friendly names (renamed on the daemon so every device shows them); context from `PaneMeta.agent` (task), local PTY foreground program, OSC title, `.git/HEAD` (local), cwd |
+| Pane headers, tab strip, sidebar Agents section, palette | agent glyphs and program from `LivePaneStatus` (`DaemonConnection.meta[pane].agent`) |
+| Inbox | `LiveAgentFeed`: agents of every connected daemon from `PaneMeta.agent`; Approve / Deny call `DaemonConnection.decide` with the matching option; Mark Done hides the item locally |
+| Key bar profile | `Workspace.reportedProgram`: backend-reported program, else the local PTY's foreground, else the daemon's agent kind; the title stands in otherwise |
+
+Still mock (the next agent's job; the apple-ffi calls now exist, docs/APPLE-FFI.md "Workspace",
+"Editor", "Multiplayer", "Push"):
+
+| Screen | File | Wire to |
+|---|---|---|
+| Inbox: Reply…, New Agent, unseen counts, history (Finished) | `Screens/InboxView.swift` (`LiveAgentFeed.reply/launch` are no-ops) | `attentionList()` / `attentionSeen`, `WorkspaceEvent.attention`, `prompt(paneId:text:submit:)`, `launchAgentPane(launch:)` |
+| Diff review | `Screens/DiffReviewView.swift` (`MockDiffSource`) | `gitStatus`, `gitDiff`, `listTurns` / `turnDiff`, `sendReview` |
+| Files | `Screens/FilesBrowserView.swift` (`MockFileSource`) | `fsList / fsStat / fsRead / fsWatch`, `uploadFile / downloadFile` |
+| Editor | `Screens/EditorView.swift` (`MockFileSource`) | `openEditor` (serve-web over a forward, never a sign-in; tunnels opt-in only), `editorOpenInSession` |
+| Browser | `Screens/BrowserView.swift` (fixed URL) | `ports()` / `.portsChanged`, `forward(localPort:target:)` |
+| Links & paths | `Screens/LinksSheet.swift` (`MockLinks`) | daemon links extraction (DAEMON.md §5) |
+| Share session, presence avatars | `Screens/InviteSheet.swift`, toolbar `PresenceStack` (`MockPresence`, shown only with `-mock`) | `createInvite`, `participants`, `MultiplayerEvent.presence`, `takeControl` … |
+| Scrollback search counts | `TerminalSearchBar` in `SplitTreeView` (fixed 2/14) | renderer / daemon search |

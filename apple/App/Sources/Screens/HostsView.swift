@@ -108,6 +108,9 @@ struct HostsView: View {
         return List {
             Section {
                 quickConnect
+            }
+            .raisedRows()
+            Section {
             } footer: {
                 if directory.isOffline {
                     Label("No network. Hosts reconnect when it's back.", systemImage: "wifi.slash")
@@ -125,6 +128,7 @@ struct HostsView: View {
         #else
         .listStyle(.inset)
         #endif
+        .terminalGrouped()
         .animation(DS.Motion.snappy, value: hosts)
     }
 
@@ -152,6 +156,7 @@ struct HostsView: View {
                     }
                     .contextMenu { menu(host) }
                     .accessibilityIdentifier("host-\(host.name)")
+                    .raisedRows()
                 }
             } header: {
                 SectionTitle(title, count: hosts.count)

@@ -6,14 +6,26 @@ import PaneLayout
 /// `-screen <name>` (UserDefaults argument domain). Names are listed in docs/DESIGN.md
 /// "Screenshots". Does nothing in normal launches.
 enum DesignFixtures {
-    static func apply(_ screen: String?, workspace: Workspace, model: WindowModel) {
+    static func apply(_ screen: String?, workspace: Workspace, model: WindowModel) async {
         guard let screen else { return }
+        // A host (`-restoreLastTarget YES` with a saved host) has no panes until its layout arrives.
+        for _ in 0..<100 where workspace.focusedPane == nil && workspace.isRemote {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         switch screen {
         case "welcome":
             for tab in workspace.session.tabs { workspace.apply(.closeTab(tab.id)) }
             return
         case "single":
             name(workspace)
+            return
+        case "live-splits":
+            // A real host's tab split in three, names and titles left as they are.
+            if let tab = workspace.session.activeTab, tab.root.panes.count == 1 {
+                workspace.apply(.split(tab.focused, .horizontal))
+                try? await Task.sleep(for: .milliseconds(800))
+                if let second = workspace.focusedPane { workspace.apply(.split(second, .vertical)) }
+            }
             return
         default:
             break

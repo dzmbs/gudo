@@ -62,6 +62,14 @@ nonisolated public struct TerminalTheme: Codable, Hashable, Identifiable, Sendab
     /// The sidebar: the terminal background a step darker (dark themes) or lighter-grey (light),
     public var sidebarBackground: Color { scaled(isLight ? 0.955 : 0.82) }
 
+    /// Rows and cards on the terminal background (grouped lists, forms): a step lighter on dark
+    /// themes, white-ish on light ones.
+    public var raisedBackground: Color { isLight ? background : scaled(1.32) }
+
+    /// The page under grouped lists and forms: the terminal background (dark themes) or a step
+    /// darker (light themes), so raised rows read on it.
+    public var groupedBackground: Color { isLight ? scaled(0.955) : background }
+
     /// The window chrome's light/dark, from the terminal background (Ghostty `window-theme = auto`).
     public nonisolated var colorScheme: ColorScheme { isLight ? .light : .dark }
 

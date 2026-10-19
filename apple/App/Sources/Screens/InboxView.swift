@@ -57,6 +57,7 @@ struct InboxView: View {
         #else
         .listStyle(.inset)
         #endif
+        .terminalGrouped()
         .animation(DS.Motion.snappy, value: items)
     }
 
@@ -93,6 +94,7 @@ struct InboxView: View {
                         }
                     }
                     .accessibilityIdentifier("inbox-\(item.id)")
+                    .raisedRows()
                 }
             } header: {
                 SectionTitle(title, count: items.count)
