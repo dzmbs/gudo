@@ -10,6 +10,8 @@ One multiplatform SwiftUI app (iPhone, iPad, Mac; iOS/iPadOS/macOS 26+) over thr
 | `Packages/UnnamedCore` | The Rust core (UniFFI): `cargo xtask build-xcframework` (docs/APPLE-FFI.md) |
 | `Packages/PaneLayout` | Layout model shared in spirit with the daemon: Session → Tab → split tree, `LayoutOp`, `LayoutStore` |
 | `Packages/DesignSystem` | Tokens, Liquid Glass components, Ghostty overlays (resize, search, palette, exit bar), agent status, the 463 Ghostty themes; spec in `docs/DESIGN.md` |
+| `Packages/DrawingKit` | Drawing without UI: overlay anchor math (Excalidraw scene px ↔ cells ↔ points), PencilKit → Excalidraw `freedraw`, the row tracker that pins daemon anchors in the app's VT |
+| `App/Resources/Excalidraw` | Offline Excalidraw build (`scripts/build-excalidraw.sh`, MIT) |
 | `App/Sources/Screens` | Hosts, pairing, Inbox, share, links, diff, files, browser, editor: views over the protocols in `App/Sources/Model/ScreenModels.swift` (mock data in `MockData.swift`) |
 | `Packages/NotifyKit` | Notification categories and actions, per-kind preferences, local notifications from the attention feed, the action handler, the Notification Service Extension's work (over `PushCrypto`) and the Live Activity attributes; no core, so the extensions stay small |
 | `Packages/PushCrypto` | Opens the daemons' sealed pushes (CryptoKit; shared vectors with `crates/push`) |
@@ -134,6 +136,26 @@ the program).
 Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typing 0.03 ms/frame build;
 sprite screen full redraw 0.61 ms avg / 0.66 ms p99; selection drag (whole viewport dirty every frame)
 0.60 ms avg / 0.67 ms p99; GPU ≤ 0.3 ms avg. All within the ~2 ms budget.
+
+
+The app side of docs/DAEMON.md §7.11, on panes of a daemon (local and plain-SSH panes have none).
+
+| | |
+|---|---|
+| Draw mode | ⌃⌘D (Pane menu ▸ Draw on Pane, command palette), a Pencil touch on the pane (iPad), or a two-finger long press. ⇧⌘D stays Ghostty's Split Down. A transparent overlay anchored to the touched row (the cursor row from the keyboard) holds one Excalidraw scene: shapes, arrows and text from the bundled editor (finger, mouse, trackpad), Pencil ink from PencilKit converted to `freedraw` elements (`DrawingKit.Freedraw`). It scrolls with the output (wheel / trackpad scroll over it scrolls the terminal) and syncs live (`excalidrawPut`, pushes reconciled with Excalidraw's rule, Pencil points streamed with `inkLive` every 16 ms). Toolbar: Pen / Shapes (iPad: Pencil inks while fingers draw shapes), Cancel (deletes a new drawing), Send to Claude/Codex (when the pane or another pane in the tab runs an agent), Done (⌘↩) |
+| Done | The covered cells (`OverlayGeometry.cells(covering:)`) are exported from the editor at device scale (`exportToBlob`, dark theme applied to the pixels because WebKit has no canvas `filter`) and placed with `placePng(replace:)`; the device's PNG shows at once, the `Placed` push follows |
+| Placements | Drawn by the Metal renderer as image quads above the text (Ghostty's `image` pipeline, `TerminalSurface.inlineImages`), pinned to rows with libghostty-vt tracked refs (`Terminal+Pins`), resolved from the daemon's `(at_seq, from_bottom)` anchors by `DrawingKit.RowTracker`; blobs are downloaded once per hash. Tap/click one to reopen its scene in place (trash removes it). Detached placements are not drawn |
+| Canvas pane | Pane menu ▸ New Canvas Split (⌃⇧⌘D) splits with `PaneLaunch.canvas`; canvas leaves (`ArtifactEvent.canvases`) show the full editor on the terminal background, live on every device |
+| Paste / drop | Images and `.excalidraw` files → `importToPane` (placed at the cursor row); on the Mac ⌥-drop of an image onto an agent pane sends it to the agent |
+| Viewers | Overlays open read-only (Excalidraw view mode); draw mode, paste and drop are off (`MultiplayerSession.isViewOnly`) |
+| Peers | Other devices' live Pencil strokes show over the pane in their presence colour and fade when the stroke lands in the scene |
+
+Tests: `(cd Packages/DrawingKit && swift test)` (anchor math, freedraw conversion with real
+`PKStroke`s, anchor ↔ pin through later and in-flight output); TerminalKit `PinTests`,
+`InlineImageTests` (pixels over the right cells, scrolling with the pinned row, +0.04 ms/frame for
+8 placements); `DrawingUITests` (iPad, local daemon: ⌃⌘D, a rectangle through the editor, Done →
+placement visible, still there after relaunch). Debug: `-drawingDemo overlay|done|scroll|canvas`
+"Rect" button the UI test uses.
 
 ## Design review
 

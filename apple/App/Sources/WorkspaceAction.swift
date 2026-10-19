@@ -8,9 +8,11 @@ enum WorkspaceAction: Hashable {
     case newTab, newTabOnHost, splitRight, splitDown, closePane
     case toggleZoom, focus(Direction), resize(Direction)
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
+    case draw, newCanvas
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .closePane]
     static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
+    static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
 
     var title: String {
@@ -28,6 +30,8 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): "Tab \(number)"
         case .lastTab: "Last Tab"
         case .goToTab: "Go to Tab…"
+        case .draw: "Draw on Pane"
+        case .newCanvas: "New Canvas Split"
         }
     }
 
@@ -46,6 +50,9 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): KeyboardShortcut(KeyEquivalent(Character("\(number)")))
         case .lastTab: KeyboardShortcut("9")
         case .goToTab: KeyboardShortcut("p")
+        // ⇧⌘D is Ghostty's Split Down.
+        case .draw: KeyboardShortcut("d", modifiers: [.command, .control])
+        case .newCanvas: KeyboardShortcut("d", modifiers: [.command, .control, .shift])
         }
     }
 
@@ -84,6 +91,8 @@ enum WorkspaceAction: Hashable {
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
         case .goToTab: break
+        case .draw: DrawingCommands.toggleDrawing(in: workspace)
+        case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         }
     }
 }

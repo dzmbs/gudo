@@ -1004,7 +1004,8 @@ Roles: `Place`, `Unplace`, `Import` need the draw role on the pane; `Placements`
 
 **Draw mode on a terminal pane (the primary UX).**
 1. Enter with a Pencil touch on the pane (iPad, `drawingPolicy = .pencilOnly`), a
-   two-finger long press, or a key (key bar button / ⌘⇧D). Fingers keep scrolling and
+   two-finger long press, or a key (key bar button / ⌃⌘D in the app: ⇧⌘D is Ghostty's Split
+   Down). Built: `apple/App/Sources/Drawing`, apple/README.md "Drawing". Fingers keep scrolling and
    selecting while Pencil inks.
 2. The overlay is a transparent layer over the pane, anchored to the row under the first
    touch: `AnchorRequest{pane, at_seq: the VT's applied seq, from_bottom}`. It scrolls with

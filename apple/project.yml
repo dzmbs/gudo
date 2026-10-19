@@ -35,13 +35,21 @@ packages:
     path: Packages/PushCrypto
   NotifyKit:
     path: Packages/NotifyKit
+  DrawingKit:
+    path: Packages/DrawingKit
 targets:
   App:
     type: application
     supportedDestinations: [iOS, macOS]
     sources:
       - App/Sources
-      - App/Resources
+      - path: App/Resources
+        excludes: ["Excalidraw/**"]
+      # The offline Excalidraw bundle (apple/scripts/build-excalidraw.sh), kept as a folder so
+      # its fonts/ tree survives; served to the draw overlay over a custom URL scheme.
+      - path: App/Resources/Excalidraw
+        type: folder
+        buildPhase: resources
       # The static Linux daemons "Install helper" uploads (`cargo xtask build-hostd-linux`).
       - path: build/hostd/unnamed-hostd-x86_64-linux.gz
         buildPhase: resources
@@ -112,6 +120,8 @@ targets:
         product: UnnamedCore
       - package: DesignSystem
         product: DesignSystem
+      - package: DrawingKit
+        product: DrawingKit
       - package: NotifyKit
         product: NotifyKit
       - package: PushCrypto
@@ -198,6 +208,7 @@ schemes:
       targets:
         - package: PaneLayout/PaneLayoutTests
         - package: DesignSystem/DesignSystemTests
+        - package: DrawingKit/DrawingKitTests
         - package: NotifyKit/NotifyKitTests
         - AppUITests
     run:

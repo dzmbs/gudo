@@ -17,6 +17,8 @@ final class GPUContext: Sendable {
     let bgColorPipeline: MTLRenderPipelineState
     let cellBgPipeline: MTLRenderPipelineState
     let cellTextPipeline: MTLRenderPipelineState
+    /// Inline images (Ghostty's `image` pipeline): placements drawn above the text.
+    let imagePipeline: MTLRenderPipelineState
     /// Runtime shader compile time, reported by the demo and the bench.
     let shaderCompileSeconds: Double
 
@@ -40,6 +42,9 @@ final class GPUContext: Sendable {
         cellTextPipeline = try Self.pipeline(
             device, library, vertex: "cell_text_vertex", fragment: "cell_text_fragment", blending: true,
             vertexDescriptor: MetalRenderer.cellTextVertexDescriptor())
+        imagePipeline = try Self.pipeline(
+            device, library, vertex: "image_vertex", fragment: "image_fragment", blending: true,
+            vertexDescriptor: MetalRenderer.imageVertexDescriptor())
     }
 
     private static func pipeline(
@@ -84,6 +89,7 @@ final class MetalRenderer {
     private struct FrameBuffers {
         var bgCells: MTLBuffer?
         var text: MTLBuffer?
+        var images: MTLBuffer?
     }
 
     private var frames = [FrameBuffers](repeating: FrameBuffers(), count: maxFramesInFlight)
@@ -109,6 +115,7 @@ final class MetalRenderer {
     /// `onGPUComplete` receives the GPU execution time in seconds.
     func draw(
         _ frame: FrameContents, uniforms: Uniforms, fonts: FontGrid, to target: MTLTexture, present drawable: CAMetalDrawable?,
+        images: [ImageDraw] = [], imageClip: MTLScissorRect? = nil,
         onGPUComplete: @escaping @Sendable (Double) -> Void
     ) {
         inFlight.wait()
@@ -151,6 +158,19 @@ final class MetalRenderer {
             encoder.setFragmentTexture(grayscaleTexture, index: 0)
             encoder.setFragmentTexture(colorTexture, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: frame.text.count)
+        }
+
+        // 4. Inline images above the text (kitty's "above text" layer), clipped to the grid.
+        if !images.isEmpty, let buffer = upload(images.map(\.vertex), into: &frames[frameIndex].images) {
+            encoder.setRenderPipelineState(gpu.imagePipeline)
+            if let imageClip { encoder.setScissorRect(imageClip) }
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            for (index, image) in images.enumerated() {
+                encoder.setVertexBuffer(buffer, offset: index * MemoryLayout<ImageVertex>.stride, index: 0)
+                encoder.setFragmentTexture(image.texture, index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
+            }
         }
         encoder.endEncoding()
 

@@ -393,6 +393,16 @@ from the real profiles). Notifications. About and Acknowledgements. Mac: toolbar
 window; iOS: one grouped form. Values reach the renderer through `TerminalAppearance`
 (`TerminalAppearance.fromPreferences()`).
 
+### Drawing in the terminal (`App/Sources/Drawing`)
+
+Draw mode lays a transparent Excalidraw over the pane: the terminal stays visible and keeps
+scrolling underneath, the scene is pinned to its row (a 2 pt accent bar marks the anchor row's
+left edge), Excalidraw's tool island at the top follows the terminal's light/dark theme, and one
+quiet glass capsule at the bottom carries Pen / Shapes, Cancel, Send to Claude/Codex and Done
+(prominent, ⌘↩). No dimming, no sheet: you never leave the terminal. Done turns the drawing into
+an image in the output at the same cells, drawn by the renderer like kitty graphics; a tap on it
+reopens it in place. Canvas panes show the same editor full size on the terminal background.
+
 ## What makes it feel premium — checklist
 
 - [x] Terminal frames at the display's rate (ProMotion key set; renderer display link); chrome

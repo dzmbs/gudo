@@ -20,7 +20,7 @@ enum WorkspaceShortcuts {
         }
     }
 
-    private static let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.tabActions
+    private static let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.drawActions + WorkspaceAction.tabActions
 
     private static func handle(_ event: NSEvent) -> Bool {
         guard event.modifierFlags.contains(.command), let window = NSApp.keyWindow, window.attachedSheet == nil,
