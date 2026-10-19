@@ -147,10 +147,12 @@ final class WorkspaceUITests: XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-localEcho", "YES"]
         app.launch()
         XCTAssertTrue(element(app, "hosts-button").waitForExistence(timeout: 20))
-        let onTop = app.buttons["Tabs on Top"].firstMatch
-        if onTop.exists { onTop.click() }
+        element(app, "pane-menu").click()
+        let onTop = app.menuItems["Tabs on Top"].firstMatch
+        if onTop.waitForExistence(timeout: 3) { onTop.click() } else { app.typeKey(XCUIKeyboardKey.escape, modifierFlags: []) }
         XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 10))
-        app.buttons["Tabs in Sidebar"].firstMatch.click()
+        element(app, "pane-menu").click()
+        app.menuItems["Tabs in Sidebar"].firstMatch.click()
         let inbox = element(app, "sidebar-inbox")
         XCTAssertTrue(inbox.waitForExistence(timeout: 5), "the sidebar shows after switching")
         XCTAssertTrue(inbox.isHittable, "the sidebar is on screen, not collapsed")

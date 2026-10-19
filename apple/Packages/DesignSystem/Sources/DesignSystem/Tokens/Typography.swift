@@ -13,6 +13,14 @@ public extension DS {
         public static let rowTitleEmphasis = SwiftUI.Font.body.weight(.medium)
         /// List row secondary line.
         public static let rowSubtitle = SwiftUI.Font.subheadline
+        /// on touch (15 / 13). Weight never changes with selection; the fill shows it.
+        #if os(macOS)
+        public static let sidebarTitle = SwiftUI.Font.body
+        public static let sidebarSubtitle = SwiftUI.Font.caption
+        #else
+        public static let sidebarTitle = SwiftUI.Font.subheadline
+        public static let sidebarSubtitle = SwiftUI.Font.footnote
+        #endif
         /// Section headers in sidebars and lists (sentence case, never uppercase).
         public static let section = SwiftUI.Font.subheadline.weight(.semibold)
         /// Metadata: ages, counts, shortcuts. Monospaced digits so columns do not jitter.

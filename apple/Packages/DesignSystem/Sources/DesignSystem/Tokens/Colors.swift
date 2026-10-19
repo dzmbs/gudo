@@ -65,6 +65,6 @@ public extension DS {
         /// tab hover 5 % + 13 % backdrop).
         public static let hoverFill = Color.primary.opacity(0.06)
         public static let pressedFill = Color.primary.opacity(0.10)
-        public static let selectedFill = Color.primary.opacity(0.09)
+        public static let selectedFill = Color.primary.opacity(0.10)
     }
 }

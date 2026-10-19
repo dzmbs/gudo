@@ -44,14 +44,18 @@ final class ChromeUITests: XCTestCase {
         app.launch()
         let ids = ["hosts-button", "pane-menu", "open-palette"]
         XCTAssertTrue(element(app, "hosts-button").waitForExistence(timeout: 20))
-        let inSidebar = app.buttons["Tabs in Sidebar"].firstMatch
-        if inSidebar.exists { press(inSidebar) }
-        XCTAssertTrue(app.buttons["Tabs on Top"].firstMatch.waitForExistence(timeout: 5))
+        func placement(_ title: String) -> XCUIElement {
+            press(element(app, "pane-menu"))
+            return app.buttons[title].firstMatch
+        }
+        // Start from vertical tabs: the strip shows only with tabs on top.
+        if element(app, "tab-bar").exists { press(placement("Tabs in Sidebar")) }
+        XCTAssertTrue(element(app, "tab-bar").waitForNonExistence(timeout: 5))
         sleep(1)
         let sidebarFrames = ids.map { element(app, $0).frame }
         attach(app, "toolbar-sidebar")
 
-        let toggle = app.buttons["Tabs on Top"].firstMatch
+        let toggle = placement("Tabs on Top")
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         press(toggle)
         XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 5))
@@ -68,7 +72,7 @@ final class ChromeUITests: XCTestCase {
         XCTAssertEqual(barFrames.map(\.minX), barFrames.map(\.minX).sorted())
         XCTAssertEqual(sidebarFrames.map(\.minX), sidebarFrames.map(\.minX).sorted())
         // Leave the default placement for the next test (the choice is saved).
-        press(app.buttons["Tabs in Sidebar"].firstMatch)
+        press(placement("Tabs in Sidebar"))
     }
 
     #if os(iOS)
