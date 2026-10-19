@@ -270,8 +270,8 @@ bitset! {
         DAEMON_INFO = 5;
         /// Shows native password prompts: wants `ServerCtl::Askpass` pushes and answers them
         /// with `ClientCtl::Askpass` (see `proto::askpass`). Without it the daemon's askpass
-        /// helper asks on the terminal.
-        ASKPASS = 6;
+        /// helper asks on the terminal. (Bit 6 is the usage meters' `AGENT_USAGE`.)
+        ASKPASS = 7;
     }
 }
 

@@ -49,7 +49,7 @@ fn askpass_messages_match_their_frozen_bytes() {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
-    assert_eq!(Caps::ASKPASS.0, 1 << 6);
+    assert_eq!(Caps::ASKPASS.0, 1 << 7);
 
     let req = |req| ClientCtl::Askpass { req_id: 5, req };
     c.check(
