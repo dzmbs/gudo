@@ -4,7 +4,7 @@
 #   apple/scripts/w3-daemon.sh start <dir>   # creates the fixtures if <dir> has none
 #   apple/scripts/w3-daemon.sh stop  <dir>
 #
-# PORT sets the daemon's UDP port (default 47013).
+# PORT sets the daemon's UDP port (default 47613).
 set -euo pipefail
 
 apple="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,6 +13,6 @@ dir="$2"
 if [[ "$action" == start && ! -d "$dir/work/proj" ]]; then
   "$apple/scripts/w3-fixtures.sh" "$dir" >/dev/null
 fi
-export PORT="${PORT:-47013}"
+export PORT="${PORT:-47613}"
 HOME="$dir/work" PATH="$dir/bin:$PATH" SHELL=/bin/zsh SHELL_ARGS= \
   "$apple/scripts/local-daemon.sh" "$action" "$dir"

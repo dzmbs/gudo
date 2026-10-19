@@ -16,9 +16,9 @@ screens=${*:-"inbox files diff editor browser links launchAgent"}
 mkdir -p "$out"
 state="$(mktemp -d "${TMPDIR:-/tmp}/un-w3shots.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
-export PORT="${PORT:-47014}"
+export PORT="${PORT:-47614}"
 bin="${UN_HOSTD_BIN:-$apple/../target/debug/unnamed-hostd}"
-daemon() { PORT="${PORT:-47014}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
+daemon() { PORT="${PORT:-47614}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
 trap 'daemon stop; pkill -f "http.server 18766" 2>/dev/null || true; rm -rf "$state"' EXIT
 

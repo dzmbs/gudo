@@ -13,9 +13,9 @@ sim="${1:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 13-inch' | 
 shift || true
 state="$(mktemp -d "${TMPDIR:-/tmp}/un-w3.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
-export PORT="${PORT:-47013}"
+export PORT="${PORT:-47613}"
 
-daemon() { PORT="${PORT:-47013}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
+daemon() { PORT="${PORT:-47613}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
 trap 'daemon stop; pkill -f "http.server 18765" 2>/dev/null || true; rm -rf "$state"' EXIT
 

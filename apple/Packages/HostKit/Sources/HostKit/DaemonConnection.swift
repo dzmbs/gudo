@@ -217,7 +217,7 @@ public final class DaemonConnection: HostConnection {
         case .refused(let reason):
             status = .needsAttention(reason: "Refused: \(reason)")
             Self.log.error("refused host=\(self.hostId, privacy: .public): \(reason, privacy: .public)")
-        case .attached(let session):
+        case .attached(let session, _, _):
             attachSession = session
             onAttached?(session)
         case .layout(let layout):
