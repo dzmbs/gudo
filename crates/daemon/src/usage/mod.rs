@@ -153,6 +153,10 @@ struct State {
     pushed: Option<AgentUsageReport>,
     pushed_at: Option<Instant>,
     ticking: bool,
+    /// Commands or endpoints are being asked in the background.
+    asking: bool,
+    /// Where refreshes send what is due to be asked.
+    asker: Option<mpsc::UnboundedSender<Vec<(Tier, AgentKind)>>>,
     claude_line: Option<AgentUsage>,
     /// The last answer of each command or endpoint, and when it came.
     asked: HashMap<(Tier, AgentKind), (Instant, Result<AgentUsage, String>)>,
@@ -200,6 +204,9 @@ impl Usage {
                 push: caps.contains(Caps::AGENT_USAGE),
                 api: opts.api_fallback,
             });
+            if st.asker.is_none() {
+                st.asker = Some(self.spawn_asker());
+            }
             (
                 !std::mem::replace(&mut st.ticking, true),
                 opts.api_fallback && !had_api,
@@ -284,6 +291,10 @@ impl Usage {
 
     /// Re-reads the sources when the report is older than the refresh interval (or always,
     /// with `due`), then pushes a changed report.
+    ///
+    /// The files are read at once; the tools' commands and the endpoints (seconds) answer from
+    /// their last result, and when that is due they run in the background, which refreshes
+    /// and pushes again when they are done.
     async fn refresh(&self, due: bool) {
         let _one = self.refreshing.lock().await;
         let (api_wanted, claude_line) = {
@@ -302,6 +313,7 @@ impl Usage {
             .unwrap_or_default();
         let now = crate::identity::now_millis();
         let mut agents = Vec::new();
+        let mut asks = Vec::new();
         for agent in [AgentKind::Claude, AgentKind::Codex] {
             let (installed, local_usage) = match agent {
                 AgentKind::Claude => (local.claude, claude_line.clone()),
@@ -315,27 +327,35 @@ impl Usage {
                     .is_some_and(|t| now.saturating_sub(t.0) < LOCAL_FRESH.as_millis() as u64)
             });
             let mut errors = Vec::new();
+            let mut pending = false;
             let mut chosen = None;
             if fresh {
                 chosen = local_usage.clone();
             }
-            if chosen.is_none() && self.cfg.cli && installed {
-                match self.ask(Tier::Cli, agent).await {
-                    Ok(u) => chosen = Some(u),
-                    Err(e) => errors.push(e),
+            let tiers = [
+                (Tier::Cli, self.cfg.cli && installed),
+                (Tier::Api, api_wanted),
+            ];
+            for (tier, wanted) in tiers {
+                if chosen.is_some() || !wanted {
+                    continue;
                 }
-            }
-            if chosen.is_none() && api_wanted {
-                match self.ask(Tier::Api, agent).await {
-                    Ok(u) => chosen = Some(u),
-                    Err(e) => errors.push(e),
+                let (last, due) = self.cached(tier, agent);
+                if due {
+                    asks.push((tier, agent));
+                    pending |= last.is_none();
+                }
+                match last {
+                    Some(Ok(u)) => chosen = Some(u),
+                    Some(Err(e)) => errors.push(e),
+                    None => {}
                 }
             }
             let mut usage = match (chosen, local_usage) {
                 (Some(c), Some(l)) if is_newer(&l, &c) => l,
                 (Some(c), _) => c,
                 (None, Some(l)) => l,
-                (None, None) => unknown(agent, &errors, api_wanted),
+                (None, None) => unknown(agent, &errors, api_wanted, pending),
             };
             if usage.plan.is_none() {
                 // A plan named by an earlier answer still holds.
@@ -354,19 +374,48 @@ impl Usage {
             st.refreshed = Some(Instant::now());
         }
         self.publish(report);
+        let mut st = lock(&self.state);
+        if !asks.is_empty()
+            && !st.asking
+            && let Some(tx) = &st.asker
+            && tx.send(asks).is_ok()
+        {
+            st.asking = true;
+        }
     }
 
-    /// The tool's command or the endpoint for `agent`, cached for its interval.
-    async fn ask(&self, tier: Tier, agent: AgentKind) -> Result<AgentUsage, String> {
+    /// The background task that runs the commands and calls the endpoints a refresh found
+    /// due, one batch at a time, then refreshes with their answers.
+    fn spawn_asker(self: &Arc<Self>) -> mpsc::UnboundedSender<Vec<(Tier, AgentKind)>> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<(Tier, AgentKind)>>();
+        let hub = Arc::downgrade(self);
+        tokio::spawn(async move {
+            while let Some(batch) = rx.recv().await {
+                let Some(hub) = hub.upgrade() else { return };
+                for (tier, agent) in batch {
+                    hub.ask(tier, agent).await;
+                }
+                lock(&hub.state).asking = false;
+                hub.refresh(true).await;
+            }
+        });
+        tx
+    }
+
+    /// The last answer of a command or endpoint, and whether it is due to be asked again.
+    fn cached(&self, tier: Tier, agent: AgentKind) -> (Option<Result<AgentUsage, String>>, bool) {
         let every = match tier {
             Tier::Cli => self.cfg.cli_refresh,
             Tier::Api => self.cfg.api_refresh,
         };
-        if let Some((at, result)) = lock(&self.state).asked.get(&(tier, agent))
-            && at.elapsed() < every
-        {
-            return result.clone();
+        match lock(&self.state).asked.get(&(tier, agent)) {
+            Some((at, result)) => (Some(result.clone()), at.elapsed() >= every),
+            None => (None, true),
         }
+    }
+
+    /// Runs the tool's command or calls the endpoint for `agent` and keeps the answer.
+    async fn ask(&self, tier: Tier, agent: AgentKind) {
         let result = match tier {
             Tier::Cli => match self.paths.cli_env(agent) {
                 None => Err(format!("{} is not on the PATH", Paths::program(agent))),
@@ -387,8 +436,7 @@ impl Usage {
         }
         lock(&self.state)
             .asked
-            .insert((tier, agent), (Instant::now(), result.clone()));
-        result
+            .insert((tier, agent), (Instant::now(), result));
     }
 
     /// Sends `report` to the watchers that take pushes, when it differs from the last one
@@ -428,7 +476,17 @@ impl Local {
 }
 
 /// An agent with nothing known, and why.
-fn unknown(agent: AgentKind, errors: &[String], api_wanted: bool) -> AgentUsage {
+fn unknown(agent: AgentKind, errors: &[String], api_wanted: bool, pending: bool) -> AgentUsage {
+    if pending {
+        return AgentUsage {
+            agent,
+            plan: None,
+            windows: Vec::new(),
+            source: UsageSource::Unknown,
+            as_of: None,
+            note: Some("Checking…".into()),
+        };
+    }
     let mut note = match agent {
         AgentKind::Claude => "Claude Code reports its limits for Pro and Max plans.".to_owned(),
         AgentKind::Codex => "Codex reports its limits when signed in with ChatGPT.".to_owned(),
@@ -585,13 +643,14 @@ mod tests {
 
     #[test]
     fn unknown_says_why() {
-        let u = unknown(AgentKind::Codex, &[], false);
+        let u = unknown(AgentKind::Codex, &[], false, false);
         assert_eq!(u.source, UsageSource::Unknown);
         assert!(u.note.unwrap().contains("Settings › Agents"));
         let u = unknown(
             AgentKind::Claude,
             &["the sign-in was refused (401)".into()],
             true,
+            false,
         );
         let note = u.note.unwrap();
         assert!(note.contains("The sign-in was refused (401)."), "{note}");

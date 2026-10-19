@@ -156,7 +156,22 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
     assert_eq!(codex.windows[0].name, "5h");
     assert_eq!(codex.windows[0].used_permille, 620);
     assert_eq!(codex.windows[1].name, "weekly");
-    // Claude has said nothing yet and `claude` is not on the PATH: listed, with the reason.
+    // Claude has said nothing yet and `claude` is not on the PATH: listed, with the reason
+    // once the daemon has looked.
+    assert_eq!(
+        agent(&report, AgentKind::Claude).note.as_deref(),
+        Some("Checking…")
+    );
+    let report = next_usage(&mut events, |r| {
+        r.agents
+            .iter()
+            .any(|a| a.note.as_deref().is_some_and(|n| n.contains("PATH")))
+    })
+    .await;
+    assert_eq!(
+        agent(&report, AgentKind::Codex).windows[0].used_permille,
+        620
+    );
     let claude = agent(&report, AgentKind::Claude);
     assert_eq!(claude.source, UsageSource::Unknown);
     assert!(claude.windows.is_empty());
@@ -248,8 +263,19 @@ async fn the_tools_commands_answer_when_there_is_no_local_data() {
     let daemon = start_with(state.path(), config(&host, true)).await;
     let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     c.attach_and_follow().await;
+    let (listener, mut events) = WorkspaceEventQueue::channel();
+    c.client.set_workspace_listener(listener);
 
-    let report = c.client.usage_watch(false).await.unwrap();
+    // The answer comes at once (the commands take seconds); their results are pushed.
+    let first = c.client.usage_watch(false).await.unwrap();
+    assert_eq!(
+        agent(&first, AgentKind::Claude).note.as_deref(),
+        Some("Checking…")
+    );
+    let report = next_usage(&mut events, |r| {
+        r.agents.iter().all(|a| a.source == UsageSource::Cli)
+    })
+    .await;
     let claude = agent(&report, AgentKind::Claude);
     assert_eq!(claude.source, UsageSource::Cli);
     assert_eq!(claude.plan.as_deref(), Some("max"));
@@ -319,6 +345,8 @@ async fn the_endpoints_are_asked_only_after_opting_in() {
     .await;
     let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     c.attach_and_follow().await;
+    let (listener, mut events) = WorkspaceEventQueue::channel();
+    c.client.set_workspace_listener(listener);
 
     // Off by default: nothing asked.
     let report = c.client.usage_watch(false).await.unwrap();
@@ -334,7 +362,11 @@ async fn the_endpoints_are_asked_only_after_opting_in() {
     assert!(codex_seen.lock().unwrap().is_empty());
 
     // Opted in.
-    let report = c.client.usage_watch(true).await.unwrap();
+    c.client.usage_watch(true).await.unwrap();
+    let report = next_usage(&mut events, |r| {
+        r.agents.iter().all(|a| a.source == UsageSource::Api)
+    })
+    .await;
     let claude = agent(&report, AgentKind::Claude);
     assert_eq!(claude.source, UsageSource::Api);
     assert_eq!(claude.plan.as_deref(), Some("pro"));

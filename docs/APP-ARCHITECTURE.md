@@ -442,3 +442,17 @@ about 2.5–3 s). Daemon side: `cargo test -p daemon --test it upgrade`.
 Gaps: no release signing key (hash plus a run of the new build is the check); the SSH path has only
 been exercised by the existing bootstrap tests, not by an update of a paired host; macOS hosts get
 no offer (the app bundles Linux daemons only).
+
+
+`DaemonWorkspace.usage` holds a host's `AgentUsageReport` while something shows it:
+`beginWatchingUsage()` / `endWatchingUsage()` count viewers (the first sends `usageWatch`, the
+last `usageUnwatch`), only for daemons whose `DaemonInfo.agentUsage` is true; pushes
+(`WorkspaceEvent.agentUsage`) update it; a reconnect re-watches. `UsageFeed` (`LiveUsageFeed`,
+`FakeUsageFeed` for `-mock` / `-fakeUsage YES`) is what views read. HostKit's `UsageMeter` makes
+the compact line ("Claude · 62% of 5h · resets 14:20": the limited, else fullest, window that has
+not reset) and its tone (quiet ≤ 80 %, amber above, red limited); `UsageDetail` the popover rows.
+Views (`UsageViews.swift`): one line per agent under each daemon host's name in the sidebar, the
+detail popover (also from the host menu's Agent Usage), and a quiet strip at the bottom of the
+Inbox. Unknown means absent; the reason is in the popover. Settings › Agents › Check Usage with
+Your Claude and Codex Sign-In (`AgentUsageSettings.apiFallbackKey`, off) re-watches every host.
+Tests: `AgentUsageTests` (HostKit), `UsageFeedTests` (AppTests), `UsageUITests`.
