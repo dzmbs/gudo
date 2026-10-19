@@ -25,6 +25,25 @@
   body[data-mode="overlay"] .HintViewer,
   body .excalidraw .help-icon,
   body .excalidraw .welcome-screen-decor { display: none !important; }
+  /* Overlay: none of Excalidraw's own chrome. Its tool island sat over the first terminal rows;
+     the host's glass toolbar at the bottom of the pane carries the tools (apple/README "Drawing"). */
+  body[data-mode="overlay"] .layer-ui__wrapper,
+  body[data-mode="overlay"] .App-menu_top,
+  body[data-mode="overlay"] .App-toolbar,
+  body[data-mode="overlay"] .App-toolbar-container,
+  body[data-mode="overlay"] .App-mobile-menu,
+  body[data-mode="overlay"] .App-bottom-bar,
+  body[data-mode="overlay"] .mobile-misc-tools-container,
+  body[data-mode="overlay"] .layer-ui__wrapper__footer,
+  body[data-mode="overlay"] .Toast,
+  body[data-mode="overlay"] .scroll-back-to-content { display: none !important; }
+  /* Its context menu, when it shows, in the app's quiet monochrome. */
+  body[data-mode="overlay"] .context-menu {
+    font: 13px -apple-system, system-ui, sans-serif !important;
+    border-radius: 12px !important;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28) !important;
+  }
+  body[data-mode="overlay"] .context-menu-item:hover { background: rgba(127, 127, 127, 0.16) !important; }
 </style>
 <script src="boot.js"></script>
 </head>

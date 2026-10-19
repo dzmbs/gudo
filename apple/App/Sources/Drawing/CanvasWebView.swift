@@ -79,6 +79,18 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler {
         return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
     }
 
+    /// Runs an async function body in the page (`await` allowed) and returns its result.
+    @discardableResult
+    func runAsync(_ body: String) async -> Any? {
+        await waitUntilReady()
+        do {
+            return try await webView.callAsyncJavaScript(body, arguments: [:], in: nil, contentWorld: .page)
+        } catch {
+            Self.log.error("canvas script: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     func waitUntilReady() async {
         guard !isReady else { return }
         await withCheckedContinuation { readyWaiters.append($0) }
