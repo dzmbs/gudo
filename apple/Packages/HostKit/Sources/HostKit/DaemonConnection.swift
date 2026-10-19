@@ -47,6 +47,10 @@ public final class DaemonConnection: HostConnection {
     public private(set) var timings = Timings()
     /// Called when a layout or connection change should be persisted (the attached session).
     @ObservationIgnored public var onAttached: ((UInt64) -> Void)?
+    /// Who is here, roles, control leases, invites and the audit log (docs/DAEMON.md §6).
+    public let multiplayer = MultiplayerSession()
+    /// The daemon's workspace pushes (attention feed, ports, files), fanned out to observers.
+    @ObservationIgnored public let workspaceEvents = WorkspaceEventHub()
 
     public struct Timings: Sendable, Equatable {
         public var dialStarted: ContinuousClock.Instant?
@@ -61,6 +65,7 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored private let ticket: String
     @ObservationIgnored private let dialer: DaemonDialer
     @ObservationIgnored private var client: (any DaemonClientAPI)?
+    @ObservationIgnored var pushClient: (any PushClientAPI)?
     @ObservationIgnored let router: PaneRouter
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
     @ObservationIgnored private var pump: Task<Void, Never>?
@@ -95,6 +100,13 @@ public final class DaemonConnection: HostConnection {
             }
         }
         observeView()
+        let router = router
+        let session = multiplayer
+        multiplayer.onInputGate = { [weak session] gate in
+            router.setGate(gate) { [weak session] pane in
+                Task { @MainActor [weak session] in session?.noteBlockedInput(pane) }
+            }
+        }
     }
 
     /// Dials the daemon. Errors are a bad ticket or device key (nothing to retry).
@@ -113,6 +125,9 @@ public final class DaemonConnection: HostConnection {
         Self.log.info("dialing host=\(self.hostId, privacy: .public)")
         let client = try dialer(ticket, listener)
         self.client = client
+        if let mp = client as? any MultiplayerClientAPI { multiplayer.attach(mp) }
+        if let source = client as? any WorkspaceEventSource { workspaceEvents.attach(source) }
+        pushClient = client as? any PushClientAPI
         pump = Task { [weak self] in
             for await event in stream {
                 self?.handle(event)
@@ -159,6 +174,7 @@ public final class DaemonConnection: HostConnection {
     }
 
     public func close() {
+        multiplayer.detach()
         pump?.cancel()
         events?.finish()
         client = nil

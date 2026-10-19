@@ -8,6 +8,11 @@ import AppKit
 struct TerminalApp: App {
     @State private var app = AppModel.shared
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #else
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
 
     init() {
         #if os(macOS)
@@ -30,6 +35,7 @@ struct TerminalApp: App {
             // 04-mobile-ux C3 "background and foreground contract": suspend with resume state
             // kept, probe and resume at once on return (R1, R5, R10). macOS keeps connections
             // up in the background.
+            AppNotifications.shared.appIsActive = phase == .active
             switch phase {
             case .active: app.hosts.foreground()
             case .background:
@@ -90,6 +96,16 @@ struct WindowRoot: View {
         }
         .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
         .onOpenURL { url in
+            // An invite opens the Join sheet: joining is always the user's tap.
+            if AppLinks.isInvite(url) {
+                model.joinInvite = url.absoluteString
+                model.sheet = .join
+                return
+            }
+            if let (host, pane) = AppLinks.openTarget(url) {
+                AppNotifications.openPane(hostId: host, pane: pane)
+                return
+            }
             Task {
                 if let target = await app.handle(url: url) {
                     show(target)

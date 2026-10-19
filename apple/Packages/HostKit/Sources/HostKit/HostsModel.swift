@@ -58,6 +58,7 @@ public final class HostsModel {
     @ObservationIgnored private var deviceKey: Data?
     @ObservationIgnored private lazy var knownHosts = KnownHosts.load(from: secrets)
     @ObservationIgnored var dialer: DaemonDialer?
+    @ObservationIgnored var joinDialer: DaemonDialer?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
     public init(secrets: any SecretStore, repository: HostRepository, configuration: Configuration = .init()) {
@@ -129,11 +130,13 @@ public final class HostsModel {
     }
 
     private func openDaemon(_ record: HostRecord) throws -> DaemonConnection {
-        guard let ticket = try secrets.string(for: record.ticketKey) else {
-            throw HostError.missingSecret("pairing ticket for \(record.name)")
+        let key = record.isGuest ? record.inviteKey : record.ticketKey
+        guard let ticket = try secrets.string(for: key) else {
+            throw HostError.missingSecret("\(record.isGuest ? "invite" : "pairing ticket") for \(record.name)")
         }
         let connection = DaemonConnection(
-            hostId: record.id, ticket: ticket, session: record.sessionId, dialer: try daemonDialer())
+            hostId: record.id, ticket: ticket, session: record.sessionId,
+            dialer: record.isGuest ? try guestDialer() : try daemonDialer())
         connection.onAttached = { [weak self] session in self?.update(record.id) { $0.sessionId = session } }
         connections[record.id] = connection
         try connection.connect()
@@ -146,6 +149,15 @@ public final class HostsModel {
         deviceKey = key
         let config = ClientConfig(secretKey: key, relay: configuration.relay, mirrorVt: configuration.mirrorVt)
         return { ticket, listener in try DaemonClient.connect(ticket: ticket, config: config, listener: listener) }
+    }
+
+    /// Dials with an invite (`DaemonClient.join`): the device key proves who redeemed it.
+    func guestDialer() throws -> DaemonDialer {
+        if let joinDialer { return joinDialer }
+        let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
+        deviceKey = key
+        let config = ClientConfig(secretKey: key, relay: configuration.relay, mirrorVt: configuration.mirrorVt)
+        return { invite, listener in try DaemonClient.join(invite: invite, config: config, listener: listener) }
     }
 
     private func openSSH(_ record: HostRecord, password: String?) throws -> SshConnection {
@@ -193,6 +205,7 @@ public final class HostsModel {
         if let record = record(id) {
             try? secrets.remove(record.ticketKey)
             try? secrets.remove(record.passwordKey)
+            try? secrets.remove(record.inviteKey)
         }
         records.removeAll { $0.id == id }
         persist()
@@ -217,6 +230,7 @@ public final class HostsModel {
         var record = existing ?? HostRecord(name: name ?? ticket.defaultName, kind: .daemon, daemonId: ticket.info.daemonId)
         record.kind = .daemon
         record.daemonId = ticket.info.daemonId
+        record.guest = nil
         if let name { record.name = name }
         try secrets.set(ticket.text, for: record.ticketKey)
         let previous = connections[record.id]
@@ -234,6 +248,57 @@ public final class HostsModel {
         touch(record.id)
         Self.log.info("paired host=\(record.id, privacy: .public) daemon=\(ticket.info.daemonId.prefix(12), privacy: .public)")
         return record.id
+    }
+
+    // MARK: Joining (multiplayer guest)
+
+    /// Joins someone's host with an invite link or QR text (`<scheme>://join/…`), as the roles
+    /// it grants. Saved as a guest host (re-dialled with the same invite; the daemon binds it to
+    /// this device on first use). Returns the host id once attached, or throws the refusal
+    /// (expired, revoked, used up).
+    @discardableResult
+    public func join(invite: String, name: String? = nil) async throws -> String {
+        let text = invite.trimmingCharacters(in: .whitespacesAndNewlines)
+        let info = try inspectInvite(invite: text)
+        let existing = records.first { $0.daemonId == info.daemonId && $0.isGuest }
+        var record = existing ?? HostRecord(name: name ?? Self.guestHostName(info), kind: .daemon, daemonId: info.daemonId)
+        record.guest = true
+        record.inviter = info.inviter.isEmpty ? nil : info.inviter
+        if let name { record.name = name }
+        try secrets.set(text, for: record.inviteKey)
+        let previous = connections[record.id]
+        connections[record.id] = nil
+        upsert(record)
+        let connection: DaemonConnection
+        do {
+            connection = try openDaemon(record)
+        } catch {
+            if let previous { connections[record.id] = previous }
+            throw error
+        }
+        do {
+            try await waitUntilReady(connection)
+        } catch {
+            // A refused first join leaves nothing behind.
+            if existing == nil {
+                connections[record.id] = nil
+                connection.close()
+                try? secrets.remove(record.inviteKey)
+                records.removeAll { $0.id == record.id }
+                persist()
+            }
+            throw error
+        }
+        previous?.close()
+        touch(record.id)
+        Self.log.info("joined host=\(record.id, privacy: .public) daemon=\(info.daemonId.prefix(12), privacy: .public) as \(roleWords(info.roles), privacy: .public)")
+        return record.id
+    }
+
+    /// "Alex's host" for an invite from Alex.
+    nonisolated static func guestHostName(_ info: InviteInfo) -> String {
+        let inviter = info.inviter.trimmingCharacters(in: .whitespaces)
+        return inviter.isEmpty ? "Shared host" : "\(inviter)’s host"
     }
 
     /// Waits for the first layout (paired, attached), or a refusal.
