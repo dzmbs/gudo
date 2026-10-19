@@ -238,6 +238,12 @@ tested against fakes.
 | Scrollback search | `WindowModel.searchTotal` | the total over the whole scrollback from the daemon's `search` (debounced 180 ms); stepping through matches needs the renderer's highlights (not wired) |
 | Acknowledgements | `SettingsView` | VS Code licence, VS Code Server licence, Microsoft privacy statement (`vscodeLicenseUrl()` …) |
 
+the daemon (DAEMON.md §5.8), so that row says "Waiting for your next prompt" without the agent's
+last message; scrollback search shows the daemon's total but cannot step through matches;
+uploads take files from the Files picker and drops (no Photos picker); "Open in Safari" for a
+forwarded localhost page works only while the app keeps the forward (iOS suspends it in the
+background); local (non-daemon) windows have no Files/Diff/Editor (they say so).
+
 
 
 `DaemonConnection.multiplayer: MultiplayerSession` (HostKit, `@MainActor @Observable`) follows

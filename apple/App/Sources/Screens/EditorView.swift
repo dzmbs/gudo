@@ -41,6 +41,12 @@ struct EditorScreen: View {
             .animation(DS.Motion.panel, value: isWorkbenchVisible)
         }
         .background(theme.background.ignoresSafeArea())
+        #if os(iOS)
+        .onAppear {
+            // The pane's key bar stays with the pane; the editor brings its own keyboard.
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
+        #endif
         .task {
             if case .ready = source.phase {} else if source.phase.url == nil { await source.open() }
         }

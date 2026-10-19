@@ -18,9 +18,7 @@ state="$(mktemp -d "${TMPDIR:-/tmp}/un-w3shots.XXXXXX")"
 "$apple/scripts/w3-fixtures.sh" "$state" >/dev/null
 export PORT="${PORT:-47014}"
 bin="${UN_HOSTD_BIN:-$apple/../target/debug/unnamed-hostd}"
-daemon() {
-  HOME="$state/work" PATH="$state/bin:$PATH" SHELL=/bin/zsh "$apple/scripts/local-daemon.sh" "$@" "$state"
-}
+daemon() { PORT="${PORT:-47014}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
 trap 'daemon stop; pkill -f "http.server 18766" 2>/dev/null || true; rm -rf "$state"' EXIT
 

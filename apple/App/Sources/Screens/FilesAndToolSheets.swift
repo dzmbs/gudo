@@ -1,5 +1,8 @@
 import DesignSystem
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// The sheets of the developer-workflow screens (New Agent, Links, Diff, Files, Browser, and the
 /// editor when a fixture asks for it as a sheet), with what each one opens wired to the window.
@@ -10,6 +13,22 @@ struct ToolSheet: View {
     @Environment(\.terminalTheme) private var theme
 
     var body: some View {
+        content
+            #if os(iOS)
+            // The terminal's key bar and line editor belong to the pane: put them away while a
+            // sheet is up, and give the pane the keyboard back after.
+            .onAppear {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+            .onDisappear {
+                guard !model.isEditorShown, model.sheet == nil, let workspace = model.workspace,
+                      let id = workspace.focusedPane else { return }
+                _ = workspace.panes[id]?.view.becomeFirstResponder()
+            }
+            #endif
+    }
+
+    @ViewBuilder private var content: some View {
         switch route {
         case .launchAgent:
             LaunchAgentSheet(feed: model.agents)

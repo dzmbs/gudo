@@ -133,6 +133,12 @@ payloads `Data`. Pushes go to a separate `WorkspaceListener` (`setWorkspaceListe
 `proto::workspace` one to one (`GitStatus`, `GitDiff`, `FileStat`, `DirListing`, `WriteTarget`,
 `WorktreeInfo`, `AttentionItem`, `PortInfo`, …), in `crates/apple-ffi/src/ws_types.rs`.
 
+The setter replaces the previous listener, so the app sets exactly one per connection
+(`HostKit.WorkspaceEventHub`, `DaemonConnection.workspaceEvents`) and every feature observes
+that. The generated `errorDescription` of `WorkspaceError` is Swift's reflection of the case;
+`DaemonWorkspaceAPI` (the slice of `DaemonClient` the screens use) and `DaemonWorkspace` (ports,
+attention, watches, pane RPC pairing; docs/APP-ARCHITECTURE.md §10).
+
 | | |
 |---|---|
 | `forward(localPort:target:) throws(ClientError) -> UInt16` | `127.0.0.1:localPort` (0 picks) → `ForwardTarget.tcp(port:)` or `.unix(path:)` on the host; one QUIC stream per connection, survives reconnects; returns the bound port |

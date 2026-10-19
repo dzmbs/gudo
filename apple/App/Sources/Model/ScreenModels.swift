@@ -271,6 +271,12 @@ protocol FileSource: AnyObject {
     func download(_ path: String, progress: @escaping @MainActor (Double) -> Void) async throws -> URL
     /// Calls `onChange` when the directory's entries change (not recursive).
     func watch(_ directory: String, onChange: @escaping @MainActor () -> Void) async -> FileWatch?
+    /// A path as the user reads it: the host's home as `~`.
+    func display(_ path: String) -> String
+}
+
+extension FileSource {
+    func display(_ path: String) -> String { path }
 }
 
 // MARK: - Diffs

@@ -44,6 +44,13 @@ struct InboxView: View {
                     .accessibilityIdentifier("inbox-new-agent")
             }
         }
+        #if os(iOS)
+        // The hidden terminal keeps the keyboard (and its key bar) otherwise; the inbox has its
+        // own fields.
+        .onAppear {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
+        #endif
         .sensoryFeedback(DS.Haptic.success, trigger: approvedCount)
         .sensoryFeedback(DS.Haptic.attention, trigger: deniedCount)
         .task(id: feed.unseenByHost.values.reduce(0, +)) {
@@ -128,6 +135,7 @@ struct InboxView: View {
                             withAnimation(DS.Motion.snappy) { feed.markDone(item.id) }
                         }
                     }
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("inbox-\(item.id)")
                     .raisedRows()
                 }
@@ -306,11 +314,20 @@ private struct InboxRow: View {
                 .background(.fill.quaternary, in: .rect(cornerRadius: DS.Radius.control))
                 .focused($isComposerFocused)
                 .onSubmit(send)
+                .submitLabel(.send)
+                // Return sends (a chat, not a document); ⇧Return is a new line.
+                .onKeyPress(.return, phases: .down) { press in
+                    guard !press.modifiers.contains(.shift) else { return .ignored }
+                    send()
+                    return .handled
+                }
                 .onKeyPress(.escape) {
                     withAnimation(DS.Motion.snappy) { isReplying = false }
                     return .handled
                 }
                 .accessibilityIdentifier("inbox-composer")
+                // Focus once the field exists (setting it with `isReplying` is too early).
+                .task { isComposerFocused = true }
             Button("Send", systemImage: "arrow.up", action: send)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.glassProminent)

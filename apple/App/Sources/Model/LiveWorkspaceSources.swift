@@ -166,6 +166,14 @@ final class LiveAgentFeed: AgentFeed {
                 }
             }
             let latest = byPane[pane.rawValue]
+            // The pane title is often just the agent's name; say what it is doing instead.
+            if prompt.isEmpty || prompt == AgentKind(agent.kind).title || prompt.lowercased() == agent.kind.lowercased() {
+                switch state {
+                case .working: prompt = "Working…"
+                case .idle, .done: prompt = "Waiting for your next prompt"
+                default: break
+                }
+            }
             var summary: String?
             if state == .done || state == .idle, let latest, latest.kind.isFinish {
                 summary = latest.body.nonEmpty ?? latest.title.nonEmpty
@@ -405,8 +413,20 @@ final class LiveFileSource: FileSource {
         return try context.api()
     }
 
+    /// Each host's home directory (`fsStat("~")`), for `display`.
+    private var homes: [String: String] = [:]
+
+    func display(_ path: String) -> String {
+        guard let id = context?.hostId, let home = homes[id] else { return path }
+        if path == home { return "~" }
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
+
     func list(_ directory: String) async throws -> [FileEntry] {
         let api = try api()
+        if let id = context?.hostId, homes[id] == nil, let home = try? await api.fsStat(path: "~") {
+            homes[id] = home.path
+        }
         let listing = try await api.fsList(path: directory, showHidden: false)
         let status = try? await api.gitStatus(path: listing.path)
         return Self.entries(listing, git: status)
@@ -636,7 +656,7 @@ final class LiveDiffSource: DiffSource {
         guard let daemon = context?.daemon else { return [] }
         return daemon.meta.compactMap { pane, meta in
             guard let agent = meta.agent else { return nil }
-            if let root, let cwd = meta.cwd, !(cwd == root || cwd.hasPrefix(root + "/")) { return nil }
+            if let root, let cwd = meta.cwd, !PathMatch.isInside(cwd, root) { return nil }
             return (pane.rawValue, AgentKind(agent.kind).title)
         }.sorted { $0.pane < $1.pane }
     }
@@ -647,7 +667,7 @@ final class LiveDiffSource: DiffSource {
         var result: [DiffTurn] = []
         for (pane, agent) in agentPanes() {
             guard let turns = try? await api.listTurns(paneId: pane) else { continue }
-            for turn in turns where turn.root == root || root == nil {
+            for turn in turns where root == nil || PathMatch.isInside(turn.root, root!) || PathMatch.isInside(root!, turn.root) {
                 result.append(DiffTurn(
                     pane: pane, turn: turn.turn, agent: agent,
                     started: Date(timeIntervalSince1970: Double(turn.startedAtMs) / 1000),
@@ -682,6 +702,24 @@ final class LiveDiffSource: DiffSource {
     }
 }
 
+/// Paths from the shell (OSC 7) and from git (physical) can differ by a symlinked prefix:
+/// macOS's `/var` and `/tmp` are `/private/var` and `/private/tmp`.
+enum PathMatch {
+    static func normalized(_ path: String) -> String {
+        var path = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        for prefix in ["/private/var/", "/private/tmp/", "/private/etc/"] where path.hasPrefix(prefix) {
+            path = String(path.dropFirst("/private".count))
+        }
+        return path
+    }
+
+    /// `path` is `directory` or inside it.
+    static func isInside(_ path: String, _ directory: String) -> Bool {
+        let path = normalized(path), directory = normalized(directory)
+        return path == directory || path.hasPrefix(directory + "/")
+    }
+}
+
 extension DiffFile {
     /// A daemon file diff with old/new line numbers counted from each hunk's start.
     init(_ file: FileDiff) {
@@ -708,7 +746,8 @@ extension DiffFile {
                 }
                 lineId += 1
             }
-            hunks.append(DiffHunk(id: index, header: hunk.header, lines: lines))
+            let range = "@@ -\(hunk.oldStart),\(hunk.oldLines) +\(hunk.newStart),\(hunk.newLines) @@"
+            hunks.append(DiffHunk(id: index, header: hunk.header.isEmpty ? range : "\(range) \(hunk.header)", lines: lines))
         }
         self.init(
             path: file.path, status: FileEntry.GitStatus(file.change), additions: Int(file.additions),

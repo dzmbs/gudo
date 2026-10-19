@@ -154,7 +154,7 @@ struct PortOfferBanner: ViewModifier {
     let model: WindowModel
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .bottom) {
+        content.overlay(alignment: .top) {
             if let port = model.ports.offer, !model.isEditorShown {
                 HStack(spacing: DS.Space.m) {
                     Circle()
@@ -179,9 +179,10 @@ struct PortOfferBanner: ViewModifier {
                 .padding(.leading, DS.Space.l)
                 .padding(.trailing, DS.Space.s)
                 .padding(.vertical, DS.Space.s)
+                .frame(maxWidth: 520)
                 .floatingCapsule()
-                .padding(.bottom, 72)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.top, 60)
+                .transition(.move(edge: .top).combined(with: .opacity))
                 .task(id: port.port) {
                     try? await Task.sleep(for: .seconds(15))
                     withAnimation(DS.Motion.overlay) { model.ports.dismissOffer() }

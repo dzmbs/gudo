@@ -511,16 +511,20 @@ private struct FileDiffBody: View {
             placeholder(file.hunksOmitted ? "This diff is too large to show here." : "No content changes")
         } else if split {
             LazyVStack(alignment: .leading, spacing: 0) {
+                // One block per hunk: row ids repeat across hunks and must not meet the
+                // hunks' own ids in one lazy stack (a row would vanish).
                 ForEach(file.hunks) { hunk in
-                    hunkHeader(hunk)
-                    ForEach(hunk.splitRows) { row in
-                        HStack(spacing: 0) {
-                            side(row.left, oldSide: true)
-                            theme.splitDivider.frame(width: 1)
-                            side(row.right, oldSide: false)
+                    VStack(alignment: .leading, spacing: 0) {
+                        hunkHeader(hunk)
+                        ForEach(hunk.splitRows) { row in
+                            HStack(spacing: 0) {
+                                side(row.left, oldSide: true)
+                                theme.splitDivider.frame(width: 1)
+                                side(row.right, oldSide: false)
+                            }
+                            annotations(for: row.left, oldSide: true)
+                            if row.right?.id != row.left?.id { annotations(for: row.right, oldSide: false) }
                         }
-                        annotations(for: row.left, oldSide: true)
-                        if row.right?.id != row.left?.id { annotations(for: row.right, oldSide: false) }
                     }
                 }
             }
@@ -530,10 +534,12 @@ private struct FileDiffBody: View {
             ScrollView(.horizontal) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(file.hunks) { hunk in
-                        hunkHeader(hunk)
-                        ForEach(hunk.lines) { line in
-                            unifiedRow(line)
-                            annotations(for: line, oldSide: line.kind == .removed)
+                        VStack(alignment: .leading, spacing: 0) {
+                            hunkHeader(hunk)
+                            ForEach(hunk.lines) { line in
+                                unifiedRow(line)
+                                annotations(for: line, oldSide: line.kind == .removed)
+                            }
                         }
                     }
                 }

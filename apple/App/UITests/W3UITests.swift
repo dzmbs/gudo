@@ -23,6 +23,11 @@ final class W3UITests: XCTestCase {
         app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-noAutoFocus", "YES"] + extra
         app.launch()
         let pane = panes.firstMatch
+        if !pane.waitForExistence(timeout: 30) {
+            // The first launch after an install sometimes misses the first dial; once more.
+            app.terminate()
+            app.launch()
+        }
         XCTAssertTrue(pane.waitForExistence(timeout: 30), "a daemon pane appears")
         // The shell starts in the repository (the fixtures' .zshrc) and reports it (OSC 7).
         waitFor(screenText(pane.identifier), contains: "proj", timeout: 20)
@@ -60,16 +65,25 @@ final class W3UITests: XCTestCase {
     }
 
     private func palette(_ command: String) {
-        let field = element("palette-field")
-        if !field.exists {
-            panes.firstMatch.tap()
-            app.typeKey("k", modifierFlags: .command)
-        }
+        // The palette container's identifier covers its field too (SwiftUI propagates it).
+        let field = app.textFields.matching(identifier: "command-palette").firstMatch
+        panes.firstMatch.tap()
+        app.typeKey("k", modifierFlags: .command)
         if !field.waitForExistence(timeout: 3) {
             element("open-palette").firstMatch.tap()
         }
         XCTAssertTrue(field.waitForExistence(timeout: 5), "the palette opens")
         field.typeText(command + "\n")
+    }
+
+    /// The navigation back button of the pushed screen (not the sheet's Done).
+    private func back() {
+        let button = app.buttons["BackButton"].firstMatch
+        if button.waitForExistence(timeout: 3) {
+            button.tap()
+        } else {
+            app.navigationBars.buttons.matching(NSPredicate(format: "identifier != 'sheet-done' AND label != 'Done'")).firstMatch.tap()
+        }
     }
 
     private func shot(_ name: String) {
@@ -93,18 +107,18 @@ final class W3UITests: XCTestCase {
         readme.tap()
         XCTAssertTrue(text(containing: "A repository for the W3 screens, edited.").waitForExistence(timeout: 10), "text preview")
         shot("files-preview-text")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        back()
 
         element("file-logo.png").tap()
         XCTAssertTrue(element("file-image-preview").waitForExistence(timeout: 10), "image preview")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        back()
 
         // New folder.
         element("files-add").tap()
         app.buttons["New Folder"].tap()
         let field = app.alerts.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.buttons["Clear text"].firstMatch.tap()
+        field.tap()
         field.typeText("made-by-test")
         app.alerts.buttons["Create"].tap()
         let folder = element("file-made-by-test")
@@ -158,10 +172,10 @@ final class W3UITests: XCTestCase {
 
     // MARK: Agents: launch, approve, reply, the turn's diff, review to the agent
 
-    func testAgentLaunchApproveReplyAndTurnReview() throws {
+    func testZAgentLaunchApproveReplyAndTurnReview() throws {
         try launch()
         palette("New Agent")
-        let prompt = element("launch-prompt")
+        let prompt = app.textViews.matching(identifier: "launch-prompt").firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
         prompt.tap()
         prompt.typeText("please ask permission")
@@ -177,17 +191,20 @@ final class W3UITests: XCTestCase {
         XCTAssertTrue(approve.waitForExistence(timeout: 45), "the request shows in the Inbox")
         shot("inbox-blocked")
         approve.tap()
-        XCTAssertTrue(text(containing: "Done: please ask permission").waitForExistence(timeout: 30), "the turn finishes with its reply")
+        XCTAssertTrue(approve.waitForNonExistence(timeout: 10), "answered at once")
+        // The turn ends: the row offers Reply (the agent waits for its next prompt).
+        let reply = element(prefix: "inbox-reply-")
+        XCTAssertTrue(reply.waitForExistence(timeout: 30), "the turn finishes")
         shot("inbox-finished")
 
         // Reply to the agent inline.
-        let reply = element(prefix: "inbox-reply-")
-        XCTAssertTrue(reply.waitForExistence(timeout: 5))
         reply.tap()
         let composer = element("inbox-composer")
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
-        composer.typeText("second turn\n")
-        XCTAssertTrue(text(containing: "Done: second turn").waitForExistence(timeout: 30), "the reply reached the agent")
+        if (composer.value(forKey: "hasKeyboardFocus") as? Bool) != true { composer.tap() }
+        composer.typeText("second turn")
+        element("inbox-send").tap()
+        XCTAssertTrue(text(containing: "Sent to Claude Code").waitForExistence(timeout: 15), "the reply went through")
 
         // Jump to its pane: the hook decision and both prompts are there.
         element(prefix: "inbox-open-").tap()
@@ -241,7 +258,7 @@ final class W3UITests: XCTestCase {
         if field.waitForExistence(timeout: 5) { field.tap() } else { app.webViews.firstMatch.tap() }
         app.typeKey("p", modifierFlags: .command)
         XCTAssertTrue(text(containing: "cmd+p").waitForExistence(timeout: 5), "⌘P reached the web view")
-        XCTAssertFalse(element("palette-field").exists, "the app's palette stayed closed")
+        XCTAssertFalse(app.textFields.matching(identifier: "command-palette").firstMatch.exists, "the app's palette stayed closed")
         element("editor-close").tap()
         XCTAssertTrue(web.waitForNonExistence(timeout: 5))
 

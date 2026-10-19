@@ -105,14 +105,14 @@ private struct DirectoryListing: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .navigationSubtitle(directory)
+            .navigationSubtitle(source.display(directory))
             .searchable(text: $filter, prompt: "Filter")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu("Add", systemImage: "plus") {
                         Button("Upload Files…", systemImage: "square.and.arrow.up") { isImporting = true }
                         Button("New Folder", systemImage: "folder.badge.plus") {
-                            name = "untitled folder"
+                            name = ""
                             naming = .newFolder
                         }
                     }
@@ -142,7 +142,7 @@ private struct DirectoryListing: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { transferBar }
             .alert(namingTitle, isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
-                TextField("Name", text: $name)
+                TextField(namingPlaceholder, text: $name)
                     .autocorrectionDisabled()
                 Button(namingAction) { commitName() }
                 Button("Cancel", role: .cancel) {}
@@ -191,7 +191,9 @@ private struct DirectoryListing: View {
                     .buttonStyle(.glass)
             }
         } else {
-            ProgressView()
+            // The design's spinner (a TimelineView), not a looping UIActivityIndicator.
+            Spinner()
+                .frame(width: 16, height: 16)
                 .opacity(showsProgress ? 1 : 0)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .task {
@@ -363,13 +365,19 @@ private struct DirectoryListing: View {
         }
     }
 
+    private var namingPlaceholder: String {
+        if case .newFolder? = naming { return "untitled folder" }
+        return "Name"
+    }
+
     private var namingAction: String {
         if case .rename? = naming { return "Rename" }
         return "Create"
     }
 
     private func commitName() {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty, case .newFolder? = naming { trimmed = "untitled folder" }
         guard !trimmed.isEmpty, !trimmed.contains("/"), let naming else { return }
         Task {
             do {
@@ -452,7 +460,7 @@ private struct FilePreviewScreen: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .navigationSubtitle((entry.path as NSString).deletingLastPathComponent)
+            .navigationSubtitle(source.display((entry.path as NSString).deletingLastPathComponent))
             .background(theme.background.ignoresSafeArea())
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {

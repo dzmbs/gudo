@@ -406,6 +406,12 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertEqual(parts.numbers.column, 9)
     }
 
+    func testShellAndGitPathsMatchAcrossPrivate() {
+        XCTAssertTrue(PathMatch.isInside("/var/folders/x/proj/src", "/private/var/folders/x/proj"))
+        XCTAssertTrue(PathMatch.isInside("/private/tmp/a", "/tmp/a/"))
+        XCTAssertFalse(PathMatch.isInside("/var/folders/x/project", "/var/folders/x/proj"))
+    }
+
     // MARK: Errors
 
     func testWorkspaceErrorsReadAsWords() {
