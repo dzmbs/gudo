@@ -1,4 +1,7 @@
+import DesignSystem
+import DrawingKit
 import Foundation
+import SwiftUI
 import TerminalRenderer
 import UniformTypeIdentifiers
 #if os(iOS)
@@ -9,15 +12,14 @@ import AppKit
 
 #if os(iOS)
 extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
-    /// Pencil touch → draw mode at that row; two-finger long press → draw mode; tap on a
-    /// placement → reopen it; drop and paste of images and `.excalidraw` files → import.
+    /// Pencil on the terminal → draw mode at that row, the stroke becoming the drawing's first;
+    /// Pencil held still → Write; two-finger long press → draw mode; tap on a placement → reopen
+    /// it; drop and paste of images and `.excalidraw` files → import.
     func installInput(on view: TerminalView) {
-        // Pencil on the terminal enters draw mode (fingers keep scrolling and selecting: the
-        // terminal's own recognizers take direct touches only).
-        let pencil = UILongPressGestureRecognizer(target: self, action: #selector(pencilTouched(_:)))
-        pencil.minimumPressDuration = 0
-        pencil.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
-        pencil.cancelsTouchesInView = false
+        // Fingers keep scrolling and selecting: the terminal's own recognizers take direct
+        // touches only.
+        let pencil = PencilCaptureGesture(target: self, action: #selector(pencilCaptured(_:)))
+        pencil.delegate = self
         view.addGestureRecognizer(pencil)
 
         let twoFinger = UILongPressGestureRecognizer(target: self, action: #selector(twoFingerPressed(_:)))
@@ -55,9 +57,73 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
 
     private static nonisolated(unsafe) var tapKey: UInt8 = 0
 
-    @objc private func pencilTouched(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, let view = gesture.view else { return }
-        beginDrawing(at: gesture.location(in: view))
+    private var capture: PencilCapture? {
+        get { objc_getAssociatedObject(self, &PaneDrawing.captureKey) as? PencilCapture }
+        set { objc_setAssociatedObject(self, &PaneDrawing.captureKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    private static nonisolated(unsafe) var captureKey: UInt8 = 0
+
+    /// A Pencil touch on the terminal outside draw and write mode. Moving draws: draw mode opens
+    /// at the touched row and the stroke (drawn meanwhile as a preview) becomes its first
+    /// stroke. Held still for half a second: Write. A tap: draw mode, nothing drawn.
+    @objc private func pencilCaptured(_ gesture: PencilCaptureGesture) {
+        guard let view = gesture.view else { return }
+        switch gesture.state {
+        case .began:
+            guard overlay == nil, writer == nil, canvas == nil, !isReadOnly, let start = gesture.samples.first else {
+                capture = nil
+                return
+            }
+            let capture = PencilCapture(start: start.location, color: isDarkTheme ? .white : .black)
+            capture.preview.frame = view.bounds
+            view.layer.addSublayer(capture.preview)
+            capture.update(gesture.samples)
+            capture.holdTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self, weak capture] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let capture, capture.phase == .pending, self.capture === capture else { return }
+                    capture.phase = .writing
+                    capture.preview.removeFromSuperlayer()
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    CanvasWebView.log.info("pencil: held still on pane \(self.paneId): Write")
+                    self.startWriting()
+                }
+            }
+            self.capture = capture
+        case .changed:
+            guard let capture else { return }
+            capture.update(gesture.samples)
+            if capture.phase == .pending, capture.moved > 6 {
+                capture.phase = .drawing
+                capture.holdTimer?.invalidate()
+                CanvasWebView.log.info("pencil: stroke on pane \(self.paneId) opens draw mode")
+                beginDrawing(at: capture.start, tool: .pen) { [weak capture] _ in capture?.opened = true }
+            }
+        case .ended:
+            guard let capture else { return }
+            self.capture = nil
+            capture.holdTimer?.invalidate()
+            capture.update(gesture.samples)
+            switch capture.phase {
+            case .pending:
+                capture.preview.removeFromSuperlayer()
+                beginDrawing(at: capture.start, tool: .pen)
+            case .drawing:
+                if capture.opened, let overlay {
+                    overlay.adoptFirstStroke(gesture.samples, from: view)
+                } else {
+                    CanvasWebView.log.info("pencil: draw mode did not open; the stroke is dropped")
+                }
+                // PencilKit draws the adopted stroke from the next frame on.
+                DispatchQueue.main.async { capture.preview.removeFromSuperlayer() }
+            case .writing:
+                break
+            }
+        default:
+            capture?.holdTimer?.invalidate()
+            capture?.preview.removeFromSuperlayer()
+            capture = nil
+        }
     }
 
     @objc private func twoFingerPressed(_ gesture: UILongPressGestureRecognizer) {
@@ -72,8 +138,11 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     }
 
     func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
-        guard gesture === placementTap, let view = gesture.view else { return overlay == nil }
-        return overlay == nil && placement(at: gesture.location(in: view)) != nil
+        // Draw and write mode take their own touches (and the Pencil in them is PencilKit's or
+        // Scribble's).
+        let idle = overlay == nil && writer == nil && canvas == nil
+        guard gesture === placementTap, let view = gesture.view else { return idle }
+        return idle && placement(at: gesture.location(in: view)) != nil
     }
 
     func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -111,6 +180,96 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     }
 }
 
+/// Follows one Pencil touch on the terminal with its coalesced samples (never cancels the
+/// terminal's touches; the terminal's own recognizers take fingers only).
+final class PencilCaptureGesture: UIGestureRecognizer {
+    private(set) var samples: [PencilSample] = []
+    private var touch: UITouch?
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard touch == nil, let first = touches.first(where: { $0.type == .pencil }) else { return }
+        touch = first
+        append(first, event)
+        state = .began
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let touch, touches.contains(touch) else { return }
+        append(touch, event)
+        state = .changed
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let touch, touches.contains(touch) else { return }
+        append(touch, event)
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let touch, touches.contains(touch) else { return }
+        state = .cancelled
+    }
+
+    override func reset() {
+        super.reset()
+        touch = nil
+        samples = []
+    }
+
+    private func append(_ touch: UITouch, _ event: UIEvent) {
+        guard let view else { return }
+        for t in event.coalescedTouches(for: touch) ?? [touch] { samples.append(PencilSample(t, in: view)) }
+    }
+
+    override func canPrevent(_ gesture: UIGestureRecognizer) -> Bool { false }
+}
+
+/// The Pencil touch being followed outside draw mode, and its live preview (drawn until the
+/// overlay's PencilKit layer has the stroke).
+@MainActor
+final class PencilCapture {
+    enum Phase { case pending, drawing, writing }
+
+    let start: CGPoint
+    var phase = Phase.pending
+    var opened = false
+    var moved: CGFloat = 0
+    var holdTimer: Timer?
+    let preview = CAShapeLayer()
+
+    init(start: CGPoint, color: UIColor) {
+        self.start = start
+        preview.strokeColor = color.cgColor
+        preview.fillColor = nil
+        preview.lineWidth = 2.5
+        preview.lineCap = .round
+        preview.lineJoin = .round
+        preview.zPosition = 10
+    }
+
+    func update(_ samples: [PencilSample]) {
+        guard let first = samples.first else { return }
+        let path = CGMutablePath()
+        path.move(to: first.location)
+        for s in samples.dropFirst() {
+            path.addLine(to: s.location)
+            moved = max(moved, hypot(s.location.x - start.x, s.location.y - start.y))
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        preview.path = path
+        CATransaction.commit()
+    }
+}
+
 /// An accessibility element over a placement (VoiceOver, UI tests); touches pass through.
 final class PlacementMarker: UIView {
     override init(frame: CGRect) {
@@ -126,6 +285,21 @@ final class PlacementMarker: UIView {
     func setIdentifier(_ id: String, label: String) {
         accessibilityIdentifier = id
         accessibilityLabel = label
+    }
+
+    /// Outlines the placement for a moment: where Done put it.
+    func flash() {
+        layer.borderColor = UIColor(DS.Palette.accent).cgColor
+        layer.cornerRadius = 3
+        layer.borderWidth = 1.5
+        let fade = CABasicAnimation(keyPath: "borderWidth")
+        fade.fromValue = 1.5
+        fade.toValue = 0
+        fade.beginTime = CACurrentMediaTime() + 1.2
+        fade.duration = 0.6
+        fade.fillMode = .backwards
+        layer.add(fade, forKey: "flash")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.layer.borderWidth = 0 }
     }
 }
 #else
@@ -183,6 +357,15 @@ final class PlacementMarker: NSView {
         setAccessibilityRole(.image)
         setAccessibilityIdentifier(id)
         setAccessibilityLabel(label)
+    }
+
+    /// Outlines the placement for a moment: where Done put it.
+    func flash() {
+        wantsLayer = true
+        layer?.borderColor = NSColor(DS.Palette.accent).cgColor
+        layer?.cornerRadius = 3
+        layer?.borderWidth = 1.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.layer?.borderWidth = 0 }
     }
 }
 #endif
