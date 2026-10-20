@@ -201,6 +201,19 @@ final class PaneDrawing: NSObject {
     /// The pin of a placement's row.
     func pin(ofPlacement id: UInt64) -> RowPin? { entries[id]?.pin }
 
+    /// A placement shown in this pane.
+    func placement(id: UInt64) -> Placement? { entries[id]?.placement }
+
+    /// Nothing modal on the pane (no draw or write overlay, not a canvas): drawings in the
+    /// output answer taps.
+    var isIdle: Bool {
+        #if os(iOS)
+        overlay == nil && writer == nil && canvas == nil
+        #else
+        overlay == nil && canvas == nil
+        #endif
+    }
+
     private func frameRendered() {
         overlay?.terminalMoved()
         peerInk.setNeedsRedraw()
@@ -219,6 +232,7 @@ final class PaneDrawing: NSObject {
             let marker = markers[id] ?? {
                 let marker = PlacementMarker(frame: rect)
                 marker.setIdentifier("placement-\(id)", label: "Drawing")
+                marker.offerMenu(drawing: self, placementId: id)
                 view.addSubview(marker)
                 markers[id] = marker
                 return marker
@@ -565,63 +579,124 @@ final class PaneDrawing: NSObject {
         #endif
     }
 
-    // MARK: After Done
+    // MARK: After a drawing is finished
 
-    /// Says where the drawing went ("Placed in terminal", it scrolls with the output) and, when
-    /// an agent runs in the pane or its tab, offers Send to Claude/Codex. The placement is
-    /// outlined for a moment.
-    func showPlaced(_ placement: Placement, png: Data, sentTo: String? = nil) {
+    /// The overlay placed a drawing and closed: outline it for a moment, then do what the user
+    /// chose (send, start an agent, copy, share, save, or just keep it) and say so.
+    func finished(_ placement: Placement, png: Data, action: DrawingAction, anchor: CGRect) {
         flashPlacement = placement.placementId
         surface?.invalidateInlineImages()
-        guard let view = pane?.view else { return }
-        dismissNotice()
+        deliver(placement, png: png, action: action, anchor: anchor)
+    }
+
+    /// Does `action` with a placed drawing (`png` nil: its image is fetched) and shows the
+    /// notice: "Sending to…" while it runs, then where it went, or why it did not.
+    func deliver(_ placement: Placement, png: Data?, action: DrawingAction, anchor: CGRect) {
         let model = PlacedNoticeModel()
-        let target = agentTarget()
-        model.agentName = sentTo ?? target?.name
-        model.sent = sentTo != nil
+        let primary = primaryDestination(in: agentDestinations())
+        switch action {
+        case .keep:
+            model.phase = .done(.kept)
+            model.agentName = primary?.agent.title
+        case .send(let destination):
+            model.phase = .working("Sending to \(destination.agent.title)…")
+        case .start(let kind):
+            model.phase = .working("Starting \(kind.title)…")
+        case .copy, .share, .save:
+            model.phase = .working("Preparing the image…")
+        }
         model.onDismiss = { [weak self] in self?.dismissNotice() }
-        model.onSend = { [weak self, weak model] in
-            guard let self, let model, let target else { return }
-            model.sending = true
-            Task {
-                do {
-                    _ = try await self.hub.client.sendToAgent(paneId: target.pane, artifactId: placement.artifactId, version: nil, png: png)
-                    model.sent = true
-                    model.sending = false
-                    self.workspace?.apply(.focus(PaneId(target.pane)))
-                    self.scheduleNoticeDismiss(after: .seconds(2))
-                } catch {
-                    model.sending = false
-                    self.dismissNotice()
-                    self.showToast("\(target.name) did not get it: \(DrawOverlay.describe(error))", failure: true)
+        model.onSend = { [weak self] in
+            guard let self, let primary else { return }
+            self.deliver(placement, png: png, action: .send(primary), anchor: anchor)
+        }
+        let quiet = action == .copy || action == .share || action == .save
+        if !quiet { showNotice(model) }
+        guard action != .keep else {
+            CanvasWebView.log.info("done: kept (\(primary.map { "Send to \($0.agent.title) offered" } ?? "no agent", privacy: .public))")
+            scheduleNoticeDismiss(after: primary != nil ? .seconds(6) : .seconds(4))
+            return
+        }
+        Task {
+            do {
+                let image: Data
+                if let png {
+                    image = png
+                } else {
+                    image = try await hub.client.blobDownload(hash: placement.image.hash, progress: nil).data
                 }
+                let outcome = try await perform(action, artifactId: placement.artifactId, png: image, anchor: anchor)
+                if outcome == .shared { return dismissNotice() }
+                if notice?.rootView.model !== model { showNotice(model) }
+                model.phase = .done(outcome)
+                layoutNotice()
+                scheduleNoticeDismiss(after: .seconds(3))
+            } catch {
+                let what: String = switch action {
+                case .send(let d): "\(d.agent.title) did not get it: \(DrawOverlay.describe(error))"
+                case .start(let kind): "\(kind.title) did not start with it: \(DrawOverlay.describe(error))"
+                default: "Could not export the drawing: \(DrawOverlay.describe(error))"
+                }
+                CanvasWebView.log.error("done: \(what, privacy: .public)")
+                if notice?.rootView.model !== model { showNotice(model) }
+                model.phase = .failed(what)
+                layoutNotice()
+                scheduleNoticeDismiss(after: .seconds(6))
             }
         }
+    }
+
+    private func showNotice(_ model: PlacedNoticeModel) {
+        guard let view = pane?.view else { return }
+        dismissNotice()
         #if os(iOS)
         let host = UIHostingController(rootView: PlacedNotice(model: model))
         host.view.backgroundColor = .clear
         host.sizingOptions = [.intrinsicContentSize]
         host.overrideUserInterfaceStyle = isDarkTheme ? .dark : .light
         host.view.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin]
-        let size = host.view.intrinsicContentSize
-        host.view.frame = CGRect(
-            x: (view.bounds.width - size.width) / 2, y: view.bounds.height - view.safeAreaInsets.bottom - 12 - size.height,
-            width: size.width, height: size.height)
         host.view.alpha = 0
         view.addSubview(host.view)
-        UIView.animate(withDuration: 0.2) { host.view.alpha = 1 }
         notice = host
+        layoutNotice()
+        UIView.animate(withDuration: 0.2) { host.view.alpha = 1 }
         #else
         let host = NSHostingView(rootView: PlacedNotice(model: model))
         host.appearance = NSAppearance(named: isDarkTheme ? .darkAqua : .aqua)
-        let size = host.fittingSize
-        host.frame = CGRect(x: (view.bounds.width - size.width) / 2, y: view.bounds.height - size.height - 12, width: size.width, height: size.height)
         host.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
         view.addSubview(host)
         notice = host
+        layoutNotice()
         #endif
-        CanvasWebView.log.info("done: notice shown (\(model.agentName.map { "with Send to \($0)" } ?? "no agent", privacy: .public))")
-        scheduleNoticeDismiss(after: model.agentName != nil && !model.sent ? .seconds(6) : .seconds(3))
+    }
+
+    /// Centres the notice at the bottom of the pane at its current size (it changes as the
+    /// phase does).
+    private func layoutNotice() {
+        guard let view = pane?.view, let notice else { return }
+        #if os(iOS)
+        notice.view.invalidateIntrinsicContentSize()
+        let size = notice.view.intrinsicContentSize
+        notice.view.frame = CGRect(
+            x: (view.bounds.width - size.width) / 2, y: view.bounds.height - view.safeAreaInsets.bottom - 12 - size.height,
+            width: size.width, height: size.height)
+        #else
+        let size = notice.fittingSize
+        notice.frame = CGRect(x: (view.bounds.width - size.width) / 2, y: view.bounds.height - size.height - 12, width: size.width, height: size.height)
+        #endif
+        // SwiftUI settles the new size on its next update.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let notice = self.notice, let view = self.pane?.view else { return }
+            #if os(iOS)
+            let size = notice.view.intrinsicContentSize
+            notice.view.frame = CGRect(
+                x: (view.bounds.width - size.width) / 2, y: view.bounds.height - view.safeAreaInsets.bottom - 12 - size.height,
+                width: size.width, height: size.height)
+            #else
+            let size = notice.fittingSize
+            notice.frame = CGRect(x: (view.bounds.width - size.width) / 2, y: view.bounds.height - size.height - 12, width: size.width, height: size.height)
+            #endif
+        }
     }
 
     private func scheduleNoticeDismiss(after delay: Duration) {
@@ -643,6 +718,50 @@ final class PaneDrawing: NSObject {
         #else
         notice.removeFromSuperview()
         #endif
+    }
+
+    // MARK: A placement's menu
+
+    /// What a tap (click) on a drawing in the output offers: the same destinations as the
+    /// overlay, plus Edit and Delete.
+    func menu(for placement: Placement) -> DrawingMenu {
+        let list = agentDestinations()
+        let primary = primaryDestination(in: list)
+        var menu = DrawingMenu.make(destinations: list, primary: primary, canStart: canStartAgent, includeKeep: false, placement: true)
+        if isReadOnly {
+            // Viewers can take a copy; nothing that changes the host.
+            menu.sections = menu.sections.compactMap { section in
+                let items = section.items.filter { $0.action == .copy || $0.action == .share || $0.action == .save }
+                return items.isEmpty ? nil : DrawingMenu.Section(title: section.title, items: items)
+            }
+        }
+        return menu
+    }
+
+    func perform(_ item: DrawingMenu.Item, on placement: Placement, anchor: CGRect) {
+        if let action = item.action {
+            deliver(placement, png: nil, action: action, anchor: anchor)
+            return
+        }
+        switch item.placementAction {
+        case .edit: reopen(placement)
+        case .delete:
+            let client = hub.client
+            Task {
+                do {
+                    try await client.unplace(placementId: placement.placementId)
+                    hub.noteRemoved(placement.placementId, pane: paneId)
+                } catch {
+                    showToast("Could not delete the drawing: \(DrawOverlay.describe(error))", failure: true)
+                }
+            }
+        case nil: break
+        }
+    }
+
+    /// The frame a placement is drawn in (pane coordinates), for menus and share sheets.
+    func frame(of placement: Placement) -> CGRect? {
+        markers[placement.placementId]?.frame
     }
 
     // MARK: Anchors

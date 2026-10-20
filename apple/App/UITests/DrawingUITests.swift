@@ -22,9 +22,10 @@ final class DrawingUITests: XCTestCase {
         add(attachment)
     }
 
-    private func launch(_ ticket: String) -> XCUIApplication {
+    private func launch(_ ticket: String, hint: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-drawingDebug", "YES", "-noAutoFocus", "YES"]
+        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-drawingDebug", "YES", "-noAutoFocus", "YES",
+                                "-drawingHintSeen", hint ? "NO" : "YES"]
         app.launch()
         return app
     }
@@ -127,7 +128,8 @@ final class DrawingUITests: XCTestCase {
         XCTAssertTrue(done.waitForNonExistence(timeout: 15), "the overlay closes")
         let notice = element(app, "drawing.notice")
         XCTAssertTrue(notice.waitForExistence(timeout: 5), "Done says where the drawing went")
-        XCTAssertTrue(app.staticTexts["Placed in terminal"].exists)
+        XCTAssertTrue(app.staticTexts["Kept in terminal"].exists)
+        XCTAssertTrue(app.staticTexts["tap it to send, copy or edit"].exists, "says what the drawing is for now")
         shot(app, "placed-notice")
         let placed = placements(app)
         expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
@@ -229,6 +231,136 @@ final class DrawingUITests: XCTestCase {
         XCTAssertTrue(overlays.firstMatch.waitForNonExistence(timeout: 10))
         app.typeKey("w", modifierFlags: .command)  // leave one pane for the next test
         sleep(2)
+    }
+
+    /// Mean luminance (0…255) of `frame` (points) in a screenshot.
+    private func luminance(_ screenshot: XCUIScreenshot, in frame: CGRect, of app: XCUIApplication) -> Double {
+        guard let image = screenshot.image.cgImage else { return 0 }
+        let scale = CGFloat(image.width) / app.frame.width
+        let crop = CGRect(x: frame.minX * scale, y: frame.minY * scale, width: frame.width * scale, height: frame.height * scale)
+        guard let region = image.cropping(to: crop.integral) else { return 0 }
+        let side = 32
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.draw(region, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return 0 }
+        var sum = 0.0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            sum += 0.2126 * Double(pixels[i]) + 0.7152 * Double(pixels[i + 1]) + 0.0722 * Double(pixels[i + 2])
+        }
+        return sum / Double(side * side)
+    }
+
+    /// Esc leaves draw mode and never reaches the shell. It used to: the overlay stayed open, the
+    /// shell got the Esc (zsh rings the bell on the second one), and the bell flashed the whole
+    /// pane white, fading back to black. Draw mode now holds the keyboard focus (the terminal's
+    /// key bar, whose esc went to the shell, is gone while drawing), and the pane never flashes
+    /// while it closes. Also: the first time, a one-line hint says what drawings are for.
+    func testEscapeLeavesDrawModeWithoutAFlash() throws {
+        let app = launch(try ticket(), hint: true)
+        let pane = preparePane(app)
+        XCTAssertTrue(element(app, "keybar-esc").waitForExistence(timeout: 5), "the key bar is up before drawing")
+
+        let done = openDrawMode(app)
+        let hint = element(app, "drawing.hint")
+        XCTAssertTrue(hint.waitForExistence(timeout: 5), "the first draw mode says what drawings are for")
+        XCTAssertTrue(hint.label.contains("send it to an agent"), hint.label)
+        XCTAssertFalse(element(app, "keybar-esc").exists && element(app, "keybar-esc").isHittable, "nothing typed while drawing reaches the shell: no key bar")
+        let rect = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(rect.waitForExistence(timeout: 5))
+        tap(rect)
+        sleep(1)
+        shot(app, "esc-before")
+        // Keys are draw mode's: a tool letter picks the tool (it is not typed into the shell).
+        let screen = element(app, pane.identifier + "-screen")
+        let shellBefore = screen.value as? String ?? ""
+        app.typeKey("r", modifierFlags: [])
+        sleep(1)
+        XCTAssertTrue(isChosen(app, tool: "rectangle", title: "Rectangle"), "R picks the rectangle while drawing")
+        XCTAssertEqual(screen.value as? String ?? "", shellBefore, "nothing typed while drawing reached the shell")
+
+        let area = pane.frame
+        let before = luminance(app.screenshot(), in: area, of: app)
+        // ⌘. is Esc on an iPad keyboard (the Magic Keyboard has none); the simulator does not hand
+        // a synthesized Esc to the app at all, so the test presses ⌘. (both are the same command).
+        app.typeKey(".", modifierFlags: .command)
+        var samples: [Double] = []
+        let start = Date()
+        while Date().timeIntervalSince(start) < 1.5 {
+            samples.append(luminance(app.screenshot(), in: area, of: app))
+        }
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5), "Esc closes draw mode")
+        let brightest = samples.max() ?? 0
+        XCTAssertLessThan(brightest, before + 20, "the pane flashed while draw mode closed (\(before) → \(samples))")
+        shot(app, "esc-after")
+
+    }
+
+    /// With no agent in the pane, the primary action is a Send To… menu: Start Claude Code or
+    /// Codex with the drawing, Copy Image, Share…, Keep in Terminal. Copy places it too and
+    /// says so. A drawing in the output then opens the same menu (plus Edit and Delete) when
+    /// tapped.
+    func testSendToMenuAndThePlacementMenu() throws {
+        let app = launch(try ticket())
+        _ = preparePane(app)
+        let before = placements(app).count
+        let done = openDrawMode(app)
+        let rect = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(rect.waitForExistence(timeout: 5))
+        tap(rect)
+        sleep(1)
+
+        let send = app.buttons["drawing.send"]
+        XCTAssertTrue(send.exists, "a Send To… menu even without an agent")
+        tap(send)
+        let copy = app.buttons["Copy Image"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 5), "the menu opens")
+        XCTAssertTrue(app.buttons["Keep in Terminal"].exists)
+        XCTAssertTrue(app.buttons["Share…"].exists)
+        XCTAssertTrue(app.buttons["Start Claude Code with This Drawing"].exists)
+        XCTAssertTrue(app.buttons["Start Codex with This Drawing"].exists)
+        shot(app, "send-to-menu")
+        copy.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 15), "the overlay closes")
+        XCTAssertTrue(app.staticTexts["Image copied"].waitForExistence(timeout: 10), "says the image was copied")
+        let placed = placements(app)
+        expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
+        waitForExpectations(timeout: 15)
+        shot(app, "copied")
+        XCTAssertTrue(element(app, "drawing.notice").waitForNonExistence(timeout: 10))
+
+        // Tap the drawing in the output: its menu.
+        let drawing = placed.element(boundBy: placed.count - 1)
+        tap(drawing)
+        let edit = app.buttons["Edit Drawing"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5), "a tap on a drawing opens its menu")
+        XCTAssertTrue(app.buttons["Copy Image"].exists)
+        XCTAssertTrue(app.buttons["Start Claude Code with This Drawing"].exists)
+        XCTAssertTrue(app.buttons["Delete Drawing"].exists)
+        shot(app, "placement-menu")
+
+        // Edit reopens it in place; Cancel leaves it as it was.
+        edit.tap()
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "Edit reopens the drawing")
+        tap(app.buttons["drawing.cancel"])
+        XCTAssertTrue(done.waitForNonExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
+        waitForExpectations(timeout: 10)
+
+        // Delete removes it.
+        sleep(1)
+        tap(placed.element(boundBy: placed.count - 1))
+        let delete = app.buttons["Delete Drawing"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        delete.tap()
+        expectation(for: NSPredicate(format: "count == %d", before), evaluatedWith: placed)
+        waitForExpectations(timeout: 10)
     }
 
     /// Write: what is written shows at the prompt and reaches the shell only on Send (typed

@@ -1159,7 +1159,7 @@ Roles: `Place`, `Unplace`, `Import` need the draw role on the pane; `Placements`
    `place_png(PlaceRequest{anchor: same row, col, cols/rows: the covered cells,
    replace: the placement it was re-opened from})`. The diagram is now part of the pane's
    output for every client and device.
-5. **Tap a placement** to reopen the overlay in place: `excalidraw_get(placement.artifact_id)`
+5. **Tap a placement** for its menu (send, copy, share, Edit, Delete); Edit reopens the overlay in place: `excalidraw_get(placement.artifact_id)`
    at `placement.anchor`, then Done again with `replace`.
 6. **Send to agent** from the overlay or a placement's menu:
    `send_to_agent(pane, Some(id), Some(version), Some(png))`.

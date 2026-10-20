@@ -29,18 +29,8 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         twoFinger.delegate = self
         view.addGestureRecognizer(twoFinger)
 
-        let tap = UITapGestureRecognizer(target: self, action: #selector(placementTapped(_:)))
-        tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue), NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
-        tap.delegate = self
-        view.addGestureRecognizer(tap)
-        // The terminal's single tap (focus, click, links) waits for ours, which fails at once
-        // unless the tap is on a placement.
-        for other in view.gestureRecognizers ?? [] where other !== tap {
-            if let single = other as? UITapGestureRecognizer, single.numberOfTapsRequired == 1, single.numberOfTouchesRequired == 1 {
-                single.require(toFail: tap)
-            }
-        }
-        placementTap = tap
+        // A tap on a drawing in the output opens its menu: its marker is a menu button
+        // (`PlacementMarker.offerMenu`).
 
         view.addInteraction(UIDropInteraction(delegate: self))
         view.onPasteAttachment = { [weak self] pasteboard in
@@ -49,13 +39,6 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
             return true
         }
     }
-
-    private var placementTap: UITapGestureRecognizer? {
-        get { objc_getAssociatedObject(self, &PaneDrawing.tapKey) as? UITapGestureRecognizer }
-        set { objc_setAssociatedObject(self, &PaneDrawing.tapKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
-    }
-
-    private static nonisolated(unsafe) var tapKey: UInt8 = 0
 
     private var capture: PencilCapture? {
         get { objc_getAssociatedObject(self, &PaneDrawing.captureKey) as? PencilCapture }
@@ -132,21 +115,33 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         beginDrawing(at: gesture.location(in: view))
     }
 
-    @objc private func placementTapped(_ gesture: UITapGestureRecognizer) {
-        guard let view = gesture.view, let placement = placement(at: gesture.location(in: view)) else { return }
-        reopen(placement)
-    }
-
     func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
         // Draw and write mode take their own touches (and the Pencil in them is PencilKit's or
         // Scribble's).
-        let idle = overlay == nil && writer == nil && canvas == nil
-        guard gesture === placementTap, let view = gesture.view else { return idle }
-        return idle && placement(at: gesture.location(in: view)) != nil
+        isIdle
     }
 
     func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        gesture !== placementTap
+        true
+    }
+
+    /// A placement's menu as a `UIMenu`.
+    func uiMenu(forPlacement id: UInt64) -> [UIMenuElement] {
+        guard let placement = placement(id: id) else { return [] }
+        let anchor = frame(of: placement) ?? .zero
+        return menu(for: placement).sections.map { section in
+            UIMenu(title: section.title ?? "", options: .displayInline, children: section.items.map { item in
+                let action = UIAction(
+                    title: item.title, subtitle: item.subtitle, image: UIImage(systemName: item.systemImage),
+                    identifier: UIAction.Identifier("drawing.menu.\(item.id)"),
+                    attributes: item.destructive ? .destructive : []
+                ) { [weak self] _ in
+                    self?.perform(item, on: placement, anchor: anchor)
+                }
+                action.accessibilityIdentifier = "drawing.menu.\(item.id)"
+                return action
+            })
+        }
     }
 
     // MARK: Drop
@@ -270,8 +265,14 @@ final class PencilCapture {
     }
 }
 
-/// An accessibility element over a placement (VoiceOver, UI tests); touches pass through.
-final class PlacementMarker: UIView {
+/// Over a drawing placed in the output: its accessibility element (VoiceOver, UI tests) and,
+/// with `offerMenu`, its menu: a tap (finger or pointer) opens Send to… / Start… / Copy / Share
+/// / Edit / Delete, anchored to the drawing. The Pencil, two-finger scrolls and every touch while
+/// the pane draws or writes pass through to the terminal.
+final class PlacementMarker: UIButton {
+    private weak var drawing: PaneDrawing?
+    private var placementId: UInt64 = 0
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
@@ -281,6 +282,28 @@ final class PlacementMarker: UIView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    func offerMenu(drawing: PaneDrawing, placementId: UInt64) {
+        self.drawing = drawing
+        self.placementId = placementId
+        isUserInteractionEnabled = true
+        showsMenuAsPrimaryAction = true
+        accessibilityTraits = [.image, .button]
+        accessibilityHint = "Send, copy, share or edit the drawing"
+        menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            MainActor.assumeIsolated {
+                guard let self, let drawing = self.drawing else { return completion([]) }
+                completion(drawing.uiMenu(forPlacement: self.placementId))
+            }
+        }])
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let drawing, drawing.isIdle else { return nil }
+        // The Pencil draws over the output, drawings included.
+        if event?.allTouches?.contains(where: { $0.type == .pencil }) == true { return nil }
+        return super.hitTest(point, with: event)
+    }
 
     func setIdentifier(_ id: String, label: String) {
         accessibilityIdentifier = id
@@ -336,9 +359,27 @@ extension PaneDrawing: NSGestureRecognizerDelegate {
         return true
     }
 
+    /// A click on a drawing in the output opens its menu (Send to… / Start… / Copy / Save /
+    /// Share / Edit / Delete) at the click.
     @objc private func placementClicked(_ gesture: NSClickGestureRecognizer) {
         guard let view = gesture.view, let placement = placement(at: gesture.location(in: view)) else { return }
-        reopen(placement)
+        let anchor = frame(of: placement) ?? CGRect(origin: gesture.location(in: view), size: .zero)
+        let popup = NSMenu()
+        for (index, section) in menu(for: placement).sections.enumerated() {
+            if index > 0 { popup.addItem(.separator()) }
+            if let title = section.title { popup.addItem(.sectionHeader(title: title)) }
+            for item in section.items {
+                let run = MenuAction { [weak self] in self?.perform(item, on: placement, anchor: anchor) }
+                let entry = NSMenuItem(title: item.title, action: #selector(MenuAction.run), keyEquivalent: "")
+                entry.target = run
+                entry.representedObject = run
+                entry.image = NSImage(systemSymbolName: item.systemImage, accessibilityDescription: nil)
+                if let subtitle = item.subtitle { entry.subtitle = subtitle }
+                entry.setAccessibilityIdentifier("drawing.menu.\(item.id)")
+                popup.addItem(entry)
+            }
+        }
+        popup.popUp(positioning: nil, at: gesture.location(in: view), in: view)
     }
 
     func gestureRecognizerShouldBegin(_ gesture: NSGestureRecognizer) -> Bool {
@@ -367,5 +408,22 @@ final class PlacementMarker: NSView {
         layer?.borderWidth = 1.5
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.layer?.borderWidth = 0 }
     }
+
+    /// The menu is the click gesture's (`placementClicked`); the marker stays inert.
+    func offerMenu(drawing: PaneDrawing, placementId: UInt64) {
+        setAccessibilityHelp("Click to send, copy, save or edit the drawing")
+    }
+}
+
+/// The target of a menu item that runs a closure (kept alive by the item's
+/// `representedObject`).
+final class MenuAction: NSObject {
+    private let handler: () -> Void
+
+    init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+    }
+
+    @objc func run() { handler() }
 }
 #endif
