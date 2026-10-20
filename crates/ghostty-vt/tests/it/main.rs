@@ -3,6 +3,7 @@
 
 mod anchors;
 mod continuation;
+mod forget;
 mod size;
 
 /// Small deterministic PRNG (xorshift64*), so failures reproduce from a seed alone.

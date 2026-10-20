@@ -31,6 +31,7 @@ mod artifacts;
 mod askpass;
 mod assist;
 mod conn;
+pub mod knock;
 mod mirror;
 mod mp;
 pub mod push;

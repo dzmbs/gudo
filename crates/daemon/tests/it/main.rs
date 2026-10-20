@@ -7,6 +7,7 @@ mod assist;
 mod codex;
 mod e2e;
 mod multiplayer;
+mod multiplayer_mp2;
 mod notify;
 mod relays;
 mod repos;

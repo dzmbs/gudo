@@ -7,20 +7,24 @@
 //! - `<state>/grants.json` holds registered grants, first-use bindings, revocations and the
 //!   guest devices; `<state>/audit/audit.jsonl` the audit log.
 
+pub(crate) mod approvals;
 pub(crate) mod audit;
 pub(crate) mod policy;
 pub(crate) mod prompt;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use grants::{Authority, GrantError};
+use grants::{Authority, DeviceKey, GrantError, GrantSpec};
 use proto::{
-    Actor, AuditKind, CursorPos, DeviceId, DeviceInfo, DeviceKind, GrantChain, GrantId, GrantInfo,
-    JoinInfo, Lease, LeaseMode, LeaseOutcome, MpError, MpResponse, PaneId, Participant, Presence,
-    PresenceState, PrincipalId, RefuseReason, RevokeTarget, Roles, Scope, ServerCtl, UnixMillis,
+    Actor, Admit, ApprovalPolicy, AuditKind, Caps, CursorPos, DeviceId, DeviceInfo, DeviceKind,
+    GrantChain, GrantId, GrantInfo, History, InviteTerms, JoinInfo, Knock, KnockAnswer, KnockId,
+    KnockOutcome, KnockUpdate, Lease, LeaseMode, LeaseOutcome, MpError, MpResponse, PaneId,
+    Participant, Presence, PresenceState, PrincipalId, RefuseReason, RevokeTarget, Roles, Scope,
+    ServerCtl, SessionId, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -33,6 +37,13 @@ use crate::fsutil::{hex, read_optional, unhex, write_atomic};
 use crate::identity::now_millis;
 
 const STORE_FILE: &str = "grants.json";
+/// How long a guest admitted from a knock keeps access unless the owner says otherwise
+const KNOCK_ADMIT_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+/// How long an answered knock's connection may stay open: the knocker reads the answer and
+/// hangs up itself; closing sooner could drop the answer in flight.
+const KNOCK_LINGER: Duration = Duration::from_secs(5);
+/// Pending knocks per invite, so a leaked knock link cannot flood the owner.
+const MAX_KNOCKS_PER_GRANT: usize = 8;
 /// Presence updates per connection are coalesced to at most one per this interval
 const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -46,6 +57,11 @@ pub(crate) struct Authz {
     pub grant_ids: Vec<GrantId>,
     pub expires: Option<UnixMillis>,
     pub name: String,
+    /// How much scrollback it sees (the invite's terms).
+    pub history: History,
+    /// When this device first redeemed its grant: with [`History::SinceJoin`] it sees only
+    /// what panes that existed then wrote afterwards.
+    pub joined_at: UnixMillis,
 }
 
 impl Authz {
@@ -58,6 +74,8 @@ impl Authz {
             grant_ids: Vec::new(),
             expires: None,
             name: "owner".into(),
+            history: History::Full,
+            joined_at: UnixMillis(0),
         }
     }
 
@@ -98,6 +116,9 @@ struct Store {
     revoked_devices: BTreeSet<String>,
     #[serde(default)]
     guests: Vec<GuestRecord>,
+    /// Approval policies by session id.
+    #[serde(default)]
+    policies: BTreeMap<u64, ApprovalPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +130,12 @@ struct StoredGrant {
     #[serde(default)]
     bound: Vec<String>,
     registered_at: u64,
+    /// Terms the daemon enforces on this grant and everything attenuated from it.
+    #[serde(default)]
+    terms: InviteTerms,
+    /// When each bound device first redeemed it, Unix ms, by device hex.
+    #[serde(default)]
+    redeemed_at: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,8 +197,17 @@ impl Store {
             chain: hex(&chain.to_token()),
             bound: Vec::new(),
             registered_at: now_millis(),
+            terms: InviteTerms::default(),
+            redeemed_at: BTreeMap::new(),
         });
         self.grants.last_mut().expect("just pushed")
+    }
+
+    /// The terms in force for a chain: the strictest of every registered link's.
+    fn terms(&self, ids: &[GrantId]) -> InviteTerms {
+        ids.iter()
+            .filter_map(|&id| self.grant(id))
+            .fold(InviteTerms::default(), |acc, g| acc.strictest(g.terms))
     }
 
     fn chain_of(g: &StoredGrant) -> Option<GrantChain> {
@@ -264,12 +300,45 @@ impl LeaseState {
     }
 }
 
+/// What redeeming a grant chain led to.
+pub(crate) enum Redeemed {
+    /// The connection joins with these rights.
+    Joined(Authz),
+    /// The chain is a knock invite: the connection waits for an owner.
+    Knock(Knocker),
+}
+
+/// Someone presenting a knock invite.
+#[derive(Debug, Clone)]
+pub(crate) struct Knocker {
+    pub actor: Actor,
+    pub name: String,
+    /// Every link of the presented chain, root first.
+    pub grant_ids: Vec<GrantId>,
+    pub roles: Roles,
+    pub scope: Scope,
+    pub expires: Option<UnixMillis>,
+}
+
+/// A knock waiting for an owner, with the knocking connection.
+struct PendingKnock {
+    knock: Knock,
+    grant_ids: Vec<GrantId>,
+    expires: Option<UnixMillis>,
+    ctl: mpsc::UnboundedSender<ServerCtl>,
+    conn: iroh::endpoint::Connection,
+}
+
 /// Multiplayer state owned by the core.
 pub(crate) struct Mp {
     store_path: PathBuf,
     store: Mutex<Store>,
     live: Mutex<HashMap<ConnId, Live>>,
     leases: Mutex<HashMap<PaneId, LeaseState>>,
+    knocks: Mutex<BTreeMap<KnockId, PendingKnock>>,
+    next_knock: AtomicU64,
+    /// Votes and claims of open approval requests.
+    pub approvals: approvals::Approvals,
     pub audit: Audit,
     lease_idle: Duration,
 }
@@ -282,6 +351,9 @@ impl Mp {
             store_path,
             live: Mutex::new(HashMap::new()),
             leases: Mutex::new(HashMap::new()),
+            knocks: Mutex::new(BTreeMap::new()),
+            next_knock: AtomicU64::new(1),
+            approvals: approvals::Approvals::default(),
             audit: Audit::open(state_dir)?,
             lease_idle,
         })
@@ -295,13 +367,16 @@ impl Mp {
     }
 
     /// Verifies a presented grant chain for `device`, binding an unbound leaf on first use.
+    /// A knock invite neither binds nor uses up anything: the device waits for an owner
+    /// (only clients announcing [`Caps::KNOCK`] can).
     pub fn redeem(
         &self,
         core: &Core,
         device: DeviceId,
         claimed: PrincipalId,
         token: &[u8],
-    ) -> Result<Authz, RefuseReason> {
+        caps: Caps,
+    ) -> Result<Redeemed, RefuseReason> {
         let actor = grants::guest_actor(device);
         let deny = |why: String| {
             self.audit.append(
@@ -343,6 +418,25 @@ impl Mp {
         };
         let device_hex = hex(&device.0);
         let leaf = &verified.leaf;
+        let terms = store.terms(&verified.ids);
+        let admitted = store
+            .grant(leaf.grant_id)
+            .is_some_and(|g| g.bound.contains(&device_hex));
+        if terms.knock && !admitted {
+            drop(store);
+            if !caps.contains(Caps::KNOCK) {
+                deny("knock invite from an app that cannot wait for the owner".into());
+                return Err(RefuseReason::InvalidGrant);
+            }
+            return Ok(Redeemed::Knock(Knocker {
+                actor,
+                name: leaf.label.clone(),
+                grant_ids: verified.ids,
+                roles: verified.roles,
+                scope: verified.scope,
+                expires: verified.expires,
+            }));
+        }
         let record = store.upsert(&chain);
         let first_use = !record.bound.contains(&device_hex);
         if first_use {
@@ -355,7 +449,15 @@ impl Mp {
                 return Err(RefuseReason::InvalidGrant);
             }
             record.bound.push(device_hex.clone());
+            record.redeemed_at.insert(device_hex.clone(), now.0);
         }
+        let joined_at = UnixMillis(
+            record
+                .redeemed_at
+                .get(&device_hex)
+                .copied()
+                .unwrap_or(now.0),
+        );
         let name = if leaf.label.is_empty() {
             format!("guest-{}", &device_hex[..6])
         } else {
@@ -380,6 +482,8 @@ impl Mp {
             grant_ids: verified.ids,
             expires: verified.expires,
             name,
+            history: terms.history,
+            joined_at,
         };
         if first_use {
             self.audit.append(
@@ -395,7 +499,7 @@ impl Mp {
                 },
             );
         }
-        Ok(authz)
+        Ok(Redeemed::Joined(authz))
     }
 
     /// Whether `authz` is still in force: unexpired, no link or device revoked.
@@ -587,12 +691,14 @@ impl Mp {
 
     // --- grants -----------------------------------------------------------------------------
 
-    /// Records a chain so it is listed and revocable before first use.
+    /// Records a chain so it is listed and revocable before first use, with `terms` the
+    /// daemon enforces on it and its descendants (terms only ever get stricter).
     pub fn register(
         &self,
         core: &Core,
         by: &Authz,
         chain: &GrantChain,
+        terms: InviteTerms,
     ) -> Result<GrantInfo, MpError> {
         let leaf = chain
             .leaf()
@@ -614,15 +720,24 @@ impl Mp {
             grants::verify(chain, core.identity.daemon_id(), presenter, now, &auth)
                 .map_err(|e| MpError::Invalid(e.to_string()))?;
         }
-        store.upsert(chain);
+        let record = store.upsert(chain);
+        record.terms = record.terms.strictest(terms);
+        let terms = record.terms;
         store.save(&self.store_path);
         let info = self.info(&store, chain);
         drop(store);
+        let mut extra = String::new();
+        if terms.knock {
+            extra.push_str(", knock to join");
+        }
+        if terms.history == History::SinceJoin {
+            extra.push_str(", scrollback since joining");
+        }
         self.audit.append(
             AuditKind::GrantRegistered,
             AuditEntry {
                 detail: format!(
-                    "grant {} for {:?}: {} on {}",
+                    "grant {} for {:?}: {} on {}{extra}",
                     short(&leaf.grant_id.0),
                     leaf.label,
                     leaf.roles.names(),
@@ -830,6 +945,363 @@ impl Mp {
             kick(grant, &ctl, conn);
         }
         n
+    }
+
+
+    /// Puts a knock in front of the owners. The same device knocking again replaces its
+    /// earlier knock.
+    ///
+    /// # Errors
+    ///
+    /// [`RefuseReason::InvalidGrant`] when the invite already has
+    /// [`MAX_KNOCKS_PER_GRANT`] knocks waiting.
+    pub fn knock(
+        &self,
+        core: &Core,
+        knocker: Knocker,
+        ctl: mpsc::UnboundedSender<ServerCtl>,
+        conn: iroh::endpoint::Connection,
+    ) -> Result<KnockId, RefuseReason> {
+        let leaf = knocker
+            .grant_ids
+            .last()
+            .copied()
+            .unwrap_or(GrantId([0; 16]));
+        let name = if knocker.name.is_empty() {
+            format!("guest-{}", &hex(&knocker.actor.device.0)[..6])
+        } else {
+            knocker.name.clone()
+        };
+        let mut knocks = lock(&self.knocks);
+        let replaced: Vec<KnockId> = knocks
+            .iter()
+            .filter(|(_, k)| k.knock.actor.device == knocker.actor.device)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &replaced {
+            knocks.remove(id);
+        }
+        let waiting = knocks.values().filter(|k| k.knock.grant_id == leaf).count();
+        if waiting >= MAX_KNOCKS_PER_GRANT {
+            drop(knocks);
+            self.audit.append(
+                AuditKind::Denied,
+                AuditEntry {
+                    actor: Some(knocker.actor),
+                    grant_id: Some(leaf),
+                    detail: format!("knock from {name} refused: too many waiting on this invite"),
+                    ..AuditEntry::default()
+                },
+            );
+            return Err(RefuseReason::InvalidGrant);
+        }
+        let knock_id = KnockId(self.next_knock.fetch_add(1, Ordering::Relaxed));
+        let knock = Knock {
+            knock_id,
+            actor: knocker.actor,
+            name,
+            grant_id: leaf,
+            roles: knocker.roles,
+            scope: knocker.scope,
+            at: UnixMillis(now_millis()),
+        };
+        knocks.insert(
+            knock_id,
+            PendingKnock {
+                knock: knock.clone(),
+                grant_ids: knocker.grant_ids,
+                expires: knocker.expires,
+                ctl,
+                conn,
+            },
+        );
+        drop(knocks);
+        for id in replaced {
+            core.emit(Event::Knock(KnockUpdate::Gone {
+                knock_id: id,
+                outcome: KnockOutcome::Withdrawn,
+                by: None,
+            }));
+        }
+        self.audit.append(
+            AuditKind::Knock,
+            AuditEntry {
+                actor: Some(knock.actor),
+                grant_id: Some(leaf),
+                detail: format!(
+                    "{} knocked to join as {} on {}",
+                    knock.name,
+                    knock.roles.names(),
+                    knock.scope
+                ),
+                ..AuditEntry::default()
+            },
+        );
+        core.emit(Event::Knock(KnockUpdate::Added(knock)));
+        Ok(knock_id)
+    }
+
+    /// The knocker gave their name.
+    pub fn rename_knock(&self, core: &Core, id: KnockId, name: &str) {
+        let name: String = name.trim().chars().take(64).collect();
+        if name.is_empty() {
+            return;
+        }
+        let updated = lock(&self.knocks).get_mut(&id).map(|k| {
+            k.knock.name = name;
+            k.knock.clone()
+        });
+        if let Some(knock) = updated {
+            core.emit(Event::Knock(KnockUpdate::Added(knock)));
+        }
+    }
+
+    /// The knocker stopped waiting (disconnected). No-op once answered.
+    pub fn withdraw_knock(&self, core: &Core, id: KnockId) {
+        let Some(gone) = lock(&self.knocks).remove(&id) else {
+            return;
+        };
+        self.audit.append(
+            AuditKind::KnockAnswered,
+            AuditEntry {
+                actor: Some(gone.knock.actor),
+                grant_id: Some(gone.knock.grant_id),
+                detail: format!("{} stopped waiting", gone.knock.name),
+                ..AuditEntry::default()
+            },
+        );
+        core.emit(Event::Knock(KnockUpdate::Gone {
+            knock_id: id,
+            outcome: KnockOutcome::Withdrawn,
+            by: None,
+        }));
+    }
+
+    /// Knocks waiting for an owner, oldest first.
+    pub fn knocks(&self) -> Vec<Knock> {
+        lock(&self.knocks)
+            .values()
+            .map(|k| k.knock.clone())
+            .collect()
+    }
+
+    /// An owner's answer: admit with roles (a fresh grant bound to the knocking device, signed
+    /// by the daemon, on the invite's scope) or deny. The knocking connection is told and
+    /// closed; an admitted guest reconnects with the new grant.
+    ///
+    /// # Errors
+    ///
+    /// [`MpError::NotFound`] if the knock is no longer waiting, [`MpError::Invalid`] for an
+    /// admission without roles, [`MpError::Conflict`] if the invite was revoked meanwhile.
+    pub fn answer_knock(
+        &self,
+        core: &Core,
+        by: &Authz,
+        id: KnockId,
+        admit: Option<Admit>,
+    ) -> Result<MpResponse, MpError> {
+        if admit.is_some_and(|a| a.roles == Roles::EMPTY) {
+            return Err(MpError::Invalid("admit with at least one role".into()));
+        }
+        let pending = lock(&self.knocks)
+            .remove(&id)
+            .ok_or_else(|| MpError::NotFound("that knock is no longer waiting".into()))?;
+        let knock = &pending.knock;
+        let now = UnixMillis(now_millis());
+        let invite_valid = pending.expires.is_none_or(|e| e > now) && {
+            let store = lock(&self.store);
+            !pending.grant_ids.iter().any(|&g| store.grant_revoked(g))
+                && !store.device_revoked(knock.actor.device)
+        };
+        let (answer, outcome, response) = match admit {
+            Some(admit) if invite_valid => {
+                let (chain, info) = self.admit(core, knock, admit, now)?;
+                (
+                    KnockAnswer::Admitted(chain),
+                    KnockOutcome::Admitted { roles: admit.roles },
+                    MpResponse::Admitted(info),
+                )
+            }
+            Some(_) => {
+                let _ = pending
+                    .ctl
+                    .send(ServerCtl::KnockAnswer(KnockAnswer::Denied));
+                close_soon(pending.conn.clone(), KNOCK_LINGER, b"invite revoked");
+                core.emit(Event::Knock(KnockUpdate::Gone {
+                    knock_id: id,
+                    outcome: KnockOutcome::Denied,
+                    by: Some(by.actor),
+                }));
+                return Err(MpError::Conflict(
+                    "the invite was revoked or expired while they waited".into(),
+                ));
+            }
+            None => (KnockAnswer::Denied, KnockOutcome::Denied, MpResponse::Done),
+        };
+        let _ = pending.ctl.send(ServerCtl::KnockAnswer(answer));
+        close_soon(pending.conn.clone(), KNOCK_LINGER, b"knock answered");
+        let detail = match outcome {
+            KnockOutcome::Admitted { roles } => format!(
+                "admitted {} as {} on {}",
+                knock.name,
+                roles.names(),
+                knock.scope
+            ),
+            _ => format!("turned {} away", knock.name),
+        };
+        self.audit.append(
+            AuditKind::KnockAnswered,
+            AuditEntry {
+                detail,
+                ..by.audit()
+            },
+        );
+        core.emit(Event::Knock(KnockUpdate::Gone {
+            knock_id: id,
+            outcome,
+            by: Some(by.actor),
+        }));
+        Ok(response)
+    }
+
+    /// Mints and records the grant an admitted knocker joins with.
+    fn admit(
+        &self,
+        core: &Core,
+        knock: &Knock,
+        admit: Admit,
+        now: UnixMillis,
+    ) -> Result<(GrantChain, GrantInfo), MpError> {
+        let key = DeviceKey::from_seed(&core.identity.secret.to_bytes())
+            .map_err(|e| MpError::Failed(e.to_string()))?;
+        let mut spec = GrantSpec::new(admit.roles, knock.scope);
+        spec.expires = Some(
+            admit
+                .expires
+                .unwrap_or(UnixMillis(now.0 + KNOCK_ADMIT_TTL.as_millis() as u64)),
+        );
+        spec.max_uses = Some(1);
+        spec.bind = Some(knock.actor.device);
+        spec.label = knock.name.clone();
+        let chain = grants::issue(&key, core.identity.daemon_id(), &spec, now);
+        let device = hex(&knock.actor.device.0);
+        let mut store = lock(&self.store);
+        let record = store.upsert(&chain);
+        record.bound.push(device.clone());
+        record.redeemed_at.insert(device, now.0);
+        record.terms = InviteTerms {
+            knock: false,
+            history: admit.history,
+        };
+        store.save(&self.store_path);
+        let info = self.info(&store, &chain);
+        Ok((chain, info))
+    }
+
+    /// Knocks whose invite was revoked or expired: tell the knocker and drop them.
+    fn drop_invalid_knocks(&self, core: &Core) {
+        let now = now_millis();
+        let doomed: Vec<PendingKnock> = {
+            let store = lock(&self.store);
+            let mut knocks = lock(&self.knocks);
+            let ids: Vec<KnockId> = knocks
+                .iter()
+                .filter(|(_, k)| {
+                    k.expires.is_some_and(|e| e.0 <= now)
+                        || k.grant_ids.iter().any(|&g| store.grant_revoked(g))
+                        || store.device_revoked(k.knock.actor.device)
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            ids.iter().filter_map(|id| knocks.remove(id)).collect()
+        };
+        for k in doomed {
+            let _ = k.ctl.send(ServerCtl::KnockAnswer(KnockAnswer::Denied));
+            close_soon(k.conn, KNOCK_LINGER, b"revoked");
+            core.emit(Event::Knock(KnockUpdate::Gone {
+                knock_id: k.knock.knock_id,
+                outcome: KnockOutcome::Withdrawn,
+                by: None,
+            }));
+        }
+    }
+
+
+    /// A session's approval policy (the default: any approver, any risk).
+    pub fn policy(&self, session: SessionId) -> ApprovalPolicy {
+        lock(&self.store)
+            .policies
+            .get(&session.0)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The policy of the session a pane belongs to.
+    pub fn policy_of_pane(&self, core: &Core, pane: PaneId) -> ApprovalPolicy {
+        core.session_of_pane(pane)
+            .map(|s| self.policy(s))
+            .unwrap_or_default()
+    }
+
+    /// Sets a session's approval policy (the caller checked the owner role), audits and
+    /// broadcasts it.
+    pub fn set_policy(
+        &self,
+        core: &Core,
+        by: &Authz,
+        session: SessionId,
+        policy: ApprovalPolicy,
+    ) -> ApprovalPolicy {
+        {
+            let mut store = lock(&self.store);
+            if policy == ApprovalPolicy::default() {
+                store.policies.remove(&session.0);
+            } else {
+                store.policies.insert(session.0, policy);
+            }
+            store.save(&self.store_path);
+        }
+        self.audit.append(
+            AuditKind::Policy,
+            AuditEntry {
+                detail: format!(
+                    "approvals in session {session}: {}",
+                    approvals::describe(policy)
+                ),
+                ..by.audit()
+            },
+        );
+        core.emit(Event::ApprovalPolicy(session, policy));
+        policy
+    }
+
+    /// Whether a guest principal still holds a valid grant somewhere (since-join views of
+    /// principals without one are dropped).
+    pub fn principal_has_access(&self, principal: PrincipalId) -> bool {
+        if self.principal_connected(principal) {
+            return true;
+        }
+        let now = now_millis();
+        let store = lock(&self.store);
+        store.guests.iter().any(|g| {
+            let Some(device) = unhex(&g.device).map(DeviceId) else {
+                return false;
+            };
+            if grants::guest_principal(device) != principal || store.device_revoked(device) {
+                return false;
+            }
+            store
+                .grants
+                .iter()
+                .filter(|s| s.bound.contains(&g.device))
+                .filter_map(Store::chain_of)
+                .any(|chain| {
+                    chain.links.iter().all(|l| {
+                        !store.grant_revoked(l.grant.grant_id)
+                            && l.grant.expires.is_none_or(|e| e.0 > now)
+                    })
+                })
+        })
     }
 
     // --- leases -----------------------------------------------------------------------------
@@ -1077,6 +1549,83 @@ impl Mp {
             self.transfer(core, pane, to, "took control (holder idle)");
         }
         self.kick_invalid();
+        self.drop_invalid_knocks(core);
+    }
+}
+
+/// What a decision may do under its session's approval policy.
+pub(crate) enum Gate {
+    /// Apply it.
+    Proceed,
+    /// Counted; the request waits for a second person. The vote is audited (with the
+    /// decider's signature) and broadcast; the agent is not answered yet.
+    Held,
+}
+
+/// reaches the agent. `signed` is what the decider signed and `sig` its signature, kept in
+/// the audit record of a held vote.
+///
+/// # Errors
+///
+/// The policy's refusal ([`MpError::Forbidden`] or [`MpError::Conflict`]), audited as
+/// [`AuditKind::Denied`]; [`MpError::NotFound`] when the request is no longer open.
+pub(crate) fn gate_decision(
+    core: &Core,
+    ballot: approvals::Ballot<'_>,
+    request: proto::RequestId,
+    option: proto::OptionId,
+    signed: (Vec<u8>, Vec<u8>),
+) -> Result<Gate, MpError> {
+    let (pane, facts) = core
+        .request_facts(request, Some(option))
+        .ok_or_else(|| MpError::NotFound("the request is no longer open".into()))?;
+    let mp = &core.mp;
+    let policy = mp.policy_of_pane(core, pane);
+    let risk = proto::Risk::of_tool(facts.tool.as_deref());
+    let allow = facts.allows.unwrap_or(true);
+    let verdict = mp
+        .approvals
+        .judge(policy, pane, request, risk, allow, ballot)
+        .inspect_err(|e| {
+            mp.audit.append(
+                AuditKind::Denied,
+                AuditEntry {
+                    actor: Some(ballot.actor),
+                    pane_id: Some(pane),
+                    detail: format!("{} could not answer {}: {e}", ballot.name, facts.summary),
+                    ..AuditEntry::default()
+                },
+            );
+        })?;
+    match verdict {
+        approvals::Verdict::Decide => Ok(Gate::Proceed),
+        approvals::Verdict::Held(status) => {
+            let (signed, sig) = signed;
+            mp.audit.append(
+                AuditKind::Approval,
+                AuditEntry {
+                    actor: Some(ballot.actor),
+                    pane_id: Some(pane),
+                    detail: format!(
+                        "{} approved {} (1 of 2; waiting for a second person)",
+                        ballot.name, facts.summary
+                    ),
+                    approval: Some(proto::ApprovalAudit {
+                        request_id: request,
+                        agent_request: facts.request.to_string(),
+                        option_id: option,
+                        option: facts.option.unwrap_or_default(),
+                        tool: facts.tool,
+                        summary: facts.summary,
+                        signed,
+                        sig,
+                    }),
+                    ..AuditEntry::default()
+                },
+            );
+            core.emit(Event::ApprovalStatus(status));
+            Ok(Gate::Held)
+        }
     }
 }
 
@@ -1089,9 +1638,14 @@ fn kick(
     let _ = ctl.send(ServerCtl::Revoked {
         grant_id: grant.unwrap_or(GrantId([0; 16])),
     });
+    close_soon(conn, Duration::from_millis(150), b"revoked");
+}
+
+/// Closes a connection after `delay`, so the last message sent on it lands first.
+fn close_soon(conn: iroh::endpoint::Connection, delay: Duration, why: &'static [u8]) {
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        conn.close(1u32.into(), b"revoked");
+        tokio::time::sleep(delay).await;
+        conn.close(1u32.into(), why);
     });
 }
 
@@ -1103,8 +1657,25 @@ fn short(bytes: &[u8]) -> String {
 pub(crate) async fn run(core: std::sync::Arc<Core>) {
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut ticks: u64 = 0;
     loop {
         interval.tick().await;
         core.mp.tick(&core);
+        ticks += 1;
+        if ticks.is_multiple_of(120) {
+            prune_views(&core);
+        }
+    }
+}
+
+/// Drops since-join views of principals whose access ended (revoked, expired): each is a
+/// whole terminal's worth of memory.
+fn prune_views(core: &Core) {
+    for (_, entry) in core.pane_entries() {
+        for principal in entry.pane.view_principals() {
+            if !core.mp.principal_has_access(principal) {
+                entry.pane.close_view(principal);
+            }
+        }
     }
 }

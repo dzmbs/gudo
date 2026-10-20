@@ -9,6 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use unnamed_core::{
+    ApprovalMode, ApprovalPolicy, ConnectOptions, KnockListener, KnockResult, Risk, knock_invite,
+};
+use unnamed_core::{
     AttentionKind, AttentionSeen, AttentionUpdate, Axis, ClientConfig, ClientEvent,
     ClientEventListener, DaemonClient, DeleteMode, DiffBase, EditorKind, FileChange, FileKind,
     ForwardTarget, GitDiffRequest, InputRejectReason, InviteOptions, LayoutOp, MultiplayerEvent,
@@ -398,6 +401,8 @@ fn invite_join_and_a_viewer_cannot_type() {
             delegate: false,
             label: "carol".into(),
             inviter: "alice".into(),
+            knock: false,
+            since_join: false,
         }))
         .unwrap();
     assert!(
@@ -827,4 +832,139 @@ fn push_register_status_unregister() {
         open_push_notification(key.secret, "not sealed".into()).unwrap_err(),
         PushError::Malformed
     );
+}
+
+impl KnockListener for Recorder<u64> {
+    fn on_waiting(&self, knock_id: u64) {
+        self.push(knock_id);
+    }
+}
+
+#[test]
+fn knock_admit_and_session_rules() {
+    let host = Host::start();
+    let (owner, owner_events) = host.client();
+    let owner_mp: Arc<Recorder<MultiplayerEvent>> = Recorder::new();
+    owner.set_multiplayer_listener(owner_mp.clone());
+    attach(&owner, &owner_events);
+    let session = owner_events.wait("attached", |all| {
+        all.iter().find_map(|e| match e {
+            ClientEvent::Layout { layout } => Some(layout.session_id),
+            _ => None,
+        })
+    });
+
+    // A knock invite says so on the join card.
+    let invite = host
+        .block_on(owner.create_invite(InviteOptions {
+            roles: vec![Role::Viewer],
+            scope: Scope::Daemon,
+            ttl_secs: Some(3600),
+            max_uses: None,
+            delegate: false,
+            label: String::new(),
+            inviter: "alice".into(),
+            knock: true,
+            since_join: true,
+        }))
+        .unwrap();
+    let info = inspect_invite(invite.link.clone()).unwrap();
+    assert!(info.knock && info.since_join, "{info:?}");
+
+    // Dee knocks from another thread (as a Swift task would) and waits.
+    let key = generate_device_key();
+    let knocker = ClientConfig {
+        secret_key: key.clone(),
+        ..config()
+    };
+    let waiting: Arc<Recorder<u64>> = Recorder::new();
+    let listener = waiting.clone();
+    let link = invite.link.clone();
+    let knock = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(knock_invite(
+                link,
+                knocker,
+                ConnectOptions::default(),
+                Some("Dee".into()),
+                listener,
+            ))
+    });
+    let knock_id = waiting.wait("asked the owner", |all| all.first().copied());
+    let seen = owner_mp.wait("knock pushed", |all| {
+        all.iter().rev().find_map(|e| match e {
+            MultiplayerEvent::KnockAdded { knock } if knock.name == "Dee" => Some(knock.clone()),
+            _ => None,
+        })
+    });
+    assert_eq!(seen.knock_id, knock_id);
+    assert!(
+        owner
+            .pending_knocks()
+            .iter()
+            .any(|k| k.knock_id == knock_id)
+    );
+    let grant = host
+        .block_on(owner.admit_knock(knock_id, vec![Role::Viewer, Role::Approver], false, None))
+        .unwrap();
+    let KnockResult::Admitted { invite: admitted } = knock.join().unwrap().unwrap() else {
+        panic!("not admitted");
+    };
+    assert_eq!(grant.bound.len(), 1);
+    let dee_events = Recorder::new();
+    let dee_mp: Arc<Recorder<MultiplayerEvent>> = Recorder::new();
+    let dee = DaemonClient::join(
+        admitted,
+        ClientConfig {
+            secret_key: key,
+            ..config()
+        },
+        dee_events.clone(),
+    )
+    .unwrap();
+    dee.set_multiplayer_listener(dee_mp.clone());
+    connected(&dee_events);
+    let me = dee_mp.wait("joined", |all| {
+        all.iter().find_map(|e| match e {
+            MultiplayerEvent::Joined { info } => Some(info.clone()),
+            _ => None,
+        })
+    });
+    assert_eq!(me.roles, [Role::Viewer, Role::Approver]);
+    assert_eq!(me.name, "Dee");
+    owner_mp.wait("knock gone", |all| {
+        all.iter()
+            .any(|e| matches!(e, MultiplayerEvent::KnockGone { knock_id: k, .. } if *k == knock_id))
+            .then_some(())
+    });
+
+    // Session rules: the owner sets them, the guest hears them and may not change them.
+    attach(&dee, &dee_events);
+    let rules = ApprovalPolicy {
+        mode: ApprovalMode::TwoPerson,
+        max_risk: Risk::Edits,
+    };
+    assert_eq!(
+        host.block_on(owner.set_approval_policy(session, rules))
+            .unwrap(),
+        rules
+    );
+    dee_mp.wait("rules pushed", |all| {
+        all.iter()
+            .any(|e| matches!(e, MultiplayerEvent::ApprovalPolicy { policy, .. } if *policy == rules))
+            .then_some(())
+    });
+    assert_eq!(dee.approval_policy_cached(), Some(rules));
+    assert!(matches!(
+        host.block_on(dee.set_approval_policy(
+            session,
+            ApprovalPolicy {
+                mode: ApprovalMode::AnyApprover,
+                max_risk: Risk::Any,
+            }
+        )),
+        Err(unnamed_core::MultiplayerError::Forbidden { .. })
+    ));
+    assert_eq!(host.block_on(dee.approval_policy(session)).unwrap(), rules);
 }

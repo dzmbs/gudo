@@ -131,6 +131,8 @@ pub(crate) struct PaneStream {
     pub cmds: mpsc::UnboundedReceiver<StreamCmd>,
     pub class: Class,
     pub one_shot: bool,
+    /// Snapshots come from this principal's since-join view (multiplayer).
+    pub viewer: Option<proto::PrincipalId>,
 }
 
 struct State {
@@ -253,7 +255,8 @@ impl PaneStream {
 
     async fn send_snapshot(&mut self, st: &mut State) -> Result<(), NetError> {
         let pane = Arc::clone(&self.pane);
-        let snapshot = tokio::task::spawn_blocking(move || pane.snapshot())
+        let viewer = self.viewer;
+        let snapshot = tokio::task::spawn_blocking(move || pane.snapshot_as(viewer))
             .await
             .map_err(|e| NetError::Frame(proto::FrameError::Io(std::io::Error::other(e))))?;
         let snapshot = match snapshot {

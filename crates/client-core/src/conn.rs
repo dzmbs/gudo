@@ -266,6 +266,14 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | Caps::ATTACH_RESULT
             | Caps::DAEMON_INFO
             | Caps::AGENT_USAGE
+            | Caps::APPROVAL_POLICY
+            // Owner devices hear knocks; a guest dialling here never waits in the lobby (a
+            // knock invite goes through `knock::knock` instead).
+            | if crate::mp::is_guest(inner) {
+                Caps::EMPTY
+            } else {
+                Caps::KNOCK
+            }
             | if inner.options.askpass {
                 Caps::ASKPASS
             } else {
@@ -360,6 +368,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         resumed
     };
     lock(&inner.stats).connections += 1;
+    inner.mp.reset_for_connection();
     // History requests in flight died with the previous connection.
     for m in lock(&inner.mirrors).values_mut() {
         m.history.in_flight = false;

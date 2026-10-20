@@ -225,6 +225,28 @@ pub(crate) fn action(
         &push::decision_message(&req.token, decision),
     ]
     .concat();
+    // Push actions come from owner devices only, so only the two-person rule can hold them.
+    let ballot = crate::mp::approvals::Ballot {
+        actor,
+        name: "The owner",
+        owner: true,
+    };
+    let gate = crate::mp::gate_decision(
+        core,
+        ballot,
+        token.request,
+        option,
+        (signed.clone(), req.sig.clone()),
+    );
+    match gate {
+        Ok(crate::mp::Gate::Proceed) => {}
+        Ok(crate::mp::Gate::Held) => {
+            return Err(WsError::Conflict(
+                "approval counted; a second person must approve too".into(),
+            ));
+        }
+        Err(e) => return Err(WsError::Denied(e.to_string())),
+    }
     let record = |decided: &Decided, details: &crate::agent::DecidedRequest| {
         core.mp.audit.append(
             proto::AuditKind::Approval,
@@ -267,6 +289,7 @@ pub(crate) fn action(
             )),
             None => WsError::NotFound("the agent is no longer waiting for this".into()),
         })?;
+    core.mp.approvals.forget(token.request);
     tracing::info!(
         pane = decided.pane_id.0,
         approve = req.approve,
