@@ -90,6 +90,7 @@ final class MetalRenderer {
         var bgCells: MTLBuffer?
         var text: MTLBuffer?
         var images: MTLBuffer?
+        var gutter: MTLBuffer?
     }
 
     private var frames = [FrameBuffers](repeating: FrameBuffers(), count: maxFramesInFlight)
@@ -116,6 +117,7 @@ final class MetalRenderer {
     func draw(
         _ frame: FrameContents, uniforms: Uniforms, fonts: FontGrid, to target: MTLTexture, present drawable: CAMetalDrawable?,
         images: [ImageDraw] = [], imageClip: MTLScissorRect? = nil,
+        gutter: [ImageDraw] = [], gutterClip: MTLScissorRect? = nil,
         onGPUComplete: @escaping @Sendable (Double) -> Void
     ) {
         inFlight.wait()
@@ -169,6 +171,20 @@ final class MetalRenderer {
             for (index, image) in images.enumerated() {
                 encoder.setVertexBuffer(buffer, offset: index * MemoryLayout<ImageVertex>.stride, index: 0)
                 encoder.setFragmentTexture(image.texture, index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
+            }
+        }
+
+        // 5. Gutter stripes (shell command marks) in the left padding, through the image
+        //    pipeline with 1×1 textures, clipped to the padding beside the grid's rows.
+        if !gutter.isEmpty, let gutterClip, let buffer = upload(gutter.map(\.vertex), into: &frames[frameIndex].gutter) {
+            encoder.setRenderPipelineState(gpu.imagePipeline)
+            encoder.setScissorRect(gutterClip)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            for (index, stripe) in gutter.enumerated() {
+                encoder.setVertexBuffer(buffer, offset: index * MemoryLayout<ImageVertex>.stride, index: 0)
+                encoder.setFragmentTexture(stripe.texture, index: 0)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
             }
         }

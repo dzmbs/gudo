@@ -595,3 +595,45 @@ iPadOS restores keyboard focus to the first pane (the model then shows pane 1 wh
 the keyboard), which the content check trips on. The same behaviours are covered without UI by
 `WindowsTests` and `WindowLayoutStoreTests`. Also seen: right after the system's "Open in…?"
 confirmation, focus can move to a tab's first pane (pre-existing focus restoration, not fixed).
+
+
+Every daemon pane gets a `PaneCommandMarks` (App/Sources/Panes), attached next to `PaneDrawing`:
+
+- **Rows.** It reads the pane's `Commands` list (`DaemonWorkspace.commands`) on attach, after
+  every snapshot (resume, reattach) and shortly after each `CommandMark` push for the pane.
+  `CommandBlocks.blocks` (HostKit, pure, tested) turns it into blocks named like row anchors
+  (rows from the bottom at the list's output offset): prompt row to the last output row. The
+  end mark's row is the next prompt when the output ended with a newline; with a following
+  command that is decided from its prompt row, for the newest command by the app's terminal
+  (`Terminal.isPromptRow`, or the row reaching the cursor). The controller pins the rows with
+  its own `RowTracker` (`onOutputApplied(observer: "command-marks")`; the router keeps one
+  callback per observer), so blocks scroll with the output and are pinned again once the
+  terminal reaches the list's offset.
+- **Stripes.** `TerminalSurface.gutterMarks` (TerminalKit) asks for `GutterMark`s before every
+  frame; the renderer draws them through the image pipeline (1×1 textures) in the left padding,
+  clipped to the grid's rows: up to 3 pt wide, right-aligned 2 pt from the text when the padding
+  allows. ANSI red (theme palette 1) for a non-zero exit, the foreground at 16 % for success,
+  38 % while running (to the cursor). None on the alternate screen. Each stripe on screen has an
+  accessibility element `command-mark-<id>` ("Command: …", value "Failed, exit 1" /
+  "Succeeded" / "Running").
+- **Menu.** `TerminalView.contextActions` adds a section to the iOS edit menu (long-press,
+  selection, secondary click) and to the Mac right-click menu for the command whose rows are
+  under the point, the likeliest next step first (the touch edit menu shows three items before
+  it pages: after a failure Ask Agent, after a success Re-run): Copy Output (`CommandOutput` by
+  id; the palette's Copy Last Command Output
+  shares `WindowModel.copyCommandOutput`), Copy Command, Re-run (bracketed paste + Return; not
+  while a command runs) and Ask Agent (`CommandBlocks.agentPrompt`: command, outcome and the end
+  of the output, plain text within the prompt sanitizer's rules, typed with `prompt(submit:
+  false)` into an agent pane of the window, this tab first; else New Task opens with it as the
+  prompt via `WindowModel.newTaskPrompt`).
+- **⌘↑ / ⌘↓** (`WorkspaceAction.previousPrompt/nextPrompt`, Pane menu, terminal key commands):
+  the nearest command prompt above or below the viewport's top row becomes the top row; past
+  the last, back to the bottom. Panes without marks use libghostty-vt's own prompt rows
+  (`scrollViewport(byPrompts:)`).
+- **Sidebar.** `DaemonWorkspace.runningCommands` follows the marks (and lists); a tab row whose
+  pane runs a shell command for 3 s or more shows "cargo build · 1m 12s" (monospaced digits,
+  `TabSubtitle`) in place of its context line. Not for agent panes.
+
+Tests: `CommandBlocksTests` (HostKit), `GutterMarkTests` and `promptRowsAndJumpingBetweenPrompts`
+(TerminalKit), `CommandMarksUITests` (iPad, local daemon), the daemon's shell integration tests
+(notification body).

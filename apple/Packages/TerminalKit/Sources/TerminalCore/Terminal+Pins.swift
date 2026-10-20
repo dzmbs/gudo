@@ -102,6 +102,45 @@ extension Terminal {
         }
     }
 
+    /// Whether the pin's row holds a shell prompt (OSC 133 `A`, or a continuation line), as this
+    /// terminal parsed it. Nil when the pin has no value. A terminal restored from a snapshot
+    /// may not know which rows were prompts.
+    public func isPromptRow(_ pin: RowPin) -> Bool? {
+        withHandle { _ in
+            var ref = GhosttyGridRef()
+            ref.size = MemoryLayout<GhosttyGridRef>.size
+            guard ghostty_tracked_grid_ref_snapshot(pin.ref, &ref) == GHOSTTY_SUCCESS else { return nil }
+            var row: GhosttyRow = 0
+            guard ghostty_grid_ref_row(&ref, &row) == GHOSTTY_SUCCESS else { return nil }
+            var semantic = GHOSTTY_ROW_SEMANTIC_NONE
+            guard ghostty_row_get(row, GHOSTTY_ROW_DATA_SEMANTIC_PROMPT, &semantic) == GHOSTTY_SUCCESS else { return nil }
+            return semantic != GHOSTTY_ROW_SEMANTIC_NONE
+        }
+    }
+
+    /// The viewport's top row in screen coordinates (0 = the oldest retained row).
+    public var viewportTopRow: Int {
+        withHandle { t in Self.viewportTop(t) }
+    }
+
+    /// Scrolls so screen row `screenRow` is the viewport's top row (clamped so the viewport
+    /// never passes the active area).
+    public func scrollViewport(toScreenRow screenRow: Int) {
+        var scroll = GhosttyTerminalScrollViewport()
+        scroll.tag = GHOSTTY_SCROLL_VIEWPORT_ROW
+        scroll.value.row = max(0, screenRow)
+        withHandle { t in ghostty_terminal_scroll_viewport(t, scroll) }
+    }
+
+    /// Scrolls by `prompts` shell prompts (negative: back towards history) using the rows the
+    /// shell marked with OSC 133, as Ghostty's `jump_to_prompt` does. No-op without marks.
+    public func scrollViewport(byPrompts prompts: Int) {
+        var scroll = GhosttyTerminalScrollViewport()
+        scroll.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA_PROMPT
+        scroll.value.delta_prompt = prompts
+        withHandle { t in ghostty_terminal_scroll_viewport(t, scroll) }
+    }
+
     private static func screenRow(_ pin: RowPin) -> Int? {
         var out = GhosttyPointCoordinate()
         guard ghostty_tracked_grid_ref_point(pin.ref, GHOSTTY_POINT_TAG_SCREEN, &out) == GHOSTTY_SUCCESS else { return nil }

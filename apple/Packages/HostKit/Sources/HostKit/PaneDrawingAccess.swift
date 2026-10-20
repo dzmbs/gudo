@@ -12,8 +12,10 @@ extension DaemonPaneBackend {
 
     /// `callback(seq, snapshot)` runs right after the pane's terminal applied output up to `seq`
     /// (`snapshot`: a snapshot taken at `seq` replaced its state), on the connection's thread,
-    /// in stream order. Pass nil to stop.
-    public func onOutputApplied(_ callback: (@Sendable (_ seq: UInt64, _ snapshot: Bool) -> Void)?) {
-        router.onApplied(pane.rawValue, tap: tap, callback)
+    /// in stream order. One callback per `observer` (drawing, command marks); nil stops it.
+    public func onOutputApplied(
+        observer: String = "drawing", _ callback: (@Sendable (_ seq: UInt64, _ snapshot: Bool) -> Void)?
+    ) {
+        router.onApplied(pane.rawValue, tap: tap, observer: observer, callback)
     }
 }

@@ -52,3 +52,39 @@ extension Terminal {
         visibleText().split(separator: "\n", omittingEmptySubsequences: false).dropFirst(row).first.map(String.init) ?? ""
     }
 }
+
+/// Rows the shell marked as prompts (OSC 133 A) are known by their pins, and the viewport jumps
+/// between them (Ghostty's `jump_to_prompt`).
+@Test func promptRowsAndJumpingBetweenPrompts() throws {
+    let terminal = Terminal(cols: 20, rows: 4) { _ in }
+    func command(_ name: String) -> String {
+        "\u{1b}]133;A\u{07}$ \u{1b}]133;B\u{07}\(name)\r\n\u{1b}]133;C\u{07}\(name) 1\r\n\(name) 2\r\n\u{1b}]133;D;0\u{07}"
+    }
+    terminal.write(Array((command("one") + command("two") + command("three") + "\u{1b}]133;A\u{07}$ ").utf8))
+    let prompt = try #require(terminal.pinRow(screenRow: 3))
+    let output = try #require(terminal.pinRow(screenRow: 4))
+    #expect(terminal.isPromptRow(prompt) == true)
+    #expect(terminal.isPromptRow(output) == false)
+    #expect(terminal.text(atScreenRow: 3).hasPrefix("$ two"))
+
+    // At the bottom "$ three" is the top row; back one prompt shows "$ two", again "$ one",
+    // and forward one "$ two" again.
+    #expect(terminal.text(atViewport: 0).hasPrefix("$ three"))
+    terminal.scrollViewport(byPrompts: -1)
+    #expect(terminal.text(atViewport: 0).hasPrefix("$ two"))
+    terminal.scrollViewport(byPrompts: -1)
+    #expect(terminal.text(atViewport: 0).hasPrefix("$ one"))
+    terminal.scrollViewport(byPrompts: 1)
+    #expect(terminal.text(atViewport: 0).hasPrefix("$ two"))
+    terminal.scrollViewport(toScreenRow: 0)
+    #expect(terminal.viewportTopRow == 0)
+    #expect(terminal.text(atViewport: 0).hasPrefix("$ one"))
+}
+
+extension Terminal {
+    fileprivate func text(atScreenRow row: Int) -> String {
+        scrollViewport(toScreenRow: row)
+        defer { scrollToBottom() }
+        return text(atViewport: 0)
+    }
+}

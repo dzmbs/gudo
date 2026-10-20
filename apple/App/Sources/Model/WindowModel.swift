@@ -43,6 +43,8 @@ final class WindowModel {
         didSet { if destination != oldValue { reportViews() } }
     }
     var sheet: SheetRoute?
+    /// The prompt New Task starts with, once (Ask Agent about a command with no agent open).
+    @ObservationIgnored var newTaskPrompt: String?
     var isPaletteShown = false {
         didSet {
             if !isPaletteShown { paletteMode = .commands }

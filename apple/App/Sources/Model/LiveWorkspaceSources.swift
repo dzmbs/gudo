@@ -1130,8 +1130,18 @@ extension WindowModel {
     /// Puts the focused pane's last command output on the pasteboard (the daemon's command
     /// marks, so only the output, not the prompt).
     func copyLastCommandOutput() async {
+        await copyCommandOutput { try await self.links.lastCommandOutput() }
+    }
+
+    /// Puts a command's output on the pasteboard and says how much (the palette's last
+    /// command, a command block's Copy Output).
+    func copyCommandOutput(_ fetch: () async throws -> (command: String?, output: String)) async {
         do {
-            let (command, output) = try await links.lastCommandOutput()
+            let (command, output) = try await fetch()
+            guard !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                toasts.show(Toast("\(command.map { "`\($0)`" } ?? "The command") printed nothing", systemImage: "doc.on.clipboard", style: .neutral))
+                return
+            }
             #if canImport(UIKit)
             UIPasteboard.general.string = output
             #else

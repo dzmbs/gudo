@@ -29,8 +29,9 @@ nonisolated final class PaneRouter: Sendable {
         var sink: Sink?
         /// How to copy this tap's terminal for a tap that starts later.
         var seed: Seed?
-        /// Told after the tap's terminal applied output up to an offset (drawing anchors).
-        var applied: Applied?
+        /// Told after the tap's terminal applied output up to an offset (drawing anchors,
+        /// command marks), by observer name.
+        var applied: [String: Applied] = [:]
         var prediction: Prediction?
         /// The size this tap's window wants (sent while it drives).
         var size: PaneSize?
@@ -362,9 +363,10 @@ nonisolated final class PaneRouter: Sendable {
     /// snapshot taken there replaced the terminal), on the delivering thread, in order.
     /// Output applied before the callback was set is reported once, at once, as a snapshot at
     /// the last offset (the terminal's state there; nothing earlier is known).
-    func onApplied(_ pane: UInt64, tap id: UInt64, _ callback: Applied?) {
+    /// Each `observer` name has one callback; nil removes it.
+    func onApplied(_ pane: UInt64, tap id: UInt64, observer: String, _ callback: Applied?) {
         let last = routes.withLock { routes in
-            routes[pane]?.taps[id]?.applied = callback
+            routes[pane]?.taps[id]?.applied[observer] = callback
             return routes[pane]?.lastApplied
         }
         if let last { callback?(last, true) }
@@ -375,8 +377,8 @@ nonisolated final class PaneRouter: Sendable {
         let callbacks = routes.withLock { routes -> [Applied] in
             routes[pane]?.lastApplied = offset.seq
             guard let taps = routes[pane]?.taps else { return [] }
-            if let only { return taps[only]?.applied.map { [$0] } ?? [] }
-            return taps.values.compactMap(\.applied)
+            if let only { return taps[only].map { Array($0.applied.values) } ?? [] }
+            return taps.values.flatMap(\.applied.values)
         }
         for callback in callbacks { callback(offset.seq, offset.snapshot) }
     }
