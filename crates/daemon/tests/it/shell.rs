@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use client_core::ClientConfig;
 use client_core::ClientEvent;
-use client_core::proto::Prediction;
+use client_core::proto::{AttentionKind, Prediction};
 
 use crate::support::{TestClient, start_with, ticket};
 
@@ -136,16 +136,28 @@ async fn scenario(shell: &Path, typed_commands: bool) {
     // ...but it is when nobody looks.
     c.client.set_view(None, vec![]);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    c.type_line(pane, "sleep 1.5; false");
+    c.type_line(pane, "sleep 1.5; echo 'it broke'; false");
     c.until("unseen long command", |c| !c.unseen.is_empty())
         .await;
-    let unseen = &c.unseen[0];
+    let unseen = c.unseen[0].clone();
     if typed_commands {
-        assert_eq!(unseen.command.as_deref(), Some("sleep 1.5; false"));
+        assert_eq!(
+            unseen.command.as_deref(),
+            Some("sleep 1.5; echo 'it broke'; false")
+        );
     }
     let end = unseen.finished.unwrap();
     assert_eq!(end.exit, Some(1));
     assert!(end.duration_ms >= 1400, "{end:?}");
+    // Its notification ends with the last line of output.
+    let list = c.client.attention_list().await.unwrap();
+    let item = list
+        .items
+        .iter()
+        .find(|i| matches!(&i.kind, AttentionKind::CommandFinished(m) if m.command_id == unseen.command_id))
+        .expect("an attention item for the command");
+    assert!(item.title.ends_with("failed (1)"), "{item:?}");
+    assert_eq!(item.body, "after 1 s · it broke");
 
     drop(c);
     daemon.shutdown().await;
