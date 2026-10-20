@@ -129,6 +129,8 @@ final class WindowModel {
     var browserURL: URL?
     /// The editor is presented (full screen on iPhone and iPad).
     var isEditorShown = false
+    /// The editor opens on the Remote Tunnel's offer (palette) instead of the default path.
+    var editorTunnelOffer = false
     let toasts = ToastCenter()
     /// The git-native workspace of this window (worktree, pull request, scripts).
     let git = GitUI()

@@ -395,12 +395,20 @@ protocol DiffSource: AnyObject {
 /// Where the editor is, in words the progress view shows.
 nonisolated enum EditorPhase: Hashable, Sendable {
     case idle
+    /// Microsoft's licence terms for this host have not been accepted yet: the first-use sheet
+    /// is up, and nothing of Microsoft's is installed or started until the user accepts.
+    case needsLicence
     /// Asking the host what it has.
     case checking
     /// First run: VS Code's CLI is downloading on the host.
     case installing
     /// The server is starting in the folder.
     case starting
+    /// Remote Tunnel (opt-in): the tunnel is starting or connecting.
+    case connectingTunnel
+    /// Remote Tunnel: the host waits for the user to sign in with this device code (in their
+    /// own browser; the app never completes it).
+    case signingIn(EditorDeviceCode)
     /// The workbench is loading in the web view.
     case loading(URL)
     case ready(URL)
@@ -414,10 +422,52 @@ nonisolated enum EditorPhase: Hashable, Sendable {
     }
 }
 
-/// VS Code in the browser over a forward to the host (`code serve-web`), never a sign-in.
+/// How the editor reaches the host.
+nonisolated enum EditorMode: Hashable, Sendable {
+    /// `code serve-web` over our direct forward: the default, never a sign-in.
+    case server
+    /// VS Code Remote Tunnels through vscode.dev: opt-in, signed in with the user's own GitHub or
+    /// Microsoft account.
+    case tunnel
+}
+
+/// The account a Remote Tunnel signs in with.
+nonisolated enum EditorTunnelAccount: String, Hashable, Sendable, CaseIterable {
+    case github, microsoft
+
+    var title: String {
+        switch self {
+        case .github: "GitHub"
+        case .microsoft: "Microsoft"
+        }
+    }
+}
+
+/// A device-code sign-in the host is waiting for (Remote Tunnel only).
+nonisolated struct EditorDeviceCode: Hashable, Sendable {
+    var account: EditorTunnelAccount
+    /// Where the user enters the code (`github.com/login/device`, `microsoft.com/devicelogin`).
+    var verificationURL: URL
+    var code: String
+}
+
+/// VS Code for the window's project: `code serve-web` over a forward to the host by default
+/// (never a sign-in); the Remote Tunnel through vscode.dev when the user picks it.
 @MainActor
 protocol EditorSource: AnyObject, Observable {
     var phase: EditorPhase { get }
+    /// Which path the editor took.
+    var mode: EditorMode { get }
+    /// The user accepted Microsoft's licence terms for this host in the first-use sheet:
+    /// remember it for the host and go on with what was asked.
+    func acceptLicence() async
+    /// The user cancelled the first-use sheet: nothing is installed or started.
+    func declineLicence()
+    /// Opens the folder through a VS Code Remote Tunnel instead (opt-in; the host signs in with
+    /// the user's own account by device code).
+    func openTunnel(account: EditorTunnelAccount) async
+    /// Desktop VS Code's URI for what the tunnel shows (`vscode://vscode-remote/tunnel+…`).
+    var tunnelDesktopURI: URL? { get }
     /// The folder the editor shows.
     var folder: String { get }
     var hostName: String { get }

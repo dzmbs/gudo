@@ -285,8 +285,14 @@ final class WorkspaceScreenModelTests: XCTestCase {
             state.editorDelay = .milliseconds(300)
         }
         let editor = LiveEditorSource(app: .shared)
+        editor.licence = Self.freshLicence()
         let context = try fakeContext(client, directory: "/home/me/proj/src")
         editor.contextOverride = { context }
+
+        // First use on the host: the licence sheet, and nothing asked of the host yet.
+        await editor.open()
+        XCTAssertEqual(editor.phase, .needsLicence)
+        XCTAssertFalse(client.calls.contains { $0.hasPrefix("openEditor") }, "nothing starts before the user accepts")
 
         var phases: [EditorPhase] = []
         let watcher = Task { @MainActor in
@@ -295,13 +301,14 @@ final class WorkspaceScreenModelTests: XCTestCase {
                 try? await Task.sleep(for: .milliseconds(5))
             }
         }
-        await editor.open()
+        await editor.acceptLicence()
         watcher.cancel()
+        XCTAssertTrue(editor.licence.isAccepted(host: "h1"), "kept for the host")
         XCTAssertTrue(phases.contains(.installing), "the first run says it is setting VS Code up: \(phases)")
         XCTAssertEqual(editor.folder, "/home/me/proj", "the repository root, not the pane's subdirectory")
         guard case .loading(let url) = editor.phase else { return XCTFail("loading: \(editor.phase)") }
         XCTAssertEqual(url.host(), "localhost")
-        XCTAssertTrue(client.calls.contains("openEditor /home/me/proj true"), "VS Code's licence is accepted by the app, never asked")
+        XCTAssertTrue(client.calls.contains("openEditor /home/me/proj true"), "the user's acceptance goes to the host")
         editor.didLoad()
         XCTAssertEqual(editor.phase, .ready(url))
 
@@ -319,6 +326,117 @@ final class WorkspaceScreenModelTests: XCTestCase {
 
         await editor.close(stopServer: true)
         XCTAssertTrue(client.calls.contains("closeEditor true"))
+    }
+
+    private static func freshLicence() -> EditorLicence {
+        let suite = "editor-licence-tests-\(UUID().uuidString)"
+        return EditorLicence(defaults: UserDefaults(suiteName: suite)!)
+    }
+
+    func testEditorLicenceIsPerHostAndDeclineStartsNothing() async throws {
+        let client = FakeWorkspaceClient()
+        let licence = Self.freshLicence()
+        let editor = LiveEditorSource(app: .shared)
+        editor.licence = licence
+        let context = try fakeContext(client)
+        editor.contextOverride = { context }
+
+        await editor.open()
+        XCTAssertEqual(editor.phase, .needsLicence)
+        editor.declineLicence()
+        XCTAssertEqual(editor.phase, .idle)
+        XCTAssertFalse(licence.isAccepted(host: "h1"))
+        XCTAssertFalse(client.calls.contains { $0.hasPrefix("openEditor") })
+
+        // Accepted on another host only: this one still asks.
+        licence.accept(host: "other")
+        await editor.open()
+        XCTAssertEqual(editor.phase, .needsLicence)
+
+        // Accepted here (earlier, in another window): no sheet.
+        licence.accept(host: "h1")
+        editor.declineLicence()
+        let second = LiveEditorSource(app: .shared)
+        second.licence = licence
+        second.contextOverride = { context }
+        await second.open()
+        guard case .loading = second.phase else { return XCTFail("\(second.phase)") }
+        licence.withdraw(host: "h1")
+        XCTAssertFalse(licence.isAccepted(host: "h1"))
+    }
+
+    func testEditorTunnelShowsTheDeviceCodeThenOpensVscodeDev() async throws {
+        let client = FakeWorkspaceClient()
+        let editor = LiveEditorSource(app: .shared)
+        editor.licence = Self.freshLicence()
+        let context = try fakeContext(client)
+        editor.contextOverride = { context }
+
+        await editor.openTunnel(account: .github)
+        XCTAssertEqual(editor.mode, .tunnel)
+        XCTAssertEqual(editor.phase, .needsLicence, "the tunnel needs the same terms")
+        XCTAssertFalse(client.calls.contains { $0.hasPrefix("tunnelStart") })
+
+        await editor.acceptLicence()
+        XCTAssertTrue(client.calls.contains("tunnelStart true gitHub"), "\(client.calls)")
+        XCTAssertFalse(client.calls.contains { $0.hasPrefix("cliInstall") }, "the host has a CLI")
+        guard case .signingIn(let login) = editor.phase else { return XCTFail("\(editor.phase)") }
+        XCTAssertEqual(login.code, "ABCD-1234")
+        XCTAssertEqual(login.verificationURL.host(), "github.com")
+        XCTAssertEqual(login.account, .github)
+
+        // The user signs in in their browser; the daemon pushes Running.
+        client.pushTunnel(.running(name: "studio", webUrl: "https://vscode.dev/tunnel/studio", adopted: false))
+        for _ in 0..<200 where editor.phase.url == nil { try await Task.sleep(for: .milliseconds(10)) }
+        guard case .loading(let url) = editor.phase else { return XCTFail("\(editor.phase)") }
+        XCTAssertEqual(url.host(), "vscode.dev")
+        XCTAssertEqual(editor.tunnelDesktopURI?.scheme, "vscode")
+
+        // A file opens through the tunnel too.
+        await editor.open(path: "/home/me/proj/src/main.rs", line: 7, column: nil)
+        XCTAssertTrue(client.calls.contains("tunnelOpen /home/me/proj/src/main.rs:7"))
+        XCTAssertNotNil(editor.pendingURL)
+
+        // Stopping ends the tunnel; the next open is the default editor.
+        await editor.close(stopServer: true)
+        XCTAssertTrue(client.calls.contains("tunnelStop"))
+        XCTAssertEqual(editor.mode, .server)
+    }
+
+    func testTunnelWebStandInForTests() {
+        XCTAssertEqual(TunnelWeb.url("https://vscode.dev/tunnel/box/home/me", base: nil)?.absoluteString, "https://vscode.dev/tunnel/box/home/me")
+        XCTAssertEqual(
+            TunnelWeb.url("https://vscode.dev/tunnel/box/home/me", base: "http://127.0.0.1:47712")?.absoluteString,
+            "http://127.0.0.1:47712/tunnel/box/home/me")
+    }
+
+    func testRemoteSSHPlan() {
+        let defaults = UserDefaults(suiteName: "remote-ssh-tests-\(UUID().uuidString)")!
+        let a = RemoteSSHPlan.port(for: "host-a", defaults: defaults)
+        XCTAssertTrue(RemoteSSHPlan.portRange.contains(a))
+        XCTAssertEqual(RemoteSSHPlan.port(for: "host-a", defaults: defaults), a, "stable per host")
+        var seen: Set<UInt16> = [a]
+        for i in 0..<50 { XCTAssertTrue(seen.insert(RemoteSSHPlan.port(for: "host-\(i)-x", defaults: defaults)).inserted, "no two hosts share a port") }
+        RemoteSSHPlan.reassign("host-a", to: 22999, defaults: defaults)
+        XCTAssertEqual(RemoteSSHPlan.port(for: "host-a", defaults: defaults), 22999)
+
+        XCTAssertEqual(RemoteSSHPlan.user(sshUser: "deploy", folder: "/home/me/proj"), "deploy")
+        XCTAssertEqual(RemoteSSHPlan.user(sshUser: nil, folder: "/home/me/proj"), "me")
+        XCTAssertEqual(RemoteSSHPlan.user(sshUser: "", folder: "/Users/me/src"), "me")
+        XCTAssertEqual(RemoteSSHPlan.user(sshUser: nil, folder: "/root/x"), "root")
+        XCTAssertNil(RemoteSSHPlan.user(sshUser: nil, folder: "/srv/app"))
+        XCTAssertNil(RemoteSSHPlan.user(sshUser: nil, folder: nil))
+
+        XCTAssertTrue(RemoteSSHPlan.isSSHBanner(Data("SSH-2.0-OpenSSH_9.6\r\n".utf8)))
+        XCTAssertFalse(RemoteSSHPlan.isSSHBanner(Data("HTTP/1.1 400".utf8)))
+        XCTAssertFalse(RemoteSSHPlan.isSSHBanner(Data()))
+
+        XCTAssertEqual(RemoteSSHPlan.uri("vscode://vscode-remote/ssh-remote+x/p", insiders: true), "vscode-insiders://vscode-remote/ssh-remote+x/p")
+        XCTAssertEqual(RemoteSSHPlan.uri("vscode://vscode-remote/ssh-remote+x/p", insiders: false), "vscode://vscode-remote/ssh-remote+x/p")
+        // The URI desktop VS Code gets: Remote - SSH's hex-JSON authority for 127.0.0.1 + user + port.
+        let uri = vscodeRemoteSshUri(host: VsCodeSshHost(host: "127.0.0.1", user: "me", port: a), path: "/home/me/proj", line: nil, column: nil)
+        XCTAssertTrue(uri.hasPrefix("vscode://vscode-remote/ssh-remote+"), uri)
+        XCTAssertTrue(uri.hasSuffix("/home/me/proj"), uri)
     }
 
     func testEditorWithoutAHostFailsInWords() async {

@@ -66,6 +66,19 @@ nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonUsageAPI {}
 
+/// The VS Code Remote Tunnel: the opt-in fallback editor path (vscode.dev, signed in with the
+/// user's own GitHub or Microsoft account by device code). Kept out of `DaemonWorkspaceAPI`'s
+/// list so fakes that do not care need nothing; the state arrives as `vsCodeTunnel` pushes.
+nonisolated public protocol DaemonTunnelAPI: AnyObject, Sendable {
+    func vscodeTunnelStatus() async throws -> VsCodeTunnelStatus
+    func vscodeCliInstall(acceptLicense: Bool) async throws -> VsCodeTunnelStatus
+    func vscodeTunnelStart(start: VsCodeTunnelStart) async throws -> VsCodeTunnelStatus
+    func vscodeTunnelStop() async throws -> VsCodeTunnelStatus
+    func vscodeTunnelOpen(open: VsCodeTunnelOpen) async throws -> VsCodeTunnelOpened
+}
+
+extension DaemonClient: DaemonTunnelAPI {}
+
 /// One daemon's workspace pushes and pane RPCs, shared by every window and screen: detected
 /// ports, the attention feed with its unseen count, directory watches, and the request/answer
 /// pairing for `links` / `search` / `commandOutput` (answers arrive as `ClientEvent`s).
@@ -107,6 +120,9 @@ public final class DaemonWorkspace {
     @ObservationIgnored private var portObservers: [UUID: ([PortInfo]) -> Void] = [:]
     @ObservationIgnored private var attentionObservers: [UUID: (AttentionUpdate) -> Void] = [:]
     @ObservationIgnored private var markObservers: [UUID: (CommandMark) -> Void] = [:]
+    @ObservationIgnored private var tunnelObservers: [UUID: (VsCodeTunnelStatus) -> Void] = [:]
+    /// The host's VS Code tunnel, as last pushed (nil until one is).
+    public private(set) var vsCodeTunnel: VsCodeTunnelStatus?
     /// Each pane's running shell command (OSC 133), from the attached session's command
     /// marks and the command lists screens ask for; the sidebar shows how long it has run.
     public private(set) var runningCommands: [UInt64: CommandMark] = [:]
@@ -175,7 +191,16 @@ public final class DaemonWorkspace {
         return id
     }
 
+    /// Calls `handler` with every VS Code tunnel state push (device code, running, failed).
+    @discardableResult
+    public func observeTunnel(_ handler: @escaping (VsCodeTunnelStatus) -> Void) -> UUID {
+        let id = UUID()
+        tunnelObservers[id] = handler
+        return id
+    }
+
     public func removeObserver(_ id: UUID) {
+        tunnelObservers[id] = nil
         portObservers[id] = nil
         attentionObservers[id] = nil
         markObservers[id] = nil
@@ -212,8 +237,9 @@ public final class DaemonWorkspace {
         case .attention(let update):
             apply(update)
             for observer in attentionObservers.values { observer(update) }
-        case .vsCodeTunnel:
-            break
+        case .vsCodeTunnel(let status):
+            vsCodeTunnel = status
+            for observer in tunnelObservers.values { observer(status) }
         case .agentUsage(let report):
             if usageViewers > 0 { usage = report }
         case .repos(let snapshot):

@@ -444,12 +444,28 @@ replaces a LAN one). Scans run every 2 s while any client is connected, at once 
 prints a new URL or a command starts/ends, never with no client; the whole list is pushed when
 it changes. Gap: a URL that scrolls off within one tick is missed (the listener still is).
 
-### 5.3 Editor (VS Code tunnel; `code serve-web`; VSCodium as automatic fallback; openvscode-server explicit only)
+### 5.3 Editor (`code serve-web` over our forward by default; VS Code tunnel opt-in; VSCodium as automatic fallback; openvscode-server explicit only)
 
-**Main path since 2026-10-18: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
-their own GitHub or Microsoft account by device code. The app opens
-`https://vscode.dev/tunnel/<name>/<folder>` top-level in a WKWebView (vscode.dev refuses framing), and
-on the Mac it opens `vscode://vscode-remote/tunnel+<name>/<path>:L:C`.
+on the host, reached over our direct iroh port forward** (`EditorLaunch` below; apple-ffi
+`DaemonClient::open_editor`). No Microsoft relay, no tunnel quota, and **never a GitHub or Microsoft
+sign-in**. The app shows Microsoft's licence terms (VS Code licence, VS Code Server licence, Microsoft
+Privacy Statement) once per host in a first-use sheet and passes `accept_vscode_license` only after the
+user taps Accept there; Cancel starts and installs nothing.
+
+- **Mac:** "Open in VS Code" opens the user's own **desktop VS Code with Remote-SSH over our
+  forward** (`vscode://vscode-remote/ssh-remote+<hex-JSON authority>/<path>[:L[:C]]` to
+  `127.0.0.1:<stable per-host port>` forwarded to the host's `127.0.0.1:22`; see "Desktop Remote-SSH"
+  below). It needs no licence sheet from us (desktop VS Code and Remote-SSH have their own terms). When
+  VS Code is not installed, or the host has no sshd answering, the app opens the in-app editor instead.
+- **Fallback, opt-in: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
+  palette). The daemon runs Microsoft's `code tunnel` on the host. The user signs in with their own
+  GitHub or Microsoft account by device code, which the app shows (code, Copy, open the verification
+  page in the user's browser) and never completes itself. The app opens
+  `https://vscode.dev/tunnel/<name>/<folder>` top-level in a `WKWebView` (vscode.dev refuses framing)
+  that opens popups (sign-in, Settings Sync) as sheets keeping `window.opener`; on the Mac the tunnel's
+  `vscode://vscode-remote/tunnel+<name>/<path>:L:C` opens desktop VS Code.
+
+The tunnel RPCs:
 
 - **`VsCodeCliInstall{accept_license}`.**
   - Refused unless the user accepted <https://code.visualstudio.com/license> in the app.
@@ -574,9 +590,10 @@ no editor picker; VS Code is the editor and must just work).
   - We never run it on our infrastructure.
   - We launch it only after the user accepted the Server licence in the app, and only for that
     user's own use.
-  - The tunnel is the main path because Microsoft's own client (vscode.dev or desktop) is then
-    the client. serve-web through our forward makes our app the client, which is greyer; it
-    stays opt-in.
+    consulted): the user runs Microsoft's server on their own machine for their own use, with
+    the terms accepted by the user in the app. The tunnel (Microsoft's own client and relay)
+    stays available as the opt-in fallback, and on the Mac desktop VS Code with Remote-SSH is
+    Microsoft's own client end to end.
   - The Remote FAQ's "cannot build a public or commercial service on top of … VS Code Server"
   - openvscode-server (MIT, Open VSX extensions only; the Microsoft Marketplace terms forbid
     non-Microsoft products from using it) is an explicit fallback only.
