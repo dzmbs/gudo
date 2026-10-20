@@ -39,24 +39,82 @@ nonisolated enum DrawingAction: Equatable, Sendable {
     case send(AgentDestination)
     /// Starts Claude Code or Codex next to the pane, then attaches the drawing once it is ready.
     case start(AgentKind)
+    /// The image, with the `.excalidraw` scene alongside (apps that understand it take it).
     case copy
+    /// The drawing as box-glyph text, for chats, commit messages and agents that read text.
+    case copyText
     /// iOS: the share sheet (Save Image, AirDrop, Messages…). Mac: the sharing picker.
     case share
-    /// Mac: a save panel.
-    case save
+    /// A file in one format: a save panel on the Mac, the share sheet on iOS.
+    case export(DrawingExportFormat)
     /// Nothing else: the drawing stays in the terminal output.
     case keep
+
+    /// Takes a copy away (pasteboard, file, share sheet); changes nothing on the host.
+    var isTakeaway: Bool {
+        switch self {
+        case .copy, .copyText, .share, .export: true
+        case .send, .start, .keep: false
+        }
+    }
 
     var id: String {
         switch self {
         case .send(let d): "send-\(d.id)"
         case .start(let kind): "start-\(kind.rawValue)"
         case .copy: "copy"
+        case .copyText: "copyText"
         case .share: "share"
-        case .save: "save"
+        case .export(let format): "export-\(format.rawValue)"
         case .keep: "keep"
         }
     }
+}
+
+/// The file formats a drawing exports to.
+nonisolated enum DrawingExportFormat: String, CaseIterable, Sendable {
+    case png, svg, excalidraw, ascii
+
+    var title: String {
+        switch self {
+        case .png: "PNG Image…"
+        case .svg: "SVG…"
+        case .excalidraw: "Excalidraw File…"
+        case .ascii: "Text (ASCII)…"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .png: "photo"
+        case .svg: "point.topleft.down.to.point.bottomright.curvepath"
+        case .excalidraw: "scribble.variable"
+        case .ascii: "text.alignleft"
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .png: "png"
+        case .svg: "svg"
+        case .excalidraw: "excalidraw"
+        case .ascii: "txt"
+        }
+    }
+
+    var type: UTType {
+        switch self {
+        case .png: .png
+        case .svg: .svg
+        case .excalidraw: .excalidraw
+        case .ascii: .plainText
+        }
+    }
+}
+
+extension UTType {
+    /// `.excalidraw` scenes (imported in Info.plist: Excalidraw declares no type of its own).
+    nonisolated static let excalidraw = UTType(importedAs: "com.excalidraw.json", conformingTo: .json)
 }
 
 /// The menu both surfaces show, as data (SwiftUI in the overlay, UIMenu / NSMenu on a
@@ -73,18 +131,23 @@ struct DrawingMenu {
         var id: String { action?.id ?? placementAction.map { "placement-\($0)" } ?? title }
     }
 
-    enum PlacementAction: String { case edit, delete }
+    enum PlacementAction: String { case edit, delete, history }
 
     struct Section: Identifiable {
         var title: String?
         var items: [Item]
+        /// Shown as a submenu titled `title` (with `systemImage`) instead of inline.
+        var submenu = false
+        var systemImage: String?
         var id: String { title ?? items.first?.id ?? "" }
     }
 
     var sections: [Section]
 
     /// `primary` is left out of the list when the surface shows it as its own button.
-    static func make(destinations: [AgentDestination], primary: AgentDestination?, canStart: Bool, includeKeep: Bool, placement: Bool) -> DrawingMenu {
+    /// `history`: the placement's drawing has a version history (Version History submenu,
+    /// filled when it opens).
+    static func make(destinations: [AgentDestination], primary: AgentDestination?, canStart: Bool, includeKeep: Bool, placement: Bool, history: Bool = false) -> DrawingMenu {
         var sections: [Section] = []
         let others = destinations.filter { $0 != primary || placement }
         if !others.isEmpty {
@@ -97,19 +160,24 @@ struct DrawingMenu {
                 Item(title: "Start \(kind.title) with This Drawing", systemImage: "plus.bubble", action: .start(kind))
             }))
         }
-        var export: [Item] = [Item(title: "Copy Image", systemImage: "doc.on.doc", action: .copy)]
-        #if os(iOS)
-        export.append(Item(title: "Share…", systemImage: "square.and.arrow.up", action: .share))
-        #else
-        export.append(Item(title: "Save Image…", systemImage: "square.and.arrow.down", action: .save))
-        export.append(Item(title: "Share…", systemImage: "square.and.arrow.up", action: .share))
-        #endif
-        sections.append(Section(title: nil, items: export))
+        sections.append(Section(title: nil, items: [
+            Item(title: "Copy Image", systemImage: "doc.on.doc", action: .copy),
+            Item(title: "Copy as Text", systemImage: "text.quote", action: .copyText),
+            Item(title: "Share…", systemImage: "square.and.arrow.up", action: .share),
+        ]))
+        sections.append(Section(
+            title: "Export", items: DrawingExportFormat.allCases.map { format in
+                Item(title: format.title, systemImage: format.systemImage, action: .export(format))
+            }, submenu: true, systemImage: "square.and.arrow.down"))
         if includeKeep {
             sections.append(Section(title: nil, items: [Item(title: "Keep in Terminal", systemImage: "pin", action: .keep)]))
         }
         if placement {
-            sections.append(Section(title: nil, items: [
+            var items: [Item] = []
+            if history {
+                items.append(Item(title: "Version History", systemImage: "clock.arrow.circlepath", placementAction: .history))
+            }
+            sections.append(Section(title: nil, items: items + [
                 Item(title: "Edit Drawing", systemImage: "pencil.tip", placementAction: .edit),
                 Item(title: "Delete Drawing", systemImage: "trash", placementAction: .delete, destructive: true),
             ]))
@@ -182,33 +250,32 @@ extension PaneDrawing {
             try await startAgent(kind, artifactId: artifactId, png: png)
             return .sent(kind.title)
         case .copy:
-            #if os(iOS)
-            UIPasteboard.general.setData(png, forPasteboardType: UTType.png.identifier)
-            #else
-            let board = NSPasteboard.general
-            board.clearContents()
-            board.setData(png, forType: .png)
-            #endif
+            // The scene rides along so apps that understand it (Excalidraw, this app on another
+            // device through Universal Clipboard) get the editable drawing, not just pixels.
+            let scene = try? await artifactId.asyncMap { try await hub.client.excalidrawFile(artifactId: $0) }
+            Self.copy(png: png, scene: scene)
             return .copied
-        case .share:
-            let file = try Self.exportFile(png)
+        case .copyText:
+            guard let artifactId else { throw ArtifactError.Invalid(message: "the drawing is not saved yet") }
+            let text = try await hub.client.artifactExport(artifactId: artifactId, version: nil, format: .ascii).data
             #if os(iOS)
-            guard let view = pane?.view, var presenter = view.window?.rootViewController else { return .kept }
-            while let next = presenter.presentedViewController { presenter = next }
-            let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
-            sheet.popoverPresentationController?.sourceView = view
-            sheet.popoverPresentationController?.sourceRect = anchor
-            presenter.present(sheet, animated: true)
+            UIPasteboard.general.string = String(decoding: text, as: UTF8.self)
             #else
-            guard let view = pane?.view else { return .kept }
-            NSSharingServicePicker(items: [file]).show(relativeTo: anchor, of: view, preferredEdge: .minY)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(String(decoding: text, as: UTF8.self), forType: .string)
             #endif
-            return .shared
-        case .save:
-            #if os(macOS)
+            return .copiedText
+        case .share:
+            let file = try Self.exportFile(png, format: .png)
+            return share(file, anchor: anchor) ? .shared : .kept
+        case .export(let format):
+            let data = try await exportData(format, artifactId: artifactId, png: png)
+            #if os(iOS)
+            return share(try Self.exportFile(data, format: format), anchor: anchor) ? .shared : .kept
+            #else
             let panel = NSSavePanel()
-            panel.allowedContentTypes = [.png]
-            panel.nameFieldStringValue = Self.fileName
+            panel.allowedContentTypes = [format.type]
+            panel.nameFieldStringValue = Self.fileName(format)
             panel.canCreateDirectories = true
             let response: NSApplication.ModalResponse
             if let window = pane?.view.window {
@@ -217,25 +284,68 @@ extension PaneDrawing {
                 response = panel.runModal()
             }
             guard response == .OK, let url = panel.url else { return .kept }
-            try png.write(to: url)
+            try data.write(to: url, options: .atomic)
             return .saved(url.lastPathComponent)
-            #else
-            return try await perform(.share, artifactId: artifactId, png: png, anchor: anchor)
             #endif
         }
     }
 
-    private static var fileName: String {
-        "Drawing \(Date().formatted(.dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())).png"
+    /// The drawing in `format`: the device's PNG, the daemon's SVG or ASCII, or the scene.
+    func exportData(_ format: DrawingExportFormat, artifactId: UInt64?, png: Data) async throws -> Data {
+        if format == .png { return png }
+        guard let artifactId else { throw ArtifactError.Invalid(message: "the drawing is not saved yet") }
+        switch format {
+        case .png: return png
+        case .svg: return try await hub.client.artifactExport(artifactId: artifactId, version: nil, format: .svg).data
+        case .ascii: return try await hub.client.artifactExport(artifactId: artifactId, version: nil, format: .ascii).data
+        case .excalidraw: return try await hub.client.excalidrawFile(artifactId: artifactId)
+        }
+    }
+
+    /// Puts the image (and the `.excalidraw` scene, when there is one) on the pasteboard.
+    static func copy(png: Data, scene: Data?) {
+        #if os(iOS)
+        var item: [String: Any] = [UTType.png.identifier: png]
+        if let scene { item[UTType.excalidraw.identifier] = scene }
+        UIPasteboard.general.setItems([item])
+        #else
+        let board = NSPasteboard.general
+        board.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(png, forType: .png)
+        if let scene { item.setData(scene, forType: NSPasteboard.PasteboardType(UTType.excalidraw.identifier)) }
+        board.writeObjects([item])
+        #endif
+    }
+
+    /// The share sheet (iOS) or sharing picker (Mac) for `file`, pointing at `anchor`.
+    private func share(_ file: URL, anchor: CGRect) -> Bool {
+        #if os(iOS)
+        guard let view = pane?.view, var presenter = view.window?.rootViewController else { return false }
+        while let next = presenter.presentedViewController { presenter = next }
+        let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+        sheet.popoverPresentationController?.sourceView = view
+        sheet.popoverPresentationController?.sourceRect = anchor
+        presenter.present(sheet, animated: true)
+        #else
+        guard let view = pane?.view else { return false }
+        NSSharingServicePicker(items: [file]).show(relativeTo: anchor, of: view, preferredEdge: .minY)
+        #endif
+        return true
+    }
+
+    static func fileName(_ format: DrawingExportFormat) -> String {
+        "Drawing \(Date().formatted(.dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())).\(format.fileExtension)"
             .replacingOccurrences(of: ":", with: ".").replacingOccurrences(of: "/", with: "-")
     }
 
-    /// A PNG in the temporary directory, named for people (share sheets show the name).
-    private static func exportFile(_ png: Data) throws -> URL {
+    /// A file in the temporary directory, named for people (share sheets and drops show the
+    /// name).
+    static func exportFile(_ data: Data, format: DrawingExportFormat) throws -> URL {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Drawings", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(fileName)
-        try png.write(to: url, options: .atomic)
+        let url = dir.appendingPathComponent(fileName(format))
+        try data.write(to: url, options: .atomic)
         return url
     }
 
@@ -261,11 +371,20 @@ extension PaneDrawing {
     }
 }
 
+extension Optional {
+    /// `map` with an async throwing transform.
+    func asyncMap<T>(_ transform: (Wrapped) async throws -> T) async rethrows -> T? {
+        guard let self else { return nil }
+        return try await transform(self)
+    }
+}
+
 /// What a finished drawing did, for the notice after it.
 enum PlacedOutcome: Equatable {
     case kept
     case sent(String)
     case copied
+    case copiedText
     case shared
     case saved(String)
 }

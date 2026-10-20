@@ -220,7 +220,10 @@ struct DrawingMenuContent: View {
 
     var body: some View {
         ForEach(menu.sections) { section in
-            if let title = section.title {
+            if section.submenu, let title = section.title {
+                Menu { items(section) } label: { Label(title, systemImage: section.systemImage ?? "ellipsis") }
+                    .accessibilityIdentifier("drawing.menu.\(title.lowercased())")
+            } else if let title = section.title {
                 Section(title) { items(section) }
             } else {
                 Section { items(section) }
@@ -296,6 +299,7 @@ final class PlacedNoticeModel {
         case .done(.kept), .done(.shared): "Kept in terminal"
         case .done(.sent(let name)): "Sent to \(name)"
         case .done(.copied): "Image copied"
+        case .done(.copiedText): "Text copied"
         case .done(.saved(let name)): "Saved \u{201C}\(name)\u{201D}"
         }
     }
@@ -305,7 +309,7 @@ final class PlacedNoticeModel {
         case .working, .failed: nil
         case .done(.kept), .done(.shared): "tap it to send, copy or edit"
         case .done(.sent): "in the prompt as an image · also kept here"
-        case .done(.copied), .done(.saved): "also kept in the terminal"
+        case .done(.copied), .done(.copiedText), .done(.saved): "also kept in the terminal"
         }
     }
 
@@ -315,6 +319,7 @@ final class PlacedNoticeModel {
         case .failed: "exclamationmark.triangle.fill"
         case .done(.sent): "paperplane.fill"
         case .done(.copied): "doc.on.doc"
+        case .done(.copiedText): "text.quote"
         case .done(.saved): "square.and.arrow.down"
         case .done: "pin.fill"
         }

@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import XCTest
 @testable import App
 
@@ -14,17 +15,40 @@ final class DrawingMenuTests: XCTestCase {
 
     func testWithNoAgentTheMenuSaysWhatADrawingIsFor() {
         let menu = DrawingMenu.make(destinations: [], primary: nil, canStart: true, includeKeep: true, placement: false)
-        #if os(iOS)
         XCTAssertEqual(titles(menu), [
             "Start Claude Code with This Drawing", "Start Codex with This Drawing",
-            "Copy Image", "Share…", "Keep in Terminal",
+            "Copy Image", "Copy as Text", "Share…",
+            "PNG Image…", "SVG…", "Excalidraw File…", "Text (ASCII)…",
+            "Keep in Terminal",
         ])
-        #else
-        XCTAssertEqual(titles(menu), [
-            "Start Claude Code with This Drawing", "Start Codex with This Drawing",
-            "Copy Image", "Save Image…", "Share…", "Keep in Terminal",
-        ])
-        #endif
+        let export = menu.sections.first { $0.title == "Export" }
+        XCTAssertEqual(export?.submenu, true, "the formats fold into an Export submenu")
+        XCTAssertEqual(export?.items.compactMap(\.action), DrawingExportFormat.allCases.map { .export($0) })
+        XCTAssertTrue(export?.items.allSatisfy { $0.action?.isTakeaway == true } ?? false, "viewers keep Export")
+    }
+
+    func testVersionHistoryOnlyOnPlacementsOfHostsThatKeepIt() {
+        let with = DrawingMenu.make(destinations: [], primary: nil, canStart: false, includeKeep: false, placement: true, history: true)
+        XCTAssertEqual(with.sections.last?.items.map(\.title), ["Version History", "Edit Drawing", "Delete Drawing"])
+        XCTAssertEqual(with.sections.last?.items.first?.placementAction, .history)
+        let without = DrawingMenu.make(destinations: [], primary: nil, canStart: false, includeKeep: false, placement: true)
+        XCTAssertFalse(titles(without).contains("Version History"))
+        let overlay = DrawingMenu.make(destinations: [], primary: nil, canStart: false, includeKeep: true, placement: false, history: true)
+        XCTAssertFalse(titles(overlay).contains("Version History"), "the overlay has no history of its own")
+    }
+
+    func testExportFormatsNameTheirFiles() {
+        XCTAssertEqual(DrawingExportFormat.allCases.map(\.fileExtension), ["png", "svg", "excalidraw", "txt"])
+        XCTAssertEqual(DrawingExportFormat.excalidraw.type.identifier, "com.excalidraw.json")
+        XCTAssertTrue(DrawingExportFormat.excalidraw.type.conforms(to: .json))
+        XCTAssertTrue(PaneDrawing.fileName(.svg).hasSuffix(".svg"))
+        XCTAssertFalse(PaneDrawing.fileName(.png).contains(":"), "no colons in file names")
+    }
+
+    func testDragRefRoundTripsThroughThePasteboardForm() throws {
+        let ref = DrawingDragRef(hostId: "h1", paneId: 3, placementId: 8, artifactId: 5, imageHash: "ab")
+        let back = try JSONDecoder().decode(DrawingDragRef.self, from: JSONEncoder().encode(ref))
+        XCTAssertEqual(back, ref)
     }
 
     func testThePrimaryAgentIsItsOwnButtonInTheOverlayButListedOnAPlacement() {

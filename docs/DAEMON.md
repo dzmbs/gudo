@@ -1201,6 +1201,41 @@ posts to `window.webkit.messageHandlers.canvas.postMessage(msg)`:
 
 Viewers get `readOnly`; the daemon refuses their puts anyway (`Forbidden`).
 
+**Moving and exporting a placed drawing (app).** A placement's menu has Copy Image (PNG plus
+the `.excalidraw` scene on the same pasteboard item, so Universal Clipboard carries both), Copy
+as Text (`Export{Ascii}`), Share…, and an Export submenu: PNG (the device's render), SVG
+(`Export{Svg}`), Excalidraw (`Client::excalidraw_file`: the scene's elements, app state and
+blobs as `data:` URLs; an image becomes a one-element scene) and ASCII. Dragging a placement
+out (iPad `UIDragInteraction`, Mac `NSDraggingSource` with a promised PNG file) offers PNG and
+`.excalidraw` to other apps and a `DrawingDragRef{host, pane, placement, artifact, image}` to
+the app's own panes: dropped on another pane of the same host it is placed there with the same
+render (`place_png`, same artifact); on another host it is imported (`.excalidraw`, else the
+PNG) and placed with the render; on an agent pane it is sent (`send_to_agent`). Type
+`com.excalidraw.json` is declared as imported (`apple/project.yml`).
+
+### 7.12 Version history
+
+A drawing's **finished versions** are kept per artifact (`art/history.rs`,
+`<session>/<artifact>/history.bin`): one when it is placed from the overlay (`Place` at the
+current version, with that render), when a client sets a preview of the current version, and
+for drawings shown in a canvas pane once nobody changed them for 30 s. An Excalidraw scene
+keeps only its latest elements, so its entry holds a copy of the live elements, app state and
+files; an op-log drawing replays its log. At most 100 entries and four times the per-drawing
+cap; their blobs are kept from garbage collection.
+
+`History{artifact}` → `History([ArtifactVersion{version, at, by, image, elements,
+restored_from}])`, newest first (any role). `Restore{artifact, version}` (draw role) writes the
+old content as a **new version on top**: each old element at a version above both its own and
+the current one, a tombstone for every element added since; the change goes out as an
+ordinary `Excalidraw` (or `Changed`) push, so open editors and caches converge without a
+reload. The artifact's preview and every placement of it switch to the old render (`Placed`,
+same placement id; the height follows the image), and the restore is itself recorded
+(`restored_from`). Both requests are gated by `DaemonFeatures::ARTIFACT_HISTORY` (older daemons
+drop a connection that sends them; client-core refuses locally). CLI: `un draw history <id>`,
+`un draw restore <id> <version>`, `un draw export <id> --format excalidraw`. App: Version
+History in a placement's menu (each version with its render, the shown one checked; picking
+another restores it). Test: `cargo test -p daemon --test it history`.
+
 D9). Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
 Requests are `ClientCtl::Assist{req_id, AssistRequest}` → `ServerCtl::AssistResult{req_id,
 Result<AssistResponse, AssistError>}`; pushes are `ServerCtl::Assist(AssistPush)`. A daemon
