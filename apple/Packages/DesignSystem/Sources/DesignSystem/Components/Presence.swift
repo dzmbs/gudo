@@ -25,10 +25,11 @@ nonisolated public struct Participant: Identifiable, Hashable, Sendable {
         return parts.compactMap { $0.first.map(String.init) }.joined().uppercased()
     }
 
-    /// Presence hues are the terminal's ANSI hues so cursors and avatars match (palette 4,5,6,2,3).
-    public var color: Color {
-        let hues: [Color] = [DS.Palette.info, Color(hex: "#B294BB"), Color(hex: "#8ABEB7"), DS.Palette.done, DS.Palette.working]
-        return hues[abs(hue) % hues.count]
+    /// Presence hues are the theme's own ANSI hues, so cursors and avatars match the terminal
+    /// (palette 4, 5, 6, 2, 3).
+    public var color: ChromeStyle {
+        let hues = [4, 5, 6, 2, 3]
+        return DS.Palette.ansi(hues[abs(hue) % hues.count])
     }
 }
 
@@ -50,7 +51,7 @@ public struct PresenceAvatar: View {
             .background(participant.color, in: .circle)
             .overlay {
                 Circle()
-                    .strokeBorder(participant.isActive ? participant.color : .clear, lineWidth: 1.5)
+                    .strokeBorder(participant.color.opacity(participant.isActive ? 1 : 0), lineWidth: 1.5)
                     .padding(-3)
             }
             .accessibilityLabel("\(participant.name), \(participant.role.rawValue)\(participant.isActive ? ", typing" : "")")
@@ -72,7 +73,7 @@ public struct PresenceStack: View {
             // Later avatars sit under earlier ones so every set of initials stays readable.
             ForEach(Array(participants.prefix(limit).enumerated()), id: \.element.id) { index, participant in
                 PresenceAvatar(participant)
-                    .background(Circle().fill(.background).padding(-1.5))
+                    .background(Circle().fill(DS.Palette.base).padding(-1.5))
                     .zIndex(Double(limit - index))
             }
             if participants.count > limit {
@@ -80,7 +81,7 @@ public struct PresenceStack: View {
                     .font(.caption2.weight(.semibold).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: DS.Size.avatar, height: DS.Size.avatar)
-                    .background(.fill.secondary, in: .circle)
+                    .background(DS.Palette.selectedFill, in: .circle)
             }
         }
         .accessibilityElement(children: .combine)

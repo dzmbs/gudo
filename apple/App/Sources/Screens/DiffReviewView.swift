@@ -35,6 +35,7 @@ struct DiffReviewView: View {
 
     var body: some View {
         content
+            .chromeContent()
             .navigationTitle(repository.map { ($0.root as NSString).lastPathComponent } ?? source.title)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -278,7 +279,7 @@ struct DiffReviewView: View {
                         Text(reviewer.map { "Send to \($0)" } ?? "Send")
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.primaryGlass)
                 .disabled(reviewer == nil || isSending)
                 .keyboardShortcut(.return, modifiers: .command)
                 .accessibilityIdentifier("diff-send-review")
@@ -393,7 +394,7 @@ private struct FileHeader: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .background(theme.raisedBackground)
+        .background(theme.surface(0.10))
         .overlay(alignment: .bottom) { theme.splitDivider.frame(height: 1) }
         .overlay(alignment: .top) { theme.splitDivider.frame(height: 1) }
         .contextMenu {
@@ -737,7 +738,7 @@ private struct NoteComposer: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .padding(DS.Space.s)
-                .background(theme.raisedBackground, in: .rect(cornerRadius: DS.Radius.control))
+                .background(theme.surface(0.10), in: .rect(cornerRadius: DS.Radius.control))
                 .focused($focused)
                 .onSubmit { onSave(text) }
                 .onKeyPress(.escape) {
@@ -750,7 +751,7 @@ private struct NoteComposer: View {
                 Button("Cancel", action: onCancel)
                     .buttonStyle(.glass)
                 Button("Add Note") { onSave(text) }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("diff-note-add")
             }

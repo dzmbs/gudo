@@ -27,7 +27,7 @@ struct PRToolbarButton: View {
     private var label: some View {
         HStack(spacing: 6) {
             Image(systemName: pr?.kind.systemImage ?? "arrow.triangle.branch")
-                .foregroundStyle(pr?.kind.color ?? .secondary)
+                .foregroundStyle(pr.map { AnyShapeStyle($0.kind.color) } ?? AnyShapeStyle(.secondary))
                 .opacity(DS.Opacity.mutedGlyph)
                 .overlay(alignment: .bottomTrailing) {
                     if let pr {
@@ -149,7 +149,7 @@ struct PRPopover: View {
                         git.isPRPopoverShown = false
                         git.requestMerge(worktree)
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .accessibilityIdentifier("pr-merge")
                 }
             }
@@ -177,7 +177,7 @@ struct PRPopover: View {
                         git.isPRPopoverShown = false
                         git.createPR(worktree)
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .controlSize(.small)
                     .help("Push \(worktree.displayBranch) and open a pull request (gh pr create --fill)")
                     .accessibilityIdentifier("pr-create")

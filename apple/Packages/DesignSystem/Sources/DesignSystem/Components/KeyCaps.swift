@@ -15,8 +15,8 @@ public struct ShortcutLabel: View {
                 Text(symbol).frame(minWidth: 13)
             }
         }
-        // The row's own font; `.secondary` is relative to the row's colour (white on the
-        // palette's selected row).
+        // The row's own font; `.secondary` is relative to the row's colour (the selection's
+        // text on the palette's selected row).
         .foregroundStyle(.secondary)
         .monospacedDigit()
         .accessibilityLabel(symbols.joined())
@@ -39,10 +39,10 @@ public struct KeyCap: View {
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.chip)
-                    .fill(.background.secondary)
+                    .fill(DS.Palette.raised)
                     .shadow(color: .black.opacity(0.12), radius: 0.5, y: 0.5))
             .overlay(
                 RoundedRectangle(cornerRadius: DS.Radius.chip)
-                    .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+                    .strokeBorder(DS.Palette.separator, lineWidth: 0.5))
     }
 }

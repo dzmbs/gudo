@@ -50,7 +50,6 @@ struct InviteSheet: View {
                 }
             }
         }
-        .followsTerminalChrome()
         #if os(iOS)
         .phoneDetents([.large])
         // People, the invite and its QR code side by side need the room of a page sheet.
@@ -78,19 +77,19 @@ private struct ShareRoot: View {
 
     var body: some View {
         Form {
-            header.raisedRows()
-            people.raisedRows()
+            header.chromeRows()
+            people.chromeRows()
             if session.isOwner {
                 if let created {
                     InviteResult(invite: created, summary: createdSummary) {
                         withAnimation(DS.Motion.panel) { self.created = nil }
                     }
-                    .raisedRows()
+                    .chromeRows()
                 } else {
-                    composer.raisedRows()
+                    composer.chromeRows()
                 }
             } else {
-                yourAccess.raisedRows()
+                yourAccess.chromeRows()
             }
             if session.isOwner {
                 Section {
@@ -103,11 +102,11 @@ private struct ShareRoot: View {
                     }
                     .accessibilityIdentifier("open-audit")
                 }
-                .raisedRows()
+                .chromeRows()
             }
         }
         .formStyle(.grouped)
-        .terminalGrouped()
+        .chromeGrouped()
         .confirmationDialog(
             "Remove \(revoking?.name ?? "")?", isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
             titleVisibility: .visible, presenting: revoking
@@ -196,7 +195,7 @@ private struct ShareRoot: View {
                 .font(.body.weight(.semibold))
                 .padding(.vertical, 4)
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.primaryGlass)
             .disabled(isCreating)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: DS.Space.s, leading: 0, bottom: 0, trailing: 0))
@@ -366,7 +365,7 @@ private struct RolePicker: View {
                 HStack(spacing: DS.Space.xs + 2) {
                     Image(systemName: role.systemImage)
                         .symbolVariant(on ? .fill : .none)
-                        .foregroundStyle(on ? Color.accentColor : .secondary)
+                        .foregroundStyle(on ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(.secondary))
                         .frame(width: 18)
                     Text(role.title)
                         .font(DS.Font.rowTitleEmphasis)
@@ -375,7 +374,7 @@ private struct RolePicker: View {
                     Spacer(minLength: 0)
                     Image(systemName: locked ? "lock.fill" : on ? "checkmark.circle.fill" : "circle")
                         .font(.caption)
-                        .foregroundStyle(on && !locked ? Color.accentColor : Color.secondary.opacity(0.6))
+                        .foregroundStyle(on && !locked ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.textTertiary))
                         .contentTransition(.symbolEffect(.replace))
                 }
                 Text(role.summary)
@@ -386,10 +385,10 @@ private struct RolePicker: View {
             }
             .padding(DS.Space.s + 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(on ? AnyShapeStyle(Color.accentColor.opacity(0.10)) : AnyShapeStyle(.fill.quaternary), in: .rect(cornerRadius: DS.Radius.control))
+            .background(on ? AnyShapeStyle(DS.Palette.accent.opacity(0.10)) : AnyShapeStyle(DS.Palette.hoverFill), in: .rect(cornerRadius: DS.Radius.control))
             .overlay {
                 RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .strokeBorder(on ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: on ? 1 : 0.5)
+                    .strokeBorder(on ? AnyShapeStyle(DS.Palette.accent.opacity(0.55)) : AnyShapeStyle(DS.Palette.hairline), lineWidth: on ? 1 : 0.5)
             }
             .contentShape(.rect(cornerRadius: DS.Radius.control))
         }
@@ -440,7 +439,7 @@ private struct InviteResult: View {
                         Label("Share", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .accessibilityIdentifier("share-invite")
                 }
             }
@@ -564,7 +563,7 @@ struct QRCodeView: View {
                 .padding(10)
                 .background(.white, in: .rect(cornerRadius: DS.Radius.control))
                 .overlay {
-                    RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)
                 }
                 .accessibilityLabel("QR code of the invite link")
         }

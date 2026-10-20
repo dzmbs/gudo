@@ -73,15 +73,15 @@ struct ExternalDisplayRoot: View {
                     Text("Open a terminal on the iPad to show it here")
                         .font(DS.Font.title)
                 }
-                .foregroundStyle(theme.foreground.opacity(0.6))
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(theme.background.ignoresSafeArea())
         .environment(model)
-        .environment(\.terminalTheme, theme)
+        // Chrome-free and all terminal: always the theme's own scheme.
+        .chromeTheme(theme)
         .environment(\.horizontalSizeClass, .regular)
-        .preferredColorScheme(theme.colorScheme)
         .onGeometryChange(for: CGSize.self, of: { $0.size }) { size = $0 }
         .task { await follow() }
     }

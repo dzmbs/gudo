@@ -76,10 +76,11 @@ struct WorkspaceView: View {
                     .environment(model)
                     .environment(model.app)
             }
-            .environment(\.terminalTheme, theme)
+            // The whole window follows the terminal theme: surfaces, text, accent and states
+            // (`ChromePalette`), light or dark by `window-theme` (Ghostty: Match Terminal).
+            .chromeTheme(theme, windowTheme: windowTheme)
             .focusedSceneValue(workspace)
             .focusedSceneValue(model)
-            .preferredColorScheme(preferredScheme)
             .renameTabPrompt(workspace)
             .modifier(MultiplayerWindowHooks(workspace: workspace))
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
@@ -116,19 +117,6 @@ struct WorkspaceView: View {
             #endif
     }
 
-
-    /// Ghostty `window-theme`: the terminal background decides light or dark (the default,
-    /// "Match Terminal"), or the system, or forced. The chrome never shows a white sidebar or
-    /// toolbar next to a dark terminal.
-    private var preferredScheme: ColorScheme? {
-        switch windowTheme {
-        case .system: nil
-        case .auto: theme.colorScheme
-        case .light: .light
-        case .dark: .dark
-        }
-    }
-
     @ViewBuilder private var content: some View {
         #if os(iOS)
         // By the window's width, never the device (`WidthBucket`): an iPhone, a foldable, Split
@@ -159,7 +147,7 @@ struct WorkspaceView: View {
             }
         }
         .animation(DS.Motion.panel, value: model.isSidebarShown)
-        .background(theme.background.ignoresSafeArea())
+        .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
         #if os(macOS)
         // Ghostty's window title: the directory, with its folder as the proxy icon.
         .modifier(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
@@ -206,17 +194,13 @@ private struct SidebarColumn: View {
                         NewTabButton(workspace: workspace)
                     }
                 }
-                .toolbarBackground(theme.sidebarBackground, for: .navigationBar)
+                .toolbarBackground(DS.Palette.sidebar, for: .navigationBar)
                 .toolbarBackgroundVisibility(.visible, for: .navigationBar)
         }
-        .background(theme.sidebarBackground.ignoresSafeArea())
-        .environment(\.colorScheme, theme.colorScheme)
-        // The sidebar's footer rides above the keyboard: the key bar is transparent glass, and a
-        // footer left under it showed through between the capsules.
+        .background(DS.Palette.sidebar, ignoresSafeAreaEdges: .all)
         #else
         WorkspaceSidebar()
-            .background(theme.sidebarBackground.ignoresSafeArea())
-            .environment(\.colorScheme, theme.colorScheme)
+            .background(DS.Palette.sidebar, ignoresSafeAreaEdges: .all)
         #endif
     }
 }
@@ -258,17 +242,16 @@ struct NewTabButton: View {
     private var canOpen: Bool { workspace.canOpenTabs || model.groups.newTabHost(preferred: nil) != nil }
 }
 
-/// The 1 pt line between sidebar and terminal (the split divider's color), draggable to resize
-/// the sidebar; double-click/tap restores the default width.
+/// The hairline between sidebar and terminal (the theme's ink at 15 %), draggable to resize the
+/// sidebar; double-click/tap restores the default width.
 private struct SidebarDivider: View {
     @Binding var width: Double
-    @Environment(\.terminalTheme) private var theme
     @Environment(\.displayScale) private var displayScale
     @State private var start: Double?
 
     var body: some View {
         Rectangle()
-            .fill(theme.splitDivider)
+            .fill(DS.Palette.separator)
             .frame(width: DS.Size.hairline(scale: displayScale))
             .ignoresSafeArea()
             .overlay {
@@ -320,6 +303,7 @@ private struct DetailColumn: View {
         VStack(spacing: 0) {
             if !model.isSidebarShown && showsTabBar {
                 TabBar(workspace: workspace)
+                    .chromeContent()
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             switch model.destination {
@@ -329,6 +313,9 @@ private struct DetailColumn: View {
                     .id(ObjectIdentifier(workspace))
                     // Behind the key bar and keyboard, which float over the terminal.
                     .background(theme.background.ignoresSafeArea(.all, edges: .bottom))
+                    // The ink goes on each destination, under its own toolbar (Inbox and Hosts
+                    // add bar items): never above a toolbar.
+                    .chromeContent()
             case .inbox:
                 InboxView(feed: model.agents, onLaunch: { model.sheet = .launchAgent }, onNewTerminal: { model.newTab() })
             case .hosts:
@@ -344,7 +331,7 @@ private struct DetailColumn: View {
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(theme.background, for: .navigationBar)
+        .toolbarBackground(DS.Palette.base, for: .navigationBar)
         .toolbarBackgroundVisibility(.visible, for: .navigationBar)
         #endif
         .navigationSubtitle(model.destination == .terminal ? subtitle : "")
@@ -353,7 +340,7 @@ private struct DetailColumn: View {
         .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
             if has { model.git.syncAutoDelete() }
         }
-        .background(theme.background.ignoresSafeArea())
+        .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
     }
 
     private var title: String {
@@ -497,6 +484,7 @@ private struct HostToolbarButton: View {
             }
             .buttonStyle(.borderless)
         }
+        .chromeContent()
         .padding(DS.Space.l)
         .frame(minWidth: 260)
         .presentationCompactAdaptation(.popover)
@@ -589,24 +577,25 @@ private struct ConnectingView: View {
     let state: ConnectionState
     let onRetry: () -> Void
     let onDisconnect: () -> Void
-    @Environment(\.terminalTheme) private var theme
 
     var body: some View {
         VStack(spacing: DS.Space.m) {
             ConnectionGlyph(state)
-                .font(.title2)
-                .frame(height: 28)
-            Text(title)
-                .font(DS.Font.title)
-                .foregroundStyle(theme.foreground)
-            if let detail {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(detail(context.date))
-                        .font(.callout)
-                        .foregroundStyle(theme.foreground.opacity(0.6))
-                        .monospacedDigit()
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 360)
+                .font(.title)
+                .frame(height: 32)
+            VStack(spacing: DS.Space.xs) {
+                Text(title)
+                    .font(DS.Font.title)
+                    .foregroundStyle(.primary)
+                if let detail {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(detail(context.date))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 360)
+                    }
                 }
             }
             if let action {
@@ -614,7 +603,7 @@ private struct ConnectingView: View {
                     Button("Disconnect", action: onDisconnect)
                         .buttonStyle(.glass)
                     Button(action, action: onRetry)
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .keyboardShortcut(.defaultAction)
                 }
                 .padding(.top, DS.Space.s)
@@ -664,21 +653,22 @@ private struct ConnectingView: View {
 private struct WelcomeView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @Environment(\.terminalTheme) private var theme
 
     var body: some View {
-        VStack(spacing: DS.Space.xxl) {
-            VStack(spacing: DS.Space.s) {
-                Image(systemName: workspace.canOpenTabs ? "terminal" : "server.rack")
-                    .font(.system(size: 34, weight: .regular))
-                    .foregroundStyle(theme.foreground.opacity(0.5))
+        VStack(spacing: DS.Space.m) {
+            Image(systemName: workspace.canOpenTabs ? "terminal" : "server.rack")
+                .font(.title)
+                .imageScale(.large)
+                .foregroundStyle(.secondary)
+            VStack(spacing: DS.Space.xs) {
                 Text(title)
                     .font(DS.Font.title)
-                    .foregroundStyle(theme.foreground)
+                    .foregroundStyle(.primary)
                 Text(message)
-                    .font(.callout)
-                    .foregroundStyle(theme.foreground.opacity(0.6))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .frame(maxWidth: 340)
             }
             VStack(spacing: 2) {
                 if workspace.canOpenTabs {
@@ -703,6 +693,7 @@ private struct WelcomeView: View {
                 welcomeRow("Command Palette", systemImage: "command", keys: ["⌘", "K"]) { model.isPaletteShown = true }
             }
             .frame(width: 300)
+            .padding(.top, DS.Space.s)
         }
         .padding(DS.Space.xxxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -734,16 +725,19 @@ private struct WelcomeView: View {
 
     private func welcomeRow(_ title: String, systemImage: String, keys: [String]?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: DS.Space.m) {
+            // The sidebar's row: a 16 pt glyph slot at 0.6, the label leading.
+            HStack(spacing: DS.Space.s + 2) {
                 Image(systemName: systemImage)
-                    .frame(width: 20)
-                    .foregroundStyle(theme.foreground.opacity(0.6))
-                Text(title).foregroundStyle(theme.foreground)
+                    .frame(width: 16)
+                    .foregroundStyle(.primary)
+                    .opacity(DS.Opacity.mutedGlyph)
+                Text(title).foregroundStyle(.primary)
                 Spacer()
-                if let keys, showsShortcuts { ShortcutLabel(keys) }
+                if let keys, showsShortcuts { ShortcutLabel(keys).font(.subheadline) }
             }
+            .font(.body)
             .padding(.horizontal, DS.Space.m)
-            .padding(.vertical, DS.Space.s + 1)
+            .padding(.vertical, DS.Space.s)
         }
         .buttonStyle(.row)
     }
@@ -757,6 +751,13 @@ private struct SheetContent: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        // A sheet is its own presentation: it takes the theme again, so its text levels, tint
+        // and surfaces are the window's.
+        ThemedRoot { content }
+            .chromeSheetBackground()
+    }
+
+    @ViewBuilder private var content: some View {
         switch route {
         case .pairing:
             PairingSheet(directory: model.hosts, live: LaunchOptions.mock ? nil : model.app.hosts, initialMode: model.pairingMode, destination: model.pairingDestination)

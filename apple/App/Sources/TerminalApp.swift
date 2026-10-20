@@ -233,7 +233,7 @@ private struct WindowContent: View {
                     model.show(.local)
                     model.destination = .hosts
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.primaryGlass)
             }
         }
     }

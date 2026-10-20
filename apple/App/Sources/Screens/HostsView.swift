@@ -31,6 +31,7 @@ struct HostsView: View {
     var onOpen: (HostSummary) -> Void = { _ in }
 
     @Environment(WindowModel.self) private var model
+    @Environment(\.chrome) private var chrome
     @State private var destination = ""
     @State private var forgetting: HostSummary?
     @State private var renaming: HostSummary?
@@ -47,13 +48,17 @@ struct HostsView: View {
                     message: "Add a machine running the daemon, or connect to any SSH host with user@host."
                 ) {
                     Button("Add Host", action: onAdd)
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                 }
             } else {
                 list(hosts)
             }
         }
+        .chromeContent()
         .navigationTitle("Hosts")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             if let live {
                 ToolbarItem(placement: .primaryAction) {
@@ -105,11 +110,12 @@ struct HostsView: View {
 
     private func list(_ hosts: [HostSummary]) -> some View {
         let groups = HostGroups(hosts)
+        // the text column), not a stock grouped Settings list.
         return List {
-            Section {
-                quickConnect
-            }
-            .raisedRows()
+            quickConnect
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: DS.Space.s, leading: DS.Space.l, bottom: DS.Space.s, trailing: DS.Space.l))
             Section {
             } footer: {
                 if directory.isOffline {
@@ -123,12 +129,9 @@ struct HostsView: View {
             section("Pinned", groups.pinned)
             section("Other", groups.other)
         }
-        #if os(iOS)
-        .listStyle(.insetGrouped)
-        #else
-        .listStyle(.inset)
-        #endif
-        .terminalGrouped()
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(DS.Palette.base)
         .animation(DS.Motion.snappy, value: hosts)
     }
 
@@ -156,10 +159,13 @@ struct HostsView: View {
                     }
                     .contextMenu { menu(host) }
                     .accessibilityIdentifier("host-\(host.name)")
-                    .raisedRows()
+                    .listRowBackground(Color.clear)
+                    .listRowSeparatorTint(chrome.hairline)
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in HostRow.textColumn }
                 }
             } header: {
                 SectionTitle(title, count: hosts.count)
+                    .padding(.top, DS.Space.s)
             }
         }
     }
@@ -195,11 +201,13 @@ struct HostsView: View {
         }
     }
 
+    /// radius 6, on the raised surface with a hairline: not a full-width system capsule.
     private var quickConnect: some View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: "terminal")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
-                .frame(width: 22)
+                .frame(width: 16)
             TextField("user@host", text: $destination)
                 .font(DS.Font.literal)
                 .textFieldStyle(.plain)
@@ -218,7 +226,22 @@ struct HostsView: View {
                     .buttonStyle(.bar)
             }
         }
+        .padding(.horizontal, DS.Space.s + 2)
+        .frame(height: Self.fieldHeight)
+        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(isQuickConnectFocused ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isQuickConnectFocused ? 1 : 0.5))
+        .contentShape(.rect)
+        .onTapGesture { isQuickConnectFocused = true }
+        #if os(iOS)
+        .frame(minHeight: 44)
+        #endif
     }
+
+    #if os(macOS)
+    static let fieldHeight: CGFloat = 28
+    #else
+    static let fieldHeight: CGFloat = 36
+    #endif
 
     private func connectTyped() {
         let trimmed = destination.trimmingCharacters(in: .whitespaces)
@@ -305,16 +328,25 @@ private struct HostRow: View {
     let host: HostSummary
     let emphasizeNeedsYou: Bool
 
+    /// A 16 pt glyph slot (18 on touch), then the text column where separators start.
+    #if os(macOS)
+    static let glyphSlot: CGFloat = 16
+    #else
+    static let glyphSlot: CGFloat = 18
+    #endif
+    static let textColumn: CGFloat = glyphSlot + DS.Space.m
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DS.Space.m) {
             Image(systemName: glyph)
-                .foregroundStyle(.secondary)
-                .frame(width: 22)
+                .foregroundStyle(.primary)
+                .opacity(DS.Opacity.mutedGlyph)
+                .frame(width: Self.glyphSlot)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: DS.Space.s) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: DS.Space.row) {
                     Text(host.name)
-                        .font(DS.Font.rowTitleEmphasis)
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     ConnectionGlyph(host.connection)
                         .font(.caption)
@@ -327,14 +359,14 @@ private struct HostRow: View {
                     trailing
                 }
                 Text(host.address)
-                    .font(DS.Font.literalSmall)
-                    .foregroundStyle(.secondary)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 detail
             }
         }
-        .padding(.vertical, DS.Space.xxs)
+        .padding(.vertical, DS.Space.row)
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
     }
@@ -369,6 +401,7 @@ private struct HostRow: View {
             }
             .font(DS.Font.meta)
             .foregroundStyle(.secondary)
+            .fixedSize()
         }
     }
 
@@ -383,46 +416,46 @@ private struct HostRow: View {
     @ViewBuilder private var detail: some View {
         if let progress = host.progress {
             Text(progress)
-                .font(DS.Font.rowSubtitle)
+                .font(.footnote)
                 .foregroundStyle(DS.Palette.working)
                 .monospacedDigit()
                 .lineLimit(1)
         } else if emphasizeNeedsYou, let needsYou = host.needsYou {
             Text(needsYou)
-                .font(DS.Font.rowSubtitle)
+                .font(.footnote)
                 .foregroundStyle(.primary)
                 .lineLimit(2)
         } else {
             switch host.connection {
             case .reconnecting(let attempt, _):
-                Text("Reconnecting… · attempt \(attempt)")
-                    .font(DS.Font.rowSubtitle)
+                Text("\(Text("Reconnecting").foregroundStyle(DS.Palette.attention)) · attempt \(attempt)")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             case .connecting, .offline:
                 Text(host.connection.title)
-                    .font(DS.Font.rowSubtitle)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             case .unreachable(let reason, let hint):
                 let why = [reason, hint].compactMap(\.self).joined(separator: " ")
                 Text("\(Text("Can't reach").foregroundStyle(DS.Palette.error)) · \(why)")
                     .foregroundStyle(.secondary)
-                    .font(DS.Font.rowSubtitle)
+                    .font(.footnote)
                     .lineLimit(2)
             case .needsAttention(let reason, _):
                 Text("\(Text("Can't connect").foregroundStyle(DS.Palette.error)) · \(reason)")
                     .foregroundStyle(.secondary)
-                    .font(DS.Font.rowSubtitle)
+                    .font(.footnote)
                     .lineLimit(2)
             case .disconnected:
                 Text(host.statusLine ?? lastUsed)
-                    .font(DS.Font.rowSubtitle)
+                    .font(.footnote)
                     .foregroundStyle(.tertiary)
             case .connected, .slow, .paused:
                 if let helper = host.helper, helper.canUpdate {
                     // Quiet: a newer helper is an offer, not a problem (the menu has the action).
                     Label(helper.message, systemImage: "arrow.down.circle")
                         .labelStyle(.titleAndIcon)
-                        .font(DS.Font.rowSubtitle)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .accessibilityIdentifier("helper-update-\(host.name)")
@@ -433,7 +466,7 @@ private struct HostRow: View {
                         .lineLimit(1)
                 } else if let status = host.statusLine {
                     Text(status)
-                        .font(DS.Font.rowSubtitle)
+                        .font(.footnote)
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
                 }

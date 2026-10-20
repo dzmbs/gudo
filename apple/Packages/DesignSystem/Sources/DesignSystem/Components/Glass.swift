@@ -9,15 +9,52 @@ import SwiftUI
 //    decoration.
 
 public extension View {
-    /// A floating panel over content: palette, search bar, reconnect card.
+    /// A floating panel over content: palette, search bar, reconnect card. The glass is tinted
+    /// is `surface_2`), not the system's grey.
     func floatingPanel(cornerRadius: CGFloat = DS.Radius.panel) -> some View {
-        glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius), interactive: false))
     }
 
     /// A floating capsule: toasts, the resize readout on iPad, compact bars.
     func floatingCapsule(interactive: Bool = false) -> some View {
-        glassEffect(interactive ? .regular.interactive() : .regular, in: .capsule)
+        modifier(ThemedGlass(shape: .capsule, interactive: interactive))
     }
+}
+
+/// Glass tinted with the chrome's raised surface.
+private struct ThemedGlass<S: Shape>: ViewModifier {
+    let shape: S
+    let interactive: Bool
+    @Environment(\.chrome) private var chrome
+
+    /// How much of the raised surface tints the glass: enough to carry the theme's hue, little
+    /// enough that the glass still reads as glass.
+    static var tint: Double { 0.55 }
+
+    func body(content: Content) -> some View {
+        let glass = Glass.regular.tint(chrome.raisedColor.opacity(Self.tint))
+        content
+            .glassEffect(interactive ? glass.interactive() : glass, in: shape)
+    }
+}
+
+/// The one primary action on a screen: prominent glass tinted with the theme's selection colour
+/// (its accent deepened until the label reads on it at 4.5:1). A pale accent (Dracula's lavender,
+/// Ghostty's blue) under the system's white label would not.
+public struct PrimaryGlassButtonStyle: PrimitiveButtonStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        Button(configuration)
+            .buttonStyle(.glassProminent)
+            .tint(DS.Palette.selection)
+            // Its own label colour: content under `chromeContent()` carries the theme's ink.
+            .foregroundStyle(DS.Palette.onSelection)
+    }
+}
+
+public extension PrimitiveButtonStyle where Self == PrimaryGlassButtonStyle {
+    static var primaryGlass: PrimaryGlassButtonStyle { PrimaryGlassButtonStyle() }
 }
 
 /// A plain, chrome-quiet button for bars: icon only, secondary until hovered or pressed, with
@@ -35,7 +72,7 @@ public struct BarButtonStyle: ButtonStyle {
             .padding(.horizontal, 2)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.field)
-                    .fill(Color.primary.opacity(configuration.isPressed ? 0.2 : isHovered ? 0.1 : 0)))
+                    .fill(DS.Palette.ink.opacity(configuration.isPressed ? 0.2 : isHovered ? 0.1 : 0)))
             .contentShape(.rect)
             .onHover { isHovered = $0 }
             #if os(iOS)
@@ -75,11 +112,11 @@ public struct RowButtonStyle: ButtonStyle {
             #endif
     }
 
-    private func fill(_ pressed: Bool) -> Color {
-        if isSelected { return isProminent ? DS.Palette.selection : DS.Palette.accent.opacity(0.2) }
-        if pressed { return DS.Palette.pressedFill }
-        if isHovered { return DS.Palette.hoverFill }
-        return .clear
+    private func fill(_ pressed: Bool) -> AnyShapeStyle {
+        if isSelected { return isProminent ? AnyShapeStyle(DS.Palette.selection) : AnyShapeStyle(DS.Palette.accent.opacity(0.2)) }
+        if pressed { return AnyShapeStyle(DS.Palette.pressedFill) }
+        if isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
+        return AnyShapeStyle(Color.clear)
     }
 }
 

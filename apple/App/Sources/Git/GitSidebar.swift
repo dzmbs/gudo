@@ -20,7 +20,7 @@ enum GitRow {
     #endif
     static let subtitle = Font.footnote
     static let indent: CGFloat = 14
-    static let selectedFill = Color.primary.opacity(0.10)
+    static let selectedFill = DS.Palette.selectedFill
 }
 
 /// ⌘ is held (Mac): rows swap their accessories for their ⌘N, without reflowing.
@@ -63,7 +63,7 @@ private struct GitRowStyle: ViewModifier {
             .contentShape(.rect)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .fill(selected ? GitRow.selectedFill : hovered ? DS.Palette.hoverFill : .clear))
+                    .fill(DS.Palette.ink.opacity(selected ? ChromePalette.fillLevels.selected : hovered ? ChromePalette.fillLevels.hover : 0)))
             .padding(.horizontal, DS.Space.s)
             .onHover { hovered = $0 }
             #if os(iOS)

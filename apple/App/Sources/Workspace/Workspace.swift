@@ -140,8 +140,8 @@ final class Workspace {
     private func start() {
         reconcilePanes()
         #if os(iOS)
-        // The terminal's keyboard is dark (TerminalView.keyboardAppearance); its key bar matches.
-        keyBar.overrideUserInterfaceStyle = .dark
+        // The key bar takes the terminal theme's light or dark itself (`KeyBarTheme`), like the
+        // keyboard (`applyKeyboardSettings`).
         #endif
         // Weak across the sleep, so a closed window's workspace is freed and the loop ends.
         Task { [weak self] in
@@ -387,6 +387,12 @@ final class Workspace {
         let ascii = defaults.bool(forKey: KeyboardSettings.asciiKeyboard)
         if pane.view.keyboardType != (ascii ? .asciiCapable : .default) {
             pane.view.keyboardType = ascii ? .asciiCapable : .default
+            if pane.view.isFirstResponder { pane.view.reloadInputViews() }
+        }
+        // The keyboard takes the terminal theme's light or dark, like the key bar over it.
+        let appearance: UIKeyboardAppearance = KeyBarTheme.style == .light ? .light : .dark
+        if pane.view.keyboardAppearance != appearance {
+            pane.view.keyboardAppearance = appearance
             if pane.view.isFirstResponder { pane.view.reloadInputViews() }
         }
         #endif

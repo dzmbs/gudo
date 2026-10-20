@@ -101,3 +101,25 @@ public struct EmptyState<Actions: View>: View {
         }
     }
 }
+
+/// default, `.vertical` inside an `HStack`.
+public struct Hairline: View {
+    public enum Axis: Sendable { case horizontal, vertical }
+
+    let axis: Axis
+    let style: ChromeStyle
+    @Environment(\.displayScale) private var scale
+
+    public init(_ axis: Axis = .horizontal, style: ChromeStyle = DS.Palette.hairline) {
+        self.axis = axis
+        self.style = style
+    }
+
+    public var body: some View {
+        let width = max(DS.Size.hairline(scale: scale), 0.5)
+        Rectangle()
+            .fill(style)
+            .frame(width: axis == .vertical ? width : nil, height: axis == .horizontal ? width : nil)
+            .accessibilityHidden(true)
+    }
+}

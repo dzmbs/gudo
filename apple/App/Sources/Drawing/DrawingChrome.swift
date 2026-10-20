@@ -142,13 +142,13 @@ struct OverlayToolbar: View {
             Button { model.onSend() } label: {
                 Label(model.compact ? "Send" : "Send to \(agent)", systemImage: "paperplane.fill")
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.primaryGlass)
             .keyboardShortcut(.return, modifiers: [.command, .shift])
             .help("Place the drawing and attach it to \(agent)'s prompt (⇧⌘↩)")
             .accessibilityIdentifier("drawing.send")
         } else {
             Button("Done") { model.onDone() }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.primaryGlass)
                 .keyboardShortcut(.return, modifiers: .command)
                 .help("Place the drawing in the terminal (⌘↩)")
                 .accessibilityIdentifier("drawing.done")
@@ -213,7 +213,7 @@ struct PlacedNotice: View {
                 if let agent = model.agentName, !model.sent {
                     Text("·").foregroundStyle(.tertiary)
                     Button { model.onSend() } label: { Text("Send to \(agent)") }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .disabled(model.sending)
                         .accessibilityIdentifier("drawing.notice.send")
                 }

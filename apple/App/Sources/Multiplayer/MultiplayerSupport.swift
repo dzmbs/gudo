@@ -95,30 +95,6 @@ enum RelativeTime {
     }
 }
 
-/// The window's appearance setting (Ghostty `window-theme`) for sheets that open their own
-/// presentation: the chrome follows the terminal, not the system.
-struct FollowsTerminalChrome: ViewModifier {
-    @Environment(\.terminalTheme) private var theme
-    @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
-
-    func body(content: Content) -> some View {
-        content.preferredColorScheme(scheme)
-    }
-
-    private var scheme: ColorScheme? {
-        switch windowTheme {
-        case .system: nil
-        case .auto: theme.colorScheme
-        case .light: .light
-        case .dark: .dark
-        }
-    }
-}
-
-extension View {
-    func followsTerminalChrome() -> some View { modifier(FollowsTerminalChrome()) }
-}
-
 /// Short hex for keys and ids: "a1b2 c3d4 e5f6 0718".
 func groupedHex(_ hex: String, groups: Int = 4) -> String {
     let chars = Array(hex.prefix(groups * 4))

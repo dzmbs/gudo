@@ -54,6 +54,7 @@ private struct ToastHost: ViewModifier {
                         .font(.callout.weight(.medium))
                         .lineLimit(2)
                 }
+                .chromeContent()
                 .padding(.horizontal, DS.Space.l)
                 .padding(.vertical, DS.Space.s + 2)
                 .floatingCapsule(interactive: true)
@@ -67,9 +68,9 @@ private struct ToastHost: ViewModifier {
         }
     }
 
-    private func color(_ style: Toast.Style) -> Color {
+    private func color(_ style: Toast.Style) -> ChromeStyle {
         switch style {
-        case .neutral: .secondary
+        case .neutral: DS.Palette.textSecondary
         case .success: DS.Palette.done
         case .failure: DS.Palette.error
         }

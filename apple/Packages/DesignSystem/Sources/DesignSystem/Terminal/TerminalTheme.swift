@@ -59,16 +59,9 @@ nonisolated public struct TerminalTheme: Codable, Hashable, Identifiable, Sendab
     /// or 8 % (light) in HSB brightness (Ghostty.Config.swift `splitDividerColor`).
     public var splitDivider: Color { scaled(isLight ? 0.92 : 0.6) }
 
-    /// The sidebar: the terminal background a step darker (dark themes) or lighter-grey (light),
-    public var sidebarBackground: Color { scaled(isLight ? 0.955 : 0.82) }
-
-    /// Rows and cards on the terminal background (grouped lists, forms): a step lighter on dark
-    /// themes, white-ish on light ones.
-    public var raisedBackground: Color { isLight ? background : scaled(1.32) }
-
-    /// The page under grouped lists and forms: the terminal background (dark themes) or a step
-    /// darker (light themes), so raised rows read on it.
-    public var groupedBackground: Color { isLight ? scaled(0.955) : background }
+    /// A surface on the terminal itself (diff file headers, the editor's cards): the foreground
+    /// terminal uses `ChromePalette`, which also follows the window scheme.
+    public func surface(_ strength: Double) -> Color { bgRGB.blended(with: fgRGB, strength).color }
 
     /// The window chrome's light/dark, from the terminal background (Ghostty `window-theme = auto`).
     public nonisolated var colorScheme: ColorScheme { isLight ? .light : .dark }
@@ -100,7 +93,7 @@ nonisolated public enum ThemeCatalog {
 
 // MARK: - Environment
 
-public extension EnvironmentValues {
+nonisolated public extension EnvironmentValues {
     /// The active terminal theme; chrome that touches the terminal (padding, dividers, dimming,
     /// the compact top bar) paints with its background so the terminal edge never shows a seam.
     @Entry var terminalTheme: TerminalTheme = .ghosttyDefault

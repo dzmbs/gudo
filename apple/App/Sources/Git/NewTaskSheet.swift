@@ -81,7 +81,7 @@ struct NewTaskSheet: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("task-runner")
                 }
-                .raisedRows()
+                .chromeRows()
                 Section {
                     Picker("Host", selection: $hostID) {
                         ForEach(hosts) { host in
@@ -120,7 +120,7 @@ struct NewTaskSheet: View {
                         Text("No host with the helper is connected. Connect one in Hosts first.")
                     }
                 }
-                .raisedRows()
+                .chromeRows()
                 if worktree {
                     Section {
                         HStack {
@@ -150,7 +150,7 @@ struct NewTaskSheet: View {
                             (Text("Runs setup first: ") + Text(setup).font(DS.Font.literalSmall))
                         }
                     }
-                    .raisedRows()
+                    .chromeRows()
                 }
                 if runner != .shell {
                     Section("Prompt") {
@@ -169,7 +169,7 @@ struct NewTaskSheet: View {
                             }
                             .accessibilityIdentifier("launch-prompt")
                     }
-                    .raisedRows()
+                    .chromeRows()
                 }
                 if let failure {
                     Section {
@@ -177,11 +177,11 @@ struct NewTaskSheet: View {
                             .foregroundStyle(DS.Palette.error)
                             .font(DS.Font.rowSubtitle)
                     }
-                    .raisedRows()
+                    .chromeRows()
                 }
             }
             .formStyle(.grouped)
-            .terminalGrouped()
+            .chromeGrouped()
             .navigationTitle("New Task")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

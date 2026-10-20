@@ -30,24 +30,41 @@ JetBrains Mono (bundled, OFL, Ghostty's default face).
 
 ### Color
 
-Light/dark pairs; dark values are Ghostty's palette entries, light values are the same hues
-darkened to ≥ 4.5:1 on white.
+Every chrome colour is derived from the active terminal theme (`ChromePalette`,
+and 16 ANSI colours; the chrome is the foreground laid over the background at fixed strengths, so a
+light theme gets darker panels and a dark theme lighter ones with one rule, Solarized chrome is
+Solarized and Dracula's is Dracula. `DS.Palette.*` are `ChromeStyle`s that resolve from the
+environment's palette when drawn; window and sheet roots set it with `chromeTheme(_:windowTheme:)`,
+content areas take the ink and tint with `chromeContent()` (never above a toolbar, so bar items
+stay monochrome and keep their disabled look). UIKit/AppKit views read
+`ChromePalette.fromPreferences()` (`KeyBarTheme` for the key bar).
 
-| Token | Light | Dark | Use | Source |
-|---|---|---|---|---|
-| `accent` | `#2F6DB5` | `#7AA6DA` | focus, selection, one primary action | Ghostty palette 12 |
-| `working` | `#A87A00` | `#F0C674` | agent working | palette 3 |
-| `blocked` | `#C8323A` | `#E8686C` | needs you, count badges | palette 9 |
-| `done` | `#4E7A12` | `#B5BD68` | done, git added, connected | palette 2 |
-| `error` | `#B83A3A` | `#CC6666` | failed, git deleted, unreachable | palette 1 |
-| `info` | `#3F6E99` | `#81A2BE` | informational | palette 4 |
-| `bell` | `#FFCC00` 50 % | same | bell border | Ghostty `BellBorderOverlay` |
-| terminal background | `#282C34` | same | grid, pane headers, tab strip, iPhone top bar | Ghostty `background` |
-| split divider | background × 0.6 brightness (`#181A1F`) | same | 1 pt dividers, header rules, sidebar edge | Ghostty `splitDividerColor` (darken 40 %) |
-| unfocused dim | background at 30 % | same | over unfocused panes | Ghostty `unfocused-split-opacity` 0.7 |
+| Token | Formula | Use |
+|---|---|---|
+| `base` | the theme background | window base, tab strip, toolbar band, iPhone top bar, Inbox/Hosts lists |
+| `sidebar` / `raised` / `overlay` | background + foreground at 5 / 10 / 15 % | sidebar; cards, popovers, palette glass tint, command blocks, fields; menus |
+| `groupedPage` / `groupedRow` | dark: base / raised; light: sidebar / base (iOS convention) | Settings, sheets' forms |
+| `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
+| `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | rows, tabs, the selected tab pill |
+| `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | 1 px lines (`Hairline`), the sidebar edge, tab strip rule |
+| `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground | focus, toggles, links, the selected theme card |
+| `selection` / `onSelection` | the accent deepened toward the darker ink until the lighter ink reads on it at 4.5:1 | the palette's selected row, the one primary button (`.primaryGlass`) |
+| `terminal`, `ansi(n)` | the theme itself | the grid, presence avatars |
+| `bell` | `#FFCC00` 50 % | bell border (Ghostty `BellBorderOverlay`) |
+| split divider | background × 0.6 brightness (dark) / × 0.92 (light) | splits only (Ghostty `splitDividerColor`) |
+| unfocused dim | background at 30 % | over unfocused panes (`unfocused-split-opacity` 0.7) |
 
-The asset catalog's `AccentColor` mirrors `accent`; `LaunchBackground` is the terminal
-background.
+Guarantees (unit-tested over all 464 bundled themes, in the theme's scheme and forced to the
+other): main text ≥ 4.5:1 on every surface (the ink moves toward white or black only as far as
+needed; for a garish mid-tone background the chrome's background steps away from the terminal's),
+state colours and the accent ≥ 3:1 on base, sidebar and overlay, selection text ≥ 4.5:1.
+
+`window-theme`: Match Terminal (default) takes the theme's scheme; Light/Dark/System that
+differ from the theme put the chrome on a neutral near-white (tinted 3 % with the theme) or
+near-black (tinted with its ink) with the theme's background as ink, and keep the theme's accent
+and states. The terminal, its key bar and keyboard keep the theme's own scheme. The asset
+catalog's `AccentColor` is Ghostty blue (the default theme's accent); `LaunchBackground` is the
+terminal background.
 
 ### Type scale
 
@@ -99,8 +116,8 @@ titles align to one column.
    title bar, tab strip, sheets, key bar) even with the system in light mode, and the reverse.
    Where chrome touches the terminal (toolbar band, tab strip, pane headers, iPhone top bar) it
    is painted with the terminal background, seamless like Ghostty's transparent titlebar.
-   flush with the window edge, on `TerminalTheme.sidebarBackground` (the terminal background
-   at 0.82 brightness for dark themes, 0.955 for light), separated by a 1 pt split-divider line.
+   flush with the window edge, on `DS.Palette.sidebar` (the theme background with its foreground
+   at 5 %), separated by a one-pixel `separator` line.
    It is drawn by hand (a scroll view of rows), because the system sidebar list paints its own
    material.
 
@@ -214,7 +231,7 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
   every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1–8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
-  9 % fill with radius 10 (hover 6 %), never the accent. Drag to reorder within a host; context
+  10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder within a host; context
   menu Rename / Close. Under a group's tabs, its agents.
 - Footer: Settings only (no connection summary, §3.7 rule 1).
 - Tab strip: a single-host window shows no host; with tabs from several hosts, each tab gets the
@@ -236,11 +253,13 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 ### Tab strip (horizontal tabs) — Ghostty native tabs
 
 Equal-width tabs across the row; centered title led by the same slot as the sidebar
-(program mark, the agent glyph instead on unfocused tabs); ⌘N right-aligned; close
-button on hover at the leading edge; 1 pt separators between unselected tabs (none beside the
-selected one); the selected tab a slightly lighter rounded pill (primary 11 %, radius 7, 0.5 pt
-hairline), moved with `matchedGeometryEffect`; + at the end. The strip sits under the shared
-toolbar (Mac and iPad alike) on the terminal background with a divider-colored bottom rule. Drag
+(program mark, the agent glyph instead on unfocused tabs); ⌘N right-aligned only while ⌘ is held;
+close button on hover at the leading edge; one-pixel separators between unselected tabs (none
+beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
+tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill of the ink at 10 %
+(radius 7, hairline edge), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
+The strip sits under the shared toolbar (Mac and iPad alike) on the window base (the terminal
+background) with a one-pixel `separator` rule. Drag
 tabs to reorder.
 
 ### Splits, panes, overlays — Ghostty 1:1
@@ -302,6 +321,12 @@ takes `selected`/`total`.)
 
 ### Hosts (`Screens/HostsView.swift`)
 
+Same surface as the Inbox (plain list on the base, inline title, hairlines from the text
+column). Quick connect is a drawn field (28 pt Mac, 36 pt touch in a 44 pt hit area, radius 6, on
+`raised` with a hairline, the accent edge while focused). Rows: kind glyph at 0.6 in a 16/18 pt slot,
+name subheadline semibold, address SF Mono footnote tertiary, status footnote with only the state
+word coloured ("Reconnecting" amber, "Can't reach" red), counts trailing in monospaced digits.
+
 Quick connect field first (SF Mono, `user@host`, Return connects). Sections: Needs you (red
 count + the reason line), Active (connection dot, address in SF Mono, sessions, agent glyph
 counts, last output line), Pinned, Other (unreachable with reason and hint). Kind glyphs: daemon
@@ -323,6 +348,12 @@ you'll resume where you left off." with Disconnect and Retry Now (default). Unre
 hint (e.g. Tailscale). The sidebar footer and connection dots show the same state.
 
 ### Agent Inbox (`Screens/InboxView.swift`)
+
+one-pixel separators from the text column, an inline title with "2 need you · 3 new" as its
+subtitle; rows with a 16 pt glyph slot (glyphs at 0.6 unless something needs you), the agent in
+subheadline semibold, "host · session" footnote tertiary, the age right-aligned in monospaced
+digits; command blocks on `raised`, radius 6, hairline edge; Approve is the one `.primaryGlass`
+action (small on the Mac, full size on touch).
 
 Needs you / Running / Finished. Row: status glyph, the agent's mark (14 pt) and name, host · session, an accent dot while
 unseen, age (ticking for running), an open-pane arrow, prompt. Permission requests show the tool
@@ -499,12 +530,13 @@ reload, glass address field (lock for https, `localhost:5173` for local), share,
 ### Settings (`Views/SettingsView.swift`)
 
 Ghostty's config as native settings; each control shows its Ghostty key in SF Mono under the
-label. Appearance: Theme (463 Ghostty themes, searchable, Dark/Light filter, each row a prompt in
-the theme's colors plus an ANSI swatch), Window (`window-theme`), Panes (compact/comfortable).
+card in its own background with its name in its foreground, a prompt in its colours and four 12 pt
+swatches (red, green, blue, yellow), the selected card ringed in the accent; the setting row
+shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Panes (compact/comfortable).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
-from the real profiles). Notifications. About and Acknowledgements. Mac: toolbar-tabbed Settings
-window; iOS: one grouped form. Values reach the renderer through `TerminalAppearance`
+from the real profiles). Notifications. About and Acknowledgements. Mac: a split view (200 pt list of
+theme's chrome. Values reach the renderer through `TerminalAppearance`
 (`TerminalAppearance.fromPreferences()`).
 
 ### Drawing in the terminal (`App/Sources/Drawing`)
@@ -587,5 +619,5 @@ title menu grouped by host), `iphone-hetzner.png` (title + host line).
   `-mock` keeps the `MockData.swift` stand-ins for screenshots.
 - **Key bar screenshots** show main's hardware-keyboard strip (profile chip + esc), because the
   simulators have a hardware keyboard attached; the full row uses the same `KeyBarLook` keys.
-- **Light terminal themes** are supported by the chrome (window theme "Match Terminal", seamless
-  toolbar rule) but not reviewed screen by screen.
+- **Mac snapshots** (`-snapshot`) leave system lists (Inbox, Hosts) and glass grey: the Mac
+  theme screenshots show the chrome around them; check lists on a live window.

@@ -41,7 +41,7 @@ public struct ResizeOverlay: View {
                     .padding(5)
                     .background(
                         RoundedRectangle(cornerRadius: DS.Radius.chip)
-                            .fill(.background)
+                            .fill(DS.Palette.raised)
                             .shadow(radius: 3))
                     .lineLimit(1)
             }
@@ -90,7 +90,7 @@ public struct ProcessExitedBar: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity)
-            .background(failed ? AnyShapeStyle(Color.red.opacity(0.5)) : AnyShapeStyle(.background))
+            .background(failed ? AnyShapeStyle(DS.Palette.ansi(1).opacity(0.5)) : AnyShapeStyle(DS.Palette.raised))
             .foregroundStyle(.primary)
             .opacity(isHovered ? 0 : 1)
             .onHover { isHovered = $0 }
@@ -156,7 +156,7 @@ public struct SecureInputBadge: View {
             .padding(5)
             .background(
                 Rectangle()
-                    .fill(.background)
+                    .fill(DS.Palette.raised)
                     .overlay(
                         Rectangle()
                             .fill(AngularGradient(colors: [.cyan, .blue, .yellow, .blue, .cyan], center: .center, angle: gradientAngle))
@@ -164,7 +164,7 @@ public struct SecureInputBadge: View {
                             .mask(RadialGradient(colors: [.clear, .black], center: .center, startRadius: 0, endRadius: 25))
                             .opacity(gradientOpacity)))
             .mask(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.gray, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(DS.Palette.border, lineWidth: 1))
             .onTapGesture { isExplaining = true }
             .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
                 Text("Secure input is on while the terminal reads a password. Other apps can't read what you type here.")

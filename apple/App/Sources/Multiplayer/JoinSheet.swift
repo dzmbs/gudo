@@ -53,12 +53,12 @@ struct JoinSheet: View {
                 } footer: {
                     Text("Paste the link someone shared, or open it from Messages or Mail. Scanning their QR code opens it too.")
                 }
-                .raisedRows()
+                .chromeRows()
 
                 switch card {
                 case .success(let info):
                     JoinCard(info: info)
-                        .raisedRows()
+                        .chromeRows()
                     Section {
                         TextField(info.label.isEmpty ? "Your name" : info.label, text: $name)
                             .textContentType(.name)
@@ -67,7 +67,7 @@ struct JoinSheet: View {
                     } footer: {
                         Text("Everyone in the session sees this name next to your avatar.")
                     }
-                    .raisedRows()
+                    .chromeRows()
                     Section {
                         Button(action: { join(info) }) {
                             HStack {
@@ -78,7 +78,7 @@ struct JoinSheet: View {
                             }
                             .padding(.vertical, 4)
                         }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .disabled(phase == .joining || isExpired(info))
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets())
@@ -94,13 +94,13 @@ struct JoinSheet: View {
                         Label("That isn't an invite link. Pairing tickets go in Add Host.", systemImage: "questionmark.circle")
                             .foregroundStyle(DS.Palette.error)
                     }
-                    .raisedRows()
+                    .chromeRows()
                 case nil:
                     EmptyView()
                 }
             }
             .formStyle(.grouped)
-            .terminalGrouped()
+            .chromeGrouped()
             .navigationTitle("Join a Session")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -112,7 +112,6 @@ struct JoinSheet: View {
             }
             .animation(DS.Motion.snappy, value: trimmed)
         }
-        .followsTerminalChrome()
         #if os(iOS)
         .phoneDetents([.large])
         #else
@@ -183,7 +182,7 @@ private struct JoinCard: View {
                         Text(role.summary).font(DS.Font.rowSubtitle).foregroundStyle(.secondary)
                     }
                 } icon: {
-                    Image(systemName: role.systemImage).foregroundStyle(Color.accentColor)
+                    Image(systemName: role.systemImage).foregroundStyle(DS.Palette.accent)
                 }
             }
             LabeledContent("Covers", value: info.scope.title)

@@ -82,15 +82,15 @@ struct ScriptDef: Codable, Hashable, Identifiable, Sendable {
     var systemImage: String { icon?.nonEmpty ?? "play" }
 
     /// The script's tint: a palette name or `#RRGGBB`.
-    var color: Color {
+    var color: AnyShapeStyle {
         switch tint?.lowercased() {
-        case "green": DS.Palette.done
-        case "red": DS.Palette.error
-        case "yellow", "orange", "amber": DS.Palette.attention
-        case "blue": DS.Palette.info
-        case "purple", "magenta": DS.Palette.merged
-        case let hex? where hex.hasPrefix("#") && hex.count == 7: Color(hex: hex)
-        default: .secondary
+        case "green": AnyShapeStyle(DS.Palette.done)
+        case "red": AnyShapeStyle(DS.Palette.error)
+        case "yellow", "orange", "amber": AnyShapeStyle(DS.Palette.attention)
+        case "blue": AnyShapeStyle(DS.Palette.info)
+        case "purple", "magenta": AnyShapeStyle(DS.Palette.merged)
+        case let hex? where hex.hasPrefix("#") && hex.count == 7: AnyShapeStyle(Color(hex: hex))
+        default: AnyShapeStyle(.secondary)
         }
     }
 }

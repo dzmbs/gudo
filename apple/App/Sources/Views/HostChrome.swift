@@ -75,11 +75,11 @@ struct HostNotices: View {
         .animation(DS.Motion.panel, value: app.hosts.installs[workspace.hostId ?? ""]?.summary)
     }
 
-    private func notice(systemImage: String?, tint: Color?, @ViewBuilder _ content: () -> some View) -> some View {
+    private func notice(systemImage: String?, tint: ChromeStyle?, @ViewBuilder _ content: () -> some View) -> some View {
         HStack(spacing: DS.Space.s) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .foregroundStyle(tint ?? .secondary)
+                    .foregroundStyle(tint ?? DS.Palette.textSecondary)
             }
             content()
         }
@@ -126,7 +126,7 @@ private struct InstallHelperOffer: View {
                         }
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.primaryGlass)
                 .accessibilityIdentifier("install-helper")
             }
             .controlSize(.small)
@@ -164,7 +164,7 @@ private struct HelperUpdateNotice: View {
                         .accessibilityIdentifier("update-helper")
                 } else {
                     Button("Update Helper", action: update)
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .controlSize(.small)
                         .accessibilityIdentifier("update-helper")
                 }

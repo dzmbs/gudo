@@ -49,6 +49,8 @@ public extension DS {
         /// Floating panels: command palette, search bar, toasts' container (Ghostty palette 10, grown
         /// for glass, which reads smaller than an opaque edge).
         public static let panel: CGFloat = 16
+        /// The selected tab's pill in the tab strip (Ghostty/AppKit native tabs: 7).
+        public static let tabPill: CGFloat = 7
         public static let tabSelection: CGFloat = 16.5
     }
 }

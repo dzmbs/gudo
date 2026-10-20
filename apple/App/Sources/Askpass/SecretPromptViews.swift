@@ -134,7 +134,7 @@ struct SecretPromptCard: View {
                     .fixedSize()
                     .accessibilityIdentifier("askpass-cancel")
                 Button("OK") { submit() }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!entry.canSend || isStale)
                     .fixedSize()
@@ -243,7 +243,7 @@ struct SecretPromptCard: View {
     private struct Message {
         let text: String
         let symbol: String
-        let color: Color
+        let color: ChromeStyle
     }
 
     private var statusMessage: Message? {

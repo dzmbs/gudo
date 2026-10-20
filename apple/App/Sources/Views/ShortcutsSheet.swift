@@ -37,11 +37,11 @@ struct ShortcutsSheet: View {
                                 .accessibilityElement(children: .combine)
                             }
                         }
-                        .raisedRows()
+                        .chromeRows()
                     }
                 }
             }
-            .terminalGrouped()
+            .chromeGrouped()
             .searchable(text: $query, prompt: "Search Shortcuts")
             .navigationTitle("Keyboard Shortcuts")
             #if os(iOS)

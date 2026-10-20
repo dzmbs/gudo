@@ -57,7 +57,7 @@ struct PanePresence: View {
                         }
                     }
                     if people.contains(where: \.typing) {
-                        TypingDots(color: people.first(where: \.typing)?.avatar.color ?? .secondary)
+                        TypingDots(color: people.first(where: \.typing).map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(.secondary))
                     }
                 }
                 .accessibilityElement(children: .ignore)
@@ -67,8 +67,8 @@ struct PanePresence: View {
         }
     }
 
-    private func driverColor(_ session: MultiplayerSession, _ principal: String) -> Color {
-        session.participants.first { $0.actor.principal == principal }?.avatar.color ?? .secondary
+    private func driverColor(_ session: MultiplayerSession, _ principal: String) -> AnyShapeStyle {
+        session.participants.first { $0.actor.principal == principal }.map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(.secondary)
     }
 
     private func label(_ session: MultiplayerSession, _ people: [UnnamedCore.Participant], _ driver: String?) -> String {
@@ -80,7 +80,7 @@ struct PanePresence: View {
 
 /// Three dots that breathe while someone types (stills under Reduce Motion).
 struct TypingDots: View {
-    let color: Color
+    let color: AnyShapeStyle
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -182,13 +182,13 @@ private struct ControlChip: View {
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Button("Take Control") { Task { await session.takeControl(pane) } }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .controlSize(.small)
                     .fixedSize()
                     .accessibilityIdentifier("take-control")
             } else {
                 Image(systemName: "keyboard.fill")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(DS.Palette.accent)
                 Text("You're driving")
                     .font(.callout.weight(.medium))
                 Button("Release") { Task { await session.releaseControl(pane) } }
@@ -237,7 +237,7 @@ private struct LeaseRequestCard: View {
                     .fixedSize()
                     .accessibilityIdentifier("keep-control")
                 Button("Hand Over") { Task { await session.answer(request, give: true) } }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .fixedSize()
                     .accessibilityIdentifier("hand-over")
             }
@@ -321,7 +321,7 @@ private struct PromptComposer: View {
                         .font(.body.weight(.bold))
                         .frame(width: 30, height: 30)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.primaryGlass)
                 .buttonBorderShape(.circle)
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
                 .keyboardShortcut(.return, modifiers: .command)

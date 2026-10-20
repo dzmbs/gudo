@@ -4,9 +4,8 @@ import SwiftUI
 // popover that opens on pointer hover with a 150 ms grace.
 
 public extension DS.Palette {
-    /// Merged pull requests (GitHub's purple, from the terminal palette's magenta: Ghostty
-    /// palette 5, darkened for light backgrounds).
-    static let merged = Color(light: Color(hex: "#7A4F8A"), dark: Color(hex: "#B294BB"))
+    /// Merged pull requests (GitHub's purple): the theme's magenta, like a working agent.
+    static let merged = DS.Palette.working
 }
 
 public extension DS {
@@ -56,10 +55,10 @@ public struct DiffStat: View {
 public enum PRKind: Sendable, Equatable {
     case open, draft, merged, closed
 
-    public var color: Color {
+    public var color: ChromeStyle {
         switch self {
         case .open: DS.Palette.done
-        case .draft: .secondary
+        case .draft: DS.Palette.textSecondary
         case .merged: DS.Palette.merged
         case .closed: DS.Palette.error
         }
@@ -112,12 +111,12 @@ public struct PRNumberBadge: View {
 public enum CheckKind: Sendable, Equatable {
     case success, failure, pending, skipped, neutral, cancelled
 
-    public var color: Color {
+    public var color: ChromeStyle {
         switch self {
         case .success: DS.Palette.done
         case .failure: DS.Palette.error
         case .pending: DS.Palette.attention
-        case .skipped, .neutral, .cancelled: .secondary
+        case .skipped, .neutral, .cancelled: DS.Palette.textSecondary
         }
     }
 
@@ -203,7 +202,7 @@ public struct CheckBadge: View {
         if let kind {
             Image(systemName: kind == .failure ? "xmark.circle.fill" : kind == .pending ? "ellipsis.circle.fill" : "checkmark.circle.fill")
                 .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, selected ? AnyShapeStyle(.secondary) : AnyShapeStyle(kind.color))
+                .foregroundStyle(DS.Palette.base, selected ? AnyShapeStyle(.secondary) : AnyShapeStyle(kind.color))
                 .accessibilityLabel("Checks \(kind == .failure ? "failed" : kind == .pending ? "running" : "passed")")
         }
     }
@@ -248,6 +247,7 @@ public struct HoverPopover<Label: View, Content: View>: View {
         }
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             content()
+                .chromeContent()
                 .onHover { inside in
                     overPopover = inside
                     update()
@@ -272,11 +272,11 @@ public struct HoverPopover<Label: View, Content: View>: View {
 
 /// The 6 pt dot of a highlight section header: the colour at 60 % with a hairline stroke.
 public struct SectionDot: View {
-    let color: Color
+    let color: AnyShapeStyle
     @Environment(\.displayScale) private var scale
 
-    public init(_ color: Color) {
-        self.color = color
+    public init(_ color: some ShapeStyle) {
+        self.color = AnyShapeStyle(color)
     }
 
     public var body: some View {
