@@ -143,8 +143,8 @@ fn tools() -> Value {
         {
             "name": "get_drawing",
             "description": "Get one drawing from this terminal session: png returns the image, \
-                svg the vector markup, ascii a text rendering (boxes, arrows and labels). \
-                Without an id, the most recently changed drawing.",
+                svg the vector markup, ascii a text rendering (boxes, arrows and labels), \
+                excalidraw the editable scene as JSON (elements with their labels). Without an id, the most recently changed drawing.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -486,7 +486,7 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["list_drawings", "get_drawing"]);
         let format = &tools[1]["inputSchema"]["properties"]["format"];
-        assert_eq!(format["enum"], json!(["png", "svg", "ascii"]));
+        assert_eq!(format["enum"], json!(["png", "svg", "ascii", "excalidraw"]));
         assert_eq!(format["default"], "png");
     }
 

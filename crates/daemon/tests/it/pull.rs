@@ -183,6 +183,27 @@ async fn agents_pull_their_sessions_drawings_and_nothing_else() {
         panic!("ascii export failed")
     };
     assert!(e.data.contains('┌'), "{}", e.data);
+    // An image as an `.excalidraw` scene holding it; op-log drawings have no such file.
+    let PullReply::Export(e) = pull(
+        &socket,
+        &token,
+        pane.0,
+        get(Some(photo.artifact_id.0), "excalidraw"),
+    )
+    .await
+    else {
+        panic!("excalidraw export failed")
+    };
+    let file = drawing::parse_file(e.data.as_bytes()).unwrap();
+    assert_eq!((file.elements.len(), &file.files[0].2), (1, &png));
+    let r = pull(
+        &socket,
+        &token,
+        pane.0,
+        get(Some(arch.artifact_id.0), "excalidraw"),
+    )
+    .await;
+    assert!(matches!(r, PullReply::Error(_)), "{r:?}");
     let PullReply::Export(e) = pull(
         &socket,
         &token,

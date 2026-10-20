@@ -22,8 +22,8 @@ pub const PULL_MAX: usize = 8 << 20;
 pub struct PullFormat {
     /// The name on the wire and in the MCP tool's schema.
     pub name: &'static str,
-    /// What the artifact store exports.
-    pub export: ExportFormat,
+    /// What the artifact store exports; `None` is the `.excalidraw` file.
+    pub export: Option<ExportFormat>,
     /// The MIME type of the result (a PNG export of a JPEG image is sniffed as JPEG).
     pub mime: &'static str,
     /// Binary results travel base64-encoded; text ones as UTF-8.
@@ -33,15 +33,16 @@ pub struct PullFormat {
 /// Every format the pull channel offers; the first is the default. Adding an
 /// [`ExportFormat`] here is all it takes to offer it to agents.
 pub const PULL_FORMATS: &[PullFormat] = &[
-    PullFormat::new("png", ExportFormat::Png, "image/png", true),
-    PullFormat::new("svg", ExportFormat::Svg, "image/svg+xml", false),
-    PullFormat::new("ascii", ExportFormat::Ascii, "text/plain", false),
+    PullFormat::new("png", Some(ExportFormat::Png), "image/png", true),
+    PullFormat::new("svg", Some(ExportFormat::Svg), "image/svg+xml", false),
+    PullFormat::new("ascii", Some(ExportFormat::Ascii), "text/plain", false),
+    PullFormat::new("excalidraw", None, "application/vnd.excalidraw+json", false),
 ];
 
 impl PullFormat {
     const fn new(
         name: &'static str,
-        export: ExportFormat,
+        export: Option<ExportFormat>,
         mime: &'static str,
         binary: bool,
     ) -> Self {
@@ -255,11 +256,25 @@ fn get(
             .find(|i| i.kind != ArtifactKind::Image)
             .ok_or("no drawings in this session")?,
     };
-    let exported =
-        super::export(art, info.artifact_id, version, format.export).map_err(|e| e.to_string())?;
-    let data = match exported.blob {
-        Some(hash) => art.read_blob(&hash).map_err(|e| e.to_string())?.1,
-        None => exported.data,
+    let (version, data) = match format.export {
+        Some(export) => {
+            let exported =
+                super::export(art, info.artifact_id, version, export).map_err(|e| e.to_string())?;
+            let data = match exported.blob {
+                Some(hash) => art.read_blob(&hash).map_err(|e| e.to_string())?.1,
+                None => exported.data,
+            };
+            (exported.version, data)
+        }
+        None => {
+            if version.is_some_and(|v| v != info.version) {
+                return Err("excalidraw files are of the current version only".into());
+            }
+            let data = art
+                .excalidraw_file(info.artifact_id)
+                .map_err(|e| e.to_string())?;
+            (info.version, data)
+        }
     };
     if data.len() > PULL_MAX {
         return Err(format!(
@@ -281,7 +296,7 @@ fn get(
     Ok(PullExport {
         id: info.artifact_id.0,
         title: info.title.clone(),
-        version: exported.version,
+        version,
         format: format.name.into(),
         mime: mime.into(),
         data,
@@ -338,7 +353,7 @@ mod tests {
     fn formats_are_looked_up_by_name() {
         assert_eq!(PULL_FORMATS[0].name, "png");
         assert_eq!(
-            PullFormat::by_name("ascii").unwrap().export,
+            PullFormat::by_name("ascii").unwrap().export.unwrap(),
             ExportFormat::Ascii
         );
         assert!(PullFormat::by_name("gif").is_none());

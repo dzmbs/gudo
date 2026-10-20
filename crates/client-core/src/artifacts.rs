@@ -662,15 +662,13 @@ impl Client {
             }
             (proto::ArtifactKind::Image, Some(image)) => {
                 let (image, bytes) = self.blob_download(image.hash).await?;
-                let file_id = image.hash.to_hex();
-                let element = image_element(&file_id, image.width, image.height);
-                drawing::ExcalidrawFile {
-                    elements: vec![
-                        drawing::parse_element(&element).map_err(ArtifactError::Failed)?,
-                    ],
-                    app_state: None,
-                    files: vec![(file_id, image.media.mime().to_owned(), bytes)],
-                }
+                drawing::ExcalidrawFile::from_image(
+                    &image.hash.to_hex(),
+                    image.media.mime(),
+                    bytes,
+                    image.width,
+                    image.height,
+                )
             }
             _ => {
                 return Err(ArtifactError::Invalid(
@@ -884,36 +882,5 @@ async fn connection(inner: &Inner) -> iroh::endpoint::Connection {
             return c;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-/// An Excalidraw image element showing file `file_id` at half its pixel size (our renders
-/// are 2×), at the origin.
-fn image_element(file_id: &str, width: u32, height: u32) -> String {
-    serde_json::json!({
-        "type": "image", "id": format!("image-{file_id:.12}"), "fileId": file_id,
-        "x": 0, "y": 0, "width": f64::from(width) / 2.0, "height": f64::from(height) / 2.0,
-        "angle": 0, "strokeColor": "transparent", "backgroundColor": "transparent",
-        "fillStyle": "solid", "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0,
-        "opacity": 100, "groupIds": [], "frameId": null, "roundness": null, "seed": 1,
-        "version": 1, "versionNonce": 1, "isDeleted": false, "boundElements": null,
-        "updated": 1, "link": null, "locked": false, "status": "saved", "scale": [1, 1],
-    })
-    .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_image_becomes_a_one_element_scene() {
-        let el = drawing::parse_element(&image_element("ab12", 400, 200)).unwrap();
-        assert_eq!((el.version, el.deleted), (1, false));
-        let v: serde_json::Value = serde_json::from_str(&el.json).unwrap();
-        assert_eq!(
-            (v["width"].as_f64(), v["fileId"].as_str()),
-            (Some(200.0), Some("ab12"))
-        );
     }
 }
