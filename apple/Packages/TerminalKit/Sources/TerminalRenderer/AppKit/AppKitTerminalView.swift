@@ -23,8 +23,13 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     public var onFocus: (() -> Void)?
     /// Which Option keys act as Meta (Ghostty's `macos-option-as-alt`).
     public var optionAsMeta = OptionAsMeta.none
-    /// Opens a ⌘-clicked link; the default asks for confirmation and uses `NSWorkspace`.
-    public var onOpenLink: ((URL) -> Void)?
+    /// Opens a ⌘-clicked link (an OSC 8 hyperlink, or a URL or path printed as text); the
+    /// default asks for confirmation and uses `NSWorkspace`.
+    public var onOpenLink: ((TerminalLink) -> Void)?
+    /// The link under the pointer changed (nil: none), for a status line showing its target.
+    public var onHoverLink: ((TerminalLink?) -> Void)?
+    private var hoveredLinkTarget: TerminalLink?
+    private var lastMousePoint: CGPoint?
 
     private var scrollRemainder: CGFloat = 0
     private lazy var selectionGesture = SelectionGesture(terminal: surface.terminal)
@@ -135,8 +140,8 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             emit(surface.mouse(.press, button: .left, at: p, mods: KeyModifiers(flags)))
             return
         }
-        if flags.contains(.command), let link = surface.link(at: p), let url = URL(string: link.url) {
-            return openLink(url)
+        if flags.contains(.command), let link = surface.link(at: p) {
+            return openLink(link)
         }
         if flags.contains(.shift), let selection = surface.terminal.selection,
            let head = surface.terminal.screenPoint(fromViewport: surface.cell(at: p))
@@ -223,20 +228,38 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func mouseMoved(with event: NSEvent) {
         let p = point(event)
-        if let link = surface.link(at: p) {
-            surface.setHoveredLink((link.row, link.columns))
-            NSCursor.pointingHand.set()
-        } else {
-            surface.setHoveredLink(nil)
-            NSCursor.iBeam.set()
-        }
+        lastMousePoint = p
+        updateHoverLink(at: p, flags: event.modifierFlags)
         if surface.reportsMouse(shift: event.modifierFlags.contains(.shift)) {
             emit(surface.mouse(.motion, button: nil, at: p, mods: KeyModifiers(event.modifierFlags)))
         }
     }
 
     override public func mouseExited(with event: NSEvent) {
-        surface.setHoveredLink(nil)
+        lastMousePoint = nil
+        setHoverLink(nil)
+    }
+
+    override public func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        // Pressing ⌘ over a printed URL underlines it.
+        if let p = lastMousePoint { updateHoverLink(at: p, flags: event.modifierFlags) }
+    }
+
+    /// Ghostty: an OSC 8 hyperlink underlines on hover; a URL or path printed as text only
+    /// while ⌘ is held, since only a ⌘-click opens it.
+    private func updateHoverLink(at p: CGPoint, flags: NSEvent.ModifierFlags) {
+        var link = surface.reportsMouse(shift: flags.contains(.shift)) && !flags.contains(.command) ? nil : surface.link(at: p)
+        if link?.isHyperlink == false, !flags.contains(.command) { link = nil }
+        setHoverLink(link)
+        if link != nil { NSCursor.pointingHand.set() } else { NSCursor.iBeam.set() }
+    }
+
+    private func setHoverLink(_ link: TerminalLink?) {
+        surface.setHoveredLink(link.map { ($0.row, $0.columns) })
+        guard link?.target != hoveredLinkTarget?.target else { return }
+        hoveredLinkTarget = link
+        onHoverLink?(link)
     }
 
     private func updateAutoscroll() {
@@ -263,8 +286,9 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         autoscrollTimer = nil
     }
 
-    private func openLink(_ url: URL) {
-        if let onOpenLink { return onOpenLink(url) }
+    private func openLink(_ link: TerminalLink) {
+        if let onOpenLink { return onOpenLink(link) }
+        guard let url = link.url() else { return }
         let alert = NSAlert()
         alert.messageText = "Open Link?"
         alert.informativeText = url.absoluteString

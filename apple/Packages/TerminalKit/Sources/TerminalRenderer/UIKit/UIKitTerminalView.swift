@@ -28,9 +28,14 @@ public final class TerminalView: UIView {
     public var optionAsMeta = OptionAsMeta.none
     /// Visual flash plus a haptic on BEL.
     public var bellHaptics = true
-    /// Opens a link the user tapped; the default asks for confirmation and opens it with
-    /// `UIApplication.open`.
-    public var onOpenLink: ((URL) -> Void)?
+    /// Opens a link the user tapped (an OSC 8 hyperlink, or a URL or path printed as text); the
+    /// default asks for confirmation and opens URLs with `UIApplication.open`.
+    public var onOpenLink: ((TerminalLink) -> Void)?
+    /// The link under the pointer changed (nil: none), for a status line showing its target.
+    public var onHoverLink: ((TerminalLink?) -> Void)?
+    private var hoveredLinkTarget: TerminalLink?
+    /// Where the last tap landed (view points), to anchor what it opens (a link's popover).
+    public private(set) var lastTapLocation: CGPoint?
     /// Whether Apple Pencil handwriting (Scribble) may type into the terminal. Off: Pencil
     /// strokes over a terminal are drawing or nothing, never text sent to the shell unseen.
     public var allowsHandwriting = false
@@ -262,6 +267,7 @@ public final class TerminalView: UIView {
 
     @objc private func tapped(_ tap: UITapGestureRecognizer) {
         let point = tap.location(in: self)
+        lastTapLocation = point
         let shift = tap.modifierFlags.contains(.shift)
         menuPoint = nil
         if !isFirstResponder { becomeFirstResponder() }
@@ -291,8 +297,8 @@ public final class TerminalView: UIView {
             clearSelection()
             return
         }
-        if let link = surface.link(at: point), let url = URL(string: link.url) {
-            openLink(url)
+        if let link = surface.link(at: point) {
+            openLink(link)
         }
     }
 
@@ -448,22 +454,27 @@ public final class TerminalView: UIView {
         let point = hover.location(in: self)
         switch hover.state {
         case .began, .changed:
-            if let link = surface.link(at: point) {
-                surface.setHoveredLink((link.row, link.columns))
-            } else {
-                surface.setHoveredLink(nil)
-            }
+            // A tap opens plain-text links too, so the pointer shows them all.
+            setHoverLink(surface.reportsMouse(shift: hover.modifierFlags.contains(.shift)) ? nil : surface.link(at: point))
             // Any-event tracking (1003) reports motion with no button held.
             if surface.reportsMouse(shift: hover.modifierFlags.contains(.shift)) {
                 emit(surface.mouse(.motion, button: nil, at: point, mods: KeyModifiers(hover.modifierFlags)))
             }
         default:
-            surface.setHoveredLink(nil)
+            setHoverLink(nil)
         }
     }
 
-    private func openLink(_ url: URL) {
-        if let onOpenLink { return onOpenLink(url) }
+    private func setHoverLink(_ link: TerminalLink?) {
+        surface.setHoveredLink(link.map { ($0.row, $0.columns) })
+        guard link?.target != hoveredLinkTarget?.target else { return }
+        hoveredLinkTarget = link
+        onHoverLink?(link)
+    }
+
+    private func openLink(_ link: TerminalLink) {
+        if let onOpenLink { return onOpenLink(link) }
+        guard link.kind == .url, let url = URL(string: link.target) else { return }
         let alert = UIAlertController(title: "Open Link?", message: url.absoluteString, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Open", style: .default) { _ in UIApplication.shared.open(url) })
