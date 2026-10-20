@@ -129,6 +129,7 @@ struct WorktreeRow: View {
     var body: some View {
         let pr = worktree.visiblePR
         let idle = tab == nil
+        let port = model.git.port(of: worktree, host: host)
         Button {
             if let tab {
                 withAnimation(DS.Motion.snappy) { model.focus(TabRef(hostId: host, tab: tab.id)) }
@@ -145,11 +146,22 @@ struct WorktreeRow: View {
                         .foregroundStyle(idle ? .secondary : .primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if let subtitle = worktree.subtitle {
-                        Text(subtitle)
-                            .font(GitRow.subtitle)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                    if worktree.subtitle != nil || port != nil {
+                        // The worktree's name, then its PORT: what `$PORT` is in its panes.
+                        HStack(spacing: DS.Space.xs) {
+                            if let subtitle = worktree.subtitle {
+                                Text(subtitle).truncationMode(.middle)
+                            }
+                            if let port {
+                                Text(verbatim: ":\(port)")
+                                    .monospacedDigit()
+                                    .layoutPriority(1)
+                                    .help("PORT \(port): what $PORT is in this worktree's panes")
+                            }
+                        }
+                        .font(GitRow.subtitle)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                     }
                 }
                 Spacer(minLength: DS.Space.xs)
@@ -160,14 +172,15 @@ struct WorktreeRow: View {
         .buttonStyle(.plain)
         .contextMenu { WorktreeMenu(worktree: worktree, host: host, tab: tab) }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
+        .accessibilityLabel(accessibilityLabel(port: port))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("worktree-row-\(worktree.displayBranch)")
     }
 
-    private var accessibilityLabel: String {
+    private func accessibilityLabel(port: UInt16?) -> String {
         var parts = [worktree.displayBranch]
         if let sub = worktree.subtitle { parts.append(sub) }
+        if let port { parts.append("PORT \(port)") }
         if worktree.added > 0 || worktree.removed > 0 { parts.append("+\(worktree.added) −\(worktree.removed)") }
         if let pr = worktree.visiblePR { parts.append("pull request \(pr.number) \(pr.stateWord), \(pr.checksSummary.words)") }
         if let agent { parts.append(agent.title) }
@@ -287,6 +300,9 @@ private struct WorktreeMenu: View {
         if let pr = worktree.visiblePR {
             Button("Open #\(pr.number) on GitHub", systemImage: "arrow.up.right.square") { git.openOnGitHub(pr) }
         }
+        if let port = git.port(of: worktree, host: host) {
+            Button("Open localhost:\(String(port))", systemImage: "globe") { git.openPort(of: worktree, host: host, tab: tab) }
+        }
         let scripts = git.scripts(for: worktree)
         if !scripts.isEmpty {
             Menu("Run", systemImage: "play") {
@@ -299,6 +315,9 @@ private struct WorktreeMenu: View {
         Button("Copy Path", systemImage: "doc.on.doc") { Pasteboard.copy(worktree.path) }
         if let branch = worktree.branch {
             Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { Pasteboard.copy(branch) }
+        }
+        if let port = git.port(of: worktree, host: host) {
+            Button("Copy PORT", systemImage: "number") { Pasteboard.copy(String(port)) }
         }
         if let tab {
             Divider()

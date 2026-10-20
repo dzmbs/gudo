@@ -323,7 +323,9 @@ final class LiveAgentFeed: AgentFeed {
                     }
                 }
             }
-            return made.setup.map { "Running setup first: \($0)" }
+            daemon.workspace.notePort(made.worktree.port, worktree: made.worktree.path)
+            return [made.worktree.port.map { "PORT \($0)" }, made.setup.map { "running setup first: \($0)" }]
+                .compactMap(\.self).joined(separator: " · ").nonEmpty
         }
         if request.shell {
             guard let session = daemon.layout.sessionId else { throw HostError.notConnected }

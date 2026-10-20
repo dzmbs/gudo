@@ -144,6 +144,11 @@ enum PaletteCommands {
                 id: "git-create-pr", title: "Create Pull Request", subtitle: "Push \(wt.displayBranch) and open it (gh pr create --fill)",
                 section: section, systemImage: "arrow.triangle.pull") { git.createPR(wt) })
         }
+        if let port = git.port(of: wt) {
+            commands.append(PaletteCommand(
+                id: "git-open-port", title: "Open localhost:\(String(port))", subtitle: "\(wt.displayBranch)'s PORT, in the browser",
+                section: section, systemImage: "globe") { git.openPort(of: wt) })
+        }
         commands.append(PaletteCommand(
             id: "git-checkout-pr", title: "Check Out Pull Request…", subtitle: "Into a new worktree", section: section,
             systemImage: "arrow.down.to.line") { git.isCheckoutPromptShown = true })
