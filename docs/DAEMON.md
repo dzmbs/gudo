@@ -634,6 +634,12 @@ worktree is started with `PORT` and `UN_WORKTREE`, recorded in `layout.json`
 a shell or Claude/Codex in the worktree. Setup and teardown commands come from
 `.unnamed.json` (§5.12).
 
+The `Repos` push (§5.12) does not carry the port: `WorktreeState` is frozen on the wire. The app
+reads ports with `WorktreeList` whenever a repository's set of worktrees changes
+(`DaemonWorkspace.worktreePorts`, matched by path, else by branch) and takes the port that
+`TaskCreate`, `WorktreeRestore` and `PrCheckout` return at once. Only worktrees the daemon made or
+registered have one; the main checkout has none.
+
 ### 5.6 Files
 
 `FsList` (lstat, directories and links to directories first, hidden flag, link target and its

@@ -30,20 +30,25 @@ struct BrowserView: View {
     }
 
     var body: some View {
-        Group {
-            if isCompact {
-                WebView(page)
-                    .ignoresSafeArea(edges: .bottom)
-                    .safeAreaInset(edge: .bottom, spacing: 0) { compactBar }
-                    .overlay(alignment: .top) { progressLine }
-            } else {
-                VStack(spacing: 0) {
-                    regularBar
-                    progressLine
-                    WebView(page)
+        // One WebView whatever the size class: a page may be shown by one WebView only, and a
+        // size class that flips while the sheet comes up (presented right after a popover)
+        // would otherwise make a second one before the first is gone (a WebKit trap).
+        WebView(page)
+            .ignoresSafeArea(edges: isCompact ? .bottom : [])
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isCompact { compactBar }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !isCompact {
+                    VStack(spacing: 0) {
+                        regularBar
+                        progressLine
+                    }
                 }
             }
-        }
+            .overlay(alignment: .top) {
+                if isCompact { progressLine }
+            }
         .onAppear {
             if page.url == nil { page.load(URLRequest(url: initialURL)) }
         }
