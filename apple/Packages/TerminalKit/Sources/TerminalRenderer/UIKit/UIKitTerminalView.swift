@@ -62,7 +62,6 @@ public final class TerminalView: UIView {
     private var pointerDragRectangle = false
     private var touchMouseDrag = false
 
-    private let bellLayer = CALayer()
 
     /// IME composition in progress (marked text) and the selection inside it, in UTF-16 units.
     private var markedText: String?
@@ -91,9 +90,6 @@ public final class TerminalView: UIView {
         backgroundColor = .black
         isMultipleTouchEnabled = true
 
-        bellLayer.backgroundColor = UIColor.white.cgColor
-        bellLayer.opacity = 0
-        layer.addSublayer(bellLayer)
 
         installGestures()
         for handle in [startHandle, endHandle] {
@@ -119,7 +115,6 @@ public final class TerminalView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         surface.layer.frame = bounds
-        bellLayer.frame = bounds
         CATransaction.commit()
         surface.layout(size: bounds.size, scale: traitCollection.displayScale)
         layoutSelectionHandles()
@@ -194,13 +189,9 @@ public final class TerminalView: UIView {
 
     // MARK: Bell
 
-    /// BEL: a short flash and, on iPhone/iPad, a warning haptic.
+    /// BEL: a warning haptic (the touch devices' system bell). Never a flash over the output:
+    /// Ghostty's visual bell is the opt-in border the app draws (`bell-features = border`).
     public func ringBell() {
-        let flash = CABasicAnimation(keyPath: "opacity")
-        flash.fromValue = 0.25
-        flash.toValue = 0
-        flash.duration = 0.3
-        bellLayer.add(flash, forKey: "bell")
         if bellHaptics { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
     }
 

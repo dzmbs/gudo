@@ -26,6 +26,8 @@ final class Pane {
     private(set) var connection = PaneConnection.live
     /// Called on the main actor after `title` or `foregroundProgram` change.
     @ObservationIgnored var onContextChange: (() -> Void)?
+    /// BEL from the program (after the view's own haptic or sound).
+    @ObservationIgnored var onBell: (() -> Void)?
     /// The cell size in points after a layout (split sizes snap to it).
     @ObservationIgnored var onCellSize: ((CGSize) -> Void)?
     /// Whether this pane is its tab's focused pane on screen (set by `Workspace`).
@@ -60,7 +62,12 @@ final class Pane {
         var events = Terminal.Events()
         events.titleChanged = { [weak self] in Task { @MainActor in self?.refreshTitle() } }
         events.pwdChanged = { [weak self] in Task { @MainActor in self?.refreshWorkingDirectory() } }
-        events.bell = { [weak self] in Task { @MainActor in self?.view.ringBell() } }
+        events.bell = { [weak self] in
+            Task { @MainActor in
+                self?.view.ringBell()
+                self?.onBell?()
+            }
+        }
         terminal.setEvents(events)
 
         if let feed = backend as? any PredictionFeed {

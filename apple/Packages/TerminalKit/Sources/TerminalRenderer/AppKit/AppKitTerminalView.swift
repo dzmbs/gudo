@@ -32,7 +32,6 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     private var autoscrollTimer: Timer?
     private var lastDragPoint = CGPoint.zero
     private var dragRectangle = false
-    private let bellLayer = CALayer()
 
     // NSTextInputClient state.
     private var markedText = NSMutableAttributedString()
@@ -43,9 +42,6 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
-        bellLayer.backgroundColor = NSColor.white.cgColor
-        bellLayer.opacity = 0
-        surface.layer.addSublayer(bellLayer)
     }
 
     @available(*, unavailable)
@@ -98,7 +94,6 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     private func relayout() {
         guard let window else { return }
-        bellLayer.frame = CGRect(origin: .zero, size: bounds.size)
         surface.layout(size: bounds.size, scale: window.backingScaleFactor)
     }
 
@@ -111,13 +106,10 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         emit(surface.encode(key))
     }
 
-    /// BEL: a short flash (macOS has no haptics for this).
+    /// BEL: the system alert sound, Ghostty's macOS default (`bell-features = system`). Never a
+    /// flash over the output: the visual bell is the opt-in border the app draws.
     public func ringBell() {
-        let flash = CABasicAnimation(keyPath: "opacity")
-        flash.fromValue = 0.25
-        flash.toValue = 0
-        flash.duration = 0.3
-        bellLayer.add(flash, forKey: "bell")
+        NSSound.beep()
     }
 
     private func point(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }

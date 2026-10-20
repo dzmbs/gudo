@@ -369,11 +369,9 @@ extension PaneDrawing: NSGestureRecognizerDelegate {
             if index > 0 { popup.addItem(.separator()) }
             if let title = section.title { popup.addItem(.sectionHeader(title: title)) }
             for item in section.items {
-                let run = MenuAction { [weak self] in self?.perform(item, on: placement, anchor: anchor) }
-                let entry = NSMenuItem(title: item.title, action: #selector(MenuAction.run), keyEquivalent: "")
-                entry.target = run
-                entry.representedObject = run
-                entry.image = NSImage(systemSymbolName: item.systemImage, accessibilityDescription: nil)
+                let entry = MenuAction.item(item.title, item.systemImage) { [weak self] in
+                    self?.perform(item, on: placement, anchor: anchor)
+                }
                 if let subtitle = item.subtitle { entry.subtitle = subtitle }
                 entry.setAccessibilityIdentifier("drawing.menu.\(item.id)")
                 popup.addItem(entry)
@@ -413,17 +411,5 @@ final class PlacementMarker: NSView {
     func offerMenu(drawing: PaneDrawing, placementId: UInt64) {
         setAccessibilityHelp("Click to send, copy, save or edit the drawing")
     }
-}
-
-/// The target of a menu item that runs a closure (kept alive by the item's
-/// `representedObject`).
-final class MenuAction: NSObject {
-    private let handler: () -> Void
-
-    init(_ handler: @escaping () -> Void) {
-        self.handler = handler
-    }
-
-    @objc func run() { handler() }
 }
 #endif

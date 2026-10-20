@@ -424,6 +424,17 @@ final class Workspace {
         }
     }
 
+    /// Ghostty's `bell-features = border` (Settings ▸ Notifications): the pane's border lights up
+    /// for a moment. Off by default, like Ghostty.
+    private func ringBell(_ id: PaneId) {
+        guard UserDefaults.standard.bool(forKey: TerminalPreferences.Key.bellFeatures) else { return }
+        notices[id, default: PaneNotice()].bell = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            self?.notices[id]?.bell = false
+        }
+    }
+
     private func makePane(_ id: PaneId) throws -> Pane {
         let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance) { [weak self] in
             // The process exited: close its pane, as Ghostty does.
@@ -434,6 +445,7 @@ final class Workspace {
             if self?.grids[id] != size { self?.grids[id] = size }
         }
         pane.isFocusedPane = { [weak self] in self?.focusedPane == id }
+        pane.onBell = { [weak self] in self?.ringBell(id) }
         pane.onCellSize = { [weak self] size in
             if self?.cellSize != size { self?.cellSize = size }
         }
