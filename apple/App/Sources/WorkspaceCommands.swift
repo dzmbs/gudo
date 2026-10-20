@@ -78,6 +78,9 @@ struct WorkspaceCommands: Commands {
                 .keyboardShortcut(WorkspaceAction.toggleSidebar.shortcut)
                 .disabled(editorHasKeys)
             Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
+            // Two tabs side by side (on by itself on a foldable's open inner screen).
+            Toggle("Two Columns", isOn: Binding(get: { model?.isTwoColumns ?? false }, set: { _ in model?.toggleTwoColumns() }))
+                .disabled(editorHasKeys || model == nil)
             Divider()
             buttons([.commandPalette, .commandPaletteGhostty, .inbox, .hosts, .shortcuts])
             Button("Add Host…") { model?.addHost() }
@@ -115,9 +118,11 @@ enum ActiveWindow {
         models.allObjects.first { workspace != nil && $0.workspace === workspace } ?? models.allObjects.first
     }
 
-    /// The window showing `workspace`.
+    /// The window showing `workspace` (on screen, else as one of its hosts: a mixed tab's or the
+    /// other column's pane).
     static func model(for workspace: Workspace) -> WindowModel? {
         models.allObjects.first { $0.workspace === workspace }
+            ?? models.allObjects.first { $0.workspaces.values.contains { $0 === workspace } }
     }
 
     #if os(macOS)

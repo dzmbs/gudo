@@ -27,6 +27,12 @@ struct TabBar: View {
             // Status UX §3.2: no host on a tab while the window is single-host; with tabs from
             // more than one host, each tab gets the host's name as a second line.
             let mixed = Set(all.map(\.hostId)).count > 1
+            // Mixed tabs lead, as in the sidebar.
+            ForEach(model.composites.tabs) { tab in
+                MixedTabChip(tab: tab, isActive: WindowModel.mixedRef(tab.id) == active)
+                    .frame(maxWidth: .infinity)
+                Rectangle().fill(Color.primary.opacity(0.14)).frame(width: 1, height: 16)
+            }
             ForEach(groups) { group in
                 ForEach(group.tabs) { tab in
                     let ref = group.ref(tab.id)

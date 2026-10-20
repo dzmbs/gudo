@@ -1,21 +1,83 @@
 import DesignSystem
+import HostKit
 import PaneLayout
 import SwiftUI
+
+/// What a split tree's leaves show and how the tree changes: one host's tab (`HostTabTree`), or
+/// a mixed tab whose leaves are panes on several hosts (`MixedTabTree`). A leaf resolves to the
+/// workspace of its pane's host, so one tree can hold panes that stream from different hosts.
+@MainActor
+protocol PaneTree {
+    /// The workspace and pane a leaf shows (nil while its host is not open in this window).
+    func resolve(_ leaf: PaneId) -> (workspace: Workspace, pane: PaneId)?
+    /// The leaf that takes the keyboard; nil when none of this tree's does (the other column).
+    var focusedLeaf: PaneId? { get }
+    func focus(leaf: PaneId)
+    func resize(leaf: PaneId, _ direction: Direction, amount: Double)
+    /// One terminal cell, for snapping split sizes to whole cells.
+    var cellSize: CGSize? { get }
+    var padding: CGFloat { get }
+    /// The tree mixes hosts: each pane header names its host.
+    var namesHosts: Bool { get }
+}
+
+/// A host's tab: the window's active one, or (Two Columns) another tab of the same window.
+struct HostTabTree: PaneTree {
+    let workspace: Workspace
+    /// The tab (nil: the window's active tab on this host).
+    var tab: TabId?
+    /// Focusing a pane goes through the window, so a pane on another host than the one on screen
+    /// brings its host and tab forward (nil: within the workspace only).
+    var model: WindowModel?
+    /// Whether this tree holds the window's focus (false: the other column).
+    var isActive = true
+
+    func resolve(_ leaf: PaneId) -> (workspace: Workspace, pane: PaneId)? { (workspace, leaf) }
+
+    var focusedLeaf: PaneId? {
+        guard isActive else { return nil }
+        guard let tab else { return workspace.focusedPane }
+        return workspace.session.tabs.first { $0.id == tab }?.focused
+    }
+
+    func focus(leaf: PaneId) {
+        if let model { model.focus(pane: leaf, onGroup: workspace.groupId) } else { workspace.apply(.focus(leaf)) }
+    }
+
+    func resize(leaf: PaneId, _ direction: Direction, amount: Double) {
+        workspace.apply(.resize(leaf, direction, amount: amount))
+    }
+
+    var cellSize: CGSize? { workspace.cellSize }
+    var padding: CGFloat { workspace.appearance.padding }
+    var namesHosts: Bool { false }
+}
 
 /// Renders a split tree recursively: leaves are panes, splits are two subtrees around a draggable
 /// divider. Compact (default) is Ghostty's look: flush panes, a 1 pt divider in the background
 struct SplitTreeView: View {
     let node: Node
-    let workspace: Workspace
+    let tree: any PaneTree
     /// More than one pane is visible: dim unfocused panes and show pane headers.
     let isSplit: Bool
 
+    init(node: Node, tree: any PaneTree, isSplit: Bool) {
+        self.node = node
+        self.tree = tree
+        self.isSplit = isSplit
+    }
+
+    /// A host's active tab.
+    init(node: Node, workspace: Workspace, isSplit: Bool) {
+        self.init(node: node, tree: HostTabTree(workspace: workspace), isSplit: isSplit)
+    }
+
     var body: some View {
         switch node {
-        case .leaf(let id):
-            PaneSlot(id: id, workspace: workspace, isSplit: isSplit)
+        case .leaf(let leaf):
+            PaneLeaf(leaf: leaf, tree: tree, isSplit: isSplit)
         case .split(let axis, let ratio, let first, let second):
-            SplitContainer(axis: axis, ratio: ratio, first: first, second: second, workspace: workspace)
+            SplitContainer(axis: axis, ratio: ratio, first: first, second: second, tree: tree)
         }
     }
 }
@@ -25,7 +87,7 @@ private struct SplitContainer: View {
     let ratio: Double
     let first: Node
     let second: Node
-    let workspace: Workspace
+    let tree: any PaneTree
 
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
@@ -42,19 +104,19 @@ private struct SplitContainer: View {
             let header: CGFloat = axis == .vertical ? PaneHeader.height : 0
             let firstLength = header + SplitSnapping.firstLength(
                 available: extent - gap - 2 * header, ratio: ratio,
-                cell: workspace.cellSize.map { axis == .horizontal ? $0.width : $0.height },
-                padding: workspace.appearance.padding)
+                cell: tree.cellSize.map { axis == .horizontal ? $0.width : $0.height },
+                padding: tree.padding)
             if axis == .horizontal {
                 HStack(spacing: 0) {
-                    SplitTreeView(node: first, workspace: workspace, isSplit: true).frame(width: firstLength)
+                    SplitTreeView(node: first, tree: tree, isSplit: true).frame(width: firstLength)
                     divider(extent: extent)
-                    SplitTreeView(node: second, workspace: workspace, isSplit: true)
+                    SplitTreeView(node: second, tree: tree, isSplit: true)
                 }
             } else {
                 VStack(spacing: 0) {
-                    SplitTreeView(node: first, workspace: workspace, isSplit: true).frame(height: firstLength)
+                    SplitTreeView(node: first, tree: tree, isSplit: true).frame(height: firstLength)
                     divider(extent: extent)
-                    SplitTreeView(node: second, workspace: workspace, isSplit: true)
+                    SplitTreeView(node: second, tree: tree, isSplit: true)
                 }
             }
         }
@@ -110,7 +172,7 @@ private struct SplitContainer: View {
 
     private func move(by amount: Double) {
         let pane = first.trailingPane(along: axis)
-        workspace.apply(.resize(pane, axis == .horizontal ? .right : .down, amount: amount))
+        tree.resize(leaf: pane, axis == .horizontal ? .right : .down, amount: amount)
     }
 
     private func equalize() {
@@ -131,12 +193,37 @@ enum SplitSnapping {
     }
 }
 
+/// A leaf of a tree: the pane it resolves to on its host, or the terminal background while that
+/// host is not open here.
+private struct PaneLeaf: View {
+    let leaf: PaneId
+    let tree: any PaneTree
+    let isSplit: Bool
+    @Environment(\.terminalTheme) private var theme
+
+    var body: some View {
+        if let (workspace, pane) = tree.resolve(leaf) {
+            PaneSlot(
+                id: pane, workspace: workspace, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf,
+                namesHost: tree.namesHosts, focus: { tree.focus(leaf: leaf) })
+        } else {
+            theme.background
+        }
+    }
+}
+
 /// One pane in the tree: its header in splits, the terminal (or why it failed to start), and
 /// Ghostty's surface overlays.
 struct PaneSlot: View {
     let id: PaneId
     let workspace: Workspace
     let isSplit: Bool
+    /// The pane takes the keyboard (the tree's focused leaf).
+    let isFocused: Bool
+    /// In a mixed tab: the header names the pane's host, and the pane dims on its own while its
+    /// host's link is down (the others stay live).
+    var namesHost = false
+    let focus: () -> Void
 
     @Environment(\.terminalTheme) private var theme
     @Environment(WindowModel.self) private var model
@@ -145,11 +232,11 @@ struct PaneSlot: View {
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
 
     var body: some View {
-        let focused = workspace.focusedPane == id
+        let focused = isFocused
         let notice = workspace.notices[id] ?? PaneNotice()
         VStack(spacing: 0) {
             if isSplit {
-                PaneHeader(id: id, workspace: workspace, isFocused: focused)
+                PaneHeader(id: id, workspace: workspace, isFocused: focused, namesHost: namesHost, focus: focus)
             }
             ZStack {
                 content
@@ -185,6 +272,7 @@ struct PaneSlot: View {
                         onClose: { model.isSearchShown = false })
                 }
             }
+            .hostLinkOverlay(groupId: workspace.groupId, enabled: namesHost)
         }
         .overlay {
             // Ghostty unfocused-split-opacity: the background color at 1 - opacity, header included.
@@ -201,9 +289,14 @@ struct PaneSlot: View {
             // One host per pane: without the id, switching between two single-pane tabs reuses
             // the representable (same structural identity), so its container keeps showing,
             // and its first responder keeps typing into, the previous tab's pane.
-            TerminalHost(pane: pane, isFocused: workspace.focusedPane == id, workspace: workspace)
-                .id(id)
-                .overlay { StalePaneOverlay(connection: pane.connection, paneId: id) }
+            TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace)
+                // Per host and pane: pane ids repeat across hosts.
+                .id(HostPane(hostId: workspace.groupId, pane: id))
+                .overlay {
+                    StalePaneOverlay(
+                        connection: pane.connection, paneId: id,
+                        hostIsLive: namesHost ? model.connectionState(ofGroup: workspace.groupId).isLive : nil)
+                }
         } else if let failure = workspace.failures[id] {
             EmptyState("Pane Failed to Start", systemImage: "exclamationmark.triangle", message: failure) {
                 Button("Close Pane") { workspace.apply(.close(id)) }
@@ -222,6 +315,9 @@ private struct PaneHeader: View {
     let id: PaneId
     let workspace: Workspace
     let isFocused: Bool
+    /// A mixed tab: name the pane's host after its program.
+    var namesHost = false
+    let focus: () -> Void
 
     @Environment(\.terminalTheme) private var theme
     @Environment(WindowModel.self) private var model
@@ -238,6 +334,9 @@ private struct PaneHeader: View {
                 .font(.caption.weight(isFocused ? .semibold : .regular))
                 .foregroundStyle(theme.foreground.opacity(isFocused ? 0.9 : 0.6))
                 .lineLimit(1)
+            if namesHost, let group = model.groups.group(workspace.groupId) {
+                HostChip(group: group, emphasized: isFocused)
+            }
             if let state, state != .idle {
                 StatusIndicator(state, size: 10)
                 Text(state.title)
@@ -247,7 +346,7 @@ private struct PaneHeader: View {
             Spacer(minLength: 0)
             PanePresence(workspace: workspace, pane: id)
             Menu {
-                PaneMenuItems(workspace: workspace, model: model, pane: id)
+                PaneMenuItems(workspace: workspace, model: model, pane: id, focusPane: focus)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.caption.weight(.semibold))
@@ -270,7 +369,7 @@ private struct PaneHeader: View {
             Rectangle().fill(theme.splitDivider).frame(height: 1)
         }
         .contentShape(.rect)
-        .onTapGesture { workspace.apply(.focus(id)) }
+        .onTapGesture { focus() }
         .onHover { isHovered = $0 }
     }
 }
@@ -280,24 +379,37 @@ struct PaneMenuItems: View {
     let workspace: Workspace
     let model: WindowModel
     var pane: PaneId?
+    /// Focuses `pane` the way its tree does (a mixed tab's leaf, the other column's tab).
+    var focusPane: (() -> Void)?
 
     var body: some View {
-        Button("Split Right", systemImage: "rectangle.split.2x1") { focusThen { workspace.split(.horizontal) } }
-        Button("Split Down", systemImage: "rectangle.split.1x2") { focusThen { workspace.split(.vertical) } }
+        // Through the window's actions, so a mixed tab splits and closes on the pane's own host.
+        Button("Split Right", systemImage: "rectangle.split.2x1") { focusThen { WorkspaceAction.splitRight.perform(on: workspace, window: model) } }
+        Button("Split Down", systemImage: "rectangle.split.1x2") { focusThen { WorkspaceAction.splitDown.perform(on: workspace, window: model) } }
+        Button("Split with Host…", systemImage: "rectangle.split.2x1.fill") {
+            focusThen { WorkspaceAction.splitWithHost.perform(on: workspace, window: model) }
+        }
+        .disabled(!model.canSplitWithHost)
         // One title for both directions, like Ghostty's "Zoom Split" toggle.
         Button("Zoom Pane", systemImage: "arrow.up.left.and.arrow.down.right") {
-            focusThen { workspace.apply(.toggleZoom) }
+            focusThen { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
         }
         Divider()
         Button("Find…", systemImage: "magnifyingglass") { focusThen { model.isSearchShown = true } }
         Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
         Button("Share Session…", systemImage: "person.crop.circle.badge.plus") { model.sheet = .invite }
         Divider()
-        Button("Close Pane", systemImage: "xmark", role: .destructive) { focusThen { workspace.closeFocusedPane() } }
+        Button("Close Pane", systemImage: "xmark", role: .destructive) {
+            focusThen { WorkspaceAction.closePane.perform(on: workspace, window: model) }
+        }
     }
 
     private func focusThen(_ action: () -> Void) {
-        if let pane, workspace.focusedPane != pane { workspace.apply(.focus(pane)) }
+        if pane != nil, let focusPane {
+            focusPane()
+        } else if let pane, workspace.focusedPane != pane {
+            workspace.apply(.focus(pane))
+        }
         action()
     }
 }

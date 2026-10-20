@@ -324,9 +324,8 @@ private struct DetailColumn: View {
             }
             switch model.destination {
             case .terminal:
-                ActiveTabView(workspace: workspace)
-                    // Pane ids are per host: never reuse one host's pane views for another's.
-                    .id(ObjectIdentifier(workspace))
+                // The active tab, a mixed tab, or Two Columns.
+                TerminalArea(workspace: workspace)
                     // Behind the key bar and keyboard, which float over the terminal.
                     .background(theme.background.ignoresSafeArea(.all, edges: .bottom))
             case .inbox:
@@ -358,7 +357,8 @@ private struct DetailColumn: View {
 
     private var title: String {
         switch model.destination {
-        case .terminal: workspace.session.activeTab.map(workspace.title(of:)) ?? Brand.name
+        case .terminal:
+            model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.session.activeTab.map(workspace.title(of:)) ?? Brand.name
         case .inbox: "Inbox"
         case .hosts: "Hosts"
         }
@@ -366,6 +366,9 @@ private struct DetailColumn: View {
 
     /// The split state only: the host is named once, by the toolbar's host button.
     private var subtitle: String {
+        if let mixed = model.activeMixed {
+            return mixed.hosts.map(model.groupName).joined(separator: " + ")
+        }
         guard let tab = workspace.session.activeTab, tab.root.panes.count > 1 else { return "" }
         return tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed"
     }
@@ -414,6 +417,9 @@ private struct TerminalToolbar: ToolbarContent {
             Menu("Pane", systemImage: "rectangle.split.2x1") {
                 PaneMenuItems(workspace: workspace, model: model)
                 Divider()
+                Toggle("Two Columns", systemImage: "rectangle.split.2x1", isOn: Binding(
+                    get: { model.isTwoColumns }, set: { _ in model.toggleTwoColumns() }))
+                    .accessibilityIdentifier("two-columns")
                 #if os(macOS)
                 Button("Draw on Pane", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
                     .disabled(!DrawingCommands.canDraw(in: workspace))
@@ -421,7 +427,7 @@ private struct TerminalToolbar: ToolbarContent {
             }
             .help("Pane")
             .menuIndicator(.hidden)
-            .disabled(workspace.focusedPane == nil || model.destination != .terminal)
+            .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
             #if os(iOS)
             // A Pencil device: drawing stays one tap away. On the Mac it is in the Pane menu.
