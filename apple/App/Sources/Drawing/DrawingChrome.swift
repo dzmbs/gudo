@@ -7,7 +7,6 @@ import SwiftUI
 @Observable
 final class OverlayModel {
     var tool: DrawTool = .pen
-    var agentName: String?
     var status: String?
     var busy = false
     var readOnly = false
@@ -16,53 +15,91 @@ final class OverlayModel {
     var canWrite = false
     /// The pane is narrow: tools fold into one menu.
     var compact = false
-    @ObservationIgnored var onDone: () -> Void = {}
+    /// Agent panes the drawing can go to, on every host the window shows.
+    var destinations: [AgentDestination] = []
+    /// The agent in this pane or its tab: the primary button sends there.
+    var primary: AgentDestination?
+    /// Claude Code / Codex can be started with the drawing.
+    var canStart = false
+    /// The one-line "what is this for" hint (until the first drawing is finished).
+    var showsHint = false
+    @ObservationIgnored var onAction: (DrawingAction) -> Void = { _ in }
     @ObservationIgnored var onCancel: () -> Void = {}
-    @ObservationIgnored var onSend: () -> Void = {}
     @ObservationIgnored var onRemove: () -> Void = {}
     @ObservationIgnored var onTool: (DrawTool) -> Void = { _ in }
     @ObservationIgnored var onWrite: () -> Void = {}
     @ObservationIgnored var onDebugRect: () -> Void = {}
+
+    var menu: DrawingMenu {
+        DrawingMenu.make(destinations: destinations, primary: primary, canStart: canStart, includeKeep: primary == nil, placement: false)
+    }
+
+    var hint: String {
+        if let primary { return "Sketch over the output, then send it to \(primary.agent.title): it lands in the prompt as an image." }
+        return "Sketch over the output, then send it to an agent as an image, copy or share it, or keep it here."
+    }
+
+    /// The hint shows until a first drawing is finished (sent, kept, copied, shared).
+    static var hintSeen: Bool {
+        get { UserDefaults.standard.bool(forKey: "drawingHintSeen") }
+        set { UserDefaults.standard.set(newValue, forKey: "drawingHintSeen") }
+    }
 }
 
 /// The draw overlay's one toolbar: a quiet glass capsule at the bottom of the pane, never over
-/// the first rows (Excalidraw's own tool island is hidden). Tools on the left; then Cancel, and
-/// the primary action: Send to Claude/Codex when an agent runs in the pane or its tab (Done is
-/// secondary then), else Done (⌘↩), which places the drawing in the terminal.
+/// the first rows (Excalidraw's own tool island is hidden). Tools on the left; then Cancel (esc),
+/// Keep (⌘↩: the drawing stays in the terminal output) and the primary action, which names where
+/// the drawing goes: Send to Claude Code / Codex when an agent runs in the pane or its tab (⇧⌘↩,
+/// with a menu of every other destination), else a Send To… menu (agents on any host in the
+/// window, Start Claude Code / Codex with it, Copy Image, Share / Save, Keep in Terminal).
 struct OverlayToolbar: View {
     @Bindable var model: OverlayModel
 
     var body: some View {
-        GlassEffectContainer {
-            HStack(spacing: DS.Space.s) {
-                if let status = model.status {
-                    Text(status)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 280)
-                        .padding(.leading, 6)
-                        .accessibilityIdentifier("drawing.status")
-                }
-                if model.readOnly {
-                    Label("View Only", systemImage: "eye")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                    Button("Close") { model.onCancel() }
-                        .buttonStyle(.glass)
-                        .keyboardShortcut(.cancelAction)
-                        .accessibilityIdentifier("drawing.cancel")
-                } else {
-                    tools
-                    actions
-                }
+        VStack(spacing: DS.Space.s) {
+            if model.showsHint, !model.readOnly {
+                Text(model.hint)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, DS.Space.m)
+                    .padding(.vertical, 6)
+                    .floatingCapsule()
+                    .transition(.opacity)
+                    .accessibilityIdentifier("drawing.hint")
             }
-            .disabled(model.busy)
-            .padding(6)
-            .floatingCapsule()
+            GlassEffectContainer {
+                HStack(spacing: DS.Space.s) {
+                    if let status = model.status {
+                        Text(status)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: 280)
+                            .padding(.leading, 6)
+                            .accessibilityIdentifier("drawing.status")
+                    }
+                    if model.readOnly {
+                        Label("View Only", systemImage: "eye")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                        Button("Close") { model.onCancel() }
+                            .buttonStyle(.glass)
+                            .keyboardShortcut(.cancelAction)
+                            .accessibilityIdentifier("drawing.cancel")
+                    } else {
+                        tools
+                        actions
+                    }
+                }
+                .disabled(model.busy)
+                .padding(6)
+                .floatingCapsule()
+            }
         }
+        .animation(DS.Motion.overlay, value: model.showsHint)
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("drawing.toolbar")
@@ -130,28 +167,80 @@ struct OverlayToolbar: View {
         }
         .buttonStyle(.glass)
         .keyboardShortcut(.cancelAction)
-        .help(model.isReopened ? "Undo these edits and close" : "Discard the drawing")
+        .help(model.isReopened ? "Undo these edits and close (esc)" : "Discard the drawing (esc)")
         .accessibilityLabel("Cancel")
         .accessibilityIdentifier("drawing.cancel")
-        if let agent = model.agentName {
-            Button("Done") { model.onDone() }
-                .buttonStyle(.glass)
-                .keyboardShortcut(.return, modifiers: .command)
-                .help("Place the drawing in the terminal (⌘↩)")
-                .accessibilityIdentifier("drawing.done")
-            Button { model.onSend() } label: {
-                Label(model.compact ? "Send" : "Send to \(agent)", systemImage: "paperplane.fill")
-            }
-            .buttonStyle(.glassProminent)
-            .keyboardShortcut(.return, modifiers: [.command, .shift])
-            .help("Place the drawing and attach it to \(agent)'s prompt (⇧⌘↩)")
-            .accessibilityIdentifier("drawing.send")
-        } else {
-            Button("Done") { model.onDone() }
+        Button { model.onAction(.keep) } label: {
+            if model.compact { Image(systemName: "pin") } else { Text("Keep") }
+        }
+        .buttonStyle(.glass)
+        .keyboardShortcut(.return, modifiers: .command)
+        .help("Keep the drawing in the terminal output; tap it later to send, copy or edit it (⌘↩)")
+        .accessibilityLabel("Keep in Terminal")
+        .accessibilityIdentifier("drawing.done")
+        if let primary = model.primary {
+            HStack(spacing: 2) {
+                Button { model.onAction(.send(primary)) } label: {
+                    Label(model.compact ? "Send" : "Send to \(primary.agent.title)", systemImage: "paperplane.fill")
+                }
                 .buttonStyle(.glassProminent)
-                .keyboardShortcut(.return, modifiers: .command)
-                .help("Place the drawing in the terminal (⌘↩)")
-                .accessibilityIdentifier("drawing.done")
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
+                .help("Attach the drawing to \(primary.agent.title)'s prompt as an image (⇧⌘↩)")
+                .accessibilityIdentifier("drawing.send")
+                Menu { DrawingMenuContent(menu: model.menu, perform: model.onAction) } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .frame(height: 20)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.glass)
+                .menuIndicator(.hidden)
+                .help("Send it somewhere else, copy or share it")
+                .accessibilityLabel("More Destinations")
+                .accessibilityIdentifier("drawing.more")
+            }
+        } else {
+            Menu { DrawingMenuContent(menu: model.menu, perform: model.onAction) } label: {
+                Label(model.compact ? "Send" : "Send To…", systemImage: "paperplane.fill")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.glassProminent)
+            .menuIndicator(.hidden)
+            .help("Send the drawing to an agent, copy or share it")
+            .accessibilityLabel("Send To")
+            .accessibilityIdentifier("drawing.send")
+        }
+    }
+}
+
+/// A `DrawingMenu` as SwiftUI menu content.
+struct DrawingMenuContent: View {
+    let menu: DrawingMenu
+    let perform: (DrawingAction) -> Void
+
+    var body: some View {
+        ForEach(menu.sections) { section in
+            if let title = section.title {
+                Section(title) { items(section) }
+            } else {
+                Section { items(section) }
+            }
+        }
+    }
+
+    private func items(_ section: DrawingMenu.Section) -> some View {
+        ForEach(section.items) { item in
+            if let action = item.action {
+                Button(role: item.destructive ? .destructive : nil) { perform(action) } label: {
+                    Label {
+                        Text(item.title)
+                        if let subtitle = item.subtitle { Text(subtitle) }
+                    } icon: {
+                        Image(systemName: item.systemImage)
+                    }
+                }
+                .accessibilityIdentifier("drawing.menu.\(item.id)")
+            }
         }
     }
 }
@@ -183,15 +272,60 @@ private struct ToolButton: View {
     }
 }
 
-/// After Done: says where the drawing went and offers the next step. Shown for a few seconds at
-/// the bottom of the pane, where the toolbar was.
+/// After a drawing is finished: says where it went and what it is for now (it stays in the
+/// output; tap it to send, copy or edit), with Send to Claude/Codex when it was only kept and an
+/// agent runs nearby. Shown for a few seconds at the bottom of the pane, where the toolbar was.
 @Observable
 final class PlacedNoticeModel {
+    enum Phase: Equatable {
+        case working(String)
+        case done(PlacedOutcome)
+        case failed(String)
+    }
+
+    var phase = Phase.done(.kept)
+    /// The agent the notice offers to send to (only after Keep).
     var agentName: String?
-    var sending = false
-    var sent = false
     @ObservationIgnored var onSend: () -> Void = {}
     @ObservationIgnored var onDismiss: () -> Void = {}
+
+    var title: String {
+        switch phase {
+        case .working(let text): text
+        case .failed(let text): text
+        case .done(.kept), .done(.shared): "Kept in terminal"
+        case .done(.sent(let name)): "Sent to \(name)"
+        case .done(.copied): "Image copied"
+        case .done(.saved(let name)): "Saved \u{201C}\(name)\u{201D}"
+        }
+    }
+
+    var detail: String? {
+        switch phase {
+        case .working, .failed: nil
+        case .done(.kept), .done(.shared): "tap it to send, copy or edit"
+        case .done(.sent): "in the prompt as an image · also kept here"
+        case .done(.copied), .done(.saved): "also kept in the terminal"
+        }
+    }
+
+    var symbol: String {
+        switch phase {
+        case .working: "hourglass"
+        case .failed: "exclamationmark.triangle.fill"
+        case .done(.sent): "paperplane.fill"
+        case .done(.copied): "doc.on.doc"
+        case .done(.saved): "square.and.arrow.down"
+        case .done: "pin.fill"
+        }
+    }
+
+    var isFailure: Bool {
+        if case .failed = phase { return true }
+        return false
+    }
+
+    var offersSend: Bool { agentName != nil && phase == .done(.kept) }
 }
 
 struct PlacedNotice: View {
@@ -200,27 +334,32 @@ struct PlacedNotice: View {
     var body: some View {
         GlassEffectContainer {
             HStack(spacing: DS.Space.s) {
-                Image(systemName: "pin.fill")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                Text(model.sent ? "Sent to \(model.agentName ?? "the agent")" : "Placed in terminal")
+                if case .working = model.phase {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: model.symbol)
+                        .foregroundStyle(model.isFailure ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
+                        .accessibilityHidden(true)
+                }
+                Text(model.title)
                     .font(.callout.weight(.medium))
-                if !model.sent {
-                    Text("scrolls with the output")
+                    .lineLimit(1)
+                if let detail = model.detail {
+                    Text(detail)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                if let agent = model.agentName, !model.sent {
+                if model.offersSend, let agent = model.agentName {
                     Text("·").foregroundStyle(.tertiary)
                     Button { model.onSend() } label: { Text("Send to \(agent)") }
                         .buttonStyle(.glassProminent)
-                        .disabled(model.sending)
                         .accessibilityIdentifier("drawing.notice.send")
                 }
             }
             .padding(.leading, DS.Space.m)
-            .padding(.trailing, model.agentName == nil || model.sent ? DS.Space.m : 6)
-            .padding(.vertical, model.agentName == nil || model.sent ? DS.Space.s + 2 : 6)
+            .padding(.trailing, model.offersSend ? 6 : DS.Space.m)
+            .padding(.vertical, model.offersSend ? 6 : DS.Space.s + 2)
             .floatingCapsule(interactive: true)
         }
         .fixedSize()

@@ -514,6 +514,25 @@ window.addEventListener(
       e.preventDefault();
       post({ type: "done" });
     }
+    // Esc leaves draw mode (the host's Cancel), once the editor has nothing of its own to end:
+    // text being typed, a shape or line being drawn, a selection. Those take Esc first, as in
+    // Excalidraw. (With the keyboard focus on the host's overlay, the host handles Esc itself.)
+    if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const app = state.api?.getAppState();
+      const busy =
+        !app ||
+        app.editingTextElement ||
+        app.newElement ||
+        app.multiElement ||
+        app.editingLinearElement ||
+        app.selectedLinearElement?.isEditing ||
+        Object.keys(app.selectedElementIds || {}).length > 0;
+      if (!busy) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        post({ type: "cancel" });
+      }
+    }
   },
   { capture: true },
 );
