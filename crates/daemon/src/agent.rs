@@ -8,6 +8,9 @@
 //! [`HookResponse`], whose `stdout` the shim prints for the agent. A `PermissionRequest` is held
 //! open until a client decides (or [`PERMISSION_WAIT`] passes), which is how an approval from a
 //! phone reaches Claude Code.
+//!
+//! The askpass helper ([`crate::askpass::AskpassCall`]) and the MCP pull channel
+//! ([`crate::art::pull::PullCall`]) share the socket; each is told apart by its own field.
 
 use std::collections::HashMap;
 use std::io;
@@ -546,6 +549,14 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         let written = write.write_all(&out).await;
         zeroize::Zeroize::zeroize(&mut out);
         written?;
+        return write.shutdown().await;
+    }
+    // So does the MCP pull channel (§7.12).
+    if let Ok(call) = serde_json::from_str::<crate::art::pull::PullCall>(&line) {
+        let reply = crate::art::pull::serve(core, call).await;
+        let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        out.push(b'\n');
+        write.write_all(&out).await?;
         return write.shutdown().await;
     }
     let request: HookRequest = serde_json::from_str(&line).map_err(io::Error::other)?;

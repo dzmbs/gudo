@@ -68,6 +68,10 @@ use proto::{DaemonId, Ticket};
 use tokio::task::JoinHandle;
 
 pub use agent::{HookRequest, HookResponse, PERMISSION_WAIT, STATUS_LINE_EVENT};
+pub use art::pull::{
+    PULL_FORMATS, PULL_MAX, PULL_VERSION, PullCall, PullExport, PullFormat, PullOp, PullReply,
+    PullSummary,
+};
 pub use askpass::{ASKPASS_VERSION, AskpassCall, HelperQuery, HelperReply};
 pub use assist::HistoryConfig;
 pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir};

@@ -10,9 +10,12 @@
 //! It never fails the agent: any error prints nothing and exits 0, so a missing daemon only
 //! means the agent falls back to its own prompts.
 //!
-//! `un-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`).
+//! `un-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`), and
+//! `un-hook mcp [--state <dir>] [--pane <id>]` the MCP server through which agents read the
+//! session's drawings (see `mcp.rs`).
 
 mod askpass;
+mod mcp;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -27,6 +30,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "askpass") {
         std::process::exit(askpass::main(&args[1..]));
+    }
+    if args.first().is_some_and(|a| a == "mcp") {
+        std::process::exit(mcp::main(&args[1..]));
     }
     let mut payload = Vec::new();
     let _ = std::io::stdin().take(4 << 20).read_to_end(&mut payload);
