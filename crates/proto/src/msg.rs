@@ -273,6 +273,14 @@ pub enum ClientCtl {
         /// The request.
         req: crate::askpass::AskpassRequest,
     },
+    /// Approves with edited input, or adds or revokes an auto-approve rule; answered by
+    /// [`ServerCtl::ApprovalResult`]. Needs Approver on the pane.
+    Approval {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: crate::approve::ApprovalRequest,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -616,6 +624,16 @@ pub enum ServerCtl {
     /// The repositories, worktrees, branches and pull requests of the panes (sent whole, to
     /// clients with [`Caps::REPO_STATUS`], after attaching and on every change).
     Repos(crate::repo::RepoSnapshot),
+    /// Answers [`ClientCtl::Approval`].
+    ApprovalResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<crate::approve::ApprovalResponse, crate::approve::ApprovalError>,
+    },
+    /// An approval request's extras or a pane's auto-approve rules changed. Sent only to
+    /// clients with [`Caps::APPROVALS`] that can see the pane.
+    Approval(crate::approve::ApprovalPush),
 }
 
 /// A successful [`ClientCtl::Attach`].

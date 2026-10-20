@@ -44,6 +44,13 @@
 
 use std::collections::HashSet;
 
+mod auto_approve;
+
+pub use auto_approve::{
+    CLOCK_SKEW_MS, RuleError, check_rule, is_shell_tool, like_this, permits, rule_matches,
+    sign_auto_approve, verify_auto_approve,
+};
+
 use proto::{
     Actor, DaemonId, Decide, DeviceId, Grant, GrantChain, GrantId, GrantLink, PrincipalId, Roles,
     Scope, UnixMillis,

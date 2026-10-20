@@ -299,3 +299,31 @@ fn force_child(chain: &GrantChain, key: &DeviceKey, spec: &GrantSpec) -> GrantCh
     parent.links.push(proto::GrantLink { grant, sig });
     parent
 }
+
+proptest! {
+    /// A shell rule never covers a command with a chaining, redirecting or expanding
+    /// character anywhere in it, whatever surrounds it.
+    #[test]
+    fn auto_approve_never_matches_compound_commands(
+        prefix in prop::sample::select(vec!["cargo test", "rm", "npm run", "ls"]),
+        before in "[a-z -]{0,12}",
+        meta in prop::sample::select(vec![";", "&", "|", ">", "<", "`", "$", "\n", "(", "\\"]),
+        after in "[a-z /-]{0,12}",
+    ) {
+        let matcher = proto::RuleMatch { tool: "Bash".into(), prefix: prefix.into() };
+        let input = format!("{prefix} {before}{meta}{after}");
+        prop_assert!(!grants::rule_matches(&matcher, "Bash", &input));
+    }
+
+    /// What `like_this` proposes always covers the request it was made from.
+    #[test]
+    fn like_this_covers_its_own_request(
+        program in prop::sample::select(vec!["cargo", "git", "rm", "ls", "make", "python3"]),
+        words in prop::collection::vec("[a-z][a-z0-9.]{0,6}", 1..4),
+    ) {
+        let input = format!("{program} {}", words.join(" "));
+        if let Some(m) = grants::like_this("Bash", &input) {
+            prop_assert!(grants::rule_matches(&m, "Bash", &input));
+        }
+    }
+}

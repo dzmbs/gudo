@@ -278,6 +278,9 @@ bitset! {
         /// Wants `ServerCtl::Repos` (repository, worktree, branch and pull request state of
         /// every pane); the daemon only watches repositories while such a client is connected.
         REPO_STATUS = 8;
+        /// Wants `ServerCtl::Approval` pushes (what may be done with an open approval
+        /// request, auto-approve rules in force) and may send `ClientCtl::Approval`.
+        APPROVALS = 9;
     }
 }
 
