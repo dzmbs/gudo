@@ -199,12 +199,15 @@ private struct HelperUpdateNotice: View {
 struct StalePaneOverlay: View {
     let connection: PaneConnection
     let paneId: PaneId
+    /// Whether the pane's own host is live, when it is not the window's (a mixed tab's leaf).
+    var hostIsLive: Bool?
     @Environment(WindowModel.self) private var model
 
     var body: some View {
         if case .stale(let reason) = connection {
             ZStack(alignment: .bottomTrailing) {
-                if model.connection.isLive {
+                // A host that is down shows its card over the pane instead.
+                if hostIsLive ?? model.connection.isLive {
                     Color.black.opacity(0.35)
                     Label(reason, systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption)

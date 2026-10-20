@@ -114,7 +114,12 @@ struct ExternalDisplayRoot: View {
     }
 
     private func mirror(_ presenter: WindowModel?) {
-        guard let presenter, let ref = presenter.currentTab else { return }
+        guard let presenter, var ref = presenter.currentTab else { return }
+        // A mixed tab belongs to its window: the display shows its focused pane's host tab.
+        if ref.hostId == HostGroups.mixedId {
+            guard let tab = presenter.workspace?.session.activeTabId else { return }
+            ref = TabRef(hostId: presenter.currentGroupId, tab: tab)
+        }
         let pane = presenter.workspace?.focusedPane
         if model.currentTab != ref || model.workspace?.focusedPane != pane {
             model.select(ref, pane: pane)

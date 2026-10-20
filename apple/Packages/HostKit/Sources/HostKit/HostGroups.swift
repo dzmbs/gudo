@@ -58,6 +58,8 @@ nonisolated public struct HostGroup: Identifiable, Equatable, Sendable {
 @Observable
 public final class HostGroups {
     public static let localId = "local"
+    /// The pseudo-host of mixed tabs (`TabRef(hostId: mixedId, tab: composite id)`).
+    public static let mixedId = "mixed"
 
     /// This device's group: its name ("This Mac") and layout, or nil where the device has no
     /// shell of its own (iPhone, iPad).
@@ -78,6 +80,9 @@ public final class HostGroups {
     public var collapsed: Set<String> = []
     /// Hosts that failed to open, with the reason (shown on the group, cleared on success).
     public private(set) var failures: [String: String] = [:]
+    /// This window's mixed tabs (panes from several hosts in one tab). They lead the unified
+    /// order; the host tabs carrying their panes are left out of their groups.
+    public let composites = CompositeTabs()
 
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
@@ -92,11 +97,13 @@ public final class HostGroups {
     /// this app (opened from another window, a deep link), each in a stable order.
     public var groups: [HostGroup] {
         var result: [HostGroup] = []
+        let carriers = composites.carriers
         if let local {
             let session = local.layout.session
             result.append(HostGroup(
                 id: Self.localId, name: local.name, kind: .local, status: .connected(rtt: nil),
-                tabs: session.tabs, activeTabId: session.activeTabId, isReady: true))
+                tabs: session.tabs.filter { !(carriers[Self.localId]?.contains($0.id) ?? false) },
+                activeTabId: session.activeTabId, isReady: true))
         }
         for id in hostOrder {
             guard let record = hosts.record(id) else { continue }
@@ -107,7 +114,8 @@ public final class HostGroups {
             if connection == nil, let failure = failures[id] { status = .needsAttention(reason: failure) }
             result.append(HostGroup(
                 id: id, name: record.name, kind: record.kind == .daemon ? .daemon : .ssh, status: status,
-                tabs: session?.tabs ?? [], activeTabId: session?.activeTabId, isReady: ready,
+                tabs: (session?.tabs ?? []).filter { !(carriers[id]?.contains($0.id) ?? false) },
+                activeTabId: session?.activeTabId, isReady: ready,
                 failure: connection == nil ? failures[id] : nil))
         }
         return result
@@ -127,12 +135,17 @@ public final class HostGroups {
     /// daemon's tabs follow its repository grouping (tabs outside a repository, then by
     /// repository and worktree), as the sidebar draws them.
     public var tabs: [TabRef] {
-        groups.flatMap { group -> [TabRef] in
+        mixedTabs + groups.flatMap { group -> [TabRef] in
             if let sidebar = repoSidebar(for: group) {
                 return sidebar.orderedTabs.map { group.ref($0) }
             }
             return group.tabs.map { group.ref($0.id) }
         }
+    }
+
+    /// The mixed tabs, in the order they were made.
+    public var mixedTabs: [TabRef] {
+        composites.tabs.map { TabRef(hostId: Self.mixedId, tab: $0.id) }
     }
 
     /// A daemon group's tabs grouped by repository and worktree, once the daemon has sent its
@@ -189,6 +202,7 @@ public final class HostGroups {
     /// Closes a host in this window and drops its connection (it stays saved), unless another
     /// window still shows it.
     public func close(_ id: String) {
+        composites.dropHost(id)
         openHosts.removeAll { $0 == id }
         failures[id] = nil
         collapsed.remove(id)
@@ -197,6 +211,7 @@ public final class HostGroups {
 
     /// Forgets a host that was removed from the saved hosts.
     public func forget(_ id: String) {
+        composites.dropHost(id)
         openHosts.removeAll { $0 == id }
         failures[id] = nil
         collapsed.remove(id)

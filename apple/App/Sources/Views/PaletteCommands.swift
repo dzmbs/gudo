@@ -12,6 +12,7 @@ enum PaletteCommands {
         case .commands: "Execute a command…"
         case .goToTab: "Go to a tab on any host…"
         case .newTabOnHost: "New tab on…"
+        case .splitWithHost: "Split with a pane on…"
         }
     }
 
@@ -19,6 +20,7 @@ enum PaletteCommands {
         switch model.paletteMode {
         case .goToTab: return tabs(model: model, section: nil)
         case .newTabOnHost: return newTabHosts(model: model)
+        case .splitWithHost: return splitHosts(model: model)
         case .commands: break
         }
         var commands: [PaletteCommand] = []
@@ -34,7 +36,7 @@ enum PaletteCommands {
 
         let actions: [(WorkspaceAction, String)] = [
             (.newTab, "plus"), (.newTabOnHost, "plus.rectangle.on.rectangle"), (.goToTab, "arrow.right.square"),
-            (.splitRight, "rectangle.split.2x1"), (.splitDown, "rectangle.split.1x2"),
+            (.splitRight, "rectangle.split.2x1"), (.splitDown, "rectangle.split.1x2"), (.splitWithHost, "rectangle.split.2x1.fill"),
             (.toggleZoom, "arrow.up.left.and.arrow.down.right"), (.closePane, "xmark"),
             (.nextTab, "chevron.right"), (.previousTab, "chevron.left"),
             (.previousPrompt, "chevron.up"), (.nextPrompt, "chevron.down"),
@@ -65,6 +67,7 @@ enum PaletteCommands {
             ("add-host", "Add Host", "plus.circle", nil, { model.addHost() }),
             ("settings", "Settings", "gearshape", ["⌘", ","], { model.sheet = .settings }),
             ("shortcuts", "Keyboard Shortcuts", "keyboard", ["⌘", "/"], { model.sheet = .shortcuts }),
+            ("two-columns", model.isTwoColumns ? "One Column" : "Two Columns", "rectangle.split.2x1", nil, { model.toggleTwoColumns() }),
             ("sidebar", model.isSidebarShown ? "Hide Sidebar" : "Show Sidebar", "sidebar.leading", ["⌘", "B"], {
                 WorkspaceAction.toggleSidebar.perform(window: model)
             }),
@@ -96,6 +99,15 @@ enum PaletteCommands {
     static func tabs(model: WindowModel, section: String?) -> [PaletteCommand] {
         let showsHost = model.groups.groups.count > 1
         var commands: [PaletteCommand] = []
+        for mixed in model.composites.tabs {
+            let ref = WindowModel.mixedRef(mixed.id)
+            commands.append(PaletteCommand(
+                id: "tab-\(ref)", title: model.title(ofMixedTab: mixed),
+                subtitle: mixed.hosts.map(model.groupName).joined(separator: " + "), section: section,
+                systemImage: "rectangle.split.2x1",
+                shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
+            ) { model.focus(ref) })
+        }
         for group in model.groups.groups {
             let workspace = model.workspace(ofGroup: group.id)
             for tab in group.tabs {
@@ -171,6 +183,23 @@ enum PaletteCommands {
     }
 
     /// ⌥⌘T: the hosts a tab can open on, the current one first, then Add Host.
+    /// Split with Host…: every other open host that can take a pane now, then Add Host.
+    static func splitHosts(model: WindowModel) -> [PaletteCommand] {
+        var commands = model.splitWithHostCandidates.map { group in
+            PaletteCommand(
+                id: "split-\(group.id)", title: group.name,
+                subtitle: group.isLocal ? "This device's shell" : group.kind == .ssh ? "SSH" : nil,
+                section: "Split With", systemImage: group.isLocal ? "laptopcomputer" : group.kind == .ssh ? "terminal" : "server.rack"
+            ) { model.split(withHost: group.id) }
+        }
+        if commands.isEmpty {
+            commands.append(PaletteCommand(
+                id: "split-add-host", title: "Add Host…", subtitle: "Pair or connect another host to split with it",
+                section: "Split With", systemImage: "plus.circle") { model.addHost() })
+        }
+        return commands
+    }
+
     static func newTabHosts(model: WindowModel) -> [PaletteCommand] {
         let groups = model.groups.groups.sorted { a, b in (a.id == model.currentGroupId ? 0 : 1) < (b.id == model.currentGroupId ? 0 : 1) }
         var commands = groups.map { group in

@@ -637,3 +637,73 @@ Every daemon pane gets a `PaneCommandMarks` (App/Sources/Panes), attached next t
 Tests: `CommandBlocksTests` (HostKit), `GutterMarkTests` and `promptRowsAndJumpingBetweenPrompts`
 (TerminalKit), `CommandMarksUITests` (iPad, local daemon), the daemon's shell integration tests
 (notification body).
+
+## 19. Mixed tabs (panes from several hosts in one tab) and Two Columns
+
+**Model.** A mixed tab is a `CompositeTab` (PaneLayout): an ordinary `Tab` over the composite's
+own leaf ids plus `members` (leaf → `HostPane`, a host id and that host's `PaneId`). Every
+arranging op (focus, directional focus, resize, zoom, rename) runs the same `Session` code as a
+host tab, on a one-tab scratch session. The window owns its mixed tabs: `HostGroups.composites`
+(`CompositeTabs`), persisted per window like `openHosts` (`@SceneStorage("mixedTabs")`, JSON, plus
+the app's last copy). In the unified tab order they come first (`TabRef(hostId: HostGroups.mixedId,
+tab: id)`), so ⌘1…⌘9, ⇧⌘[ ], Go to Tab and focus restore treat them like any tab. The sidebar
+shows them under **Mixed** at the window's top, each row naming its hosts with their glyphs (the
+link's state glyph while a host is down); the strip and the iPhone switcher list them too.
+
+- *Where a host's panes live.* Each host's panes in a mixed tab live in one tab on that host, its
+  **carrier**. The host layout stays the truth for pane lifetime: other windows and devices see
+  the carrier as a plain tab (with the host's own arrangement of its panes); this window hides it
+  from that host's group, since the mixed tab shows its panes.
+- *What ⌘D / ⇧⌘D split onto.* The focused leaf's host: `.split(pane)` in its carrier there; the
+  new pane is placed beside the focused leaf in the mixed tab once the host answers.
+- *Split with Host…* (⇧⌥⌘D, Pane menu, header ⋯ menu, palette) on a host tab makes that tab a
+  mixed tab in place (same tree, its tab the carrier) and asks the other host for a pane: a
+  `.newTab` there (it becomes the carrier) or, with a carrier already, a split in it. ⌥⌘D itself
+  is the system's Dock shortcut on Mac and iPad and never reaches the app, hence the ⇧.
+- *Closing.* Closing a leaf sends `.close(pane)` to its host (the carrier shrinks, or closes with
+  its last pane); closing the mixed tab sends `.closeTab(carrier)` to each host. Closing a host in
+  the window drops its leaves (the panes stay on the host).
+- *Reporting back.* `CompositeTabs.reconcile()` runs whenever a host's layout or link changes: a
+  pane its (known, live) host no longer has leaves; a pane that appears in a carrier (split on
+  another device) joins beside that host's last leaf; a split this window asked for is adopted
+  when its answer arrives (10 s timeout). A host that is down or still connecting is *unknown*:
+  its leaves stay, so a restart or outage never reshapes the tab. A mixed tab down to one host
+  dissolves into that host's carrier tab, which shows again in its group.
+- *setView priorities.* `WindowModel.screenViews()` gives each daemon the panes this window shows
+  of it: a mixed tab's visible leaves on that host (the zoomed leaf alone when zoomed) plus the
+  other column's; the focused pane only to the focused leaf's host. Hosts with nothing on screen
+  get an empty view, as before.
+
+**Focus and actions.** `target` (the workspace on screen) follows the focused leaf's host, so
+everything that acts on "the focused pane" (find, links, prompt jumps, drawing, agents, the
+toolbar host button) works unchanged. `SplitTreeView` renders any `PaneTree`: `HostTabTree` (a
+host's tab) or `MixedTabTree`, whose leaves resolve through their own host's `Workspace` (panes
+keep streaming per host, `WindowModel.workspaces`). A terminal taking the keyboard reports it
+(`Workspace.onPaneFocus`), so a click in another host's pane moves the mixed tab's focus.
+`WorkspaceAction.perform` first offers pane actions to the mixed tab (`performInMixedTab`). Each
+leaf names its host in its pane header and carries its own host's connection overlay: one host
+going down dims and labels its leaves only.
+
+**Restore.** The window saves its mixed tabs and the focused `TabRef`; on relaunch the tab comes
+back at once (leaves of hosts still connecting show the terminal background, then their panes).
+This device's own panes do not outlive the app and hosts no longer open in the window are
+dropped. A restarted daemon reuses ids: a carrier that no longer holds any of the composite's
+panes is forgotten rather than trusted (pane ids a restarted daemon reuses can still be mistaken
+for the old ones; daemons do not keep sessions across restarts today, so this needs a session
+generation from the daemon to close fully).
+
+Two tabs side by side, each column its own tab (any host, or a mixed tab), a 1 pt divider and a
+26 pt header per column. The current tab's column takes the keyboard; the other is dimmed like an
+unfocused split. Columns stay put: a tab picked in the sidebar replaces the current column's,
+focus moving into the other column swaps which is current, and a closed tab's column takes the
+next tab not shown (or offers New Tab, which lands there). It turns on by itself on a phone
+window that is regular both ways (`WidthBucket.isTwoSegment`: a foldable's open inner screen; a
+phone's portrait width and landscape height are both under 600 pt); the user's choice per window
+wins and is restored. Never in compact width.
+
+Tests: `CompositeTabTests` (PaneLayout: tree mapping, split with host, ⌘D on a leaf, close,
+answers, strays, host down, dissolve, timeout, close tab, round trip), `HostGroupsTests.
+mixedTabsLeadAndHideTheirCarriers`, `WindowsTests.testTwoColumnsComeOnByThemselvesOnlyOnAnOpenFoldable`,
+`MixedTabsUITests` (iPad: `apple/scripts/mixed-ui-test.sh` starts two daemons on 47421/47422 —
+split with host, type in both, ⌘D/⌘W on beta, relaunch restores, kill alpha and beta keeps
+working; Two Columns with this iPad's echo shell).
