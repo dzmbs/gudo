@@ -1075,8 +1075,14 @@ from the environment or an `a=q` query; else a braille render and a summary).
 `cargo test -p daemon --test it artifacts` (macOS and Linux): Excalidraw scenes (a canvas pane
 creates one; concurrent puts reconcile with the version / nonce rule on both clients and the
 daemon, stale offers come back as winners, deletions, resync after a reconnect, ASCII/SVG/PNG
-export, a viewer reads but cannot put or import); inline placements (placed at the cursor
-row, followed through 40 lines of output, sent to a client attaching later, replaced after
+export, a viewer reads but cannot put or import); a canvas pane with peers
+(`canvas_pane_with_peers_syncs_inks_resyncs_and_closes`: owner, second device, driver guest
+and viewer on one `Split` canvas — `Canvases` on attach and reconnect, realistic rectangle /
+freedraw / text elements pushed live with put→push latency printed, edits of each other's
+elements, a concurrent tie settled by `versionNonce` on every client and the daemon, live ink
+stamped and not echoed, tombstones, resync after suspend, viewer refused, closing a `NewTab`
+canvas keeps the scene, deleting the scene closes its pane everywhere); inline placements
+(placed at the cursor row, followed through 40 lines of output, sent to a client attaching later, replaced after
 an edit, a kitty PNG printed by a program in the pane captured as an image artifact and
 placement with its `c`/`r` size, a dropped `.excalidraw` file and photo imported and placed,
 detached by `clear`, removed, kept detached after a restart with the scene intact); two
