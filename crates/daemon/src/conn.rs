@@ -200,7 +200,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
     if core.cfg.self_exe.is_some() {
         features |= DaemonFeatures::SELF_UPGRADE;
     }
-    features |= DaemonFeatures::AGENT_USAGE;
+    features |= DaemonFeatures::AGENT_USAGE | DaemonFeatures::ARTIFACT_HISTORY;
     crate::info::build_info(features)
 }
 
@@ -958,6 +958,9 @@ impl Client {
                 let info = art.update(artifact_id, |i| {
                     i.preview = Some(proto::Preview { image, version });
                 })?;
+                if version == info.version {
+                    art.checkpoint(artifact_id, self.actor, Some(image), None);
+                }
                 core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
                 Ok(ArtifactResponse::Info(info))
             }
@@ -1022,6 +1025,18 @@ impl Client {
                 })
                 .await
                 .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                // Finishing a drawing from the overlay records that version.
+                if art
+                    .info(placement.artifact_id)
+                    .is_some_and(|i| i.version == placement.version)
+                {
+                    art.checkpoint(
+                        placement.artifact_id,
+                        self.actor,
+                        Some(placement.image),
+                        None,
+                    );
+                }
                 if let Some(session) = core.session_of_pane(placement.pane_id) {
                     if let Some(old) = replaced {
                         core.emit_artifact(
@@ -1098,7 +1113,101 @@ impl Client {
                 );
                 Ok(ArtifactResponse::Sent(sent))
             }
+            ArtifactRequest::History { artifact_id } => {
+                self.visible_artifact(artifact_id)?;
+                art.history(artifact_id).map(ArtifactResponse::History)
+            }
+            ArtifactRequest::Restore {
+                artifact_id,
+                version,
+            } => self.restore(artifact_id, version).await,
         }
+    }
+
+    /// Brings a drawing back to `version` as a new version: the content goes out like any
+    /// edit (open editors and caches converge), the result is recorded in the history, and
+    /// every placement shows that version's render.
+    async fn restore(
+        &self,
+        artifact_id: proto::ArtifactId,
+        version: u64,
+    ) -> Result<ArtifactResponse, ArtifactError> {
+        let core = &self.core;
+        let art = &core.art;
+        self.visible_artifact(artifact_id)?;
+        let then = art.history_entry(artifact_id, version)?;
+        let info = match art.restore_plan(artifact_id, version)? {
+            crate::art::history::RestorePlan::Excalidraw(put) => {
+                let applied = art.ex_put(put)?;
+                core.emit_artifact(
+                    applied.info.session_id,
+                    ArtifactEvent::Excalidraw {
+                        artifact_id,
+                        version: applied.info.version,
+                        elements: applied.won,
+                        app_state: applied.app_state,
+                        files: applied.files,
+                    },
+                    None,
+                );
+                applied.info
+            }
+            crate::art::history::RestorePlan::Ops(ops) => {
+                let (info, batch) = art.apply(artifact_id, self.actor, ops)?;
+                core.emit_artifact(
+                    info.session_id,
+                    ArtifactEvent::Changed {
+                        info: info.clone(),
+                        batch,
+                    },
+                    None,
+                );
+                info
+            }
+        };
+        // The old render shows the same content; without one the daemon renders it.
+        let image = match then.image {
+            Some(image) => Some(image),
+            None => {
+                let core2 = Arc::clone(core);
+                tokio::task::spawn_blocking(move || {
+                    let e =
+                        crate::art::export(&core2.art, artifact_id, None, proto::ExportFormat::Png)
+                            .ok()?;
+                    match e.blob {
+                        Some(hash) => core2.art.read_blob(&hash).ok().map(|(i, _)| i),
+                        None => core2.art.put_blob(&e.data).ok(),
+                    }
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+        };
+        let info = match image {
+            Some(image) => art.update(artifact_id, |i| {
+                i.preview = Some(proto::Preview {
+                    image,
+                    version: i.version,
+                });
+            })?,
+            None => info,
+        };
+        core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
+        if let Some(image) = image {
+            for p in crate::art::place::reshow(core, artifact_id, info.version, image) {
+                if let Some(session) = core.session_of_pane(p.pane_id) {
+                    core.emit_artifact(session, ArtifactEvent::Placed(p), None);
+                }
+            }
+        }
+        let entry = art
+            .checkpoint(artifact_id, self.actor, image, Some(version))
+            .ok_or_else(|| ArtifactError::Failed("the restored version was not recorded".into()))?;
+        Ok(ArtifactResponse::Restored {
+            info,
+            version: entry,
+        })
     }
 
     /// Live ink: drawers only, on a visible drawing; stamped with the actor and fanned out to

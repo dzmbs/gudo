@@ -374,3 +374,52 @@ pub fn parse_file(bytes: &[u8]) -> Result<ExcalidrawFile, String> {
     }
     Ok(out)
 }
+
+impl ExcalidrawFile {
+    /// Writes the scene as an `.excalidraw` file, the form [`parse_file`] reads and Excalidraw
+    /// opens: live elements in order, the app state, and every image as a `data:` URL.
+    /// Deleted elements (tombstones) are left out.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let file = drawing::ExcalidrawFile {
+    ///     elements: vec![drawing::parse_element(r#"{"id":"a","version":1}"#).unwrap()],
+    ///     app_state: None,
+    ///     files: vec![],
+    /// };
+    /// let back = drawing::parse_file(file.to_json().as_bytes()).unwrap();
+    /// assert_eq!(back.elements[0].id, "a");
+    /// ```
+    pub fn to_json(&self) -> String {
+        let elements: Vec<Value> = self
+            .elements
+            .iter()
+            .filter(|e| !e.deleted)
+            .filter_map(|e| serde_json::from_str(&e.json).ok())
+            .collect();
+        let app_state = self
+            .app_state
+            .as_deref()
+            .and_then(|a| serde_json::from_str::<Value>(a).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| serde_json::json!({}));
+        let files: serde_json::Map<String, Value> = self
+            .files
+            .iter()
+            .map(|(id, mime, bytes)| {
+                let url = format!("data:{mime};base64,{}", data_encoding::BASE64.encode(bytes));
+                let file = serde_json::json!({ "id": id, "mimeType": mime, "dataURL": url });
+                (id.clone(), file)
+            })
+            .collect();
+        serde_json::json!({
+            "type": "excalidraw",
+            "version": 2,
+            "elements": elements,
+            "appState": app_state,
+            "files": files,
+        })
+        .to_string()
+    }
+}

@@ -15,10 +15,10 @@ use client_core::drawing;
 use client_core::proto;
 
 use crate::art_types::{
-    ArtifactCreate, ArtifactError, ArtifactEvent, ArtifactInfo, ArtifactScene, CachedExcalidraw,
-    CachedScene, CanvasPane, CoordSpace, DrawElement, DrawOp, ExElement, ExFile, ExcalidrawApplied,
-    ExcalidrawScene, ExportFormat, ExportedFile, ImageInfo, ImageRef, InkChunk, InkPoint,
-    PlaceRequest, Placement, SentToAgent, blob_hash, ops_to_proto,
+    ArtifactCreate, ArtifactError, ArtifactEvent, ArtifactInfo, ArtifactScene, ArtifactVersion,
+    CachedExcalidraw, CachedScene, CanvasPane, CoordSpace, DrawElement, DrawOp, ExElement, ExFile,
+    ExcalidrawApplied, ExcalidrawScene, ExportFormat, ExportedFile, ImageInfo, ImageRef, InkChunk,
+    InkPoint, PlaceRequest, Placement, RestoredVersion, SentToAgent, blob_hash, ops_to_proto,
 };
 use crate::bytes::Bytes;
 use crate::client::DaemonClient;
@@ -212,6 +212,69 @@ impl DaemonClient {
             format,
             version,
             data: data.into(),
+        })
+    }
+
+    /// The artifact as an `.excalidraw` file (images embedded): an Excalidraw scene, or an
+    /// image as a scene holding it. Ink drawings have none (`Invalid`).
+    ///
+    /// # Errors
+    ///
+    /// `Invalid` for ink drawings; otherwise the daemon's [`ArtifactError`].
+    pub async fn excalidraw_file(&self, artifact_id: u64) -> Result<Bytes, ArtifactError> {
+        let core = self.core();
+        let data =
+            on_runtime(async move { core.excalidraw_file(proto::ArtifactId(artifact_id)).await })
+                .await?;
+        Ok(data.into())
+    }
+
+    /// Whether the daemon keeps drawings' finished versions
+    /// ([`artifact_history`](Self::artifact_history), [`artifact_restore`](Self::artifact_restore)).
+    pub fn offers_drawing_history(&self) -> bool {
+        self.inner
+            .daemon_info()
+            .is_some_and(|i| i.features.contains(proto::DaemonFeatures::ARTIFACT_HISTORY))
+    }
+
+    /// A drawing's finished versions, newest first (none for images).
+    ///
+    /// # Errors
+    ///
+    /// `Failed` when the daemon keeps no history (see
+    /// [`offers_drawing_history`](Self::offers_drawing_history)); otherwise the daemon's
+    /// [`ArtifactError`].
+    pub async fn artifact_history(
+        &self,
+        artifact_id: u64,
+    ) -> Result<Vec<ArtifactVersion>, ArtifactError> {
+        let list: Vec<proto::ArtifactVersion> = self
+            .art_call(|c| async move { c.artifact_history(proto::ArtifactId(artifact_id)).await })
+            .await?;
+        Ok(to_vec(list))
+    }
+
+    /// Brings a drawing back to `version` from its history, as a new version on top. Open
+    /// editors get it as [`ArtifactEvent::Excalidraw`], placements as `Placed` with the old
+    /// render.
+    ///
+    /// # Errors
+    ///
+    /// As [`artifact_history`](Self::artifact_history); `NotFound` for a version not in it.
+    pub async fn artifact_restore(
+        &self,
+        artifact_id: u64,
+        version: u64,
+    ) -> Result<RestoredVersion, ArtifactError> {
+        let core = self.core();
+        let (info, version) = on_runtime(async move {
+            core.artifact_restore(proto::ArtifactId(artifact_id), version)
+                .await
+        })
+        .await?;
+        Ok(RestoredVersion {
+            info: info.into(),
+            version: version.into(),
         })
     }
 

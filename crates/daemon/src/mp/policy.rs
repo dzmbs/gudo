@@ -145,6 +145,8 @@ pub(crate) fn artifact(req: &proto::ArtifactRequest) -> (Need, Target) {
         R::Place(p) => (Need::Draw, Target::Pane(p.pane_id)),
         R::Import(i) => (Need::Draw, Target::Pane(i.pane_id)),
         R::Placements { pane_id } => (Need::View, Target::Pane(*pane_id)),
+        R::History { .. } => (Need::View, Target::Any),
+        R::Restore { .. } => (Need::Draw, Target::Any),
     }
 }
 

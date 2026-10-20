@@ -6,6 +6,7 @@ mod askpass;
 mod assist;
 mod codex;
 mod e2e;
+mod history;
 mod multiplayer;
 mod notify;
 mod relays;

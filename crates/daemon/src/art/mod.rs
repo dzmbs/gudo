@@ -10,12 +10,14 @@
 //! <session>/<artifact>/ops.log   [u32 LE len][postcard OpBatch]…, appended per batch
 //! <session>/<artifact>/excalidraw.bin  an Excalidraw scene (postcard), written each second
 //!                                when it changed
+//! <session>/<artifact>/history.bin     finished versions (postcard, `history.rs`)
 //! <session>/send/<id>@<v>.png    files pasted into agent panes
 //! ```
 //!
 //! The daemon orders batches; every client applies them in version order and converges.
 
 pub(crate) mod ex;
+pub(crate) mod history;
 pub(crate) mod place;
 pub(crate) mod send;
 
@@ -74,6 +76,8 @@ struct Item {
     ex: Option<drawing::ExScene>,
     /// The Excalidraw scene changed since it was last written.
     ex_dirty: bool,
+    /// Recorded versions, oldest first.
+    history: Vec<history::Checkpoint>,
 }
 
 #[derive(Default)]
@@ -307,6 +311,9 @@ impl Art {
                     if let Some(ex) = &it.ex {
                         refs.extend(ex.files.values().map(|f| f.image.hash.to_hex()));
                     }
+                    for c in &it.history {
+                        refs.extend(c.blobs().map(|i| i.hash.to_hex()));
+                    }
                     for batch in &it.log {
                         for op in &batch.ops {
                             if let DrawOp::Add(e) = op
@@ -482,6 +489,7 @@ impl Art {
                 log_bytes: 0,
                 ex: (req.kind == ArtifactKind::Excalidraw).then(drawing::ExScene::new),
                 ex_dirty: false,
+                history: Vec::new(),
             },
         );
         self.save_index(&st);
@@ -758,6 +766,7 @@ pub(crate) async fn run(core: std::sync::Arc<Core>) {
             }
         }
         core.art.flush();
+        core.art.idle_checkpoints();
     }
 }
 
@@ -844,6 +853,7 @@ fn load_item(dir: &Path) -> io::Result<Option<Item>> {
         log_bytes,
         ex,
         ex_dirty: false,
+        history: history::load(dir)?,
     }))
 }
 

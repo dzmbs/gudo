@@ -289,5 +289,8 @@ bitset! {
         SELF_UPGRADE = 0;
         /// Answers `WorkspaceRequest::UsageWatch` / `UsageUnwatch` (agent plan usage).
         AGENT_USAGE = 1;
+        /// Keeps drawings' finished versions and answers `ArtifactRequest::History` /
+        /// `Restore`.
+        ARTIFACT_HISTORY = 2;
     }
 }
