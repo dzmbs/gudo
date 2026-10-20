@@ -63,6 +63,12 @@ enum PaletteCommands {
             ("hosts", "Go to Hosts", "server.rack", nil, { model.destination = .hosts }),
             ("add-host", "Add Host", "plus.circle", nil, { model.addHost() }),
             ("settings", "Settings", "gearshape", ["⌘", ","], { model.sheet = .settings }),
+            ("shortcuts", "Keyboard Shortcuts", "keyboard", ["⌘", "/"], { model.sheet = .shortcuts }),
+            ("sidebar", model.isSidebarShown ? "Hide Sidebar" : "Show Sidebar", "sidebar.leading", ["⌘", "B"], {
+                WorkspaceAction.toggleSidebar.perform(window: model)
+            }),
+            ("tab-bar", TabPlacement.showsTabBar ? "Hide Tab Bar When the Sidebar Is Hidden" : "Show Tab Bar When the Sidebar Is Hidden",
+             "rectangle.topthird.inset.filled", nil, { TabPlacement.showsTabBar.toggle() }),
         ]
         for (id, title, image, keys, run) in tools {
             commands.append(PaletteCommand(id: id, title: title, section: "Go", systemImage: image, shortcut: keys, action: run))

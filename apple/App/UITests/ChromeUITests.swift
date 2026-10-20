@@ -32,47 +32,65 @@ final class ChromeUITests: XCTestCase {
         add(attachment)
     }
 
-    /// The toolbar's buttons have the same size, order and (by construction) style in both tab
-    /// placements: one toolbar serves both.
-    func testToolbarIsTheSameInBothTabPlacements() throws {
+    /// Safari's model: the sidebar button is always in the toolbar, ⌘B does the same, and the
+    /// tabs move to a strip on top while the sidebar is hidden. The toolbar's buttons keep their
+    /// size, order and place either way.
+    func testSidebarToggleAndCommandBMoveTheTabs() throws {
         #if os(iOS)
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "iPhone has no tab placements")
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "iPhone has no sidebar")
         #endif
         let app = XCUIApplication()
-        // Not `-tabStyle`: a launch argument outranks the toggle's write to user defaults.
-        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-ApplePersistenceIgnoreState", "YES"]
+        app.launchArguments += [
+            "-restoreLastTarget", "NO", "-localEcho", "YES", "-ApplePersistenceIgnoreState", "YES",
+            "-sidebarShown", "YES", "-tabBarWithoutSidebar", "YES",
+        ]
         app.launch()
-        let ids = ["hosts-button", "pane-menu", "open-palette"]
-        XCTAssertTrue(element(app, "hosts-button").waitForExistence(timeout: 20))
-        func placement(_ title: String) -> XCUIElement {
-            press(element(app, "pane-menu"))
-            return app.buttons[title].firstMatch
-        }
-        // Start from vertical tabs: the strip shows only with tabs on top.
-        if element(app, "tab-bar").exists { press(placement("Tabs in Sidebar")) }
-        XCTAssertTrue(element(app, "tab-bar").waitForNonExistence(timeout: 5))
+        let ids = ["toggle-sidebar", "hosts-button", "pane-menu", "open-palette"]
+        let toggle = element(app, "toggle-sidebar")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 20), "the sidebar button is in the toolbar")
+        let sidebar = element(app, "sidebar-inbox")
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "the sidebar shows")
+        XCTAssertFalse(element(app, "tab-bar").exists, "no strip while the sidebar holds the tabs")
         sleep(1)
-        let sidebarFrames = ids.map { element(app, $0).frame }
-        attach(app, "toolbar-sidebar")
+        let shownFrames = ids.map { element(app, $0).frame }
+        attach(app, "sidebar-shown")
 
-        let toggle = placement("Tabs on Top")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         press(toggle)
-        XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 5))
+        XCTAssertTrue(sidebar.waitForNonExistence(timeout: 5), "the button hides the sidebar")
+        XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 5), "the tabs move to the strip")
         sleep(1)
-        let barFrames = ids.map { element(app, $0).frame }
-        attach(app, "toolbar-bar")
-
-        for (id, (a, b)) in zip(ids, zip(sidebarFrames, barFrames)) {
-            XCTAssertEqual(a.width, b.width, accuracy: 0.5, "\(id) width differs between tab placements")
-            XCTAssertEqual(a.height, b.height, accuracy: 0.5, "\(id) height differs between tab placements")
-            XCTAssertEqual(a.minY, b.minY, accuracy: 0.5, "\(id) moved vertically between tab placements")
+        let hiddenFrames = ids.map { element(app, $0).frame }
+        attach(app, "sidebar-hidden")
+        for (id, (a, b)) in zip(ids, zip(shownFrames, hiddenFrames)) {
+            XCTAssertEqual(a.width, b.width, accuracy: 0.5, "\(id) width differs")
+            XCTAssertEqual(a.height, b.height, accuracy: 0.5, "\(id) height differs")
+            XCTAssertEqual(a.minY, b.minY, accuracy: 0.5, "\(id) moved vertically")
         }
-        // Same order, left to right.
-        XCTAssertEqual(barFrames.map(\.minX), barFrames.map(\.minX).sorted())
-        XCTAssertEqual(sidebarFrames.map(\.minX), sidebarFrames.map(\.minX).sorted())
-        // Leave the default placement for the next test (the choice is saved).
-        press(placement("Tabs in Sidebar"))
+        XCTAssertEqual(hiddenFrames.map(\.minX), hiddenFrames.map(\.minX).sorted())
+
+        // ⌘B from the terminal, both ways.
+        let pane = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'")).firstMatch
+        XCTAssertTrue(pane.waitForExistence(timeout: 10))
+        pane.tap()
+        expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: pane)
+        waitForExpectations(timeout: 5)
+        // The Simulator attaches its hardware keyboard on the first key event of a launch and
+        // drops that event (a real keyboard is attached long before): a harmless key first.
+        app.typeKey(XCUIKeyboardKey.shift, modifierFlags: [])
+        app.typeKey("b", modifierFlags: .command)
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "⌘B shows the sidebar")
+        XCTAssertTrue(element(app, "tab-bar").waitForNonExistence(timeout: 5))
+        app.typeKey("b", modifierFlags: .command)
+        XCTAssertTrue(sidebar.waitForNonExistence(timeout: 5), "⌘B hides it again")
+        app.typeKey("b", modifierFlags: .command)
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+
+        // ⌘/ lists every shortcut, ⌘B among them.
+        pane.tap()
+        app.typeKey("/", modifierFlags: .command)
+        XCTAssertTrue(element(app, "shortcuts-sheet").waitForExistence(timeout: 5), "⌘/ opens the shortcuts")
+        XCTAssertTrue(app.staticTexts["Toggle Sidebar"].exists)
+        attach(app, "shortcuts")
     }
 
     #if os(iOS)

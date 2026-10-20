@@ -28,7 +28,7 @@ final class ProgramLogoUITests: XCTestCase {
     private func launchPrograms() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
-            "-screen", "programs", "-mock", "-tabStyle", "sidebar", "-noAutoFocus", "YES",
+            "-screen", "programs", "-mock", "-sidebarShown", "YES", "-noAutoFocus", "YES",
             "-restoreLastTarget", "NO", "-ApplePersistenceIgnoreState", "YES",
         ]
         app.launch()

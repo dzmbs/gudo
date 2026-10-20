@@ -21,7 +21,7 @@ enum PaletteMode: Equatable {
 
 /// Modal surfaces. One at a time, like the system's own sheets.
 enum SheetRoute: String, Identifiable {
-    case pairing, launchAgent, invite, join, links, diff, files, browser, editor, settings
+    case pairing, launchAgent, invite, join, links, diff, files, browser, editor, settings, shortcuts
     var id: String { rawValue }
 }
 
@@ -50,6 +50,12 @@ final class WindowModel {
         }
     }
     var paletteMode = PaletteMode.commands
+    /// The sidebar (Safari's model): shown, it holds the tabs; hidden, the tabs move to a strip on
+    /// top (unless `TabPlacement.showsTabBarKey` is off). Per window; the last choice is the next
+    /// window's start.
+    var isSidebarShown = TabPlacement.sidebarShown {
+        didSet { TabPlacement.sidebarShown = isSidebarShown }
+    }
     var isSearchShown = false
     var searchNeedle = "" {
         didSet { if searchNeedle != oldValue { updateSearchCount() } }

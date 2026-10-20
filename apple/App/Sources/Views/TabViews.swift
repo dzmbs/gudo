@@ -783,17 +783,22 @@ struct CompactTerminalView: View {
 
 // MARK: - Shared
 
-struct TabStyleToggle: View {
-    @Binding var style: TabStyle
+/// Shows or hides the sidebar (⌘B). Hidden, the tabs move to the strip on top; its context menu
+/// turns that strip off for a terminal that fills the window.
+struct SidebarToggle: View {
+    @Environment(WindowModel.self) private var model
+    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
 
     var body: some View {
-        Button(
-            style == .sidebar ? "Tabs on Top" : "Tabs in Sidebar",
-            systemImage: style == .sidebar ? "rectangle.topthird.inset.filled" : "sidebar.left"
-        ) {
-            withAnimation(DS.Motion.panel) { style = style == .sidebar ? .bar : .sidebar }
+        Button(model.isSidebarShown ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.leading") {
+            WorkspaceAction.toggleSidebar.perform(window: model)
         }
-        .help("Switch between vertical and horizontal tabs")
+        .help(model.isSidebarShown ? "Hide Sidebar (⌘B)" : "Show Sidebar (⌘B)")
+        .tint(.primary)
+        .contextMenu {
+            Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
+        }
+        .accessibilityIdentifier("toggle-sidebar")
     }
 }
 

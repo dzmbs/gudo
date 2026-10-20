@@ -6,7 +6,7 @@ import SwiftUI
 struct WorkspaceCommands: Commands {
     @FocusedValue(Workspace.self) private var focusedWorkspace
     @FocusedValue(WindowModel.self) private var focusedModel
-    @AppStorage("tabStyle") private var tabStyle = TabStyle.sidebar
+    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
 
     /// The focused window's workspace, else the one last worked in. The items are never disabled
     /// for a missing focused value: SwiftUI reports none at times while a window is key (after it
@@ -35,6 +35,11 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .textEditing) {
             buttons([.find])
         }
+        // A terminal has no rich text: the system's Format ▸ Font items (Bold ⌘B, Italic ⌘I,
+        // Underline ⌘U) and Print (⌘P) would answer those chords before the terminal and the
+        // app's own shortcuts (⌘B sidebar, ⌘P Go to Tab) ever saw them.
+        CommandGroup(replacing: .textFormatting) {}
+        CommandGroup(replacing: .printItem) {}
         CommandMenu("Pane") {
             buttons(WorkspaceAction.paneActions)
             Divider()
@@ -47,7 +52,6 @@ struct WorkspaceCommands: Commands {
             Divider()
             Button("Rename Tab…") { workspace?.renamingTab = workspace?.session.activeTabId }
                 .disabled(workspace?.session.activeTab == nil)
-            Toggle("Vertical Tabs", isOn: Binding(get: { tabStyle == .sidebar }, set: { tabStyle = $0 ? .sidebar : .bar }))
         }
         CommandMenu("Git") {
             Button("New Task…") { model?.sheet = .launchAgent }
@@ -68,7 +72,14 @@ struct WorkspaceCommands: Commands {
             Button("Archive Worktree") { if let wt = model?.git.worktree { model?.git.archive(wt) } }
         }
         CommandGroup(before: .sidebar) {
-            buttons([.commandPalette, .commandPaletteGhostty, .inbox, .hosts])
+            Button(model?.isSidebarShown == false ? "Show Sidebar" : "Hide Sidebar") {
+                if let model { WorkspaceAction.toggleSidebar.perform(window: model) }
+            }
+                .keyboardShortcut(WorkspaceAction.toggleSidebar.shortcut)
+                .disabled(editorHasKeys)
+            Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
+            Divider()
+            buttons([.commandPalette, .commandPaletteGhostty, .inbox, .hosts, .shortcuts])
             Button("Add Host…") { model?.addHost() }
             Divider()
         }

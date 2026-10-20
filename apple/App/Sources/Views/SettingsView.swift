@@ -94,6 +94,7 @@ private struct AppearanceSection: View {
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
     @AppStorage(TabNaming.titleFromShell) private var titleFromShell = false
+    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
 
     var body: some View {
         Section("Appearance") {
@@ -122,6 +123,13 @@ private struct AppearanceSection: View {
                 ConfigLabel("Tab Title from Shell", key: "title-from-shell")
             }
             .accessibilityIdentifier("settings-title-from-shell")
+            #if os(macOS)
+            Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
+            #else
+            if UIDevice.current.userInterfaceIdiom != .phone {
+                Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
+            }
+            #endif
         }
     }
 }

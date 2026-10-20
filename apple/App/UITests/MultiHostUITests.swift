@@ -83,7 +83,7 @@ final class MultiHostUITests: XCTestCase {
         try XCTSkipIf(Self.isPhone, "the sidebar is iPad and Mac")
         let app = XCUIApplication()
         app.launchArguments += [
-            "-localEcho", "YES", "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES",
+            "-localEcho", "YES", "-restoreLastTarget", "NO", "-sidebarShown", "YES",
             "-hostsDirectory", NSTemporaryDirectory() + "multihost-empty-\(UUID().uuidString)",
         ]
         app.launch()
@@ -134,7 +134,7 @@ final class MultiHostUITests: XCTestCase {
         app.launchArguments += extra + [
             "-testTickets", "\(alpha),\(beta)", "-testTicketNames", names, "-testRelay", "disabled",
             "-hostsDirectory", NSTemporaryDirectory() + "multihost-\(alpha.suffix(10))\(beta.suffix(10))", "-connectionProbe", "YES",
-            "-restoreLastTarget", "NO", "-tabStyle", "sidebar", "-sidebarShown", "YES", "-keyBar.lineEditor", "<false/>",
+            "-restoreLastTarget", "NO", "-sidebarShown", "YES", "-keyBar.lineEditor", "<false/>",
         ]
         app.launch()
         return app

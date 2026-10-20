@@ -1,3 +1,4 @@
+import DesignSystem
 import PaneLayout
 import SwiftUI
 
@@ -13,12 +14,16 @@ enum WorkspaceAction: Hashable {
     case newWindow
     /// The window's own screens and overlays.
     case commandPalette, commandPaletteGhostty, find, links, inbox, hosts
+    /// Shows or hides the sidebar; hidden, the tabs are a strip on top (`TabPlacement`).
+    case toggleSidebar
+    /// Every shortcut on one page.
+    case shortcuts
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .closePane]
     static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
-    static let windowActions: [Self] = [.commandPalette, .commandPaletteGhostty, .find, .links, .inbox, .hosts]
+    static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .links, .inbox, .hosts]
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
@@ -47,6 +52,8 @@ enum WorkspaceAction: Hashable {
         case .links: "Links & Paths…"
         case .inbox: "Inbox"
         case .hosts: "Hosts"
+        case .toggleSidebar: "Toggle Sidebar"
+        case .shortcuts: "Keyboard Shortcuts"
         }
     }
 
@@ -76,6 +83,8 @@ enum WorkspaceAction: Hashable {
         case .links: KeyboardShortcut("l", modifiers: [.command, .shift])
         case .inbox: KeyboardShortcut("i", modifiers: [.command, .shift])
         case .hosts: KeyboardShortcut("h", modifiers: [.command, .shift])
+        case .toggleSidebar: KeyboardShortcut("b")
+        case .shortcuts: KeyboardShortcut("/")
         }
     }
 
@@ -101,6 +110,8 @@ enum WorkspaceAction: Hashable {
         case .links: window.sheet = .links
         case .inbox: window.destination = .inbox
         case .hosts: window.destination = window.destination == .hosts ? .terminal : .hosts
+        case .toggleSidebar: perform(window: window)
+        case .shortcuts: window.sheet = window.sheet == .shortcuts ? nil : .shortcuts
         default: perform(on: window.workspace ?? workspace)
         }
     }
@@ -123,7 +134,17 @@ enum WorkspaceAction: Hashable {
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.
-        case .commandPalette, .commandPaletteGhostty, .find, .links, .inbox, .hosts: break
+        case .commandPalette, .commandPaletteGhostty, .find, .links, .inbox, .hosts, .toggleSidebar, .shortcuts: break
+        }
+    }
+
+    /// Runs a window-only action (the sidebar toggle's own button has no workspace to hand).
+    func perform(window: WindowModel) {
+        switch self {
+        case .toggleSidebar:
+            withAnimation(DS.Motion.panel) { window.isSidebarShown.toggle() }
+        default:
+            if let workspace = window.workspace { perform(on: workspace, window: window) }
         }
     }
 }

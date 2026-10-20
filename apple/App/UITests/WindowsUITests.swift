@@ -104,7 +104,7 @@ final class WindowsUITests: XCTestCase {
         app.launchArguments += [
             "-testTickets", ticket, "-testTicketNames", "studio", "-testRelay", "disabled",
             "-hostsDirectory", daemonHosts(ticket), "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO",
-            "-tabStyle", "sidebar", "-sidebarShown", "YES", "-keyBar.lineEditor", "<false/>",
+            "-sidebarShown", "YES", "-keyBar.lineEditor", "<false/>",
         ]
         app.launch()
         let firstPane = panes(app).firstMatch
@@ -261,7 +261,7 @@ final class WindowsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-localEcho", "YES", "-hostsDirectory", scratch, "-windowProbe", "YES", "-resetWindows", "YES", "-restoreLastTarget", "NO",
-            "-tabStyle", "sidebar", "-sidebarShown", "YES", "-resizeOverlay", "always",
+            "-sidebarShown", "YES", "-resizeOverlay", "always",
         ]
         app.launch()
         let pane = panes(app).firstMatch

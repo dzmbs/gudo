@@ -4,12 +4,32 @@ import TerminalRenderer
 import SwiftUI
 import TerminalCore
 
-/// Where tabs are listed in regular-width windows.
-enum TabStyle: String {
-    /// A vertical tab list in a collapsible sidebar (the default on iPad and Mac).
-    case sidebar
-    /// A horizontal tab strip above the panes.
-    case bar
+/// Where tabs are listed in regular-width windows, Safari's way: the sidebar holds them while it
+/// is shown; hidden, they show as a strip on top. One button and ⌘B switch between the two, so
+/// there is no separate "tab style" to find.
+enum TabPlacement {
+    static let sidebarShownKey = "sidebarShown"
+    /// Off: no strip while the sidebar is hidden (the terminal gets the whole window).
+    static let showsTabBarKey = "tabBarWithoutSidebar"
+
+    /// The last sidebar choice, which a new window starts with. Reads the old "tabStyle" setting
+    /// once: tabs on top was the sidebar hidden.
+    static var sidebarShown: Bool {
+        get {
+            let defaults = UserDefaults.standard
+            if let old = defaults.string(forKey: "tabStyle") {
+                defaults.removeObject(forKey: "tabStyle")
+                if old == "bar" { defaults.set(false, forKey: sidebarShownKey) }
+            }
+            return defaults.object(forKey: sidebarShownKey) as? Bool ?? true
+        }
+        set { UserDefaults.standard.set(newValue, forKey: sidebarShownKey) }
+    }
+
+    static var showsTabBar: Bool {
+        get { UserDefaults.standard.object(forKey: showsTabBarKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: showsTabBarKey) }
+    }
 }
 
 /// A window: tabs (sidebar, strip, or the compact layout on iPhone) around the active tab's panes,
@@ -18,8 +38,6 @@ enum TabStyle: String {
 struct WorkspaceView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @AppStorage("tabStyle") private var tabStyle = TabStyle.sidebar
-    @AppStorage("sidebarShown") private var sidebarShown = true
     @AppStorage("sidebarWidth") private var sidebarWidth = 248.0
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
@@ -72,10 +90,10 @@ struct WorkspaceView: View {
             .task {
                 await DesignFixtures.apply(LaunchOptions.screen, workspace: workspace, model: model)
                 if LaunchOptions.screen == "toggle" {
-                    // Regression fixture: strip first, then vertical tabs, as a user would switch.
-                    tabStyle = .bar
+                    // Regression fixture: strip first, then the sidebar, as a user would switch.
+                    model.isSidebarShown = false
                     try? await Task.sleep(for: .seconds(1))
-                    tabStyle = .sidebar
+                    model.isSidebarShown = true
                 }
             }
             // Closing a host's last tab moves to the nearest tab on another host; on the Mac,
@@ -130,21 +148,18 @@ struct WorkspaceView: View {
     /// the toolbar looks the same in either.
     private var regular: some View {
         HStack(spacing: 0) {
-            if tabStyle == .sidebar && sidebarShown {
+            if model.isSidebarShown {
                 SidebarColumn(workspace: workspace)
                     .frame(width: sidebarWidth)
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 SidebarDivider(width: $sidebarWidth)
             }
             NavigationStack {
-                DetailColumn(workspace: workspace, tabStyle: $tabStyle, sidebarShown: $sidebarShown)
+                DetailColumn(workspace: workspace)
             }
         }
-        .animation(DS.Motion.panel, value: tabStyle == .sidebar && sidebarShown)
+        .animation(DS.Motion.panel, value: model.isSidebarShown)
         .background(theme.background.ignoresSafeArea())
-        // Choosing vertical tabs always shows them, whatever the sidebar was last collapsed to.
-        .onChange(of: tabStyle) { _, style in if style == .sidebar { sidebarShown = true } }
-        .onAppear { if tabStyle == .sidebar { sidebarShown = true } }
         #if os(macOS)
         // Ghostty's window title: the directory, with its folder as the proxy icon.
         .modifier(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
@@ -297,15 +312,15 @@ private struct RepresentedDirectory: ViewModifier {
 /// Hosts, under one toolbar shared by both tab placements.
 private struct DetailColumn: View {
     let workspace: Workspace
-    @Binding var tabStyle: TabStyle
-    @Binding var sidebarShown: Bool
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
+    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
 
     var body: some View {
         VStack(spacing: 0) {
-            if tabStyle == .bar {
-                TabBar(workspace: workspace, style: $tabStyle)
+            if !model.isSidebarShown && showsTabBar {
+                TabBar(workspace: workspace)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
             switch model.destination {
             case .terminal:
@@ -333,7 +348,7 @@ private struct DetailColumn: View {
         .toolbarBackgroundVisibility(.visible, for: .navigationBar)
         #endif
         .navigationSubtitle(model.destination == .terminal ? subtitle : "")
-        .toolbar { TerminalToolbar(workspace: workspace, tabStyle: $tabStyle, sidebarShown: $sidebarShown) }
+        .toolbar { TerminalToolbar(workspace: workspace) }
         .modifier(GitDialogs(git: model.git))
         .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
             if has { model.git.syncAutoDelete() }
@@ -356,25 +371,16 @@ private struct DetailColumn: View {
     }
 }
 
-/// The window toolbar, identical in both tab placements: the sidebar toggle leading; presence,
-/// Hosts, Find, the pane menu and the palette as one monochrome glass group; the tab placement
-/// toggle on its own.
+/// The window toolbar, identical with the sidebar shown or hidden: the sidebar toggle leading
+/// (always there, in the same place: Safari, Finder, Xcode); presence, Hosts, Find, the pane
+/// menu and the palette as one monochrome glass group.
 private struct TerminalToolbar: ToolbarContent {
     let workspace: Workspace
-    @Binding var tabStyle: TabStyle
-    @Binding var sidebarShown: Bool
     @Environment(WindowModel.self) private var model
 
     var body: some ToolbarContent {
-        if tabStyle == .sidebar {
-            ToolbarItem(placement: .navigation) {
-                Button(sidebarShown ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.leading") {
-                    withAnimation(DS.Motion.panel) { sidebarShown.toggle() }
-                }
-                .help("Toggle Sidebar")
-                .tint(.primary)
-                .accessibilityIdentifier("toggle-sidebar")
-            }
+        ToolbarItem(placement: .navigation) {
+            SidebarToggle()
         }
         if let session = workspace.multiplayer {
             ToolbarItem(placement: .primaryAction) {
@@ -412,7 +418,6 @@ private struct TerminalToolbar: ToolbarContent {
                 Button("Draw on Pane", systemImage: "pencil.tip") { DrawingCommands.toggleDrawing(in: workspace) }
                     .disabled(!DrawingCommands.canDraw(in: workspace))
                 #endif
-                TabStyleToggle(style: $tabStyle)
             }
             .help("Pane")
             .menuIndicator(.hidden)
@@ -763,6 +768,8 @@ private struct SheetContent: View {
             JoinSheet(invite: model.joinInvite.isEmpty ? UserDefaults.standard.string(forKey: "joinInvite") ?? "" : model.joinInvite)
         case .settings:
             SettingsView()
+        case .shortcuts:
+            ShortcutsSheet()
         }
     }
 

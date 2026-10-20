@@ -14,7 +14,6 @@ import SwiftUI
 /// tabs carries its host as a second line (status UX §3.2); a single-host window shows no host.
 struct TabBar: View {
     let workspace: Workspace
-    @Binding var style: TabStyle
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @Namespace private var selection

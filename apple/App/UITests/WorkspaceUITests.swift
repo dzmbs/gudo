@@ -143,16 +143,10 @@ final class WorkspaceUITests: XCTestCase {
     @MainActor
     func testSidebarAppearsAfterSwitchingFromTabStrip() throws {
         let app = XCUIApplication()
-        // Not `-tabStyle bar`: a launch argument outranks the toggle's write to user defaults.
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-localEcho", "YES"]
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-localEcho", "YES", "-sidebarShown", "NO", "-tabBarWithoutSidebar", "YES"]
         app.launch()
-        XCTAssertTrue(element(app, "hosts-button").waitForExistence(timeout: 20))
-        element(app, "pane-menu").click()
-        let onTop = app.menuItems["Tabs on Top"].firstMatch
-        if onTop.waitForExistence(timeout: 3) { onTop.click() } else { app.typeKey(XCUIKeyboardKey.escape, modifierFlags: []) }
-        XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 10))
-        element(app, "pane-menu").click()
-        app.menuItems["Tabs in Sidebar"].firstMatch.click()
+        XCTAssertTrue(element(app, "tab-bar").waitForExistence(timeout: 20))
+        element(app, "toggle-sidebar").click()
         let inbox = element(app, "sidebar-inbox")
         XCTAssertTrue(inbox.waitForExistence(timeout: 5), "the sidebar shows after switching")
         XCTAssertTrue(inbox.isHittable, "the sidebar is on screen, not collapsed")
