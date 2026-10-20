@@ -287,6 +287,7 @@ final class DrawOverlay: NSObject {
             if rows != 0 { surface.scroll(rows: rows) }
         case "loaded":
             CanvasWebView.log.info("draw: scene loaded (\(body["count"] as? Int ?? 0) element(s))")
+            model.loaded = true
             #if os(iOS)
             ink?.pageLoaded()
             #endif

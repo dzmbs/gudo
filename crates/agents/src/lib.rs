@@ -36,7 +36,9 @@ pub use event::{
     NativeSessionId, PaneId, RequestId, SchemaVersion, Seq, SessionInfo, Source, Status, Subagent,
     SubagentId, Turn, TurnOutcome, UnixMillis,
 };
-pub use launch::{LaunchContext, LaunchMode, LaunchSpec, SupportFile, pane_env};
+pub use launch::{
+    LaunchContext, LaunchMode, LaunchSpec, SupportFile, mcp_args, mcp_server_name, pane_env,
+};
 pub use manifest::{
     ENGINE_VERSION, Manifest, ManifestError, Region, ScreenInput, ScreenMatch, ScreenVerdict,
 };

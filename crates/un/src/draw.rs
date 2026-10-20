@@ -34,7 +34,8 @@ pub(crate) enum DrawCmd {
         #[arg(long, default_value_t = 80)]
         width: usize,
     },
-    /// Write a PNG (the image, the drawing's preview or a daemon render) or an SVG.
+    /// Write a PNG (the image, the drawing's preview or a daemon render), an SVG, ASCII text,
+    /// or an `.excalidraw` file.
     Export {
         id: u64,
         #[arg(long, value_enum, default_value_t = Format::Png)]
@@ -45,6 +46,10 @@ pub(crate) enum DrawCmd {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+    /// A drawing's finished versions, newest first.
+    History { id: u64 },
+    /// Bring a drawing back to a version from its history (as a new version on top).
+    Restore { id: u64, version: u64 },
     /// Show an artifact inline in a pane at its cursor row (as the app's "done" does).
     Place {
         id: u64,
@@ -89,6 +94,8 @@ pub(crate) enum Format {
     Svg,
     /// Box-glyph text (shapes, arrows, text) for terminals and agents.
     Ascii,
+    /// An `.excalidraw` file (scenes and images), images embedded.
+    Excalidraw,
 }
 
 pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
@@ -159,6 +166,35 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
                 print!("{}", String::from_utf8_lossy(&text));
             }
         }
+        DrawCmd::History { id } => {
+            let history = conn.client.artifact_history(ArtifactId(id)).await?;
+            if history.is_empty() {
+                println!("no finished versions yet");
+            }
+            for v in history {
+                let restored = v
+                    .restored_from
+                    .map(|r| format!(", restored v{r}"))
+                    .unwrap_or_default();
+                let render = v.image.map_or("no render".to_owned(), |i| {
+                    format!("{}×{} render", i.width, i.height)
+                });
+                println!(
+                    "v{:<4} {:>3} elements  {render}  at {} ms{restored}",
+                    v.version, v.elements, v.at.0
+                );
+            }
+        }
+        DrawCmd::Restore { id, version } => {
+            let (info, entry) = conn
+                .client
+                .artifact_restore(ArtifactId(id), version)
+                .await?;
+            println!(
+                "restored artifact {} v{version} as v{} ({} elements)",
+                info.artifact_id, entry.version, info.elements
+            );
+        }
         DrawCmd::Place { id, pane, version } => {
             let pane = match pane {
                 Some(p) => PaneId(p),
@@ -207,14 +243,26 @@ pub(crate) async fn run(conn: &mut Conn, cmd: DrawCmd) -> Result<()> {
             output,
         } => {
             let format = match format {
-                Format::Png => ExportFormat::Png,
-                Format::Svg => ExportFormat::Svg,
-                Format::Ascii => ExportFormat::Ascii,
+                Format::Png => Some(ExportFormat::Png),
+                Format::Svg => Some(ExportFormat::Svg),
+                Format::Ascii => Some(ExportFormat::Ascii),
+                Format::Excalidraw => None,
             };
-            let (v, data) = conn
-                .client
-                .artifact_export(ArtifactId(id), version, format)
-                .await?;
+            let (v, data) = match format {
+                Some(format) => {
+                    conn.client
+                        .artifact_export(ArtifactId(id), version, format)
+                        .await?
+                }
+                None => {
+                    if version.is_some() {
+                        bail!("--version is for PNG, SVG and ASCII (restore it first)");
+                    }
+                    let data = conn.client.excalidraw_file(ArtifactId(id)).await?;
+                    let v = conn.client.artifact_get(ArtifactId(id), u64::MAX).await?;
+                    (v.info.version, data)
+                }
+            };
             match output {
                 Some(path) => {
                     std::fs::write(&path, &data)?;

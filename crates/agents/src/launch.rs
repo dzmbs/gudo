@@ -93,6 +93,61 @@ pub fn pane_env(ctx: &LaunchContext) -> Vec<(String, OsString)> {
     ]
 }
 
+/// Returns the name agents know the daemon's MCP server by (docs/DAEMON.md §7.12):
+/// [`brand::PRODUCT_NAME`] made a bare identifier, plus `_drawings`.
+///
+/// It is valid both as a Claude Code server name (its tools appear as `mcp__<name>__<tool>`)
+/// and as a bare TOML key in Codex's `mcp_servers.<name>`.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(agents::mcp_server_name(), "unnamed_drawings");
+/// ```
+pub fn mcp_server_name() -> String {
+    let product: String = brand::PRODUCT_NAME
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | '0'..='9' => c,
+            'A'..='Z' => c.to_ascii_lowercase(),
+            _ => '_',
+        })
+        .collect();
+    format!("{product}_drawings")
+}
+
+/// Returns the hook shim's arguments that run the MCP server for this pane:
+/// `mcp --state <state_dir> --pane <pane>`. The shim reads the socket and token from the state
+/// directory, so no secret goes on a command line.
+pub fn mcp_args(ctx: &LaunchContext) -> Vec<String> {
+    vec![
+        "mcp".into(),
+        "--state".into(),
+        ctx.state_dir.to_string_lossy().into_owned(),
+        "--pane".into(),
+        ctx.pane_id.as_str().into(),
+    ]
+}
+
+/// Quotes `s` as a TOML basic string.
+pub(crate) fn toml_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Quotes `s` for a POSIX shell as one word.
 pub(crate) fn shell_quote(s: &str) -> String {
     if !s.is_empty()
@@ -136,6 +191,31 @@ mod tests {
             ]
         );
         assert_eq!(env[0].1, "p_9f2");
+    }
+
+    #[test]
+    fn mcp_server_runs_the_shim_for_this_pane() {
+        assert_eq!(mcp_server_name(), "unnamed_drawings");
+        assert_eq!(
+            mcp_args(&test_context()),
+            ["mcp", "--state", "/state", "--pane", "p_9f2"]
+        );
+    }
+
+    #[test]
+    fn quotes_for_toml() {
+        assert_eq!(
+            toml_quote("/opt/un/bin/un-hook"),
+            r#""/opt/un/bin/un-hook""#
+        );
+        assert_eq!(
+            toml_quote(r#"/Users/A "B"\C/un-hook"#),
+            r#""/Users/A \"B\"\\C/un-hook""#
+        );
+        assert_eq!(toml_quote("a\nb\u{7f}"), r#""a\nb\u007F""#);
+        let weird = "it's \"x\" \\ y\tz é\u{1}";
+        let doc: toml::Table = toml::from_str(&format!("k = {}", toml_quote(weird))).unwrap();
+        assert_eq!(doc["k"].as_str(), Some(weird));
     }
 
     #[test]

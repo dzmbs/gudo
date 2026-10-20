@@ -92,7 +92,7 @@ final class DrawingUITests: XCTestCase {
         app.typeKey("d", modifierFlags: [.command, .control])
         let done = app.buttons["drawing.done"]
         XCTAssertTrue(done.waitForExistence(timeout: 10), "the draw overlay opens")
-        sleep(2)  // the page loads its scene
+        waitForScene(app)
         return done
     }
 
@@ -213,6 +213,7 @@ final class DrawingUITests: XCTestCase {
         XCTAssertEqual(overlays.count, 1, "one pane draws")
 
         // Something drawn in the left pane: the right pane asks first.
+        waitForScene(app)
         let rect = app.buttons["drawing.debugRect"]
         XCTAssertTrue(rect.waitForExistence(timeout: 5))
         tap(rect)
@@ -361,6 +362,130 @@ final class DrawingUITests: XCTestCase {
         delete.tap()
         expectation(for: NSPredicate(format: "count == %d", before), evaluatedWith: placed)
         waitForExpectations(timeout: 10)
+    }
+
+    /// Waits until the editor holds the scene (a cold WebKit can take seconds; a rectangle
+    /// added before that is lost).
+    private func waitForScene(_ app: XCUIApplication) {
+        let toolbar = element(app, "drawing.toolbar")
+        expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: toolbar)
+        waitForExpectations(timeout: 30)
+    }
+
+    /// Draws a rectangle and keeps it in the output; returns the new placement.
+    private func keepARectangle(_ app: XCUIApplication) -> XCUIElement {
+        let placed = placements(app)
+        let before = placed.count
+        let done = openDrawMode(app)
+        let rect = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(rect.waitForExistence(timeout: 5))
+        tap(rect)
+        sleep(1)
+        tap(done)
+        XCTAssertTrue(done.waitForNonExistence(timeout: 15))
+        expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
+        waitForExpectations(timeout: 20)
+        XCTAssertTrue(element(app, "drawing.notice").waitForNonExistence(timeout: 10))
+        return placed.element(boundBy: placed.count - 1)
+    }
+
+    /// A drawing's menu exports it (PNG, SVG, Excalidraw, ASCII under Export; Copy as Text) and
+    /// lists its finished versions: edited and kept again, the first version is restored from
+    /// Version History, as a new version on top.
+    func testExportCopyTextAndVersionHistory() throws {
+        let app = launch(try ticket())
+        _ = preparePane(app)
+        let drawing = keepARectangle(app)
+
+        tap(drawing)
+        let export = app.buttons["Export"]
+        XCTAssertTrue(export.waitForExistence(timeout: 5), "an Export submenu")
+        XCTAssertTrue(app.buttons["Copy as Text"].exists)
+        export.tap()
+        for title in ["PNG Image…", "SVG…", "Excalidraw File…", "Text (ASCII)…"] {
+            XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 3), "\(title) is offered")
+        }
+        shot(app, "export-menu")
+        app.buttons["Excalidraw File…"].tap()
+        // The share sheet with the scene file.
+        let sheet = app.otherElements["ActivityListView"].firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 15), "the share sheet opens with the file")
+        shot(app, "export-share-sheet")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)).tap()  // outside the popover
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
+
+        tap(drawing)
+        let copyText = app.buttons["Copy as Text"]
+        XCTAssertTrue(copyText.waitForExistence(timeout: 5))
+        copyText.tap()
+        XCTAssertTrue(app.staticTexts["Text copied"].waitForExistence(timeout: 10), "the ASCII rendering is on the pasteboard")
+        XCTAssertTrue(element(app, "drawing.notice").waitForNonExistence(timeout: 10))
+
+        // One version so far.
+        tap(drawing)
+        let history = app.buttons["Version History"]
+        XCTAssertTrue(history.waitForExistence(timeout: 5), "a Version History submenu")
+        history.tap()
+        let versions = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawing.history.'"))
+        expectation(for: NSPredicate(format: "count == 1"), evaluatedWith: versions)
+        waitForExpectations(timeout: 10)
+        shot(app, "history-one")
+        panes(app).firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.1)).tap()  // close the menu
+        sleep(1)
+
+        // Edit: a second rectangle, kept again → two versions.
+        tap(placements(app).element(boundBy: placements(app).count - 1))
+        app.buttons["Edit Drawing"].tap()
+        let done = app.buttons["drawing.done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 10))
+        waitForScene(app)
+        tap(app.buttons["drawing.debugRect"])
+        sleep(1)
+        tap(done)
+        XCTAssertTrue(done.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(element(app, "drawing.notice").waitForNonExistence(timeout: 10))
+        tap(placements(app).element(boundBy: placements(app).count - 1))
+        XCTAssertTrue(history.waitForExistence(timeout: 5))
+        history.tap()
+        expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: versions)
+        waitForExpectations(timeout: 10)
+        shot(app, "history-two")
+
+        // Restore the first: the drawing goes back, as a third version.
+        versions.element(boundBy: 1).tap()
+        sleep(3)  // the daemon writes it back and re-shows the placement with the old render
+        tap(placements(app).element(boundBy: placements(app).count - 1))
+        XCTAssertTrue(history.waitForExistence(timeout: 5))
+        history.tap()
+        expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: versions)
+        waitForExpectations(timeout: 10)
+        shot(app, "history-restored")
+    }
+
+    /// A drawing dragged from one pane onto another is placed there too (the same drawing,
+    /// with its own render), and the original stays.
+    func testDragADrawingOntoAnotherPane() throws {
+        let app = launch(try ticket())
+        _ = preparePane(app)
+        let drawing = keepARectangle(app)
+        let before = placements(app).count
+        app.typeKey("d", modifierFlags: .command)  // split right
+        let split = panes(app)
+        expectation(for: NSPredicate(format: "count >= 2"), evaluatedWith: split)
+        waitForExpectations(timeout: 15)
+        // Leave one pane for the next test, pass or fail (the daemon keeps the layout).
+        addTeardownBlock { @MainActor in
+            app.typeKey("w", modifierFlags: .command)
+            sleep(2)
+        }
+        sleep(2)
+        let target = split.element(boundBy: 1)
+        drawing.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 1.2, thenDragTo: target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+        let placed = placements(app)
+        expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
+        waitForExpectations(timeout: 20)
+        shot(app, "dragged-to-other-pane")
     }
 
     /// Write: what is written shows at the prompt and reaches the shell only on Send (typed
