@@ -93,7 +93,7 @@ enum DesignFixtures {
                 workspace.notices[panes[0]] = PaneNotice(secureInput: true)
             }
         default:
-            if screen == "ticket" { model.addHost(mode: .ticket) } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }
+            if screen == "ticket" { model.addHost(mode: .ticket) } else if screen == "themes" { model.sheet = .settings } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }
         }
     }
 

@@ -5,54 +5,56 @@ import UnnamedCore
 
 /// Ghostty's config surfaced as native settings. Each control shows the Ghostty key it mirrors, so
 /// a Ghostty user can map their config file; the values are the same names and defaults.
-/// macOS: the toolbar-tabbed Settings window. iOS: one grouped form in a sheet.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    #if os(macOS)
+    @State private var pane = SettingsPane.appearance
+    #else
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
-    @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
-
-    private var scheme: ColorScheme? {
-        switch windowTheme {
-        case .system: nil
-        case .auto: ThemeCatalog.theme(named: themeName).colorScheme
-        case .light: .light
-        case .dark: .dark
-        }
-    }
+    /// `-screen themes` opens the theme picker (design review).
+    @State private var path: [SettingsPage] = LaunchOptions.screen == "themes" ? [.theme] : []
+    #endif
 
     var body: some View {
         #if os(macOS)
-        TabView {
-            SwiftUI.Tab("Appearance", systemImage: "paintpalette") { pane { AppearanceSection() } }
-            SwiftUI.Tab("Terminal", systemImage: "terminal") { pane { FontSection(); CursorSection(); SplitsSection(); PasswordsSection() } }
-            SwiftUI.Tab("Keyboard", systemImage: "keyboard") { pane { KeyboardSection(); VoiceSettingsSection() } }
-            SwiftUI.Tab("Notifications", systemImage: "bell.badge") { pane { NotificationsSection() } }
-            SwiftUI.Tab("Agents", systemImage: "sparkle") { pane { AgentsSettingsSection() } }
-            SwiftUI.Tab("Git", systemImage: "arrow.triangle.branch") { pane { GitSettingsSection() } }
-            SwiftUI.Tab("About", systemImage: "info.circle") { pane { AboutSection() } }
-        }
-        .frame(width: 560, height: 520)
         // The window follows the terminal theme, like the workspace (Ghostty `window-theme`).
-        .preferredColorScheme(scheme)
-        .environment(\.terminalTheme, ThemeCatalog.theme(named: themeName))
-        #else
-        NavigationStack {
-            Form {
-                AppearanceSection().raisedRows()
-                FontSection().raisedRows()
-                CursorSection().raisedRows()
-                SplitsSection().raisedRows()
-                KeyboardSection().raisedRows()
-                PasswordsSection().raisedRows()
-                VoiceSettingsSection().raisedRows()
-                NotificationsSection().raisedRows()
-                AgentsSettingsSection().raisedRows()
-                GitSettingsSection().raisedRows()
-                AboutSection().raisedRows()
+        ThemedRoot {
+            NavigationSplitView {
+                List(SettingsPane.allCases, selection: $pane) { pane in
+                    Label(pane.title, systemImage: pane.systemImage)
+                        .tag(pane)
+                }
+                .scrollContentBackground(.hidden)
+                .background(DS.Palette.sidebar)
+                .chromeContent()
+                .navigationSplitViewColumnWidth(200)
+            } detail: {
+                Form { detail(pane).chromeRows() }
+                    .formStyle(.grouped)
+                    .chromeGrouped()
+                    .navigationTitle(pane.title)
             }
-            .terminalGrouped()
+            .frame(minWidth: 720, minHeight: 480)
+        }
+        #else
+        NavigationStack(path: $path) {
+            Form {
+                AppearanceSection().chromeRows()
+                FontSection().chromeRows()
+                CursorSection().chromeRows()
+                SplitsSection().chromeRows()
+                KeyboardSection().chromeRows()
+                PasswordsSection().chromeRows()
+                VoiceSettingsSection().chromeRows()
+                NotificationsSection().chromeRows()
+                AgentsSettingsSection().chromeRows()
+                GitSettingsSection().chromeRows()
+                AboutSection().chromeRows()
+            }
+            .chromeGrouped()
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: SettingsPage.self) { _ in ThemePicker(selection: $themeName) }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -62,12 +64,59 @@ struct SettingsView: View {
         #endif
     }
 
-    private func pane(@ViewBuilder _ content: () -> some View) -> some View {
-        NavigationStack {
-            Form { content().raisedRows() }.formStyle(.grouped).terminalGrouped()
+    #if os(macOS)
+    @ViewBuilder private func detail(_ pane: SettingsPane) -> some View {
+        switch pane {
+        case .appearance: AppearanceSection()
+        case .terminal: FontSection(); CursorSection(); SplitsSection(); PasswordsSection()
+        case .keyboard: KeyboardSection(); VoiceSettingsSection()
+        case .notifications: NotificationsSection()
+        case .agents: AgentsSettingsSection()
+        case .git: GitSettingsSection()
+        case .about: AboutSection()
+        }
+    }
+    #endif
+}
+
+#if os(iOS)
+/// Pages pushed onto the iOS Settings stack by value.
+private enum SettingsPage: Hashable {
+    case theme
+}
+#endif
+
+#if os(macOS)
+/// The Mac Settings window's panes, in its sidebar.
+private enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
+    case appearance, terminal, keyboard, notifications, agents, git, about
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .appearance: "Appearance"
+        case .terminal: "Terminal"
+        case .keyboard: "Keyboard"
+        case .notifications: "Notifications"
+        case .agents: "Agents"
+        case .git: "Git"
+        case .about: "About"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .appearance: "paintpalette"
+        case .terminal: "terminal"
+        case .keyboard: "keyboard"
+        case .notifications: "bell.badge"
+        case .agents: "sparkle"
+        case .git: "arrow.triangle.branch"
+        case .about: "info.circle"
         }
     }
 }
+#endif
 
 /// A setting's label: its title and, underneath, the Ghostty config key in SF Mono.
 private struct ConfigLabel: View {
@@ -292,31 +341,43 @@ private struct ThemePicker: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets())
+            .listRowInsets(EdgeInsets(top: DS.Space.s, leading: DS.Space.l, bottom: DS.Space.s, trailing: DS.Space.l))
+            .listRowSeparator(.hidden)
 
             ForEach(themes) { theme in
                 Button {
                     selection = theme.name
                 } label: {
-                    ThemeRow(theme: theme, isSelected: theme.name == selection)
+                    ThemeCard(theme: theme, isSelected: theme.name == selection)
                 }
                 .buttonStyle(.plain)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: DS.Space.xs, leading: DS.Space.l, bottom: DS.Space.xs, trailing: DS.Space.l))
+                .listRowSeparator(.hidden)
+                .accessibilityIdentifier("theme-\(theme.name)")
             }
         }
+        .listStyle(.plain)
+        .chromeGrouped()
         .searchable(text: $query, prompt: "\(ThemeCatalog.all.count + 1) themes")
         .navigationTitle("Theme")
     }
 }
 
-private struct ThemeRow: View {
+/// foreground, a prompt in its colours, and four swatches (red, green, blue, yellow). The selected
+/// card has the window's accent ring.
+private struct ThemeCard: View {
     let theme: TerminalTheme
     let isSelected: Bool
 
     var body: some View {
         HStack(spacing: DS.Space.m) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(theme.name).lineLimit(1)
-                // A prompt line in the theme's own colors.
+            VStack(alignment: .leading, spacing: 2) {
+                Text(theme.name)
+                    .font(.body)
+                    .foregroundStyle(theme.foreground)
+                    .lineLimit(1)
+                // A prompt line in the theme's own colours.
                 HStack(spacing: 0) {
                     Text("~ ").foregroundStyle(theme.ansi(4))
                     Text("❯ ").foregroundStyle(theme.ansi(2))
@@ -324,36 +385,58 @@ private struct ThemeRow: View {
                     Text("status").foregroundStyle(theme.ansi(3))
                 }
                 .font(TerminalFont.font(size: 12, relativeTo: .caption))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(theme.background, in: .rect(cornerRadius: DS.Radius.chip))
             }
-            Spacer()
-            ThemeSwatch(theme: theme)
-            Image(systemName: "checkmark")
-                .font(.body.weight(.semibold))
+            Spacer(minLength: DS.Space.s)
+            ThemeSwatches(theme: theme)
+            Image(systemName: "checkmark.circle.fill")
+                .font(.body)
                 .foregroundStyle(DS.Palette.accent)
                 .opacity(isSelected ? 1 : 0)
         }
+        .padding(.horizontal, DS.Space.m)
+        .padding(.vertical, DS.Space.s + 2)
+        .background(theme.background, in: .rect(cornerRadius: DS.Radius.control))
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.Radius.control)
+                .strokeBorder(isSelected ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(theme.foreground.opacity(0.12)), lineWidth: isSelected ? 2 : 0.5)
+        }
         .contentShape(.rect)
+        .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
-/// The eight normal ANSI colors as a strip on the theme background.
+private struct ThemeSwatches: View {
+    let theme: TerminalTheme
+    var size: CGFloat = 12
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach([1, 2, 4, 3], id: \.self) { index in
+                Circle()
+                    .fill(theme.ansi(index))
+                    .frame(width: size, height: size)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The current theme beside its setting: its background and foreground as a tile, then its four
+/// swatches.
 private struct ThemeSwatch: View {
     let theme: TerminalTheme
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(1..<7, id: \.self) { index in
-                theme.ansi(index).frame(width: 6, height: 14)
-            }
+        HStack(spacing: 6) {
+            Text("Aa")
+                .font(TerminalFont.font(size: 11, relativeTo: .caption2))
+                .foregroundStyle(theme.foreground)
+                .frame(width: 26, height: 18)
+                .background(theme.background, in: .rect(cornerRadius: DS.Radius.chip))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+            ThemeSwatches(theme: theme, size: 8)
         }
-        .padding(3)
-        .background(theme.background)
-        .clipShape(.rect(cornerRadius: 3))
-        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
         .accessibilityHidden(true)
     }
 }
@@ -381,8 +464,10 @@ private struct KeyBarProfilesView: View {
                     .scrollIndicators(.hidden)
                 }
                 .padding(.vertical, DS.Space.xs)
+                .chromeRows()
             }
         }
+        .chromeGrouped()
         .navigationTitle("Key Bar Profiles")
     }
 
@@ -395,8 +480,8 @@ private struct KeyBarProfilesView: View {
             }
             return AnyView(Image(systemName: key.symbol ?? "questionmark").font(.caption.weight(.medium))
                 .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(.background.secondary, in: .rect(cornerRadius: DS.Radius.chip))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5)))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.chip))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.separator, lineWidth: 0.5)))
         }
         return spine + wing
     }
@@ -433,6 +518,7 @@ private struct AcknowledgementsView: View {
                 Text("Opening the editor uses VS Code under these terms, for you, on hosts you control.")
             }
         }
+        .chromeGrouped()
         .navigationTitle("Acknowledgements")
     }
 
@@ -441,6 +527,7 @@ private struct AcknowledgementsView: View {
             Text(name)
             Text(detail).font(.footnote).foregroundStyle(.secondary)
         }
+        .chromeRows()
     }
 
     private func link(_ title: String, _ url: String) -> some View {
@@ -453,5 +540,6 @@ private struct AcknowledgementsView: View {
             }
         }
         .accessibilityIdentifier("ack-\(title)")
+        .chromeRows()
     }
 }

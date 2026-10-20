@@ -19,6 +19,7 @@ struct InboxView: View {
     var onOpen: ((AgentItem) -> Void)?
 
     @Environment(WindowModel.self) private var model
+    @Environment(\.chrome) private var chrome
     @State private var approvedCount = 0
     @State private var deniedCount = 0
 
@@ -31,7 +32,7 @@ struct InboxView: View {
                     message: "Agents on your hosts report here when they need approval, ask a question, or finish."
                 ) {
                     Button("Start an Agent", action: onLaunch)
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .disabled(feed.launchHosts.isEmpty && !LaunchOptions.mock)
                 }
             } else {
@@ -39,8 +40,12 @@ struct InboxView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { InboxUsageStrip() }
+        .chromeContent()
         .navigationTitle("Inbox")
-        .navigationSubtitle(unseenLine)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .navigationSubtitle(subtitle)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 if let onNewTerminal {
@@ -55,6 +60,8 @@ struct InboxView: View {
                     } primaryAction: {
                         onNewTerminal()
                     }
+                    // Toolbar controls are monochrome (DESIGN.md), never the accent.
+                    .tint(.primary)
                     .accessibilityIdentifier("inbox-new")
                 } else {
                     Button("New Agent", systemImage: "plus", action: onLaunch)
@@ -80,6 +87,13 @@ struct InboxView: View {
         }
     }
 
+    /// "2 need you · 3 new on studio".
+    private var subtitle: String {
+        let needYou = feed.items.filter(\.state.needsYou).count
+        return [needYou > 0 ? "\(needYou) need\(needYou == 1 ? "s" : "") you" : nil, unseenLine.isEmpty ? nil : unseenLine]
+            .compactMap(\.self).joined(separator: " · ")
+    }
+
     /// "3 new · studio 2, devbox 1".
     private var unseenLine: String {
         let unseen = feed.unseenByHost.sorted { $0.key < $1.key }
@@ -93,17 +107,15 @@ struct InboxView: View {
         let needsYou = items.filter(\.state.needsYou).sorted { $0.since > $1.since }
         let running = items.filter { $0.state == .working }.sorted { $0.since > $1.since }
         let finished = items.filter { $0.state == .done || $0.state == .idle }.sorted { $0.since > $1.since }
+        // list on the base, hairlines inset to the text column.
         return List {
             section("Needs you", needsYou)
             section("Running", running)
             section("Finished", finished)
         }
-        #if os(iOS)
-        .listStyle(.insetGrouped)
-        #else
-        .listStyle(.inset)
-        #endif
-        .terminalGrouped()
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(DS.Palette.base)
         .animation(DS.Motion.snappy, value: items)
         .accessibilityIdentifier("inbox-list")
     }
@@ -155,10 +167,13 @@ struct InboxView: View {
                     }
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("inbox-\(item.id)")
-                    .raisedRows()
+                    .listRowBackground(Color.clear)
+                    .listRowSeparatorTint(chrome.hairline)
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in InboxRow.textColumn }
                 }
             } header: {
                 SectionTitle(title, count: items.count)
+                    .padding(.top, DS.Space.s)
             }
         }
     }
@@ -191,11 +206,14 @@ private struct InboxRow: View {
     @State private var draft = ""
     @FocusState private var isComposerFocused: Bool
 
+    static let glyphSlot: CGFloat = 16
+    static let textColumn: CGFloat = glyphSlot + DS.Space.m
+
     var body: some View {
         HStack(alignment: .top, spacing: DS.Space.m) {
             glyph
-                .frame(width: 22, height: 20)
-            VStack(alignment: .leading, spacing: DS.Space.xs + 2) {
+                .frame(width: Self.glyphSlot, height: 20)
+            VStack(alignment: .leading, spacing: DS.Space.row) {
                 header
                 Text(verbatim: item.prompt)
                     .font(item.isCommand ? DS.Font.literal : DS.Font.rowSubtitle)
@@ -205,7 +223,7 @@ private struct InboxRow: View {
                 if let summary = item.summary {
                     Text(verbatim: summary)
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(item.state == .error ? DS.Palette.error : .secondary)
+                        .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
                         .lineLimit(3)
                 }
                 if isReplying {
@@ -218,7 +236,7 @@ private struct InboxRow: View {
                 }
             }
         }
-        .padding(.vertical, DS.Space.xs)
+        .padding(.vertical, DS.Space.row)
         .contentShape(.rect)
         .onTapGesture(count: 2) { if item.paneId != nil { open() } }
     }
@@ -226,16 +244,17 @@ private struct InboxRow: View {
     @ViewBuilder private var glyph: some View {
         if item.isCommand {
             Image(systemName: item.state == .error ? "xmark.circle" : "checkmark.circle")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(item.state == .error ? DS.Palette.error : .secondary)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
         } else {
             StatusIndicator(item.state, size: 14)
+                .opacity(item.state.needsYou ? 1 : DS.Opacity.mutedGlyph)
         }
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
-            HStack(spacing: DS.Space.xs + 2) {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.row) {
+            HStack(spacing: DS.Space.row) {
                 // The agent's mark before its name (the state glyph leads the row).
                 if !item.isCommand {
                     ProgramMark(item.agent.identity)
@@ -243,13 +262,13 @@ private struct InboxRow: View {
                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
                 }
                 Text(item.isCommand ? "Command" : item.agent.title)
-                    .font(DS.Font.rowTitleEmphasis)
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
             }
             .layoutPriority(1)
             Text("\(item.hostName) · \(item.sessionTitle)")
-                .font(DS.Font.rowSubtitle)
-                .foregroundStyle(.secondary)
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
                 .lineLimit(1)
             Spacer(minLength: DS.Space.s)
             if item.unseen {
@@ -262,7 +281,7 @@ private struct InboxRow: View {
             TimelineView(.periodic(from: .now, by: item.state == .working ? 1 : 30)) { context in
                 Text(age(at: context.date))
                     .font(DS.Font.meta)
-                    .foregroundStyle(item.state == .working ? item.state.color : .secondary)
+                    .foregroundStyle(item.state == .working ? AnyShapeStyle(item.state.color) : AnyShapeStyle(.secondary))
             }
             if item.paneId != nil {
                 Button("Open Pane", systemImage: "arrow.up.right", action: open)
@@ -281,27 +300,30 @@ private struct InboxRow: View {
             VStack(alignment: .leading, spacing: DS.Space.s) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tool)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.tertiary)
                     Text(verbatim: detail)
                         .font(DS.Font.literal)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.horizontal, DS.Space.s + 2)
-                .padding(.vertical, DS.Space.s)
+                .padding(.horizontal, DS.Space.s)
+                .padding(.vertical, DS.Space.row)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.fill.quaternary, in: .rect(cornerRadius: DS.Radius.control))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                 HStack(spacing: DS.Space.s) {
                     Spacer()
                     Button("Deny", action: deny)
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("inbox-deny-\(item.id)")
                     Button("Approve", action: approve)
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .accessibilityIdentifier("inbox-approve-\(item.id)")
                 }
+                #if os(macOS)
                 .controlSize(.small)
+                #endif
             }
         case .question(let question)?:
             VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -337,7 +359,8 @@ private struct InboxRow: View {
                 .lineLimit(1...5)
                 .padding(.horizontal, DS.Space.s + 2)
                 .padding(.vertical, DS.Space.s)
-                .background(.fill.quaternary, in: .rect(cornerRadius: DS.Radius.control))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.control))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                 .focused($isComposerFocused)
                 .onSubmit(send)
                 .submitLabel(.send)
@@ -356,7 +379,7 @@ private struct InboxRow: View {
                 .task { isComposerFocused = true }
             Button("Send", systemImage: "arrow.up", action: send)
                 .labelStyle(.iconOnly)
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.primaryGlass)
                 .buttonBorderShape(.circle)
                 .controlSize(.small)
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)

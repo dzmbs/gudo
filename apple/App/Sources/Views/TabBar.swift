@@ -5,17 +5,16 @@ import SwiftUI
 
 /// Horizontal tabs, after Ghostty's macOS native tab bar: equal-width tabs across the whole row,
 /// each with a centered title led by the program's mark (the agent glyph instead while an
-/// unfocused tab's pane reports one), ⌘N right-aligned,
-/// a close button on hover at the leading edge, thin separators between unselected tabs, a slightly
-/// lighter rounded pill for the selected tab, and + at the end. It sits on the terminal background
-/// like Ghostty's transparent titlebar, so tabs and terminal read as one surface.
+/// a close button on hover at the leading edge, hairlines between unselected tabs, the selected tab
+/// a pill of the theme's ink at 10 %, and + at the end. Inactive tabs are the same ink dimmed by
+/// opacity (0.7, 0.85 on hover), so their glyph colours survive. It sits on the window's base,
+/// the terminal's own background, so tabs and terminal read as one surface.
 ///
 /// Every host's tabs share the strip in the sidebar's order; with more than one host, each run of
 /// tabs carries its host as a second line (status UX §3.2); a single-host window shows no host.
 struct TabBar: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @Environment(\.terminalTheme) private var theme
     @Namespace private var selection
 
     var body: some View {
@@ -33,9 +32,9 @@ struct TabBar: View {
                     let index = all.firstIndex(of: ref) ?? 0
                     if index > 0 {
                         // Ghostty/AppKit draw no separator next to the selected tab.
-                        Rectangle()
-                            .fill(Color.primary.opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 0.14))
-                            .frame(width: 1, height: 16)
+                        Hairline(.vertical, style: DS.Palette.separator)
+                            .frame(height: 16)
+                            .opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 1)
                     }
                     TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: mixed, namespace: selection)
                         .frame(maxWidth: .infinity)
@@ -48,9 +47,9 @@ struct TabBar: View {
         .labelStyle(.iconOnly)
         .padding(.horizontal, DS.Space.xs + 2)
         .frame(height: 34)
-        .background(theme.background)
-        .overlay(alignment: .bottom) { Rectangle().fill(theme.splitDivider).frame(height: 1) }
-        .animation(DS.Motion.snappy, value: active)
+        .background(DS.Palette.base)
+        .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
+        .animation(DS.Motion.quick, value: active)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-bar")
     }
@@ -75,18 +74,18 @@ private struct TabChip: View {
         let program = model.programIdentity(of: tab, onGroup: group.id)
         ZStack {
             if isActive {
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.primary.opacity(0.11))
-                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
+                    .fill(DS.Palette.selectedFill)
+                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.tabPill).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                     .matchedGeometryEffect(id: "selection", in: namespace)
                     .padding(.vertical, 3)
             } else if isHovered {
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.primary.opacity(0.05))
+                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
+                    .fill(DS.Palette.hoverFill)
                     .padding(.vertical, 3)
             }
 
-            HStack(spacing: DS.Space.xs + 2) {
+            HStack(spacing: DS.Space.row) {
                 // §3.4: the program's mark; the agent glyph instead on an unfocused tab.
                 TabLeadingMark(program: program, state: isActive ? nil : state)
                 VStack(spacing: 0) {
@@ -101,9 +100,9 @@ private struct TabChip: View {
                     }
                 }
             }
-            .font(.callout.weight(isActive ? .medium : .regular))
-            .foregroundStyle(isActive ? .primary : .secondary)
-            .opacity(group.isLocal || group.status.isLive ? 1 : 0.6)
+            .font(DS.Font.tabTitle)
+            .foregroundStyle(.primary)
+            .opacity((isActive ? 1 : isHovered ? DS.Opacity.inactiveHover : DS.Opacity.inactive) * (group.isLocal || group.status.isLive ? 1 : 0.6))
             .padding(.horizontal, 40)
 
             HStack(spacing: 0) {
@@ -112,20 +111,23 @@ private struct TabChip: View {
                     .frame(width: 22, height: 22)
                     .opacity(isHovered ? 1 : 0)
                     .accessibilityHidden(!isHovered)
+                    .help("Close Tab (⌘W)")
                 Spacer(minLength: 0)
-                if let number = model.groups.shortcutNumber(of: ref) {
+                if CommandKeyState.shared.held, let number = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(number)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .padding(.trailing, DS.Space.s)
+                        .transition(.opacity)
                 }
             }
             .padding(.leading, 3)
+            .animation(DS.Motion.quick, value: CommandKeyState.shared.held)
         }
         .frame(height: 34)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
-        .onHover { isHovered = $0 }
+        .onHover { hovering in withAnimation(DS.Motion.hover) { isHovered = hovering } }
         .contextMenu {
             if let workspace {
                 Button("Rename…", systemImage: "pencil") {

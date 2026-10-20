@@ -195,7 +195,29 @@ final class KeyBar: UIInputView {
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardsChanged), name: .GCKeyboardDidConnect, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardsChanged), name: .GCKeyboardDidDisconnect, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(themeMayHaveChanged), name: UserDefaults.didChangeNotification, object: nil)
+        applyTheme()
         apply()
+    }
+
+    /// The terminal theme's scheme, ink and accent (`KeyBarTheme`): the bar floats over the
+    /// terminal, so it reads as part of it whatever the window's chrome does.
+    /// Applies the theme; true when it changed anything.
+    @discardableResult private func applyTheme() -> Bool {
+        let style = KeyBarTheme.style, accent = KeyBarTheme.accent
+        var changed = false
+        if overrideUserInterfaceStyle != style { overrideUserInterfaceStyle = style; changed = true }
+        if tintColor != accent { tintColor = accent; changed = true }
+        return changed
+    }
+
+    @objc private func themeMayHaveChanged() {
+        guard applyTheme() else { return }
+        for case let key as UIButton in allSubviews(of: self) { key.setNeedsUpdateConfiguration() }
+    }
+
+    private func allSubviews(of view: UIView) -> [UIView] {
+        view.subviews + view.subviews.flatMap(allSubviews)
     }
 
     @available(*, unavailable)
@@ -447,7 +469,7 @@ final class KeyBar: UIInputView {
     private func circleConfiguration(symbol: String) -> UIButton.Configuration {
         var configuration = UIButton.Configuration.plain()
         configuration.image = UIImage(systemName: symbol, withConfiguration: metrics.symbolConfiguration)
-        configuration.baseForegroundColor = UIColor.label.withAlphaComponent(0.9)
+        configuration.baseForegroundColor = KeyBarTheme.ink.withAlphaComponent(0.9)
         configuration.contentInsets = .zero
         return configuration
     }
@@ -946,13 +968,13 @@ private final class JoystickView: UIView {
         addSubview(glass)
         icon.image = UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right",
                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
-        icon.tintColor = UIColor.label.withAlphaComponent(0.9)
+        icon.tintColor = KeyBarTheme.ink.withAlphaComponent(0.9)
         icon.contentMode = .center
         addSubview(icon)
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textAlignment = .center
         addSubview(label)
-        dot.backgroundColor = .label
+        dot.backgroundColor = KeyBarTheme.ink
         dot.layer.cornerRadius = 3
         dot.isHidden = true
         addSubview(dot)

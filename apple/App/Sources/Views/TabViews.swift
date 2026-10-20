@@ -15,7 +15,6 @@ import SwiftUI
 /// own material (white or grey next to a dark terminal on the Mac, an inset card on iPad); this one
 struct WorkspaceSidebar: View {
     @Environment(WindowModel.self) private var model
-    @Environment(\.terminalTheme) private var theme
 
     var body: some View {
         let groups = model.groups.groups
@@ -46,7 +45,8 @@ struct WorkspaceSidebar: View {
             .animation(DS.Motion.snappy, value: model.groups.collapsed)
         }
         .scrollIndicators(.never)
-        .background(theme.sidebarBackground.ignoresSafeArea())
+        .chromeContent()
+        .background(DS.Palette.sidebar, ignoresSafeAreaEdges: .all)
         #if os(macOS)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
@@ -100,7 +100,7 @@ private struct SidebarRowStyle: ViewModifier {
             .contentShape(.rect)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .fill(selected ? DS.Palette.selectedFill : hovered ? DS.Palette.hoverFill : .clear))
+                    .fill(DS.Palette.ink.opacity(selected ? ChromePalette.fillLevels.selected : hovered ? ChromePalette.fillLevels.hover : 0)))
             .padding(.horizontal, DS.Space.s)
             .onHover { hovered = $0 }
     }
@@ -111,7 +111,7 @@ struct SelectionFill: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: DS.Radius.control)
-            .fill(isSelected ? DS.Palette.selectedFill : .clear)
+            .fill(DS.Palette.selectedFill.opacity(isSelected ? 1 : 0))
             .padding(.horizontal, DS.Space.s)
     }
 }
@@ -657,7 +657,6 @@ private struct ConnectionProbe: View {
 struct CompactTerminalView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @Environment(\.terminalTheme) private var theme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -677,9 +676,9 @@ struct CompactTerminalView: View {
             ActiveTabView(workspace: workspace, compact: true)
                 .id(ObjectIdentifier(workspace))
         }
-        .background(theme.background.ignoresSafeArea())
-        // The bar sits on the terminal, so it takes the terminal's light/dark, not the system's.
-        .environment(\.colorScheme, theme.isLight ? .light : .dark)
+        .chromeContent()
+        // The bar is the window's base: the terminal's own background under Match Terminal.
+        .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
     }
 
     private var tabSwitcher: some View {
@@ -737,12 +736,12 @@ struct CompactTerminalView: View {
                         .lineLimit(1)
                     HStack(spacing: DS.Space.xs) {
                         Text(model.hostName)
-                            .font(DS.Font.meta)
-                            .foregroundStyle(.secondary)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                             .lineLimit(1)
                         if !model.connection.isLive {
                             ConnectionGlyph(model.connection)
-                                .font(.system(size: 10))
+                                .font(.caption2)
                         }
                     }
                 }
@@ -754,7 +753,7 @@ struct CompactTerminalView: View {
                         .font(.caption2.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 5)
-                        .background(.fill.tertiary, in: .capsule)
+                        .background(DS.Palette.selectedFill, in: .capsule)
                 }
             }
             .padding(.horizontal, DS.Space.xs)

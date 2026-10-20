@@ -92,7 +92,7 @@ public struct CommandPalette: View {
                 }
                 .accessibilityIdentifier("palette-field")
 
-            Divider()
+            Hairline()
 
             if results.isEmpty {
                 Text("No matches")
@@ -129,6 +129,7 @@ public struct CommandPalette: View {
                 }
             }
         }
+        .chromeContent()
         .frame(maxWidth: DS.Size.paletteWidth)
         .floatingPanel(cornerRadius: DS.Radius.panel)
         .padding()
@@ -152,15 +153,15 @@ public struct CommandPalette: View {
                 } else if let image = command.systemImage {
                     Image(systemName: image)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection) : AnyShapeStyle(.secondary))
                         .frame(width: 16)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     highlighted(command.title, selected: selected)
-                        .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection) : AnyShapeStyle(.primary))
                     if let subtitle = command.subtitle {
                         Text(subtitle).font(.caption)
-                            .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.75)) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.75)) : AnyShapeStyle(.secondary))
                             .lineLimit(1)
                     }
                 }
@@ -170,16 +171,16 @@ public struct CommandPalette: View {
                         .font(.caption2.weight(.medium))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Color.primary.opacity(0.08), in: .capsule)
-                        .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .background(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.18)) : AnyShapeStyle(DS.Palette.selectedFill), in: .capsule)
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(.secondary))
                 }
                 // The first five results run with ⌘1–⌘5 while a query narrows them.
                 if !trimmed.isEmpty, index < 5 {
                     ShortcutLabel(["⌘", "\(index + 1)"])
-                        .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(.secondary))
                 } else if let shortcut = command.shortcut {
                     ShortcutLabel(shortcut)
-                        .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(.secondary))
                 }
             }
             .padding(.horizontal, DS.Space.s)
@@ -190,7 +191,7 @@ public struct CommandPalette: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    /// Matched characters in bold (white on the selected row, never the accent colour).
+    /// Matched characters in bold (in the selection's text colour on the selected row, never the accent).
     private func highlighted(_ title: String, selected: Bool) -> Text {
         guard !trimmed.isEmpty, let indices = FuzzyMatch.indices(trimmed, in: title) else { return Text(title) }
         var attributed = AttributedString(title)

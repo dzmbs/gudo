@@ -31,9 +31,10 @@ nonisolated public enum AgentState: String, CaseIterable, Codable, Hashable, Sen
         }
     }
 
-    public var color: Color {
+    /// The state's colour, from the theme (`ChromePalette`): resolved where it is drawn.
+    public var color: ChromeStyle {
         switch self {
-        case .idle, .unknown: .secondary
+        case .idle, .unknown: DS.Palette.textSecondary
         case .working: DS.Palette.working
         case .blocked: DS.Palette.blocked
         case .done: DS.Palette.done
@@ -86,12 +87,12 @@ public struct StatusIndicator: View {
 
 /// A 3/4 arc that turns once per second; a still arc under Reduce Motion so it still says
 public struct Spinner: View {
-    var color: Color
+    var color: AnyShapeStyle
     var lineWidth: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(color: Color = .secondary, lineWidth: CGFloat = 1.5) {
-        self.color = color
+    public init(color: some ShapeStyle = HierarchicalShapeStyle.secondary, lineWidth: CGFloat = 1.5) {
+        self.color = AnyShapeStyle(color)
         self.lineWidth = lineWidth
     }
 
@@ -106,8 +107,6 @@ public struct Spinner: View {
     }
 }
 
-/// A status capsule: glyph, state name and optional detail ("Working · 4m"). Ghostty's palette
-/// badge shape (capsule, 15 % tint, caption2 medium).
 public struct StatusPill: View {
     let state: AgentState
     let detail: String?
@@ -129,7 +128,7 @@ public struct StatusPill: View {
         .foregroundStyle(state.color)
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
-        .background(state.color.opacity(0.14), in: .capsule)
+        .background(state.color.opacity(0.10), in: .rect(cornerRadius: DS.Radius.chip))
         .accessibilityElement(children: .combine)
     }
 }
@@ -148,10 +147,12 @@ public struct CountBadge: View {
         if count > 0 {
             Text(count > 99 ? "99+" : "\(count)")
                 .font(.caption2.weight(.semibold).monospacedDigit())
-                .foregroundStyle(urgent ? Color.white : Color.secondary)
+                // The window's base colour on the amber: dark text on a dark theme's light amber,
+                // light on a light theme's deep one.
+                .foregroundStyle(urgent ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(.secondary))
                 .padding(.horizontal, 5)
                 .frame(minWidth: 16, minHeight: 16)
-                .background(urgent ? AnyShapeStyle(DS.Palette.blocked) : AnyShapeStyle(.fill.tertiary), in: .capsule)
+                .background(urgent ? AnyShapeStyle(DS.Palette.blocked) : AnyShapeStyle(DS.Palette.selectedFill), in: .capsule)
                 .contentTransition(.numericText())
                 .animation(DS.Motion.indicator, value: count)
                 .accessibilityLabel("\(count)")

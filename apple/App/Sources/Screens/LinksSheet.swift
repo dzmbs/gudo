@@ -75,12 +75,12 @@ struct LinksSheet: View {
                         Text("Found on screen and in the output of the pane's recent commands.")
                     }
                 }
-                .raisedRows()
+                .chromeRows()
             }
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif
-            .terminalGrouped()
+            .chromeGrouped()
             .overlay {
                 if let failure {
                     EmptyState("Couldn't Read Links", systemImage: "exclamationmark.triangle", message: failure) {

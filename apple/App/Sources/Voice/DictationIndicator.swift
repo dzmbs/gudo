@@ -15,7 +15,7 @@ private struct DictationIndicator: ViewModifier {
                 case .starting, .listening, .finishing:
                     capsule {
                         Image(systemName: "mic.fill")
-                            .foregroundStyle(voice.phase == .listening ? DS.Palette.error : .secondary)
+                            .foregroundStyle(voice.phase == .listening ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
                             .symbolEffect(.pulse, isActive: voice.phase == .starting)
                         Text(title)
                             .font(.callout.weight(.medium))

@@ -101,6 +101,7 @@ private struct DirectoryListing: View {
 
     var body: some View {
         content
+            .chromeContent()
             .navigationTitle(title)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -456,6 +457,7 @@ private struct FilePreviewScreen: View {
 
     var body: some View {
         content
+            .chromeContent()
             .navigationTitle(entry.name)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -493,7 +495,7 @@ private struct FilePreviewScreen: View {
         case .binary(let size)?:
             EmptyState(entry.name, systemImage: FileIcon.symbol(for: entry), message: "\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) · no preview for this kind of file.") {
                 Button("Download", action: download)
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
             }
         case nil:
             if let failure {

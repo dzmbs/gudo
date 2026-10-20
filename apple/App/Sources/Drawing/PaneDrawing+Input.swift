@@ -312,7 +312,7 @@ final class PlacementMarker: UIButton {
 
     /// Outlines the placement for a moment: where Done put it.
     func flash() {
-        layer.borderColor = UIColor(DS.Palette.accent).cgColor
+        layer.borderColor = UIColor(ChromePalette.fromPreferences().accentColor).cgColor
         layer.cornerRadius = 3
         layer.borderWidth = 1.5
         let fade = CABasicAnimation(keyPath: "borderWidth")
@@ -401,7 +401,7 @@ final class PlacementMarker: NSView {
     /// Outlines the placement for a moment: where Done put it.
     func flash() {
         wantsLayer = true
-        layer?.borderColor = NSColor(DS.Palette.accent).cgColor
+        layer?.borderColor = NSColor(ChromePalette.fromPreferences().accentColor).cgColor
         layer?.cornerRadius = 3
         layer?.borderWidth = 1.5
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.layer?.borderWidth = 0 }

@@ -38,7 +38,7 @@ final class CapsuleKey: UIButton {
     init(metrics: CapsuleMetrics) {
         self.metrics = metrics
         super.init(frame: .zero)
-        underline.backgroundColor = .label
+        underline.backgroundColor = KeyBarTheme.ink
         underline.isUserInteractionEnabled = false
         underline.layer.cornerRadius = 1
         addSubview(underline)
@@ -64,7 +64,7 @@ final class CapsuleKey: UIButton {
         configuration.contentInsets = .zero
         configuration.titleLineBreakMode = .byClipping
         let active = latch != .off || isOn
-        let label = UIColor.label.withAlphaComponent(isHighlighted || active ? 1 : 0.9)
+        let label = KeyBarTheme.ink.withAlphaComponent(isHighlighted || active ? 1 : 0.9)
         configuration.baseForegroundColor = label
         if let title {
             var attributes = AttributeContainer()
@@ -78,7 +78,7 @@ final class CapsuleKey: UIButton {
         var background = UIBackgroundConfiguration.clear()
         background.backgroundColor = active
             ? tintColor.withAlphaComponent(0.22)
-            : isHighlighted ? UIColor.label.withAlphaComponent(0.14) : .clear
+            : isHighlighted ? KeyBarTheme.ink.withAlphaComponent(0.14) : .clear
         background.cornerRadius = (metrics.capsuleHeight - 8) / 2
         background.backgroundInsets = NSDirectionalEdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 2)
         configuration.background = background

@@ -9,7 +9,7 @@ import UnnamedCore
 
 extension UsageTone {
     /// The meter's colour; nil keeps the surface's own quiet style.
-    var color: Color? {
+    var color: ChromeStyle? {
         switch self {
         case .quiet: nil
         case .attention: DS.Palette.attention
@@ -99,6 +99,7 @@ struct UsageDetailView: View {
             .padding(DS.Space.xl)
             .frame(width: 320, alignment: .leading)
         }
+        .chromeContent()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("usage-detail")
     }
@@ -123,7 +124,7 @@ private struct AgentUsageSection: View {
                     .font(.callout)
                     ProgressView(value: row.fraction)
                         .progressViewStyle(.linear)
-                        .tint(row.tone.color ?? .secondary)
+                        .tint(row.tone.color.map { AnyShapeStyle($0) } ?? AnyShapeStyle(DS.Palette.textSecondary))
                         .opacity(row.isPast ? 0.4 : 1)
                     if let reset = row.reset {
                         Text(reset)
@@ -201,7 +202,8 @@ struct InboxUsageStrip: View {
                 .padding(.horizontal, DS.Space.xl)
                 .padding(.vertical, DS.Space.s)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .top) { Divider() }
+                .background(DS.Palette.base)
+                .overlay(alignment: .top) { Hairline() }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("inbox-usage")
             }

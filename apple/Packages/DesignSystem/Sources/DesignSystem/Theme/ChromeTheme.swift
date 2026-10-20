@@ -1,0 +1,109 @@
+import SwiftUI
+
+/// Puts a window's (or a sheet's, or a Settings window's) chrome on the terminal theme: the theme
+/// and its `ChromePalette` in the environment and the window scheme (Ghostty `window-theme`).
+/// The ink and tint go on content (`chromeContent()`), never above a toolbar: bar items keep the
+/// system's monochrome look and their disabled state.
+private struct ChromeThemeModifier: ViewModifier {
+    let theme: TerminalTheme
+    let windowTheme: TerminalPreferences.WindowTheme
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        let chrome = ChromePalette(theme: theme, scheme: requestedScheme)
+        content
+            .environment(\.terminalTheme, theme)
+            .environment(\.chrome, chrome)
+            .preferredColorScheme(preferredScheme(chrome))
+    }
+
+    /// The scheme the user asked the window to take, nil for "Match Terminal".
+    private var requestedScheme: ColorScheme? {
+        switch windowTheme {
+        case .auto: nil
+        case .system: colorScheme
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    private func preferredScheme(_ chrome: ChromePalette) -> ColorScheme? {
+        windowTheme == .system ? nil : chrome.scheme
+    }
+}
+
+public extension View {
+    /// The window's chrome follows `theme` (and `windowTheme`): apply once at every window, sheet
+    /// and Settings root.
+    func chromeTheme(_ theme: TerminalTheme, windowTheme: TerminalPreferences.WindowTheme = .auto) -> some View {
+        modifier(ChromeThemeModifier(theme: theme, windowTheme: windowTheme))
+    }
+
+    /// Content on the chrome: the theme's three text levels as the hierarchical foreground styles
+    /// (so `.primary`, `.secondary` and `.tertiary` below are the theme's ink, not the system's
+    /// greys) and the accent as the tint. Apply under a view's `.toolbar`, never above it.
+    func chromeContent() -> some View {
+        modifier(ChromeContentModifier())
+    }
+
+    /// A grouped list or form on the chrome's grouped page, instead of the system's black or grey,
+    /// with the theme's ink (`chromeContent()`).
+    func chromeGrouped() -> some View {
+        scrollContentBackground(.hidden)
+            .background(DS.Palette.groupedPage, ignoresSafeAreaEdges: .all)
+            .chromeContent()
+    }
+
+    /// Rows on the chrome's grouped row surface; apply to each section of a `chromeGrouped()` list.
+    func chromeRows() -> some View {
+        listRowBackground(Rectangle().fill(DS.Palette.groupedRow))
+    }
+
+    /// A sheet's own background on the chrome (iPad form sheets, iPhone page sheets).
+    func chromeSheetBackground() -> some View {
+        presentationBackground(DS.Palette.groupedPage)
+    }
+}
+
+private struct ChromeContentModifier: ViewModifier {
+    @Environment(\.chrome) private var chrome
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(chrome.text, chrome.textSecondary, chrome.textTertiary)
+            .tint(chrome.accentColor)
+    }
+}
+
+public extension ChromePalette {
+    /// The palette for the user's settings, for UIKit and AppKit views that cannot read the
+    /// environment (the key bar, layer-backed marks). `systemScheme` is the trait collection's
+    /// style, used when `window-theme` is System.
+    static func fromPreferences(systemScheme: ColorScheme? = nil, defaults: UserDefaults = .standard) -> ChromePalette {
+        let theme = ThemeCatalog.theme(named: defaults.string(forKey: TerminalPreferences.Key.theme) ?? TerminalPreferences.Default.theme)
+        let windowTheme = defaults.string(forKey: TerminalPreferences.Key.windowTheme).flatMap(TerminalPreferences.WindowTheme.init) ?? .auto
+        let scheme: ColorScheme? = switch windowTheme {
+        case .auto: nil
+        case .system: systemScheme
+        case .light: .light
+        case .dark: .dark
+        }
+        return ChromePalette(theme: theme, scheme: scheme)
+    }
+}
+
+/// Reads the user's theme settings and applies `chromeTheme`: for roots that are not handed the
+/// theme (the Mac Settings window, extra scenes).
+public struct ThemedRoot<Content: View>: View {
+    @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
+    @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
+    let content: Content
+
+    public init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    public var body: some View {
+        content.chromeTheme(ThemeCatalog.theme(named: themeName), windowTheme: windowTheme)
+    }
+}

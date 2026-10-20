@@ -85,7 +85,7 @@ struct WriteToolbar: View {
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("write.cancel")
                 Button { model.onSend() } label: { Label("Send", systemImage: "return") }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .disabled(model.isEmpty)
                     .help("Type it at the prompt and press Return")
                     .accessibilityIdentifier("write.send")

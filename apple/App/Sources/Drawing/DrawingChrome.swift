@@ -183,7 +183,7 @@ struct OverlayToolbar: View {
                 Button { model.onAction(.send(primary)) } label: {
                     Label(model.compact ? "Send" : "Send to \(primary.agent.title)", systemImage: "paperplane.fill")
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.primaryGlass)
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
                 .help("Attach the drawing to \(primary.agent.title)'s prompt as an image (⇧⌘↩)")
                 .accessibilityIdentifier("drawing.send")
@@ -204,7 +204,7 @@ struct OverlayToolbar: View {
                 Label(model.compact ? "Send" : "Send To…", systemImage: "paperplane.fill")
             }
             .menuStyle(.button)
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.primaryGlass)
             .menuIndicator(.hidden)
             .help("Send the drawing to an agent, copy or share it")
             .accessibilityLabel("Send To")
@@ -353,7 +353,7 @@ struct PlacedNotice: View {
                 if model.offersSend, let agent = model.agentName {
                     Text("·").foregroundStyle(.tertiary)
                     Button { model.onSend() } label: { Text("Send to \(agent)") }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .accessibilityIdentifier("drawing.notice.send")
                 }
             }

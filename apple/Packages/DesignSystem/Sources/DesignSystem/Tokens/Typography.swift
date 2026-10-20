@@ -21,6 +21,12 @@ public extension DS {
         public static let sidebarTitle = SwiftUI.Font.subheadline
         public static let sidebarSubtitle = SwiftUI.Font.footnote
         #endif
+        /// Tab strip titles: the Mac's callout (12), one step under the sidebar on touch (15).
+        #if os(macOS)
+        public static let tabTitle = SwiftUI.Font.callout
+        #else
+        public static let tabTitle = SwiftUI.Font.subheadline
+        #endif
         /// Section headers in sidebars and lists (sentence case, never uppercase).
         public static let section = SwiftUI.Font.subheadline.weight(.semibold)
         /// Metadata: ages, counts, shortcuts. Monospaced digits so columns do not jitter.

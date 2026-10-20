@@ -35,36 +35,130 @@ public extension Color {
 }
 
 public extension DS {
-    /// Chrome colors. Chrome is monochrome (system label/fill colors); color is reserved for state
-    /// Ghostty's default palette so the chrome and the terminal read as one surface; light-mode
-    /// variants are darkened to pass 4.5:1 on white.
+    /// Chrome colours. Every one resolves from the window's `ChromePalette` (the active terminal
+    /// under Solarized and Dracula's under Dracula. Chrome is otherwise monochrome: hue is for
+    /// is for state").
     nonisolated enum Palette {
-        /// The brand accent: Ghostty's bright blue (palette 12, #7AA6DA) on dark, darkened for light.
-        /// Used for focus, selection and the single primary action, nothing decorative.
-        public static let accent = Color(light: Color(hex: "#2F6DB5"), dark: Color(hex: "#7AA6DA"))
-        /// A solid selection under white text (the palette's selected row): the accent deepened
-        /// to pass 4.5:1 with white in both modes.
-        public static let selection = Color(light: Color(hex: "#2F6DB5"), dark: Color(hex: "#2E5E91"))
+        /// The theme's accent: its cursor colour when that is a real colour, else its bright blue
+        /// (or the bright magenta or cyan farthest from background and foreground). Ghostty's
+        /// default theme gives #7AA6DA. Focus, selection and the single primary action only.
+        public static let accent = ChromeStyle(.accent)
+        /// A solid selection (the palette's selected row): the accent deepened until
+        /// `onSelection` text reads on it at 4.5:1.
+        public static let selection = ChromeStyle(.selection)
+        public static let onSelection = ChromeStyle(.onSelection)
 
-        /// Your turn: an agent waiting for input, a slow or reconnecting link (Ghostty yellow,
-        public static let attention = Color(light: Color(hex: "#A87A00"), dark: Color(hex: "#F0C674"))
-        /// Agent working. A working agent is a neutral spinner; kept for charts and legacy uses.
-        public static let working = attention
+        /// Your turn: an agent waiting for input, a slow or reconnecting link (the theme's
+        public static let attention = ChromeStyle(.attention)
+        /// Agent working (the theme's magenta). In rows a working agent is a neutral spinner.
+        public static let working = ChromeStyle(.working)
         /// Agent blocked / needs you.
         public static let blocked = attention
-        /// Agent done (Ghostty green, palette 2).
-        public static let done = Color(light: Color(hex: "#4E7A12"), dark: Color(hex: "#B5BD68"))
-        /// Failure (Ghostty red, palette 1).
-        public static let error = Color(light: Color(hex: "#B83A3A"), dark: Color(hex: "#CC6666"))
-        /// Informational (Ghostty blue, palette 4).
-        public static let info = Color(light: Color(hex: "#3F6E99"), dark: Color(hex: "#81A2BE"))
+        /// Done, git added, connected (the theme's green).
+        public static let done = ChromeStyle(.done)
+        /// Failed, git deleted, unreachable (the theme's red).
+        public static let error = ChromeStyle(.error)
+        /// Informational (the theme's blue).
+        public static let info = ChromeStyle(.info)
 
         /// Ghostty's bell border: #FFCC00 at 50 %.
         public static let bell = Color(red: 1, green: 0.8, blue: 0).opacity(0.5)
 
-        /// tab hover 5 % + 13 % backdrop).
-        public static let hoverFill = Color.primary.opacity(0.06)
-        public static let pressedFill = Color.primary.opacity(0.10)
-        public static let selectedFill = Color.primary.opacity(0.10)
+        /// Text: the theme's foreground at 90 / 60 / 40 / 20 %. Window and sheet roots set the
+        /// first three as the hierarchical styles, so `.primary`, `.secondary` and `.tertiary`
+        /// resolve to them as well.
+        public static let text = ChromeStyle(.text)
+        public static let textSecondary = ChromeStyle(.textSecondary)
+        public static let textTertiary = ChromeStyle(.textTertiary)
+        public static let textQuaternary = ChromeStyle(.textQuaternary)
+
+        /// control-hover 5 %).
+        public static let hoverFill = ChromeStyle(.hoverFill)
+        public static let selectedFill = ChromeStyle(.selectedFill)
+        public static let pressedFill = ChromeStyle(.pressedFill)
+
+        /// Lines: the foreground at 10 / 15 / 20 %.
+        public static let hairline = ChromeStyle(.hairline)
+        public static let separator = ChromeStyle(.separator)
+        public static let border = ChromeStyle(.border)
+
+        /// Opaque surfaces: the window base (the terminal's background), the sidebar (fg 5 %),
+        /// cards and popovers (10 %), menus (15 %), grouped lists' page and rows, and the
+        /// terminal grid itself.
+        public static let base = ChromeStyle(.base)
+        public static let sidebar = ChromeStyle(.sidebar)
+        public static let raised = ChromeStyle(.raised)
+        public static let overlay = ChromeStyle(.overlay)
+        public static let groupedPage = ChromeStyle(.groupedPage)
+        public static let groupedRow = ChromeStyle(.groupedRow)
+        public static let terminal = ChromeStyle(.terminal)
+        /// The foreground at full strength, for a one-off opacity (prefer the named levels).
+        public static let ink = ChromeStyle(.ink)
+        /// The theme's ANSI colour `index` (0…15), as the terminal draws it.
+        public static func ansi(_ index: Int) -> ChromeStyle { ChromeStyle(.ansi(index)) }
+    }
+}
+
+/// A chrome colour by name, resolved from the environment's `ChromePalette` when drawn. Usable
+/// wherever a `ShapeStyle` is (`foregroundStyle`, `fill`, `background`, `tint`, `opacity`), with
+/// no `@Environment` at the call site.
+nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
+    public enum Token: Hashable, Sendable {
+        case accent, selection, onSelection
+        case done, error, attention, working, info
+        case text, textSecondary, textTertiary, textQuaternary
+        case hoverFill, selectedFill, pressedFill
+        case hairline, separator, border
+        case base, sidebar, raised, overlay, groupedPage, groupedRow, terminal
+        /// The ink itself (the foreground at full strength), for one-off opacities.
+        case ink
+        /// One of the theme's 16 ANSI colours as the terminal draws it (presence hues, previews).
+        case ansi(Int)
+    }
+
+    public let token: Token
+
+    public init(_ token: Token) {
+        self.token = token
+    }
+
+    public func resolve(in environment: EnvironmentValues) -> Color.Resolved {
+        if case .ansi(let index) = token { return environment.terminalTheme.ansiRGB(index).color.resolve(in: environment) }
+        return environment.chrome.color(token).resolve(in: environment)
+    }
+}
+
+nonisolated public extension ChromePalette {
+    /// The colour for a token.
+    func color(_ token: ChromeStyle.Token) -> Color {
+        switch token {
+        case .accent: accentColor
+        case .selection: selectionColor
+        case .onSelection: onSelectionColor
+        case .done: done.color
+        case .error: error.color
+        case .attention: attention.color
+        case .working: working.color
+        case .info: info.color
+        case .text: text
+        case .textSecondary: textSecondary
+        case .textTertiary: textTertiary
+        case .textQuaternary: textQuaternary
+        case .hoverFill: hoverFill
+        case .selectedFill: selectedFill
+        case .pressedFill: pressedFill
+        case .hairline: hairline
+        case .separator: separator
+        case .border: border
+        case .base: baseColor
+        case .sidebar: sidebarColor
+        case .raised: raisedColor
+        case .overlay: overlayColor
+        case .groupedPage: groupedPageColor
+        case .groupedRow: groupedRowColor
+        case .terminal: terminalColor
+        case .ink: foreground.color
+        case .ansi: foreground.color
+        }
     }
 }

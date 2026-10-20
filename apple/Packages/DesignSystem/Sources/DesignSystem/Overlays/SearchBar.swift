@@ -46,7 +46,7 @@ public struct TerminalSearchBar: View {
                     .padding(.leading, 8)
                     .padding(.trailing, 50)
                     .padding(.vertical, 6)
-                    .background(Color.primary.opacity(0.1), in: .rect(cornerRadius: DS.Radius.field))
+                    .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.field))
                     .focused($isFocused)
                     .overlay(alignment: .trailing) { counter }
                     .onSubmit(onNext)
@@ -66,6 +66,7 @@ public struct TerminalSearchBar: View {
                 Button("Close Search", systemImage: "xmark", action: onClose)
             }
             .buttonStyle(.bar)
+            .chromeContent()
             .padding(8)
             .floatingPanel(cornerRadius: 14)
             .onAppear { isFocused = true }

@@ -48,7 +48,7 @@ struct GrantsView: View {
             } header: {
                 SectionTitle("Active Invites", count: active.count)
             }
-            .raisedRows()
+            .chromeRows()
 
             Section {
                 ForEach(session.devices.sorted { ($0.kind == .owner ? 0 : 1, $1.firstSeenMs) < ($1.kind == .owner ? 0 : 1, $0.firstSeenMs) }, id: \.device) { device in
@@ -64,7 +64,7 @@ struct GrantsView: View {
             } footer: {
                 Text("Revoking an owner device unpairs it. Processes a guest started keep running.")
             }
-            .raisedRows()
+            .chromeRows()
 
             if !ended.isEmpty {
                 Section {
@@ -74,10 +74,10 @@ struct GrantsView: View {
                 } header: {
                     SectionTitle("Ended", count: ended.count)
                 }
-                .raisedRows()
+                .chromeRows()
             }
         }
-        .terminalGrouped()
+        .chromeGrouped()
         .navigationTitle("Access & Grants")
         .refreshable { await session.refreshGrants() }
         .task {
@@ -119,7 +119,7 @@ private struct GrantRow: View {
         let grant = info.grant
         HStack(alignment: .top, spacing: DS.Space.m) {
             Image(systemName: info.revoked ? "xmark.circle" : grant.roles.contains(.driver) ? "keyboard" : grant.roles.contains(.prompter) ? "text.bubble" : "eye")
-                .foregroundStyle(info.revoked ? DS.Palette.error : .secondary)
+                .foregroundStyle(info.revoked ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
                 .frame(width: 22)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
@@ -130,7 +130,7 @@ private struct GrantRow: View {
                         Text("Can invite")
                             .font(DS.Font.badge)
                             .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(.fill.secondary, in: .capsule)
+                            .background(DS.Palette.selectedFill, in: .capsule)
                     }
                 }
                 Text("\(roleWords(grant.roles)) · \(grant.scope.title)")
@@ -256,7 +256,7 @@ struct AuditLogView: View {
                 .labelsHidden()
                 .accessibilityIdentifier("audit-filter")
             }
-            .raisedRows()
+            .chromeRows()
             Section {
                 if session.auditPage == nil {
                     Text("Reading the log…").foregroundStyle(.secondary)
@@ -276,9 +276,9 @@ struct AuditLogView: View {
             } header: {
                 SectionTitle(filter == .all ? "Newest First" : filter.title, count: records.count)
             }
-            .raisedRows()
+            .chromeRows()
         }
-        .terminalGrouped()
+        .chromeGrouped()
         .navigationTitle("Audit Log")
         .searchable(text: $query, prompt: "Filter by person, tool or command")
         .refreshable { await session.loadAudit() }
@@ -406,11 +406,11 @@ private struct AuditRow: View {
         }
     }
 
-    private var tint: Color {
+    private var tint: ChromeStyle {
         switch record.kind {
-        case .approval: record.approval.map { Self.isApproval($0.option) ? DS.Palette.done : DS.Palette.blocked } ?? .secondary
+        case .approval: record.approval.map { Self.isApproval($0.option) ? DS.Palette.done : DS.Palette.blocked } ?? DS.Palette.textSecondary
         case .denied, .revoked: DS.Palette.error
-        default: .secondary
+        default: DS.Palette.textSecondary
         }
     }
 
@@ -440,7 +440,7 @@ private struct AuditRow: View {
             }
         }
         .padding(DS.Space.s + 2)
-        .background(.fill.quaternary, in: .rect(cornerRadius: DS.Radius.control))
+        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
         .padding(.leading, 22 + DS.Space.m)
     }
 

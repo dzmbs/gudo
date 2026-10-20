@@ -48,7 +48,7 @@ struct PortsList: View {
                     Text("Start a server in a pane (`npm run dev`, `python3 -m http.server`) and it shows up here by itself.")
                 }
             }
-            .raisedRows()
+            .chromeRows()
             let other = ports.filter { !$0.isHTTP }
             if !other.isEmpty {
                 Section {
@@ -56,7 +56,7 @@ struct PortsList: View {
                 } header: {
                     SectionTitle("Other ports", count: other.count)
                 }
-                .raisedRows()
+                .chromeRows()
             }
             Section {
                 HStack(spacing: DS.Space.s) {
@@ -77,12 +77,12 @@ struct PortsList: View {
             } header: {
                 SectionTitle("Open")
             }
-            .raisedRows()
+            .chromeRows()
         }
         #if os(iOS)
         .listStyle(.insetGrouped)
         #endif
-        .terminalGrouped()
+        .chromeGrouped()
         .navigationTitle("Ports")
         .navigationSubtitle(model.ports.hostName)
         #if os(iOS)
@@ -169,7 +169,7 @@ struct PortOfferBanner: ViewModifier {
                             .lineLimit(1)
                     }
                     Button("Open") { Task { await model.openPort(port) } }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.primaryGlass)
                         .controlSize(.small)
                         .accessibilityIdentifier("port-offer-open")
                     Button("Dismiss", systemImage: "xmark") { withAnimation(DS.Motion.overlay) { model.ports.dismissOffer() } }

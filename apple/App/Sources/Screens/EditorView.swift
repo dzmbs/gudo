@@ -170,7 +170,7 @@ private struct EditorProgress: View {
                         Button("Close", action: close)
                             .buttonStyle(.glass)
                         Button("Try Again", action: retry)
-                            .buttonStyle(.glassProminent)
+                            .buttonStyle(.primaryGlass)
                             .accessibilityIdentifier("editor-retry")
                     }
                 }
@@ -182,7 +182,7 @@ private struct EditorProgress: View {
                 }
                 .padding(DS.Space.l)
                 .frame(width: 340)
-                .background(theme.raisedBackground, in: .rect(cornerRadius: DS.Radius.panel))
+                .background(theme.surface(0.10), in: .rect(cornerRadius: DS.Radius.panel))
                 Text(footnote)
                     .font(.footnote)
                     .foregroundStyle(theme.foreground.opacity(0.5))
@@ -284,7 +284,6 @@ private struct EditorProgress: View {
 /// a large sheet on the Mac.
 struct EditorPresentation: ViewModifier {
     @Bindable var model: WindowModel
-    @Environment(\.terminalTheme) private var theme
 
     func body(content: Content) -> some View {
         #if os(iOS)
@@ -297,10 +296,10 @@ struct EditorPresentation: ViewModifier {
     }
 
     private var screen: some View {
-        EditorScreen(source: model.editor) { model.closeEditor() }
-            .environment(model)
-            .environment(\.terminalTheme, theme)
-            .preferredColorScheme(theme.colorScheme)
+        ThemedRoot {
+            EditorScreen(source: model.editor) { model.closeEditor() }
+                .environment(model)
+        }
     }
 }
 

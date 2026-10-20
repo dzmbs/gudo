@@ -811,14 +811,14 @@ final class AnchorMark: PlatformView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
-        backgroundColor = UIColor(DS.Palette.accent)
+        backgroundColor = UIColor(ChromePalette.fromPreferences().accentColor)
         layer.cornerRadius = 1
     }
     #else
     override init(frame: CGRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(DS.Palette.accent).cgColor
+        layer?.backgroundColor = NSColor(ChromePalette.fromPreferences().accentColor).cgColor
         layer?.cornerRadius = 1
     }
 

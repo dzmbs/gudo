@@ -77,11 +77,11 @@ nonisolated public enum ConnectionState: Hashable, Sendable {
     }
 
     /// The glyph's colour: amber for "your turn", red for failure, otherwise the chrome's own.
-    public var color: Color {
+    public var color: ChromeStyle {
         switch self {
         case .slow, .reconnecting: DS.Palette.attention
         case .needsAttention, .unreachable: DS.Palette.error
-        default: Color.secondary
+        default: DS.Palette.textSecondary
         }
     }
 }
@@ -257,10 +257,10 @@ private struct ConnectionNotice: View {
                 .lineLimit(1)
         }
         .font(DS.Font.overlay)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DS.Palette.textSecondary)
         .padding(.horizontal, DS.Space.m)
         .padding(.vertical, DS.Space.xs + 2)
-        .background(.regularMaterial, in: Capsule())
+        .floatingCapsule()
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("connection-notice")
     }
@@ -287,12 +287,13 @@ private struct ConnectionCard: View {
                 Button("Disconnect", action: onDisconnect)
                     .buttonStyle(.glass)
                 Button(card.action, action: onRetry)
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.primaryGlass)
                     .keyboardShortcut(.defaultAction)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .controlSize(.regular)
         }
+        .chromeContent()
         .padding(DS.Space.l)
         .frame(width: 340)
         .floatingPanel(cornerRadius: 22)
