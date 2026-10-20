@@ -69,6 +69,8 @@ public final class HostsModel {
     @ObservationIgnored private lazy var knownHosts = KnownHosts.load(from: secrets)
     @ObservationIgnored var dialer: DaemonDialer?
     @ObservationIgnored var joinDialer: DaemonDialer?
+    /// Knocks with a knock invite (`knockInvite`); tests replace it.
+    @ObservationIgnored var knocker: Knocker?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
     public init(secrets: any SecretStore, repository: HostRepository, configuration: Configuration = .init()) {
@@ -186,6 +188,13 @@ public final class HostsModel {
         return { ticket, listener in
             try DaemonClient.connectWith(ticket: ticket, config: config, options: options, listener: listener)
         }
+    }
+
+    /// This device's key (created on first use).
+    func deviceKeyData() throws -> Data {
+        let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
+        deviceKey = key
+        return key
     }
 
     /// Dials with an invite (`DaemonClient.join`): the device key proves who redeemed it.
@@ -675,11 +684,14 @@ public enum HelperUpdateError: Error, Equatable, LocalizedError {
 public enum PairingError: Error, Equatable, LocalizedError {
     case refused(String)
     case timedOut
+    /// The owner turned a knock away.
+    case turnedAway
 
     public var errorDescription: String? {
         switch self {
         case .refused(let reason): "The host refused this device (\(reason)). Ask it for a new ticket (its helper's `pair` command)."
         case .timedOut: "The host did not answer. Check that it is running and reachable."
+        case .turnedAway: "The owner didn't let you in."
         }
     }
 }

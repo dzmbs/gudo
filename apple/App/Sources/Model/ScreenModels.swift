@@ -1,5 +1,7 @@
 import DesignSystem
 import Foundation
+import HostKit
+import UnnamedCore
 
 // Data the upcoming screens show, behind protocols. The views only read these types; the wiring
 // (daemon, SSH, agent hooks) replaces the mocks in MockData.swift without touching a view.
@@ -182,6 +184,41 @@ protocol AgentFeed: AnyObject, Observable {
     /// Starts Claude Code or Codex in a new pane; returns a note when the first prompt could not
     /// be typed (the pane runs either way).
     func launch(_ request: AgentLaunchRequest) async throws -> String?
+    /// People asking to join hosts this device owns (multiplayer knocks).
+    var knocks: [KnockItem] { get }
+    /// What the session's approval rules say about answering this request here.
+    func approval(_ id: AgentItem.ID) -> ApprovalContext?
+    /// Claims a request ("I'll take this one"), or releases the claim.
+    func claim(_ id: AgentItem.ID, _ claim: Bool)
+}
+
+extension AgentFeed {
+    var knocks: [KnockItem] { [] }
+    func approval(_ id: AgentItem.ID) -> ApprovalContext? { nil }
+    func claim(_ id: AgentItem.ID, _ claim: Bool) {}
+}
+
+/// Someone knocking on one of this device's hosts.
+struct KnockItem: Identifiable {
+    var id: String { "\(hostId)/\(knock.knockId)" }
+    var hostId: String
+    var hostName: String
+    var knock: Knock
+    var session: MultiplayerSession
+}
+
+/// An approval request under its session's rules, as this device sees it.
+nonisolated struct ApprovalContext: Equatable, Sendable {
+    /// Why this device may not approve (it may still deny), or nil.
+    var block: String?
+    /// "Alex approved · needs a second person", "Claimed by Bob".
+    var progress: String?
+    /// The session asks approvers to claim requests.
+    var claimMode: Bool
+    /// This principal holds the claim.
+    var claimedByMe: Bool
+    /// This principal's approval is already counted (two-person rule).
+    var approvedAlready: Bool
 }
 
 // MARK: - Panes: status, links, search

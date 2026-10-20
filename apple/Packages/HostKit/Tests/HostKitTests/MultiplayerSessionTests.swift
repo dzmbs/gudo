@@ -16,6 +16,11 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         var revoked: [RevokeTarget] = []
         var takeOutcome: LeaseOutcome = .granted(lease: Lease(paneId: 1, holder: "aa", sinceMs: 0, mode: .leased))
         var promptError: MultiplayerError?
+        var admitted: [(UInt64, [Role], Bool)] = []
+        var denied: [UInt64] = []
+        var policies: [(UInt64, ApprovalPolicy)] = []
+        var claims: [(UInt64, Bool)] = []
+        var policyError: MultiplayerError?
     }
     let state = Mutex(State())
 
@@ -57,6 +62,26 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         return UInt32(text.count)
     }
     func audit(after: UInt64?, limit: UInt32) async throws -> AuditPage { AuditPage(records: [], total: 0, chainOk: true) }
+    func pendingKnocks() -> [Knock] { [] }
+    func admitKnock(knockId: UInt64, roles: [Role], sinceJoin: Bool, ttlSecs: UInt64?) async throws -> GrantInfo {
+        state.withLock { $0.admitted.append((knockId, roles, sinceJoin)) }
+        return GrantInfo(
+            grant: Grant(grantId: "g", issuer: "d", roles: roles, scope: .daemon, issuedAtMs: 0, expiresMs: nil, maxUses: 1, bind: nil, delegate: false, label: "Kim"),
+            parent: nil, bound: [], revoked: false)
+    }
+    func denyKnock(knockId: UInt64) async throws { state.withLock { $0.denied.append(knockId) } }
+    func approvalPolicyCached() -> ApprovalPolicy? { nil }
+    func approvalStatuses() -> [ApprovalStatus] { [] }
+    func setApprovalPolicy(sessionId: UInt64, policy: ApprovalPolicy) async throws -> ApprovalPolicy {
+        if let error = state.withLock({ $0.policyError }) { throw error }
+        state.withLock { $0.policies.append((sessionId, policy)) }
+        return policy
+    }
+    func claimApproval(requestId: UInt64, claim: Bool) async throws -> ApprovalStatus {
+        state.withLock { $0.claims.append((requestId, claim)) }
+        return ApprovalStatus(paneId: 1, requestId: requestId, risk: .any, mode: .claim, approvals: [],
+                              needed: 1, claimedBy: claim ? ApprovalVote(actor: guestActor, name: "Mira", atMs: 1) : nil)
+    }
 }
 
 private let ownerActor = Actor(principal: "aa", device: String(repeating: "a", count: 64))
@@ -210,6 +235,106 @@ private func settle(_ condition: () -> Bool) async throws {
         // A scope that is not available falls back to the host.
         draft.scope = .pane
         #expect(draft.options(inviter: "A", session: nil, tab: nil, pane: nil).scope == .daemon)
+    }
+
+    @Test func knocksArriveAndAreAnswered() async throws {
+        let fake = FakeMultiplayerClient()
+        let session = MultiplayerSession()
+        session.attach(fake)
+        fake.push(.joined(info: info(ownerActor, "Alex", [.owner])))
+        let kim = Knock(knockId: 7, actor: guestActor, name: "guest-bbbbbb", grantId: "g", roles: [.viewer], scope: .daemon, atMs: 1)
+        fake.push(.knockAdded(knock: kim))
+        try await settle { session.knocks.count == 1 }
+        // A rename replaces the entry rather than adding one.
+        var renamed = kim
+        renamed.name = "Kim Lee"
+        fake.push(.knockAdded(knock: renamed))
+        try await settle { session.knocks.first?.name == "Kim Lee" }
+        #expect(session.knocks.count == 1)
+
+        await session.admit(renamed, roles: [.viewer, .driver], sinceJoin: true)
+        #expect(session.knocks.isEmpty)
+        #expect(fake.state.withLock { $0.admitted.map { "\($0.0) \(roleWords($0.1)) \($0.2)" } } == ["7 Driver true"])
+
+        let lou = Knock(knockId: 8, actor: guestActor, name: "Lou", grantId: "g", roles: [.viewer], scope: .daemon, atMs: 2)
+        fake.push(.knockAdded(knock: lou))
+        try await settle { session.knocks.count == 1 }
+        await session.turnAway(lou)
+        #expect(fake.state.withLock { $0.denied } == [8])
+        // Someone who gave up disappears by themselves.
+        fake.push(.knockAdded(knock: lou))
+        try await settle { session.knocks.count == 1 }
+        fake.push(.knockGone(knockId: 8, outcome: .withdrawn, by: nil))
+        try await settle { session.knocks.isEmpty }
+    }
+
+    @Test func approvalRulesExplainWhatAGuestMayAnswer() async throws {
+        let fake = FakeMultiplayerClient()
+        let session = MultiplayerSession()
+        session.attach(fake)
+        fake.push(.joined(info: info(guestActor, "Mira", [.viewer, .approver], grant: "g1")))
+        try await settle { session.me != nil }
+        #expect(session.approvalPolicy == .standard)
+        #expect(session.approvalBlock(requestId: 1, risk: .any) == nil)
+
+        fake.push(.approvalPolicy(sessionId: 1, policy: ApprovalPolicy(mode: .anyApprover, maxRisk: .edits)))
+        try await settle { session.approvalPolicy.maxRisk == .edits }
+        #expect(session.approvalBlock(requestId: 1, risk: .any) == "Allowing a command needs the owner here.")
+        #expect(session.approvalBlock(requestId: 1, risk: .edits) == nil)
+
+        fake.push(.approvalPolicy(sessionId: 1, policy: ApprovalPolicy(mode: .ownerOnly, maxRisk: .any)))
+        try await settle { session.approvalPolicy.mode == .ownerOnly }
+        #expect(session.approvalBlock(requestId: 1, risk: .readOnly) == "Only the owner answers approvals here.")
+
+        // Two people: the first approval is shown until the second arrives, then cleared.
+        fake.push(.approvalPolicy(sessionId: 1, policy: ApprovalPolicy(mode: .twoPerson, maxRisk: .any)))
+        let vote = ApprovalVote(actor: ownerActor, name: "Alex", atMs: 1)
+        fake.push(.approvalStatus(status: ApprovalStatus(paneId: 1, requestId: 4, risk: .any, mode: .twoPerson, approvals: [vote], needed: 2, claimedBy: nil)))
+        try await settle { session.approvalStatuses[4] != nil }
+        #expect(session.approvalProgress(requestId: 4) == "Alex approved · needs a second person")
+        #expect(!session.approvedAlready(requestId: 4))
+        fake.push(.decided(decided: Decided(paneId: 1, requestId: 4, optionId: 0, decidedBy: guestActor, atMs: 2)))
+        try await settle { session.approvalStatuses[4] == nil }
+
+        // Claims: someone else's claim blocks this approver; their own does not.
+        fake.push(.approvalPolicy(sessionId: 1, policy: ApprovalPolicy(mode: .claim, maxRisk: .any)))
+        fake.push(.approvalStatus(status: ApprovalStatus(paneId: 1, requestId: 5, risk: .any, mode: .claim, approvals: [], needed: 1, claimedBy: vote)))
+        try await settle { session.approvalStatuses[5] != nil }
+        #expect(session.approvalBlock(requestId: 5, risk: .any) == "Alex claimed this request.")
+        #expect(session.approvalProgress(requestId: 5) == "Claimed by Alex")
+        await session.claim(6)
+        #expect(session.approvalProgress(requestId: 6) == "You claimed this")
+        #expect(fake.state.withLock { $0.claims.map(\.0) } == [6])
+    }
+
+    @Test func theOwnerSetsTheRulesAndARefusalRollsBack() async throws {
+        let fake = FakeMultiplayerClient()
+        let session = MultiplayerSession()
+        session.attach(fake)
+        fake.push(.joined(info: info(ownerActor, "Alex", [.owner])))
+        try await settle { session.me != nil }
+        let two = ApprovalPolicy(mode: .twoPerson, maxRisk: .edits)
+        await session.setApprovalPolicy(two, session: 3)
+        #expect(session.approvalPolicy == two)
+        #expect(fake.state.withLock { $0.policies.map(\.0) } == [3])
+        // Owners are never held back.
+        #expect(session.approvalBlock(requestId: 1, risk: .any) == nil)
+        fake.state.withLock { $0.policyError = .Forbidden(message: "only the host's owner sets approval rules") }
+        await session.setApprovalPolicy(.standard, session: 3)
+        #expect(session.approvalPolicy == two)
+        #expect(session.notice?.isFailure == true)
+    }
+
+    @Test func inviteDraftCarriesKnockAndHistory() {
+        var draft = InviteDraft()
+        #expect(draft.sinceJoin && !draft.knock)
+        draft.knock = true
+        draft.sinceJoin = false
+        let options = draft.options(inviter: "Alex", session: 1, tab: nil, pane: nil)
+        #expect(options.knock && !options.sinceJoin)
+        // A knock link names nobody: the knocker says who they are.
+        #expect(options.label.isEmpty)
+        #expect(draft.summary.hasSuffix("asks you first"))
     }
 
     @Test func promptRefusalsAndRevocationReadWell() async throws {
