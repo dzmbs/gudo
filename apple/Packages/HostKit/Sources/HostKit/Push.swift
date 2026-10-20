@@ -87,8 +87,8 @@ extension HostsModel {
         else { throw HostError.missingSecret("pairing for this host") }
         let key = try DeviceIdentity.load(from: secrets)
         return try await sendPushAction(
-            ticket: ticket, config: ClientConfig(secretKey: key, relay: .default, mirrorVt: false),
-            options: ConnectOptions(relayCaDer: []), token: token,
+            ticket: ticket, config: clientConfig(key, mirrorVt: false),
+            options: relaySettings.connectOptions(askpass: false), token: token,
             decision: approve ? .approve : .deny, timeoutMs: UInt64(timeout / .milliseconds(1)))
     }
 }

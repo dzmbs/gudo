@@ -3,6 +3,7 @@
 use std::net::TcpListener as StdTcpListener;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, ReadExactError, RecvStream, SendStream, presets};
@@ -58,29 +59,96 @@ pub(crate) async fn recv<T: DeserializeOwned>(
 
 async fn bind(inner: &Inner) -> Result<Endpoint, ConnError> {
     let key: [u8; 32] = inner.config.secret_key.as_slice().try_into().map_err(net)?;
-    endpoint_builder(inner.config.relay, &inner.relays, &inner.options)?
+    let options = lock(&inner.net).1.clone();
+    endpoint_builder(&route(inner), &options)?
         .secret_key(iroh::SecretKey::from_bytes(&key))
         .bind()
         .await
         .map_err(net)
 }
 
-/// An endpoint builder for dialling a daemon whose ticket says `relays`. The client's own
-/// `Disabled` wins (the app's local-only switch); otherwise the daemon's choice does.
+/// Binds an endpoint, retrying until it works (a bad relay URL in the settings keeps failing
+/// until they change).
+async fn bind_until_ok(inner: &Inner) -> Endpoint {
+    loop {
+        inner.rebind.store(false, Ordering::SeqCst);
+        match bind(inner).await {
+            Ok(ep) => return ep,
+            Err(e) => {
+                inner.emit(ClientEvent::Disconnected {
+                    reason: format!("binding endpoint: {e}"),
+                });
+                let _ = tokio::time::timeout(MAX_BACKOFF, inner.reconnect.notified()).await;
+            }
+        }
+    }
+}
+
+fn route(inner: &Inner) -> Route {
+    let net = lock(&inner.net);
+    Route::new(net.0, &inner.relays, &net.1)
+}
+
+/// How to reach a daemon: what the client asks for (local only, its own relays) over what
+/// the daemon's ticket says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// Direct addresses only: no relay, no address lookup.
+    Direct,
+    /// The default relays (n0 preset) and the daemon's home relay.
+    Default,
+    /// Only these relays.
+    Custom {
+        urls: Vec<String>,
+        auth_token: Option<String>,
+        /// The client's own relays (`ConnectOptions::relay_urls`): the ticket's home relay
+        /// is not dialled either.
+        own: bool,
+    },
+}
+
+impl Route {
+    /// The client's `Disabled` wins (the app's local-only switch), then a local-only daemon,
+    /// then the client's own relays, then the daemon's choice.
+    pub(crate) fn new(
+        mode: RelayMode,
+        relays: &proto::TicketRelays,
+        options: &crate::ConnectOptions,
+    ) -> Self {
+        use proto::TicketRelays;
+        match (mode, relays) {
+            (RelayMode::Disabled, _) | (_, TicketRelays::Disabled) => Self::Direct,
+            _ if !options.relay_urls.is_empty() => Self::Custom {
+                urls: options.relay_urls.clone(),
+                auth_token: options.relay_auth_token.clone(),
+                own: true,
+            },
+            (RelayMode::Default, TicketRelays::Default) => Self::Default,
+            (RelayMode::Default, TicketRelays::Custom { urls, auth_token }) => Self::Custom {
+                urls: urls.clone(),
+                auth_token: auth_token.clone(),
+                own: false,
+            },
+        }
+    }
+}
+
+/// An endpoint builder for dialling along `route`, trusting `options.relay_ca_der` too.
 pub(crate) fn endpoint_builder(
-    mode: RelayMode,
-    relays: &proto::TicketRelays,
+    route: &Route,
     options: &crate::ConnectOptions,
 ) -> Result<iroh::endpoint::Builder, ConnError> {
-    use proto::TicketRelays;
-    let mut builder = match (mode, relays) {
-        (RelayMode::Disabled, _) | (_, TicketRelays::Disabled) => {
-            Endpoint::builder(presets::Minimal)
-        }
-        (RelayMode::Default, TicketRelays::Default) => Endpoint::builder(presets::N0),
-        (RelayMode::Default, TicketRelays::Custom { urls, auth_token }) => {
+    let mut builder = match route {
+        Route::Direct => Endpoint::builder(presets::Minimal),
+        Route::Default => Endpoint::builder(presets::N0),
+        Route::Custom {
+            urls,
+            auth_token,
+            own,
+        } => {
+            let whose = if *own { "relay settings" } else { "ticket" };
             let map = iroh::RelayMap::try_from_iter(urls.iter().map(String::as_str))
-                .map_err(|e| ConnError::Net(format!("relay urls in the ticket: {e}")))?;
+                .map_err(|e| ConnError::Net(format!("relay urls in the {whose}: {e}")))?;
             let map = match auth_token {
                 Some(token) => map.with_auth_token(token.clone()),
                 None => map,
@@ -99,28 +167,31 @@ pub(crate) fn endpoint_builder(
 }
 
 fn daemon_addr(inner: &Inner) -> Result<EndpointAddr, ConnError> {
-    ticket_addr(&inner.ticket, inner.config.relay, &inner.relays)
+    ticket_addr(&inner.ticket, &route(inner))
 }
 
-/// Where to dial the ticket's daemon: its direct addresses, plus its home relay (and, for
-/// self-hosted relays, the others it may move to) unless relays are off.
+/// Where to dial the ticket's daemon: its direct addresses, plus the relays `route` allows
+/// (the daemon's home relay, and for self-hosted relays the others it may move to).
 pub(crate) fn ticket_addr(
     ticket: &proto::Ticket,
-    mode: RelayMode,
-    relays: &proto::TicketRelays,
+    route: &Route,
 ) -> Result<EndpointAddr, ConnError> {
     let id = EndpointId::from_bytes(&ticket.daemon_id.0).map_err(net)?;
     let mut addr = EndpointAddr::new(id);
     for a in &ticket.addrs {
         addr = addr.with_ip_addr(*a);
     }
-    if mode == RelayMode::Disabled || *relays == proto::TicketRelays::Disabled {
-        return Ok(addr);
-    }
-    let mut urls: Vec<&str> = ticket.relay_url.as_deref().into_iter().collect();
-    if let proto::TicketRelays::Custom { urls: custom, .. } = relays {
-        urls.extend(custom.iter().map(String::as_str));
-    }
+    let home = ticket.relay_url.as_deref();
+    let urls: Vec<&str> = match route {
+        Route::Direct => vec![],
+        Route::Default => home.into_iter().collect(),
+        Route::Custom { urls, own, .. } => (!own)
+            .then_some(home)
+            .flatten()
+            .into_iter()
+            .chain(urls.iter().map(String::as_str))
+            .collect(),
+    };
     for url in urls {
         if let Ok(url) = RelayUrl::from_str(url) {
             addr = addr.with_relay_url(url);
@@ -131,23 +202,19 @@ pub(crate) fn ticket_addr(
 
 /// Keeps a connection up for the client's lifetime.
 pub(crate) async fn supervise(inner: Arc<Inner>) {
-    let endpoint = loop {
-        match bind(&inner).await {
-            Ok(ep) => break ep,
-            Err(e) => {
-                inner.emit(ClientEvent::Disconnected {
-                    reason: format!("binding endpoint: {e}"),
-                });
-                tokio::time::sleep(MAX_BACKOFF).await;
-            }
-        }
-    };
+    let mut endpoint = bind_until_ok(&inner).await;
     *lock(&inner.endpoint) = Some(endpoint.clone());
     let mut backoff = Duration::from_millis(100);
     loop {
         if *lock(&inner.paused) {
             inner.reconnect.notified().await;
             continue;
+        }
+        if inner.rebind.load(Ordering::SeqCst) {
+            // The relay settings changed: a new endpoint built from them.
+            endpoint.close().await;
+            endpoint = bind_until_ok(&inner).await;
+            *lock(&inner.endpoint) = Some(endpoint.clone());
         }
         match connect_once(&inner, &endpoint).await {
             Ok(conn) => {
@@ -892,4 +959,109 @@ async fn forward_one(
     };
     let _ = tokio::join!(up, down);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use proto::TicketRelays;
+
+    use super::*;
+    use crate::ConnectOptions;
+
+    const HOME: &str = "https://home.example.net/";
+    const OWN: &str = "https://relay.example.com/";
+
+    fn ticket() -> proto::Ticket {
+        proto::Ticket {
+            v: proto::Ticket::VERSION,
+            daemon_id: proto::DaemonId(*iroh::SecretKey::from_bytes(&[7; 32]).public().as_bytes()),
+            addrs: vec!["192.168.1.20:47011".parse().unwrap()],
+            relay_url: Some(HOME.into()),
+            principal: proto::PrincipalId([1; 16]),
+            secret: proto::PairingSecret([2; 16]),
+            expires: proto::UnixMillis(0),
+        }
+    }
+
+    fn own() -> ConnectOptions {
+        ConnectOptions {
+            relay_urls: vec![OWN.into()],
+            relay_auth_token: Some("token".into()),
+            ..ConnectOptions::default()
+        }
+    }
+
+    fn relays(route: &Route) -> Vec<String> {
+        let addr = ticket_addr(&ticket(), route).unwrap();
+        assert_eq!(
+            addr.ip_addrs().count(),
+            1,
+            "direct addresses are always dialled"
+        );
+        addr.relay_urls().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn local_only_wins_over_everything() {
+        let custom = TicketRelays::Custom {
+            urls: vec![HOME.into()],
+            auth_token: None,
+        };
+        for relays in [TicketRelays::Default, custom, TicketRelays::Disabled] {
+            assert_eq!(
+                Route::new(RelayMode::Disabled, &relays, &own()),
+                Route::Direct
+            );
+        }
+        // A local-only daemon is on no relay: the device's own relays cannot reach it.
+        assert_eq!(
+            Route::new(RelayMode::Default, &TicketRelays::Disabled, &own()),
+            Route::Direct
+        );
+        assert!(relays(&Route::Direct).is_empty());
+    }
+
+    #[test]
+    fn the_devices_own_relays_replace_the_tickets() {
+        let route = Route::new(RelayMode::Default, &TicketRelays::Default, &own());
+        assert_eq!(
+            route,
+            Route::Custom {
+                urls: vec![OWN.into()],
+                auth_token: Some("token".into()),
+                own: true
+            }
+        );
+        // Only the device's relay, not the daemon's home relay.
+        assert_eq!(relays(&route), vec![OWN.to_string()]);
+        assert!(endpoint_builder(&route, &own()).is_ok());
+    }
+
+    #[test]
+    fn otherwise_the_ticket_decides() {
+        let none = ConnectOptions::default();
+        let route = Route::new(RelayMode::Default, &TicketRelays::Default, &none);
+        assert_eq!(route, Route::Default);
+        assert_eq!(relays(&route), vec![HOME.to_string()]);
+        let custom = TicketRelays::Custom {
+            urls: vec![OWN.into()],
+            auth_token: None,
+        };
+        let route = Route::new(RelayMode::Default, &custom, &none);
+        assert!(matches!(route, Route::Custom { own: false, .. }));
+        assert_eq!(relays(&route), vec![HOME.to_string(), OWN.to_string()]);
+    }
+
+    #[test]
+    fn a_bad_relay_url_is_an_error_not_a_panic() {
+        let options = ConnectOptions {
+            relay_urls: vec!["not a url".into()],
+            ..ConnectOptions::default()
+        };
+        let route = Route::new(RelayMode::Default, &TicketRelays::Default, &options);
+        let Err(err) = endpoint_builder(&route, &options) else {
+            panic!("a bad relay url is rejected");
+        };
+        assert!(err.to_string().contains("relay settings"), "{err}");
+    }
 }
