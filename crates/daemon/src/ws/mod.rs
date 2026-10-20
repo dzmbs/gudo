@@ -405,7 +405,8 @@ pub(crate) async fn handle(
 
 // --- hooks from the rest of the daemon ------------------------------------------------------
 
-/// A long command finished unseen.
+/// A long command finished unseen. The body says how long it ran and ends with its last line
+/// of output, the line that usually says what happened.
 pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
     let duration = mark.finished.map_or(0, |f| f.duration_ms) / 1000;
     let status = match mark.finished.and_then(|f| f.exit) {
@@ -414,15 +415,47 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
         None => "finished".to_owned(),
     };
     let command = mark.command.clone().unwrap_or_else(|| "command".into());
+    let last_line = core
+        .pane(mark.pane_id)
+        .and_then(|entry| entry.pane.command_output(Some(mark.command_id)).ok())
+        .and_then(|output| last_output_line(&output.text));
+    let body = match last_line {
+        Some(line) => format!("after {} · {line}", run_time(duration)),
+        None => format!("after {}", run_time(duration)),
+    };
     let update = core.ws.attention.add(NewItem {
         pane_id: mark.pane_id,
         session_id: lock(&core.layout).session_of_pane(mark.pane_id),
         kind: AttentionKind::CommandFinished(mark.clone()),
         title: format!("{command} {status}"),
-        body: format!("after {duration} s"),
+        body,
         while_viewed: false,
     });
     core.emit(Event::Attention(update));
+}
+
+/// Longest last line put in a notification body, in characters.
+const LAST_LINE_CHARS: usize = 120;
+
+/// The last line of output with something on it, trimmed and cut to [`LAST_LINE_CHARS`].
+fn last_output_line(text: &str) -> Option<String> {
+    let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    let line: String = line.chars().filter(|c| !c.is_control()).collect();
+    if line.chars().count() > LAST_LINE_CHARS {
+        let cut: String = line.chars().take(LAST_LINE_CHARS - 1).collect();
+        Some(format!("{}…", cut.trim_end()))
+    } else {
+        Some(line)
+    }
+}
+
+/// A run time in the app's words: `42 s`, `3 min 5 s`, `2 h 4 min`.
+fn run_time(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} s"),
+        60..3600 => format!("{} min {} s", secs / 60, secs % 60),
+        _ => format!("{} h {} min", secs / 3600, secs % 3600 / 60),
+    }
 }
 
 /// What an agent's arbiter asked to notify about.
@@ -499,5 +532,27 @@ pub(crate) fn pane_focused(core: &Core, pane: PaneId) {
     };
     if let Some(update) = core.ws.attention.mark(&seen) {
         core.emit(Event::Attention(update));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_body_parts() {
+        assert_eq!(
+            last_output_line("Compiling x\nerror: could not compile\n\n  \n").as_deref(),
+            Some("error: could not compile")
+        );
+        assert_eq!(last_output_line("\n \n"), None);
+        assert_eq!(last_output_line("\tok\t").as_deref(), Some("ok"));
+        let long = "x".repeat(300);
+        let cut = last_output_line(&long).unwrap();
+        assert_eq!(cut.chars().count(), LAST_LINE_CHARS);
+        assert!(cut.ends_with('…'));
+        assert_eq!(run_time(42), "42 s");
+        assert_eq!(run_time(185), "3 min 5 s");
+        assert_eq!(run_time(7440), "2 h 4 min");
     }
 }

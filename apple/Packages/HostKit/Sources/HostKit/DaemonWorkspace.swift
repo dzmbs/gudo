@@ -106,6 +106,10 @@ public final class DaemonWorkspace {
     @ObservationIgnored private weak var hub: WorkspaceEventHub?
     @ObservationIgnored private var portObservers: [UUID: ([PortInfo]) -> Void] = [:]
     @ObservationIgnored private var attentionObservers: [UUID: (AttentionUpdate) -> Void] = [:]
+    @ObservationIgnored private var markObservers: [UUID: (CommandMark) -> Void] = [:]
+    /// Each pane's running shell command (OSC 133), from the attached session's command
+    /// marks and the command lists screens ask for; the sidebar shows how long it has run.
+    public private(set) var runningCommands: [UInt64: CommandMark] = [:]
 
     private static let log = Logger(subsystem: Log.subsystem, category: "workspace")
 
@@ -163,9 +167,36 @@ public final class DaemonWorkspace {
         return id
     }
 
+    /// Calls `handler` with every command start and end in the attached session's panes.
+    @discardableResult
+    public func observeCommandMarks(_ handler: @escaping (CommandMark) -> Void) -> UUID {
+        let id = UUID()
+        markObservers[id] = handler
+        return id
+    }
+
     public func removeObserver(_ id: UUID) {
         portObservers[id] = nil
         attentionObservers[id] = nil
+        markObservers[id] = nil
+    }
+
+    // MARK: Commands (shell integration)
+
+    /// A pane's command list was read: what it says runs now replaces what was known (after a
+    /// reconnect, marks pushed while away are missed).
+    public func noteCommands(_ list: CommandList, pane: UInt64) {
+        let running = CommandBlocks.running(list)
+        if runningCommands[pane] != running { runningCommands[pane] = running }
+    }
+
+    func noteMark(_ mark: CommandMark) {
+        if mark.finished == nil {
+            runningCommands[mark.paneId] = mark
+        } else if runningCommands[mark.paneId]?.commandId == mark.commandId {
+            runningCommands[mark.paneId] = nil
+        }
+        for observer in markObservers.values { observer(mark) }
     }
 
     // MARK: Events
@@ -254,6 +285,10 @@ public final class DaemonWorkspace {
         case .searchResult(let id, _, _, _), .links(let id, _, _, _), .commands(let id, _, _, _),
              .commandOutput(let id, _, _, _):
             pending.removeValue(forKey: id)?.resume(returning: event)
+        case .commandMark(let mark):
+            noteMark(mark)
+        case .paneClosed(let pane):
+            runningCommands[pane] = nil
         case .disconnected:
             // Requests in flight get no answer on this connection.
             let waiting = pending
@@ -399,7 +434,10 @@ public final class DaemonWorkspace {
         let api = try client()
         let event = await request { api.commands(paneId: pane) }
         guard case .commands(_, _, let list, let error) = event else { throw HostError.notConnected }
-        if let list { return list }
+        if let list {
+            noteCommands(list, pane: pane)
+            return list
+        }
         throw PaneRpcError(error)
     }
 

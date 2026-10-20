@@ -130,7 +130,9 @@ app (`ClientEvent::PaneHistory`) for its own decoder.
   sent at start and end. OSC 7 accepts both `file://` and `kitty-shell-cwd://`.
 - **Finished while unseen**: a command running at least `Config::long_command` (10 s) that ends
   while no connected client has the pane focused or visible is pushed to every client as
-  `CommandFinishedUnseen` (for a local notification now, push later).
+  `CommandFinishedUnseen` (for a local notification now, push later). Its attention item reads
+  "cargo build failed (101)" / "after 1 min 12 s · error: could not compile `x`": the body ends
+  with the last non-empty line of the command's output (at most 120 characters).
 - **Echo prediction**: `133;A`/`B` set "at prompt", `C` clears it; that is the S6 rule's second
   signal for raw-mode shells.
 - **Requests**: `Commands` (every remembered command with its prompt/output/end rows),

@@ -209,6 +209,10 @@ struct NewTaskSheet: View {
                 hostID = hostID ?? (hosts.first { $0.id == model.workspace?.hostId } ?? hosts.first)?.id
                 repoPath = repoPath ?? model.git.worktree?.repo ?? repos.first?.path
                 worktree = repo != nil
+                if let seeded = model.newTaskPrompt {
+                    model.newTaskPrompt = nil
+                    prompt = seeded
+                }
                 isPromptFocused = true
             }
             .onChange(of: hosts.map(\.id)) { _, ids in

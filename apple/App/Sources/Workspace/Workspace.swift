@@ -439,6 +439,8 @@ final class Workspace {
         }
         applyKeyboardSettings(to: pane)
         PaneDrawing.attach(to: pane, workspace: self)
+        // Shell command marks: gutter stripes, the command menu, ⌘↑/⌘↓ between prompts.
+        PaneCommandMarks.attach(to: pane, workspace: self)
         #if os(iOS)
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar

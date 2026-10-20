@@ -88,6 +88,20 @@ public final class TerminalSurface {
     private var lastImages: [InlineImagePlacement] = []
     private var imagesDirty = false
 
+    /// Stripes in the left gutter (shell command marks), asked for before every frame so they
+    /// follow pinned rows. Call `invalidateGutterMarks()` when they change without the terminal
+    /// changing.
+    public var gutterMarks: (() -> [GutterMark])? {
+        didSet { invalidateGutterMarks() }
+    }
+
+    /// The marks drawn in the last frame and the rows they cover in view points: the full
+    /// width of the view (a command's rows, for hit testing), clipped to the grid.
+    public private(set) var gutterMarkFrames: [(mark: GutterMark, rect: CGRect)] = []
+    private var gutterTextures = GutterTextures()
+    private var lastMarks: [GutterMark] = []
+    private var marksDirty = false
+
     private let renderer: MetalRenderer
     private var fonts: FontGrid?
     private let state = RenderState()
@@ -467,6 +481,59 @@ public final class TerminalSurface {
         return MTLScissorRect(x: x, y: y, width: width, height: height)
     }
 
+    // MARK: Gutter marks
+
+    /// The gutter marks changed (added, finished, re-anchored): draw again.
+    public func invalidateGutterMarks() {
+        marksDirty = true
+        setNeedsRender()
+    }
+
+    /// The gutter mark whose rows contain `point` (view points), from the last frame.
+    public func gutterMark(at point: CGPoint) -> GutterMark? {
+        gutterMarkFrames.last { $0.rect.minY <= point.y && point.y < $0.rect.maxY }?.mark
+    }
+
+    private func gutterDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics m: CellMetrics) -> [ImageDraw] {
+        var draws: [ImageDraw] = []
+        var frames: [(mark: GutterMark, rect: CGRect)] = []
+        let gridRows = Int(grid?.rows ?? 0)
+        let scale = layer.contentsScale
+        let left = Int(paddingPx.w)
+        let width = Self.gutterWidth(paddingLeft: left, scale: scale)
+        // Right-aligned towards the text with 2 pt of air when the padding allows, else at
+        // the pane's edge.
+        let x = max(0, left - width - Int((2 * scale).rounded()))
+        let inset = Self.gutterInset(cellHeight: m.cellHeight, scale: scale)
+        for mark in marks {
+            let top = max(mark.row, 0), bottom = min(mark.row + mark.rows, gridRows)
+            guard mark.rows > 0, bottom > top else { continue }
+            frames.append((mark, CGRect(
+                x: 0, y: (CGFloat(paddingPx.x) + CGFloat(top * m.cellHeight)) / scale,
+                width: pixelSize.width / scale, height: CGFloat((bottom - top) * m.cellHeight) / scale)))
+            guard let texture = gutterTextures.texture(mark.color(colors), opacity: mark.opacity, device: renderer.device) else { continue }
+            // The whole stripe (its ends may be off screen; the clip trims them).
+            let height = mark.rows * m.cellHeight - 2 * inset
+            guard height > 0 else { continue }
+            draws.append(ImageDraw(texture: texture, vertex: ImageVertex(
+                gridPos: SIMD2(0, Float(mark.row)), cellOffset: SIMD2(Float(x - left), Float(inset)),
+                sourceRect: SIMD4(0, 0, 1, 1), destSize: SIMD2(Float(width), Float(height)))))
+        }
+        gutterMarkFrames = frames
+        return draws
+    }
+
+    /// The left padding beside the grid's rows in drawable pixels: stripes never draw over
+    /// the cells or the top and bottom padding.
+    private var gutterClip: MTLScissorRect? {
+        guard let grid, pixelSize.width > 0 else { return nil }
+        let y = max(0, Int(paddingPx.x))
+        let width = min(Int(paddingPx.w), Int(pixelSize.width))
+        let height = min(Int(grid.rows) * Int(grid.cellHeight), Int(pixelSize.height) - y)
+        guard width > 0, height > 0 else { return nil }
+        return MTLScissorRect(x: 0, y: y, width: width, height: height)
+    }
+
     // MARK: Rendering
 
     /// Marks the terminal as changed. Safe to call from any thread; coalesces wakeups.
@@ -555,7 +622,9 @@ public final class TerminalSurface {
         let overlayChanged = overlay != lastOverlay || overlayDirty
         let images = inlineImages?() ?? []
         let imagesChanged = imagesDirty || images != lastImages
-        guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged else { return false }
+        let marks = gutterMarks?() ?? []
+        let marksChanged = marksDirty || marks != lastMarks
+        guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged || marksChanged else { return false }
         if cursor.blinking != cursorBlinks {
             cursorBlinks = cursor.blinking
             restartBlink()
@@ -570,6 +639,9 @@ public final class TerminalSurface {
         lastImages = images
         imagesDirty = false
         let draws = images.isEmpty && inlineImageFrames.isEmpty ? [] : imageDraws(images, metrics: fonts.metrics)
+        lastMarks = marks
+        marksDirty = false
+        let stripes = marks.isEmpty && gutterMarkFrames.isEmpty ? [] : gutterDraws(marks, colors: state.colors, metrics: fonts.metrics)
         let built = CACurrentMediaTime()
 
         let stats = stats
@@ -577,7 +649,7 @@ public final class TerminalSurface {
         if let target = drawable?.texture ?? (offscreen ? offscreenTarget() : nil) {
             renderer.draw(
                 frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: target, present: drawable,
-                images: draws, imageClip: imageClip
+                images: draws, imageClip: imageClip, gutter: stripes, gutterClip: gutterClip
             ) {
                 stats.recordGPU(seconds: $0)
             }
@@ -628,8 +700,10 @@ public final class TerminalSurface {
         guard let fonts, let texture = offscreenTarget() else { return nil }
         let done = DispatchSemaphore(value: 0)
         let draws = lastImages.isEmpty ? [] : imageDraws(lastImages, metrics: fonts.metrics)
+        let stripes = lastMarks.isEmpty ? [] : gutterDraws(lastMarks, colors: state.colors, metrics: fonts.metrics)
         renderer.draw(
-            frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: texture, present: nil, images: draws, imageClip: imageClip
+            frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: texture, present: nil, images: draws, imageClip: imageClip,
+            gutter: stripes, gutterClip: gutterClip
         ) { _ in done.signal() }
         done.wait()
 

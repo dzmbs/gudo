@@ -194,6 +194,31 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         emit(surface.mouse(.release, button: .right, at: point(event), mods: KeyModifiers(event.modifierFlags)))
     }
 
+    /// Menu items about the rows under a point (view coordinates), for the right-click menu: a
+    /// shell command's Copy Output, Re-run… Empty for nothing.
+    public var contextActions: ((CGPoint) -> [NSMenuItem])?
+
+    /// The right-click menu (when the program does not take the right button): Copy, what the
+    /// rows under the pointer offer, Paste.
+    override public func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        if surface.terminal.selection != nil {
+            menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        }
+        let extra = contextActions?(point(event)) ?? []
+        if !extra.isEmpty {
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            extra.forEach(menu.addItem)
+            menu.addItem(.separator())
+        }
+        menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
+        for item in menu.items where item.action == #selector(copy(_:)) || item.action == #selector(paste(_:)) || item.action == #selector(selectAll(_:)) {
+            item.target = self
+        }
+        return menu
+    }
+
     override public func otherMouseDown(with event: NSEvent) {
         guard surface.reportsMouse(shift: false) else { return }
         emit(surface.mouse(.press, button: .middle, at: point(event), mods: KeyModifiers(event.modifierFlags)))

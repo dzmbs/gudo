@@ -8,6 +8,8 @@ import SwiftUI
 enum WorkspaceAction: Hashable {
     case newTab, newTabOnHost, splitRight, splitDown, closePane
     case toggleZoom, focus(Direction), resize(Direction)
+    /// The previous or next shell prompt at the top of the pane (Ghostty's `jump_to_prompt`).
+    case previousPrompt, nextPrompt
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
     case draw, newCanvas
     /// A new window with this window's hosts, on its tab (⌘N).
@@ -21,6 +23,7 @@ enum WorkspaceAction: Hashable {
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .closePane]
     static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
+        + [.previousPrompt, .nextPrompt]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
     static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .links, .inbox, .hosts]
@@ -39,6 +42,8 @@ enum WorkspaceAction: Hashable {
         case .toggleZoom: "Zoom Pane"
         case .focus(let direction): "Select Pane \(direction.name)"
         case .resize(let direction): "Move Divider \(direction.name)"
+        case .previousPrompt: "Jump to Previous Prompt"
+        case .nextPrompt: "Jump to Next Prompt"
         case .previousTab: "Show Previous Tab"
         case .nextTab: "Show Next Tab"
         case .selectTab(let number): "Tab \(number)"
@@ -67,6 +72,8 @@ enum WorkspaceAction: Hashable {
         case .toggleZoom: KeyboardShortcut(.return, modifiers: [.command, .shift])
         case .focus(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option])
         case .resize(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .control])
+        case .previousPrompt: KeyboardShortcut(.upArrow, modifiers: .command)
+        case .nextPrompt: KeyboardShortcut(.downArrow, modifiers: .command)
         case .previousTab: KeyboardShortcut("[", modifiers: [.command, .shift])
         case .nextTab: KeyboardShortcut("]", modifiers: [.command, .shift])
         case .selectTab(let number): KeyboardShortcut(KeyEquivalent(Character("\(number)")))
@@ -126,6 +133,8 @@ enum WorkspaceAction: Hashable {
         case .toggleZoom: workspace.apply(.toggleZoom)
         case .focus(let direction): workspace.apply(.focusDirection(direction))
         case .resize(let direction): workspace.resizeFocusedPane(direction)
+        case .previousPrompt: PaneCommandMarks.jumpToPrompt(-1, in: workspace)
+        case .nextPrompt: PaneCommandMarks.jumpToPrompt(1, in: workspace)
         case .previousTab: workspace.selectTab(offset: -1)
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)

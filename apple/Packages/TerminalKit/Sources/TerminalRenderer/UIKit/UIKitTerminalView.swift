@@ -34,6 +34,10 @@ public final class TerminalView: UIView {
     /// Whether Apple Pencil handwriting (Scribble) may type into the terminal. Off: Pencil
     /// strokes over a terminal are drawing or nothing, never text sent to the shell unseen.
     public var allowsHandwriting = false
+    /// Extra actions for the edit menu about the rows under a point (view coordinates): a
+    /// shell command's Copy Output, Re-run… The menu shows after a long-press, a selection, or
+    /// a secondary click; return nil for nothing.
+    public var contextActions: ((CGPoint) -> UIMenu?)?
 
     private let repeater = KeyRepeater()
     private var repeatingKey: UIKeyboardHIDUsage?
@@ -51,6 +55,8 @@ public final class TerminalView: UIView {
     private let startHandle = SelectionHandle(isStart: true)
     private let endHandle = SelectionHandle(isStart: false)
     private var editMenu: UIEditMenuInteraction?
+    /// Where the menu was asked for (long-press, secondary click); nil: at the selection.
+    private var menuPoint: CGPoint?
     private var autoscrollTask: Task<Void, Never>?
     private var lastPointerLocation = CGPoint.zero
     private var pointerDragRectangle = false
@@ -235,6 +241,13 @@ public final class TerminalView: UIView {
         longPress.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         addGestureRecognizer(longPress)
 
+        // Pointer secondary click: the program's right button when it tracks the mouse, else
+        // the edit menu at the pointer.
+        let secondary = UITapGestureRecognizer(target: self, action: #selector(secondaryClicked(_:)))
+        secondary.buttonMaskRequired = .secondary
+        secondary.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        addGestureRecognizer(secondary)
+
         // Touch drags and the scroll wheel / two-finger trackpad scroll (no touches).
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.allowedScrollTypesMask = .all
@@ -259,6 +272,7 @@ public final class TerminalView: UIView {
     @objc private func tapped(_ tap: UITapGestureRecognizer) {
         let point = tap.location(in: self)
         let shift = tap.modifierFlags.contains(.shift)
+        menuPoint = nil
         if !isFirstResponder { becomeFirstResponder() }
 
         if surface.reportsMouse(shift: shift) {
@@ -295,6 +309,7 @@ public final class TerminalView: UIView {
         let point = press.location(in: self)
         switch press.state {
         case .began:
+            menuPoint = point
             if surface.terminal.selectWord(atViewport: surface.cell(at: point)) != nil {
                 UISelectionFeedbackGenerator().selectionChanged()
                 selectionChanged(showMenu: false)
@@ -311,6 +326,19 @@ public final class TerminalView: UIView {
         default:
             stopAutoscroll()
         }
+    }
+
+    @objc private func secondaryClicked(_ click: UITapGestureRecognizer) {
+        let point = click.location(in: self)
+        if surface.reportsMouse(shift: click.modifierFlags.contains(.shift)) {
+            let mods = KeyModifiers(click.modifierFlags)
+            emit(surface.mouse(.press, button: .right, at: point, mods: mods))
+            emit(surface.mouse(.release, button: .right, at: point, mods: mods))
+            return
+        }
+        if !isFirstResponder { becomeFirstResponder() }
+        menuPoint = point
+        editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
     }
 
     /// One finger scrolls (alt screen: arrows; mouse mode: drag), two fingers or the wheel send
@@ -406,6 +434,7 @@ public final class TerminalView: UIView {
         switch pan.state {
         case .began:
             if !isFirstResponder { becomeFirstResponder() }
+            menuPoint = nil
             let px = surface.pixels(start)
             surface.terminal.clearSelection()
             selectionGesture.press(cell: surface.cell(at: start), x: px.x, y: px.y, time: CACurrentMediaTime())
@@ -546,7 +575,14 @@ public final class TerminalView: UIView {
     }
 
     private func showEditMenu() {
-        guard let ends = surface.selectionEnds() else { return }
+        guard let ends = surface.selectionEnds() else {
+            // Nothing selected (a long-press on blank cells): the menu still offers what the
+            // rows under the finger have, if anything.
+            if let menuPoint, contextActions?(menuPoint) != nil {
+                editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: menuPoint))
+            }
+            return
+        }
         let anchor = ends.start ?? ends.end ?? .zero
         let config = UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: anchor.midX, y: anchor.minY))
         editMenu?.presentEditMenu(with: config)
@@ -897,11 +933,18 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
         _ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
         var actions: [UIMenuElement] = []
+        let selection = surface.selectionEnds()
         if surface.terminal.selection != nil {
             actions.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 self?.copy(nil)
                 self?.clearSelection()
             })
+        }
+        // What the rows under the press (or the selection's start) belong to.
+        if let point = menuPoint ?? selection?.start.map({ CGPoint(x: $0.midX, y: $0.midY) }),
+           let extra = contextActions?(point)
+        {
+            actions.append(extra)
         }
         if UIPasteboard.general.hasStrings {
             actions.append(UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.paste(nil) })
@@ -911,9 +954,18 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
     }
 
     public func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
-        guard let ends = surface.selectionEnds() else { return .null }
+        guard let ends = surface.selectionEnds() else {
+            guard let menuPoint else { return .null }
+            return CGRect(origin: menuPoint, size: .zero).insetBy(dx: -1, dy: -1)
+        }
         let rects = [ends.start, ends.end].compactMap { $0 }
         return rects.dropFirst().reduce(rects.first ?? .null) { $0.union($1) }
+    }
+
+    public func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration, animator: any UIEditMenuInteractionAnimating
+    ) {
+        animator.addCompletion { [weak self] in self?.menuPoint = nil }
     }
 }
 

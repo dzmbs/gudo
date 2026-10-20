@@ -457,6 +457,7 @@ private struct TabRow: View {
         let state = states.min { $0.urgency < $1.urgency }
         let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
         let context = workspace?.context(of: tab)
+        let running = workspace?.runningCommand(of: tab)
         let program = model.programIdentity(of: tab, onGroup: group.id)
 
         Button {
@@ -483,13 +484,11 @@ private struct TabRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                    // Only a line that says something: not "~", not empty, not the title again.
-                    if let context, Self.isInformative(context, title: title) {
-                        Text(context)
-                            .font(DS.Font.sidebarSubtitle)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.head)
+                    // Only a line that says something: not "~", not empty, not the title again;
+                    // a shell command running a while shows with its run time.
+                    let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
+                    if informative != nil || running != nil {
+                        TabSubtitle(context: informative, running: running)
                             // Under the title, past the mark slot and its spacing.
                             .padding(.leading, ProgramMark.rowSlot + DS.Space.xs + 2)
                     }
@@ -528,7 +527,7 @@ private struct TabRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
-        .accessibilityValue(context ?? "")
+        .accessibilityValue(running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
     }
