@@ -29,6 +29,14 @@ nonisolated public protocol DaemonUpgradeAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonUpgradeAPI {}
 
+/// A client whose relay settings can change while it runs (`DaemonClient.setRelays`). Not
+/// part of `DaemonClientAPI` so test fakes need not implement it.
+nonisolated public protocol RelaySettingsClient: AnyObject, Sendable {
+    func setRelays(relay: RelayMode, options: ConnectOptions)
+}
+
+extension DaemonClient: RelaySettingsClient {}
+
 /// Dials a daemon. The real one is `DaemonClient.connect`; tests pass a fake.
 public typealias DaemonDialer = @Sendable (_ ticket: String, _ listener: any ClientEventListener) throws -> any DaemonClientAPI
 

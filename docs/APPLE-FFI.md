@@ -309,9 +309,12 @@ Secrets cross as `String` and are zeroed on the Rust side once sent.
 ### Relays
 
 `DaemonClient.connectWith(ticket:config:options:listener:)` with `ConnectOptions(relayCaDer:
-[Data])` trusts a private CA for self-hosted relays. `inspectPairTicket(ticket:).relays` says
-what the ticket asks for: `TicketRelays.default / .custom(urls:hasAuthToken:) / .disabled`
-(docs/RELAYS.md); the app's own `RelayMode.disabled` still wins.
+[Data])` trusts a private CA for self-hosted relays; `relayUrls` / `relayAuthToken` send every
+daemon through the device's own relays instead of the ticket's. `inspectPairTicket(ticket:).relays`
+says what the ticket asks for: `TicketRelays.default / .custom(urls:hasAuthToken:) / .disabled`
+(docs/RELAYS.md); the app's own `RelayMode.disabled` still wins, and a `.disabled` ticket stays
+direct. `setRelays(relay:options:)` applies new settings to a running client (redial on a new
+endpoint; `askpass` is kept).
 
 Errors are typed Swift enums: `ClientError` (`Ticket`, `Key`, `Io`), `SshError` (`Io`, `Protocol`,
 `Timeout`, `Disconnected`, `AuthFailed{user,host,tried,allowed}`,

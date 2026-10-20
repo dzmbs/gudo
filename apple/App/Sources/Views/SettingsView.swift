@@ -29,6 +29,7 @@ struct SettingsView: View {
             SwiftUI.Tab("Notifications", systemImage: "bell.badge") { pane { NotificationsSection() } }
             SwiftUI.Tab("Agents", systemImage: "sparkle") { pane { AgentsSettingsSection() } }
             SwiftUI.Tab("Git", systemImage: "arrow.triangle.branch") { pane { GitSettingsSection() } }
+            SwiftUI.Tab("Network", systemImage: "network") { pane { NetworkSettingsSection() } }
             SwiftUI.Tab("About", systemImage: "info.circle") { pane { AboutSection() } }
         }
         .frame(width: 560, height: 520)
@@ -48,6 +49,7 @@ struct SettingsView: View {
                 NotificationsSection().raisedRows()
                 AgentsSettingsSection().raisedRows()
                 GitSettingsSection().raisedRows()
+                NetworkSettingsSection().raisedRows()
                 AboutSection().raisedRows()
             }
             .terminalGrouped()
