@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 import TerminalRenderer
 import UniformTypeIdentifiers
+import UnnamedCore
 #if os(iOS)
 import UIKit
 #else
@@ -175,8 +176,8 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
                             image: image ?? UIImage(systemName: "scribble"),
                             identifier: UIAction.Identifier("drawing.history.\(version.version)"),
                             attributes: current ? .disabled : [], state: current ? .on : .off
-                        ) { [weak self] _ in
-                            self?.restore(placement, to: version)
+                        ) { _ in
+                            self.restore(placement, to: version)
                         }
                         action.accessibilityIdentifier = "drawing.history.\(version.version)"
                         items.append(action)
@@ -326,15 +327,23 @@ final class PencilCapture {
 /// with `offerMenu`, its menu: a tap (finger or pointer) opens Send to… / Start… / Copy / Share
 /// / Edit / Delete, anchored to the drawing. The Pencil, two-finger scrolls and every touch while
 /// the pane draws or writes pass through to the terminal.
-final class PlacementMarker: UIButton, UIDragInteractionDelegate {
+final class PlacementMarker: UIView, UIDragInteractionDelegate {
     private weak var drawing: PaneDrawing?
     private var placementId: UInt64 = 0
+    /// Presents the menu (a tap asks it to). A menu button of its own would open on touch
+    /// down and swallow the long press that lifts the drawing.
+    private let menuButton = UIButton()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         isAccessibilityElement = true
         accessibilityTraits = .image
+        menuButton.frame = bounds
+        menuButton.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        menuButton.isUserInteractionEnabled = false
+        menuButton.isAccessibilityElement = false
+        addSubview(menuButton)
     }
 
     @available(*, unavailable)
@@ -349,15 +358,25 @@ final class PlacementMarker: UIButton, UIDragInteractionDelegate {
         let drag = UIDragInteraction(delegate: self)
         drag.isEnabled = true
         addInteraction(drag)
-        showsMenuAsPrimaryAction = true
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(showMenu)))
         accessibilityTraits = [.image, .button]
-        accessibilityHint = "Send, copy, share or edit the drawing"
-        menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+        accessibilityHint = "Send, copy, share or edit the drawing; touch and hold to drag it"
+        menuButton.showsMenuAsPrimaryAction = true
+        menuButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             MainActor.assumeIsolated {
                 guard let self, let drawing = self.drawing else { return completion([]) }
                 completion(drawing.uiMenu(forPlacement: self.placementId))
             }
         }])
+    }
+
+    @objc private func showMenu() {
+        menuButton.performPrimaryAction()
+    }
+
+    override func accessibilityActivate() -> Bool {
+        showMenu()
+        return true
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -532,7 +551,7 @@ extension PaneDrawing {
     func dragWriter(for placement: Placement) -> NSPasteboardWriting? {
         guard let ref = dragRef(placement), let png = hub.cachedPNG(hash: placement.image.hash) else { return nil }
         let scene = sceneCache[placement.artifactId]
-        return DrawingFilePromise(png: png, scene: scene, ref: ref)
+        return DrawingFilePromise(png: png, scene: scene, ref: ref, name: Self.fileName(.png))
     }
 
     /// Fetches the scene a drag may carry, ahead of the drag (pasteboards are answered at once).
@@ -555,15 +574,17 @@ extension PaneDrawing {
 
 /// A drawing dragged out: a promised PNG file, plus PNG data, the `.excalidraw` scene and the
 /// in-app reference on the same pasteboard item.
-final class DrawingFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate {
+nonisolated final class DrawingFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate {
     private let png: Data
     private let scene: Data?
     private let ref: DrawingDragRef
+    private let name: String
 
-    init(png: Data, scene: Data?, ref: DrawingDragRef) {
+    init(png: Data, scene: Data?, ref: DrawingDragRef, name: String) {
         self.png = png
         self.scene = scene
         self.ref = ref
+        self.name = name
         super.init()
         fileType = UTType.png.identifier
         delegate = self
@@ -589,11 +610,18 @@ final class DrawingFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDele
     }
 
     func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
-        PaneDrawing.fileName(.png)
+        name
     }
 
-    func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL) async throws {
-        try png.write(to: url, options: .atomic)
+    // The completion-handler form: the compiler crashes emitting the `async` one's thunk
+    // (Swift 6.4).
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping @Sendable ((any Error)?) -> Void) {
+        do {
+            try png.write(to: url, options: .atomic)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
     }
 }
 

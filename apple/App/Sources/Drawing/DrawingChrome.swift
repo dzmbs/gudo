@@ -23,6 +23,8 @@ final class OverlayModel {
     var canStart = false
     /// The one-line "what is this for" hint (until the first drawing is finished).
     var showsHint = false
+    /// The editor holds the scene (VoiceOver and UI tests read it as the toolbar's value).
+    var loaded = false
     @ObservationIgnored var onAction: (DrawingAction) -> Void = { _ in }
     @ObservationIgnored var onCancel: () -> Void = {}
     @ObservationIgnored var onRemove: () -> Void = {}
@@ -102,6 +104,7 @@ struct OverlayToolbar: View {
         .animation(DS.Motion.overlay, value: model.showsHint)
         .fixedSize()
         .accessibilityElement(children: .contain)
+        .accessibilityValue(model.loaded ? "ready" : "loading")
         .accessibilityIdentifier("drawing.toolbar")
     }
 

@@ -1225,7 +1225,7 @@ method −32601, unknown tool −32602, unparsable line −32700. Tools (both re
 | Tool | Arguments | Result |
 |---|---|---|
 | `list_drawings` | — | text: one line per artifact, newest first; then the same as JSON |
-| `get_drawing` | `id?` (default: newest non-image), `format?` `png`\|`svg`\|`ascii` (default `png`), `version?` | caption + PNG as `image` content, SVG/ASCII as `text` |
+| `get_drawing` | `id?` (default: newest non-image), `format?` `png`\|`svg`\|`ascii`\|`excalidraw` (default `png`), `version?` | caption + PNG as `image` content, SVG/ASCII/the `.excalidraw` scene as `text` |
 
 Failures (daemon down, bad id, too large) are `isError: true` results, never JSON-RPC errors.
 
@@ -1275,7 +1275,7 @@ args = ["mcp", "--pane", "12"]
 
 Codex starts MCP servers with a reduced environment, so give it `--pane` (and `--state` when
 the state dir is not the default). Tests: `mcp::tests` (protocol over a fake backend),
-`tests/it/pull.rs` (socket: list, png/svg/ascii, other session, bad token, stray pane),
+`tests/it/pull.rs` (socket: list, png/svg/ascii/excalidraw, other session, bad token, stray pane),
 `hostd/tests/mcp.rs` (the built `un-hook mcp` against a daemon).
 
 ### 7.13 Version history

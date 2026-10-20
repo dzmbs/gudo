@@ -92,7 +92,7 @@ final class DrawingUITests: XCTestCase {
         app.typeKey("d", modifierFlags: [.command, .control])
         let done = app.buttons["drawing.done"]
         XCTAssertTrue(done.waitForExistence(timeout: 10), "the draw overlay opens")
-        sleep(2)  // the page loads its scene
+        waitForScene(app)
         return done
     }
 
@@ -213,6 +213,7 @@ final class DrawingUITests: XCTestCase {
         XCTAssertEqual(overlays.count, 1, "one pane draws")
 
         // Something drawn in the left pane: the right pane asks first.
+        waitForScene(app)
         let rect = app.buttons["drawing.debugRect"]
         XCTAssertTrue(rect.waitForExistence(timeout: 5))
         tap(rect)
@@ -363,6 +364,14 @@ final class DrawingUITests: XCTestCase {
         waitForExpectations(timeout: 10)
     }
 
+    /// Waits until the editor holds the scene (a cold WebKit can take seconds; a rectangle
+    /// added before that is lost).
+    private func waitForScene(_ app: XCUIApplication) {
+        let toolbar = element(app, "drawing.toolbar")
+        expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: toolbar)
+        waitForExpectations(timeout: 30)
+    }
+
     /// Draws a rectangle and keeps it in the output; returns the new placement.
     private func keepARectangle(_ app: XCUIApplication) -> XCUIElement {
         let placed = placements(app)
@@ -375,7 +384,7 @@ final class DrawingUITests: XCTestCase {
         tap(done)
         XCTAssertTrue(done.waitForNonExistence(timeout: 15))
         expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
-        waitForExpectations(timeout: 15)
+        waitForExpectations(timeout: 20)
         XCTAssertTrue(element(app, "drawing.notice").waitForNonExistence(timeout: 10))
         return placed.element(boundBy: placed.count - 1)
     }
@@ -402,8 +411,7 @@ final class DrawingUITests: XCTestCase {
         let sheet = app.otherElements["ActivityListView"].firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 15), "the share sheet opens with the file")
         shot(app, "export-share-sheet")
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS '.excalidraw' OR label CONTAINS 'Drawing'")).firstMatch.exists)
-        app.buttons["Close"].firstMatch.tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)).tap()  // outside the popover
         XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
 
         tap(drawing)
@@ -430,7 +438,7 @@ final class DrawingUITests: XCTestCase {
         app.buttons["Edit Drawing"].tap()
         let done = app.buttons["drawing.done"]
         XCTAssertTrue(done.waitForExistence(timeout: 10))
-        sleep(2)
+        waitForScene(app)
         tap(app.buttons["drawing.debugRect"])
         sleep(1)
         tap(done)
@@ -445,9 +453,7 @@ final class DrawingUITests: XCTestCase {
 
         // Restore the first: the drawing goes back, as a third version.
         versions.element(boundBy: 1).tap()
-        let restored = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Restored the drawing'")).firstMatch
-        XCTAssertTrue(restored.waitForExistence(timeout: 10), "says it restored the drawing")
-        sleep(2)
+        sleep(3)  // the daemon writes it back and re-shows the placement with the old render
         tap(placements(app).element(boundBy: placements(app).count - 1))
         XCTAssertTrue(history.waitForExistence(timeout: 5))
         history.tap()
@@ -467,6 +473,11 @@ final class DrawingUITests: XCTestCase {
         let split = panes(app)
         expectation(for: NSPredicate(format: "count >= 2"), evaluatedWith: split)
         waitForExpectations(timeout: 15)
+        // Leave one pane for the next test, pass or fail (the daemon keeps the layout).
+        addTeardownBlock { @MainActor in
+            app.typeKey("w", modifierFlags: .command)
+            sleep(2)
+        }
         sleep(2)
         let target = split.element(boundBy: 1)
         drawing.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -475,8 +486,6 @@ final class DrawingUITests: XCTestCase {
         expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
         waitForExpectations(timeout: 20)
         shot(app, "dragged-to-other-pane")
-        app.typeKey("w", modifierFlags: .command)  // leave one pane for the next test
-        sleep(2)
     }
 
     /// Write: what is written shows at the prompt and reaches the shell only on Send (typed

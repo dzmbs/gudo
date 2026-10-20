@@ -123,11 +123,11 @@ extension PaneDrawing {
         return date.formatted(date: .abbreviated, time: .shortened)
     }
 
-    /// "Version 3 · current" / "Version 4 · restored 1".
+    /// "Version 3 · shown" / "Version 5 · restored from 2".
     static func versionDetail(_ version: ArtifactVersion, current: Bool) -> String {
         var parts = ["Version \(version.version)"]
         if current { parts.append("shown") }
-        if let from = version.restoredFrom { parts.append("restores \(from)") }
+        if let from = version.restoredFrom { parts.append("restored from \(from)") }
         return parts.joined(separator: " · ")
     }
 }
