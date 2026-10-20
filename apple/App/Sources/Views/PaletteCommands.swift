@@ -71,7 +71,7 @@ enum PaletteCommands {
             ("tab-bar", TabPlacement.showsTabBar ? "Hide Tab Bar When the Sidebar Is Hidden" : "Show Tab Bar When the Sidebar Is Hidden",
              "rectangle.topthird.inset.filled", nil, { TabPlacement.showsTabBar.toggle() }),
         ]
-        for (id, title, image, keys, run) in tools {
+        for (id, title, image, keys, run) in tools + model.editorPaletteExtras {
             commands.append(PaletteCommand(id: id, title: title, section: "Go", systemImage: image, shortcut: keys, action: run))
         }
 

@@ -233,6 +233,11 @@ final class MockEditorSource: EditorSource {
     func open(path: String, line: Int?, column: Int?) async {}
     func didLoad() {}
     func close(stopServer: Bool) async {}
+    var mode: EditorMode { .server }
+    var tunnelDesktopURI: URL? { nil }
+    func acceptLicence() async {}
+    func declineLicence() {}
+    func openTunnel(account: EditorTunnelAccount) async {}
 }
 
 @Observable

@@ -221,6 +221,49 @@ nonisolated final class FakeWorkspaceClient: DaemonClientAPI, DaemonWorkspaceAPI
     }
 }
 
+/// The VS Code Remote Tunnel half: a CLI is there, nobody is signed in, starting asks for a
+/// device code; `pushTunnel` delivers what the daemon would push next.
+extension FakeWorkspaceClient: DaemonTunnelAPI {
+    static func tunnel(_ state: TunnelState) -> VsCodeTunnelStatus {
+        VsCodeTunnelStatus(
+            cli: VsCodeCli(path: "/usr/bin/code", version: "1.105.0", commit: nil, sha256: nil, managed: false),
+            cliDownloadable: true, state: state, provider: .gitHub)
+    }
+
+    func pushTunnel(_ state: TunnelState) {
+        self.state.withLock { $0.listener }?.onWorkspaceEvent(event: .vsCodeTunnel(status: Self.tunnel(state)))
+    }
+
+    func vscodeTunnelStatus() async throws -> VsCodeTunnelStatus {
+        record("tunnelStatus")
+        return Self.tunnel(.stopped)
+    }
+
+    func vscodeCliInstall(acceptLicense: Bool) async throws -> VsCodeTunnelStatus {
+        record("cliInstall \(acceptLicense)")
+        return Self.tunnel(.stopped)
+    }
+
+    func vscodeTunnelStart(start: VsCodeTunnelStart) async throws -> VsCodeTunnelStatus {
+        record("tunnelStart \(start.acceptServerLicense) \(start.provider)")
+        return Self.tunnel(.needsLogin(login: DeviceLogin(
+            provider: start.provider, verificationUrl: "https://github.com/login/device", userCode: "ABCD-1234", atMs: 0)))
+    }
+
+    func vscodeTunnelStop() async throws -> VsCodeTunnelStatus {
+        record("tunnelStop")
+        return Self.tunnel(.stopped)
+    }
+
+    func vscodeTunnelOpen(open: VsCodeTunnelOpen) async throws -> VsCodeTunnelOpened {
+        record("tunnelOpen \(open.path):\(open.line ?? 0)")
+        return VsCodeTunnelOpened(
+            name: "studio", folder: open.folder ?? "/home/me/proj",
+            webUrl: "https://vscode.dev/tunnel/studio\(open.folder ?? "/home/me/proj")",
+            desktopUri: "vscode://vscode-remote/tunnel+studio\(open.path)", inWindow: false)
+    }
+}
+
 /// A connected `DaemonConnection` over the fake, and a context on it.
 @MainActor
 func fakeContext(_ client: FakeWorkspaceClient, directory: String? = "/home/me/proj", pane: UInt64? = 1) throws -> HostContext {

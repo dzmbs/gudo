@@ -17,7 +17,11 @@ export PORT="${PORT:-47613}"
 
 daemon() { PORT="${PORT:-47613}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
-trap 'daemon stop; pkill -f "http.server 18765" 2>/dev/null || true; rm -rf "$state"' EXIT
+# vscode.dev's stand-in for the Remote Tunnel test.
+tunnel_web_port="${TUNNEL_WEB_PORT:-47712}"
+"$state/bin/vscode-dev-stub" "$tunnel_web_port" &
+stub=$!
+trap 'daemon stop; kill $stub 2>/dev/null || true; pkill -f "http.server 18765" 2>/dev/null || true; rm -rf "$state"' EXIT
 
 only=()
 if [[ $# -gt 0 ]]; then
@@ -31,7 +35,8 @@ log="$state/xcodebuild.log"
 results="${W3_RESULTS:-$state/W3.xcresult}"
 rm -rf "$results"
 status=0
-TEST_RUNNER_PAIR_TICKET="$ticket" TEST_RUNNER_W3_REPO="$state/work/proj" xcodebuild \
+TEST_RUNNER_PAIR_TICKET="$ticket" TEST_RUNNER_W3_REPO="$state/work/proj" \
+  TEST_RUNNER_TUNNEL_WEB="http://127.0.0.1:$tunnel_web_port" xcodebuild \
   -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$apple/build/DerivedData" \
   -resultBundlePath "$results" "${only[@]}" test >"$log" 2>&1 || status=$?
