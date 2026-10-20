@@ -9,6 +9,7 @@ mod e2e;
 mod history;
 mod multiplayer;
 mod notify;
+mod pull;
 mod relays;
 mod repos;
 mod shell;

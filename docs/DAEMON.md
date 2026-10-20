@@ -1213,7 +1213,72 @@ render (`place_png`, same artifact); on another host it is imported (`.excalidra
 PNG) and placed with the render; on an agent pane it is sent (`send_to_agent`). Type
 `com.excalidraw.json` is declared as imported (`apple/project.yml`).
 
-### 7.12 Version history
+### 7.12 MCP pull channel
+
+Agents read the session's drawings themselves (push is §7.4). `un-hook mcp [--state <dir>]
+[--pane <id>]` is a stdio MCP server (`crates/hostd/src/mcp.rs`): JSON-RPC 2.0, one message per
+line; `initialize` echoes the client's `protocolVersion` if it is 2024-11-05, 2025-03-26 or
+2025-06-18 (else 2025-06-18), capabilities `{tools: {}}`, `serverInfo.name`
+`<product>-drawings`; `ping`, `tools/list`, `tools/call`; notifications get no answer; unknown
+method −32601, unknown tool −32602, unparsable line −32700. Tools (both read-only):
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `list_drawings` | — | text: one line per artifact, newest first; then the same as JSON |
+| `get_drawing` | `id?` (default: newest non-image), `format?` `png`\|`svg`\|`ascii` (default `png`), `version?` | caption + PNG as `image` content, SVG/ASCII as `text` |
+
+Failures (daemon down, bad id, too large) are `isError: true` results, never JSON-RPC errors.
+
+Each tool call is one line on the hook socket (shared with hooks and askpass, told apart by
+the `pull` field; `crates/daemon/src/art/pull.rs`):
+
+```text
+→ {"v":1,"token":"…","pane":"12","pull":{"op":"list"}}
+← {"list":{"session":1,"artifacts":[{"id":3,"kind":"drawing","title":"arch","version":2,
+   "updated_at":1761000000000,"elements":5,"placed_in":[12],"canvas_in":[],"ink_over":12,
+   "width":640,"height":320}]}}
+→ {"v":1,"token":"…","pane":"12","pull":{"op":"get","id":3,"format":"png","version":2}}
+← {"export":{"id":3,"title":"arch","version":2,"format":"png","mime":"image/png",
+   "data":"<base64>","base64":true}}
+← {"error":"no artifact 9 in this session"}
+```
+
+The pane picks the session; artifacts of other sessions read as unknown. A bad token, a pane
+in no session, an unknown format or an export over 8 MiB is an `error`. Exports are §7.5's
+(`art::export`), run off the async workers; `kind` is `drawing`, `excalidraw` or `image`;
+`width`/`height` are the image's or the last preview's. Formats are the `PULL_FORMATS` table
+(name, `ExportFormat`, MIME, binary); a row there is all a new format needs.
+
+The server finds the socket in `<state>/hook.endpoint` (re-read per call) and the token in
+`<state>/hook.token`, never in argv. Without `--state` it uses `UN_ENDPOINT_FILE`/`UN_SOCK` and
+`UN_TOKEN`, else the default state dir; without `--pane`, `UN_PANE_ID`.
+
+**Agents the daemon launches** get it with no change to the user's config. The server name is
+`<product>_drawings` (`agents::mcp_server_name`, valid for both). Claude: `--mcp-config
+<state>/claude/mcp/<pane>.json` (`{"mcpServers":{"unnamed_drawings":{"type":"stdio","command":
+"<hook_bin>","args":["mcp","--state","<state>","--pane","<pane>"]}}}`, added to the user's
+servers; no `--strict-mcp-config`), and the `--settings` file (v3) allows
+`mcp__unnamed_drawings`. Codex: `-c mcp_servers.unnamed_drawings.command="<hook_bin>"` and
+`-c mcp_servers.unnamed_drawings.args=["mcp","--state","<state>","--pane","<pane>"]` (TOML
+strings, escaped).
+
+**By hand** (an agent we did not launch, started in one of our panes, whose environment
+carries `UN_PANE_ID`, `UN_TOKEN` and the endpoint):
+
+```sh
+claude mcp add unnamed_drawings -- /path/to/un-hook mcp
+# ~/.codex/config.toml
+[mcp_servers.unnamed_drawings]
+command = "/path/to/un-hook"
+args = ["mcp", "--pane", "12"]
+```
+
+Codex starts MCP servers with a reduced environment, so give it `--pane` (and `--state` when
+the state dir is not the default). Tests: `mcp::tests` (protocol over a fake backend),
+`tests/it/pull.rs` (socket: list, png/svg/ascii, other session, bad token, stray pane),
+`hostd/tests/mcp.rs` (the built `un-hook mcp` against a daemon).
+
+### 7.13 Version history
 
 A drawing's **finished versions** are kept per artifact (`art/history.rs`,
 `<session>/<artifact>/history.bin`): one when it is placed from the overlay (`Place` at the
@@ -1234,7 +1299,6 @@ same placement id; the height follows the image), and the restore is itself reco
 drop a connection that sends them; client-core refuses locally). CLI: `un draw history <id>`,
 `un draw restore <id> <version>`, `un draw export <id> --format excalidraw`. App: Version
 History in a placement's menu (each version with its render, the shown one checked; picking
-another restores it). Test: `cargo test -p daemon --test it history`.
 
 D9). Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
 Requests are `ClientCtl::Assist{req_id, AssistRequest}` → `ServerCtl::AssistResult{req_id,
