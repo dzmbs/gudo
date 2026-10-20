@@ -901,10 +901,17 @@ impl Client {
                 {
                     entry.pane.anchor_remove(artifact_id.0);
                 }
-                let info = art.delete(artifact_id)?;
+                // Close the canvas panes while the artifact still holds them, so clients hear
+                // `PaneClosed` and the new `Canvases` list.
                 for pane in &info.canvas_panes {
                     Arc::clone(core).apply_op(proto::LayoutOp::ClosePane { pane_id: *pane });
                 }
+                let info = match art.delete(artifact_id) {
+                    Ok(info) => info,
+                    // Closing its last pane closed the session, and its artifacts with it.
+                    Err(ArtifactError::NotFound(_)) if !info.canvas_panes.is_empty() => info,
+                    Err(e) => return Err(e),
+                };
                 core.emit_artifact(
                     info.session_id,
                     ArtifactEvent::Deleted {

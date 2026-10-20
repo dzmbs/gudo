@@ -106,6 +106,11 @@ impl ArtState {
 
     /// Applies a scene answer to the cache; returns the version if it changed the cache.
     fn absorb(&self, scene: &ArtifactScene) -> Option<u64> {
+        // Excalidraw scenes live in `ex`: an op-log entry for one would be resynced with
+        // `Get` on every reconnect and report a `Synced` before its elements are back.
+        if scene.info.kind == proto::ArtifactKind::Excalidraw {
+            return None;
+        }
         let mut cache = lock(&self.cache);
         let id = scene.info.artifact_id;
         let entry = cache.entry(id).or_insert_with(|| Cached {
@@ -232,6 +237,7 @@ impl ArtState {
             }
             ArtifactEvent::Deleted { artifact_id, .. } => {
                 lock(&self.cache).remove(artifact_id);
+                lock(&self.ex).remove(artifact_id);
             }
             ArtifactEvent::Canvases {
                 session_id,
@@ -392,7 +398,11 @@ impl Client {
     ) -> Result<ArtifactInfo, ArtifactError> {
         let info = expect!(self.artifact(ArtifactRequest::Create(create)).await?,
             ArtifactResponse::Created(i) => i)?;
-        if info.version > 0 {
+        if info.kind == proto::ArtifactKind::Excalidraw {
+            lock(&self.inner.art.ex)
+                .entry(info.artifact_id)
+                .or_default();
+        } else if info.version > 0 {
             // Bring the cache up to the initial ops.
             let _ = self.artifact_get(info.artifact_id, 0).await;
         } else {
