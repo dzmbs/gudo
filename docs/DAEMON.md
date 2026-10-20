@@ -979,6 +979,41 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 - Unit tests: prompt sanitizer, audit chain (reopen, edit detection).
 - `proto` goldens for every new message and variant; invite text round trip.
 
+### 6.9 Approval extras: edited approvals and auto-approve rules (`proto::approve`)
+
+Clients that announce `Caps::APPROVALS` get `ServerCtl::Approval` pushes and may send
+`ClientCtl::Approval` (answered by `ServerCtl::ApprovalResult`). Every request needs Approver on
+the pane; pushes go to connections whose scope covers the pane.
+
+- **What may be done with a request.** When a hook holds a `PermissionRequest` open, the daemon
+  pushes `ApprovalPush::Request`: the wire request id, the tool, `input` (the command, only when
+  the agent takes edited input: Claude Code's `Bash`) and `like` (the rule "approve all like
+  this" would add). The client keeps the latest per pane; it is current only while the pane's
+  `AgentState::Blocked` names the same request id.
+- **Edited approval.** `ApproveEdited { decide, input }`: a signed `Decide` for the allow option
+  plus the new command. The hook answers `{"behavior":"allow","updatedInput":{…, "command":
+  input}}` (the rest of the tool input kept). Refused with `NotEditable` for other tools and
+  agents, `Invalid` for another option or an empty command. The audit record keeps both commands.
+- **Auto-approve rules** (`AddRule`, `RevokeRule`; `crates/grants` `auto_approve`). A rule is
+  signed by its device over `auto_approve_signing_bytes` (bound to the daemon) and names one pane,
+  one tool and, for shell tools, a command prefix: the program, plus the subcommand for programs
+  that have one (`cargo test`, `git status`). A shell rule never matches a command that chains,
+  pipes, redirects, backgrounds, substitutes or expands (`; & | > < \` $ ( ) { } \\`, newline),
+  never covers `sudo`/`env`/shells, and never has an empty prefix. Limits: expiry ≤ 8 h, 1–50
+  agent turns (the turn it was added in counts). It ends when it expires, when its turns are used
+  (counted on `TurnStarted`), when the agent session ends, starts again or changes id (including
+  `/clear` and compaction: the user approves again), when the pane closes, when it is revoked,
+  and on a daemon restart (rules are memory only). While a rule lives, a hook-held request it
+  covers is answered at once with "allow once", as the rule's author; the audit record names the
+  rule and carries its signature. `AddRule` with `request_id` also answers that open request.
+  The rules in force are pushed whole per pane (`ApprovalPush::Rules`: uses, turns used, who
+  granted it) after every change and to every new connection.
+- **Tests:** `crates/grants` unit + property tests (matching, scope, signature, caps);
+  `tests/it/approvals.rs` (edited approval and its audit, `NotEditable`; a rule answers the open
+  request and the next one like it, not another command or a compound one, audited with the
+  rule's signature, then revoked; turn limit, session end, expiry, too-wide and too-long rules;
+  a viewer can neither add nor revoke); goldens in `proto/tests/golden_approve.rs`.
+
 
 `proto::artifact` (wire), `crates/drawing` (model shared with client-core and `un`: packed
 ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/src/art/`

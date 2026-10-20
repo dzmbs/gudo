@@ -59,7 +59,15 @@ while IFS= read -r line; do
       echo "asking to run: rm -rf build"
       payload=$(/usr/bin/python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"hook_event_name":"PermissionRequest","cwd":sys.argv[2],"tool_name":"Bash","tool_input":{"command":"rm -rf build"}}))' "$sid" "$PWD")
       out=$(send PermissionRequest "$payload")
-      case "$out" in *'"allow"'*) echo "decision: allowed" ;; *'"deny"'*) echo "decision: denied" ;; *) echo "decision: none" ;; esac
+      # An edited approval (updatedInput) runs the edited command instead.
+      edited=$(printf '%s' "$out" | /usr/bin/python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["decision"]["updatedInput"]["command"])
+except Exception: pass' 2>/dev/null)
+      case "$out" in
+        *'"allow"'*) if [ -n "$edited" ]; then echo "decision: allowed (edited: $edited)"; else echo "decision: allowed"; fi ;;
+        *'"deny"'*) echo "decision: denied" ;;
+        *) echo "decision: none" ;;
+      esac
       ;;
   esac
   # A real turn takes seconds; the daemon snapshots the tree when the turn starts.

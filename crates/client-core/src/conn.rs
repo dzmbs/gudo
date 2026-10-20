@@ -159,6 +159,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 inner.art.fail_pending();
                 inner.assist.fail_pending();
                 inner.askpass.fail_pending();
+                inner.approvals.fail_pending();
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -266,6 +267,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | Caps::ATTACH_RESULT
             | Caps::DAEMON_INFO
             | Caps::AGENT_USAGE
+            | Caps::APPROVALS
             | if inner.options.askpass {
                 Caps::ASKPASS
             } else {
@@ -526,6 +528,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             continue;
         };
         let Some(msg) = inner.askpass.dispatch(msg) else {
+            continue;
+        };
+        let Some(msg) = inner.approvals.dispatch(msg) else {
             continue;
         };
         let event = match msg {

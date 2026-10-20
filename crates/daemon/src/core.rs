@@ -73,6 +73,8 @@ pub(crate) enum Event {
     Askpass(proto::AskpassPush),
     /// The repository snapshot changed (read it from `ws.repos`).
     Repos,
+    /// An approval request's extras or a pane's auto-approve rules changed (`approve`).
+    Approval(proto::ApprovalPush),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -155,6 +157,8 @@ pub(crate) struct Core {
     pub upgrade: crate::upgrade::Upgrade,
     /// Native password prompts: the helper, open prompts, connections that may answer.
     pub askpass: crate::askpass::Askpass,
+    /// Auto-approve rules and the open requests' extras (`approve`).
+    pub approvals: crate::approve::Approvals,
     connected: AtomicUsize,
 }
 
@@ -193,6 +197,7 @@ impl Core {
                 &cfg.state_dir,
                 &cfg.hook_bin(),
             ),
+            approvals: crate::approve::Approvals::default(),
             cfg,
             connected: AtomicUsize::new(0),
         })
@@ -663,6 +668,7 @@ impl Core {
                     task.abort();
                 }
                 self.hooks.cancel_pending(*id);
+                self.approvals.forget_pane(*id);
                 self.ws.forget_pane(*id);
                 self.mp.forget_pane(*id);
                 entry.pane.hang_up();
@@ -958,6 +964,10 @@ impl Core {
                         .turns
                         .record(crate::ws::turns::Boundary::Start { pane: id, cwd });
                 }
+                crate::approve::turn_started(self, id);
+            }
+            EventKind::SessionStarted | EventKind::SessionIdChanged => {
+                crate::approve::session_over(self, id);
             }
             EventKind::TurnEnded
             | EventKind::Interrupted
@@ -966,6 +976,9 @@ impl Core {
                 self.ws
                     .turns
                     .record(crate::ws::turns::Boundary::End { pane: id });
+                if event.kind == EventKind::SessionEnded {
+                    crate::approve::session_over(self, id);
+                }
             }
             _ => {}
         }
@@ -1013,6 +1026,7 @@ impl Core {
         }
         if !blocked {
             crate::ws::agent_unblocked(self, id);
+            self.approvals.clear_request(id);
         }
     }
 
@@ -1025,6 +1039,18 @@ impl Core {
         &self,
         actor: Actor,
         decide: &Decide,
+        record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
+    ) -> Result<Decided, Option<Actor>> {
+        self.decide_with(actor, decide, None, record)
+    }
+
+    /// [`Core::decide`], allowing with `edited` as the command to run instead when given (the
+    /// caller checked that the request takes edited input and that the option allows it).
+    pub fn decide_with(
+        &self,
+        actor: Actor,
+        decide: &Decide,
+        edited: Option<&str>,
         record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
     ) -> Result<Decided, Option<Actor>> {
         for (id, entry) in self.pane_entries() {
@@ -1047,7 +1073,13 @@ impl Core {
                         at: proto::UnixMillis(crate::identity::now_millis()),
                     };
                     record(&decided, &details);
-                    self.hooks.resolve(id, &details.request, details.choice);
+                    match edited {
+                        Some(command) => {
+                            self.hooks.resolve_edited(id, &details.request, command);
+                        }
+                        None => self.hooks.resolve(id, &details.request, details.choice),
+                    }
+                    self.approvals.clear_request(id);
                     self.emit(Event::Decided(decided));
                     self.emit(Event::PaneMeta(id));
                     Ok(decided)

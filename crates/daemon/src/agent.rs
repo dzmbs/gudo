@@ -273,6 +273,18 @@ impl AgentRuntime {
         self.take(update)
     }
 
+    /// The wire id of the dialog currently showing, if blocked, with the option that allows
+    /// it once.
+    pub fn blocked_wire(&mut self) -> Option<(RequestId, agents::RequestId, Option<OptionId>)> {
+        let request = self.blocked_request()?;
+        let wire = self.wire_request(&request);
+        let allow = self
+            .approval_options(wire)
+            .and_then(|b| b.approve)
+            .map(|(id, _)| id);
+        Some((wire, request, allow))
+    }
+
     /// The string id of the dialog currently showing, if blocked.
     pub fn blocked_request(&self) -> Option<agents::RequestId> {
         self.arbiter
@@ -416,7 +428,37 @@ pub(crate) struct DecidedRequest {
 struct Pending {
     request: agents::RequestId,
     suggestions: Vec<Value>,
+    /// The agent asking, the tool and its input (for edited approvals and rules).
+    agent: Option<AgentKind>,
+    tool: String,
+    input: Value,
     reply: oneshot::Sender<HookResponse>,
+}
+
+/// A hook-held permission request: what the tool wants to do.
+#[derive(Debug, Clone)]
+pub(crate) struct HeldRequest {
+    pub request: agents::RequestId,
+    pub agent: Option<AgentKind>,
+    pub tool: String,
+    pub input: Value,
+}
+
+impl HeldRequest {
+    /// The text a rule matches and a person may edit: the shell command for shell tools,
+    /// nothing for other tools (their rules match the tool alone).
+    pub fn command(&self) -> Option<&str> {
+        grants::is_shell_tool(&self.tool)
+            .then(|| self.input.get("command").and_then(Value::as_str))
+            .flatten()
+    }
+
+    /// The editable input: Claude Code takes `updatedInput` for its `Bash` tool.
+    pub fn editable(&self) -> Option<&str> {
+        (self.agent == Some(AgentKind::Claude) && self.tool == "Bash")
+            .then(|| self.command())
+            .flatten()
+    }
 }
 
 /// The hook socket and the hook decisions waiting for a client.
@@ -505,6 +547,41 @@ impl HookServer {
                 stdout: Some(stdout),
             });
         }
+    }
+
+    /// Answers a held request with "allow", running `command` instead of what the agent
+    /// asked for (Claude Code's `updatedInput`). False if the request is no longer held.
+    pub fn resolve_edited(&self, pane: PaneId, request: &agents::RequestId, command: &str) -> bool {
+        let mut pending = lock(&self.pending);
+        if !pending.get(&pane).is_some_and(|p| &p.request == request) {
+            return false;
+        }
+        let p = pending.remove(&pane).expect("checked above");
+        let mut input = p.input.clone();
+        if let Some(obj) = input.as_object_mut() {
+            obj.insert("command".into(), command.into());
+        }
+        let stdout = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow", "updatedInput": input },
+            }
+        })
+        .to_string();
+        let _ = p.reply.send(HookResponse {
+            stdout: Some(stdout),
+        });
+        true
+    }
+
+    /// The request a hook holds open on `pane`, if any.
+    pub fn held(&self, pane: PaneId) -> Option<HeldRequest> {
+        lock(&self.pending).get(&pane).map(|p| HeldRequest {
+            request: p.request.clone(),
+            agent: p.agent,
+            tool: p.tool.clone(),
+            input: p.input.clone(),
+        })
     }
 
     /// Whether a hook holds request `request` of `pane` open, so a decision reaches the agent.
@@ -607,9 +684,23 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         Pending {
             request: request_id,
             suggestions,
+            agent: agent_kind(&request.agent),
+            tool: request
+                .payload
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            input: request
+                .payload
+                .get("tool_input")
+                .cloned()
+                .unwrap_or(Value::Null),
             reply: tx,
         },
     );
+    // An auto-approve rule may answer at once; otherwise clients learn what they may do.
+    crate::approve::request_held(core, pane_id);
     match tokio::time::timeout(PERMISSION_WAIT, rx).await {
         Ok(Ok(response)) => response,
         // No decision: the agent falls back to its own prompt in the terminal.
