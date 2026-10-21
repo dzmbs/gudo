@@ -275,6 +275,10 @@ pub enum WorkspaceRequest {
     TaskCreate(crate::repo::TaskCreate),
     /// Runs a script in a new tab → [`WorkspaceResponse::PaneCreated`].
     ScriptRun(crate::repo::ScriptRun),
+    /// The running agents Live Activity's update capability (or that it ended) for this
+    /// device's push registration → [`WorkspaceResponse::Push`]. Only daemons offering
+    /// [`DaemonFeatures::LIVE_ACTIVITY`](crate::DaemonFeatures::LIVE_ACTIVITY) understand it.
+    PushActivity(PushActivityToken),
     /// The workflows a pane can use (its repository's and the global ones), or only the global
     /// ones without a pane → [`WorkspaceResponse::Workflows`]. See [`crate::workflow`].
     WorkflowList {
@@ -1175,6 +1179,16 @@ pub struct PushRegistration {
     pub prefs: PushPrefs,
     /// A push-to-start capability for the agents Live Activity, if the device has one.
     pub activity_cap: Option<String>,
+}
+
+/// The agents Live Activity running on a device (docs/PUSH.md §6): the relay capability for
+/// its ActivityKit update token. The daemon sends `update` and `end` pushes to it, and a
+/// push-to-start ([`PushRegistration::activity_cap`]) only while the device has none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushActivityToken {
+    /// The capability the relay issued for the activity's push token (`kind: "activity"`);
+    /// `None`: the activity ended or was dismissed.
+    pub cap: Option<String>,
 }
 
 /// Which attention items a device wants pushed.

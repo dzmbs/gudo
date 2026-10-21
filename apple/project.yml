@@ -87,6 +87,8 @@ targets:
               NSExceptionAllowsInsecureHTTPLoads: true
         # Agent runs on the Lock Screen and in the Dynamic Island (AgentActivityWidget).
         NSSupportsLiveActivities: true
+        # The daemons' agents Live Activity pushes "needs you" at priority 10 (docs/PUSH.md §6).
+        NSSupportsLiveActivitiesFrequentUpdates: true
         # A window's host, tab and pane: Handoff to the owner's other devices, and a tab dragged
         # out into a new iPad window (App/Sources/Windows). Multiple windows (iPad scenes,
         # Stage Manager, external displays) come from the generated scene manifest.
@@ -210,6 +212,9 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         BrandURLScheme: $(BRAND_URL_SCHEME)
+        # The pushed agents activity opens its sealed rows with the shared key (push builds).
+        PushKeychainGroup: $(PUSH_KEYCHAIN_GROUP)
+        PushAppGroup: $(PUSH_APP_GROUP)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
@@ -221,6 +226,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGN_ENTITLEMENTS: $(PUSH_ENTITLEMENTS_FILE)
     dependencies:
       - package: NotifyKit
         product: NotifyKit

@@ -607,6 +607,9 @@ final class WindowModel {
                 destination = .terminal
                 show(.host(id))
             }
+            if let drawing = payload.drawing, let pane, payload.kind == .daemon {
+                continueDrawing(drawing, pane: pane)
+            }
         case .local(let tab, let pane):
             if let tab { select(TabRef(hostId: HostGroups.localId, tab: tab), pane: pane) }
         case .notPaired:
@@ -617,6 +620,36 @@ final class WindowModel {
                 systemImage: "laptopcomputer.and.iphone", style: .neutral))
         }
     }
+
+    /// Opens a continued drawing once its pane is up: draw mode on the placement (or the
+    /// unplaced drawing), or the canvas pane focused. The pane connects, attaches and gets its
+    /// placements after the window switched to it, so this retries for a while.
+    private func continueDrawing(_ drawing: HandoffPayload.Drawing, pane: PaneId) {
+        drawingContinuation?.cancel()
+        continuedDrawing = nil
+        drawingContinuation = Task { @MainActor [weak self] in
+            let start = ContinuousClock.now
+            while !Task.isCancelled, ContinuousClock.now - start < .seconds(40) {
+                let settled = ContinuousClock.now - start > .seconds(3)
+                if let paneDrawing = PaneDrawing.of(pane), self?.workspace?.panes[pane] != nil,
+                   paneDrawing.continueDrawing(drawing, settled: settled)
+                {
+                    self?.continuedDrawing = "\(drawing.canvas ? "canvas" : "draw"):\(drawing.artifact)"
+                    AppModel.log.info("continued drawing \(drawing.artifact) on pane \(pane.rawValue)")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.toasts.show(Toast(
+                "The drawing from \(self.lastContinued?.device ?? "your other device") isn't in that pane anymore",
+                systemImage: "scribble.variable", style: .neutral))
+        }
+    }
+
+    @ObservationIgnored private var drawingContinuation: Task<Void, Never>?
+    /// The drawing a continued activity opened (`draw:<artifact>` / `canvas:<artifact>`; probe).
+    private(set) var continuedDrawing: String?
 
     /// A continued activity whose host is not paired here (the window offers to add it).
     var handoffMissing: HandoffPayload?

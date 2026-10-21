@@ -88,12 +88,12 @@ fn workflow_messages_match_their_frozen_bytes() {
             WorkspaceRequest::WorkflowList {
                 pane_id: Some(PaneId(3)),
             },
-            "060000000115052f0103",
+            "06000000011505300103",
         ),
         (
             "WorkflowList (global)",
             WorkspaceRequest::WorkflowList { pane_id: None },
-            "050000000115052f00",
+            "050000000115053000",
         ),
         (
             "WorkflowSave",
@@ -109,7 +109,7 @@ fn workflow_messages_match_their_frozen_bytes() {
                     shells: vec![],
                 },
             }),
-            "1e00000001150530010103014e0763207b7b627d7d000001016201016401016d0100",
+            "1e00000001150531010103014e0763207b7b627d7d000001016201016401016d0100",
         ),
     ] {
         c.check(name, req(r), golden);

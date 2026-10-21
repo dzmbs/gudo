@@ -25,10 +25,14 @@ import AppKit
 @MainActor
 final class DrawOverlay: NSObject {
     let view = OverlayContainer()
-    private(set) var artifactId: UInt64?
+    private(set) var artifactId: UInt64? {
+        didSet { if artifactId != oldValue { drawing.publishDrawingFocus() } }
+    }
     private unowned let drawing: PaneDrawing
     private var origin: RowPin
     private let reopened: Placement?
+    /// A drawing that exists but is not placed yet (continued from another device).
+    private let existing: UInt64?
     private let web = CanvasWebView()
     private var sync: SceneSync?
     private let model = OverlayModel()
@@ -58,10 +62,11 @@ final class DrawOverlay: NSObject {
     /// The tool the last overlay closed with (a keyboard-opened overlay starts with it).
     static var lastTool: DrawTool = .pen
 
-    init(drawing: PaneDrawing, origin: RowPin, reopened: Placement?, tool: DrawTool) {
+    init(drawing: PaneDrawing, origin: RowPin, reopened: Placement?, tool: DrawTool, existing: UInt64? = nil) {
         self.drawing = drawing
         self.origin = origin
         self.reopened = reopened
+        self.existing = existing
         super.init()
         model.readOnly = drawing.isReadOnly
         model.isReopened = reopened != nil
@@ -137,6 +142,9 @@ final class DrawOverlay: NSObject {
         CanvasWebView.log.info("draw: overlay opens on pane \(drawing.paneId) (\(reopened == nil ? "new" : "reopened", privacy: .public), tool \(tool.rawValue, privacy: .public))")
     }
 
+    /// The placement this overlay edits (nil: a new drawing).
+    var reopenedPlacementId: UInt64? { reopened?.placementId }
+
     // MARK: Lifecycle
 
     func start() {
@@ -153,6 +161,8 @@ final class DrawOverlay: NSObject {
         let client = drawing.hub.client
         if let reopened {
             artifactId = reopened.artifactId
+        } else if let existing {
+            artifactId = existing
         } else if !model.readOnly {
             do {
                 let session = drawing.sessionId

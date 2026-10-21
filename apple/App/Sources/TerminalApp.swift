@@ -280,6 +280,11 @@ private struct WindowContent: View {
         }
         #endif
         #endif
+        // `<scheme>://inbox`: the agents Live Activity opens the Inbox (every host's agents).
+        if url.host() == "inbox" {
+            model.destination = .inbox
+            return
+        }
         // An invite opens the Join sheet: joining is always the user's tap.
         if AppLinks.isInvite(url) {
             model.joinInvite = url.absoluteString

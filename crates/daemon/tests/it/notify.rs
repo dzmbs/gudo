@@ -522,6 +522,236 @@ async fn registrations_persist_and_bad_keys_are_refused() {
     daemon.shutdown().await;
 }
 
+/// A Live Activity push the fake relay received, opened on the "device".
+fn activity(
+    r: &Received,
+    daemon: &Daemon,
+    seal_secret: &[u8; 32],
+) -> (push::RelayRequest, push::ActivityState) {
+    let request = verify(r, daemon);
+    assert_eq!(request.push_type, push::PushType::LiveActivity);
+    assert_eq!(request.category, None, "the relay learns no category");
+    let state = push::open(seal_secret, &request.sealed)
+        .unwrap()
+        .activity()
+        .expect("signed by the daemon");
+    assert_eq!(state.daemon, push::hex(&daemon.daemon_id().0));
+    (request, state)
+}
+
+/// The agents Live Activity: agents start working → push-to-start; the app hands over the
+/// running activity's token → updates go there (an agent needing you at once and urgent,
+/// routine changes rate-limited); every agent idle long enough → end, and the activity's
+/// token is forgotten, so the next busy spell starts a new one. A gone token is dropped.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_activity_starts_updates_and_ends() {
+    let state = tempfile::tempdir().unwrap();
+    let mut relay = FakeRelay::start().await;
+    let url = relay.url.clone();
+    let daemon = start_with(state.path(), move |c| {
+        c.push.relay_url = url;
+        c.push.delay = Duration::from_secs(600);
+        c.push.backoff = Duration::from_millis(50);
+        c.push.activity_debounce = Duration::from_millis(100);
+        c.push.activity_interval = Duration::from_millis(600);
+        c.push.activity_end_after = Duration::from_millis(1500);
+    })
+    .await;
+    // No alert kinds: only the activity reaches the relay.
+    let none = PushPrefs {
+        approvals: false,
+        blocked: false,
+        done: false,
+        failed: false,
+        commands: false,
+    };
+    let key = ClientConfig::generate_key();
+    let mut a = TestClient::connect(&ticket(&daemon), key);
+    a.until("connected", |c| c.connected > 0).await;
+    assert!(
+        a.client
+            .daemon_info()
+            .expect("daemon info")
+            .features
+            .contains(proto::DaemonFeatures::LIVE_ACTIVITY),
+        "the daemon offers Live Activities"
+    );
+    // Before registering for push, an activity token is refused.
+    let early = a.client.push_activity(Some("u".into())).await;
+    assert!(matches!(early, Err(WsError::NotFound(_))), "{early:?}");
+    let (seal_secret, seal_public) = client_core::push::x25519_keypair();
+    a.client
+        .push_register(PushRegistration {
+            cap: "alert-cap".into(),
+            seal_key: seal_public,
+            relay_url: None,
+            prefs: none,
+            activity_cap: Some("start-cap".into()),
+        })
+        .await
+        .unwrap();
+    let (shown, hidden) = two_panes(&mut a).await;
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let prompt = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
+    });
+    let stop = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "Stop",
+        "last_assistant_message": "All tests pass.",
+    });
+    relay
+        .quiet(Duration::from_millis(400), "no agent runs yet")
+        .await;
+
+    // 1. An agent starts working: push-to-start on the start capability.
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    let (start, s) = activity(&relay.next("push-to-start").await, &daemon, &seal_secret);
+    assert_eq!(start.cap, "start-cap");
+    assert_eq!(start.event, Some(push::ActivityEvent::Start));
+    assert!(!start.urgent);
+    assert!(start.stale.is_some());
+    assert_eq!((s.running, s.blocked, s.done), (1, 0, 0));
+    assert!(s.headline.contains("claude"), "{s:?}");
+    // Not started twice in the same busy spell (the app has not reported the activity yet).
+    relay
+        .quiet(Duration::from_millis(800), "already started")
+        .await;
+
+    // 2. The app reports the started activity's token: the current state goes there at once.
+    a.client
+        .push_activity(Some("update-cap".into()))
+        .await
+        .unwrap();
+    let (update, s) = activity(&relay.next("first update").await, &daemon, &seal_secret);
+    assert_eq!(update.cap, "update-cap");
+    assert_eq!(update.event, Some(push::ActivityEvent::Update));
+    assert_eq!((s.running, s.blocked), (1, 0));
+
+    // 3. The agent asks for approval: an urgent update right away.
+    let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
+    payload["cwd"] = "/".into();
+    let waiting = hook(&daemon, state.path(), hidden, "PermissionRequest", payload).await;
+    let (blocked, s) = activity(&relay.next("needs you").await, &daemon, &seal_secret);
+    assert_eq!(blocked.event, Some(push::ActivityEvent::Update));
+    assert!(blocked.urgent, "needing the user is high priority");
+    assert_eq!(s.blocked, 1);
+    assert!(s.headline.contains("node_modules"), "{s:?}");
+    // The relay sees ciphertext only.
+    let body = String::from_utf8(relay_body(&blocked)).unwrap();
+    assert!(!body.contains("node_modules"), "{body}");
+
+    // 4. Approved, it works on and finishes: routine updates (done, nothing running), then
+    //    the end once idle.
+    a.until("blocked agent", |c| {
+        c.metas
+            .get(&hidden)
+            .and_then(|m| m.agent.as_ref())
+            .is_some_and(|a| matches!(a.state, AgentState::Blocked(_)))
+    })
+    .await;
+    let Some(AgentState::Blocked(blocker)) =
+        a.metas[&hidden].agent.as_ref().map(|a| a.state.clone())
+    else {
+        unreachable!()
+    };
+    a.client.decide(blocker.request_id, blocker.options[0].id);
+    tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .expect("hook answered")
+        .unwrap();
+    // The agent works on.
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    a.until("working again", |c| {
+        c.metas
+            .get(&hidden)
+            .and_then(|m| m.agent.as_ref())
+            .is_some_and(|a| a.state == AgentState::Running)
+    })
+    .await;
+    hook(&daemon, state.path(), hidden, "Stop", stop.clone()).await;
+    let mut finished = None;
+    while finished.is_none() {
+        let (r, s) = activity(&relay.next("finished").await, &daemon, &seal_secret);
+        assert_eq!(r.cap, "update-cap");
+        assert_eq!(r.event, Some(push::ActivityEvent::Update), "{s:?}");
+        // The agent's state and its "finished" item may arrive as two routine updates.
+        if s.running + s.blocked == 0 && s.done == 1 {
+            assert!(!r.urgent);
+            finished = Some(s);
+        }
+    }
+    let s = finished.unwrap();
+    assert!(s.headline.contains("All tests pass."), "{s:?}");
+    let (end, _) = activity(&relay.next("end").await, &daemon, &seal_secret);
+    assert_eq!(end.event, Some(push::ActivityEvent::End));
+    assert_eq!(end.cap, "update-cap");
+    assert!(end.dismiss.is_some());
+    assert!(end.stale.is_none());
+
+    // 5. The ended activity's token is forgotten: the next busy spell starts a new one, and
+    //    a gone push-to-start token is dropped.
+    a.client.set_view(Some(shown), vec![shown]);
+    relay.script.lock().unwrap().push(410);
+    hook(
+        &daemon,
+        state.path(),
+        hidden,
+        "UserPromptSubmit",
+        prompt.clone(),
+    )
+    .await;
+    let (again, _) = activity(&relay.next("second start").await, &daemon, &seal_secret);
+    assert_eq!(again.event, Some(push::ActivityEvent::Start));
+    assert_eq!(again.cap, "start-cap");
+    hook(&daemon, state.path(), hidden, "Stop", stop.clone()).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    hook(&daemon, state.path(), hidden, "UserPromptSubmit", prompt).await;
+    relay
+        .quiet(Duration::from_millis(1500), "the start token is gone")
+        .await;
+
+    // 6. Registered again with a fresh start token, and the user dismissed the activity
+    //    (`None`): no start until the agents go idle and busy again.
+    a.client
+        .push_register(PushRegistration {
+            cap: "alert-cap".into(),
+            seal_key: seal_public,
+            relay_url: None,
+            prefs: none,
+            activity_cap: Some("start-cap-2".into()),
+        })
+        .await
+        .unwrap();
+    a.client.push_activity(None).await.unwrap();
+    relay
+        .quiet(Duration::from_millis(800), "dismissed by the user")
+        .await;
+    hook(&daemon, state.path(), hidden, "Stop", stop).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let prompt = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "more",
+    });
+    hook(&daemon, state.path(), hidden, "UserPromptSubmit", prompt).await;
+    let (third, _) = activity(&relay.next("third start").await, &daemon, &seal_secret);
+    assert_eq!(third.cap, "start-cap-2");
+    drop(a);
+    daemon.shutdown().await;
+}
+
 /// The real Worker in `wrangler dev` with the fake APNs (docs/PUSH.md "Local development"):
 ///
 /// ```text
@@ -607,6 +837,161 @@ async fn local_dev_relay_end_to_end() {
     let sealed = entry["payload"]["s"].as_str().unwrap();
     let note = client_core::push::open_notification(&a.seal_secret, sealed).unwrap();
     assert_eq!(note.body, "Done via wrangler dev.");
+    drop(a);
+    daemon.shutdown().await;
+}
+
+/// Trades an APNs (or ActivityKit) token for a relay capability bound to `daemon`.
+async fn relay_cap(
+    http: &reqwest::Client,
+    relay_url: &str,
+    daemon: &Daemon,
+    token: &str,
+    kind: &str,
+) -> String {
+    let body = serde_json::json!({
+        "token": token,
+        "env": "sandbox",
+        "daemon": push::hex(&daemon.daemon_id().0),
+        "kind": kind,
+    });
+    let reg: serde_json::Value = http
+        .post(format!("{relay_url}/v1/register"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    reg["cap"].as_str().expect("a capability").to_owned()
+}
+
+/// The first fake-APNs log entry for `token` that `matches`.
+async fn apns_entry(
+    http: &reqwest::Client,
+    log_url: &str,
+    token: &str,
+    matches: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let text = http
+            .get(log_url)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let log: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+        if let Some(e) = log.into_iter().find(|e| e["token"] == token && matches(e)) {
+            return e;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "nothing for {token} reached the fake APNs"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn random_token() -> String {
+    let mut raw = [0u8; 32];
+    getrandom::fill(&mut raw).unwrap();
+    push::hex(&raw)
+}
+
+/// The agents Live Activity through the real Worker in `wrangler dev` and the fake APNs
+/// (set up as for [`local_dev_relay_end_to_end`]): push-to-start, then updates and the end on
+/// the running activity's token, each a well-formed `liveactivity` request whose content
+/// state opens on the "device".
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs wrangler dev and the fake APNs running"]
+async fn local_dev_relay_live_activity() {
+    let relay_url = std::env::var("PUSH_DEV_RELAY").expect("PUSH_DEV_RELAY");
+    let apns_log =
+        std::env::var("PUSH_DEV_APNS_LOG").unwrap_or_else(|_| "http://127.0.0.1:8790/log".into());
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let http = reqwest::Client::new();
+    let state = tempfile::tempdir().unwrap();
+    let url = relay_url.clone();
+    let daemon = start_with(state.path(), move |c| {
+        c.push.relay_url = url;
+        c.push.delay = Duration::from_secs(600);
+        c.push.activity_debounce = Duration::from_millis(100);
+        c.push.activity_interval = Duration::from_millis(500);
+        c.push.activity_end_after = Duration::from_secs(2);
+    })
+    .await;
+    let (alert_token, start_token, update_token) = (random_token(), random_token(), random_token());
+    let cap = relay_cap(&http, &relay_url, &daemon, &alert_token, "alert").await;
+    let start_cap = relay_cap(&http, &relay_url, &daemon, &start_token, "activity").await;
+    let mut a = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    a.until("connected", |c| c.connected > 0).await;
+    let (seal_secret, seal_public) = client_core::push::x25519_keypair();
+    a.client
+        .push_register(PushRegistration {
+            cap,
+            seal_key: seal_public,
+            relay_url: None,
+            prefs: PushPrefs::default(),
+            activity_cap: Some(start_cap),
+        })
+        .await
+        .unwrap();
+    let (_shown, hidden) = two_panes(&mut a).await;
+    let home = std::env::var("HOME").unwrap();
+    let prompt = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
+    });
+    hook(&daemon, state.path(), hidden, "UserPromptSubmit", prompt).await;
+
+    let open = |entry: &serde_json::Value| {
+        assert_eq!(entry["problems"], serde_json::json!([]), "{entry}");
+        assert_eq!(entry["headers"]["pushType"], "liveactivity");
+        assert_eq!(
+            entry["headers"]["topic"],
+            "dev.unnamed.app.push-type.liveactivity"
+        );
+        let sealed = entry["payload"]["aps"]["content-state"]["s"]
+            .as_str()
+            .unwrap();
+        push::open(&seal_secret, sealed)
+            .unwrap()
+            .activity()
+            .unwrap()
+    };
+    let start = apns_entry(&http, &apns_log, &start_token, |_| true).await;
+    assert_eq!(start["payload"]["aps"]["event"], "start");
+    assert_eq!(
+        start["payload"]["aps"]["attributes-type"],
+        "AgentsActivityAttributes"
+    );
+    assert_eq!(open(&start).running, 1);
+
+    // The app reports the started activity's own token.
+    let update_cap = relay_cap(&http, &relay_url, &daemon, &update_token, "activity").await;
+    a.client.push_activity(Some(update_cap)).await.unwrap();
+    let update = apns_entry(&http, &apns_log, &update_token, |e| {
+        e["payload"]["aps"]["event"] == "update"
+    })
+    .await;
+    assert_eq!(open(&update).running, 1);
+    assert!(update["payload"]["aps"]["stale-date"].is_u64());
+
+    let stop = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "Stop",
+        "last_assistant_message": "Done via wrangler dev.",
+    });
+    hook(&daemon, state.path(), hidden, "Stop", stop).await;
+    let end = apns_entry(&http, &apns_log, &update_token, |e| {
+        e["payload"]["aps"]["event"] == "end"
+    })
+    .await;
+    assert_eq!(open(&end).running, 0);
+    assert!(end["payload"]["aps"]["dismissal-date"].is_u64());
     drop(a);
     daemon.shutdown().await;
 }

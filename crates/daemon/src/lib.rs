@@ -58,7 +58,7 @@ mod ws;
 pub mod info;
 
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -253,6 +253,75 @@ impl Daemon {
 }
 
 async fn bind(core: &Core) -> Result<Endpoint, StartError> {
+    // The ports the last run bound, so tickets already handed out still reach this daemon
+    // directly. Taken by something else since: fresh ports (relays and address lookup still
+    // find it; a direct-only device needs a new ticket).
+    let previous = identity::endpoint_info(&core.cfg.state_dir)
+        .ok()
+        .flatten()
+        .map(|info| info.bound)
+        .unwrap_or_default();
+    let wanted = sticky_binds(core.cfg.bind, &previous);
+    if !wanted.is_empty() {
+        let mut builder = endpoint_builder(core)?;
+        for addr in &wanted {
+            builder = builder
+                .bind_addr(*addr)
+                .map_err(|e| StartError::Bind(e.to_string()))?;
+        }
+        match builder.bind().await {
+            Ok(endpoint) => return Ok(endpoint),
+            Err(e) => tracing::warn!(
+                ?wanted,
+                "binding the previous ports failed, using new ones: {e}"
+            ),
+        }
+    }
+    let mut builder = endpoint_builder(core)?;
+    if let Some(addr) = core.cfg.bind {
+        builder = builder
+            .bind_addr(addr)
+            .map_err(|e| StartError::Bind(e.to_string()))?;
+    }
+    builder
+        .bind()
+        .await
+        .map_err(|e| StartError::Bind(e.to_string()))
+}
+
+/// The sockets to bind so this run listens where the last one did: for `--bind` with port 0
+/// (or the default `0.0.0.0` + `[::]`), the same address on the port the last run had for
+/// that address family. Empty when there is nothing to reuse (first run, a fixed port).
+fn sticky_binds(bind: Option<SocketAddr>, previous: &[SocketAddr]) -> Vec<SocketAddr> {
+    let port_of = |v4: bool| {
+        previous
+            .iter()
+            .find(|a| a.is_ipv4() == v4 && a.port() != 0)
+            .map(SocketAddr::port)
+    };
+    let wanted = match bind {
+        Some(addr) if addr.port() != 0 => return Vec::new(),
+        Some(addr) => vec![addr],
+        None => vec![
+            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
+            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
+        ],
+    };
+    // Every family needs its old port (a run without IPv6 left none): otherwise the plain
+    // bind below is just as good.
+    wanted
+        .into_iter()
+        .map(|mut addr| {
+            port_of(addr.is_ipv4()).map(|port| {
+                addr.set_port(port);
+                addr
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
+}
+
+fn endpoint_builder(core: &Core) -> Result<iroh::endpoint::Builder, StartError> {
     let builder = match &core.cfg.relay {
         RelayMode::Default => Endpoint::builder(presets::N0),
         RelayMode::Disabled => Endpoint::builder(presets::Minimal),
@@ -276,19 +345,15 @@ async fn bind(core: &Core) -> Result<Endpoint, StartError> {
             builder
         }
     };
-    let mut builder = builder
+    let builder = builder
         .secret_key(core.identity.secret.clone())
         .alpns(vec![proto::ALPN.to_vec()]);
-    if let Some(addr) = core.cfg.bind {
-        builder = builder
-            .clear_ip_transports()
-            .bind_addr(addr)
-            .map_err(|e| StartError::Bind(e.to_string()))?;
-    }
-    builder
-        .bind()
-        .await
-        .map_err(|e| StartError::Bind(e.to_string()))
+    // A fixed `--bind` replaces the default sockets; `bind_addr` per family does the same.
+    Ok(if core.cfg.bind.is_some() {
+        builder.clear_ip_transports()
+    } else {
+        builder
+    })
 }
 
 /// The certificates in a PEM file.
@@ -344,6 +409,7 @@ fn endpoint_info_of(endpoint: &Endpoint, relays: &RelayMode) -> EndpointInfo {
         relays: relays.ticket_relays(),
         pid: std::process::id(),
         started_at: identity::now_millis(),
+        bound: endpoint.bound_sockets(),
     }
 }
 
@@ -363,5 +429,30 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
                 Err(e) => tracing::debug!("handshake failed: {e}"),
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebinds_the_ports_the_last_run_had() {
+        let addr = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let previous = [addr("0.0.0.0:51482"), addr("[::]:59205")];
+        assert_eq!(
+            sticky_binds(None, &previous),
+            [addr("0.0.0.0:51482"), addr("[::]:59205")]
+        );
+        // `--bind` with port 0 keeps its address and takes the old port.
+        assert_eq!(
+            sticky_binds(Some(addr("127.0.0.1:0")), &previous),
+            [addr("127.0.0.1:51482")]
+        );
+        // A fixed port is the user's; a first run, or a family without an old port, binds
+        // as before.
+        assert!(sticky_binds(Some(addr("127.0.0.1:7000")), &previous).is_empty());
+        assert!(sticky_binds(None, &[]).is_empty());
+        assert!(sticky_binds(None, &previous[..1]).is_empty());
     }
 }
