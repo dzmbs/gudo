@@ -1029,13 +1029,16 @@ final class LivePortSource: PortSource {
         return Self.url(for: port, localPort: local)
     }
 
-    /// `http://localhost:<local>` plus the path of the URL the server printed.
+    /// `http://localhost:<local>` plus the path of the URL the server printed. A printed
+    /// `*.localhost` name is kept (S-BR1's fallback): it resolves to loopback, so it reaches the
+    /// forward, and a server that routes by name (`app.localhost`) still sees it.
     static func url(for port: DetectedPort, localPort: UInt16) -> URL {
         var components = URLComponents()
         components.scheme = port.url.flatMap { URL(string: $0)?.scheme } == "https" ? "https" : "http"
         components.host = "localhost"
         components.port = Int(localPort)
         if let printed = port.url.flatMap(URLComponents.init(string:)) {
+            if let host = printed.host?.lowercased(), host.hasSuffix(".localhost") { components.host = host }
             components.path = printed.path
             components.query = printed.query
         }
@@ -1116,10 +1119,10 @@ final class LiveLinkSource: LinkSource {
         return (output.mark.command, output.text)
     }
 
-    func countMatches(_ needle: String) async throws -> Int? {
+    func countMatches(_ needle: String, caseSensitive: Bool) async throws -> Int? {
         guard let target, !needle.isEmpty else { return nil }
         let page = try await target.hub.search(
-            pane: target.pane, query: SearchQuery(pattern: needle, mode: .plain, case: .smart), limit: 1)
+            pane: target.pane, query: SearchQuery(pattern: needle, mode: .plain, case: caseSensitive ? .sensitive : .insensitive), limit: 1)
         return Int(page.total)
     }
 }
@@ -1156,16 +1159,19 @@ extension WindowModel {
         }
     }
 
-    /// Counts matches for the scrollback search bar over the daemon's whole scrollback
-    /// (debounced; `searchTotal` stays nil for local panes).
+    /// Applies the needle to the searched pane (highlights, its own count) and counts matches
+    /// over the daemon's whole scrollback (debounced; `searchTotal` stays nil for local and
+    /// plain-SSH panes, whose terminal holds all of it).
     func updateSearchCount() {
+        applySearch()
         searchCountTask?.cancel()
-        let needle = searchNeedle
+        let needle = searchNeedle, caseSensitive = searchCaseSensitive
+        if needle.isEmpty { searchTotal = nil }
         searchCountTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
             guard let self, !Task.isCancelled else { return }
-            let total = try? await self.links.countMatches(needle)
-            guard !Task.isCancelled, self.searchNeedle == needle else { return }
+            let total = try? await self.links.countMatches(needle, caseSensitive: caseSensitive)
+            guard !Task.isCancelled, self.searchNeedle == needle, self.searchCaseSensitive == caseSensitive else { return }
             self.searchTotal = total ?? nil
         }
     }

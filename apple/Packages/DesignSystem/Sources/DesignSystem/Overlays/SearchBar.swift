@@ -3,9 +3,11 @@ import SwiftUI
 /// Scrollback search (Ghostty `SurfaceSearchOverlay`): a 180 pt field with the match counter inside
 /// it, next/previous/close buttons, in a floating panel pinned to a corner. Drag it to another
 /// corner; it snaps with a 0.2 s ease-out. Return goes to the next match, ⇧Return to the previous,
-/// Esc closes when the field is empty and otherwise returns focus to the terminal.
+/// Esc closes. "Aa" matches case exactly (off: case-insensitive, as Ghostty).
 public struct TerminalSearchBar: View {
     @Binding var needle: String
+    /// Match case; nil hides the toggle.
+    var caseSensitive: Binding<Bool>?
     /// Zero-based index of the selected match, if any.
     let selected: Int?
     /// Total matches; nil while the search is still running.
@@ -22,10 +24,11 @@ public struct TerminalSearchBar: View {
     private let padding: CGFloat = 8
 
     public init(
-        needle: Binding<String>, selected: Int?, total: Int?,
+        needle: Binding<String>, caseSensitive: Binding<Bool>? = nil, selected: Int?, total: Int?,
         onNext: @escaping () -> Void, onPrevious: @escaping () -> Void, onClose: @escaping () -> Void
     ) {
         _needle = needle
+        self.caseSensitive = caseSensitive
         self.selected = selected
         self.total = total
         self.onNext = onNext
@@ -49,25 +52,71 @@ public struct TerminalSearchBar: View {
                     .background(Color.primary.opacity(0.1), in: .rect(cornerRadius: DS.Radius.field))
                     .focused($isFocused)
                     .overlay(alignment: .trailing) { counter }
-                    .onSubmit(onNext)
+                    .onSubmit {
+                        onNext()
+                        // Return submits and, on iOS, would end editing: stay in the field.
+                        isFocused = true
+                    }
                     .onKeyPress(.return, phases: .down) { press in
                         guard press.modifiers.contains(.shift) else { return .ignored }
                         onPrevious()
                         return .handled
                     }
+                    // ⌘G / ⇧⌘G while typing: the text field would take them for itself.
+                    .onKeyPress(keys: ["g", "G"], phases: .down) { press in
+                        guard press.modifiers.contains(.command) else { return .ignored }
+                        if press.modifiers.contains(.shift) { onPrevious() } else { onNext() }
+                        return .handled
+                    }
+                    // ⌘. is Esc on an iPad keyboard (the Magic Keyboard has none), as in the terminal.
+                    .onKeyPress(keys: ["."], phases: .down) { press in
+                        guard press.modifiers.contains(.command) else { return .ignored }
+                        onClose()
+                        return .handled
+                    }
                     .onKeyPress(.escape) {
-                        if needle.isEmpty { onClose() } else { isFocused = false }
+                        onClose()
                         return .handled
                     }
                     .accessibilityIdentifier("search-field")
 
+                if let caseSensitive {
+                    Button {
+                        caseSensitive.wrappedValue.toggle()
+                    } label: {
+                        Text(verbatim: "Aa")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(caseSensitive.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .frame(minWidth: 22)
+                            .background(
+                                RoundedRectangle(cornerRadius: DS.Radius.field)
+                                    .fill(Color.accentColor.opacity(caseSensitive.wrappedValue ? 0.18 : 0))
+                                    .padding(-3))
+                    }
+                    .accessibilityLabel("Match Case")
+                    .accessibilityValue(caseSensitive.wrappedValue ? "On" : "Off")
+                    .accessibilityIdentifier("search-case")
+                    .help("Match Case")
+                }
+
                 Button("Previous Match", systemImage: "chevron.up", action: onPrevious)
+                    .help("Previous Match (⇧⌘G)")
                 Button("Next Match", systemImage: "chevron.down", action: onNext)
+                    .help("Next Match (⌘G)")
                 Button("Close Search", systemImage: "xmark", action: onClose)
+                    .help("Close (Esc)")
+                    // Esc closes from the field or the terminal (Ghostty's `end_search`): iOS gives the
+                    // field's own key handler no Esc from a hardware keyboard.
+                    .keyboardShortcut(.escape, modifiers: [])
             }
             .buttonStyle(.bar)
             .padding(8)
             .floatingPanel(cornerRadius: 14)
+            // The count lives inside the field, where accessibility does not reach it: the bar
+            // carries it ("3/17", "-/17").
+            .accessibilityElement(children: .contain)
+            .accessibilityValue(countText)
+            .accessibilityIdentifier("search-bar")
             .onAppear { isFocused = true }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { barSize = $0 }
             .padding(padding)
@@ -87,6 +136,11 @@ public struct TerminalSearchBar: View {
         }
     }
 
+    private var countText: String {
+        if let selected { return "\(selected + 1)/\(total.map(String.init) ?? "?")" }
+        return total.map { "-/\($0)" } ?? ""
+    }
+
     @ViewBuilder private var counter: some View {
         Group {
             if let selected {
@@ -98,6 +152,7 @@ public struct TerminalSearchBar: View {
         .font(.caption.monospacedDigit())
         .foregroundStyle(.secondary)
         .padding(.trailing, 8)
+        .accessibilityIdentifier("search-count")
     }
 
     enum Corner {

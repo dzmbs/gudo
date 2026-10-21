@@ -175,14 +175,7 @@ struct PaneSlot: View {
                 MultiplayerPaneOverlay(workspace: workspace, pane: id, isFocused: focused)
                 AskpassPaneOverlay(workspace: workspace, pane: id)
                 if model.isSearchShown && focused {
-                    TerminalSearchBar(
-                        needle: Bindable(model).searchNeedle,
-                        // Totals over the whole scrollback from the daemon's search; stepping
-                        // through matches needs the renderer's highlights (not wired yet).
-                        selected: model.searchNeedle.isEmpty || !LaunchOptions.mock ? nil : 2,
-                        total: model.searchNeedle.isEmpty ? nil : model.searchTotal,
-                        onNext: {}, onPrevious: {},
-                        onClose: { model.isSearchShown = false })
+                    PaneSearchBar(model: model, pane: workspace.panes[id])
                 }
             }
         }

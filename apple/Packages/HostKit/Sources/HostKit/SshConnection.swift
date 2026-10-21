@@ -3,6 +3,7 @@ import Observation
 import os
 import PaneLayout
 import Synchronization
+import TerminalCore
 import UnnamedCore
 
 /// A plain-SSH host (no daemon): one self-healing `SshSession` shared by every pane (one
@@ -115,12 +116,19 @@ public final class SshConnection: HostConnection {
 /// A plain-SSH pane: a PTY channel on the host's shared session, with the same events as a
 /// daemon pane (docs/SSH.md §4). After a drop the session redials and the pane opens a new
 /// shell (or re-attaches tmux), marked in the stream.
-nonisolated public final class SshPaneBackend: PaneBackend {
+///
+/// It predicts echo like a daemon pane, but nothing here can read the remote termios or ack
+/// inputs: `StreamEchoInference` allows prediction only once keystrokes were seen echoed.
+nonisolated public final class SshPaneBackend: PaneBackend, PredictionFeed {
     public let pane: PaneId
     private let session: SshSession
     private let channel = Mutex<SshPane?>(nil)
     private let size = Mutex(PaneSize(cols: 80, rows: 24, widthPx: 0, heightPx: 0))
     private let tmuxSession: String?
+    private let echo = StreamEchoInference()
+    private let prediction = Mutex<(@Sendable (PredictionUpdate) -> Void)?>(nil)
+    /// Judges keystrokes whose echo never came while nothing else happens.
+    private let echoTimer = Mutex<DispatchSourceTimer?>(nil)
 
     init(pane: PaneId, session: SshSession, tmuxSession: String? = nil) {
         self.pane = pane
@@ -129,9 +137,11 @@ nonisolated public final class SshPaneBackend: PaneBackend {
     }
 
     public func start(events: @escaping @Sendable (PaneEvent) -> Void) {
-        let listener = ClosureListener { event in
+        let listener = ClosureListener { [weak self] event in
             switch event {
-            case .paneBytes(_, _, let data): events(.output(data))
+            case .paneBytes(_, _, let data):
+                events(.output(data))
+                self?.predict(self?.echo.output(data) ?? [])
             case .paneResized(_, _, let size): events(.resized(cols: size.cols, rows: size.rows))
             case .connected: events(.connection(.live))
             case .disconnected(let reason), .refused(let reason): events(.connection(.stale(reason: reason)))
@@ -163,10 +173,40 @@ nonisolated public final class SshPaneBackend: PaneBackend {
     }
 
     public func terminate() {
+        echoTimer.withLock { timer in
+            timer?.cancel()
+            timer = nil
+        }
+        prediction.withLock { $0 = nil }
         channel.withLock { channel in
             channel?.close()
             channel = nil
         }
+    }
+
+    // MARK: Echo prediction
+
+    public func startPredictionFeed(_ onUpdate: @escaping @Sendable (PredictionUpdate) -> Void) {
+        prediction.withLock { $0 = onUpdate }
+        onUpdate(.hint(echo.hint))
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250), leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            predict(echo.tick())
+        }
+        timer.resume()
+        echoTimer.withLock { $0?.cancel(); $0 = timer }
+    }
+
+    public func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
+        predict(echo.input(Array(bytes)))
+        write(bytes)
+    }
+
+    private func predict(_ updates: [PredictionUpdate]) {
+        guard !updates.isEmpty, let onUpdate = prediction.withLock({ $0 }) else { return }
+        for update in updates { onUpdate(update) }
     }
 }
 
