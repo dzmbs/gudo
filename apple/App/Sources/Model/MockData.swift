@@ -290,6 +290,7 @@ final class MockPortSource: PortSource {
         DetectedPort(port: 5432, process: "postgres", url: nil, isHTTP: false, loopbackOnly: true, pane: nil),
     ]
     var hostName: String { "studio" }
+    var hostId: String? { nil }
     var offer: DetectedPort? { nil }
     func dismissOffer() {}
     func open(_ port: DetectedPort) async throws -> URL { URL(string: "https://ghostty.org/docs")! }

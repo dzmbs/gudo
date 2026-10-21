@@ -24,7 +24,7 @@ ticket="$(daemon start)"
 tunnel_web_port="${TUNNEL_WEB_PORT:-47712}"
 "$state/bin/vscode-dev-stub" "$tunnel_web_port" &
 stub=$!
-trap 'daemon stop; kill $stub 2>/dev/null || true; pkill -f "http.server 18765" 2>/dev/null || true; rm -rf "$state"' EXIT
+trap 'daemon stop; kill $stub 2>/dev/null || true; pkill -f "http.server 18765" 2>/dev/null || true; pkill -f "devserver 4831" 2>/dev/null || true; rm -rf "$state"' EXIT
 
 suite="${UI_TEST_CLASS:-W3UITests}"
 only=()

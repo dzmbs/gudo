@@ -962,8 +962,17 @@ final class LivePortSource: PortSource {
 
     func dismissOffer() { offer = nil }
 
+    var hostId: String? { context?.hostId }
+
     func open(_ port: DetectedPort) async throws -> URL {
         guard let context else { throw HostError.notConnected }
+        // S-BR1: at the URL the server printed, through the host's proxy and data store.
+        let hub = context.hub
+        if let url = await DevServerRouting.shared.page(for: port, hostId: context.hostId, client: { try hub.client() }) {
+            offer = nil
+            return url
+        }
+        // The fallback: a forward on the same port number if free here, else any.
         let api = try context.api()
         let local: UInt16
         if let existing = api.forwards().first(where: { if case .tcp(let p) = $0.target { p == port.port } else { false } }) {
@@ -979,8 +988,8 @@ final class LivePortSource: PortSource {
         return Self.url(for: port, localPort: local)
     }
 
-    /// `http://localhost:<local>` plus the path of the URL the server printed. A printed
-    /// `*.localhost` name is kept (S-BR1's fallback): it resolves to loopback, so it reaches the
+    /// The fallback's URL: `http://localhost:<local>` plus the path of the URL the server printed.
+    /// A printed `*.localhost` name is kept: it resolves to loopback, so it reaches the
     /// forward, and a server that routes by name (`app.localhost`) still sees it.
     static func url(for port: DetectedPort, localPort: UInt16) -> URL {
         var components = URLComponents()

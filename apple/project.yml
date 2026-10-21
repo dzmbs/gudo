@@ -79,6 +79,12 @@ targets:
         # The editor and dev servers load over local forwards (http://localhost:<port>).
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+          # `http://app.localhost:5173`: dev servers' `*.localhost` names (S-BR1, through the
+          # host's proxy); NSAllowsLocalNetworking only covers bare names and IP literals.
+          NSExceptionDomains:
+            localhost:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         # Agent runs on the Lock Screen and in the Dynamic Island (AgentActivityWidget).
         NSSupportsLiveActivities: true
         # A window's host, tab and pane: Handoff to the owner's other devices, and a tab dragged

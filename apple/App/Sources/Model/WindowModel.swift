@@ -160,7 +160,12 @@ final class WindowModel {
     /// The host whose usage detail popover is open (from its meter or its menu).
     var usageDetailHost: String?
     /// The page the in-app browser opens (a forwarded port, a link).
-    var browserURL: URL?
+    var browserURL: URL? {
+        didSet { browserHost = nil }
+    }
+    /// The host whose dev server `browserURL` is (its web data store routes to it); set after
+    /// `browserURL`, nil for other pages.
+    var browserHost: String?
     /// The editor is presented (full screen on iPhone and iPad).
     var isEditorShown = false
     /// The editor opens on the Remote Tunnel's offer (palette) instead of the default path.
