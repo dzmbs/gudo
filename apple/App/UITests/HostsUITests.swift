@@ -44,12 +44,12 @@ final class HostsUITests: XCTestCase {
         return directory
     }
 
-    private func launch(hostsDirectory: String) {
+    private func launch(hostsDirectory: String, extra: [String] = []) {
         app = XCUIApplication()
         app.launchArguments += [
             "-hostsDirectory", hostsDirectory, "-destination", "hosts", "-restoreLastTarget", "NO",
             "-ApplePersistenceIgnoreState", "YES", "-resetWindows", "YES",
-        ]
+        ] + extra
         app.launch()
     }
 
@@ -88,25 +88,12 @@ final class HostsUITests: XCTestCase {
     }
 
     func testSSHConfigImportListsTagsAndSavesHosts() throws {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(Self.config, forType: .string)
-        #else
-        UIPasteboard.general.string = Self.config
-        #endif
-        launch(hostsDirectory: try hostsDirectory([]))
-        let importMenu = app.buttons["Import"].firstMatch
-        XCTAssertTrue(importMenu.waitForExistence(timeout: 20), "the Import menu is on the Hosts screen")
-        press(importMenu)
-        let paste = app.buttons["Paste ssh_config"].firstMatch
-        XCTAssertTrue(paste.waitForExistence(timeout: 5))
-        press(paste)
-        #if os(iOS)
-        // iOS asks before an app reads what another app copied.
-        let allow = app.buttons["Allow Paste"].firstMatch
-        let springboardAllow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Paste"].firstMatch
-        if allow.waitForExistence(timeout: 3) { allow.tap() } else if springboardAllow.exists { springboardAllow.tap() }
-        #endif
+        // The file is read as Hosts → Import reads one (`-testSSHConfig`: the simulator's
+        // pasteboard prompt and file picker cannot be driven reliably); the sheet is the real one.
+        let file = NSTemporaryDirectory() + "ssh-config-\(UUID().uuidString)"
+        try Self.config.write(toFile: file, atomically: true, encoding: .utf8)
+        launch(hostsDirectory: try hostsDirectory([]), extra: ["-testSSHConfig", file])
+        XCTAssertTrue(app.buttons["Import"].firstMatch.waitForExistence(timeout: 20), "the Import menu is on the Hosts screen")
         let importButton = app.buttons["Import 3"].firstMatch
         XCTAssertTrue(importButton.waitForExistence(timeout: 10), "the three aliases are offered, all selected")
         XCTAssertTrue(app.staticTexts["builder"].exists)

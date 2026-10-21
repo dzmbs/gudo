@@ -152,7 +152,7 @@ struct PairingSheet: View {
                             TailscaleTag()
                             Text("needs Tailscale connected here")
                                 .font(DS.Font.rowSubtitle)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(DS.Palette.textTertiary)
                                 .lineLimit(1)
                         }
                     }

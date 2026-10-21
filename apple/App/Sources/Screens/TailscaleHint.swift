@@ -41,10 +41,10 @@ struct TailscaleTag: View {
     var body: some View {
         Text("Tailscale")
             .font(DS.Font.badge)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(.tertiary, lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.textTertiary, lineWidth: 0.5))
             .fixedSize()
             .accessibilityLabel("On Tailscale")
             .accessibilityIdentifier("tailscale-tag")
@@ -61,14 +61,14 @@ struct TailscaleHint: View {
             Label("Connect Tailscale on this device to reach it.", systemImage: "network")
                 .labelStyle(.titleAndIcon)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(2)
                 .accessibilityIdentifier("tailscale-hint")
         } else {
             VStack(alignment: .leading, spacing: DS.Space.s) {
                 Label(Tailscale.connectHint, systemImage: "network")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if TailscaleApp.isInstalled {
                     Button("Open Tailscale", systemImage: "arrow.up.forward.app", action: TailscaleApp.open)

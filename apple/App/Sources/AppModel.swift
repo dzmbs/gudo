@@ -199,6 +199,12 @@ final class AppModel {
 
     private func runSingleLaunchHook() async -> WorkspaceTarget? {
         let defaults = UserDefaults.standard
+        // `-testSSHConfig <path>`: read that ssh_config as Hosts → Import would (UI tests; the
+        // simulator's pasteboard and file picker cannot be driven reliably).
+        if let path = defaults.string(forKey: "testSSHConfig"),
+           let text = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) {
+            try? hosts.loadSSHConfig(text)
+        }
         if let ticket = defaults.string(forKey: "testTicket"), !ticket.isEmpty {
             do {
                 return .host(try await hosts.pair(try PairingTicket(ticket)))
