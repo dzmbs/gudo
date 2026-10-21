@@ -927,6 +927,11 @@ impl Client {
                     self.send(ServerCtl::Approval(push));
                 }
             }
+            Event::Workflows(rev) => {
+                if self.caps.contains(Caps::WORKFLOWS) {
+                    self.send(ServerCtl::WorkflowsChanged { rev });
+                }
+            }
         }
     }
 

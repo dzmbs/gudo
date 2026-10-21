@@ -20,4 +20,5 @@ mod terminal;
 mod upgrade;
 mod usage;
 mod vscode;
+mod workflows;
 mod workspace;

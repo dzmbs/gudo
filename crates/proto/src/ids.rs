@@ -288,6 +288,9 @@ bitset! {
         /// Wants `ServerCtl::Approval` pushes (what may be done with an open approval
         /// request, auto-approve rules in force) and may send `ClientCtl::Approval`.
         APPROVALS = 11;
+        /// Wants `ServerCtl::WorkflowsChanged` when a workflow file it has listed changes
+        /// (see `proto::workflow`).
+        WORKFLOWS = 12;
     }
 }
 

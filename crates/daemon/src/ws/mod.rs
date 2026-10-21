@@ -17,6 +17,7 @@ mod review;
 pub(crate) mod tunnel;
 pub(crate) mod turns;
 mod watch;
+pub(crate) mod workflows;
 mod worktree;
 
 pub(crate) use tunnel::DEFAULT_UPDATE_URL as VSCODE_UPDATE_URL;
@@ -53,6 +54,8 @@ pub(crate) struct Ws {
     pub repos: repo::Repos,
     worktree_root: PathBuf,
     pub usage: Arc<crate::usage::Usage>,
+    /// Workflow files (`proto::workflow`).
+    pub workflows: Arc<workflows::Workflows>,
 }
 
 impl Ws {
@@ -64,7 +67,8 @@ impl Ws {
             attention: Attention::default(),
             turns: turns::Turns::new(),
             editors: editor::Editors::default(),
-            tunnel: tunnel::Tunnel::new(events),
+            tunnel: tunnel::Tunnel::new(events.clone()),
+            workflows: Arc::new(workflows::Workflows::new(events)),
             worktrees: worktree::Worktrees::load(&cfg.state_dir, cfg.worktree_port_base),
             repos: repo::Repos::new(),
             worktree_root: cfg
@@ -404,7 +408,44 @@ pub(crate) async fn handle(
             ws.usage.unwatch(&conn.ctl);
             Ok(A::Done)
         }
+        R::WorkflowList { pane_id } => {
+            let cwd = pane_id.map(|p| pane_cwd(core, p)).transpose()?.flatten();
+            let global = workflow_dir(&core.cfg);
+            let workflows = Arc::clone(&ws.workflows);
+            blocking(move || Ok(workflows.list(&global, cwd.as_deref())))
+                .await
+                .map(A::Workflows)
+        }
+        R::WorkflowSave(save) => {
+            let cwd = save
+                .pane_id
+                .map(|p| pane_cwd(core, p))
+                .transpose()?
+                .flatten();
+            let global = workflow_dir(&core.cfg);
+            let workflows = Arc::clone(&ws.workflows);
+            blocking(move || workflows.save(save.scope, &save.workflow, &global, cwd.as_deref()))
+                .await
+                .map(A::WorkflowSaved)
+        }
     }
+}
+
+/// The global workflow directory of the daemon's user.
+fn workflow_dir(cfg: &Config) -> PathBuf {
+    let xdg = cfg.pane_var("XDG_CONFIG_HOME").map(PathBuf::from);
+    workflows::global_dir(xdg.as_deref(), &cfg.home())
+}
+
+/// A pane's directory: OSC 7, else where it was launched.
+fn pane_cwd(core: &Core, pane: PaneId) -> Result<Option<PathBuf>, WsError> {
+    let entry = core
+        .pane(pane)
+        .ok_or_else(|| WsError::NotFound(format!("pane {pane}")))?;
+    let meta = lock(&entry.meta).cwd.clone();
+    Ok(meta
+        .or_else(|| lock(&entry.record).cwd.clone())
+        .map(PathBuf::from))
 }
 
 // --- hooks from the rest of the daemon ------------------------------------------------------

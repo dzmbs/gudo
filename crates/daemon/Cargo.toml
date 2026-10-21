@@ -36,6 +36,7 @@ ring.workspace = true
 notify.workspace = true
 ignore.workspace = true
 toml.workspace = true
+serde-saphyr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
