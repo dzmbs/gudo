@@ -215,61 +215,6 @@ public struct CheckBadge: View {
     }
 }
 
-/// A popover that opens on pointer hover (Mac, iPad with a pointer) and closes 150 ms after the
-public struct HoverPopover<Label: View, Content: View>: View {
-    @Binding var isPresented: Bool
-    let onClick: (() -> Void)?
-    @ViewBuilder let label: () -> Label
-    @ViewBuilder let content: () -> Content
-    @State private var overAnchor = false
-    @State private var overPopover = false
-    @State private var closing: Task<Void, Never>?
-
-    public init(
-        isPresented: Binding<Bool>, onClick: (() -> Void)? = nil,
-        @ViewBuilder label: @escaping () -> Label, @ViewBuilder content: @escaping () -> Content
-    ) {
-        _isPresented = isPresented
-        self.onClick = onClick
-        self.label = label
-        self.content = content
-    }
-
-    public var body: some View {
-        Button {
-            if let onClick { onClick() } else { isPresented.toggle() }
-        } label: {
-            label()
-        }
-        .onHover { inside in
-            overAnchor = inside
-            update()
-        }
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            content()
-                .chromeContent()
-                .onHover { inside in
-                    overPopover = inside
-                    update()
-                }
-                .presentationCompactAdaptation(.sheet)
-        }
-    }
-
-    private func update() {
-        closing?.cancel()
-        if overAnchor || overPopover {
-            if !isPresented { isPresented = true }
-        } else if isPresented {
-            closing = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(150))
-                guard !Task.isCancelled, !overAnchor, !overPopover else { return }
-                isPresented = false
-            }
-        }
-    }
-}
-
 /// The 6 pt dot of a highlight section header: the colour at 60 % with a hairline stroke.
 public struct SectionDot: View {
     let color: AnyShapeStyle

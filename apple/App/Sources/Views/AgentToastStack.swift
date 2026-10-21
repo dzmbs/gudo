@@ -62,6 +62,7 @@ private struct AgentToastCard: View {
                 Button("Dismiss", systemImage: "xmark") {
                     withAnimation(DS.Motion.overlay) { model.agentToasts.dismiss(card.id) }
                 }
+                .help("Dismiss")
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
                 .font(.caption2.weight(.bold))

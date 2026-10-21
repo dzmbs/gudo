@@ -452,8 +452,9 @@ private struct TerminalToolbar: ToolbarContent {
 }
 
 
-/// name, the icon replaced by the state glyph only while the link is not healthy. The popover is
-/// the one place the round trip is shown. On this device's own window it opens Hosts.
+/// name, the icon replaced by the state glyph only while the link is not healthy. Hovering opens
+/// them; the popover is the one place the round trip is shown. On this device's own window it
+/// opens Hosts.
 private struct HostToolbarButton: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -461,19 +462,28 @@ private struct HostToolbarButton: View {
 
     var body: some View {
         if workspace.isRemote {
-            Button { showsDetails.toggle() } label: {
+            HoverPopover(isPresented: $showsDetails) {
                 // A plain stack, not a Label: iPad toolbars reduce a Label to its icon.
-                HStack(spacing: 6) {
+                HStack(spacing: DS.Space.row) {
                     ConnectionGlyph(model.connection, healthy: Image(systemName: "server.rack"))
                     Text(model.hostName).lineLimit(1)
                 }
                 .font(.subheadline)
                 .foregroundStyle(DS.Palette.textSecondary)
-                .padding(.horizontal, 6)
+                .padding(.horizontal, DS.Space.row)
+                .contentShape(.rect)
+            } content: {
+                HostDetailsPopover(workspace: workspace) {
+                    showsDetails = false
+                    toggleHosts()
+                } onDisconnect: {
+                    showsDetails = false
+                    model.disconnect()
+                }
             }
             .help(model.connection.isQuiet ? model.hostName : "\(model.hostName) · \(model.connection.title)")
+            .accessibilityLabel("\(model.hostName), \(model.connection.title)")
             .accessibilityIdentifier("hosts-button")
-            .popover(isPresented: $showsDetails) { details }
         } else {
             Button("Hosts", systemImage: "server.rack") { toggleHosts() }
                 .help("Hosts (⇧⌘H)")
@@ -481,45 +491,87 @@ private struct HostToolbarButton: View {
         }
     }
 
-    private var details: some View {
-        VStack(alignment: .leading, spacing: DS.Space.s) {
-            Text(model.hostName).font(.headline)
-            if let address = model.hosts.hosts.first(where: { $0.id == workspace.hostId })?.address, !address.isEmpty {
-                Text(address)
-                    .font(DS.Font.literalSmall)
-                    .foregroundStyle(DS.Palette.textSecondary)
-                    .textSelection(.enabled)
+    private func toggleHosts() {
+        withAnimation(DS.Motion.snappy) { model.destination = model.destination == .hosts ? .terminal : .hosts }
+    }
+}
+
+/// one line "address · 3 tabs · 12 ms", a divider, one row per tab (its mark or agent glyph, its
+/// name, its state word right-aligned), then All Hosts and Disconnect. System padding and
+/// spacing (O3), 260–480 wide, scrolling past 400.
+private struct HostDetailsPopover: View {
+    let workspace: Workspace
+    let onAllHosts: () -> Void
+    let onDisconnect: () -> Void
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        let group = model.groups.groups.first { $0.id == workspace.hostId }
+        let tabs = group?.tabs ?? []
+        VStack(alignment: .leading) {
+            (Text(stateWord + " ").foregroundStyle(DS.Palette.textSecondary) + Text(model.hostName))
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(summary(tabs: tabs.count))
+                .font(.subheadline)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .monospacedDigit()
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            if !tabs.isEmpty, let group {
+                Divider()
+                ForEach(tabs) { tab in
+                    let ref = group.ref(tab.id)
+                    let state = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }.min { $0.urgency < $1.urgency }
+                    let title = model.workspace(ofGroup: group.id)?.title(of: tab) ?? tab.title ?? "Shell"
+                    Button {
+                        model.focus(ref)
+                    } label: {
+                        HStack(spacing: DS.Space.row) {
+                            TabLeadingMark(program: model.programIdentity(of: tab, onGroup: group.id), state: state)
+                            Text(title).lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: DS.Space.s)
+                            Text(model.currentTab == ref ? "Open" : state.flatMap { $0 == .idle || $0 == .unknown ? nil : $0.title } ?? "")
+                                .foregroundStyle(DS.Palette.textSecondary)
+                        }
+                        .font(.caption)
+                        .padding(.vertical, DS.Space.xxs)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("host-details-tab-\(tab.id.rawValue)")
+                }
             }
-            HStack(spacing: DS.Space.row) {
-                ConnectionGlyph(model.connection)
-                Text(workspace.host?.status.summary ?? model.connection.title)
-                    .monospacedDigit()
-            }
-            .font(.subheadline)
-            .foregroundStyle(DS.Palette.textSecondary)
-            Divider().padding(.vertical, DS.Space.xs)
+            Divider()
             HStack {
-                Button("All Hosts") {
-                    showsDetails = false
-                    toggleHosts()
-                }
+                Button("All Hosts", action: onAllHosts)
+                    .help("Hosts (⇧⌘H)")
                 Spacer()
-                Button("Disconnect", role: .destructive) {
-                    showsDetails = false
-                    model.disconnect()
-                }
+                Button("Disconnect", role: .destructive, action: onDisconnect)
             }
             .buttonStyle(.borderless)
         }
-        .chromeContent()
-        .padding(DS.Space.l)
-        .frame(minWidth: 260)
-        .presentationCompactAdaptation(.popover)
+        .hoverPopoverFrame()
         .accessibilityIdentifier("host-details")
     }
 
-    private func toggleHosts() {
-        withAnimation(DS.Motion.snappy) { model.destination = model.destination == .hosts ? .terminal : .hosts }
+    /// The status word before the name: "Connected", "Reconnecting", …
+    private var stateWord: String {
+        model.connection.title
+    }
+
+    private func summary(tabs: Int) -> String {
+        var parts: [String] = []
+        if let address = model.hosts.hosts.first(where: { $0.id == workspace.hostId })?.address, !address.isEmpty {
+            parts.append(address)
+        }
+        parts.append(tabs == 1 ? "1 tab" : "\(tabs) tabs")
+        if let status = workspace.host?.status, case .connected(let rtt?) = status {
+            parts.append("\(Int((rtt / .milliseconds(1)).rounded())) ms")
+        } else if let status = workspace.host?.status, !status.isLive {
+            parts.append(status.summary)
+        }
+        return parts.joined(separator: " · ")
     }
 }
 

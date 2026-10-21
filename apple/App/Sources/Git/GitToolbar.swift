@@ -328,6 +328,7 @@ struct OpenInMenu: View {
             Button("Diff", systemImage: "plusminus") { model.sheet = .diff }
             if let worktree = git.worktree, let port = git.port(of: worktree) {
                 Button("localhost:\(String(port))", systemImage: "globe") { git.openPort(of: worktree) }
+                    .help("Open localhost:\(String(port)) in the browser")
             }
             if let pr = git.pr {
                 Divider()

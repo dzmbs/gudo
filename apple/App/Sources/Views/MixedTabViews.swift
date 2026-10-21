@@ -302,6 +302,7 @@ struct MixedTabChip: View {
             .padding(.horizontal, 40)
             HStack(spacing: 0) {
                 Button("Close Tab", systemImage: "xmark") { model.closeMixedTab(tab.id) }
+                    .help("Close Tab (⌘W)")
                     .font(.caption2.weight(.bold))
                     .frame(width: 22, height: 22)
                     .opacity(isHovered ? 1 : 0)
@@ -475,6 +476,7 @@ private struct EmptyColumn: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 240)
             Button("New Tab", systemImage: "plus") { model.newTabInOtherColumn() }
+                .help("New Tab in This Column")
                 .buttonStyle(.glass)
                 .accessibilityIdentifier("column-new-tab")
         }

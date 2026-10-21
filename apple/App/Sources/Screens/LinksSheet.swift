@@ -114,6 +114,7 @@ struct LinksSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done", systemImage: "xmark") { dismiss() }
+                        .help("Done (Esc)")
                 }
             }
             .task { await load() }

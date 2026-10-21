@@ -51,8 +51,10 @@ struct DiffReviewView: View {
                             Text("Side by Side").tag(DiffLayout.split)
                         }
                     }
+                    .help("Layout: automatic, unified or side by side")
                     .menuIndicator(.hidden)
                     Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }
+                        .help("Reload (⌘R)")
                         .keyboardShortcut("r", modifiers: .command)
                 }
             }
@@ -269,6 +271,7 @@ struct DiffReviewView: View {
                 }
                 Spacer()
                 Button("Copy", systemImage: "doc.on.doc") { DiffPasteboard.copy(formattedNotes) }
+                    .help("Copy the notes")
                     .buttonStyle(.glass)
                 Button {
                     send()
@@ -708,6 +711,7 @@ private struct NoteCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Delete Note", systemImage: "xmark", action: delete)
+                .help("Delete Note")
                 .buttonStyle(.bar)
                 .controlSize(.small)
         }

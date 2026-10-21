@@ -206,6 +206,7 @@ private struct HostGroupHeader: View {
     let collapsed: Bool
     @Environment(WindowModel.self) private var model
     @State private var hovered = false
+    @State private var showsAgents = false
 
     var body: some View {
         let state = group.connectionState
@@ -251,7 +252,16 @@ private struct HostGroupHeader: View {
                 }
                 // The host's agents at a glance (§3.4 aggregate: blocked > error > done > working).
                 if let agents = aggregateAgentState {
-                    AgentGlyph(state: agents)
+                    HoverPopover(isPresented: $showsAgents) {
+                        AgentGlyph(state: agents)
+                            .frame(minWidth: 22, minHeight: 22)
+                            .contentShape(.rect)
+                    } content: {
+                        HostAgentsPopover(group: group) { showsAgents = false }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Agents on \(group.name)")
+                    .accessibilityIdentifier("host-agents-\(group.name)")
                 }
                 Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
                     .labelStyle(.iconOnly)
@@ -303,6 +313,46 @@ private struct HostGroupHeader: View {
     private var aggregateAgentState: AgentState? {
         let states = group.tabs.flatMap(\.root.panes).compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
         return states.filter { $0 != .idle && $0 != .unknown }.min { AgentGlyph.priority($0) < AgentGlyph.priority($1) }
+    }
+}
+
+/// A host's agents at a glance (the header's glyph, on hover): one row each with its glyph,
+private struct HostAgentsPopover: View {
+    let group: HostGroup
+    let onSelect: () -> Void
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        let numbers = Dictionary(uniqueKeysWithValues: model.groups.tabs.enumerated().map { ($1, $0 + 1) })
+        VStack(alignment: .leading) {
+            Text("Agents on \(group.name)").font(.headline)
+            Divider()
+            ForEach(group.tabs) { tab in
+                ForEach(tab.root.panes, id: \.self) { pane in
+                    if let state = model.agentState(ofPane: pane, onGroup: group.id) {
+                        let program = model.programIdentity(ofPane: pane, onGroup: group.id)
+                        Button {
+                            onSelect()
+                            model.focus(pane: pane, onGroup: group.id)
+                        } label: {
+                            HStack(spacing: DS.Space.row) {
+                                AgentGlyph(state: state)
+                                Text(program.isShell ? "Agent" : program.displayName)
+                                Text("\(numbers[group.ref(tab.id)] ?? 0)")
+                                    .monospacedDigit()
+                                    .foregroundStyle(DS.Palette.textTertiary)
+                                Spacer(minLength: DS.Space.s)
+                                Text(state.title).foregroundStyle(DS.Palette.textSecondary)
+                            }
+                            .font(.caption)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .hoverPopoverFrame()
     }
 }
 
@@ -658,6 +708,7 @@ private struct SidebarFooter: View {
                 model.sheet = .settings
                 #endif
             }
+            .help("Settings (⌘,)")
             .buttonStyle(.bar)
             .accessibilityIdentifier("open-settings")
         }
@@ -711,11 +762,14 @@ struct CompactTerminalView: View {
                     paneSwitcher(tab)
                 }
                 Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
+                    .help("Command Palette (⌘K)")
                 NewTabButton(workspace: workspace)
             }
             .buttonStyle(.bar)
             .labelStyle(.iconOnly)
             .padding(.horizontal, DS.Space.s)
+            // A 36 pt bar with a two-line title: grows with Dynamic Type only as far as it fits.
+            .dynamicTypeSize(...DynamicTypeSize.xLarge)
             .frame(height: 36)
             TerminalArea(workspace: workspace, compact: true)
         }
@@ -811,12 +865,12 @@ struct CompactTerminalView: View {
                     Text("\(total)")
                         .font(.caption2.weight(.semibold).monospacedDigit())
                         .foregroundStyle(DS.Palette.textSecondary)
-                        .padding(.horizontal, 5)
+                        .padding(.horizontal, DS.Space.badgeH - 2)
                         .background(DS.Palette.selectedFill, in: .capsule)
                 }
             }
             .padding(.horizontal, DS.Space.xs)
-            .frame(height: 30)
+            .frame(minHeight: 30)
             .contentShape(.rect)
         }
         .accessibilityIdentifier("tab-switcher")

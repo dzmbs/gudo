@@ -75,6 +75,7 @@ struct HostsView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Host", systemImage: "plus", action: onAdd)
+                    .help("Add Host")
                     .accessibilityIdentifier("hosts-add")
             }
         }
@@ -225,6 +226,7 @@ struct HostsView: View {
                 .accessibilityIdentifier("hosts-quick-connect")
             if !destination.isEmpty {
                 Button("Connect", systemImage: "return", action: connectTyped)
+                    .help("Connect (↩)")
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bar)
             }

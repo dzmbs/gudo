@@ -129,6 +129,7 @@ struct InboxView: View {
                     .accessibilityIdentifier("inbox-new")
                 } else {
                     Button("New Agent", systemImage: "plus", action: onLaunch)
+                        .help("New Agent")
                         .accessibilityIdentifier("inbox-new-agent")
                 }
             }
@@ -834,7 +835,10 @@ private struct InboxRow: View {
             isComposerFocused = true
         }
         .buttonStyle(.glass)
+        #if os(macOS)
         .controlSize(.small)
+        #endif
+        .help("Reply to \(item.agent.title)")
         .accessibilityIdentifier("inbox-reply-\(item.id)")
     }
 
@@ -867,7 +871,10 @@ private struct InboxRow: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.primaryGlass)
                 .buttonBorderShape(.circle)
+                #if os(macOS)
                 .controlSize(.small)
+                #endif
+                .help("Send (↩)")
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
                 .accessibilityIdentifier("inbox-send")
         }

@@ -303,6 +303,13 @@ struct PaneSlot: View {
 
 /// It sits on the terminal background so the pane still reads as one surface.
 private struct PaneHeader: View {
+    /// The pane menu's opacity on an unfocused, unhovered header: hidden on the Mac (hover shows
+    /// it), quiet on touch, where there is no hover.
+    #if os(macOS)
+    static let restingMenuOpacity = 0.0
+    #else
+    static let restingMenuOpacity = DS.Opacity.mutedGlyph
+    #endif
     static let height: CGFloat = 24
 
     let id: PaneId
@@ -351,11 +358,14 @@ private struct PaneHeader: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
-            .opacity(isFocused || isHovered ? 1 : 0)
+            .opacity(isFocused || isHovered ? 1 : Self.restingMenuOpacity)
+            .help("Pane Menu: split, zoom, find, share, close")
             .accessibilityLabel("Pane Menu")
         }
         .padding(.leading, DS.Space.s)
         .padding(.trailing, DS.Space.xxs)
+        // A fixed 24 pt band over the grid: its caption text grows only so far.
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
         .frame(height: Self.height)
         .background(theme.background, ignoresSafeAreaEdges: [])
         .overlay(alignment: .bottom) {

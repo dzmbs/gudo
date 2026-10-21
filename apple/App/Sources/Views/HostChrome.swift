@@ -61,6 +61,7 @@ struct HostNotices: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                             Button("Dismiss", systemImage: "xmark") { app.hosts.dismissNotes(hostId) }
+                                .help("Dismiss")
                                 .labelStyle(.iconOnly)
                                 .buttonStyle(.bar)
                         }
@@ -171,6 +172,7 @@ private struct HelperUpdateNotice: View {
             }
             if advice.kind == .update {
                 Button("Not Now", systemImage: "xmark", action: onDismiss)
+                    .help("Not Now")
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bar)
             }

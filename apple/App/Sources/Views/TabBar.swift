@@ -55,6 +55,8 @@ struct TabBar: View {
         .frame(height: DS.Size.tabStrip)
         .background(DS.Palette.base)
         .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
+        // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         .animation(DS.Motion.quick, value: active)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-bar")
