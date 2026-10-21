@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// fixtures: a local `unnamed-hostd` whose `code serve-web` is a stand-in page that counts its
@@ -257,3 +258,4 @@ final class EditorPanesUITests: XCTestCase {
         closeEditors()
     }
 }
+#endif
