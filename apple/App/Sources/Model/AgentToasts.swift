@@ -145,6 +145,7 @@ extension WindowModel {
             return
         }
         agentToasts.dismiss(item: oldest.id)
+        destination = .terminal
         agents.open(oldest.id)
     }
 

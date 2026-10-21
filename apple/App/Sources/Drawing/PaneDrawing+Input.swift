@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 import TerminalRenderer
 import UniformTypeIdentifiers
+import UnnamedCore
 #if os(iOS)
 import UIKit
 #else
@@ -125,12 +126,14 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         true
     }
 
-    /// A placement's menu as a `UIMenu`.
+    /// A placement's menu as a `UIMenu`: sections inline, Export and Version History as
+    /// submenus (the history is fetched when it opens).
     func uiMenu(forPlacement id: UInt64) -> [UIMenuElement] {
         guard let placement = placement(id: id) else { return [] }
         let anchor = frame(of: placement) ?? .zero
         return menu(for: placement).sections.map { section in
-            UIMenu(title: section.title ?? "", options: .displayInline, children: section.items.map { item in
+            let children: [UIMenuElement] = section.items.map { item in
+                if item.placementAction == .history { return historyMenu(placement) }
                 let action = UIAction(
                     title: item.title, subtitle: item.subtitle, image: UIImage(systemName: item.systemImage),
                     identifier: UIAction.Identifier("drawing.menu.\(item.id)"),
@@ -140,14 +143,58 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
                 }
                 action.accessibilityIdentifier = "drawing.menu.\(item.id)"
                 return action
-            })
+            }
+            if section.submenu {
+                let submenu = UIMenu(title: section.title ?? "", image: section.systemImage.flatMap { UIImage(systemName: $0) }, children: children)
+                submenu.accessibilityIdentifier = "drawing.menu.\((section.title ?? "").lowercased())"
+                return submenu
+            }
+            return UIMenu(title: section.title ?? "", options: .displayInline, children: children)
         }
+    }
+
+    /// Version History: every finished version with its render, the shown one checked; picking
+    /// another restores it.
+    private func historyMenu(_ placement: Placement) -> UIMenu {
+        let list = UIDeferredMenuElement.uncached { [weak self] completion in
+            MainActor.assumeIsolated {
+                guard let self else { return completion([]) }
+                Task { @MainActor in
+                    let versions = await self.history(of: placement)
+                    guard !versions.isEmpty else {
+                        return completion([UIAction(title: "No earlier versions", attributes: .disabled) { _ in }])
+                    }
+                    var items: [UIMenuElement] = []
+                    for version in versions {
+                        let current = version.version == placement.version
+                        var image: UIImage?
+                        if let hash = version.image?.hash, let png = await self.hub.png(hash: hash) {
+                            image = await UIImage(data: png)?.byPreparingThumbnail(ofSize: CGSize(width: 96, height: 54))
+                        }
+                        let action = UIAction(
+                            title: Self.when(version), subtitle: Self.versionDetail(version, current: current),
+                            image: image ?? UIImage(systemName: "scribble"),
+                            identifier: UIAction.Identifier("drawing.history.\(version.version)"),
+                            attributes: current ? .disabled : [], state: current ? .on : .off
+                        ) { _ in
+                            self.restore(placement, to: version)
+                        }
+                        action.accessibilityIdentifier = "drawing.history.\(version.version)"
+                        items.append(action)
+                    }
+                    completion(items)
+                }
+            }
+        }
+        let menu = UIMenu(title: "Version History", image: UIImage(systemName: "clock.arrow.circlepath"), children: [list])
+        menu.accessibilityIdentifier = "drawing.menu.history"
+        return menu
     }
 
     // MARK: Drop
 
     func dropInteraction(_ interaction: UIDropInteraction, canHandle session: any UIDropSession) -> Bool {
-        !isReadOnly && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier, UTType.fileURL.identifier, "com.excalidraw.json", UTType.json.identifier])
+        !isReadOnly && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier, UTType.fileURL.identifier, UTType.excalidraw.identifier, UTType.json.identifier])
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {
@@ -155,6 +202,12 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: any UIDropSession) {
+        // A drawing dragged from a pane of this app: the same drawing, not a copy of its pixels.
+        let refs = session.localDragSession?.items.compactMap { $0.localObject as? DrawingDragRef } ?? []
+        if !refs.isEmpty {
+            refs.forEach(dropped)
+            return
+        }
         for item in session.items {
             let provider = item.itemProvider
             let name = provider.suggestedName ?? "Dropped Image"
@@ -163,6 +216,11 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
                     guard let data else { return }
                     let png = UIImage(data: data).flatMap { $0.pngData() } ?? data
                     Task { @MainActor [weak self] in self?.importAttachment(name: name + ".png", data: png) }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.excalidraw.identifier) {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.excalidraw.identifier) { data, _ in
+                    guard let data else { return }
+                    Task { @MainActor [weak self] in self?.importAttachment(name: name + ".excalidraw", data: data) }
                 }
             } else {
                 provider.loadFileRepresentation(forTypeIdentifier: UTType.data.identifier) { url, _ in
@@ -269,15 +327,23 @@ final class PencilCapture {
 /// with `offerMenu`, its menu: a tap (finger or pointer) opens Send to… / Start… / Copy / Share
 /// / Edit / Delete, anchored to the drawing. The Pencil, two-finger scrolls and every touch while
 /// the pane draws or writes pass through to the terminal.
-final class PlacementMarker: UIButton {
+final class PlacementMarker: UIView, UIDragInteractionDelegate {
     private weak var drawing: PaneDrawing?
     private var placementId: UInt64 = 0
+    /// Presents the menu (a tap asks it to). A menu button of its own would open on touch
+    /// down and swallow the long press that lifts the drawing.
+    private let menuButton = UIButton()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         isAccessibilityElement = true
         accessibilityTraits = .image
+        menuButton.frame = bounds
+        menuButton.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        menuButton.isUserInteractionEnabled = false
+        menuButton.isAccessibilityElement = false
+        addSubview(menuButton)
     }
 
     @available(*, unavailable)
@@ -287,15 +353,30 @@ final class PlacementMarker: UIButton {
         self.drawing = drawing
         self.placementId = placementId
         isUserInteractionEnabled = true
-        showsMenuAsPrimaryAction = true
+        // Long press lifts the drawing: into other apps (PNG + `.excalidraw`), other panes,
+        // windows and hosts (`PaneDrawing.dropped`).
+        let drag = UIDragInteraction(delegate: self)
+        drag.isEnabled = true
+        addInteraction(drag)
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(showMenu)))
         accessibilityTraits = [.image, .button]
-        accessibilityHint = "Send, copy, share or edit the drawing"
-        menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+        accessibilityHint = "Send, copy, share or edit the drawing; touch and hold to drag it"
+        menuButton.showsMenuAsPrimaryAction = true
+        menuButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             MainActor.assumeIsolated {
                 guard let self, let drawing = self.drawing else { return completion([]) }
                 completion(drawing.uiMenu(forPlacement: self.placementId))
             }
         }])
+    }
+
+    @objc private func showMenu() {
+        menuButton.performPrimaryAction()
+    }
+
+    override func accessibilityActivate() -> Bool {
+        showMenu()
+        return true
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -308,6 +389,35 @@ final class PlacementMarker: UIButton {
     func setIdentifier(_ id: String, label: String) {
         accessibilityIdentifier = id
         accessibilityLabel = label
+    }
+
+    func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: any UIDragSession) -> [UIDragItem] {
+        guard let drawing, drawing.isIdle, let placement = drawing.placement(id: placementId), let ref = drawing.dragRef(placement) else { return [] }
+        let item = UIDragItem(itemProvider: drawing.itemProvider(for: placement))
+        item.localObject = ref
+        if let png = drawing.hub.cachedPNG(hash: placement.image.hash), let image = UIImage(data: png) {
+            item.previewProvider = { [bounds] in
+                let view = UIImageView(image: image)
+                view.frame = bounds
+                view.contentMode = .scaleAspectFit
+                return UIDragPreview(view: view)
+            }
+        }
+        CanvasWebView.log.info("drag: placement \(placement.placementId) lifted")
+        return [item]
+    }
+
+    func dragInteraction(_ interaction: UIDragInteraction, previewForLifting item: UIDragItem, session: any UIDragSession) -> UITargetedDragPreview? {
+        // The image is drawn by Metal under this (transparent) marker: lift a copy of it.
+        guard let drawing, let placement = drawing.placement(id: placementId),
+              let png = drawing.hub.cachedPNG(hash: placement.image.hash), let image = UIImage(data: png), let superview
+        else { return nil }
+        let view = UIImageView(image: image)
+        view.frame = bounds
+        view.contentMode = .scaleAspectFit
+        let parameters = UIDragPreviewParameters()
+        parameters.backgroundColor = .clear
+        return UITargetedDragPreview(view: view, parameters: parameters, target: UIDragPreviewTarget(container: superview, center: center))
     }
 
     /// Outlines the placement for a moment: where Done put it.
@@ -326,15 +436,11 @@ final class PlacementMarker: UIButton {
     }
 }
 #else
-extension PaneDrawing: NSGestureRecognizerDelegate {
+extension PaneDrawing {
     /// Click on a placement → reopen it; drop and paste of images and `.excalidraw` files →
     /// import (⌥-drop onto an agent pane sends the image to the agent).
     func installInput(on view: TerminalView) {
-        let click = NSClickGestureRecognizer(target: self, action: #selector(placementClicked(_:)))
-        click.delaysPrimaryMouseButtonEvents = false
-        click.delegate = self
-        view.addGestureRecognizer(click)
-
+        // Clicks and drags on a drawing go to its marker (`PlacementMarker`).
         view.onPasteAttachment = { [weak self] pasteboard in
             self?.importFromPasteboard(pasteboard, send: false) ?? false
         }
@@ -345,6 +451,12 @@ extension PaneDrawing: NSGestureRecognizerDelegate {
 
     private func importFromPasteboard(_ pasteboard: NSPasteboard, send: Bool) -> Bool {
         guard !isReadOnly else { return false }
+        // A drawing dragged from a pane of this app: the same drawing, not a copy of its pixels.
+        if let data = pasteboard.data(forType: NSPasteboard.PasteboardType(DrawingDragRef.typeIdentifier)),
+           let ref = try? JSONDecoder().decode(DrawingDragRef.self, from: data) {
+            dropped(ref)
+            return true
+        }
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             let accepted = urls.filter { PaneDrawing.acceptsFile(named: $0.lastPathComponent) }
             for url in accepted {
@@ -359,37 +471,202 @@ extension PaneDrawing: NSGestureRecognizerDelegate {
         return true
     }
 
-    /// A click on a drawing in the output opens its menu (Send to… / Start… / Copy / Save /
-    /// Share / Edit / Delete) at the click.
-    @objc private func placementClicked(_ gesture: NSClickGestureRecognizer) {
-        guard let view = gesture.view, let placement = placement(at: gesture.location(in: view)) else { return }
-        let anchor = frame(of: placement) ?? CGRect(origin: gesture.location(in: view), size: .zero)
+    /// A click on a drawing in the output opens its menu (Send to… / Start… / Copy / Export /
+    /// Share / Version History / Edit / Delete) at the click.
+    func showMenu(forPlacement id: UInt64, at point: CGPoint) {
+        guard let view = pane?.view, let placement = placement(id: id) else { return }
+        let anchor = frame(of: placement) ?? CGRect(origin: point, size: .zero)
         let popup = NSMenu()
         for (index, section) in menu(for: placement).sections.enumerated() {
-            if index > 0 { popup.addItem(.separator()) }
-            if let title = section.title { popup.addItem(.sectionHeader(title: title)) }
-            for item in section.items {
+            let entries = section.items.map { item -> NSMenuItem in
+                if item.placementAction == .history { return historyItem(placement) }
                 let entry = MenuAction.item(item.title, item.systemImage) { [weak self] in
                     self?.perform(item, on: placement, anchor: anchor)
                 }
                 if let subtitle = item.subtitle { entry.subtitle = subtitle }
                 entry.setAccessibilityIdentifier("drawing.menu.\(item.id)")
-                popup.addItem(entry)
+                return entry
             }
+            if index > 0 { popup.addItem(.separator()) }
+            if section.submenu, let title = section.title {
+                let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                parent.image = section.systemImage.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+                parent.submenu = NSMenu(title: title)
+                entries.forEach { parent.submenu?.addItem($0) }
+                parent.setAccessibilityIdentifier("drawing.menu.\(title.lowercased())")
+                popup.addItem(parent)
+                continue
+            }
+            if let title = section.title { popup.addItem(.sectionHeader(title: title)) }
+            entries.forEach(popup.addItem)
         }
-        popup.popUp(positioning: nil, at: gesture.location(in: view), in: view)
+        popup.popUp(positioning: nil, at: point, in: view)
     }
 
-    func gestureRecognizerShouldBegin(_ gesture: NSGestureRecognizer) -> Bool {
-        guard let view = gesture.view else { return false }
-        return overlay == nil && placement(at: gesture.location(in: view)) != nil
+    /// Version History: fetched as the menu opens; every finished version with its render,
+    /// the shown one checked; picking another restores it.
+    private func historyItem(_ placement: Placement) -> NSMenuItem {
+        let parent = NSMenuItem(title: "Version History", action: nil, keyEquivalent: "")
+        parent.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
+        parent.setAccessibilityIdentifier("drawing.menu.history")
+        let submenu = NSMenu(title: "Version History")
+        let loading = NSMenuItem(title: "Loading…", action: nil, keyEquivalent: "")
+        loading.isEnabled = false
+        submenu.addItem(loading)
+        parent.submenu = submenu
+        Task { [weak self, weak submenu] in
+            guard let self else { return }
+            let versions = await self.history(of: placement)
+            var items: [NSMenuItem] = []
+            for version in versions {
+                let current = version.version == placement.version
+                let entry = MenuAction.item(Self.when(version), "scribble") { [weak self] in
+                    self?.restore(placement, to: version)
+                }
+                entry.subtitle = Self.versionDetail(version, current: current)
+                entry.state = current ? .on : .off
+                entry.isEnabled = !current
+                if let hash = version.image?.hash, let png = await self.hub.png(hash: hash), let image = NSImage(data: png) {
+                    let height: CGFloat = 32
+                    image.size = NSSize(width: min(96, height * image.size.width / max(image.size.height, 1)), height: height)
+                    entry.image = image
+                }
+                entry.setAccessibilityIdentifier("drawing.history.\(version.version)")
+                items.append(entry)
+            }
+            guard let submenu else { return }
+            submenu.removeAllItems()
+            if items.isEmpty {
+                let none = NSMenuItem(title: "No earlier versions", action: nil, keyEquivalent: "")
+                none.isEnabled = false
+                submenu.addItem(none)
+            }
+            items.forEach(submenu.addItem)
+        }
+        return parent
+    }
+
+    /// What dragging `placement` out offers: a PNG file (Finder, Mail), PNG data, the
+    /// `.excalidraw` scene when it is at hand, and a reference for this app's panes.
+    func dragWriter(for placement: Placement) -> NSPasteboardWriting? {
+        guard let ref = dragRef(placement), let png = hub.cachedPNG(hash: placement.image.hash) else { return nil }
+        let scene = sceneCache[placement.artifactId]
+        return DrawingFilePromise(png: png, scene: scene, ref: ref, name: Self.fileName(.png))
+    }
+
+    /// Fetches the scene a drag may carry, ahead of the drag (pasteboards are answered at once).
+    func prefetchScene(_ placement: Placement) {
+        guard sceneCache[placement.artifactId] == nil else { return }
+        let client = hub.client
+        Task { [weak self] in
+            guard let scene = try? await client.excalidrawFile(artifactId: placement.artifactId) else { return }
+            self?.sceneCache[placement.artifactId] = scene
+        }
+    }
+
+    private var sceneCache: [UInt64: Data] {
+        get { objc_getAssociatedObject(self, &PaneDrawing.sceneKey) as? [UInt64: Data] ?? [:] }
+        set { objc_setAssociatedObject(self, &PaneDrawing.sceneKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    private static nonisolated(unsafe) var sceneKey: UInt8 = 0
+}
+
+/// A drawing dragged out: a promised PNG file, plus PNG data, the `.excalidraw` scene and the
+/// in-app reference on the same pasteboard item.
+nonisolated final class DrawingFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate {
+    private let png: Data
+    private let scene: Data?
+    private let ref: DrawingDragRef
+    private let name: String
+
+    init(png: Data, scene: Data?, ref: DrawingDragRef, name: String) {
+        self.png = png
+        self.scene = scene
+        self.ref = ref
+        self.name = name
+        super.init()
+        fileType = UTType.png.identifier
+        delegate = self
+    }
+
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        var types = super.writableTypes(for: pasteboard) + [.png, NSPasteboard.PasteboardType(DrawingDragRef.typeIdentifier)]
+        if scene != nil { types.append(NSPasteboard.PasteboardType(UTType.excalidraw.identifier)) }
+        return types
+    }
+
+    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        super.writableTypes(for: pasteboard).contains(type) ? super.writingOptions(forType: type, pasteboard: pasteboard) : []
+    }
+
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        switch type.rawValue {
+        case NSPasteboard.PasteboardType.png.rawValue: png
+        case DrawingDragRef.typeIdentifier: try? JSONEncoder().encode(ref)
+        case UTType.excalidraw.identifier: scene
+        default: super.pasteboardPropertyList(forType: type)
+        }
+    }
+
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        name
+    }
+
+    // The completion-handler form: the compiler crashes emitting the `async` one's thunk
+    // (Swift 6.4).
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping @Sendable ((any Error)?) -> Void) {
+        do {
+            try png.write(to: url, options: .atomic)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
     }
 }
 
-/// An accessibility element over a placement (VoiceOver, UI tests); clicks pass through.
-final class PlacementMarker: NSView {
+/// Over a drawing placed in the output: its accessibility element (VoiceOver, UI tests), its
+/// menu on a click, and a drag source (into other apps as a PNG file + data + the scene, into
+/// this app's panes as the drawing itself). Passes everything through while the pane draws.
+final class PlacementMarker: NSView, NSDraggingSource {
+    private weak var drawing: PaneDrawing?
+    private var placementId: UInt64 = 0
+    private var down: NSPoint?
+
     override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let drawing, drawing.isIdle else { return nil }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        down = convert(event.locationInWindow, from: nil)
+        if let drawing, let placement = drawing.placement(id: placementId) { drawing.prefetchScene(placement) }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = down, let drawing, let placement = drawing.placement(id: placementId) else { return }
+        let at = convert(event.locationInWindow, from: nil)
+        guard hypot(at.x - start.x, at.y - start.y) > 4 else { return }
+        down = nil
+        guard let writer = drawing.dragWriter(for: placement) else { return }
+        let item = NSDraggingItem(pasteboardWriter: writer)
+        let image = drawing.hub.cachedPNG(hash: placement.image.hash).flatMap(NSImage.init(data:))
+        item.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [item], event: event, source: self)
+        CanvasWebView.log.info("drag: placement \(placement.placementId) lifted")
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard down != nil, let drawing, let view = drawing.pane?.view else { return }
+        down = nil
+        drawing.showMenu(forPlacement: placementId, at: view.convert(event.locationInWindow, from: nil))
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
+    }
 
     func setIdentifier(_ id: String, label: String) {
         setAccessibilityElement(true)
@@ -407,9 +684,17 @@ final class PlacementMarker: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.layer?.borderWidth = 0 }
     }
 
-    /// The menu is the click gesture's (`placementClicked`); the marker stays inert.
     func offerMenu(drawing: PaneDrawing, placementId: UInt64) {
-        setAccessibilityHelp("Click to send, copy, save or edit the drawing")
+        self.drawing = drawing
+        self.placementId = placementId
+        setAccessibilityRole(.button)
+        setAccessibilityHelp("Click to send, copy, export or edit the drawing; drag it to move it")
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let drawing, let view = drawing.pane?.view else { return false }
+        drawing.showMenu(forPlacement: placementId, at: view.convert(NSPoint(x: frame.midX, y: frame.midY), from: superview))
+        return true
     }
 }
 #endif

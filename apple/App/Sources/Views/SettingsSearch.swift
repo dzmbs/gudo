@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, font, cursor, splits, keyboard, passwords, voice, notifications, bell, agents, git, about
+    case appearance, font, cursor, splits, links, keyboard, passwords, voice, notifications, bell, agents, git, network, about
 
     var title: String {
         switch self {
@@ -33,6 +33,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .font: "Font"
         case .cursor: "Cursor"
         case .splits: "Splits"
+        case .links: "Links"
         case .keyboard: "Keyboard"
         case .passwords: "Passwords"
         case .voice: "Voice"
@@ -40,6 +41,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .bell: "Bell"
         case .agents: "Agent Usage"
         case .git: "Git"
+        case .network: "Network"
         case .about: "About"
         }
     }
@@ -48,11 +50,12 @@ nonisolated enum SettingsSection: String, Sendable {
     var pane: SettingsPane {
         switch self {
         case .appearance: .appearance
-        case .font, .cursor, .splits, .passwords: .terminal
+        case .font, .cursor, .splits, .links, .passwords: .terminal
         case .keyboard, .voice: .keyboard
         case .notifications, .bell: .notifications
         case .agents: .agents
         case .git: .git
+        case .network: .network
         case .about: .about
         }
     }
@@ -86,12 +89,15 @@ enum SettingsIndex {
             .init(id: "merge-strategy", title: "Merge Pull Requests With", section: .git, synonyms: ["pr", "squash", "rebase", "merge"]),
             .init(id: "auto-delete", title: "Delete Merged Worktrees", section: .git, synonyms: ["worktree", "cleanup", "branch"]),
             .init(id: "git-scripts", title: "Scripts", section: .git, synonyms: ["run", "command", "⌘r"]),
+            .init(id: "relay-mode", title: "Relays", section: .network, synonyms: ["relay", "iroh", "self-hosted", "local only", "network"]),
+            .init(id: "relay-ca", title: "Import Certificate", section: .network, synonyms: ["certificate", "ca", "private", "relay", "tls"]),
             .init(id: "version", title: "Version", section: .about, synonyms: ["build", "about"]),
             .init(id: "acknowledgements", title: "Acknowledgements", section: .about, synonyms: ["licenses", "licences", "credits", "open source"]),
         ]
         #if os(iOS)
         entries += [
             .init(id: "tab-bar", title: "Tab Bar When the Sidebar Is Hidden", section: .appearance, synonyms: ["tabs", "strip"]),
+            .init(id: "open-web-links", title: "Open Web Links In", section: .links, synonyms: ["link", "url", "safari", "browser"]),
             .init(id: "ascii-keyboard", title: "ASCII Keyboard", section: .keyboard, synonyms: ["keyboard", "autocorrect"]),
             .init(id: "hardware-key-bar", title: "With a Hardware Keyboard", section: .keyboard, synonyms: ["key bar", "esc", "pill", "magic keyboard"]),
             .init(id: "key-bar-profiles", title: "Key Bar Profiles", section: .keyboard, synonyms: ["key bar", "keys", "ctrl"]),

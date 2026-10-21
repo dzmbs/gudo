@@ -97,6 +97,108 @@ async fn daemon_and_client_connect_through_a_self_hosted_relay() {
     daemon.shutdown().await;
 }
 
+/// The app's "Custom relay" setting: a ticket that names no relay at all (and no direct
+/// addresses) still reaches the daemon through the relay the device was told to use.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_devices_own_relay_replaces_the_tickets() {
+    let (_server, url, cert) = spawn_relay().await;
+    let state = tempfile::tempdir().unwrap();
+    let ca = state.path().join("relay-ca.pem");
+    std::fs::write(&ca, pem(&cert)).unwrap();
+    let relay_url = url.clone();
+    let daemon = start_with(state.path(), move |c| {
+        c.relay = daemon::RelayMode::Custom(CustomRelays {
+            urls: vec![relay_url],
+            auth_token: None,
+            ca_files: vec![ca],
+        });
+    })
+    .await;
+    daemon.wait_online(Duration::from_secs(10)).await;
+
+    let link = daemon.pairing_link(daemon::PAIRING_TTL).unwrap();
+    let (ticket, _) = Ticket::parse_with_extras(&link).unwrap();
+    // A classic ticket: default relays, no home relay, no addresses.
+    let bare = Ticket {
+        addrs: vec![],
+        relay_url: None,
+        ..ticket
+    }
+    .to_string();
+    let mut config = ClientConfig::new(ClientConfig::generate_key());
+    config.relay = RelayMode::Default;
+    let mut c = TestClient::connect_with(
+        &bare,
+        config,
+        ConnectOptions {
+            relay_ca_der: vec![cert],
+            relay_urls: vec![url],
+            ..ConnectOptions::default()
+        },
+    );
+    c.until("connected through the device's relay", |c| c.connected > 0)
+        .await;
+    let pane = c.attach_and_follow().await;
+    c.type_line(pane, "echo own-$((40+2))-relay");
+    c.wait_text(pane, "own-42-relay").await;
+    drop(c);
+    daemon.shutdown().await;
+}
+
+/// The settings change while a client runs (`Client::set_relays`): a client that cannot reach
+/// the daemon (no address, no relay) gets the device's relay and connects on a new endpoint.
+#[tokio::test(flavor = "multi_thread")]
+async fn relay_settings_apply_to_a_running_client() {
+    let (_server, url, cert) = spawn_relay().await;
+    let state = tempfile::tempdir().unwrap();
+    let ca = state.path().join("relay-ca.pem");
+    std::fs::write(&ca, pem(&cert)).unwrap();
+    let relay_url = url.clone();
+    let daemon = start_with(state.path(), move |c| {
+        c.relay = daemon::RelayMode::Custom(CustomRelays {
+            urls: vec![relay_url],
+            auth_token: None,
+            ca_files: vec![ca],
+        });
+    })
+    .await;
+    daemon.wait_online(Duration::from_secs(10)).await;
+    let link = daemon.pairing_link(daemon::PAIRING_TTL).unwrap();
+    let (ticket, _) = Ticket::parse_with_extras(&link).unwrap();
+    let bare = Ticket {
+        addrs: vec![],
+        relay_url: None,
+        ..ticket
+    }
+    .to_string();
+
+    // Direct only, and the ticket has no address: nothing to dial.
+    let mut config = ClientConfig::new(ClientConfig::generate_key());
+    config.relay = RelayMode::Disabled;
+    let mut c = TestClient::connect_with(&bare, config, ConnectOptions::default());
+    c.until("the first dial fails", |c| {
+        c.log.iter().any(|e| e.starts_with("Disconnected"))
+    })
+    .await;
+    assert_eq!(c.connected, 0, "unreachable without a relay");
+
+    c.client.set_relays(
+        RelayMode::Default,
+        &ConnectOptions {
+            relay_ca_der: vec![cert],
+            relay_urls: vec![url],
+            ..ConnectOptions::default()
+        },
+    );
+    c.until("connected after the settings changed", |c| c.connected > 0)
+        .await;
+    let pane = c.attach_and_follow().await;
+    c.type_line(pane, "echo switched-$((40+2))");
+    c.wait_text(pane, "switched-42").await;
+    drop(c);
+    daemon.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn local_only_daemons_hand_out_direct_tickets() {
     let state = tempfile::tempdir().unwrap();

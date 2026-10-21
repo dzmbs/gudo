@@ -77,6 +77,9 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
                 guard let self, let daemon else { return }
                 self.handle(event, hostId: id, daemon: daemon)
             }
+            daemon.multiplayer.onKnockArrived = { [weak self] knock in
+                Task { await self?.postKnock(knock, hostId: id) }
+            }
             subscriptions[id] = (identity, token)
         }
         for id in subscriptions.keys where !live.contains(id) { subscriptions[id] = nil }
@@ -158,6 +161,24 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Someone knocks on a host this device owns: a time-sensitive note that opens the Inbox,
+    /// where they are let in or turned away. In front, the banner over the terminal says it.
+    func postKnock(_ knock: Knock, hostId: String) async {
+        guard !appIsActive, await ensureAuthorized() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(knock.name) wants to join"
+        content.body = "\(hosts.record(hostId)?.name ?? "Your host") · their link offers \(roleWords(knock.roles)). Open to let them in or turn them away."
+        content.threadIdentifier = hostId
+        content.interruptionLevel = .timeSensitive
+        content.sound = .default
+        content.userInfo = [Self.knockHostKey: hostId]
+        let request = UNNotificationRequest(identifier: "knock-\(hostId)-\(knock.knockId)", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
+        Self.log.info("posted knock host=\(hostId, privacy: .public)")
+    }
+
+    nonisolated static let knockHostKey = "knockHost"
+
     private func clearDelivered(hostId: String) {
         Task {
             let center = UNUserNotificationCenter.current()
@@ -183,6 +204,10 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let action = response.actionIdentifier
         let userInfo = response.notification.request.content.userInfo
+        if userInfo[Self.knockHostKey] is String {
+            await MainActor.run { ActiveWindow.model?.destination = .inbox }
+            return
+        }
         let thread = response.notification.request.content.threadIdentifier
         let handler = NotificationActionHandler(client: AppActionClient())
         let result = await handler.handle(actionIdentifier: action, target: NotificationTarget(userInfo: userInfo))

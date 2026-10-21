@@ -288,6 +288,7 @@ final class GitUI {
             defer { busy = nil }
             do {
                 let info = try await api.prCheckout(repo: repo, number: number)
+                hub?.notePort(info.port, worktree: info.path)
                 openTab(in: info.path, name: "pr-\(number)")
                 toast("#\(number) is in \((info.path as NSString).lastPathComponent)", "arrow.triangle.pull", style: .success)
             } catch {
@@ -337,6 +338,7 @@ final class GitUI {
         Task {
             do {
                 let info = try await api.worktreeRestore(id: archived.id)
+                hub?.notePort(info.port, worktree: info.path)
                 openTab(in: info.path, name: (info.path as NSString).lastPathComponent)
                 toast("Restored \(archived.branch ?? archived.path)", "tray.and.arrow.up", style: .success)
             } catch {
@@ -368,6 +370,36 @@ final class GitUI {
             return
         }
         run(script)
+    }
+
+    /// The worktree's `PORT` on its host (the window's when nil), if the daemon gave it one.
+    func port(of wt: WorktreeState?, host: String? = nil) -> UInt16? {
+        guard let wt, !wt.main else { return nil }
+        return hub(host)?.port(ofWorktree: wt.path)
+    }
+
+    /// Opens the worktree's `localhost:PORT` in the in-app browser: the host's port forwarded
+    /// to the same port here. A worktree on another host first brings its tab forward (the
+    /// browser forwards from the window's host).
+    func openPort(of wt: WorktreeState, host: String? = nil, tab: Tab? = nil) {
+        guard let window, let port = port(of: wt, host: host) else { return }
+        let fromPopover = isPRPopoverShown
+        isPRPopoverShown = false
+        Task {
+            // A sheet cannot come up while the popover is still going away.
+            if fromPopover { try? await Task.sleep(for: .milliseconds(450)) }
+            if let host, host != window.workspace?.hostId {
+                guard let tab else {
+                    toast("Open a tab in \(wt.displayBranch) first.", "network", style: .neutral)
+                    return
+                }
+                window.focus(TabRef(hostId: host, tab: tab.id))
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            let detected = window.ports.ports.first { $0.port == port }
+                ?? DetectedPort(port: port, process: "", url: nil, isHTTP: true, loopbackOnly: true, pane: wt.displayBranch)
+            await window.openPort(detected)
+        }
     }
 
     /// A new tab with a shell in `path`.

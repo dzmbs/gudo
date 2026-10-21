@@ -221,11 +221,12 @@ extension WindowModel {
         }
     }
 
-    /// A URL from a pane (links sheet): http(s) on localhost goes through a forward when the
-    /// window's host has that port; other URLs open in the in-app browser as they are.
+    /// A URL from a pane (a tap, the links sheet): a dev server's URL on a remote host (loopback,
+    /// `*.localhost`, the host's own address on a port it listens on: `isDevServerURL`) goes
+    /// through a forward; other URLs open in the in-app browser as they are.
     func openURL(_ text: String) async {
         guard let url = URL(string: text) else { return }
-        if let host = url.host(), ["localhost", "127.0.0.1", "0.0.0.0"].contains(host), let port = url.port, workspace?.isRemote == true {
+        if isDevServerURL(url), let port = url.port, workspace?.isRemote == true {
             var detected = ports.ports.first { $0.port == UInt16(port) }
                 ?? DetectedPort(port: UInt16(port), process: "", url: nil, isHTTP: true, loopbackOnly: true, pane: nil)
             detected.url = text

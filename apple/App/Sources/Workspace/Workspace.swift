@@ -190,6 +190,10 @@ final class Workspace {
     var isLayoutLive: Bool { host?.status.isLive ?? true }
     /// What a layout change does while the host is not live: say so (never a silent no-op).
     @ObservationIgnored var onLayoutUnavailable: (() -> Void)?
+    /// A pane's terminal took the keyboard (a click or tap in it): its window follows, which
+    /// matters when the pane is not in the window's own tab on this host (a mixed tab's pane,
+    /// the other column).
+    @ObservationIgnored var onPaneFocus: ((PaneId) -> Void)?
 
     func apply(_ op: LayoutOp) {
         if case .newTab = op, !canOpenTabs {
@@ -459,6 +463,8 @@ final class Workspace {
         PaneDrawing.attach(to: pane, workspace: self)
         // Shell command marks: gutter stripes, the command menu, ⌘↑/⌘↓ between prompts.
         PaneCommandMarks.attach(to: pane, workspace: self)
+        // Links: localhost in the in-app browser, paths in the editor, the rest per the setting.
+        PaneLinks.attach(to: pane, workspace: self)
         #if os(iOS)
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
@@ -487,6 +493,7 @@ final class Workspace {
             keyBar.update(context: keyBarContext(of: pane))
             pane.claimSize()
             apply(.focus(id))
+            onPaneFocus?(id)
             keyBar.onDraw = DrawingCommands.canDraw(in: self) ? { [weak self] in if let self { DrawingCommands.toggleDrawing(in: self) } } : nil
         }
         #if DEBUG
@@ -509,6 +516,7 @@ final class Workspace {
             ActiveWindow.workspace = self
             pane?.claimSize()
             self?.apply(.focus(id))
+            self?.onPaneFocus?(id)
         }
         #endif
         return pane

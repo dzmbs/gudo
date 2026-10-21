@@ -49,6 +49,18 @@ final class AgentFleetUITests: XCTestCase {
         XCTAssertTrue(open.waitForNonExistence(timeout: 12), "the toast times out")
     }
 
+    func testShiftCommandAJumpsToTheWaitingAgent() {
+        launch(screen: "agent-toast")
+        let card = element("agent-toast-approve-a3")
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        wakeKeyboard()
+        // ⇧⌘A (⇧⌘G is find previous): the agent waiting longest is shown, so its card goes
+        // at once (long before the toast's 8 s).
+        XCTAssertTrue(card.exists)
+        app.typeKey("a", modifierFlags: [.command, .shift])
+        XCTAssertTrue(card.waitForNonExistence(timeout: 2), "⇧⌘A took you to the waiting agent")
+    }
+
     // MARK: Inbox
 
     func testInboxFiltersCountAndNarrowTheList() {

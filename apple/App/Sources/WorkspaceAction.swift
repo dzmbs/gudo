@@ -7,6 +7,8 @@ import SwiftUI
 /// asks which host, ⌘1…⌘9 and ⇧⌘[ ] walk the unified list across hosts, ⌘P finds a tab anywhere.
 enum WorkspaceAction: Hashable {
     case newTab, newTabOnHost, splitRight, splitDown, closePane
+    /// A pane on another host beside the focused one: the tab becomes a mixed tab.
+    case splitWithHost
     case toggleZoom, focus(Direction), resize(Direction)
     /// The previous or next shell prompt at the top of the pane (Ghostty's `jump_to_prompt`).
     case previousPrompt, nextPrompt
@@ -16,18 +18,20 @@ enum WorkspaceAction: Hashable {
     case newWindow
     /// The window's own screens and overlays.
     case commandPalette, commandPaletteGhostty, find, links, inbox, hosts
+    /// The next (older) and previous scrollback search match (⌘G / ⇧⌘G).
+    case findNext, findPrevious
     case jumpToWaitingAgent
     /// Shows or hides the sidebar; hidden, the tabs are a strip on top (`TabPlacement`).
     case toggleSidebar
     /// Every shortcut on one page.
     case shortcuts
 
-    static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .closePane]
+    static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
         + [.previousPrompt, .nextPrompt]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
-    static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .links, .inbox, .jumpToWaitingAgent, .hosts]
+    static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
@@ -39,6 +43,7 @@ enum WorkspaceAction: Hashable {
         case .newTabOnHost: "New Tab on Host…"
         case .splitRight: "Split Right"
         case .splitDown: "Split Down"
+        case .splitWithHost: "Split with Host…"
         case .closePane: "Close Pane"
         case .toggleZoom: "Zoom Pane"
         case .focus(let direction): "Select Pane \(direction.name)"
@@ -55,6 +60,8 @@ enum WorkspaceAction: Hashable {
         case .newWindow: "New Window"
         case .commandPalette, .commandPaletteGhostty: "Command Palette"
         case .find: "Find…"
+        case .findNext: "Find Next"
+        case .findPrevious: "Find Previous"
         case .links: "Links & Paths…"
         case .inbox: "Inbox"
         case .jumpToWaitingAgent: "Jump to Waiting Agent"
@@ -70,6 +77,9 @@ enum WorkspaceAction: Hashable {
         case .newTabOnHost: KeyboardShortcut("t", modifiers: [.command, .option])
         case .splitRight: KeyboardShortcut("d")
         case .splitDown: KeyboardShortcut("d", modifiers: [.command, .shift])
+        // ⌥ is "on another host" (⌥⌘T); ⌥⌘D itself is the system's Dock shortcut on the Mac and
+        // iPad, which never reaches the app, so Split with Host adds ⇧.
+        case .splitWithHost: KeyboardShortcut("d", modifiers: [.command, .option, .shift])
         case .closePane: KeyboardShortcut("w")
         case .toggleZoom: KeyboardShortcut(.return, modifiers: [.command, .shift])
         case .focus(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option])
@@ -89,9 +99,12 @@ enum WorkspaceAction: Hashable {
         case .commandPalette: KeyboardShortcut("k")
         case .commandPaletteGhostty: KeyboardShortcut("p", modifiers: [.command, .shift])
         case .find: KeyboardShortcut("f")
+        case .findNext: KeyboardShortcut("g")
+        case .findPrevious: KeyboardShortcut("g", modifiers: [.command, .shift])
         case .links: KeyboardShortcut("l", modifiers: [.command, .shift])
         case .inbox: KeyboardShortcut("i", modifiers: [.command, .shift])
-        case .jumpToWaitingAgent: KeyboardShortcut("g", modifiers: [.command, .shift])
+        // ⇧⌘G is find previous (Ghostty, macOS); A for agent, free in the app and the systems.
+        case .jumpToWaitingAgent: KeyboardShortcut("a", modifiers: [.command, .shift])
         case .hosts: KeyboardShortcut("h", modifiers: [.command, .shift])
         case .toggleSidebar: KeyboardShortcut("b")
         case .shortcuts: KeyboardShortcut("/")
@@ -106,9 +119,12 @@ enum WorkspaceAction: Hashable {
             perform(on: workspace)
             return
         }
+        // A mixed tab's panes split, close, zoom and move focus in the mixed tab.
+        if window.performInMixedTab(self) { return }
         switch self {
         case .newTab: window.newTab()
         case .newTabOnHost: window.showHostPicker()
+        case .splitWithHost: window.showSplitWithHostPicker()
         case .previousTab: window.selectTab(offset: -1)
         case .nextTab: window.selectTab(offset: 1)
         case .selectTab(let number): window.selectTab(shortcut: number)
@@ -117,6 +133,8 @@ enum WorkspaceAction: Hashable {
         case .newWindow: window.newWindow()
         case .commandPalette, .commandPaletteGhostty: window.isPaletteShown.toggle()
         case .find: window.isSearchShown = true
+        case .findNext: window.findNext()
+        case .findPrevious: window.findPrevious()
         case .links: window.sheet = .links
         case .inbox: window.destination = .inbox
         case .jumpToWaitingAgent: window.jumpToWaitingAgent()
@@ -143,11 +161,11 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab, .newWindow: break
+        case .goToTab, .newWindow, .splitWithHost: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.
-        case .commandPalette, .commandPaletteGhostty, .find, .links, .inbox, .jumpToWaitingAgent, .hosts, .toggleSidebar, .shortcuts: break
+        case .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts, .toggleSidebar, .shortcuts: break
         }
     }
 

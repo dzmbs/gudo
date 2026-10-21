@@ -118,7 +118,9 @@ pub fn like_this(tool: &str, input: &str) -> Option<RuleMatch> {
             prefix: String::new(),
         });
     }
-    let input = input.trim();
+    // Only spaces and tabs are trimmed: a newline anywhere, even a trailing one, is a second
+    // command line as far as a rule is concerned.
+    let input = trim_blanks(input);
     if !is_simple_command(input) {
         return None;
     }
@@ -153,13 +155,18 @@ pub fn rule_matches(matcher: &RuleMatch, tool: &str, input: &str) -> bool {
     if !is_shell_tool(tool) {
         return matcher.prefix.is_empty() || continues(input.trim(), &matcher.prefix);
     }
-    let input = input.trim();
+    let input = trim_blanks(input);
     if matcher.prefix.is_empty() || !is_simple_command(input) {
         return false;
     }
     // Compare word by word, so extra spaces between them do not matter.
     let normalized = input.split_whitespace().collect::<Vec<_>>().join(" ");
     continues(&normalized, &matcher.prefix)
+}
+
+/// Spaces and tabs off both ends (never newlines).
+fn trim_blanks(input: &str) -> &str {
+    input.trim_matches([' ', '\t'])
 }
 
 fn continues(input: &str, prefix: &str) -> bool {

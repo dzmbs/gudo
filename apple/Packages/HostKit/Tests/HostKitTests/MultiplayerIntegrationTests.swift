@@ -153,6 +153,63 @@ import UnnamedCore
     }
 }
 
+extension MultiplayerIntegrationTests {
+    /// Knock to join through the real daemon: the guest knocks and waits, the owner sees the
+    /// knock and admits it as a driver, the guest joins with its own grant; the owner then sets
+    /// the session's approval rules and the guest hears them.
+    @Test func knockAdmitJoinAndApprovalRules() async throws {
+        let daemon = try LocalDaemon()
+        let owner = makeModel()
+        let ownerHost: String
+        do {
+            ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        } catch PairingError.refused {
+            ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        }
+        let ownerConnection = try #require(owner.connection(ownerHost) as? DaemonConnection)
+        let mp = ownerConnection.multiplayer
+        try await eventually("owner identity") { mp.me != nil }
+
+        var draft = InviteDraft()
+        draft.knock = true
+        draft.scope = .host
+        draft.uses = .unlimited
+        let invite = try await mp.createInvite(draft.options(inviter: "Alex", session: nil, tab: nil, pane: nil))
+        let card = try inspectInvite(invite: invite.link)
+        #expect(card.knock && card.sinceJoin)
+
+        let guest = makeModel()
+        let asked = Mutex(false)
+        let joining = Task { try await guest.knock(invite: invite.link, name: "Kim Lee") { asked.withLock { $0 = true } } }
+        try await eventually("owner sees the knock", timeout: .seconds(10)) { mp.knocks.contains { $0.name == "Kim Lee" } }
+        #expect(asked.withLock { $0 })
+        let knock = try #require(mp.knocks.first)
+        await mp.admit(knock, roles: [.viewer, .driver], sinceJoin: true)
+        let guestHost = try await joining.value
+        let guestConnection = try #require(guest.connection(guestHost) as? DaemonConnection)
+        let gmp = guestConnection.multiplayer
+        try await eventually("guest identity") { gmp.me != nil }
+        #expect(gmp.canDrive && !gmp.isOwner)
+        #expect(gmp.me?.name == "Kim Lee")
+        try await eventually("knock cleared") { mp.knocks.isEmpty }
+
+        // Turned away: the knock throws, nothing is saved.
+        let other = makeModel()
+        let refused = Task { try await other.knock(invite: invite.link, name: "Lou") }
+        try await eventually("lou knocks", timeout: .seconds(10)) { mp.knocks.contains { $0.name == "Lou" } }
+        await mp.turnAway(try #require(mp.knocks.first { $0.name == "Lou" }))
+        await #expect(throws: PairingError.turnedAway) { try await refused.value }
+        #expect(other.records.isEmpty)
+
+        // Session rules: set by the owner, heard by the guest.
+        let session = try #require(ownerConnection.layout.sessionId)
+        let rules = ApprovalPolicy(mode: .twoPerson, maxRisk: .edits)
+        await mp.setApprovalPolicy(rules, session: session)
+        try await eventually("guest hears the rules", timeout: .seconds(10)) { gmp.approvalPolicy == rules }
+        #expect(gmp.approvalBlock(requestId: 1, risk: .any) != nil)
+    }
+}
+
 nonisolated final class ClientEventCollector: ClientEventListener {
     private let state = Mutex(false)
     var connected: Bool { state.withLock { $0 } }

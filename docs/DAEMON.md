@@ -444,12 +444,28 @@ replaces a LAN one). Scans run every 2 s while any client is connected, at once 
 prints a new URL or a command starts/ends, never with no client; the whole list is pushed when
 it changes. Gap: a URL that scrolls off within one tick is missed (the listener still is).
 
-### 5.3 Editor (VS Code tunnel; `code serve-web`; VSCodium as automatic fallback; openvscode-server explicit only)
+### 5.3 Editor (`code serve-web` over our forward by default; VS Code tunnel opt-in; VSCodium as automatic fallback; openvscode-server explicit only)
 
-**Main path since 2026-10-18: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
-their own GitHub or Microsoft account by device code. The app opens
-`https://vscode.dev/tunnel/<name>/<folder>` top-level in a WKWebView (vscode.dev refuses framing), and
-on the Mac it opens `vscode://vscode-remote/tunnel+<name>/<path>:L:C`.
+on the host, reached over our direct iroh port forward** (`EditorLaunch` below; apple-ffi
+`DaemonClient::open_editor`). No Microsoft relay, no tunnel quota, and **never a GitHub or Microsoft
+sign-in**. The app shows Microsoft's licence terms (VS Code licence, VS Code Server licence, Microsoft
+Privacy Statement) once per host in a first-use sheet and passes `accept_vscode_license` only after the
+user taps Accept there; Cancel starts and installs nothing.
+
+- **Mac:** "Open in VS Code" opens the user's own **desktop VS Code with Remote-SSH over our
+  forward** (`vscode://vscode-remote/ssh-remote+<hex-JSON authority>/<path>[:L[:C]]` to
+  `127.0.0.1:<stable per-host port>` forwarded to the host's `127.0.0.1:22`; see "Desktop Remote-SSH"
+  below). It needs no licence sheet from us (desktop VS Code and Remote-SSH have their own terms). When
+  VS Code is not installed, or the host has no sshd answering, the app opens the in-app editor instead.
+- **Fallback, opt-in: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
+  palette). The daemon runs Microsoft's `code tunnel` on the host. The user signs in with their own
+  GitHub or Microsoft account by device code, which the app shows (code, Copy, open the verification
+  page in the user's browser) and never completes itself. The app opens
+  `https://vscode.dev/tunnel/<name>/<folder>` top-level in a `WKWebView` (vscode.dev refuses framing)
+  that opens popups (sign-in, Settings Sync) as sheets keeping `window.opener`; on the Mac the tunnel's
+  `vscode://vscode-remote/tunnel+<name>/<path>:L:C` opens desktop VS Code.
+
+The tunnel RPCs:
 
 - **`VsCodeCliInstall{accept_license}`.**
   - Refused unless the user accepted <https://code.visualstudio.com/license> in the app.
@@ -574,9 +590,10 @@ no editor picker; VS Code is the editor and must just work).
   - We never run it on our infrastructure.
   - We launch it only after the user accepted the Server licence in the app, and only for that
     user's own use.
-  - The tunnel is the main path because Microsoft's own client (vscode.dev or desktop) is then
-    the client. serve-web through our forward makes our app the client, which is greyer; it
-    stays opt-in.
+    consulted): the user runs Microsoft's server on their own machine for their own use, with
+    the terms accepted by the user in the app. The tunnel (Microsoft's own client and relay)
+    stays available as the opt-in fallback, and on the Mac desktop VS Code with Remote-SSH is
+    Microsoft's own client end to end.
   - The Remote FAQ's "cannot build a public or commercial service on top of … VS Code Server"
   - openvscode-server (MIT, Open VSX extensions only; the Microsoft Marketplace terms forbid
     non-Microsoft products from using it) is an explicit fallback only.
@@ -616,6 +633,12 @@ worktree is started with `PORT` and `UN_WORKTREE`, recorded in `layout.json`
 (`worktree: {path, port}`). `WorktreeLaunch{path, split_from, axis, agent?}` splits a pane into
 a shell or Claude/Codex in the worktree. Setup and teardown commands come from
 `.unnamed.json` (§5.12).
+
+The `Repos` push (§5.12) does not carry the port: `WorktreeState` is frozen on the wire. The app
+reads ports with `WorktreeList` whenever a repository's set of worktrees changes
+(`DaemonWorkspace.worktreePorts`, matched by path, else by branch) and takes the port that
+`TaskCreate`, `WorktreeRestore` and `PrCheckout` return at once. Only worktrees the daemon made or
+registered have one; the main checkout has none.
 
 ### 5.6 Files
 
@@ -979,7 +1002,66 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 - Unit tests: prompt sanitizer, audit chain (reopen, edit detection).
 - `proto` goldens for every new message and variant; invite text round trip.
 
-### 6.9 Approval extras: edited approvals and auto-approve rules (`proto::approve`)
+
+Clients and daemons find each other through `Caps::KNOCK`, `Caps::APPROVAL_POLICY` and
+`DaemonFeatures::MP2`. Code: `crates/daemon/src/mp/approvals.rs`, `mp/mod.rs` (knocks, terms),
+`pane.rs` (views), `crates/client-core/src/knock.rs`, `crates/apple-ffi/src/mp2.rs`. Tests:
+`cargo test -p daemon --test it multiplayer_mp2`, `proto --test golden_mp2`, the decision
+table in `mp/approvals.rs`, `ghostty-vt --test it forget`.
+
+**Invite terms.** `MpRequest::RegisterInvite{chain, terms}` records `InviteTerms{knock,
+history}` with the grant in `grants.json`. They are not in the signed grant: the daemon looks
+them up for every link of a presented chain and applies the strictest, so a delegated child
+can add terms but never drop its parent's, and a guest cannot strip them from a link. A copy
+rides after the invite's bytes (`Invite::to_string_with_terms`, marker `0xE9`; old parsers
+ignore it) only so the join card can say "asks first" and "earlier output hidden". `un invite
+--knock --history since-join`.
+
+**Knock to join.** A chain whose terms say `knock` does not join. With `Caps::KNOCK` the
+connection waits in a lobby: no `Welcome`, nothing visible; it hears
+`ServerCtl::KnockAnswer(Waiting{knock_id})` and may only `Ping`, `SetName` and `Bye` (it pings
+every 10 s; 45 s of silence ends it). Without the cap the grant is refused as invalid, so old
+apps never get in. Knocks bind and use up nothing; at most 8 wait per invite; the same device
+knocking again replaces its knock. Owner devices with the cap get `ServerCtl::Knock(Added |
+Gone)` (and every pending knock right after `Joined`). `MpRequest::AnswerKnock{knock_id,
+admit}` (owner, daemon scope): `Admit{roles, history, expires}` mints a new root grant signed
+by the daemon key, on the invite's scope, bound to the knocking device, single use, expiring
+`KnockAnswer::Admitted(chain)` and reconnects with it (`knock::knock` returns the invite to
+join with). `None` sends `Denied`. Revoking or expiring the knock invite turns its waiting
+knockers away. Audited: `Knock`, `KnockAnswered` (admitted as …, turned away, stopped
+waiting). `un knocks [--watch]`, `un admit N --role driver`, `un deny N`, `un join` knocks.
+
+(`MpRequest::SetApprovalPolicy`, `un policy --mode two-person --max-risk edits`), everyone in
+the session hears `ServerCtl::ApprovalPolicy` on attach and on change. Enforced where
+decisions are signed, before the agent is answered: `Decide`, push actions and on-screen
+dialog answers (`AnswerBlocked`).
+
+| Mode | Rule |
+|---|---|
+| `AnyApprover` (default) | first valid decision wins |
+| `OwnerOnly` | only paired owner devices decide |
+| `TwoPerson` | allowing a `Risk::Any` call needs two different principals; the first approval is held (audited with its signature, "1 of 2"), one "no" ends it |
+| `Claim` | `MpRequest::Claim{request_id}` reserves a request: only the claimer (or an owner) answers it; claiming withdraws its attention item (notifications) |
+
+`max_risk` caps what non-owners may allow (`Risk::of_tool`: reads, edits, anything else);
+denying is never capped. On-screen answers carry no request id or tool, so non-owners may use
+them only under `AnyApprover`/`Claim` without a risk cap. `ServerCtl::ApprovalStatus` (risk,
+mode, held approvals, claim) goes to clients in scope when a request opens and on every vote or
+claim. Refusals name the rule and are audited as `Denied`; claims and policy changes as
+`Claim` and `Policy`.
+
+that existed when its device first redeemed the grant, only what was written afterwards: the
+daemon keeps a *view* per guest principal and pane, a copy of the terminal made from the
+snapshot's READY section with all history erased (`Terminal::forget_history`, both screens),
+fed the same output and resizes under the pane's lock. Its snapshots, history pages, search,
+links and command list (commands that started later, rows shifted) are served instead of the
+pane's; a resume point before the view's start falls back to a snapshot, so the ring never
+replays earlier bytes. The screen at the moment of joining stays visible: it is the live
+session they join. Views open at join, or on first use after a daemon restart (which only
+hides more), and are dropped once the principal's access ends. Panes created later are shown
+whole. Not covered: inline images anchored in earlier rows and agent turn transcripts.
+
+### 6.10 Approval extras: edited approvals and auto-approve rules (`proto::approve`)
 
 Clients that announce `Caps::APPROVALS` get `ServerCtl::Approval` pushes and may send
 `ClientCtl::Approval` (answered by `ServerCtl::ApprovalResult`). Every request needs Approver on
@@ -1110,8 +1192,14 @@ from the environment or an `a=q` query; else a braille render and a summary).
 `cargo test -p daemon --test it artifacts` (macOS and Linux): Excalidraw scenes (a canvas pane
 creates one; concurrent puts reconcile with the version / nonce rule on both clients and the
 daemon, stale offers come back as winners, deletions, resync after a reconnect, ASCII/SVG/PNG
-export, a viewer reads but cannot put or import); inline placements (placed at the cursor
-row, followed through 40 lines of output, sent to a client attaching later, replaced after
+export, a viewer reads but cannot put or import); a canvas pane with peers
+(`canvas_pane_with_peers_syncs_inks_resyncs_and_closes`: owner, second device, driver guest
+and viewer on one `Split` canvas — `Canvases` on attach and reconnect, realistic rectangle /
+freedraw / text elements pushed live with put→push latency printed, edits of each other's
+elements, a concurrent tie settled by `versionNonce` on every client and the daemon, live ink
+stamped and not echoed, tombstones, resync after suspend, viewer refused, closing a `NewTab`
+canvas keeps the scene, deleting the scene closes its pane everywhere); inline placements
+(placed at the cursor row, followed through 40 lines of output, sent to a client attaching later, replaced after
 an edit, a kitty PNG printed by a program in the pane captured as an image artifact and
 placement with its `c`/`r` size, a dropped `.excalidraw` file and photo imported and placed,
 detached by `clear`, removed, kept detached after a restart with the scene intact); two
@@ -1229,6 +1317,105 @@ posts to `window.webkit.messageHandlers.canvas.postMessage(msg)`:
 | JS → Swift | `{type: "done"}` / `{type: "cancel"}` | overlay toolbar buttons |
 
 Viewers get `readOnly`; the daemon refuses their puts anyway (`Forbidden`).
+
+**Moving and exporting a placed drawing (app).** A placement's menu has Copy Image (PNG plus
+the `.excalidraw` scene on the same pasteboard item, so Universal Clipboard carries both), Copy
+as Text (`Export{Ascii}`), Share…, and an Export submenu: PNG (the device's render), SVG
+(`Export{Svg}`), Excalidraw (`Client::excalidraw_file`: the scene's elements, app state and
+blobs as `data:` URLs; an image becomes a one-element scene) and ASCII. Dragging a placement
+out (iPad `UIDragInteraction`, Mac `NSDraggingSource` with a promised PNG file) offers PNG and
+`.excalidraw` to other apps and a `DrawingDragRef{host, pane, placement, artifact, image}` to
+the app's own panes: dropped on another pane of the same host it is placed there with the same
+render (`place_png`, same artifact); on another host it is imported (`.excalidraw`, else the
+PNG) and placed with the render; on an agent pane it is sent (`send_to_agent`). Type
+`com.excalidraw.json` is declared as imported (`apple/project.yml`).
+
+### 7.12 MCP pull channel
+
+Agents read the session's drawings themselves (push is §7.4). `un-hook mcp [--state <dir>]
+[--pane <id>]` is a stdio MCP server (`crates/hostd/src/mcp.rs`): JSON-RPC 2.0, one message per
+line; `initialize` echoes the client's `protocolVersion` if it is 2024-11-05, 2025-03-26 or
+2025-06-18 (else 2025-06-18), capabilities `{tools: {}}`, `serverInfo.name`
+`<product>-drawings`; `ping`, `tools/list`, `tools/call`; notifications get no answer; unknown
+method −32601, unknown tool −32602, unparsable line −32700. Tools (both read-only):
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `list_drawings` | — | text: one line per artifact, newest first; then the same as JSON |
+| `get_drawing` | `id?` (default: newest non-image), `format?` `png`\|`svg`\|`ascii`\|`excalidraw` (default `png`), `version?` | caption + PNG as `image` content, SVG/ASCII/the `.excalidraw` scene as `text` |
+
+Failures (daemon down, bad id, too large) are `isError: true` results, never JSON-RPC errors.
+
+Each tool call is one line on the hook socket (shared with hooks and askpass, told apart by
+the `pull` field; `crates/daemon/src/art/pull.rs`):
+
+```text
+→ {"v":1,"token":"…","pane":"12","pull":{"op":"list"}}
+← {"list":{"session":1,"artifacts":[{"id":3,"kind":"drawing","title":"arch","version":2,
+   "updated_at":1761000000000,"elements":5,"placed_in":[12],"canvas_in":[],"ink_over":12,
+   "width":640,"height":320}]}}
+→ {"v":1,"token":"…","pane":"12","pull":{"op":"get","id":3,"format":"png","version":2}}
+← {"export":{"id":3,"title":"arch","version":2,"format":"png","mime":"image/png",
+   "data":"<base64>","base64":true}}
+← {"error":"no artifact 9 in this session"}
+```
+
+The pane picks the session; artifacts of other sessions read as unknown. A bad token, a pane
+in no session, an unknown format or an export over 8 MiB is an `error`. Exports are §7.5's
+(`art::export`), run off the async workers; `kind` is `drawing`, `excalidraw` or `image`;
+`width`/`height` are the image's or the last preview's. Formats are the `PULL_FORMATS` table
+(name, `ExportFormat`, MIME, binary); a row there is all a new format needs.
+
+The server finds the socket in `<state>/hook.endpoint` (re-read per call) and the token in
+`<state>/hook.token`, never in argv. Without `--state` it uses `UN_ENDPOINT_FILE`/`UN_SOCK` and
+`UN_TOKEN`, else the default state dir; without `--pane`, `UN_PANE_ID`.
+
+**Agents the daemon launches** get it with no change to the user's config. The server name is
+`<product>_drawings` (`agents::mcp_server_name`, valid for both). Claude: `--mcp-config
+<state>/claude/mcp/<pane>.json` (`{"mcpServers":{"unnamed_drawings":{"type":"stdio","command":
+"<hook_bin>","args":["mcp","--state","<state>","--pane","<pane>"]}}}`, added to the user's
+servers; no `--strict-mcp-config`), and the `--settings` file (v3) allows
+`mcp__unnamed_drawings`. Codex: `-c mcp_servers.unnamed_drawings.command="<hook_bin>"` and
+`-c mcp_servers.unnamed_drawings.args=["mcp","--state","<state>","--pane","<pane>"]` (TOML
+strings, escaped).
+
+**By hand** (an agent we did not launch, started in one of our panes, whose environment
+carries `UN_PANE_ID`, `UN_TOKEN` and the endpoint):
+
+```sh
+claude mcp add unnamed_drawings -- /path/to/un-hook mcp
+# ~/.codex/config.toml
+[mcp_servers.unnamed_drawings]
+command = "/path/to/un-hook"
+args = ["mcp", "--pane", "12"]
+```
+
+Codex starts MCP servers with a reduced environment, so give it `--pane` (and `--state` when
+the state dir is not the default). Tests: `mcp::tests` (protocol over a fake backend),
+`tests/it/pull.rs` (socket: list, png/svg/ascii/excalidraw, other session, bad token, stray pane),
+`hostd/tests/mcp.rs` (the built `un-hook mcp` against a daemon).
+
+### 7.13 Version history
+
+A drawing's **finished versions** are kept per artifact (`art/history.rs`,
+`<session>/<artifact>/history.bin`): one when it is placed from the overlay (`Place` at the
+current version, with that render), when a client sets a preview of the current version, and
+for drawings shown in a canvas pane once nobody changed them for 30 s. An Excalidraw scene
+keeps only its latest elements, so its entry holds a copy of the live elements, app state and
+files; an op-log drawing replays its log. At most 100 entries and four times the per-drawing
+cap; their blobs are kept from garbage collection.
+
+`History{artifact}` → `History([ArtifactVersion{version, at, by, image, elements,
+restored_from}])`, newest first (any role). `Restore{artifact, version}` (draw role) writes the
+old content as a **new version on top**: each old element at a version above both its own and
+the current one, a tombstone for every element added since; the change goes out as an
+ordinary `Excalidraw` (or `Changed`) push, so open editors and caches converge without a
+reload. The artifact's preview and every placement of it switch to the old render (`Placed`,
+same placement id; the height follows the image), and the restore is itself recorded
+(`restored_from`). Both requests are gated by `DaemonFeatures::ARTIFACT_HISTORY` (older daemons
+drop a connection that sends them; client-core refuses locally). CLI: `un draw history <id>`,
+`un draw restore <id> <version>`, `un draw export <id> --format excalidraw`. App: Version
+History in a placement's menu (each version with its render, the shown one checked; picking
 
 D9). Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
 Requests are `ClientCtl::Assist{req_id, AssistRequest}` → `ServerCtl::AssistResult{req_id,

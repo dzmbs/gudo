@@ -524,9 +524,17 @@ pub struct DaemonClient {
 pub struct ConnectOptions {
     /// Extra CA certificates (DER) to trust for the daemon's self-hosted relays (a private
     /// CA; docs/RELAYS.md). The usual web roots stay trusted. Which relays to use comes from
-    /// the ticket (`PairTicketInfo.relays`).
+    /// the ticket (`PairTicketInfo.relays`) unless `relay_urls` names the device's own.
     #[uniffi(default = [])]
     pub relay_ca_der: Vec<Bytes>,
+    /// This device's own relays (self-hosted `iroh-relay` URLs), used instead of the ticket's
+    /// for every daemon. Empty: follow the ticket. `RelayMode.disabled` and a local-only
+    /// daemon still mean direct only.
+    #[uniffi(default = [])]
+    pub relay_urls: Vec<String>,
+    /// The shared token for `relay_urls` (`Authorization: Bearer`).
+    #[uniffi(default = None)]
+    pub relay_auth_token: Option<String>,
     /// Show native password prompts (`AskpassListener`): the daemon sends this connection
     /// the askpass prompts of panes it may drive. Off for clients that cannot show them.
     #[uniffi(default = false)]
@@ -537,7 +545,18 @@ impl From<ConnectOptions> for client_core::ConnectOptions {
     fn from(o: ConnectOptions) -> Self {
         Self {
             relay_ca_der: o.relay_ca_der.into_iter().map(Into::into).collect(),
+            relay_urls: o.relay_urls,
+            relay_auth_token: o.relay_auth_token.filter(|t| !t.is_empty()),
             askpass: o.askpass,
+        }
+    }
+}
+
+impl From<RelayMode> for client_core::RelayMode {
+    fn from(mode: RelayMode) -> Self {
+        match mode {
+            RelayMode::Default => Self::Default,
+            RelayMode::Disabled => Self::Disabled,
         }
     }
 }
@@ -546,10 +565,7 @@ impl From<ClientConfig> for client_core::ClientConfig {
     fn from(config: ClientConfig) -> Self {
         Self {
             secret_key: config.secret_key.into(),
-            relay: match config.relay {
-                RelayMode::Default => client_core::RelayMode::Default,
-                RelayMode::Disabled => client_core::RelayMode::Disabled,
-            },
+            relay: config.relay.into(),
             mirror_vt: config.mirror_vt,
             repo_status: config.repo_status,
         }
@@ -818,6 +834,13 @@ impl DaemonClient {
         self.inner.reconnect();
     }
 
+    /// Changes how the daemon is reached (the app's relay settings changed): `relay` and the
+    /// relay parts of `options` (`askpass` stays as connected). Redials on a new endpoint;
+    /// followed panes resume as after any reconnect.
+    pub fn set_relays(&self, relay: RelayMode, options: ConnectOptions) {
+        self.inner.set_relays(relay.into(), &options.into());
+    }
+
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect),
     /// keeping all resume state (app suspended).
     pub fn suspend(&self) {
@@ -931,5 +954,32 @@ pub fn bench_pane_bytes(
         events: count,
         ffi_ns: ns(ffi),
         rust_ns: ns(rust),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_options_carry_the_devices_relays() {
+        let options = ConnectOptions {
+            relay_ca_der: vec![vec![0x30, 0x82].into()],
+            relay_urls: vec!["https://relay.example.com".into()],
+            relay_auth_token: Some("secret".into()),
+            askpass: true,
+        };
+        let core = client_core::ConnectOptions::from(options);
+        assert_eq!(core.relay_ca_der, vec![vec![0x30, 0x82]]);
+        assert_eq!(core.relay_urls, vec!["https://relay.example.com"]);
+        assert_eq!(core.relay_auth_token.as_deref(), Some("secret"));
+        assert!(core.askpass);
+        // An empty token field means no token.
+        let core = client_core::ConnectOptions::from(ConnectOptions {
+            relay_auth_token: Some(String::new()),
+            ..ConnectOptions::default()
+        });
+        assert_eq!(core.relay_auth_token, None);
+        assert!(core.relay_urls.is_empty());
     }
 }

@@ -14,7 +14,9 @@ use crate::event::{
     EventKind, Seq, Source, Turn, TurnOutcome,
 };
 use crate::hook::{self, Common};
-use crate::launch::{LaunchContext, LaunchMode, LaunchSpec, pane_env};
+use crate::launch::{
+    LaunchContext, LaunchMode, LaunchSpec, mcp_args, mcp_server_name, pane_env, toml_quote,
+};
 use crate::manifest::Manifest;
 use crate::signal::{Claim, Signal};
 
@@ -27,6 +29,20 @@ const NOTIFICATION_OVERRIDES: [&str; 3] = [
     r#"tui.notification_method="osc9""#,
     r#"tui.notification_condition="always""#,
 ];
+
+/// `-c` overrides that add the daemon's drawings MCP server (docs/DAEMON.md §7.12) for this
+/// run only, next to the user's own `mcp_servers`.
+fn mcp_overrides(ctx: &LaunchContext) -> [String; 2] {
+    let name = mcp_server_name();
+    let args: Vec<String> = mcp_args(ctx).iter().map(|a| toml_quote(a)).collect();
+    [
+        format!(
+            "mcp_servers.{name}.command={}",
+            toml_quote(&ctx.hook_bin.to_string_lossy())
+        ),
+        format!("mcp_servers.{name}.args=[{}]", args.join(",")),
+    ]
+}
 
 /// The Codex CLI adapter.
 #[derive(Debug, Clone)]
@@ -233,12 +249,15 @@ impl AgentAdapter for Codex {
         &self.manifest
     }
 
-    /// `codex -c <notifications…> [resume <id>]`. Codex cannot pin a new session id, so a
-    /// `Fresh` id is ignored; the id arrives later from a hook or the rollout file. Resume must
-    /// run with the same `CODEX_HOME` that created the session, so the pane inherits it untouched.
+    /// `codex -c <notifications…> -c <drawings MCP server…> [resume <id>]`. Codex cannot pin a
+    /// new session id, so a `Fresh` id is ignored; the id arrives later from a hook or the rollout
+    /// file. Resume must run with the same `CODEX_HOME` that created the session, so the pane
+    /// inherits it untouched.
     fn launch(&self, ctx: &LaunchContext, mode: &LaunchMode) -> LaunchSpec {
         let mut args: Vec<OsString> = NOTIFICATION_OVERRIDES
             .iter()
+            .map(|o| (*o).to_owned())
+            .chain(mcp_overrides(ctx))
             .flat_map(|o| ["-c".into(), OsString::from(o)])
             .collect();
         if let LaunchMode::Resume { session_id } = mode {
@@ -293,6 +312,10 @@ mod tests {
                 r#"tui.notification_method="osc9""#,
                 "-c",
                 r#"tui.notification_condition="always""#,
+                "-c",
+                r#"mcp_servers.unnamed_drawings.command="/opt/un/bin/un-hook""#,
+                "-c",
+                r#"mcp_servers.unnamed_drawings.args=["mcp","--state","/state","--pane","p_9f2"]"#,
             ]
         );
         assert!(spec.files.is_empty());
@@ -307,7 +330,37 @@ mod tests {
                 session_id: NativeSessionId::new("0199a213"),
             },
         );
-        assert_eq!(spec.display_argv()[7..], ["resume", "0199a213"]);
+        assert_eq!(spec.display_argv()[11..], ["resume", "0199a213"]);
+    }
+
+    #[test]
+    fn mcp_overrides_are_valid_toml_for_any_path() {
+        let mut ctx = test_context();
+        ctx.hook_bin = r#"/Users/A "B"\x/un-hook"#.into();
+        ctx.state_dir = "/Users/A B/Library/Application Support/unnamed".into();
+        let mut doc = toml::Table::new();
+        for o in mcp_overrides(&ctx) {
+            let (key, value) = o.split_once('=').unwrap();
+            let value: toml::Table = toml::from_str(&format!("v = {value}")).unwrap();
+            doc.insert(key.rsplit('.').next().unwrap().into(), value["v"].clone());
+        }
+        assert_eq!(doc["command"].as_str(), Some(r#"/Users/A "B"\x/un-hook"#));
+        let args: Vec<&str> = doc["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "mcp",
+                "--state",
+                "/Users/A B/Library/Application Support/unnamed",
+                "--pane",
+                "p_9f2"
+            ]
+        );
     }
 
     #[test]

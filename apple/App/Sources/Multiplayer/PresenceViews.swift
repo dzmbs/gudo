@@ -363,6 +363,8 @@ struct MultiplayerWindowHooks: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            // Someone with a knock link waits for the owner (the Inbox has the full list).
+            .overlay(alignment: .bottom) { KnockOverlay(workspace: workspace) }
             .onChange(of: workspace.multiplayer?.notice) { _, notice in
                 if let notice { model.toasts.show(notice.toast) }
             }

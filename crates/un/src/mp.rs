@@ -6,8 +6,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use client_core::proto::{
-    AuditKind, DeviceId, GrantId, LeaseOutcome, MpResponse, PaneId, PresenceState, PrincipalId,
-    RevokeTarget, Roles, Scope, SessionId, TabId, UnixMillis,
+    Admit, ApprovalMode, ApprovalPolicy, AuditKind, DeviceId, GrantId, History, InviteTerms,
+    KnockId, KnockUpdate, LeaseOutcome, MpResponse, PaneId, PresenceState, PrincipalId, RequestId,
+    RevokeTarget, Risk, Roles, Scope, SessionId, TabId, UnixMillis,
 };
 use client_core::{GrantSpec, MultiplayerEvent, MultiplayerEventQueue, now_millis};
 
@@ -43,6 +44,56 @@ pub(crate) enum MpCmd {
         /// Print only the link.
         #[arg(long)]
         no_qr: bool,
+        /// Joining asks you first (`un knocks`, `un admit`, `un deny`).
+        #[arg(long)]
+        knock: bool,
+        /// Scrollback the guest sees: `full` or `since-join`.
+        #[arg(long, default_value = "full")]
+        history: String,
+        /// Who invites, shown on the join card (default: this connection's name).
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Knocks waiting for you (owner).
+    Knocks {
+        /// Keep printing knocks as they come and go.
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Let a knock in (owner).
+    Admit {
+        /// The knock's number from `un knocks`.
+        knock: u64,
+        /// Roles, joined by `+`.
+        #[arg(long, default_value = "viewer")]
+        role: String,
+        /// Scrollback they see: `full` or `since-join`.
+        #[arg(long, default_value = "since-join")]
+        history: String,
+        /// How long their access lasts (default 7 days).
+        #[arg(long)]
+        ttl: Option<String>,
+    },
+    /// Turn a knock away (owner).
+    Deny {
+        /// The knock's number from `un knocks`.
+        knock: u64,
+    },
+    /// Show or set the attached session's approval rules (setting: owner).
+    Policy {
+        /// `any`, `owner-only`, `two-person` or `claim`.
+        #[arg(long)]
+        mode: Option<String>,
+        /// The riskiest call approvers may allow: `read-only`, `edits` or `any`.
+        #[arg(long)]
+        max_risk: Option<String>,
+    },
+    /// Claim an open approval request so only you answer it (or `--release`).
+    Claim {
+        /// The request id.
+        request: u64,
+        #[arg(long)]
+        release: bool,
     },
     /// Who is connected, their roles and what they look at.
     Who {
@@ -146,6 +197,46 @@ fn parse_scope(conn: &Conn, s: &str) -> Result<Scope> {
     })
 }
 
+fn parse_history(s: &str) -> Result<History> {
+    match s {
+        "full" => Ok(History::Full),
+        "since-join" | "since_join" => Ok(History::SinceJoin),
+        other => bail!("history is `full` or `since-join`, not {other:?}"),
+    }
+}
+
+fn parse_mode(s: &str) -> Result<ApprovalMode> {
+    Ok(match s {
+        "any" | "any-approver" => ApprovalMode::AnyApprover,
+        "owner-only" | "owner_only" => ApprovalMode::OwnerOnly,
+        "two-person" | "two_person" => ApprovalMode::TwoPerson,
+        "claim" => ApprovalMode::Claim,
+        other => bail!("mode is any, owner-only, two-person or claim, not {other:?}"),
+    })
+}
+
+fn parse_risk(s: &str) -> Result<Risk> {
+    Ok(match s {
+        "read-only" | "read_only" => Risk::ReadOnly,
+        "edits" => Risk::Edits,
+        "any" => Risk::Any,
+        other => bail!("risk is read-only, edits or any, not {other:?}"),
+    })
+}
+
+fn print_policy(policy: ApprovalPolicy) {
+    let mode = match policy.mode {
+        ApprovalMode::AnyApprover => "any approver",
+        ApprovalMode::OwnerOnly => "owner only",
+        ApprovalMode::TwoPerson => "two people for commands",
+        ApprovalMode::Claim => "claim before answering",
+    };
+    println!(
+        "approvals: {mode}; approvers may allow up to {}",
+        policy.max_risk
+    );
+}
+
 fn when(t: Option<UnixMillis>) -> String {
     match t {
         None => "never".into(),
@@ -221,7 +312,14 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             delegate,
             bind,
             no_qr,
+            knock,
+            history,
+            from,
         } => {
+            let terms = InviteTerms {
+                knock,
+                history: parse_history(&history)?,
+            };
             let roles: Roles = role.parse().map_err(anyhow::Error::msg)?;
             let mut spec = GrantSpec::new(roles, parse_scope(conn, &scope)?);
             spec.expires =
@@ -230,9 +328,13 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             spec.label = name;
             spec.delegate = delegate;
             spec.bind = bind.as_deref().map(unhex::<32>).transpose()?.map(DeviceId);
-            let inviter = conn.client.me().map_or_else(|| "owner".into(), |m| m.name);
-            let invite = conn.client.create_invite(spec.clone(), inviter).await?;
-            print_invite(&invite.to_string(), !no_qr);
+            let inviter =
+                from.unwrap_or_else(|| conn.client.me().map_or_else(|| "owner".into(), |m| m.name));
+            let invite = conn
+                .client
+                .create_invite_with_terms(spec.clone(), inviter, terms)
+                .await?;
+            print_invite(&invite.to_string_with_terms(terms), !no_qr);
             eprintln!(
                 "grant {}: {} on {}, expires {}, uses {}",
                 hex(&invite.chain.grant_id().0[..4]),
@@ -241,6 +343,100 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                 when(spec.expires),
                 spec.max_uses.map_or("unlimited".into(), |u| u.to_string()),
             );
+        }
+        MpCmd::Knocks { watch } => {
+            let print = |k: &client_core::proto::Knock| {
+                println!(
+                    "#{:<4} {:<16} wants {} on {}",
+                    k.knock_id,
+                    k.name,
+                    k.roles.names(),
+                    k.scope
+                );
+            };
+            let (listener, mut events) = MultiplayerEventQueue::channel();
+            conn.client.set_multiplayer_listener(listener);
+            let knocks = conn.client.knocks().await?;
+            if knocks.is_empty() && !watch {
+                println!("nobody is knocking");
+            }
+            knocks.iter().for_each(print);
+            if watch {
+                while let Some(event) = events.recv().await {
+                    match event {
+                        MultiplayerEvent::Knock {
+                            update: KnockUpdate::Added(k),
+                        } => print(&k),
+                        MultiplayerEvent::Knock {
+                            update:
+                                KnockUpdate::Gone {
+                                    knock_id, outcome, ..
+                                },
+                        } => println!("#{knock_id} {outcome:?}"),
+                        MultiplayerEvent::Revoked => bail!("access revoked"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        MpCmd::Admit {
+            knock,
+            role,
+            history,
+            ttl,
+        } => {
+            let roles: Roles = role.parse().map_err(anyhow::Error::msg)?;
+            let expires = ttl
+                .as_deref()
+                .map(parse_ttl)
+                .transpose()?
+                .flatten()
+                .map(|d| UnixMillis(now_millis().0 + d.as_millis() as u64));
+            let admit = Admit {
+                roles,
+                history: parse_history(&history)?,
+                expires,
+            };
+            let info = conn
+                .client
+                .answer_knock(KnockId(knock), Some(admit))
+                .await?;
+            match info {
+                Some(g) => println!(
+                    "let {} in as {} (grant {}, expires {})",
+                    g.grant.label,
+                    roles.names(),
+                    hex(&g.grant.grant_id.0[..4]),
+                    when(g.grant.expires)
+                ),
+                None => println!("let #{knock} in"),
+            }
+        }
+        MpCmd::Deny { knock } => {
+            conn.client.answer_knock(KnockId(knock), None).await?;
+            println!("turned #{knock} away");
+        }
+        MpCmd::Policy { mode, max_risk } => {
+            let session = conn.layout().session_id;
+            let mut policy = conn.client.approval_policy(session).await?;
+            if mode.is_none() && max_risk.is_none() {
+                print_policy(policy);
+                return Ok(());
+            }
+            if let Some(mode) = mode {
+                policy.mode = parse_mode(&mode)?;
+            }
+            if let Some(risk) = max_risk {
+                policy.max_risk = parse_risk(&risk)?;
+            }
+            print_policy(conn.client.set_approval_policy(session, policy).await?);
+        }
+        MpCmd::Claim { request, release } => {
+            let status = conn.client.claim(RequestId(request), !release).await?;
+            match status.claimed_by {
+                Some(c) => println!("request {request} claimed by {}", c.name),
+                None => println!("request {request} is unclaimed"),
+            }
         }
         MpCmd::Who { watch } => {
             let list = conn.client.participants().await?;

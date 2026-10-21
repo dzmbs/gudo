@@ -1,4 +1,5 @@
 import DesignSystem
+import HostKit
 import SwiftUI
 #if canImport(UIKit)
 import GameController
@@ -72,9 +73,10 @@ struct InboxView: View {
 
     var body: some View {
         let items = feed.items
+        let knocks = feed.knocks
         let shown = items.filter(filter.includes)
         Group {
-            if items.isEmpty {
+            if items.isEmpty && knocks.isEmpty {
                 EmptyState(
                     "Nothing Needs You", systemImage: "tray",
                     message: "Agents on your hosts report here when they need approval, ask a question, or finish."
@@ -83,14 +85,14 @@ struct InboxView: View {
                         .buttonStyle(.primaryGlass)
                         .disabled(feed.launchHosts.isEmpty && !LaunchOptions.mock)
                 }
-            } else if shown.isEmpty {
+            } else if shown.isEmpty && knocks.isEmpty {
                 EmptyState(filter.emptyTitle, systemImage: "line.3.horizontal.decrease.circle", message: "Nothing in the Inbox matches this filter.") {
                     Button("Show All") { withAnimation(DS.Motion.snappy) { filter = .all } }
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("inbox-show-all")
                 }
             } else {
-                list(shown)
+                list(shown, knocks: knocks)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -191,10 +193,21 @@ struct InboxView: View {
         sections(items).flatMap(\.items)
     }
 
-    private func list(_ items: [AgentItem]) -> some View {
+    private func list(_ items: [AgentItem], knocks: [KnockItem]) -> some View {
         // list on the base, hairlines inset to the text column.
         ScrollViewReader { proxy in
             List {
+                // People asking to join a host this device owns (multiplayer knocks).
+                if !knocks.isEmpty {
+                    Section {
+                        ForEach(knocks) { item in
+                            KnockRow(knock: item.knock, session: item.session, hostName: item.hostName)
+                                .chromeRows()
+                        }
+                    } header: {
+                        SectionTitle("Asking to join", count: knocks.count)
+                    }
+                }
                 ForEach(sections(items), id: \.title) { section in
                     Section {
                         ForEach(section.items) { item in row(item) }
@@ -208,6 +221,7 @@ struct InboxView: View {
             .scrollContentBackground(.hidden)
             .background(DS.Palette.base)
             .animation(DS.Motion.snappy, value: items)
+            .animation(DS.Motion.snappy, value: knocks.map(\.id))
             .onChange(of: focused) { _, id in
                 guard let id else { return }
                 withAnimation(DS.Motion.snappy) { proxy.scrollTo(id) }
@@ -220,6 +234,8 @@ struct InboxView: View {
         let isFocused = focused == item.id
         return InboxRow(
             item: item,
+            approval: feed.approval(item.id),
+            claim: { feed.claim(item.id, $0) },
             options: feed.approvalOptions(item.id),
             rules: feed.autoApprovals(item.id),
             isFocused: isFocused,
@@ -390,7 +406,7 @@ struct InboxView: View {
         case .deny: deny(focusedRequestIn: rows)
         case .edit:
             guard let current = rows.first(where: { $0.id == focused }), case .permission? = current.request,
-                  feed.approvalOptions(current.id)?.editableInput != nil
+                  feed.approvalOptions(current.id)?.editableInput != nil, Self.mayApprove(feed.approval(current.id))
             else { return }
             editing = current.id
         }
@@ -403,7 +419,17 @@ struct InboxView: View {
             focused = rows.first?.id
             return
         }
-        if case .permission? = current.request { approve(current) } else if current.paneId != nil { open(current) }
+        if case .permission? = current.request {
+            if Self.mayApprove(feed.approval(current.id)) { approve(current) }
+        } else if current.paneId != nil {
+            open(current)
+        }
+    }
+
+    /// Whether this device may approve now: not blocked by the session's approval policy (two
+    /// people, a claim by someone else, the risk cap) and not already approved by this person.
+    static func mayApprove(_ approval: ApprovalContext?) -> Bool {
+        approval?.block == nil && approval?.approvedAlready != true
     }
 
     private func deny(focusedRequestIn rows: [AgentItem]) {
@@ -413,7 +439,7 @@ struct InboxView: View {
 
     private func approveAll(focusedIn rows: [AgentItem]) {
         guard let current = rows.first(where: { $0.id == focused }), case .permission? = current.request,
-              feed.approvalOptions(current.id)?.likeThis != nil
+              feed.approvalOptions(current.id)?.likeThis != nil, Self.mayApprove(feed.approval(current.id))
         else { return }
         approveAll(current)
     }
@@ -501,6 +527,9 @@ private struct InboxFilterBar: View {
 /// One agent: status glyph, agent and where it runs, age, prompt, then what it needs.
 private struct InboxRow: View {
     let item: AgentItem
+    /// The session's approval rules as they apply here (multiplayer).
+    let approval: ApprovalContext?
+    let claim: (Bool) -> Void
     let options: AgentApprovalOptions?
     let rules: [AgentAutoApproval]
     let isFocused: Bool
@@ -639,6 +668,12 @@ private struct InboxRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                    if let note = approval?.block ?? approval?.progress {
+                        Label(note, systemImage: approval?.block != nil ? "lock" : "person.2")
+                            .font(DS.Font.rowSubtitle)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("inbox-approval-note-\(item.id)")
+                    }
                     verbs
                 }
             }
@@ -661,9 +696,15 @@ private struct InboxRow: View {
 
     /// auto-approve in its menu). The focused row shows its keys.
     private var verbs: some View {
-        HStack(spacing: DS.Space.s) {
+        let mayApprove = InboxView.mayApprove(approval)
+        return HStack(spacing: DS.Space.s) {
             Spacer()
-            if options?.editableInput != nil {
+            if let approval, approval.claimMode, approval.block == nil || approval.claimedByMe {
+                Button(approval.claimedByMe ? "Release" : "Claim") { claim(!approval.claimedByMe) }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("inbox-claim-\(item.id)")
+            }
+            if options?.editableInput != nil, mayApprove {
                 Button { isEditing = true } label: { verb("Edit", key: "E") }
                     .buttonStyle(.glass)
                     .help("Edit the command, then approve (E)")
@@ -674,11 +715,14 @@ private struct InboxRow: View {
                 .help("Deny (Esc)")
                 .accessibilityIdentifier("inbox-deny-\(item.id)")
             HStack(spacing: 1) {
-                Button(action: approve) { verb("Approve", key: "↩") }
+                Button(action: approve) {
+                    verb(approval?.approvedAlready == true ? "Approved" : "Approve", key: "↩")
+                }
                     .buttonStyle(.primaryGlass)
+                    .disabled(!mayApprove)
                     .help("Approve (↩)")
                     .accessibilityIdentifier("inbox-approve-\(item.id)")
-                if let like = options?.likeThis {
+                if let like = options?.likeThis, mayApprove {
                     Menu {
                         Button("Approve All Like This for This Task", systemImage: "checkmark.seal", action: approveAll)
                             .accessibilityIdentifier("inbox-approve-all-\(item.id)")

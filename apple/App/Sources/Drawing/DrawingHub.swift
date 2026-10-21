@@ -20,6 +20,8 @@ final class DrawingHub {
     /// Open editors (overlay or canvas) by artifact.
     private var scenes: [UInt64: [WeakScene]] = [:]
     private var images: [String: Task<InlineImagePixels?, Never>] = [:]
+    /// Encoded images by hash, for copies, drags and drops (what the placements show).
+    private var pngs: [String: Data] = [:]
 
     private static var hubs: [ObjectIdentifier: (client: Weak<DaemonClient>, hub: DrawingHub)] = [:]
 
@@ -110,10 +112,9 @@ final class DrawingHub {
     /// The decoded pixels of a blob, downloaded once per hash.
     func pixels(hash: String) async -> InlineImagePixels? {
         if let task = images[hash] { return await task.value }
-        let client = client
-        let task = Task<InlineImagePixels?, Never> {
-            guard let blob = try? await client.blobDownload(hash: hash, progress: nil) else { return nil }
-            return await Task.detached { Self.decode(blob.data) }.value
+        let task = Task<InlineImagePixels?, Never> { [weak self] in
+            guard let data = await self?.png(hash: hash) else { return nil }
+            return await Task.detached { Self.decode(data) }.value
         }
         images[hash] = task
         let result = await task.value
@@ -123,9 +124,21 @@ final class DrawingHub {
 
     /// Seeds the cache with a PNG this device rendered (no download for its own placements).
     func seed(hash: String, png: Data) {
+        pngs[hash] = png
         guard images[hash] == nil else { return }
         images[hash] = Task.detached { Self.decode(png) }
     }
+
+    /// A blob's bytes, downloaded once per hash.
+    func png(hash: String) async -> Data? {
+        if let data = pngs[hash] { return data }
+        guard let blob = try? await client.blobDownload(hash: hash, progress: nil) else { return nil }
+        pngs[hash] = blob.data
+        return blob.data
+    }
+
+    /// A blob's bytes if this device has them (drag sources must answer at once).
+    func cachedPNG(hash: String) -> Data? { pngs[hash] }
 
     nonisolated static func decode(_ data: Data) -> InlineImagePixels? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),

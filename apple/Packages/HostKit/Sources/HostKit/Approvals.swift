@@ -3,7 +3,7 @@ import Observation
 import os
 import UnnamedCore
 
-// Approval extras (docs/DAEMON.md §6.9): approve an agent's request with an edited command, and
+// Approval extras (docs/DAEMON.md §6.10): approve an agent's request with an edited command, and
 // "approve all like this for this task" rules the daemon applies until they lapse (time, turns,
 // the agent session) or are revoked. Views bind to `ApprovalSession` (one per
 // `DaemonConnection`); plain approve / deny stays `DaemonConnection.decide`.

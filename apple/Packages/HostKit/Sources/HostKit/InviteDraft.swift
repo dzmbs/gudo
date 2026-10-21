@@ -81,6 +81,10 @@ nonisolated public struct InviteDraft: Equatable, Sendable {
     public var uses = Uses.once
     /// The guest may invite others with narrower access.
     public var delegate = false
+    /// Joining asks the owner first (knock to join): for links posted where anyone may see
+    /// them.
+    public var knock = false
+    public var sinceJoin = true
 
     public init() {}
 
@@ -96,7 +100,8 @@ nonisolated public struct InviteDraft: Equatable, Sendable {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return InviteOptions(
             roles: orderedRoles, scope: scope, ttlSecs: expiry.ttlSecs, maxUses: uses.maxUses,
-            delegate: delegate, label: trimmed.isEmpty ? "Guest" : trimmed, inviter: inviter)
+            delegate: delegate, label: trimmed.isEmpty ? (knock ? "" : "Guest") : trimmed, inviter: inviter,
+            knock: knock, sinceJoin: sinceJoin)
     }
 
     /// Viewer first, then the chosen roles in a fixed order.
@@ -104,8 +109,10 @@ nonisolated public struct InviteDraft: Equatable, Sendable {
         [.viewer] + Role.invitable.filter { $0 != .viewer && roles.contains($0) }
     }
 
-    /// "Driver · Tab · 24 hours · 1 person".
+    /// "Driver · Tab · 24 hours · 1 person", then "asks you first".
     public var summary: String {
-        [roleWords(orderedRoles), scope.title, expiry.title, uses.title].joined(separator: " · ")
+        var parts = [roleWords(orderedRoles), scope.title, expiry.title, uses.title]
+        if knock { parts.append("asks you first") }
+        return parts.joined(separator: " · ")
     }
 }

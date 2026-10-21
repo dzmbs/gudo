@@ -191,4 +191,31 @@ final class FakeConnection: HostConnection {
         #expect(try JSONDecoder().decode([TabRef].self, from: data) == [ref])
         #expect(ref.description == "hetzner/42")
     }
+
+    /// A mixed tab (this Mac's first tab split with studio): it leads the unified order, and the
+    /// host tabs carrying its panes leave their groups; closing studio in the window dissolves it.
+    @Test func mixedTabsLeadAndHideTheirCarriers() throws {
+        let (groups, fakes, local) = try fixture()
+        let composites = groups.composites
+        composites.hostSession = { id in id == HostGroups.localId ? local.session : fakes[id]?.layout.session }
+        composites.send = { id, op in
+            if id == HostGroups.localId { local.apply(op) } else { fakes[id]?.layout.apply(op) }
+            return true
+        }
+        let first = local.session.tabs[0]
+        let id = composites.make(fromHost: HostGroups.localId, tab: first)
+        composites.split(id, onHost: "studio", axis: .horizontal)
+        #expect(composites.tab(id)?.hosts == ["local", "studio"])
+        // studio opened a carrier tab: its group still lists only its own first tab.
+        #expect(fakes["studio"]!.layout.session.tabs.count == 2)
+        #expect(groups.group("studio")?.tabs.count == 1)
+        #expect(groups.group(HostGroups.localId)?.tabs.map(\.id) == [local.session.tabs[1].id])
+        #expect(groups.tabs.first == TabRef(hostId: HostGroups.mixedId, tab: id))
+        #expect(groups.tab(forShortcut: 1) == TabRef(hostId: HostGroups.mixedId, tab: id))
+        #expect(groups.tabs.count == 6, "the composite stands in for its two carriers")
+        // Closing studio in this window: the composite dissolves into this Mac's tab.
+        groups.close("studio")
+        #expect(composites.tabs.isEmpty)
+        #expect(groups.group(HostGroups.localId)?.tabs.count == 2)
+    }
 }

@@ -90,8 +90,14 @@ struct Cli {
 enum Cmd {
     /// Save a pairing ticket and pair this machine with the daemon.
     Pair { ticket: String },
-    /// Save an invite and join the daemon as a guest under its grant.
-    Join { invite: String },
+    /// Save an invite and join the daemon as a guest under its grant. A knock invite asks
+    /// the owner first and waits for their answer.
+    Join {
+        invite: String,
+        /// Your name, shown to the owner when knocking.
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Show the focused pane in this terminal; follows focus changes. Ctrl-] detaches.
     Attach,
     /// List sessions, and the attached session's tabs and panes.
@@ -257,6 +263,30 @@ fn config_dir() -> PathBuf {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
         })
         .join(brand::DIR_NAME)
+}
+
+/// Knocks with a knock invite and waits for the owner; returns the invite to join with.
+async fn knock(cli: &Cli, invite: &str, name: Option<String>) -> Result<String> {
+    use client_core::knock::{KnockOutcome, knock};
+    let mut config = ClientConfig::new(device_key()?);
+    if cli.no_relay {
+        config.relay = RelayMode::Disabled;
+    }
+    let outcome = knock(
+        invite,
+        config,
+        client_core::ConnectOptions::default(),
+        name,
+        |id| eprintln!("knocked (#{id}); waiting for the owner to let you in…"),
+    )
+    .await?;
+    match outcome {
+        KnockOutcome::Admitted(invite) => {
+            eprintln!("let in");
+            Ok(invite.to_string())
+        }
+        KnockOutcome::Denied => bail!("the owner turned you away"),
+    }
 }
 
 fn device_key() -> Result<Vec<u8>> {
@@ -458,8 +488,14 @@ async fn run(cli: Cli) -> Result<()> {
         println!("paired; attached to session {:?}", conn.layout().name);
         return Ok(());
     }
-    if let Cmd::Join { invite } = &cli.command {
-        let parsed: client_core::proto::Invite = invite.parse().context("not an invite")?;
+    if let Cmd::Join { invite, name } = &cli.command {
+        let (parsed, terms) =
+            client_core::proto::Invite::parse_with_terms(invite).context("not an invite")?;
+        let invite = &if terms.knock {
+            knock(&cli, invite, name.clone()).await?
+        } else {
+            invite.clone()
+        };
         std::fs::create_dir_all(config_dir())?;
         std::fs::write(config_dir().join("un.invite"), invite)?;
         let cli = Cli {

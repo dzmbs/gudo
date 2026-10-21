@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use ghostty_vt::{KeyEncoder, MouseEncoder, Screen, Terminal, TextRegion, Wrap, history_chunk};
 use proto::{
-    CommandList, CommandOutput, InputPayload, LinkSource, Links, PaneId, PaneSize, RpcError,
-    SearchPage, SearchQuery, Seq, SnapGen,
+    CommandList, CommandOutput, InputPayload, LinkSource, Links, PaneId, PaneSize, PrincipalId,
+    RpcError, SearchPage, SearchQuery, Seq, SnapGen, UnixMillis,
 };
 use pty::{EchoState, PtyActor, ReadError, SpawnOptions, Subscriber, WinSize};
 use tokio::sync::{mpsc, watch};
@@ -90,9 +90,37 @@ struct Vt {
     anchors: Anchors,
     kitty: KittyScanner,
     next_kitty: u64,
+    /// Scrollback limit, for views.
+    scrollback_bytes: usize,
+    /// Guests who see only what was written after they joined (multiplayer `since_join`).
+    views: Vec<View>,
+}
+
+/// A guest's copy of the pane's terminal that started without scrollback (multiplayer
+/// `History::SinceJoin`). It is fed the same output and resizes in the same order as the
+/// pane's own terminal, under the same lock, so its snapshot at any output offset is the
+/// pane's screen with only the history written since the view opened.
+struct View {
+    principal: PrincipalId,
+    term: Terminal,
+    /// When the view opened: commands that started before are not shown.
+    since: UnixMillis,
+    /// The output offset it opened at: a stream may only resume from here on.
+    from: Seq,
+    /// The newest snapshots, for history paging; the last one is the cache.
+    snapshots: VecDeque<Arc<Snapshot>>,
 }
 
 impl Vt {
+    fn view(&self, principal: PrincipalId) -> Option<&View> {
+        self.views.iter().find(|v| v.principal == principal)
+    }
+
+    /// Rows of the pane's terminal above the view's oldest row: the history the view lacks.
+    fn hidden_rows(&self, view: &View) -> u64 {
+        (self.term.total_rows() as u64).saturating_sub(view.term.total_rows() as u64)
+    }
+
     fn feed(&mut self, seq: pty::Seq, data: &[u8]) {
         // Write up to the end of each kitty image so its cell can be pinned where the
         // program put it (the cursor at that moment).
@@ -116,6 +144,9 @@ impl Vt {
             }
         }
         self.term.write(&data[written..]);
+        for view in &mut self.views {
+            view.term.write(data);
+        }
         self.seq = seq.get() + data.len() as u64;
         let prompts = self.term.take_semantic_prompts();
         if !prompts.is_empty() {
@@ -253,6 +284,8 @@ impl Pane {
             anchors: Anchors::default(),
             kitty: KittyScanner::default(),
             next_kitty: 0,
+            scrollback_bytes,
+            views: Vec::new(),
         }));
         let hook_vt = Arc::clone(&vt);
         let options = SpawnOptions::new(win_size(size))
@@ -340,6 +373,11 @@ impl Pane {
         vt.term
             .resize(size.cols, size.rows)
             .map_err(io::Error::other)?;
+        for view in &mut vt.views {
+            if let Err(e) = view.term.resize(size.cols, size.rows) {
+                tracing::warn!(pane = %self.id, "resizing a since-join view: {e}");
+            }
+        }
         let vt = &mut *vt;
         vt.scroll.resized(&mut vt.term);
         // Inside the Vt lock, so no output can be fed between the record and the ioctl: every
@@ -408,39 +446,95 @@ impl Pane {
             }
             (vt.term.encode_snapshot()?, Seq(vt.seq), vt.resize_count)
         };
-        let ready = ghostty_vt::ready_len(&full).ok_or(ghostty_vt::Error::InvalidValue)?;
-        let zstd = zstd::bulk::compress(&full[..ready], ZSTD_LEVEL)?;
-        let snapshot = Arc::new(Snapshot {
-            seq,
-            resize_count,
-            raw_len: ready as u32,
-            zstd,
-            full,
-        });
+        let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
         *lock(&self.cache) = Some(Arc::clone(&snapshot));
         let mut history = lock(&self.history);
-        history.retain(|s| s.seq != seq);
-        history.push_back(Arc::clone(&snapshot));
-        while history.len() > HISTORY_SNAPSHOTS {
-            history.pop_front();
+        keep_snapshot(&mut history, &snapshot);
+        Ok(snapshot)
+    }
+
+    /// The current snapshot as `viewer` may see it: the pane's own for `None`, the
+    /// principal's since-join view otherwise (opened now if it is missing, which only ever
+    /// hides more).
+    pub fn snapshot_as(&self, viewer: Option<PrincipalId>) -> Result<Arc<Snapshot>, SnapshotError> {
+        let Some(principal) = viewer else {
+            return self.snapshot();
+        };
+        let (full, seq, resize_count) = {
+            let mut vt = lock(&self.vt);
+            open_view(&mut vt, principal)?;
+            let view = vt.view(principal).ok_or(ghostty_vt::Error::InvalidValue)?;
+            if let Some(cached) = view.snapshots.back()
+                && cached.seq.0 == vt.seq
+                && cached.resize_count == vt.resize_count
+            {
+                return Ok(Arc::clone(cached));
+            }
+            (view.term.encode_snapshot()?, Seq(vt.seq), vt.resize_count)
+        };
+        let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
+        if let Some(view) = lock(&self.vt)
+            .views
+            .iter_mut()
+            .find(|v| v.principal == principal)
+        {
+            keep_snapshot(&mut view.snapshots, &snapshot);
         }
         Ok(snapshot)
     }
 
+    /// Starts a since-join view for `principal` (no-op if it has one): from now on its
+    /// snapshots, history, search and command output hold only what is written after this.
+    ///
+    /// # Errors
+    ///
+    /// If no terminal could be made for it.
+    pub fn open_view(&self, principal: PrincipalId) -> Result<(), ghostty_vt::Error> {
+        open_view(&mut lock(&self.vt), principal)
+    }
+
+    /// The output offset `principal`'s since-join view opened at (opening it now if
+    /// missing): bytes before it must not be replayed to that principal.
+    pub fn view_start(&self, principal: PrincipalId) -> Seq {
+        let mut vt = lock(&self.vt);
+        match open_view(&mut vt, principal) {
+            Ok(()) => vt.view(principal).map_or(Seq(u64::MAX), |v| v.from),
+            Err(_) => Seq(u64::MAX),
+        }
+    }
+
+    /// Principals with a since-join view of this pane.
+    pub fn view_principals(&self) -> Vec<PrincipalId> {
+        lock(&self.vt).views.iter().map(|v| v.principal).collect()
+    }
+
+    /// Drops `principal`'s since-join view (its access ended).
+    pub fn close_view(&self, principal: PrincipalId) {
+        lock(&self.vt).views.retain(|v| v.principal != principal);
+    }
+
     /// History records of the snapshot at `snapshot_seq` from `offset`: whole records up to
     /// about `max_bytes`, ending after a page or at FINISH. `None` if that snapshot is gone or
-    /// the offset is not a record boundary after READY.
+    /// the offset is not a record boundary after READY. A `viewer` pages through its own
+    /// since-join snapshots.
     pub fn history_page(
         &self,
+        viewer: Option<PrincipalId>,
         snapshot_seq: Seq,
         offset: u64,
         max_bytes: u32,
     ) -> Option<HistoryChunk> {
-        let snapshot = lock(&self.history)
-            .iter()
-            .rev()
-            .find(|s| s.seq == snapshot_seq)
-            .cloned()?;
+        let find = |snapshots: &VecDeque<Arc<Snapshot>>| {
+            snapshots
+                .iter()
+                .rev()
+                .find(|s| s.seq == snapshot_seq)
+                .cloned()
+        };
+        let snapshot = match viewer {
+            None => find(&lock(&self.history)),
+            Some(p) => find(&lock(&self.vt).view(p)?.snapshots),
+        }?;
         let start = usize::try_from(offset).ok()?;
         if start < snapshot.raw_len as usize {
             return None;
@@ -489,12 +583,16 @@ impl Pane {
     /// One page of matches for `query` over the whole screen, newest first.
     pub fn search(
         &self,
+        viewer: Option<PrincipalId>,
         query: &SearchQuery,
         cursor: u32,
         limit: u32,
     ) -> Result<SearchPage, RpcError> {
         let re = scan::compile(query).map_err(RpcError::BadRequest)?;
-        let (text, seq) = self.screen_text_cached()?;
+        let (text, seq) = match viewer {
+            None => self.screen_text_cached()?,
+            Some(p) => self.view_text(p)?,
+        };
         let all = text.search(&re);
         let total = all.len();
         let start = (cursor as usize).min(total);
@@ -538,11 +636,32 @@ impl Pane {
         Ok((text, seq))
     }
 
-    /// Links on screen and in the last `commands` finished commands' output.
-    pub fn links(&self, commands: u16, cwd: Option<&Path>, home: Option<&Path>) -> Links {
+    /// The whole text of `principal`'s since-join view (not cached: few guests search).
+    fn view_text(&self, principal: PrincipalId) -> Result<(Arc<ScreenText>, u64), RpcError> {
+        let mut vt = lock(&self.vt);
+        open_view(&mut vt, principal).map_err(internal)?;
+        let view = vt.view(principal).ok_or(RpcError::NotFound)?;
+        let joined = view
+            .term
+            .text_wrapped(TextRegion::All, Wrap::Join)
+            .map_err(internal)?;
+        let text = ScreenText::new(&joined, view.term.cols(), view.term.total_rows() as u64);
+        Ok((Arc::new(text), vt.seq))
+    }
+
+    /// Links on screen and in the last `commands` finished commands' output (for a
+    /// `viewer`, only commands that started after its since-join view opened).
+    pub fn links(
+        &self,
+        viewer: Option<PrincipalId>,
+        commands: u16,
+        cwd: Option<&Path>,
+        home: Option<&Path>,
+    ) -> Links {
         // Extract under the lock, scan (regexes, file system checks) after releasing it.
         let regions: Vec<(LinkSource, String, String)> = {
             let vt = lock(&self.vt);
+            let since = viewer.map(|p| vt.view(p).map_or(UnixMillis(u64::MAX), |v| v.since));
             let mut regions = vec![(
                 LinkSource::Screen,
                 vt.term.vt(TextRegion::Active).unwrap_or_default(),
@@ -551,6 +670,7 @@ impl Pane {
             let ids: Vec<u64> = vt
                 .commands
                 .finished()
+                .filter(|m| since.is_none_or(|s| m.started_at >= s))
                 .take(usize::from(commands))
                 .map(|m| m.command_id)
                 .collect();
@@ -575,19 +695,53 @@ impl Pane {
         }
     }
 
-    /// The shell-integration commands the pane remembers.
-    pub fn commands(&self) -> CommandList {
+    /// The shell-integration commands the pane remembers. A `viewer` gets those that started
+    /// after its since-join view opened, with rows in the view's coordinates.
+    pub fn commands(&self, viewer: Option<PrincipalId>) -> CommandList {
         let vt = lock(&self.vt);
+        let all = vt.commands.list(&vt.term);
+        let Some(view) = viewer.map(|p| vt.view(p)) else {
+            return CommandList {
+                at_seq: Seq(vt.seq),
+                total_rows: vt.term.total_rows() as u64,
+                commands: all,
+            };
+        };
+        let Some(view) = view else {
+            return CommandList {
+                at_seq: Seq(vt.seq),
+                total_rows: 0,
+                commands: Vec::new(),
+            };
+        };
+        let hidden = vt.hidden_rows(view);
+        let shift = |row: Option<u64>| row.and_then(|r| r.checked_sub(hidden));
         CommandList {
             at_seq: Seq(vt.seq),
-            total_rows: vt.term.total_rows() as u64,
-            commands: vt.commands.list(&vt.term),
+            total_rows: view.term.total_rows() as u64,
+            commands: all
+                .into_iter()
+                .filter(|c| c.mark.started_at >= view.since)
+                .map(|mut c| {
+                    c.rows.prompt = shift(c.rows.prompt);
+                    c.rows.output = shift(c.rows.output);
+                    c.rows.end = shift(c.rows.end);
+                    c
+                })
+                .collect(),
         }
     }
 
-    /// The output of command `id`, or of the most recent finished command.
-    pub fn command_output(&self, id: Option<u64>) -> Result<CommandOutput, RpcError> {
+    /// The output of command `id`, or of the most recent finished command (for a `viewer`,
+    /// only commands that started after its since-join view opened).
+    pub fn command_output(
+        &self,
+        viewer: Option<PrincipalId>,
+        id: Option<u64>,
+    ) -> Result<CommandOutput, RpcError> {
         let vt = lock(&self.vt);
+        let since = viewer.map(|p| vt.view(p).map_or(UnixMillis(u64::MAX), |v| v.since));
+        let visible = |m: &proto::CommandMark| since.is_none_or(|s| m.started_at >= s);
         let mark = match id {
             Some(id) => vt
                 .commands
@@ -595,8 +749,9 @@ impl Pane {
                 .into_iter()
                 .map(|c| c.mark)
                 .find(|m| m.command_id == id),
-            None => vt.commands.finished().next().cloned(),
+            None => vt.commands.finished().find(|m| visible(m)).cloned(),
         }
+        .filter(visible)
         .ok_or(RpcError::NotFound)?;
         let (region, mut truncated) = vt
             .commands
@@ -703,6 +858,61 @@ impl Pane {
     pub fn hang_up(&self) {
         let _ = self.pty.signal(pty::Signal::Hangup);
     }
+}
+
+impl Snapshot {
+    /// Compresses the READY prefix of a full encoding for the wire.
+    fn compress(full: Vec<u8>, seq: Seq, resize_count: u64) -> Result<Self, SnapshotError> {
+        let ready = ghostty_vt::ready_len(&full).ok_or(ghostty_vt::Error::InvalidValue)?;
+        let zstd = zstd::bulk::compress(&full[..ready], ZSTD_LEVEL)?;
+        Ok(Self {
+            seq,
+            resize_count,
+            raw_len: ready as u32,
+            zstd,
+            full,
+        })
+    }
+}
+
+/// Keeps `snapshot` among the newest few for history paging.
+fn keep_snapshot(snapshots: &mut VecDeque<Arc<Snapshot>>, snapshot: &Arc<Snapshot>) {
+    snapshots.retain(|s| s.seq != snapshot.seq);
+    snapshots.push_back(Arc::clone(snapshot));
+    while snapshots.len() > HISTORY_SNAPSHOTS {
+        snapshots.pop_front();
+    }
+}
+
+/// Opens `principal`'s since-join view if it has none: a copy of the terminal as it is now,
+/// screens kept, history erased. If the terminal cannot be encoded at this instant (inside an
+fn open_view(vt: &mut Vt, principal: PrincipalId) -> Result<(), ghostty_vt::Error> {
+    if vt.view(principal).is_some() {
+        return Ok(());
+    }
+    // Only the READY section: the screens and the rows sharing their pages; older history
+    // is never decoded, and `forget_history` drops the rest.
+    let copy = vt.term.encode_snapshot().and_then(|bytes| {
+        let ready = ghostty_vt::ready_len(&bytes).ok_or(ghostty_vt::Error::InvalidValue)?;
+        Ok(ghostty_vt::StreamingRestore::new(&bytes[..ready])?.into_terminal())
+    });
+    let mut term = match copy {
+        Ok(term) => term,
+        Err(e) => {
+            tracing::debug!(pane = %vt.pane, "since-join view starts blank: {e}");
+            Terminal::new(vt.size.cols, vt.size.rows)?
+        }
+    };
+    term.forget_history()?;
+    term.set_scrollback_max_bytes(Some(vt.scrollback_bytes))?;
+    vt.views.push(View {
+        principal,
+        term,
+        since: UnixMillis(crate::identity::now_millis()),
+        from: Seq(vt.seq),
+        snapshots: VecDeque::new(),
+    });
+    Ok(())
 }
 
 pub(crate) fn win_size(size: PaneSize) -> WinSize {

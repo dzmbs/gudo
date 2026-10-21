@@ -67,7 +67,7 @@ fn approval_messages_match_their_frozen_bytes() {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
-    assert_eq!(Caps::APPROVALS.0, 1 << 9);
+    assert_eq!(Caps::APPROVALS.0, 1 << 11);
 
     let req = |req| ClientCtl::Approval { req_id: 5, req };
     c.check(
@@ -100,34 +100,34 @@ fn approval_messages_match_their_frozen_bytes() {
     c.check(
         "ServerCtl::ApprovalResult(Done)",
         result(Ok(ApprovalResponse::Done)),
-        "05000000012c050000",
+        "050000000130050000",
     );
     for (name, error, golden) in [
-        ("NotFound", ApprovalError::NotFound, "05000000012c050100"),
+        ("NotFound", ApprovalError::NotFound, "050000000130050100"),
         (
             "Forbidden",
             ApprovalError::Forbidden("x".into()),
-            "07000000012c0501010178",
+            "0700000001300501010178",
         ),
         (
             "NotEditable",
             ApprovalError::NotEditable,
-            "05000000012c050102",
+            "050000000130050102",
         ),
         (
             "Invalid",
             ApprovalError::Invalid("x".into()),
-            "07000000012c0501030178",
+            "0700000001300501030178",
         ),
         (
             "AlreadyDecided",
             ApprovalError::AlreadyDecided,
-            "05000000012c050104",
+            "050000000130050104",
         ),
         (
             "Disconnected",
             ApprovalError::Disconnected,
-            "05000000012c050105",
+            "050000000130050105",
         ),
     ] {
         c.check(
@@ -149,7 +149,7 @@ fn approval_messages_match_their_frozen_bytes() {
                 prefix: "ls".into(),
             }),
         })),
-        "17000000012d000307044261736801026c73010442617368026c73",
+        "170000000131000307044261736801026c73010442617368026c73",
     );
     c.check(
         "ServerCtl::Approval(Rules)",
@@ -162,7 +162,7 @@ fn approval_messages_match_their_frozen_bytes() {
                 granted_by: "Ana".into(),
             }],
         }),
-        "5c000000012d010301111111111111111111111111111111110301070442617368026c73e80702aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb020102010203416e61",
+        "5c0000000131010301111111111111111111111111111111110301070442617368026c73e80702aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb020102010203416e61",
     );
 
     assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));

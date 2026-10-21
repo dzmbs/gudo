@@ -1,5 +1,6 @@
 import DesignSystem
 import HostKit
+import PaneLayout
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -111,6 +112,10 @@ private struct WindowContent: View {
     @SceneStorage("openHosts") private var storedHosts: String?
     @SceneStorage("collapsedHosts") private var storedCollapsed: String?
     @SceneStorage("focusedTab") private var storedFocus: String?
+    /// The window's mixed tabs (`CompositeTab`s, JSON).
+    @SceneStorage("mixedTabs") private var storedMixed: String?
+    /// Two Columns as the user set it for this window (absent: automatic).
+    @SceneStorage("twoColumns") private var storedTwoColumns: String?
     /// The request this scene already opened (a restored scene must not open it again).
     @SceneStorage("openedRequest") private var openedRequest: String?
     @State private var restored = false
@@ -127,6 +132,8 @@ private struct WindowContent: View {
             .onChange(of: model.groups.openHosts) { _, _ in persist() }
             .onChange(of: model.groups.collapsed) { _, _ in persist() }
             .onChange(of: model.currentTab) { _, _ in persist() }
+            .onChange(of: model.composites.tabs) { _, _ in persist() }
+            .onChange(of: model.twoColumnsChoice) { _, _ in persist() }
             .onChange(of: scenePhase, initial: true) { _, phase in model.isOnScreen = phase != .background }
     }
 
@@ -203,6 +210,10 @@ private struct WindowContent: View {
                 // changes).
                 GeometryReader { proxy in
                     Color.clear.onChange(of: Double(proxy.size.width), initial: true) { _, width in widthChanged(width) }
+                        // Both sides: a foldable's open inner screen turns Two Columns on.
+                        .onChange(of: proxy.size, initial: true) { _, size in
+                            if model.windowSize != size { model.windowSize = size }
+                        }
                 }
             }
             #if DEBUG
@@ -339,12 +350,18 @@ private struct WindowContent: View {
             model.show(.host(id))
         }
         let collapsed = decode([String].self, storedCollapsed) ?? decode([String].self, defaults.string(forKey: Self.lastCollapsedKey)) ?? []
-        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: focus)
+        let mixed = decode([CompositeTab].self, storedMixed) ?? decode([CompositeTab].self, defaults.string(forKey: Self.lastMixedKey)) ?? []
+        if let twoColumns = storedTwoColumns ?? defaults.string(forKey: Self.lastTwoColumnsKey) {
+            model.twoColumnsChoice = twoColumns == "auto" ? nil : twoColumns == "on"
+        }
+        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: focus, mixedTabs: mixed)
     }
 
     private static let lastHostsKey = "window.openHosts"
     private static let lastCollapsedKey = "window.collapsedHosts"
     private static let lastFocusKey = "window.focusedTab"
+    private static let lastMixedKey = "window.mixedTabs"
+    private static let lastTwoColumnsKey = "window.twoColumns"
 
     /// Saves what a relaunch restores, per window and as the app's latest.
     private func persist() {
@@ -356,10 +373,14 @@ private struct WindowContent: View {
         storedHosts = encode(model.groups.openHosts)
         storedCollapsed = encode(model.groups.collapsed.sorted())
         storedFocus = model.currentTab.flatMap(encode)
+        storedMixed = encode(model.composites.tabs)
+        storedTwoColumns = model.twoColumnsChoice.map { $0 ? "on" : "off" } ?? "auto"
         storedTarget = nil
         let defaults = UserDefaults.standard
         defaults.set(storedHosts, forKey: Self.lastHostsKey)
         defaults.set(storedCollapsed, forKey: Self.lastCollapsedKey)
         defaults.set(storedFocus, forKey: Self.lastFocusKey)
+        defaults.set(storedMixed, forKey: Self.lastMixedKey)
+        defaults.set(storedTwoColumns, forKey: Self.lastTwoColumnsKey)
     }
 }

@@ -148,10 +148,10 @@ private struct AgentToastCard: View {
     @ViewBuilder private var actions: some View {
         HStack(spacing: DS.Space.s) {
             if isNewest, card.kind == .needsYou {
-                ShortcutLabel(["⇧", "⌘", "G"])
+                ShortcutLabel(["⇧", "⌘", "A"])
                     .font(DS.Font.meta)
                     .foregroundStyle(.tertiary)
-                    .help("Jump to the agent waiting longest (⇧⌘G)")
+                    .help("Jump to the agent waiting longest (⇧⌘A)")
             }
             Spacer(minLength: 0)
             if case .permission? = item.request {

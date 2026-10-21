@@ -1,4 +1,4 @@
-//! Approval extras on [`DaemonClient`] (`proto::approve`, docs/DAEMON.md §6.9): approve with
+//! Approval extras on [`DaemonClient`] (`proto::approve`, docs/DAEMON.md §6.10): approve with
 //! an edited command, and "approve all like this for this task" rules.
 //!
 //! Pushes go to an [`ApprovalListener`]; the latest are also kept

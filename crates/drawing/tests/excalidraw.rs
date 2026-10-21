@@ -80,3 +80,37 @@ fn excalidraw_file_exports_to_ascii_and_svg() {
     assert!(svg.contains("<ellipse") && svg.contains(">daemon<") && svg.contains("#a5d8ff"));
     assert!(!parse_file(br#"{"type":"other"}"#).is_ok());
 }
+
+#[test]
+fn excalidraw_file_round_trips_without_tombstones() {
+    let mut file = parse_file(FLOW).unwrap();
+    file.files.push((
+        "img1".into(),
+        "image/png".into(),
+        vec![0x89, b'P', b'N', b'G'],
+    ));
+    let back = parse_file(file.to_json().as_bytes()).unwrap();
+    assert_eq!(back.elements.len(), 8, "the deleted element is left out");
+    assert!(back.elements.iter().all(|e| !e.deleted));
+    let ids = |f: &drawing::ExcalidrawFile| {
+        f.elements
+            .iter()
+            .filter(|e| !e.deleted)
+            .map(|e| (e.id.clone(), e.version))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(&back),
+        ids(&file),
+        "elements keep their order and versions"
+    );
+    assert!(back.app_state.unwrap().contains("gridSize"));
+    assert_eq!(
+        back.files,
+        vec![(
+            "img1".into(),
+            "image/png".into(),
+            vec![0x89, b'P', b'N', b'G']
+        )]
+    );
+}

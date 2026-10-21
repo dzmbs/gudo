@@ -209,6 +209,19 @@ public final class DaemonConnection: HostConnection {
         client.reconnect()
     }
 
+    /// The relay settings changed: redial on an endpoint built from them. Panes resume as
+    /// after any reconnect; a suspended connection uses them when it resumes.
+    public func setRelays(_ relay: RelayMode, options: ConnectOptions) {
+        guard let client = client as? any RelaySettingsClient else { return }
+        Self.log.info("relay settings changed: redialing host=\(self.hostId, privacy: .public)")
+        if status != .suspended {
+            status = .connecting(.dialing)
+            dials += 1
+            timings.dialStarted = .now
+        }
+        client.setRelays(relay: relay, options: options)
+    }
+
     public func close() {
         multiplayer.detach()
         askpass.detach()

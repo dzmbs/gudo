@@ -106,6 +106,11 @@ impl ArtState {
 
     /// Applies a scene answer to the cache; returns the version if it changed the cache.
     fn absorb(&self, scene: &ArtifactScene) -> Option<u64> {
+        // Excalidraw scenes live in `ex`: an op-log entry for one would be resynced with
+        // `Get` on every reconnect and report a `Synced` before its elements are back.
+        if scene.info.kind == proto::ArtifactKind::Excalidraw {
+            return None;
+        }
         let mut cache = lock(&self.cache);
         let id = scene.info.artifact_id;
         let entry = cache.entry(id).or_insert_with(|| Cached {
@@ -232,6 +237,7 @@ impl ArtState {
             }
             ArtifactEvent::Deleted { artifact_id, .. } => {
                 lock(&self.cache).remove(artifact_id);
+                lock(&self.ex).remove(artifact_id);
             }
             ArtifactEvent::Canvases {
                 session_id,
@@ -392,7 +398,11 @@ impl Client {
     ) -> Result<ArtifactInfo, ArtifactError> {
         let info = expect!(self.artifact(ArtifactRequest::Create(create)).await?,
             ArtifactResponse::Created(i) => i)?;
-        if info.version > 0 {
+        if info.kind == proto::ArtifactKind::Excalidraw {
+            lock(&self.inner.art.ex)
+                .entry(info.artifact_id)
+                .or_default();
+        } else if info.version > 0 {
             // Bring the cache up to the initial ops.
             let _ = self.artifact_get(info.artifact_id, 0).await;
         } else {
@@ -578,6 +588,95 @@ impl Client {
         let session = self.artifact_session(req.artifact_id).await?;
         req.png = Some(self.blob_upload(session, png).await?.hash);
         self.place(req).await
+    }
+
+    /// A drawing's finished versions, newest first (none for images).
+    ///
+    /// # Errors
+    ///
+    /// [`ArtifactError::Failed`] without asking when the daemon does not offer
+    /// [`DaemonFeatures::ARTIFACT_HISTORY`](proto::DaemonFeatures::ARTIFACT_HISTORY) (older
+    /// daemons drop a connection that sends the request); else the daemon's error.
+    pub async fn artifact_history(
+        &self,
+        artifact_id: ArtifactId,
+    ) -> Result<Vec<proto::ArtifactVersion>, ArtifactError> {
+        self.require_history()?;
+        expect!(self.artifact(ArtifactRequest::History { artifact_id }).await?,
+            ArtifactResponse::History(h) => h)
+    }
+
+    /// Brings a drawing back to `version` from its history, as a new version on top; open
+    /// editors, caches and placements follow through the ordinary pushes. Returns the
+    /// drawing now and the history entry the restore made.
+    ///
+    /// # Errors
+    ///
+    /// As [`artifact_history`](Self::artifact_history); `NotFound` for a version not in the
+    /// history.
+    pub async fn artifact_restore(
+        &self,
+        artifact_id: ArtifactId,
+        version: u64,
+    ) -> Result<(ArtifactInfo, proto::ArtifactVersion), ArtifactError> {
+        self.require_history()?;
+        expect!(self.artifact(ArtifactRequest::Restore { artifact_id, version }).await?,
+            ArtifactResponse::Restored { info, version } => (info, version))
+    }
+
+    fn require_history(&self) -> Result<(), ArtifactError> {
+        let offered = self
+            .daemon_info()
+            .is_some_and(|i| i.features.contains(proto::DaemonFeatures::ARTIFACT_HISTORY));
+        if offered {
+            Ok(())
+        } else {
+            Err(ArtifactError::Failed(
+                "the host's daemon keeps no drawing history; update it".into(),
+            ))
+        }
+    }
+
+    /// The artifact as an `.excalidraw` file (what Excalidraw opens, and what dropping it on
+    /// a pane imports): an Excalidraw scene with its images embedded, or an image as a scene
+    /// holding it. Ink drawings (op-log artifacts) export as PNG or SVG instead.
+    ///
+    /// # Errors
+    ///
+    /// `Invalid` for ink drawings; the daemon's error for the scene or its blobs.
+    pub async fn excalidraw_file(&self, artifact_id: ArtifactId) -> Result<Vec<u8>, ArtifactError> {
+        let info = self.artifact_get(artifact_id, u64::MAX).await?.info;
+        let file = match (info.kind, info.image) {
+            (proto::ArtifactKind::Excalidraw, _) => {
+                let scene = self.excalidraw_get(artifact_id, 0).await?;
+                let mut files = Vec::with_capacity(scene.files.len());
+                for f in scene.files {
+                    let (image, bytes) = self.blob_download(f.image.hash).await?;
+                    files.push((f.file_id, image.media.mime().to_owned(), bytes));
+                }
+                drawing::ExcalidrawFile {
+                    elements: scene.elements,
+                    app_state: scene.app_state,
+                    files,
+                }
+            }
+            (proto::ArtifactKind::Image, Some(image)) => {
+                let (image, bytes) = self.blob_download(image.hash).await?;
+                drawing::ExcalidrawFile::from_image(
+                    &image.hash.to_hex(),
+                    image.media.mime(),
+                    bytes,
+                    image.width,
+                    image.height,
+                )
+            }
+            _ => {
+                return Err(ArtifactError::Invalid(
+                    "ink drawings export as PNG or SVG".into(),
+                ));
+            }
+        };
+        Ok(file.to_json().into_bytes())
     }
 
     /// Removes an inline placement.

@@ -66,6 +66,29 @@ nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonUsageAPI {}
 
+/// The VS Code Remote Tunnel: the opt-in fallback editor path (vscode.dev, signed in with the
+/// user's own GitHub or Microsoft account by device code). Kept out of `DaemonWorkspaceAPI`'s
+/// list so fakes that do not care need nothing; the state arrives as `vsCodeTunnel` pushes.
+nonisolated public protocol DaemonTunnelAPI: AnyObject, Sendable {
+    func vscodeTunnelStatus() async throws -> VsCodeTunnelStatus
+    func vscodeCliInstall(acceptLicense: Bool) async throws -> VsCodeTunnelStatus
+    func vscodeTunnelStart(start: VsCodeTunnelStart) async throws -> VsCodeTunnelStatus
+    func vscodeTunnelStop() async throws -> VsCodeTunnelStatus
+    func vscodeTunnelOpen(open: VsCodeTunnelOpen) async throws -> VsCodeTunnelOpened
+}
+
+extension DaemonClient: DaemonTunnelAPI {}
+
+/// A repository's worktrees with their `PORT` (`WorktreeList`, docs/DAEMON.md §5.5). The
+/// repository push (`RepoSnapshot`) does not carry ports and its structs are frozen on the wire,
+/// so the hub asks when a repository's set of worktrees changes. Kept out of `DaemonRepoAPI`
+/// so fakes that do not care need nothing.
+nonisolated public protocol DaemonWorktreeListAPI: AnyObject, Sendable {
+    func worktreeList(repo: String) async throws -> [WorktreeInfo]
+}
+
+extension DaemonClient: DaemonWorktreeListAPI {}
+
 /// One daemon's workspace pushes and pane RPCs, shared by every window and screen: detected
 /// ports, the attention feed with its unseen count, directory watches, and the request/answer
 /// pairing for `links` / `search` / `commandOutput` (answers arrive as `ClientEvent`s).
@@ -97,6 +120,11 @@ public final class DaemonWorkspace {
     /// Repositories, worktrees, branches and pull requests of the host's panes, as last pushed
     /// (`WorkspaceEvent.repos`); nil until the first snapshot.
     public internal(set) var repos: RepoSnapshot?
+    /// Each worktree's `PORT` (the daemon gives one to every worktree it made), by the
+    /// snapshot's worktree path; see `port(ofWorktree:)`.
+    public private(set) var worktreePorts: [String: UInt16] = [:]
+    /// The worktree paths of each repository the ports were last read for.
+    @ObservationIgnored private var worktreePortsLoaded: [String: Set<String>] = [:]
 
     @ObservationIgnored private let resolve: () -> (any DaemonWorkspaceAPI)?
     @ObservationIgnored private var installedOn: ObjectIdentifier?
@@ -107,6 +135,9 @@ public final class DaemonWorkspace {
     @ObservationIgnored private var portObservers: [UUID: ([PortInfo]) -> Void] = [:]
     @ObservationIgnored private var attentionObservers: [UUID: (AttentionUpdate) -> Void] = [:]
     @ObservationIgnored private var markObservers: [UUID: (CommandMark) -> Void] = [:]
+    @ObservationIgnored private var tunnelObservers: [UUID: (VsCodeTunnelStatus) -> Void] = [:]
+    /// The host's VS Code tunnel, as last pushed (nil until one is).
+    public private(set) var vsCodeTunnel: VsCodeTunnelStatus?
     /// Each pane's running shell command (OSC 133), from the attached session's command
     /// marks and the command lists screens ask for; the sidebar shows how long it has run.
     public private(set) var runningCommands: [UInt64: CommandMark] = [:]
@@ -147,6 +178,9 @@ public final class DaemonWorkspace {
         installedOn = identity
         ports = client.ports()
         if let repoClient = client as? any DaemonRepoAPI, let snapshot = repoClient.repos() { repos = snapshot }
+        // A new connection (maybe a restarted daemon): read the ports again.
+        worktreePortsLoaded = [:]
+        loadWorktreePortsIfNeeded()
     }
 
     // MARK: Observers (other features)
@@ -175,7 +209,16 @@ public final class DaemonWorkspace {
         return id
     }
 
+    /// Calls `handler` with every VS Code tunnel state push (device code, running, failed).
+    @discardableResult
+    public func observeTunnel(_ handler: @escaping (VsCodeTunnelStatus) -> Void) -> UUID {
+        let id = UUID()
+        tunnelObservers[id] = handler
+        return id
+    }
+
     public func removeObserver(_ id: UUID) {
+        tunnelObservers[id] = nil
         portObservers[id] = nil
         attentionObservers[id] = nil
         markObservers[id] = nil
@@ -212,12 +255,14 @@ public final class DaemonWorkspace {
         case .attention(let update):
             apply(update)
             for observer in attentionObservers.values { observer(update) }
-        case .vsCodeTunnel:
-            break
+        case .vsCodeTunnel(let status):
+            vsCodeTunnel = status
+            for observer in tunnelObservers.values { observer(status) }
         case .agentUsage(let report):
             if usageViewers > 0 { usage = report }
         case .repos(let snapshot):
             repos = snapshot
+            loadWorktreePortsIfNeeded()
         }
     }
 
@@ -234,6 +279,7 @@ public final class DaemonWorkspace {
         guard let api = try? repoClient() else { return }
         do {
             repos = try await api.repoRefresh(path: path)
+            loadWorktreePortsIfNeeded()
         } catch {
             Self.log.error("repo refresh host=\(self.hostId, privacy: .public): \(String(describing: error), privacy: .public)")
         }
@@ -248,6 +294,60 @@ public final class DaemonWorkspace {
     /// A worktree by path.
     public func worktree(_ path: String) -> WorktreeState? {
         repos?.worktrees.first { $0.path == path }
+    }
+
+    /// The worktree's `PORT` on the host, if the daemon gave it one (the main checkout and
+    /// worktrees made outside the app have none).
+    public func port(ofWorktree path: String) -> UInt16? {
+        worktreePorts[Self.normalized(path)]
+    }
+
+    /// Records a port a request returned (`TaskCreated`, a restore) before the next read.
+    public func notePort(_ port: UInt16?, worktree path: String) {
+        guard let port else { return }
+        worktreePorts[Self.normalized(path)] = port
+    }
+
+    /// `/private/var/…` and `/var/…` are one directory on macOS hosts; git and the daemon do
+    /// not always print the same one.
+    nonisolated static func normalized(_ path: String) -> String {
+        for prefix in ["/private/var/", "/private/tmp/"] where path.hasPrefix(prefix) {
+            return String(path.dropFirst("/private".count))
+        }
+        return path
+    }
+
+    /// Reads `PORT`s for the repositories whose worktrees changed since the last read.
+    private func loadWorktreePortsIfNeeded() {
+        guard let repos, let api = resolve() as? any DaemonWorktreeListAPI else { return }
+        let byRepo = Dictionary(grouping: repos.worktrees, by: \.repo).mapValues { Set($0.map(\.path)) }
+        for (repo, paths) in byRepo where worktreePortsLoaded[repo] != paths {
+            worktreePortsLoaded[repo] = paths
+            let worktrees = repos.worktrees.filter { $0.repo == repo }
+            Task { [weak self] in
+                do {
+                    let listed = try await api.worktreeList(repo: repo)
+                    self?.applyPorts(listed, to: worktrees)
+                } catch {
+                    // Asked again with the next snapshot.
+                    self?.worktreePortsLoaded[repo] = nil
+                    Self.log.debug("worktree ports \(repo, privacy: .public): \(String(describing: error), privacy: .public)")
+                }
+            }
+        }
+    }
+
+    /// Ports by the snapshot's paths: matched on the path, else on the checked-out branch (git
+    /// checks a branch out in one worktree at most).
+    func applyPorts(_ listed: [WorktreeInfo], to worktrees: [WorktreeState]) {
+        var ports = worktreePorts
+        for state in worktrees {
+            let key = Self.normalized(state.path)
+            let match = listed.first { Self.normalized($0.path) == key }
+                ?? state.branch.flatMap { branch in listed.first { $0.branch == branch } }
+            ports[key] = match?.port
+        }
+        if ports != worktreePorts { worktreePorts = ports }
     }
 
     /// Applies a pull request a request returned, so the UI shows it before the next push.

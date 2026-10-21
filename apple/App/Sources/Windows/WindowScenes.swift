@@ -19,7 +19,10 @@ struct WindowRequest: Codable, Hashable {
     /// A new window like `window`: the same hosts, on the same tab.
     @MainActor
     static func like(_ window: WindowModel) -> WindowRequest {
-        WindowRequest(hosts: window.groups.openHosts, tab: window.currentTab)
+        // Mixed tabs belong to their window: the new one opens on the focused pane's host tab.
+        let mixed = window.currentTab?.hostId == HostGroups.mixedId
+        let tab = mixed ? window.workspace?.session.activeTabId.map { TabRef(hostId: window.currentGroupId, tab: $0) } : window.currentTab
+        return WindowRequest(hosts: window.groups.openHosts, tab: tab)
     }
 }
 

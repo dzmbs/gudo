@@ -87,7 +87,7 @@ enum DesignFixtures {
             #endif
         case "agent-toast":
             // Two agents on another host start needing you and finish, a moment apart: the toast
-            // stack (`AgentToasts`), approve from it, ⇧⌘G.
+            // stack (`AgentToasts`), approve from it, ⇧⌘A.
             guard let feed = model.agents as? MockAgentFeed else { return }
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation(DS.Motion.snappy) {

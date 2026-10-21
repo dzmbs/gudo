@@ -79,6 +79,41 @@ struct DaemonWorkspaceTests {
         #expect(client.state.withLock { $0.watched } == ["/p", "/p"])
     }
 
+    @Test func worktreePortsAreReadWhenARepositorysWorktreesChange() async throws {
+        let (connection, client) = try connected()
+        let hub = connection.workspace
+        client.state.withLock {
+            $0.worktreeLists["/r"] = [
+                WorktreeInfo(path: "/r", branch: "main", head: nil, main: true, locked: false, prunable: false, port: nil),
+                WorktreeInfo(path: "/private/var/w/feat", branch: "feat", head: nil, main: false, locked: false, prunable: false, port: 4101),
+            ]
+        }
+        let main = RepoSidebarTests.worktree("/r", main: true, branch: "main")
+        let feat = RepoSidebarTests.worktree("/var/w/feat", branch: "feat")
+        client.push(.repos(snapshot: RepoSnapshot(rev: 1, panes: [], worktrees: [main, feat], gh: .unknown)))
+        try await eventually("ports") { hub.port(ofWorktree: "/var/w/feat") == 4101 }
+        #expect(hub.port(ofWorktree: "/private/var/w/feat") == 4101, "/private/var and /var are one directory")
+        #expect(hub.port(ofWorktree: "/r") == nil, "the main checkout has no PORT")
+
+        // A push that only changes counts does not ask again; a new worktree does.
+        var busier = feat
+        busier.added = 3
+        client.push(.repos(snapshot: RepoSnapshot(rev: 2, panes: [], worktrees: [main, busier], gh: .unknown)))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(client.state.withLock { $0.listed } == ["/r"])
+        let fix = RepoSidebarTests.worktree("/w/fix", branch: "fix")
+        client.state.withLock {
+            $0.worktreeLists["/r"]?.append(WorktreeInfo(path: "/w/fix", branch: "fix", head: nil, main: false, locked: false, prunable: false, port: 4102))
+        }
+        client.push(.repos(snapshot: RepoSnapshot(rev: 3, panes: [], worktrees: [main, busier, fix], gh: .unknown)))
+        try await eventually("new worktree") { hub.port(ofWorktree: "/w/fix") == 4102 }
+        #expect(client.state.withLock { $0.listed } == ["/r", "/r"])
+
+        // A port a request returned shows before the next read.
+        hub.notePort(4200, worktree: "/w/new")
+        #expect(hub.port(ofWorktree: "/w/new") == 4200)
+    }
+
     // MARK: Helpers
 
     private func connected() throws -> (DaemonConnection, FakeWorkspaceAPI) {
@@ -114,6 +149,9 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
         var usageWatches: [Bool] = []
         var usageUnwatches = 0
         var usage = AgentUsageReport(agents: [])
+        /// `worktreeList` answers by repository, and the repositories asked.
+        var worktreeLists: [String: [WorktreeInfo]] = [:]
+        var listed: [String] = []
     }
 
     let state = Mutex(State())
@@ -203,5 +241,14 @@ extension FakeWorkspaceAPI: DaemonUsageAPI {
 
     func usageUnwatch() async throws {
         state.withLock { $0.usageUnwatches += 1 }
+    }
+}
+
+extension FakeWorkspaceAPI: DaemonWorktreeListAPI {
+    func worktreeList(repo: String) async throws -> [WorktreeInfo] {
+        state.withLock { state in
+            state.listed.append(repo)
+            return state.worktreeLists[repo] ?? []
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! Approval extras (`proto::approve`, docs/DAEMON.md §6.9): auto-approve rules ("approve
+//! Approval extras (`proto::approve`, docs/DAEMON.md §6.10): auto-approve rules ("approve
 //! all like this for this task") and approving with edited input.
 //!
 //! Rules live per pane, in memory only: a daemon restart ends them, as does the agent
