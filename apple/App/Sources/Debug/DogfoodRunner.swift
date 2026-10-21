@@ -192,8 +192,14 @@ final class DogfoodRunner {
             return true
         }
         guard let window else { throw Failure("no window") }
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
+        if UserDefaults.standard.bool(forKey: "dogfoodBackground") {
+            // Behind every other app's windows, never key: input takes the inactive path
+            // (`inactiveDelivery` below), the same events into the window's first responder.
+            window.orderBack(nil)
+        } else {
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+        }
         if let size = scenario["window"] as? [String: Any], let w = size["width"] as? Double, let h = size["height"] as? Double {
             setWindowSize(window, width: w, height: h)
         }
