@@ -104,12 +104,12 @@ enum PaletteCommands {
     static func tabs(model: WindowModel, section: String?) -> [PaletteCommand] {
         let showsHost = model.groups.groups.count > 1
         var commands: [PaletteCommand] = []
-        for mixed in model.composites.tabs {
+        for mixed in model.composites.ordered {
             let ref = WindowModel.mixedRef(mixed.id)
             commands.append(PaletteCommand(
                 id: "tab-\(ref)", title: model.title(ofMixedTab: mixed),
                 subtitle: mixed.hosts.map(model.groupName).joined(separator: " + "), section: section,
-                systemImage: "rectangle.split.2x1",
+                systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : "rectangle.split.2x1",
                 shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
             ) { model.focus(ref) })
         }

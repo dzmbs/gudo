@@ -135,8 +135,15 @@ extension WindowModel {
         syncMixedFocus()
     }
 
-    /// Brings the target and the host's own focus in line with the mixed tab's focused pane.
+    /// Brings the target and the host's own focus in line with the mixed tab's focused pane. An
+    /// editor's host becomes the target (⌘T, Files and the toolbar act there).
     func syncMixedFocus() {
+        if let editor = activeMixed?.focusedEditor {
+            if currentGroupId != editor.hostId, groups.group(editor.hostId) != nil {
+                show(.host(editor.hostId), keepingMixedTab: true)
+            }
+            return
+        }
         guard let mixed = activeMixed, let member = mixed.focusedMember, let open = workspace(ofGroup: member.hostId) else { return }
         if currentGroupId != member.hostId {
             show(member.hostId == HostGroups.localId ? .local : .host(member.hostId), keepingMixedTab: true)
@@ -171,7 +178,7 @@ extension WindowModel {
         activeMixedTab = nil
         if let ref {
             focus(ref)
-        } else if let next = groups.tabs.first {
+        } else if let next = tabAfterClosing {
             focus(next)
         } else {
             show(.local)
@@ -257,13 +264,24 @@ extension WindowModel {
         composites.closeTab(id)
         guard wasActive else { return }
         activeMixedTab = nil
-        if let next = groups.tabs.first { focus(next) } else { show(.local) }
+        if let next = tabAfterClosing { focus(next) } else { show(.local) }
+    }
+
+    /// The tab shown after the one on screen closed: the one worked in before it (an editor tab
+    /// gives way to the terminal it was opened from), else the first.
+    private var tabAfterClosing: TabRef? {
+        let all = groups.tabs
+        if let last = lastTerminalTab, all.contains(last) { return last }
+        return all.first
     }
 
     /// The name a mixed tab goes by: its own (the host tab it grew from, or a rename), else the
     /// focused pane's title.
     func title(ofMixedTab tab: CompositeTab) -> String {
         if let title = tab.title, !title.isEmpty { return title }
+        if let editor = tab.focusedEditor ?? (tab.isEditorOnly ? tab.leaves.compactMap({ tab.editors[$0] }).first : nil) {
+            return editor.folderName
+        }
         if let member = tab.focusedMember, let open = workspace(ofGroup: member.hostId),
            var carrier = open.session.tab(containing: member.pane)
         {
@@ -271,6 +289,13 @@ extension WindowModel {
             return open.title(of: carrier)
         }
         return "Mixed"
+    }
+
+    /// The mark a window-owned tab shows: VS Code while an editor has its focus, else the
+    /// focused pane's program.
+    func programIdentity(ofMixedTab tab: CompositeTab) -> ProgramIdentity {
+        if tab.focusedEditor != nil || tab.isEditorOnly { return .vscode }
+        return tab.focusedMember.map { programIdentity(ofPane: $0.pane, onGroup: $0.hostId) } ?? .shell
     }
 
     // MARK: What the daemons hear

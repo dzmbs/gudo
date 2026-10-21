@@ -21,7 +21,7 @@ struct ToolSheet: View {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
             .onDisappear {
-                guard !model.isEditorShown, model.sheet == nil, let workspace = model.workspace,
+                guard !model.editorHasKeys, model.sheet == nil, let workspace = model.workspace,
                       let id = workspace.focusedPane else { return }
                 _ = workspace.panes[id]?.view.becomeFirstResponder()
             }
@@ -53,10 +53,6 @@ struct ToolSheet: View {
             }
         case .browser:
             BrowserSheet()
-        case .editor:
-            EditorScreen(source: model.editor) { dismiss() }
-                .macMinimumSize(width: 900, height: 600)
-                .presentationSizing(.page)
         default:
             EmptyView()
         }

@@ -31,7 +31,7 @@ struct EditorLicenceSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Text("Both come under Microsoft’s terms. Read them, and accept only if you agree.")
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.vertical, DS.Space.xs)
@@ -94,7 +94,7 @@ struct EditorLicenceSheet: View {
                 Spacer()
                 Image(systemName: "arrow.up.right")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
             }
             .contentShape(.rect)
         }
@@ -121,7 +121,7 @@ struct EditorTunnelOfferSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Text("The tunnel needs you to sign in on \(host) with your own GitHub or Microsoft account, once. You do that in your browser; this app never sees your password. The usual editor needs no account.")
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.vertical, DS.Space.xs)
@@ -138,7 +138,7 @@ struct EditorTunnelOfferSheet: View {
                                 Spacer()
                                 Image(systemName: "chevron.right")
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(DS.Palette.textTertiary)
                             }
                             .contentShape(.rect)
                         }
@@ -238,7 +238,7 @@ struct EditorDeviceCodeSheet: View {
                             .frame(width: 14, height: 14)
                         Text("Waiting for you to finish signing in…")
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                     .listRowBackground(Color.clear)
                 }

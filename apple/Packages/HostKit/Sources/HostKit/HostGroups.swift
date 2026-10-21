@@ -143,9 +143,9 @@ public final class HostGroups {
         }
     }
 
-    /// The mixed tabs, in the order they were made.
+    /// The window's own tabs: VS Code tabs, then mixed tabs, each in the order they were made.
     public var mixedTabs: [TabRef] {
-        composites.tabs.map { TabRef(hostId: Self.mixedId, tab: $0.id) }
+        composites.ordered.map { TabRef(hostId: Self.mixedId, tab: $0.id) }
     }
 
     /// A daemon group's tabs grouped by repository and worktree, once the daemon has sent its

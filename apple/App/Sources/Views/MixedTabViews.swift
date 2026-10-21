@@ -22,6 +22,8 @@ struct MixedTabTree: PaneTree {
 
     var focusedLeaf: PaneId? { isActive ? tab?.focusedLeaf : nil }
 
+    func editor(_ leaf: PaneId) -> EditorMember? { tab?.editors[leaf] }
+
     func focus(leaf: PaneId) {
         model.focusLeaf(leaf, inMixedTab: id)
     }
@@ -164,23 +166,29 @@ struct MixedHostsLine: View {
 
 // MARK: - Sidebar and strip
 
-/// The window's mixed tabs at the top of the sidebar, under "Mixed": each row names its hosts.
+/// The window's own tabs at the top of the sidebar: VS Code tabs under "VS Code", then mixed
+/// tabs under "Mixed". Each row names its hosts.
 struct MixedSidebarSection: View {
     let numbers: [TabRef: Int]
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        let tabs = model.composites.tabs
+        let ordered = model.composites.ordered
+        section(ordered.filter(\.isEditorOnly), title: "VS Code", systemImage: "chevron.left.forwardslash.chevron.right", id: "host-group-editors")
+        section(ordered.filter { !$0.isEditorOnly }, title: "Mixed", systemImage: "rectangle.split.2x1", id: "host-group-mixed")
+    }
+
+    @ViewBuilder private func section(_ tabs: [CompositeTab], title: String, systemImage: String, id: String) -> some View {
         if !tabs.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: DS.Space.s) {
-                    Image(systemName: "rectangle.split.2x1")
+                    Image(systemName: systemImage)
                         .font(DS.Font.section.weight(.regular))
                         .imageScale(.small)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .opacity(DS.Opacity.mutedGlyph)
                         .frame(width: 16)
-                    Text("Mixed")
+                    Text(title)
                         .font(DS.Font.section)
                         .foregroundStyle(DS.Palette.textSecondary)
                     Spacer()
@@ -191,7 +199,7 @@ struct MixedSidebarSection: View {
                 .padding(.bottom, DS.Space.xs)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("host-group-mixed")
+                .accessibilityIdentifier(id)
                 VStack(spacing: 1) {
                     ForEach(tabs) { tab in
                         let ref = WindowModel.mixedRef(tab.id)
@@ -215,8 +223,7 @@ private struct MixedTabRow: View {
         let ref = WindowModel.mixedRef(tab.id)
         let isActive = model.destination == .terminal && model.currentTab == ref
         let title = model.title(ofMixedTab: tab)
-        let member = tab.focusedMember
-        let program = member.map { model.programIdentity(ofPane: $0.pane, onGroup: $0.hostId) } ?? .shell
+        let program = model.programIdentity(ofMixedTab: tab)
         let state = tab.leaves.compactMap { tab.members[$0] }
             .compactMap { model.agentState(ofPane: $0.pane, onGroup: $0.hostId) }
             .min { $0.urgency < $1.urgency }
@@ -265,7 +272,9 @@ private struct MixedTabRow: View {
             Button("Cancel", role: .cancel) {}
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title), mixed: \(tab.hosts.map(model.groupName).joined(separator: " and "))")
+        .accessibilityLabel(tab.isEditorOnly
+            ? "\(title), VS Code on \(tab.hosts.map(model.groupName).joined(separator: " and "))"
+            : "\(title), mixed: \(tab.hosts.map(model.groupName).joined(separator: " and "))")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
     }
@@ -292,9 +301,14 @@ struct MixedTabChip: View {
                     .padding(.vertical, 3)
             }
             VStack(spacing: 0) {
-                Text(model.title(ofMixedTab: tab))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: DS.Space.xs) {
+                    if tab.isEditorOnly {
+                        ProgramMark(.vscode, size: 12)
+                    }
+                    Text(model.title(ofMixedTab: tab))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Text(tab.hosts.map(model.groupName).joined(separator: " + "))
                     .font(DS.Font.meta)
                     .foregroundStyle(DS.Palette.textTertiary)
@@ -450,10 +464,7 @@ private struct ColumnHeader: View {
 
     private func describe() -> (String, String?, ProgramIdentity) {
         if ref.hostId == HostGroups.mixedId, let tab = model.composites.tab(ref.tab) {
-            let member = tab.focusedMember
-            return (
-                model.title(ofMixedTab: tab), tab.hosts.map(model.groupName).joined(separator: " + "),
-                member.map { model.programIdentity(ofPane: $0.pane, onGroup: $0.hostId) } ?? .shell)
+            return (model.title(ofMixedTab: tab), tab.hosts.map(model.groupName).joined(separator: " + "), model.programIdentity(ofMixedTab: tab))
         }
         guard let workspace = model.workspace(ofGroup: ref.hostId),
               let tab = workspace.session.tabs.first(where: { $0.id == ref.tab })

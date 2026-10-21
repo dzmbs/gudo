@@ -31,7 +31,7 @@ struct TabBar: View {
             // more than one host, each tab gets the host's name as a second line.
             let mixed = Set(all.map(\.hostId)).count > 1
             // Mixed tabs lead, as in the sidebar.
-            ForEach(model.composites.tabs) { tab in
+            ForEach(model.composites.ordered) { tab in
                 MixedTabChip(tab: tab, isActive: WindowModel.mixedRef(tab.id) == active)
                     .frame(maxWidth: .infinity)
                 Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)

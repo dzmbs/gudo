@@ -533,9 +533,13 @@ menu Open in VS Code, Share…/Download, Copy Path, Rename…, Reveal in Termina
 to Trash (confirmed). A file pushes a preview: text with a line-number gutter in SF Mono, images
 fit, others a card with size and Download.
 
-Editor: VS Code's own workbench, full screen on iPhone/iPad (a large sheet on Mac) under a 36 pt
-strip on the terminal background: close, `</>`, folder name, host in SF Mono, Reload, More (Copy
-Folder Path, Stop Editor on host). While it starts: a centred card of steps — Set up VS Code on
+Editor: VS Code's own workbench as a pane of the split tree (a tab of its own, or beside a terminal;
+APP-ARCHITECTURE §20) under a strip on the terminal background — 36 pt alone in its tab, a pane
+header's 24 pt in a split, dimmed like an unfocused split when another pane has the focus: close,
+`</>`, folder name, host in SF Mono, Reload, More (Copy Folder Path, Open in Desktop VS Code on the
+Mac, Remote Tunnel, Stop Editor on host). Sidebar: a "VS Code" group above Mixed, each row the code
+glyph, the folder name and its host. A suspended editor coming back shows its last picture at 55 %
+under a "Resuming VS Code" capsule until the workbench is up. While it starts: a centred card of steps — Set up VS Code on
 host (first run only) / Start the editor / Open the workbench — each with a check, spinner or
 ring and its seconds, and one line saying what is happening ("First time on studio: VS Code is
 being set up there. It takes about 15 seconds, once."). No licence prompt, no sign-in, no editor

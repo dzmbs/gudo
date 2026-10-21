@@ -22,6 +22,8 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     private(set) var isLoading = false
     /// The main page finished loading.
     @ObservationIgnored var onLoad: (() -> Void)?
+    /// The main page could not be loaded (the error, in words).
+    @ObservationIgnored var onFail: ((String) -> Void)?
 
     struct Popup: Identifiable {
         let id = UUID()
@@ -46,6 +48,7 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     }
 
     func load(_ url: URL) {
+        Self.log.info("editor page loads \(url.host() ?? "-", privacy: .public):\(url.port ?? 0)")
         webView.load(URLRequest(url: url))
     }
 
@@ -92,11 +95,22 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
-        if webView === self.webView { isLoading = false }
+        guard webView === self.webView else { return }
+        isLoading = false
+        failed(error)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-        if webView === self.webView { isLoading = false }
+        guard webView === self.webView else { return }
+        isLoading = false
+        failed(error)
+    }
+
+    private func failed(_ error: any Error) {
+        // A newer load replacing this one is not a failure.
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        Self.log.error("editor page failed: \(String(describing: error), privacy: .public)")
+        onFail?(error.localizedDescription)
     }
 
     static func openExternally(_ url: URL) {

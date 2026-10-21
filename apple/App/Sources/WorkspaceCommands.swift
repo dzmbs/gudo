@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 /// The menus. On macOS they are the menu bar; on iPadOS the same commands drive the iPadOS menu
 /// bar and the ⌘-hold shortcut overlay as `UIKeyCommand`s. ⌘ is never sent to the terminal
@@ -14,9 +15,10 @@ struct WorkspaceCommands: Commands {
     /// nothing. The actions resolve the window when they run.
     private var workspace: Workspace? { focusedWorkspace ?? ActiveWindow.workspace }
     private var model: WindowModel? { focusedModel ?? ActiveWindow.model }
-    /// VS Code is in front: every key goes to it (⌘P, ⌘⇧P, ⌘F, ⌘D, ⌘K chords…), so the app's
-    /// own shortcuts step aside.
-    private var editorHasKeys: Bool { model?.isEditorShown == true }
+    /// A VS Code pane has the keyboard: every key goes to it (⌘P, ⌘⇧P, ⌘F, ⌘D, ⌘K chords…),
+    /// so the app's own shortcuts step aside, except the few that lead back out
+    /// (`WorkspaceAction.passesEditor`).
+    private var editorHasKeys: Bool { model?.editorHasKeys == true }
 
     var body: some Commands {
         #if os(iOS)
@@ -98,7 +100,7 @@ struct WorkspaceCommands: Commands {
                 }
             }
                 .keyboardShortcut(action.shortcut)
-                .disabled(editorHasKeys)
+                .disabled(editorHasKeys && !action.passesEditor)
         }
     }
 }
@@ -126,6 +128,14 @@ enum ActiveWindow {
     }
 
     #if os(macOS)
+    /// The window whose VS Code pane has the keyboard in `window`, if one does.
+    static func model(editingIn window: NSWindow) -> WindowModel? {
+        models.allObjects.first { model in
+            guard let webView = model.focusedEditor?.webView, webView.window === window else { return false }
+            return model.editorHasKeys && EditorPane.hasKeyboard(webView)
+        }
+    }
+
     /// The workspace shown in `window`: the one whose panes live there, else the last active.
     static func workspace(in window: NSWindow) -> Workspace? {
         for model in models.allObjects {
