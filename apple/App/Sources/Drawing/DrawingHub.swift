@@ -44,6 +44,11 @@ final class DrawingHub {
     func register(_ pane: PaneDrawing) {
         panes.setObject(pane, forKey: NSNumber(value: pane.paneId))
         reloadPlacements(pane: pane.paneId)
+        // The session's canvas panes as the client cached them: the list pushed on attach can
+        // arrive before this hub's listener exists (a relaunch), and is not pushed again.
+        for canvas in client.canvasPanes(sessionId: pane.sessionId) where canvases[canvas.paneId] == nil {
+            canvases[canvas.paneId] = canvas.artifactId
+        }
     }
 
     /// The pushed placements of a pane as the client caches them (after attach / resume).
@@ -194,6 +199,10 @@ final class SceneSync {
     private var knownFiles: Set<String> = []
     private var chain: Task<Void, Never>?
     var readOnly = false
+    /// The scene's live elements' types by id, as this editor knows them.
+    private(set) var liveElements: [String: String] = [:]
+    /// Called when `liveElements` changed.
+    var onElementsChanged: (() -> Void)?
 
     init(artifactId: UInt64, sessionId: UInt64, hub: DrawingHub, web: CanvasWebView) {
         self.artifactId = artifactId
@@ -229,6 +238,22 @@ final class SceneSync {
         if let viewport { config["viewport"] = viewport }
         config.merge(extra) { $1 }
         web.call("load", config)
+        note(elements)
+    }
+
+    /// Keeps `liveElements` in step with elements the editor loaded, changed or received.
+    private func note(_ elements: [Any]) {
+        guard !elements.isEmpty else { return }
+        for case let element as [String: Any] in elements {
+            guard let id = element["id"] as? String else { continue }
+            liveElements[id] = (element["isDeleted"] as? Bool ?? false) ? nil : element["type"] as? String ?? "?"
+        }
+        onElementsChanged?()
+    }
+
+    /// "rectangle:1" per element type, sorted (accessibility value of the editor).
+    var elementSummary: String {
+        Dictionary(grouping: liveElements.values, by: { $0 }).map { "\($0.key):\($0.value.count)" }.sorted().joined(separator: " ")
     }
 
     static func object(_ element: ExElement) -> Any? { object(element.json) }
@@ -245,6 +270,7 @@ final class SceneSync {
             return try? excalidrawElement(json: json)
         }
         if let state = message["appState"] as? [String: Any] { appState.merge(state) { $1 } }
+        note(list)
         put(elements)
     }
 
@@ -310,7 +336,9 @@ final class SceneSync {
                     fileList.append(["id": file.fileId, "mimeType": file.image.media == .jpeg ? "image/jpeg" : "image/png", "dataURL": url])
                 }
             }
-            web.call("applyRemote", ["elements": elements.compactMap(Self.object), "files": fileList])
+            let objects = elements.compactMap(Self.object)
+            web.call("applyRemote", ["elements": objects, "files": fileList])
+            note(objects)
         }
     }
 }

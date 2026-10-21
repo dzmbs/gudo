@@ -169,6 +169,7 @@ struct WindowProbe: View {
         }
         if let missing = model.handoffMissing { fields["missing"] = missing.hostName }
         if let result = model.continuedResult { fields["continued"] = result }
+        if let drawing = model.continuedDrawing { fields["continuedDrawing"] = drawing }
         let data = (try? encoder.encode(fields)) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }

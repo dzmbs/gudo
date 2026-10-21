@@ -9,7 +9,7 @@ import UnnamedCore
 
 /// A Live Activity per agent run, updated locally while the app is alive: started when an
 /// agent starts working, "Needs you" when it blocks, ended a few minutes after it finishes.
-/// (Push updates need the daemon to send them; docs/PUSH.md §6.)
+/// Builds with push use the daemons' agents activity instead (`AgentsLiveActivity`).
 @MainActor
 final class AgentLiveActivities {
     static let shared = AgentLiveActivities()
@@ -78,7 +78,8 @@ final class AgentLiveActivities {
             }
             if phase.isFinal { end(key, phase: phase, headline: headline) }
         } else if phase == .working || phase == .blocked {
-            guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+            // The daemons push the agents activity (push builds): no second, local one.
+            guard ActivityAuthorizationInfo().areActivitiesEnabled, !AgentsLiveActivity.shared.isPushDriven else { return }
             let now = Date.now
             started[key] = now
             let attributes = AgentRunAttributes(agent: AgentKind(agent.kind).title, hostName: hostName, hostId: hostId, paneId: pane.rawValue, task: title)

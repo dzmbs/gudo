@@ -547,6 +547,16 @@ host by id on the same device, else by daemon id, else by SSH address, and opens
 device has not paired: an alert names it and offers Add Host (SSH pre-filled; ticket otherwise).
 This device's own shell is never offered to other devices.
 
+Drawings ride along (2026-10-21): while a pane of the shown tab is in draw mode, or the focused
+pane is a canvas pane, the payload's `drawing` names it (`artifact`, the `placement` being edited,
+`canvas`) and `pane` is that pane (`Workspace.drawingFocus`, kept by `PaneDrawing`). Continuing
+opens the host and pane, then (`WindowModel.continueDrawing`, retried while the pane connects and
+its placements arrive) reopens that placement in draw mode, or a drawing not placed yet over the
+pane, or just leaves the canvas pane focused. Payloads without `drawing` (older builds) continue as
+before. "Open on Other Device" is Handoff itself. Tests: `WindowsTests` (payload, which pane),
+`DrawingHandoffUITests` (draw mode in the activity and continued in draw mode; a canvas split
+drawn with Excalidraw's rectangle tool, reopened after relaunch, continued focused).
+
 **Width buckets.** `WidthBucket` picks the layout from the window's width, never the device:
 under 600 pt compact (the iPhone layout: one pane, tab switcher, tab bar), else regular (sidebar
 and splits), with 12 pt of hysteresis so a drag at the edge does not flip back and forth. The
@@ -575,7 +585,7 @@ simulator (`SBChamoisWindowingEnabled`) and runs `WindowsUITests`.
 
 Limits (need a device or a second device): real Split View / Slide Over and Stage Manager drags
 (UI tests narrow the window with the debug width and rotate the iPhone instead); a real external
-display (the non-interactive scene is not exercised by the simulator's tests); Handoff between
+display (`xcrun simctl` cannot attach one; `ExternalDisplayTests` checks the scene configuration, the mirrored tab and the font scale); Handoff between
 devices, same Apple Account, Bluetooth and Wi-Fi on; ad-hoc "-" signed Mac builds have no team
 and cannot hand off); a daemon host continued on another device opens that device's attached
 session, so the tab and pane are found only when both attach the same session (else the host

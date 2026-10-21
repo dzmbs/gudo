@@ -232,19 +232,33 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         let store = SharedPushStore(bundle: .main)
         if let key = try? hosts.pushSealKey() { store.setSealKey(key.secret) }
         store.setPairedDaemons(hosts.pairedDaemonIds)
-        #if DEBUG
-        let environment = ApnsEnvironment.sandbox
-        #else
-        let environment = ApnsEnvironment.production
-        #endif
         let prefs = PushPrefs(approvals: prefs.approvals, blocked: prefs.blocked, done: prefs.done, failed: prefs.failed, commands: prefs.commands)
+        #if os(iOS)
+        let activityStart = AgentsLiveActivity.shared.startToken
+        #else
+        let activityStart: Data? = nil
+        #endif
         for (id, connection) in hosts.connections where connection is DaemonConnection && hosts.record(id)?.isGuest == false {
             do {
-                _ = try await hosts.registerPush(hostId: id, apnsToken: token, environment: environment, prefs: prefs)
+                _ = try await hosts.registerPush(
+                    hostId: id, apnsToken: token, environment: Self.apnsEnvironment, prefs: prefs, activityStartToken: activityStart)
             } catch {
                 Self.log.error("push registration host=\(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
+        #if os(iOS)
+        // A running agents activity's token, for daemons that connected since it started.
+        if AgentsLiveActivity.shared.updateToken != nil { await AgentsLiveActivity.shared.sendUpdateToken() }
+        #endif
+    }
+
+    /// Development builds get sandbox tokens; TestFlight and the App Store production ones.
+    static var apnsEnvironment: ApnsEnvironment {
+        #if DEBUG
+        .sandbox
+        #else
+        .production
+        #endif
     }
 
     /// Whether this build can receive remote pushes (entitlement + team).
