@@ -770,11 +770,16 @@ Revisit with a way to map an extension host to its folder.
 **Keyboard.** While an editor leaf has the focus and its workbench is up (`WindowModel.editorHasKeys`)
 every key is VS Code's: the menu commands are disabled (as for the old cover) except
 `WorkspaceAction.passesEditor`, and the Mac's shortcut monitor stands aside unless the key is one of
-those. What stays the app's, and why:
+those. On the iPad the web view's container answers those keys itself from the responder chain
+(`EditorWebHost`, as a terminal answers the app's shortcuts): the system's own ⌘W (Close Window) would
+otherwise win over the menu item. What stays the app's, and why:
 - **⌘1–⌘9** (select tab / last tab): the way to any other tab. VS Code's own ⌘1–⌘8 only focus editor
   groups (a browser takes them for its tabs in vscode.dev too).
 - **⌘W** closes the editor pane, as it closes vscode.dev's tab in a browser. Nothing is lost: the
-  server keeps running and VS Code keeps unsaved changes (hot exit).
+  server keeps running and VS Code keeps unsaved changes (hot exit). **Gap (iPad):** while the web view
+  has the keyboard, ⌘W never reaches the app — the system's Close Window takes it before the menu item
+  and before the container's key command (⌃⌘\` and ⌘1–⌘9 do arrive); the bar's ✕ and the Pane menu close
+  it there. Needs the system Close command removed from the main menu (UIMenuBuilder).
 - **⌃⌘\` Return to Terminal** (Pane menu): the terminal beside the editor in its tab, else the tab the
   editor was opened from (`lastTerminalTab`). VS Code binds nothing to ⌃⌘\` (its ⌃\` toggles its own
   terminal). ⌘⎋ was tried first: on the iPad it never reaches the app while a web view has the keyboard.
@@ -799,5 +804,5 @@ suspension only off screen and past the limit, reload on show; placement, bringi
 forward, ⌘W, `editorHasKeys`, Return to Terminal, the keys that pass), `EditorPanesUITests` (iPad,
 `UI_TEST_CLASS=EditorPanesUITests apple/scripts/w3-ui-test.sh`: two folders in two tabs keeping what
 was typed and their load count, ⌘P reaching VS Code and ⌘2 the app, an editor beside the terminal,
-⌃⌘\` then ⌘K reaching the app, relaunch restoring and lazily loading both tabs, ⌘W; suspension after 3 s
+⌃⌘\` then ⌘K reaching the app, relaunch restoring and lazily loading both tabs, closing; suspension after 3 s
 reloading the page), and the existing `W3UITests` editor tests.

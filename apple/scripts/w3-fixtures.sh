@@ -12,7 +12,7 @@ bin="$dir/bin"
 repo="$work/proj"
 mkdir -p "$repo/src" "$bin"
 # Two more folders for the editor-pane tests (several VS Code tabs, one beside a terminal).
-mkdir -p "$work/site" "$work/docs"
+mkdir -p "$work/site" "$work/docs" "$work/notes"
 printf '<h1>site</h1>\n' >"$work/site/index.html"
 printf '# docs\n' >"$work/docs/README.md"
 

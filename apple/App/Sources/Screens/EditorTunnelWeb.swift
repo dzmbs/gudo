@@ -48,6 +48,7 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     }
 
     func load(_ url: URL) {
+        Self.log.info("editor page loads \(url.host() ?? "-", privacy: .public):\(url.port ?? 0)")
         webView.load(URLRequest(url: url))
     }
 

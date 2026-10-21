@@ -225,10 +225,10 @@ final class EditorPanesUITests: XCTestCase {
         waitForWorkbench("proj", timeout: 60)
         shot("editor-restored")
 
-        // ⌘W closes an editor pane.
-        webField.tap()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(row("proj, VS Code on").waitForNonExistence(timeout: 10), "⌘W closed the editor")
+        // The bar's ✕ closes an editor pane. (⌘W does on the Mac; on the iPad the system's own
+        // Close Window takes ⌘W while a web view has the keyboard: APP-ARCHITECTURE §20.)
+        element("editor-close").tap()
+        XCTAssertTrue(row("proj, VS Code on").waitForNonExistence(timeout: 10), "the editor closed")
         closeEditors()
     }
 
@@ -238,19 +238,19 @@ final class EditorPanesUITests: XCTestCase {
         try launch(["-editorSuspendAfter", "3"])
         closeEditors()  // what an earlier run left open
         XCTAssertTrue(anyPane.waitForExistence(timeout: 30), "a daemon pane")
-        typeInPane("cd ~/proj\n")
+        typeInPane("cd ~/notes\n")
         palette("Open in VS Code")
         let accept = element("editor-licence-accept")
         if accept.waitForExistence(timeout: 5) { accept.tap() }
-        waitForWorkbench("proj")
+        waitForWorkbench("notes")
         typeInWorkbench("gone")
         let loads = try XCTUnwrap(pageLoads())
         // Wait long enough for a snapshot, then leave for the terminal well past the limit.
         RunLoop.current.run(until: Date().addingTimeInterval(3))
         terminalRow.tap()
         RunLoop.current.run(until: Date().addingTimeInterval(8))
-        row("proj, VS Code on").tap()
-        waitForWorkbench("proj", timeout: 30)
+        row("notes, VS Code on").tap()
+        waitForWorkbench("notes", timeout: 30)
         waitFor(NSPredicate(format: "label == %@", "Page loads \(loads + 1)"),
                 app.webViews.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Page loads '")).firstMatch,
                 timeout: 20, "the suspended editor loaded again")

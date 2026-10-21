@@ -31,6 +31,8 @@ struct EditorPaneView: View {
     var onStop: () -> Void
     /// Mac: opens the folder in desktop VS Code instead (nil when it is not installed).
     var openDesktop: (() -> Void)?
+    /// A shortcut that leads out of VS Code, pressed while the web view has the keyboard.
+    var performShortcut: (WorkspaceAction) -> Void = { _ in }
 
     @Environment(\.terminalTheme) private var theme
     @Environment(\.openURL) private var openURL
@@ -44,7 +46,7 @@ struct EditorPaneView: View {
             bar
             ZStack {
                 if let browser = pane.browser {
-                    WebViewHost(webView: browser.webView)
+                    EditorWebHost(webView: browser.webView, perform: performShortcut)
                         .opacity(pane.isWorkbenchVisible ? 1 : 0)
                         .accessibilityIdentifier("editor-web")
                 }
@@ -437,7 +439,10 @@ struct EditorLeafView: View {
             pane: model.editors.pane(for: member), isSplit: isSplit, isFocused: isFocused, focus: focus,
             onClose: { model.closeEditor(member.id) },
             onStop: { model.closeEditor(member.id, stopServer: true) },
-            openDesktop: desktop)
+            openDesktop: desktop,
+            performShortcut: { action in
+                if let workspace = model.workspace { action.perform(on: workspace, window: model) } else if action == .returnToTerminal { model.returnToTerminal() }
+            })
             // One web view per editor: never reuse another editor's view.
             .id(member.id)
     }
@@ -461,4 +466,72 @@ private enum EditorPasteboard {
         NSPasteboard.general.setString(string, forType: .string)
         #endif
     }
+}
+
+/// An editor pane's web view in SwiftUI. On iPad its container answers the shortcuts that lead
+/// out of VS Code (`WorkspaceAction.passesEditor`: ⌘1–⌘9, ⌘W, ⌃⌘`) from the responder chain, as
+/// a terminal answers the app's shortcuts itself: the system's own ⌘W (Close Window) in the main
+/// menu would otherwise win over the app's menu item while the web view has the keyboard. The
+/// Mac's shortcut monitor (`WorkspaceShortcuts`) does the same there.
+struct EditorWebHost: View {
+    let webView: WKWebView
+    var perform: (WorkspaceAction) -> Void
+
+    var body: some View {
+        #if canImport(UIKit)
+        Representable(webView: webView, perform: perform)
+        #else
+        WebViewHost(webView: webView)
+        #endif
+    }
+
+    #if canImport(UIKit)
+    private struct Representable: UIViewRepresentable {
+        let webView: WKWebView
+        let perform: (WorkspaceAction) -> Void
+
+        func makeUIView(context: Context) -> Container {
+            let container = Container()
+            container.perform = perform
+            container.host(webView)
+            return container
+        }
+
+        func updateUIView(_ container: Container, context: Context) {
+            container.perform = perform
+            container.host(webView)
+        }
+    }
+
+    final class Container: UIView {
+        static let actions = WorkspaceAction.allShortcutActions.filter(\.passesEditor)
+        var perform: ((WorkspaceAction) -> Void)?
+
+        func host(_ webView: WKWebView) {
+            guard webView.superview !== self else { return }
+            webView.removeFromSuperview()
+            webView.frame = bounds
+            webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(webView)
+        }
+
+        override var keyCommands: [UIKeyCommand]? {
+            Self.actions.map { action in
+                let command = UIKeyCommand(
+                    input: action.shortcut.key.uiKeyInput, modifierFlags: action.shortcut.modifiers.uiKeyModifierFlags,
+                    action: #selector(passEditorKey(_:)))
+                command.wantsPriorityOverSystemBehavior = true
+                return command
+            }
+        }
+
+        @objc private func passEditorKey(_ command: UIKeyCommand) {
+            guard let action = Self.actions.first(where: {
+                $0.shortcut.key.uiKeyInput == command.input && $0.shortcut.modifiers.uiKeyModifierFlags == command.modifierFlags
+            }) else { return }
+            EditorPane.log.info("editor key passes to the app: \(action.title, privacy: .public)")
+            perform?(action)
+        }
+    }
+    #endif
 }
