@@ -58,6 +58,9 @@ HISTFILE=$out/zsh_history" > $zdot/.zshrc
 fi
 
 args=(-ApplePersistenceIgnoreState YES -dogfood $scenario -dogfoodOut $out)
+# In the background by default (no Dock icon, never in front of your work);
+# DOGFOOD_FOREGROUND=1 runs it as a normal, active window.
+[[ -n ${DOGFOOD_FOREGROUND:-} ]] || args+=(-dogfoodBackground YES)
 [[ -n $only_case ]] && args+=(-dogfoodCase $only_case)
 print "running ${scenario:t} → $out"
 set +e
