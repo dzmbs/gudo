@@ -20,6 +20,7 @@ enum WorkspaceAction: Hashable {
     case commandPalette, commandPaletteGhostty, find, links, inbox, hosts
     /// The next (older) and previous scrollback search match (⌘G / ⇧⌘G).
     case findNext, findPrevious
+    case jumpToWaitingAgent
     /// Shows or hides the sidebar; hidden, the tabs are a strip on top (`TabPlacement`).
     case toggleSidebar
     /// Every shortcut on one page.
@@ -30,7 +31,7 @@ enum WorkspaceAction: Hashable {
         + [.previousPrompt, .nextPrompt]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
-    static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .hosts]
+    static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
@@ -63,6 +64,7 @@ enum WorkspaceAction: Hashable {
         case .findPrevious: "Find Previous"
         case .links: "Links & Paths…"
         case .inbox: "Inbox"
+        case .jumpToWaitingAgent: "Jump to Waiting Agent"
         case .hosts: "Hosts"
         case .toggleSidebar: "Toggle Sidebar"
         case .shortcuts: "Keyboard Shortcuts"
@@ -101,6 +103,8 @@ enum WorkspaceAction: Hashable {
         case .findPrevious: KeyboardShortcut("g", modifiers: [.command, .shift])
         case .links: KeyboardShortcut("l", modifiers: [.command, .shift])
         case .inbox: KeyboardShortcut("i", modifiers: [.command, .shift])
+        // ⇧⌘G is find previous (Ghostty, macOS); A for agent, free in the app and the systems.
+        case .jumpToWaitingAgent: KeyboardShortcut("a", modifiers: [.command, .shift])
         case .hosts: KeyboardShortcut("h", modifiers: [.command, .shift])
         case .toggleSidebar: KeyboardShortcut("b")
         case .shortcuts: KeyboardShortcut("/")
@@ -133,6 +137,7 @@ enum WorkspaceAction: Hashable {
         case .findPrevious: window.findPrevious()
         case .links: window.sheet = .links
         case .inbox: window.destination = .inbox
+        case .jumpToWaitingAgent: window.jumpToWaitingAgent()
         case .hosts: window.destination = window.destination == .hosts ? .terminal : .hosts
         case .toggleSidebar: perform(window: window)
         case .shortcuts: window.sheet = window.sheet == .shortcuts ? nil : .shortcuts
@@ -160,7 +165,7 @@ enum WorkspaceAction: Hashable {
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.
-        case .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .hosts, .toggleSidebar, .shortcuts: break
+        case .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts, .toggleSidebar, .shortcuts: break
         }
     }
 

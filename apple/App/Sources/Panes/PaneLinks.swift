@@ -143,6 +143,7 @@ struct LinksSettingsSection: View {
             Picker("Open Web Links In", selection: $opening) {
                 ForEach(LinkOpening.allCases) { Text($0.title).tag($0) }
             }
+            .settingAnchor("open-web-links")
         } header: {
             Text("Links")
         } footer: {

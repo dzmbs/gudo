@@ -166,6 +166,8 @@ final class WindowModel {
     /// The editor opens on the Remote Tunnel's offer (palette) instead of the default path.
     var editorTunnelOffer = false
     let toasts = ToastCenter()
+    /// Agents on other tabs and hosts that need you or finished (`AgentToasts`).
+    let agentToasts = AgentToasts()
     /// The git-native workspace of this window (worktree, pull request, scripts).
     let git = GitUI()
 
@@ -281,6 +283,7 @@ final class WindowModel {
         workspace = local
         followGroups()
         startMixedTabs()
+        followAgentToasts()
     }
 
     /// The window closed: its terminals stop and the daemons stop counting its panes as shown.

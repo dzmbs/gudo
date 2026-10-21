@@ -82,7 +82,7 @@ struct WorkspaceCommands: Commands {
             Toggle("Two Columns", isOn: Binding(get: { model?.isTwoColumns ?? false }, set: { _ in model?.toggleTwoColumns() }))
                 .disabled(editorHasKeys || model == nil)
             Divider()
-            buttons([.commandPalette, .commandPaletteGhostty, .inbox, .hosts, .shortcuts])
+            buttons([.commandPalette, .commandPaletteGhostty, .inbox, .jumpToWaitingAgent, .hosts, .shortcuts])
             Button("Add Host…") { model?.addHost() }
             Divider()
         }

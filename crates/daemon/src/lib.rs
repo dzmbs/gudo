@@ -26,6 +26,7 @@
 
 mod agent;
 mod anchor;
+mod approve;
 mod art;
 mod askpass;
 mod assist;

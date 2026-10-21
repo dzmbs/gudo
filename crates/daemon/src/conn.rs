@@ -157,6 +157,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     });
     core.client_connected(true);
     core.askpass.register(client.id, &client.authz, client.caps);
+    client.approvals_state();
     let repo_watch = client.caps.contains(Caps::REPO_STATUS);
     if repo_watch {
         core.ws.repos.watch(true);
@@ -913,6 +914,142 @@ impl Client {
                 if self.caps.contains(Caps::APPROVAL_POLICY) && self.pane_allowed(status.pane_id) {
                     self.send(ServerCtl::ApprovalStatus(status));
                 }
+            }
+            Event::Approval(push) => {
+                let pane = match &push {
+                    proto::ApprovalPush::Request(info) => info.pane_id,
+                    proto::ApprovalPush::Rules { pane_id, .. } => *pane_id,
+                };
+                if self.caps.contains(Caps::APPROVALS) && self.pane_allowed(pane) {
+                    self.send(ServerCtl::Approval(push));
+                }
+            }
+        }
+    }
+
+    /// The open requests' extras and the rules in force, for a connection that just arrived.
+    fn approvals_state(&self) {
+        if !self.caps.contains(Caps::APPROVALS) {
+            return;
+        }
+        let (open, panes) = self.core.approvals.snapshot();
+        for info in open {
+            if self.pane_allowed(info.pane_id) {
+                self.send(ServerCtl::Approval(proto::ApprovalPush::Request(info)));
+            }
+        }
+        for pane in panes {
+            if self.pane_allowed(pane) {
+                let rules = self.core.approvals.rules(pane);
+                self.send(ServerCtl::Approval(proto::ApprovalPush::Rules {
+                    pane_id: pane,
+                    rules,
+                }));
+            }
+        }
+    }
+
+    /// An approval extra: approve with edited input, add or revoke an auto-approve rule.
+    /// Each needs Approver on the pane, and the first two a signature by this device.
+    fn approval(
+        &self,
+        req: proto::ApprovalRequest,
+    ) -> Result<proto::ApprovalResponse, proto::ApprovalError> {
+        use proto::ApprovalError as E;
+        self.live().map_err(|e| E::Forbidden(e.to_string()))?;
+        let daemon = self.core.identity.daemon_id();
+        let name = self.core.mp.name_of(self.id);
+        match req {
+            proto::ApprovalRequest::ApproveEdited { decide, input } => {
+                if decide.actor != self.actor {
+                    return Err(E::Forbidden(
+                        "the decision's actor is not this connection".into(),
+                    ));
+                }
+                let pane = self
+                    .core
+                    .request_pane(decide.request_id)
+                    .ok_or(E::NotFound)?;
+                self.allow(Need::Approve, Target::Pane(pane))
+                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                if !grants::verify_approval(daemon, &decide) {
+                    return Err(E::Forbidden(
+                        "the decision is not signed by this device".into(),
+                    ));
+                }
+                let input = input.trim();
+                if input.is_empty() || input.len() > 64 * 1024 {
+                    return Err(E::Invalid("the command is empty or too long".into()));
+                }
+                let (original, allow) =
+                    crate::approve::editable(&self.core, pane, decide.request_id)?;
+                if decide.option_id != allow {
+                    return Err(E::Invalid("an edited request can only be allowed".into()));
+                }
+                let sig = decide.sig.clone();
+                let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
+                    self.core.mp.audit.append(
+                        AuditKind::Approval,
+                        crate::mp::AuditEntry {
+                            pane_id: Some(decided.pane_id),
+                            detail: format!(
+                                "{name} edited {original:?} to {input:?} and chose {:?}",
+                                details.option
+                            ),
+                            approval: Some(proto::ApprovalAudit {
+                                request_id: decide.request_id,
+                                agent_request: details.request.to_string(),
+                                option_id: decide.option_id,
+                                option: details.option.clone(),
+                                tool: details.tool.clone(),
+                                summary: format!("{original} → {input}"),
+                                signed: proto::approval_signing_bytes(
+                                    daemon,
+                                    decide.request_id,
+                                    decide.option_id,
+                                    decide.actor,
+                                ),
+                                sig,
+                            }),
+                            ..self.authz.audit()
+                        },
+                    );
+                };
+                match self
+                    .core
+                    .decide_with(self.actor, &decide, Some(input), record)
+                {
+                    Ok(_) => Ok(proto::ApprovalResponse::Done),
+                    Err(Some(_)) => Err(E::AlreadyDecided),
+                    Err(None) => Err(E::NotFound),
+                }
+            }
+            proto::ApprovalRequest::AddRule(rule) => {
+                if rule.actor != self.actor {
+                    return Err(E::Forbidden(
+                        "the rule's actor is not this connection".into(),
+                    ));
+                }
+                self.allow(Need::Approve, Target::Pane(rule.pane_id))
+                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                grants::check_rule(
+                    daemon,
+                    &rule,
+                    proto::UnixMillis(crate::identity::now_millis()),
+                )
+                .map_err(|e| match e {
+                    grants::RuleError::Signature => E::Forbidden(e.to_string()),
+                    _ => E::Invalid(e.to_string()),
+                })?;
+                crate::approve::add_rule(&self.core, rule, name)?;
+                Ok(proto::ApprovalResponse::Done)
+            }
+            proto::ApprovalRequest::RevokeRule { rule_id } => {
+                let pane = crate::approve::rule_pane(&self.core, rule_id).ok_or(E::NotFound)?;
+                self.allow(Need::Approve, Target::Pane(pane))
+                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                crate::approve::revoke(&self.core, rule_id, self.actor, &name)?;
+                Ok(proto::ApprovalResponse::Done)
             }
         }
     }
@@ -1747,6 +1884,10 @@ impl Client {
                     let result = client.assist(req).await;
                     client.send(ServerCtl::AssistResult { req_id, result });
                 });
+            }
+            ClientCtl::Approval { req_id, req } => {
+                let result = self.approval(req);
+                self.send(ServerCtl::ApprovalResult { req_id, result });
             }
             ClientCtl::Askpass { req_id, req } => {
                 let client = Arc::clone(self);

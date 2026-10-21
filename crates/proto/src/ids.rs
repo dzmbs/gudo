@@ -285,6 +285,9 @@ bitset! {
         /// Understands approval policies: wants `ServerCtl::ApprovalPolicy` and
         /// `ServerCtl::ApprovalStatus`.
         APPROVAL_POLICY = 10;
+        /// Wants `ServerCtl::Approval` pushes (what may be done with an open approval
+        /// request, auto-approve rules in force) and may send `ClientCtl::Approval`.
+        APPROVALS = 11;
     }
 }
 

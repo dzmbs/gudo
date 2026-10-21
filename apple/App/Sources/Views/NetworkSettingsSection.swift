@@ -32,6 +32,7 @@ struct NetworkSettingsSection: View {
             #endif
             .labelsHidden()
             .accessibilityIdentifier("settings-relay-mode")
+            .settingAnchor("relay-mode")
             if mode == .custom {
                 TextField("Relay URL", text: $url, prompt: Text(verbatim: "https://relay.example.com"))
                     .font(DS.Font.literal)
@@ -160,6 +161,7 @@ private struct CertificatesSection: View {
             }
             Button("Import Certificate…", systemImage: "doc.badge.plus", action: startImport)
                 .accessibilityIdentifier("settings-relay-ca-import")
+                .settingAnchor("relay-ca")
             if let failure {
                 Label(failure, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)

@@ -27,6 +27,7 @@
 //! # }
 //! ```
 
+mod approvals;
 mod artifacts;
 mod askpass;
 mod assist;
@@ -57,6 +58,7 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::mirror::Mirror;
 
+pub use approvals::{ApprovalEvent, ApprovalEventQueue, ApprovalListener};
 pub use artifacts::{ArtifactEventQueue, ArtifactListener, ArtifactUpdate};
 pub use askpass::{AskpassEvent, AskpassEventQueue, AskpassListener};
 pub use assist::{AssistEvent, AssistEventQueue, AssistListener};
@@ -439,6 +441,8 @@ pub(crate) struct Inner {
     pub assist: assist::AssistState,
     /// Askpass requests in flight, open and detected password prompts.
     pub askpass: askpass::AskpassState,
+    /// Approval extras in flight, open requests' extras, auto-approve rules.
+    pub approvals: approvals::ApprovalState,
     /// What the daemon said about itself on the last connection.
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
     /// The last connection was for an upgrade only.
@@ -618,6 +622,7 @@ impl Client {
             art: artifacts::ArtState::default(),
             assist: assist::AssistState::default(),
             askpass: askpass::AskpassState::default(),
+            approvals: approvals::ApprovalState::default(),
             daemon_info: Mutex::new(None),
             incompatible: Mutex::new(false),
         });

@@ -163,6 +163,34 @@ nonisolated struct AgentLaunchRequest: Hashable, Sendable {
     var shell = false
 }
 
+/// What Approve can do beyond yes, for a permission request.
+nonisolated struct AgentApprovalOptions: Hashable, Sendable {
+    /// The input the agent accepts edited before it runs (Claude Code's shell command); nil when
+    /// it can only be approved as asked.
+    var editableInput: String?
+    /// What "Approve All Like This" would cover, in words ("cargo test …"); nil when not offered.
+    var likeThis: String?
+}
+
+/// A standing "approve all like this" for one agent's task: scoped to its pane and session,
+/// limited in time and turns, revocable (a grant on the host, `crates/grants`).
+nonisolated struct AgentAutoApproval: Identifiable, Hashable, Sendable {
+    var id: String
+    /// What it approves ("cargo test …", "any Edit").
+    var label: String
+    var expiresAt: Date
+    var turnsLeft: Int
+    /// Requests it has approved so far.
+    var uses: Int
+    /// Who granted it (a device or person name).
+    var grantedBy: String
+
+    /// The limits "Approve All Like This for This Task" sets: an hour or ten turns, whichever
+    /// comes first.
+    static let minutes = 60
+    static let turns = 10
+}
+
 @MainActor
 protocol AgentFeed: AnyObject, Observable {
     var items: [AgentItem] { get }
@@ -188,6 +216,29 @@ protocol AgentFeed: AnyObject, Observable {
     func approval(_ id: AgentItem.ID) -> ApprovalContext?
     /// Claims a request ("I'll take this one"), or releases the claim.
     func claim(_ id: AgentItem.ID, _ claim: Bool)
+
+    /// Edit and "approve all like this" for a permission request; nil when neither is offered.
+    func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions?
+    /// The standing approvals of the item's agent (its task).
+    func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval]
+    /// Approves with the input edited (only when `approvalOptions` has `editableInput`).
+    func approveEdited(_ id: AgentItem.ID, input: String) async throws
+    /// Approves this request and every one like it for the rest of the task, within the limits.
+    func approveAllLikeThis(_ id: AgentItem.ID) async throws
+    func revokeAutoApproval(_ id: AgentItem.ID, rule: AgentAutoApproval.ID) async throws
+}
+
+/// Feeds without the approval extras (mocks, fakes): plain approve and deny.
+extension AgentFeed {
+    func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions? { nil }
+    func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval] { [] }
+    func approveEdited(_ id: AgentItem.ID, input: String) async throws { throw ApprovalUnavailable() }
+    func approveAllLikeThis(_ id: AgentItem.ID) async throws { throw ApprovalUnavailable() }
+    func revokeAutoApproval(_ id: AgentItem.ID, rule: AgentAutoApproval.ID) async throws { throw ApprovalUnavailable() }
+}
+
+nonisolated struct ApprovalUnavailable: LocalizedError {
+    var errorDescription: String? { "The host's helper is too old for this; update it from the host's menu." }
 }
 
 extension AgentFeed {
