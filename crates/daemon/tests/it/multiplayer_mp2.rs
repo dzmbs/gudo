@@ -196,6 +196,12 @@ async fn knocking_waits_for_the_owner_who_admits_or_turns_away() {
     assert!(page.chain_ok);
     let kinds: Vec<AuditKind> = page.records.iter().map(|r| r.kind).collect();
     assert!(kinds.contains(&AuditKind::Knock), "{kinds:?}");
+    assert!(
+        page.records
+            .iter()
+            .any(|r| r.kind == AuditKind::Knock && r.detail.starts_with("Kim Lee knocked")),
+        "knocks are audited under the name the knocker gave"
+    );
     let answered: Vec<&str> = page
         .records
         .iter()

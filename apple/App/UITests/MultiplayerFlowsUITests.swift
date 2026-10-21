@@ -74,7 +74,8 @@ final class MultiplayerFlowsUITests: XCTestCase {
         shot(app, "flows-3-knock")
 
         element(app, "knock-admit").tap()
-        let driver = element(app, "admit-driver")
+        // Menu items carry their titles (identifiers do not reach UIKit's menu).
+        let driver = app.buttons["Driver"].firstMatch
         XCTAssertTrue(driver.waitForExistence(timeout: 5), "Admit as… lists the roles")
         shot(app, "flows-4-admit-as")
         driver.tap()
@@ -89,7 +90,14 @@ final class MultiplayerFlowsUITests: XCTestCase {
         audit.tap()
         XCTAssertTrue(element(app, "audit-chain-ok").waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["Let someone in"].firstMatch.waitForExistence(timeout: 10), "the admission is audited")
-        XCTAssertTrue(app.staticTexts["Kim Lee knocked"].firstMatch.exists, "the knock is audited")
+        // Access records only: the knock sits among the joins, not under every lease and prompt.
+        app.buttons["Access"].firstMatch.tap()
+        let knocked = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Kim Lee knocked'")).firstMatch
+        for _ in 0..<6 where !knocked.exists {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        shot(app, "flows-5-audit-access")
+        XCTAssertTrue(knocked.exists, "the knock is audited")
         shot(app, "flows-5-audit")
     }
 

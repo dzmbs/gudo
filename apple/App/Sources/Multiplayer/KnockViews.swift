@@ -8,6 +8,29 @@ import UnnamedCore
 // Inbox, Share Session) and admits them with a role, or turns them away. The approval rules
 // say who answers a session's agent requests.
 
+/// Someone knocking on one of this device's hosts.
+struct KnockItem: Identifiable {
+    var id: String { "\(hostId)/\(knock.knockId)" }
+    var hostId: String
+    var hostName: String
+    var knock: Knock
+    var session: MultiplayerSession
+}
+
+/// An approval request under its session's rules, as this device sees it.
+nonisolated struct ApprovalContext: Equatable, Sendable {
+    /// Why this device may not approve (it may still deny), or nil.
+    var block: String?
+    /// "Alex approved · needs a second person", "Claimed by Bob".
+    var progress: String?
+    /// The session asks approvers to claim requests.
+    var claimMode: Bool
+    /// This principal holds the claim.
+    var claimedByMe: Bool
+    /// This principal's approval is already counted (two-person rule).
+    var approvedAlready: Bool
+}
+
 /// The roles an owner admits someone as, weakest first, as the "Admit as" menu lists them.
 enum AdmitChoice: String, CaseIterable, Identifiable {
     case viewer, prompter, driver, pair
@@ -141,7 +164,8 @@ struct KnockRow: View {
     }
 }
 
-/// The newest knock on the window's host, floating over the terminal so the owner sees it
+/// The newest knock on the window's host, floating at the foot of the terminal (clear of the
+/// toolbar and the panes' control chips) so the owner sees it
 /// without opening anything. Other knocks wait in the Inbox.
 struct KnockBanner: View {
     let session: MultiplayerSession
@@ -168,9 +192,9 @@ struct KnockBanner: View {
             .frame(maxWidth: 460)
             .floatingPanel(cornerRadius: 20)
             .padding(.horizontal, DS.Space.m)
-            .padding(.top, DS.Space.s)
+            .padding(.bottom, DS.Space.l)
             .sensoryFeedback(DS.Haptic.attention, trigger: knock.knockId)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .transition(.move(edge: .bottom).combined(with: .opacity))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("knock-banner")
         }
@@ -184,7 +208,7 @@ struct KnockOverlay: View {
     var body: some View {
         let shown = !LaunchOptions.mock || MockMultiplayer.onPanes
         let session = workspace.multiplayer.flatMap { $0.isOwner && shown ? $0 : nil }
-        ZStack(alignment: .top) {
+        ZStack(alignment: .bottom) {
             if let session, !session.knocks.isEmpty {
                 KnockBanner(session: session)
             }

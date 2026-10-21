@@ -736,13 +736,22 @@ impl Mp {
         self.audit.append(
             AuditKind::GrantRegistered,
             AuditEntry {
-                detail: format!(
-                    "grant {} for {:?}: {} on {}{extra}",
-                    short(&leaf.grant_id.0),
-                    leaf.label,
-                    leaf.roles.names(),
-                    leaf.scope
-                ),
+                detail: if leaf.label.is_empty() {
+                    format!(
+                        "grant {}: {} on {}{extra}",
+                        short(&leaf.grant_id.0),
+                        leaf.roles.names(),
+                        leaf.scope
+                    )
+                } else {
+                    format!(
+                        "grant {} for {:?}: {} on {}{extra}",
+                        short(&leaf.grant_id.0),
+                        leaf.label,
+                        leaf.roles.names(),
+                        leaf.scope
+                    )
+                },
                 ..by.audit()
             },
         );

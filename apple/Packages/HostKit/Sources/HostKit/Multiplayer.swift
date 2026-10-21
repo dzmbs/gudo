@@ -714,7 +714,8 @@ public final class MultiplayerSession {
         // Approval rules and claims answer in sentences ("only the owner answers approvals in
         // this session"); missing roles name the role ("needs the driver role; …").
         if !lower.contains(" role") {
-            let plain = reason.replacing(/^(forbidden|conflict|not found|invalid): /, with: "")
+            let prefix = ["forbidden: ", "conflict: ", "not found: ", "invalid: "].first { reason.hasPrefix($0) }
+            let plain = prefix.map { String(reason.dropFirst($0.count)) } ?? reason
             if what == "Decide" || what == nil, !plain.isEmpty {
                 return plain.prefix(1).uppercased() + plain.dropFirst() + (plain.hasSuffix(".") ? "" : ".")
             }

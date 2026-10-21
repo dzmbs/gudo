@@ -80,7 +80,7 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
     func claimApproval(requestId: UInt64, claim: Bool) async throws -> ApprovalStatus {
         state.withLock { $0.claims.append((requestId, claim)) }
         return ApprovalStatus(paneId: 1, requestId: requestId, risk: .any, mode: .claim, approvals: [],
-                              needed: 1, claimedBy: claim ? ApprovalVote(actor: guestActor, name: "Mira", atMs: 1) : nil)
+                              needed: 1, claimedBy: claim ? ApprovalVote(actor: Actor(principal: "bb", device: String(repeating: "b", count: 64)), name: "Mira", atMs: 1) : nil)
     }
 }
 

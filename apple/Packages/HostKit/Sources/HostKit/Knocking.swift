@@ -24,8 +24,9 @@ extension HostsModel {
     @discardableResult
     public func knock(invite: String, name: String?, onWaiting: @escaping @Sendable () -> Void = {}) async throws -> String {
         let text = invite.trimmingCharacters(in: .whitespacesAndNewlines)
-        let config = ClientConfig(secretKey: try deviceKeyData(), relay: configuration.relay, mirrorVt: false)
-        let options = ConnectOptions(relayCaDer: [], askpass: false)
+        // The same network settings as every other connection (direct-only, own relay, CAs).
+        let config = clientConfig(try deviceKeyData(), mirrorVt: false)
+        let options = relaySettings.connectOptions(askpass: false)
         let knock = knocker ?? { invite, config, options, name, listener in
             try await knockInvite(invite: invite, config: config, options: options, name: name, listener: listener)
         }

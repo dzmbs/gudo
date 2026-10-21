@@ -367,7 +367,8 @@ private struct AuditRow: View {
         case .lease: return "\(actorName) took control"
         case .prompt: return "\(actorName) prompted an agent"
         case .denied: return "Refused"
-        case .knock: return "\(actorName) knocked"
+        // A knocker is nobody the host knows yet: the record names them.
+        case .knock: return (record.detail.components(separatedBy: " knocked").first ?? actorName) + " knocked"
         case .knockAnswered: return record.detail.hasPrefix("admitted") ? "Let someone in" : record.detail.hasSuffix("stopped waiting") ? "Stopped waiting" : "Turned someone away"
         case .policy: return "Approval rules changed"
         case .claim: return "\(actorName) \(record.detail.contains(" released ") ? "released" : "claimed") a request"

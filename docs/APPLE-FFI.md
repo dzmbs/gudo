@@ -222,6 +222,10 @@ Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerE
 | `prompt(paneId:text:submit:) -> UInt32` | composer path (sanitized; the prompter role's only input) |
 | `setTyping(paneId:typing:)` | typing indicator |
 | `listGrants()`, `listDevices()`, `revoke(target:)`, `audit(after:limit:)` | owner only; `RevokeTarget.grant / .device / .principal`; `AuditPage.chainOk` |
+| `knockInvite(invite:config:options:name:listener:) -> KnockResult` | free function: knock and wait (cancel the Swift task to stop); `KnockListener.onWaiting(knockId:)`; `.admitted(invite:)` is the link to join with, `.denied`; `KnockError.invalid / unreachable / refused` |
+| `pendingKnocks()`, `admitKnock(knockId:roles:sinceJoin:ttlSecs:) -> GrantInfo`, `denyKnock(knockId:)` | owner; events `knockAdded(knock:)`, `knockGone(knockId:outcome:by:)` |
+| `approvalPolicy(sessionId:)`, `setApprovalPolicy(sessionId:policy:)`, `approvalPolicyCached()` | `ApprovalPolicy(mode: .anyApprover / .ownerOnly / .twoPerson / .claim, maxRisk: .readOnly / .edits / .any)`; event `approvalPolicy(sessionId:policy:)` |
+| `claimApproval(requestId:claim:) -> ApprovalStatus`, `approvalStatuses()`, `riskOfTool(tool:)` | where a request stands (risk, held approvals, claim); event `approvalStatus(status:)` |
 
 ### Push (docs/PUSH.md)
 

@@ -306,10 +306,35 @@ async fn serve_knock(
     conn: Connection,
     ctl_tx: SendStream,
     mut ctl_rx: RecvStream,
-    knocker: Knocker,
+    mut knocker: Knocker,
 ) -> Result<(), NetError> {
     let (ctl, ctl_out) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_ctl(ctl_tx, ctl_out));
+    // The knocker says who it is right after `Hello`; wait a moment for it, so the owner (and
+    // the audit log) see the name rather than a placeholder.
+    let first = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        net::recv(&mut ctl_rx),
+    )
+    .await;
+    let mut named = None;
+    match first {
+        Ok(Ok(Some(ClientCtl::Multiplayer {
+            req_id,
+            req: MpRequest::SetName { name },
+        }))) => {
+            let name: String = name.trim().chars().take(64).collect();
+            if !name.is_empty() {
+                knocker.name = name;
+            }
+            named = Some(req_id);
+        }
+        Ok(Ok(None | Some(ClientCtl::Bye { .. })) | Err(_)) => {
+            writer.abort();
+            return Ok(());
+        }
+        _ => {}
+    }
     let id = match core.mp.knock(&core, knocker, ctl.clone(), conn.clone()) {
         Ok(id) => id,
         Err(reason) => {
@@ -322,6 +347,12 @@ async fn serve_knock(
     let _ = ctl.send(ServerCtl::KnockAnswer(proto::KnockAnswer::Waiting {
         knock_id: id,
     }));
+    if let Some(req_id) = named {
+        let _ = ctl.send(ServerCtl::MultiplayerResult {
+            req_id,
+            result: Ok(MpResponse::Done),
+        });
+    }
     // The knocker pings every few seconds; silence this long means it is gone.
     const LOBBY_IDLE: std::time::Duration = std::time::Duration::from_secs(45);
     let result = loop {

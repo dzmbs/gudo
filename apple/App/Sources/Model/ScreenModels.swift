@@ -1,7 +1,5 @@
 import DesignSystem
 import Foundation
-import HostKit
-import UnnamedCore
 
 // Data the upcoming screens show, behind protocols. The views only read these types; the wiring
 // (daemon, SSH, agent hooks) replaces the mocks in MockData.swift without touching a view.
@@ -198,28 +196,6 @@ extension AgentFeed {
     func claim(_ id: AgentItem.ID, _ claim: Bool) {}
 }
 
-/// Someone knocking on one of this device's hosts.
-struct KnockItem: Identifiable {
-    var id: String { "\(hostId)/\(knock.knockId)" }
-    var hostId: String
-    var hostName: String
-    var knock: Knock
-    var session: MultiplayerSession
-}
-
-/// An approval request under its session's rules, as this device sees it.
-nonisolated struct ApprovalContext: Equatable, Sendable {
-    /// Why this device may not approve (it may still deny), or nil.
-    var block: String?
-    /// "Alex approved · needs a second person", "Claimed by Bob".
-    var progress: String?
-    /// The session asks approvers to claim requests.
-    var claimMode: Bool
-    /// This principal holds the claim.
-    var claimedByMe: Bool
-    /// This principal's approval is already counted (two-person rule).
-    var approvedAlready: Bool
-}
 
 // MARK: - Panes: status, links, search
 

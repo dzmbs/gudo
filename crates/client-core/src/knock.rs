@@ -10,7 +10,7 @@ use proto::{
     SignedGrant, Ticket,
 };
 
-use crate::conn::{endpoint_builder, recv, send, ticket_addr};
+use crate::conn::{Route, endpoint_builder, recv, send, ticket_addr};
 use crate::{ClientConfig, ConnectOptions};
 
 /// How often the waiting connection pings, so idle timeouts and NATs keep it open.
@@ -65,8 +65,10 @@ pub async fn knock(
     let secret = iroh::SecretKey::from_bytes(&key);
     let device = proto::DeviceId(*secret.public().as_bytes());
     let unreachable = |e: &dyn std::fmt::Display| KnockError::Unreachable(e.to_string());
-    let relays = proto::TicketRelays::default();
-    let endpoint = endpoint_builder(config.relay, &relays, &options)
+    // Invites carry no relay extras: the daemon's home relay, unless this device's own
+    // network settings say otherwise.
+    let route = Route::new(config.relay, &proto::TicketRelays::default(), &options);
+    let endpoint = endpoint_builder(&route, &options)
         .map_err(|e| unreachable(&e))?
         .secret_key(secret)
         .bind()
@@ -82,7 +84,7 @@ pub async fn knock(
         expires: proto::UnixMillis(0),
     };
     let result = async {
-        let addr = ticket_addr(&ticket, config.relay, &relays).map_err(|e| unreachable(&e))?;
+        let addr = ticket_addr(&ticket, &route).map_err(|e| unreachable(&e))?;
         let conn = endpoint
             .connect(addr, proto::ALPN)
             .await
@@ -143,6 +145,13 @@ async fn wait(
     send(&mut tx, &ClientCtl::Hello(hello))
         .await
         .map_err(|e| unreachable(&e))?;
+    // Who is knocking, before the owner is asked (the daemon waits a moment for it).
+    if let Some(name) = name.as_ref().filter(|n| !n.trim().is_empty()) {
+        let req = MpRequest::SetName { name: name.clone() };
+        send(&mut tx, &ClientCtl::Multiplayer { req_id: 1, req })
+            .await
+            .map_err(|e| unreachable(&e))?;
+    }
     let mut on_waiting = Some(on_waiting);
     let mut keepalive = tokio::time::interval(KEEPALIVE);
     keepalive.tick().await;
@@ -158,12 +167,6 @@ async fn wait(
         };
         match msg {
             Some(ServerCtl::KnockAnswer(KnockAnswer::Waiting { knock_id })) => {
-                if let Some(name) = name.as_ref().filter(|n| !n.trim().is_empty()) {
-                    let req = MpRequest::SetName { name: name.clone() };
-                    send(&mut tx, &ClientCtl::Multiplayer { req_id: 1, req })
-                        .await
-                        .map_err(|e| unreachable(&e))?;
-                }
                 if let Some(f) = on_waiting.take() {
                     f(knock_id);
                 }
