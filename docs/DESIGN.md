@@ -226,7 +226,7 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - A host with no tabs shows one row "New Terminal" (`plus` in `.secondary`) under its header
   (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
 - One row per tab: its number across all hosts (tertiary, monospaced), a leading slot (16 pt on
-  holds the focused pane's program mark (14 / 16 pt: the official logo where its terms allow,
+  holds the focused pane's program mark (14 / 16 pt: the official logo, unmodified, where one ships (`ProgramCatalog.logos`; the owner's dark variant in dark),
   replaced by the agent glyph on unfocused tabs (§3.4: working = mini spinner, needs input =
   amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
   every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1–8 index the

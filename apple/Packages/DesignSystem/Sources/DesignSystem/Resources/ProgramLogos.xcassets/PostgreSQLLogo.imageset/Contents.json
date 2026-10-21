@@ -1,0 +1,15 @@
+{
+  "images": [
+    {
+      "filename": "PostgreSQL_logo.3colors.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "preserves-vector-representation": true
+  }
+}

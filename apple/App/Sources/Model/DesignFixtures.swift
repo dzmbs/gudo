@@ -129,6 +129,10 @@ enum DesignFixtures {
             ("scratch", "python3.12", nil), ("review", "codex", .blocked), ("README.md", "nvim", nil),
             ("Cargo.toml", "hx", nil), ("work", "tmux", nil), ("history", "git", nil), ("load", "btop", nil),
             ("console", "irb", nil), ("~", "-zsh", nil),
+            ("search", "gemini", nil), ("pr", "copilot", nil), ("init.el", "emacs", nil), ("api", "docker", nil),
+            ("prod", "kubectl", nil), ("web", "node", nil), ("bench", "bun", nil), ("tools", "deno", nil),
+            ("server", "go", nil), ("build", "cargo", nil), ("check", "rustc", nil), ("db", "psql", nil),
+            ("cache", "redis-cli", nil),
         ]
         var fixture: [String: (program: String, state: AgentState?)] = [:]
         // `-fixtureTabs N`: the first N only (the tab strip has room for about six).

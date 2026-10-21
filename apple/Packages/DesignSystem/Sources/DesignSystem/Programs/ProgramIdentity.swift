@@ -25,15 +25,34 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
 
     /// An official logo in the package's asset catalog.
     public struct Logo: Hashable, Sendable {
+        public enum Clearance: String, Hashable, Sendable {
+            /// The artwork's licence or the owner's trademark terms allow this use.
+            case licensed
+            /// The owner publishes the artwork without terms for this use; permission requested.
+            case termsSilent
+            /// (docs/legal/logo-permission-requests.md).
+            case ownerApprovedRisk
+        }
+
         /// The image set's name in `ProgramLogos.xcassets`.
         public var asset: String
         /// Drawn in the text colour (the owner publishes a monochrome version or allows one);
-        /// otherwise drawn unaltered in its own colours.
+        /// otherwise drawn unaltered in its own colours. A set may carry the owner's dark-background
+        /// variant as its dark appearance.
         public var template: Bool
+        /// The exact URL each file in the image set was downloaded from (a file inside a zip is
+        /// named after `#`), light first.
+        public var sources: [String]
+        /// When the files were downloaded, yyyy-MM-dd.
+        public var retrieved: String
+        public var clearance: Clearance
 
-        public init(_ asset: String, template: Bool) {
+        public init(_ asset: String, template: Bool = false, sources: [String], retrieved: String, clearance: Clearance) {
             self.asset = asset
             self.template = template
+            self.sources = sources
+            self.retrieved = retrieved
+            self.clearance = clearance
         }
     }
 
@@ -42,7 +61,7 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
     /// What the user calls it ("Neovim"); also the mark's accessibility label.
     public var displayName: String
     public var kind: Kind
-    /// The official logo, nil where the terms do not allow it here (the kind's symbol shows).
+    /// The official logo, nil where none ships (the kind's symbol shows).
     public var logo: Logo?
 
     public init(id: String, displayName: String, kind: Kind, logo: Logo? = nil) {
@@ -65,6 +84,7 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
 nonisolated public enum ProgramCatalog {
     // MARK: Entries
 
+    /// means the kind's neutral symbol.
     public static let entries: [ProgramIdentity] = [
         // Agents
         entry("claude", "Claude Code", .agent),
@@ -116,25 +136,51 @@ nonisolated public enum ProgramCatalog {
         entry("pwsh", "PowerShell", .shell),
     ]
 
-    /// Official logos this build ships, by catalog id (asset name, template or not). Kept apart
-    /// Each file is the project's own artwork, unaltered (ruby: the kit's PDF page cropped to the
-    /// gem). `template` only where the licence allows recolouring and the artwork needs it to read
-    /// on dark and light chrome (tmux's dark-grey screen).
+    /// Official logos this build ships, by catalog id: the legal switch. One line per logo, so
+    /// any one is turned off by deleting its line if its owner objects (the kind's symbol shows
+    /// again). Each file is the owner's own artwork, byte-identical to its download (ruby: the
+    /// kit's PDF page cropped to the gem), in its own colours; a dark variant only where the owner
+    /// publishes one. `template` only where the licence allows recolouring and the artwork needs
+    /// it (tmux's dark-grey screen). Terms, minimum sizes and notices:
     public static let logos: [String: ProgramIdentity.Logo] = [
-        // git-scm.com/community/logos, CC BY 3.0 (Jason Long); Git trademark policy allows
-        // identifying Git without permission.
-        // Not lazygit: the Git mark on another project would suggest it is Git.
-        "git": .init("GitLogo", template: false),
-        // neovim.io/logos, CC BY 3.0 (Jason Long).
-        "neovim": .init("NeovimLogo", template: false),
-        // github.com/helix-editor/helix logo.svg, MPL-2.0 (logo by @jakenvac).
-        "helix": .init("HelixLogo", template: false),
-        // github.com/tmux/tmux logo/, ISC (© 2015 Jason Long).
-        "tmux": .init("TmuxLogo", template: true),
-        // github.com/aristocratos/btop Img/icon.svg, Apache-2.0.
-        "btop": .init("BtopLogo", template: false),
-        // ruby-lang.org/en/about/logo, CC BY-SA 2.5 (© 2006 Yukihiro Matsumoto).
-        "ruby": .init("RubyLogo", template: false),
+        // CC BY 3.0 (Jason Long); the Git trademark policy allows identifying Git without
+        // permission. Not lazygit: the Git mark on another project would suggest it is Git.
+        "git": .init("GitLogo", sources: ["https://git-scm.com/images/logos/downloads/Git-Icon-1788C.svg"], retrieved: "2026-10-19", clearance: .licensed),
+        // CC BY 3.0 (Jason Long).
+        "neovim": .init("NeovimLogo", sources: ["https://neovim.io/logos/neovim-logos.zip#neovim-mark.svg"], retrieved: "2026-10-19", clearance: .licensed),
+        // MPL-2.0 (logo by @jakenvac).
+        "helix": .init("HelixLogo", sources: ["https://raw.githubusercontent.com/helix-editor/helix/master/logo.svg"], retrieved: "2026-10-19", clearance: .licensed),
+        // ISC (© 2015 Jason Long).
+        "tmux": .init("TmuxLogo", template: true, sources: ["https://raw.githubusercontent.com/tmux/tmux/master/logo/tmux-logomark.svg"], retrieved: "2026-10-19", clearance: .licensed),
+        // Apache-2.0.
+        "btop": .init("BtopLogo", sources: ["https://raw.githubusercontent.com/aristocratos/btop/main/Img/icon.svg"], retrieved: "2026-10-19", clearance: .licensed),
+        // CC BY-SA 2.5 (© 2006 Yukihiro Matsumoto).
+        "ruby": .init("RubyLogo", sources: ["https://cache.ruby-lang.org/pub/misc/logo/ruby-logo-kit.zip#ruby.pdf"], retrieved: "2026-10-19", clearance: .licensed),
+        // GPL-3.0-or-later (© FSF, Nicolas Petton); the SVG is its own source form.
+        "emacs": .init("EmacsLogo", sources: ["https://git.savannah.gnu.org/cgit/emacs.git/plain/etc/images/icons/hicolor/scalable/apps/emacs.svg"], retrieved: "2026-10-21", clearance: .licensed),
+        // GPL-2.0-or-later (htop repository).
+        "htop": .init("HtopLogo", sources: ["https://raw.githubusercontent.com/htop-dev/htop/main/htop.svg"], retrieved: "2026-10-21", clearance: .licensed),
+        // No terms published; permission requested.
+        "vim": .init("VimLogo", sources: ["https://www.vim.org/images/vimlogo.svg"], retrieved: "2026-10-21", clearance: .termsSilent),
+        "bun": .init("BunLogo", sources: ["https://bun.com/logo.svg"], retrieved: "2026-10-21", clearance: .termsSilent),
+        // Deno's guidelines: light mark on light, outlined dark mark on dark.
+        "deno": .init("DenoLogo", sources: ["https://deno.com/logos/icon-light.svg", "https://deno.com/logos/icon-dark.svg"], retrieved: "2026-10-21", clearance: .termsSilent),
+        "claude": .init("ClaudeLogo", sources: ["https://www.anthropic.com/press-kit#Anthropic media resources/Anthropic logos/Claude logos/3 Claude Spark/SVG/Claude Spark - Clay.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        // OpenAI publishes no Codex mark; the Blossom, black on light and white on dark.
+        "codex": .init("CodexLogo", sources: ["https://cdn.openai.com/brand/OpenAI-Logos-2025.zip#OpenAI-logos(new)/SVGs/OpenAI-black-monoblossom.svg", "https://cdn.openai.com/brand/OpenAI-Logos-2025.zip#OpenAI-logos(new)/SVGs/OpenAI-white-monoblossom.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "gemini": .init("GeminiCLILogo", sources: ["https://geminicli.com/brandassets/gemini-cli-icon_full-color.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "copilot": .init("CopilotLogo", sources: ["https://brand.github.com/GitHub_Logos.zip#GitHub Logos/SVG/Copilot_Icon_Black.svg", "https://brand.github.com/GitHub_Logos.zip#GitHub Logos/SVG/Copilot_Icon_White.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "docker": .init("DockerLogo", sources: ["https://www.docker.com/static/Docker-Logos-1.zip#docker-logos/SVG/docker-mark-ocean-blue.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        // The Kubernetes icon (CNCF publishes no kubectl mark).
+        "kubectl": .init("KubernetesLogo", sources: ["https://raw.githubusercontent.com/cncf/artwork/main/projects/kubernetes/icon/color/kubernetes-icon-color.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "python": .init("PythonLogo", sources: ["https://s3.dualstack.us-east-2.amazonaws.com/pythondotorg-assets/media/files/python-logo-only.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "node": .init("NodeLogo", sources: ["https://nodejs.org/static/logos/nodejsHex.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "go": .init("GoLogo", sources: ["https://go.dev/images/go-logo-blue.svg", "https://go.dev/images/go-logo-white.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        // CC BY 4.0 artwork, also Rust Foundation trademarks; the white-outline file is the
+        // project's version for dark backgrounds.
+        "rustc": .init("RustLogo", sources: ["https://raw.githubusercontent.com/rust-lang/rust-artwork/main/logo/rust-logo.svg", "https://raw.githubusercontent.com/rust-lang/rust-artwork/main/logo/rust-logo-white-outline.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "cargo": .init("CargoLogo", sources: ["https://raw.githubusercontent.com/rust-lang/cargo/master/doc/book/src/images/Cargo-Logo-Small.png"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        "psql": .init("PostgreSQLLogo", sources: ["https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
     ]
 
     /// Process names that differ from the catalog id.
