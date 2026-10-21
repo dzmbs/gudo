@@ -16,6 +16,7 @@ struct PasswordsSection: View {
                     .contentTransition(.numericText())
             }
             .accessibilityIdentifier("saved-passwords-count")
+            .settingAnchor("saved-passwords")
             Button("Forget Saved Passwords", role: .destructive) { confirming = true }
                 .disabled(saved == 0)
                 .accessibilityIdentifier("forget-saved-passwords")

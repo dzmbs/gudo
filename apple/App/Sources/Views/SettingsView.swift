@@ -15,43 +15,72 @@ struct SettingsView: View {
     @State private var path: [SettingsPage] = LaunchOptions.screen == "themes" ? [.theme] : []
     #endif
 
+    /// Settings search: the query, and the row a result jumped to (lit for a moment).
+    @State private var query = ""
+    @State private var highlight: String?
+    @State private var jump: SettingsEntry?
+
     var body: some View {
         #if os(macOS)
         // The window follows the terminal theme, like the workspace (Ghostty `window-theme`).
         ThemedRoot {
             NavigationSplitView {
-                List(SettingsPane.allCases, selection: $pane) { pane in
-                    Label(pane.title, systemImage: pane.systemImage)
-                        .tag(pane)
+                Group {
+                    if query.isEmpty {
+                        List(SettingsPane.allCases, selection: $pane) { pane in
+                            Label(pane.title, systemImage: pane.systemImage)
+                                .tag(pane)
+                        }
+                    } else {
+                        // Results replace the panes while searching; the search stays.
+                        let results = SettingsIndex.search(query)
+                        List {
+                            ForEach(results) { entry in
+                                Button { jump = entry } label: { SettingsResultRow(entry: entry) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                        .overlay { if results.isEmpty { SettingsNoResults(query: query) } }
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(DS.Palette.sidebar)
                 .chromeContent()
-                .navigationSplitViewColumnWidth(200)
+                .searchable(text: $query, placement: .sidebar, prompt: "Search")
+                .navigationSplitViewColumnWidth(220)
             } detail: {
-                Form { detail(pane).chromeRows() }
-                    .formStyle(.grouped)
-                    .chromeGrouped()
-                    .navigationTitle(pane.title)
+                ScrollViewReader { proxy in
+                    Form { detail(pane).chromeRows() }
+                        .formStyle(.grouped)
+                        .chromeGrouped()
+                        .navigationTitle(pane.title)
+                        .environment(\.settingsHighlight, highlight)
+                        .onChange(of: jump) { _, entry in
+                            guard let entry else { return }
+                            pane = entry.section.pane
+                            reveal(entry, proxy: proxy)
+                        }
+                }
             }
             .frame(minWidth: 720, minHeight: 480)
         }
         #else
         NavigationStack(path: $path) {
-            Form {
-                AppearanceSection().chromeRows()
-                FontSection().chromeRows()
-                CursorSection().chromeRows()
-                SplitsSection().chromeRows()
-                KeyboardSection().chromeRows()
-                PasswordsSection().chromeRows()
-                VoiceSettingsSection().chromeRows()
-                NotificationsSection().chromeRows()
-                AgentsSettingsSection().chromeRows()
-                GitSettingsSection().chromeRows()
-                AboutSection().chromeRows()
+            ScrollViewReader { proxy in
+                Group {
+                    if query.isEmpty {
+                        form
+                    } else {
+                        SettingsResults(query: query) { entry in
+                            query = ""
+                            reveal(entry, proxy: proxy)
+                        }
+                    }
+                }
+                .chromeGrouped()
+                .environment(\.settingsHighlight, highlight)
             }
-            .chromeGrouped()
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Settings or Ghostty Keys")
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SettingsPage.self) { _ in ThemePicker(selection: $themeName) }
@@ -62,6 +91,40 @@ struct SettingsView: View {
             }
         }
         #endif
+    }
+
+    #if os(iOS)
+    private var form: some View {
+        Form {
+            AppearanceSection().chromeRows()
+            FontSection().chromeRows()
+            CursorSection().chromeRows()
+            SplitsSection().chromeRows()
+            KeyboardSection().chromeRows()
+            PasswordsSection().chromeRows()
+            VoiceSettingsSection().chromeRows()
+            NotificationsSection().chromeRows()
+            AgentsSettingsSection().chromeRows()
+            GitSettingsSection().chromeRows()
+            AboutSection().chromeRows()
+        }
+    }
+    #endif
+
+    /// Scrolls to a result's row once it is laid out, and lights it for a moment.
+    private func reveal(_ entry: SettingsEntry, proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            // The form (iOS) or the pane (Mac) replaces the results first.
+            try? await Task.sleep(for: .milliseconds(150))
+            withAnimation(DS.Motion.snappy) { proxy.scrollTo(entry.id, anchor: .center) }
+            highlight = entry.id
+            // Once more after the search bar has closed and the form settled.
+            try? await Task.sleep(for: .milliseconds(350))
+            withAnimation(DS.Motion.snappy) { proxy.scrollTo(entry.id, anchor: .center) }
+            try? await Task.sleep(for: .seconds(1.6))
+            if highlight == entry.id { highlight = nil }
+            if jump == entry { jump = nil }
+        }
     }
 
     #if os(macOS)
@@ -88,7 +151,7 @@ private enum SettingsPage: Hashable {
 
 #if os(macOS)
 /// The Mac Settings window's panes, in its sidebar.
-private enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
+nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
     case appearance, terminal, keyboard, notifications, agents, git, about
     var id: String { rawValue }
 
@@ -158,25 +221,31 @@ private struct AppearanceSection: View {
                 }
             }
             .accessibilityIdentifier("settings-theme")
+            .settingAnchor("theme")
             Picker(selection: $windowTheme) {
                 ForEach(TerminalPreferences.WindowTheme.allCases) { Text($0.title).tag($0) }
             } label: {
                 ConfigLabel("Window", key: "window-theme")
             }
+            .settingAnchor("window-theme")
             Picker(selection: $paneStyle) {
                 ForEach(TerminalPreferences.PaneStyle.allCases) { Text($0.title).tag($0) }
             } label: {
                 ConfigLabel("Panes", key: "pane-style")
             }
+            .settingAnchor("pane-style")
             Toggle(isOn: $titleFromShell) {
                 ConfigLabel("Tab Title from Shell", key: "title-from-shell")
             }
             .accessibilityIdentifier("settings-title-from-shell")
+            .settingAnchor("title-from-shell")
             #if os(macOS)
             Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
+                .settingAnchor("tab-bar")
             #else
             if UIDevice.current.userInterfaceIdiom != .phone {
                 Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
+                    .settingAnchor("tab-bar")
             }
             #endif
         }
@@ -193,6 +262,7 @@ private struct FontSection: View {
             } label: {
                 ConfigLabel("Family", key: "font-family")
             }
+            .settingAnchor("font-family")
             Stepper(value: $fontSize, in: 8...32, step: 1) {
                 HStack {
                     ConfigLabel("Size", key: "font-size")
@@ -200,6 +270,7 @@ private struct FontSection: View {
                     Text("\(Int(fontSize)) pt").monospacedDigit().foregroundStyle(.secondary)
                 }
             }
+            .settingAnchor("font-size")
             Text("The quick brown fox jumps over the lazy dog 0O 1lI {}[]")
                 .font(TerminalFont.font(size: fontSize))
                 .lineLimit(1)
@@ -222,7 +293,9 @@ private struct CursorSection: View {
             } label: {
                 ConfigLabel("Style", key: "cursor-style")
             }
+            .settingAnchor("cursor-style")
             Toggle(isOn: $blink) { ConfigLabel("Blink", key: "cursor-style-blink") }
+                .settingAnchor("cursor-style-blink")
         }
     }
 }
@@ -241,11 +314,13 @@ private struct SplitsSection: View {
                 }
                 Slider(value: $opacity, in: 0.15...1)
             }
+            .settingAnchor("unfocused-split-opacity")
             Picker(selection: $resizeOverlay) {
                 ForEach(TerminalPreferences.ResizeOverlay.allCases) { Text($0.title).tag($0) }
             } label: {
                 ConfigLabel("Size Overlay", key: "resize-overlay")
             }
+            .settingAnchor("resize-overlay")
         }
     }
 }
@@ -268,14 +343,18 @@ private struct KeyboardSection: View {
             } label: {
                 ConfigLabel("Option Sends Meta", key: "macos-option-as-alt")
             }
+            .settingAnchor("macos-option-as-alt")
             #if os(iOS)
             Toggle("ASCII Keyboard", isOn: $asciiKeyboard)
+                .settingAnchor("ascii-keyboard")
             Picker("With a Hardware Keyboard", selection: $hardwareKeyBar) {
                 Text("Esc Pill").tag(KeyBar.HardwareMode.minimal.rawValue)
                 Text("Hidden").tag(KeyBar.HardwareMode.hidden.rawValue)
                 Text("Full Key Bar").tag(KeyBar.HardwareMode.full.rawValue)
             }
+            .settingAnchor("hardware-key-bar")
             NavigationLink("Key Bar Profiles") { KeyBarProfilesView() }
+                .settingAnchor("key-bar-profiles")
             #endif
         } header: {
             Text("Keyboard")
@@ -297,6 +376,7 @@ private struct NotificationsSection: View {
         NotificationPrefsSection()
         Section {
             Toggle(isOn: $bellBorder) { ConfigLabel("Flash Border on Bell", key: "bell-features = border") }
+                .settingAnchor("bell-features")
         } header: {
             Text("Bell")
         }
@@ -307,7 +387,9 @@ private struct AboutSection: View {
     var body: some View {
         Section("About") {
             LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                .settingAnchor("version")
             NavigationLink("Acknowledgements") { AcknowledgementsView() }
+                .settingAnchor("acknowledgements")
         }
     }
 }
@@ -495,6 +577,7 @@ private struct AcknowledgementsView: View {
             ack("Nerd Fonts", "MIT and per-icon-set licenses · symbols in the terminal font")
             ack("iTerm2-Color-Schemes", "MIT · terminal themes, as bundled by Ghostty")
             ack("Orca", "MIT · key bar and reconnect behaviour")
+            ack("Warp UI framework", "MIT · Copyright (C) 2020-2026 Denver Technologies, Inc. · the “working” shimmer")
             Section {
                 ack("Git logo", "Jason Long · CC BY 3.0 · creativecommons.org/licenses/by/3.0")
                 ack("Neovim logo", "Jason Long · CC BY 3.0 · creativecommons.org/licenses/by/3.0")

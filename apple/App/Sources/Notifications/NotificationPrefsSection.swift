@@ -12,11 +12,17 @@ struct NotificationPrefsSection: View {
     var body: some View {
         Section {
             kind("Approval Requests", "Approve or deny from the notification, after Face ID.", "checkmark.seal", \.approvals)
+                .settingAnchor("notify-approvals")
             kind("Agent Waiting", "An agent asks a question or waits in the terminal.", "exclamationmark.bubble", \.blocked)
+                .settingAnchor("notify-blocked")
             kind("Agent Finished", "A turn ended with its last message.", "checkmark.circle", \.done)
+                .settingAnchor("notify-done")
             kind("Agent Failed", "A turn ended with an error.", "xmark.octagon", \.failed)
+                .settingAnchor("notify-failed")
             kind("Long Commands", "A command you weren't watching finished.", "terminal", \.commands)
+                .settingAnchor("notify-commands")
             Toggle("Only When the App Is in the Background", isOn: $prefs.onlyInBackground)
+                .settingAnchor("notify-background")
         } header: {
             Text("Notifications")
         } footer: {

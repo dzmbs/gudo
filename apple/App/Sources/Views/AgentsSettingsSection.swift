@@ -10,6 +10,7 @@ struct AgentsSettingsSection: View {
         Section {
             Toggle("Check Usage with Your Claude and Codex Sign-In", isOn: $apiFallback)
                 .accessibilityIdentifier("settings-usage-api-fallback")
+                .settingAnchor("usage-api-fallback")
                 .onChange(of: apiFallback) { DaemonWorkspace.usageSettingsChanged() }
         } header: {
             Text("Agent Usage")
