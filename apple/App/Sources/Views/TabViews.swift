@@ -124,6 +124,11 @@ private struct SidebarRowStyle: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.control)
                     .fill(DS.Palette.ink.opacity(selected ? ChromePalette.fillLevels.selected : hovered ? ChromePalette.fillLevels.hover : 0)))
+            #if os(iOS)
+            // The iPad pointer takes the row's own rounded shape (as the git rows do).
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: DS.Radius.control))
+            .hoverEffect(.highlight)
+            #endif
             .padding(.horizontal, DS.Space.s)
             .onHover { hovered = $0 }
     }

@@ -171,5 +171,37 @@ final class AgentFleetUITests: XCTestCase {
         search.typeText("no such setting")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'No Results'")).firstMatch.waitForExistence(timeout: 3))
     }
+
+
+    /// The host header's agent glyph peeks at the host's agents (tap on touch; hover with a
+    /// pointer), and a row focuses its pane.
+    func testHostAgentsPopoverListsAgents() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "iPhone has no sidebar")
+        launch(screen: "splits")
+        let glyph = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'host-agents-'")).firstMatch
+        XCTAssertTrue(glyph.waitForExistence(timeout: 10))
+        glyph.tap()
+        let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Agents on'")).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 3), "the popover names the host")
+        XCTAssertTrue(app.staticTexts["Needs You"].exists || app.staticTexts["Working"].exists, "each agent with its state")
+        shot("host-agents-popover")
+    }
+
+    /// Settings › Appearance › Follow Light and Dark Mode shows a light and a dark theme in place
+    /// of the single theme.
+    func testThemePairShowsLightAndDarkThemes() {
+        launch(screen: "settings")
+        let toggle = app.switches["settings-theme-pair"].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertTrue(element("settings-theme").exists, "one theme while the pair is off")
+        toggle.switches.firstMatch.exists ? toggle.switches.firstMatch.tap() : toggle.tap()
+        XCTAssertTrue(element("settings-theme-light").waitForExistence(timeout: 3), "a light theme")
+        XCTAssertTrue(element("settings-theme-dark").exists, "and a dark theme")
+        XCTAssertFalse(element("settings-theme").exists, "the single theme gives way")
+        shot("theme-pair")
+        // Leave the setting as it was for the next tests.
+        toggle.switches.firstMatch.exists ? toggle.switches.firstMatch.tap() : toggle.tap()
+        XCTAssertTrue(element("settings-theme").waitForExistence(timeout: 3))
+    }
 }
 #endif
