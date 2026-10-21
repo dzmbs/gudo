@@ -352,10 +352,17 @@ struct Conn {
     sessions: Vec<SessionSummary>,
     /// Working directories from pane metadata.
     cwds: std::collections::HashMap<PaneId, String>,
+    /// Authenticated at least once.
+    connected: bool,
+    /// Why the last dial or connection failed, for the timeout message.
+    last_error: Option<String>,
+    /// Dialling the ticket's direct addresses only (`--no-relay`).
+    direct_only: bool,
 }
 
 impl Conn {
-    async fn open(cli: &Cli) -> Result<Self> {
+    /// Starts dialling; nothing is awaited yet.
+    fn dial(cli: &Cli) -> Result<Self> {
         let (listener, events) = EventQueue::channel();
         let mut config = ClientConfig::new(device_key()?);
         if cli.no_relay {
@@ -365,13 +372,28 @@ impl Conn {
             Dial::Ticket(ticket) => Client::connect(&ticket, config, listener)?,
             Dial::Invite(invite) => Client::join(&invite, config, listener)?,
         };
-        let mut conn = Self {
+        Ok(Self {
             client,
             events,
             layout: None,
             sessions: Vec::new(),
             cwds: std::collections::HashMap::new(),
-        };
+            connected: false,
+            last_error: None,
+            direct_only: cli.no_relay,
+        })
+    }
+
+    /// Connects without attaching (forwards need no session).
+    async fn connect(cli: &Cli) -> Result<Self> {
+        let mut conn = Self::dial(cli)?;
+        conn.wait("the connection", |c| c.connected).await?;
+        Ok(conn)
+    }
+
+    /// Connects and attaches to `--session` (or the daemon's choice).
+    async fn open(cli: &Cli) -> Result<Self> {
+        let mut conn = Self::dial(cli)?;
         let session = match &cli.session {
             Some(name) => {
                 conn.client.list_sessions();
@@ -395,6 +417,8 @@ impl Conn {
     fn apply(&mut self, event: &ClientEvent) -> Result<()> {
         match event {
             ClientEvent::Layout { layout } => self.layout = Some(layout.clone()),
+            ClientEvent::Connected { .. } => self.connected = true,
+            ClientEvent::Disconnected { reason } => self.last_error = Some(reason.clone()),
             ClientEvent::Sessions { sessions } => self.sessions.clone_from(sessions),
             ClientEvent::PaneMeta { meta } => {
                 if let Some(cwd) = &meta.cwd {
@@ -421,7 +445,29 @@ impl Conn {
             anyhow::Ok(())
         })
         .await
-        .with_context(|| format!("timed out waiting for {what}"))?
+        .map_err(|_| self.timed_out(what))?
+    }
+
+    /// The timeout error: says when the daemon was never reached, and why.
+    fn timed_out(&self, what: &str) -> anyhow::Error {
+        if self.connected {
+            return anyhow::anyhow!("timed out waiting for {what}");
+        }
+        let why = self
+            .last_error
+            .as_deref()
+            .map_or_else(String::new, |e| format!(" (last error: {e})"));
+        let hint = if self.direct_only {
+            "; with --no-relay only the ticket's direct addresses are dialled: if the daemon \
+             now listens elsewhere (another network, or an older daemon that changed its port on \
+             a restart), pair again with a new ticket or drop --no-relay"
+        } else {
+            ""
+        };
+        anyhow::anyhow!(
+            "could not reach the daemon within {}s{why}{hint}",
+            TIMEOUT.as_secs()
+        )
     }
 
     fn layout(&self) -> &SessionLayout {
@@ -515,7 +561,11 @@ async fn run(cli: Cli) -> Result<()> {
         );
         return Ok(());
     }
-    let mut conn = Conn::open(&cli).await?;
+    let mut conn = if matches!(cli.command, Cmd::Forward { .. }) {
+        Conn::connect(&cli).await?
+    } else {
+        Conn::open(&cli).await?
+    };
     let shell = PaneLaunch::Shell { cwd: None };
     let outcome = match cli.command {
         Cmd::Pair { .. } | Cmd::Join { .. } | Cmd::Daemon { .. } => {

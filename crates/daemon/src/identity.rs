@@ -68,6 +68,11 @@ pub struct EndpointInfo {
     pub pid: u32,
     /// When it started.
     pub started_at: u64,
+    /// The UDP sockets the endpoint bound (`0.0.0.0:p`, `[::]:p`). The next start binds the
+    /// same ports again, so the direct addresses in tickets already handed out keep working
+    /// across restarts and upgrades (a device dialling with relays off has nothing else).
+    #[serde(default)]
+    pub bound: Vec<SocketAddr>,
 }
 
 pub(crate) fn now_millis() -> u64 {
@@ -385,6 +390,7 @@ mod tests {
             relays: proto::TicketRelays::default(),
             pid: std::process::id(),
             started_at: now_millis(),
+            bound: Vec::new(),
         };
         write_endpoint_info(dir.path(), &info).expect("endpoint");
         dir

@@ -278,6 +278,30 @@ async fn port_forward_to_a_local_echo_server() {
     daemon.shutdown().await;
 }
 
+/// A device that dials direct addresses only (`un --no-relay`, the app's local-only switch)
+/// has nothing but the ticket it paired with. A restart used to bind fresh random UDP ports,
+/// so that ticket pointed nowhere and `un --no-relay forward` timed out "waiting for layout".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_direct_only_ticket_still_reaches_the_daemon_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = ClientConfig::generate_key();
+    let daemon = start(dir.path()).await;
+    let old = ticket(&daemon);
+    let mut c = TestClient::connect(&old, key.clone());
+    c.client.attach(None);
+    c.until("layout", |c| c.layout.is_some()).await;
+    drop(c);
+    daemon.shutdown().await;
+
+    let daemon = start(dir.path()).await;
+    let mut c = TestClient::connect(&old, key);
+    c.client.attach(None);
+    c.until("layout over the old ticket", |c| c.layout.is_some())
+        .await;
+    drop(c);
+    daemon.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn daemon_restart_restores_the_layout() {
     let dir = tempfile::tempdir().unwrap();
