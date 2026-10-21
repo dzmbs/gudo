@@ -475,9 +475,10 @@ private struct TabRow: View {
                         TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
                             .font(DS.Font.sidebarTitle)
-                            .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .shimmering(state == .working, text: title)
+                            .foregroundStyle(.primary)
                         if tab.zoomed != nil {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.caption2)
@@ -571,9 +572,11 @@ private struct GroupAgents: View {
                             HStack(spacing: DS.Space.xs + 1) {
                                 ProgramMark(program, size: 12)
                                     .foregroundStyle(.primary)
-                                Text(program.isShell ? "agent" : program.displayName)
+                                let name = program.isShell ? "agent" : program.displayName
+                                Text(name)
                                     .font(DS.Font.rowSubtitle)
                                     .lineLimit(1)
+                                    .shimmering(row.state == .working, text: name)
                             }
                             Text("\(row.number)")
                                 .font(DS.Font.meta)
