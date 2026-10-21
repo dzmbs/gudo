@@ -369,6 +369,9 @@ pub(crate) async fn handle(
         R::PushRegister(reg) => Ok(A::Push(crate::notifier::register(core, conn.actor, reg)?)),
         R::PushUnregister => Ok(A::Push(crate::notifier::unregister(core, conn.actor))),
         R::PushStatus => Ok(A::Push(crate::notifier::status(core, conn.actor.device))),
+        R::PushActivity(token) => Ok(A::Push(crate::notifier::activity_token(
+            core, conn.actor, token,
+        )?)),
         R::PushAction(action) => {
             crate::notifier::action(core, conn.actor, &action).map(A::PushDecided)
         }

@@ -156,7 +156,8 @@ pub enum ApnsEnvironment {
 pub enum PushCapKind {
     /// Notifications (`PushRegistration.cap`).
     Alert,
-    /// The agents Live Activity (`PushRegistration.activity_cap`).
+    /// The agents Live Activity: a push-to-start token (`PushRegistration.activity_cap`) or
+    /// a running activity's update token (`DaemonClient::push_activity`).
     Activity,
 }
 
@@ -420,5 +421,25 @@ impl DaemonClient {
     /// The daemon's [`WorkspaceError`].
     pub async fn push_status(&self) -> Result<PushStatus, WorkspaceError> {
         self.ws_call(|c| async move { c.push_status().await }).await
+    }
+
+    /// The relay capability of this device's running agents Live Activity (its update
+    /// token), or `None` once it ended or was dismissed: the daemon sends `update` / `end`
+    /// pushes to it. Only for daemons that [`offers_live_activity`](Self::offers_live_activity).
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` without a push registration; the daemon's other [`WorkspaceError`]s.
+    pub async fn push_activity(&self, cap: Option<String>) -> Result<PushStatus, WorkspaceError> {
+        self.ws_call(|c| async move { c.push_activity(cap).await })
+            .await
+    }
+
+    /// Whether the daemon sends the agents Live Activity and answers
+    /// [`push_activity`](Self::push_activity).
+    pub fn offers_live_activity(&self) -> bool {
+        self.inner
+            .daemon_info()
+            .is_some_and(|i| i.features.contains(proto::DaemonFeatures::LIVE_ACTIVITY))
     }
 }
