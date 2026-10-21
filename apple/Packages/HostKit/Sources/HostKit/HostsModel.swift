@@ -25,6 +25,11 @@ public struct HostEntry: Identifiable, Equatable, Sendable {
     public var helper: HelperAdvice?
     /// "Ubuntu 24.04.1 LTS · x86_64", from the daemon.
     public var machine: String?
+    /// An SSH host on a Tailscale tailnet (`100.64.0.0/10`, `*.ts.net`): reachable only while
+    /// the Tailscale app is connected on this device.
+    public var isTailscale = false
+    /// The last dial to a tailnet host failed: say that Tailscale must be connected here.
+    public var needsTailscale = false
 }
 
 /// Everything about hosts the UI binds to: the saved hosts, their live connections, pairing,
@@ -109,6 +114,11 @@ public final class HostsModel {
         } else if case .reconnecting = status {
             needsYou = status.summary
         }
+        let isTailscale = record.kind == .ssh && record.ssh.map(Tailscale.isTailnet) == true
+        let dialFailed: Bool = switch status {
+        case .reconnecting, .offline: !network.isOffline
+        default: false
+        }
         return HostEntry(
             id: record.id, name: record.name, kind: record.kind,
             address: record.ssh?.display ?? record.daemonId.map { String($0.prefix(16)) } ?? "",
@@ -119,7 +129,9 @@ public final class HostsModel {
             machine: record.machine.map { machine in
                 [machine.osName.isEmpty ? machine.os : machine.osName, machine.arch]
                     .filter { !$0.isEmpty }.joined(separator: " · ")
-            })
+            },
+            isTailscale: isTailscale,
+            needsTailscale: isTailscale && dialFailed)
     }
 
     /// What to say about a daemon host's helper version, from its latest connection.

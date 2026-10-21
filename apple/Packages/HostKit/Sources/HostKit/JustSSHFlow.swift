@@ -97,11 +97,32 @@ public final class JustSSHFlow {
             let id = try hosts.connectSSH(
                 endpoint, password: auth == .password ? password : nil, rememberPassword: rememberPassword)
             if let ssh = hosts.connection(id) as? SshConnection {
-                try await ssh.connected()
+                try await connected(ssh, hostId: id, endpoint: endpoint)
             }
             step = .connected(id)
         } catch {
             step = .failed(SshErrorText.describe(error))
+        }
+    }
+
+    /// Waits until authenticated, or fails at the first dial that cannot reach the host
+    /// (the session would otherwise redial forever while the sheet spins). The host stays
+    /// saved; the redial stops until the user tries again.
+    private func connected(_ ssh: SshConnection, hostId: String, endpoint: SSHEndpoint) async throws {
+        let attempt = Task { try await ssh.connected() }
+        while true {
+            if case .reconnecting(_, let reason) = ssh.status {
+                hosts.disconnect(hostId)
+                _ = try? await attempt.value
+                throw JustSSHError.unreachable(host: endpoint.host, reason: reason, tailscale: Tailscale.isTailnet(endpoint))
+            }
+            switch ssh.status {
+            case .connected, .needsAttention, .idle:
+                try await attempt.value
+                return
+            default:
+                try await Task.sleep(for: .milliseconds(100))
+            }
         }
     }
 
@@ -126,11 +147,15 @@ public final class JustSSHFlow {
 public enum JustSSHError: Error, Equatable, LocalizedError {
     case missingUser
     case remote(String)
+    /// The first dial did not reach the host (`tailscale`: it is on a tailnet).
+    case unreachable(host: String, reason: String, tailscale: Bool)
 
     public var errorDescription: String? {
         switch self {
         case .missingUser: "Add a user name: user@host"
         case .remote(let stderr): "The host refused: \(stderr)"
+        // The screen adds the Tailscale hint (with its Open button) for tailnet hosts.
+        case .unreachable(let host, let reason, _): "Couldn't reach \(host): \(reason)"
         }
     }
 }

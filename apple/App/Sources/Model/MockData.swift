@@ -28,6 +28,10 @@ final class MockHostDirectory: HostDirectory {
             id: "garage", name: "garage-pi", address: "pi@192.168.1.40", kind: .ssh,
             connection: .unreachable(reason: "No route to host.", hint: "Check that the Pi is on and on this network."),
             sessionCount: 0, agentCounts: [:], lastSeen: ago(60 * 60 * 26), isPinned: false),
+        HostSummary(
+            id: "nas", name: "nas", address: "admin@nas.tail3f2c.ts.net", kind: .ssh,
+            connection: .reconnecting(attempt: 2, since: ago(30)), sessionCount: 0, agentCounts: [:],
+            lastSeen: ago(60 * 60 * 3), isPinned: false, isTailscale: true, needsTailscale: true),
     ]
 
     var isOffline: Bool { false }

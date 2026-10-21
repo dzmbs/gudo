@@ -49,6 +49,10 @@ nonisolated struct HostSummary: Identifiable, Hashable, Sendable {
     var canInstallHelper = false
     /// The host's helper is older than the app's, or cannot work with it ("Update Helper").
     var helper: HelperOffer?
+    /// On a Tailscale tailnet (`100.64.0.0/10`, `*.ts.net`): tagged in the list.
+    var isTailscale = false
+    /// A dial to it failed: the Tailscale app must be connected on this device.
+    var needsTailscale = false
 
     var needsYouCount: Int {
         max((agentCounts[.blocked] ?? 0) + (agentCounts[.error] ?? 0), needsYou == nil ? 0 : 1)

@@ -191,6 +191,9 @@ struct HostsView: View {
                 renaming = host
             }
         }
+        if host.isTailscale, TailscaleApp.isInstalled {
+            Button("Open Tailscale", systemImage: "arrow.up.forward.app", action: TailscaleApp.open)
+        }
         Button("Copy Address", systemImage: "doc.on.doc") { copy(host.address) }
         if !host.isLocal {
             if host.connection != .disconnected {
@@ -355,6 +358,9 @@ private struct HostRow: View {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
+                    if host.isTailscale {
+                        TailscaleTag()
+                    }
                     Spacer(minLength: DS.Space.s)
                     trailing
                 }
@@ -364,6 +370,9 @@ private struct HostRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 detail
+                if host.needsTailscale {
+                    TailscaleHint(compact: true)
+                }
             }
         }
         .padding(.vertical, DS.Space.row)
