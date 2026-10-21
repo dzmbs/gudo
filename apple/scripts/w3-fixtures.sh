@@ -147,7 +147,9 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(PAGE if ok else b"forbidden")
     def log_message(self, *a):
         pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+# Threaded: a real server takes many connections, and a stale keep-alive one (a killed app's, the
+# compressing proxy's pool) must not hold up the rest.
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
 chmod +x "$bin/code"
 

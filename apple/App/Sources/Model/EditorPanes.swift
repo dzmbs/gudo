@@ -97,6 +97,7 @@ final class EditorPane: Identifiable {
         if let browser { return browser }
         let browser = TunnelBrowser()
         browser.onLoad = { [weak self] in self?.workbenchLoaded() }
+        browser.onFail = { [weak self] reason in self?.pageFailed(reason) }
         watchTouches(browser.webView)
         self.browser = browser
         return browser
@@ -129,8 +130,27 @@ final class EditorPane: Identifiable {
         loadedURL = nil
     }
 
+    /// Load failures in a row (a forward just made can refuse the first connections).
+    @ObservationIgnored private var failures = 0
+
+    /// The workbench did not load: try again a few times, a second apart, before saying so.
+    private func pageFailed(_ reason: String) {
+        guard !isWorkbenchVisible, let url = browser?.webView.url ?? loadedURL else { return }
+        failures += 1
+        guard failures <= 5 else {
+            Self.log.error("editor \(self.member.description, privacy: .public) gave up loading: \(reason, privacy: .public)")
+            return
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !self.isWorkbenchVisible else { return }
+            self.browser?.load(url)
+        }
+    }
+
     private func workbenchLoaded() {
         guard loadedURL != nil else { return }
+        failures = 0
         source.didLoad()
         isWorkbenchVisible = true
         if isSuspended {
