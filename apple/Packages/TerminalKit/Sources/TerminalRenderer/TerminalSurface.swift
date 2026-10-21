@@ -579,6 +579,21 @@ public final class TerminalSurface {
         return draws
     }
 
+    /// Tints across the grid over marks that ask for one (a failed command's rows), drawn in
+    /// the image pass under any inline image and clipped to the grid.
+    private func rowTintDraws(_ marks: [GutterMark], colors: RenderState.Colors, metrics m: CellMetrics) -> [ImageDraw] {
+        guard let grid, marks.contains(where: { $0.rowTint > 0 }) else { return [] }
+        let width = Int(grid.cols) * m.cellWidth
+        return marks.compactMap { mark in
+            guard mark.rowTint > 0, mark.rows > 0,
+                  let texture = gutterTextures.texture(mark.color(colors), opacity: mark.rowTint, device: renderer.device)
+            else { return nil }
+            return ImageDraw(texture: texture, vertex: ImageVertex(
+                gridPos: SIMD2(0, Float(mark.row)), cellOffset: SIMD2(0, 0),
+                sourceRect: SIMD4(0, 0, 1, 1), destSize: SIMD2(Float(width), Float(mark.rows * m.cellHeight))))
+        }
+    }
+
     /// The left padding beside the grid's rows in drawable pixels: stripes never draw over
     /// the cells or the top and bottom padding.
     private var gutterClip: MTLScissorRect? {
@@ -696,7 +711,8 @@ public final class TerminalSurface {
         lastOverlay = overlay
         lastImages = images
         imagesDirty = false
-        let draws = images.isEmpty && inlineImageFrames.isEmpty ? [] : imageDraws(images, metrics: fonts.metrics)
+        let draws = rowTintDraws(marks, colors: state.colors, metrics: fonts.metrics)
+            + (images.isEmpty && inlineImageFrames.isEmpty ? [] : imageDraws(images, metrics: fonts.metrics))
         lastMarks = marks
         marksDirty = false
         let stripes = marks.isEmpty && gutterMarkFrames.isEmpty ? [] : gutterDraws(marks, colors: state.colors, metrics: fonts.metrics)
@@ -757,7 +773,8 @@ public final class TerminalSurface {
     public func snapshot() -> CGImage? {
         guard let fonts, let texture = offscreenTarget() else { return nil }
         let done = DispatchSemaphore(value: 0)
-        let draws = lastImages.isEmpty ? [] : imageDraws(lastImages, metrics: fonts.metrics)
+        let draws = rowTintDraws(lastMarks, colors: state.colors, metrics: fonts.metrics)
+            + (lastImages.isEmpty ? [] : imageDraws(lastImages, metrics: fonts.metrics))
         let stripes = lastMarks.isEmpty ? [] : gutterDraws(lastMarks, colors: state.colors, metrics: fonts.metrics)
         renderer.draw(
             frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: texture, present: nil, images: draws, imageClip: imageClip,

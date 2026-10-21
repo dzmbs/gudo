@@ -16,6 +16,10 @@ struct TabBar: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
     @Namespace private var selection
+    /// leaves the strip, so the next close button lands under it.
+    @State private var isPointerInside = false
+    @State private var frozenWidth: CGFloat?
+    @State private var chipWidth: CGFloat = 0
 
     var body: some View {
         let groups = model.groups.groups
@@ -43,9 +47,11 @@ struct TabBar: View {
                             .opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 1)
                     }
                     TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: mixed, namespace: selection)
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: frozenWidth ?? .infinity)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { if frozenWidth == nil { chipWidth = $0 } }
                 }
             }
+            if frozenWidth != nil { Spacer(minLength: 0) }
             NewTabButton(workspace: workspace)
                 .padding(.leading, DS.Space.xs)
         }
@@ -58,6 +64,13 @@ struct TabBar: View {
         // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         .animation(DS.Motion.quick, value: active)
+        .onHover { inside in
+            isPointerInside = inside
+            if !inside, frozenWidth != nil { withAnimation(DS.Motion.quick) { frozenWidth = nil } }
+        }
+        .onChange(of: all.count) { old, new in
+            if new < old, isPointerInside, chipWidth > 0 { frozenWidth = chipWidth }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-bar")
     }
@@ -99,7 +112,7 @@ private struct TabChip: View {
                 VStack(spacing: 0) {
                     Text(title)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
                     if showsHost {
                         Text(group.name)
                             .font(DS.Font.meta)
@@ -155,10 +168,19 @@ private struct TabChip: View {
             workspace?.apply(.moveTab(TabId(raw), to: index))
             return true
         }
-        .help([group.isLocal ? nil : group.name, workspace?.directory(of: tab) ?? title].compactMap(\.self).joined(separator: " · "))
+        .help(Self.tooltip(title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab)))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: nil))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tabbar-\(ref)")
+    }
+
+    /// (the context line: branch, program or task), each once.
+    static func tooltip(title: String, host: String?, directory: String?, context: String?) -> String {
+        var lines = [title]
+        let place = [host, directory].compactMap(\.self).joined(separator: " · ")
+        if !place.isEmpty, place != title { lines.append(place) }
+        if let context, !context.isEmpty, context != title, context != directory, context != "~" { lines.append(context) }
+        return lines.joined(separator: "\n")
     }
 }

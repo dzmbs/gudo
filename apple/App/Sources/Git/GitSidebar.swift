@@ -37,13 +37,31 @@ final class CommandKeyState {
         #if os(macOS)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
-            MainActor.assumeIsolated {
-                if self?.held != held { withAnimation(DS.Motion.quick) { self?.held = held } }
-            }
+            MainActor.assumeIsolated { self?.commandChanged(held) }
             return event
         }
         #endif
     }
+
+    #if os(macOS)
+    @ObservationIgnored private var pending: Task<Void, Never>?
+
+    /// flash them; ⌘ up hides them at once.
+    private func commandChanged(_ down: Bool) {
+        pending?.cancel()
+        guard down else {
+            if held { withAnimation(DS.Motion.quick) { held = false } }
+            return
+        }
+        pending = Task { @MainActor [weak self] in
+            guard (try? await Task.sleep(for: CommandKeyState.delay)) != nil, let self, !self.held else { return }
+            withAnimation(DS.Motion.quick) { self.held = true }
+        }
+    }
+    #endif
+
+    /// How long ⌘ is held before the shortcut hints show.
+    static let delay = Duration.milliseconds(750)
 }
 
 private struct GitRowStyle: ViewModifier {

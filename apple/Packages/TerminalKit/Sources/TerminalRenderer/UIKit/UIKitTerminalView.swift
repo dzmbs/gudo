@@ -33,6 +33,9 @@ public final class TerminalView: UIView {
     public var onOpenLink: ((TerminalLink) -> Void)?
     /// The link under the pointer changed (nil: none), for a status line showing its target.
     public var onHoverLink: ((TerminalLink?) -> Void)?
+    /// The pointer over the terminal (view points), nil when it leaves: hover affordances
+    /// drawn by the host (a command's ✓/✗ and run time).
+    public var onPointerMoved: ((CGPoint?) -> Void)?
     private var hoveredLinkTarget: TerminalLink?
     /// Where the last tap landed (view points), to anchor what it opens (a link's popover).
     public private(set) var lastTapLocation: CGPoint?
@@ -452,6 +455,10 @@ public final class TerminalView: UIView {
 
     @objc private func hovered(_ hover: UIHoverGestureRecognizer) {
         let point = hover.location(in: self)
+        switch hover.state {
+        case .began, .changed: onPointerMoved?(point)
+        default: onPointerMoved?(nil)
+        }
         switch hover.state {
         case .began, .changed:
             // A tap opens plain-text links too, so the pointer shows them all.

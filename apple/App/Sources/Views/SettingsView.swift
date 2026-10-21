@@ -212,21 +212,25 @@ private struct AppearanceSection: View {
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
     @AppStorage(TabNaming.titleFromShell) private var titleFromShell = false
     @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
+    @AppStorage(ThemePair.enabledKey) private var themePair = false
 
     var body: some View {
         Section("Appearance") {
-            NavigationLink {
-                ThemePicker(selection: $theme)
-            } label: {
-                HStack {
-                    ConfigLabel("Theme", key: "theme")
-                    Spacer()
-                    ThemeSwatch(theme: ThemeCatalog.theme(named: theme))
-                    Text(theme).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
+            if !themePair {
+                NavigationLink {
+                    ThemePicker(selection: $theme)
+                } label: {
+                    HStack {
+                        ConfigLabel("Theme", key: "theme")
+                        Spacer()
+                        ThemeSwatch(theme: ThemeCatalog.theme(named: theme))
+                        Text(theme).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
+                    }
                 }
+                .accessibilityIdentifier("settings-theme")
+                .settingAnchor("theme")
             }
-            .accessibilityIdentifier("settings-theme")
-            .settingAnchor("theme")
+            ThemePairRows { ThemePicker(selection: $0) }
             Picker(selection: $windowTheme) {
                 ForEach(TerminalPreferences.WindowTheme.allCases) { Text($0.title).tag($0) }
             } label: {

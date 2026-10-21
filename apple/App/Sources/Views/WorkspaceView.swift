@@ -82,6 +82,7 @@ struct WorkspaceView: View {
             // The whole window follows the terminal theme: surfaces, text, accent and states
             // (`ChromePalette`), light or dark by `window-theme` (Ghostty: Match Terminal).
             .chromeTheme(theme, windowTheme: windowTheme)
+            .modifier(ThemePairFollower())
             .focusedSceneValue(workspace)
             .focusedSceneValue(model)
             .renameTabPrompt(workspace)
