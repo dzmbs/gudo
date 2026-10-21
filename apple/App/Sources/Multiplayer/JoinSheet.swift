@@ -73,31 +73,6 @@ struct JoinSheet: View {
                         Text("Everyone in the session sees this name next to your avatar.")
                     }
                     .chromeRows()
-                    Section {
-                        if phase == .knocking {
-                            KnockWaiting(owner: info.inviter, asked: progress.asked, cancel: stopKnocking)
-                        } else {
-                            Button(action: { info.knock ? knock(info) : join(info) }) {
-                                HStack {
-                                    Spacer()
-                                    Text(buttonTitle(info))
-                                        .font(.body.weight(.semibold))
-                                    Spacer()
-                                }
-                                .padding(.vertical, 4)
-                            }
-                            .buttonStyle(.primaryGlass)
-                            .disabled(phase == .joining || isExpired(info))
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
-                            .accessibilityIdentifier("join-button")
-                        }
-                        if case .failed(let reason) = phase {
-                            Label(reason, systemImage: "exclamationmark.triangle.fill")
-                                .font(DS.Font.rowSubtitle)
-                                .foregroundStyle(DS.Palette.error)
-                        }
-                    }
                 case .failure:
                     Section {
                         Label("That isn't an invite link. Pairing tickets go in Add Host.", systemImage: "questionmark.circle")
@@ -110,6 +85,15 @@ struct JoinSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
+            // The action stays in view under the card (a short form sheet scrolled it off).
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if case .success(let info) = card {
+                    action(info)
+                        .padding(.horizontal, DS.Space.l)
+                        .padding(.vertical, DS.Space.m)
+                        .background(DS.Palette.groupedPage)
+                }
+            }
             .navigationTitle("Join a Session")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -130,6 +114,29 @@ struct JoinSheet: View {
         #else
         .frame(minWidth: 460, idealWidth: 500, minHeight: 520)
         #endif
+    }
+
+    @ViewBuilder private func action(_ info: InviteInfo) -> some View {
+        VStack(spacing: DS.Space.s) {
+            if phase == .knocking {
+                KnockWaiting(owner: info.inviter, asked: progress.asked, cancel: stopKnocking)
+            } else {
+                Button(action: { info.knock ? knock(info) : join(info) }) {
+                    Text(buttonTitle(info))
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.primaryGlass)
+                .disabled(phase == .joining || isExpired(info))
+                .accessibilityIdentifier("join-button")
+            }
+            if case .failed(let reason) = phase {
+                Label(reason, systemImage: "exclamationmark.triangle.fill")
+                    .font(DS.Font.rowSubtitle)
+                    .foregroundStyle(DS.Palette.error)
+            }
+        }
     }
 
     private func buttonTitle(_ info: InviteInfo) -> String {
