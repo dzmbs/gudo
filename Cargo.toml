@@ -65,6 +65,12 @@ tokio = { version = "1.53.3", default-features = false, features = ["rt-multi-th
 russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa", "flate2"] }
 ring = "0.17.14"
 flate2 = "1"
+# The editor's compressing proxy (crates/daemon/src/ws/editor_proxy.rs): HTTP/1.1 on hyper
+# (already in the graph through reqwest), brotli from Dropbox's pure-Rust crate (BSD-3/MIT).
+hyper = { version = "1.12", default-features = false, features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio", "client-legacy", "http1"] }
+http-body-util = "0.1.5"
+brotli = "9"
 # Push (crates/push, docs/PUSH.md): HPKE's X25519 from curve25519-dalek and Ed25519 from
 # ed25519-dalek (both already in the graph through iroh), HKDF and ChaCha20-Poly1305 from ring;
 # HTTP to the push relay with reqwest on rustls/ring (already in the graph through iroh-relay).
