@@ -91,7 +91,9 @@ final class AgentFleetUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         wakeKeyboard()
         // ↑ until the first row has the keyboard (from nothing, ↑ picks the last row).
-        for _ in 0..<10 where (row.value as? String) != "focused" {
+        // On iPhone the list scrolls to the last row first, which takes the first row out of
+        // the hierarchy until ↑ brings it back.
+        for _ in 0..<10 where !(row.exists && (row.value as? String) == "focused") {
             app.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [])
         }
         XCTAssertEqual(row.value as? String, "focused")
