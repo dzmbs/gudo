@@ -36,11 +36,11 @@ public struct DiffStat: View {
             HStack(spacing: 2) {
                 if added > 0 {
                     Text("+\(added.formatted(.number))")
-                        .foregroundStyle(selected ? AnyShapeStyle(.secondary) : AnyShapeStyle(DS.Palette.done))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(DS.Palette.done))
                 }
                 if removed > 0 {
                     Text("−\(removed.formatted(.number))")
-                        .foregroundStyle(selected ? AnyShapeStyle(.secondary) : AnyShapeStyle(DS.Palette.error))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(DS.Palette.error))
                 }
             }
             .font(font.monospacedDigit())
@@ -96,7 +96,7 @@ public struct PRNumberBadge: View {
     }
 
     public var body: some View {
-        let style = selected ? AnyShapeStyle(.secondary) : AnyShapeStyle(kind.color)
+        let style = selected ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(kind.color)
         Text("#\(number)")
             .font(.caption2.monospacedDigit())
             .foregroundStyle(style)
@@ -171,7 +171,7 @@ public struct ChecksRing: View {
         let gap = groups.count > 1 ? 0.05 : 0
         ZStack {
             if checks.isEmpty {
-                Circle().stroke(.quaternary, lineWidth: line)
+                Circle().stroke(DS.Palette.textQuaternary, lineWidth: line)
             }
             ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
                 let start = groups[..<index].reduce(0.0) { $0 + Double($1.count) } / total
@@ -202,7 +202,7 @@ public struct CheckBadge: View {
         if let kind {
             Image(systemName: kind == .failure ? "xmark.circle.fill" : kind == .pending ? "ellipsis.circle.fill" : "checkmark.circle.fill")
                 .symbolRenderingMode(.palette)
-                .foregroundStyle(DS.Palette.base, selected ? AnyShapeStyle(.secondary) : AnyShapeStyle(kind.color))
+                .foregroundStyle(DS.Palette.base, selected ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(kind.color))
                 .accessibilityLabel("Checks \(kind == .failure ? "failed" : kind == .pending ? "running" : "passed")")
         }
     }
@@ -212,61 +212,6 @@ public struct CheckBadge: View {
         if checks.contains(.failure) { return .failure }
         if checks.contains(.pending) { return .pending }
         return .success
-    }
-}
-
-/// A popover that opens on pointer hover (Mac, iPad with a pointer) and closes 150 ms after the
-public struct HoverPopover<Label: View, Content: View>: View {
-    @Binding var isPresented: Bool
-    let onClick: (() -> Void)?
-    @ViewBuilder let label: () -> Label
-    @ViewBuilder let content: () -> Content
-    @State private var overAnchor = false
-    @State private var overPopover = false
-    @State private var closing: Task<Void, Never>?
-
-    public init(
-        isPresented: Binding<Bool>, onClick: (() -> Void)? = nil,
-        @ViewBuilder label: @escaping () -> Label, @ViewBuilder content: @escaping () -> Content
-    ) {
-        _isPresented = isPresented
-        self.onClick = onClick
-        self.label = label
-        self.content = content
-    }
-
-    public var body: some View {
-        Button {
-            if let onClick { onClick() } else { isPresented.toggle() }
-        } label: {
-            label()
-        }
-        .onHover { inside in
-            overAnchor = inside
-            update()
-        }
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            content()
-                .chromeContent()
-                .onHover { inside in
-                    overPopover = inside
-                    update()
-                }
-                .presentationCompactAdaptation(.sheet)
-        }
-    }
-
-    private func update() {
-        closing?.cancel()
-        if overAnchor || overPopover {
-            if !isPresented { isPresented = true }
-        } else if isPresented {
-            closing = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(150))
-                guard !Task.isCancelled, !overAnchor, !overPopover else { return }
-                isPresented = false
-            }
-        }
     }
 }
 

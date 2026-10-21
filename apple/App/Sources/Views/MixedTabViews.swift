@@ -74,7 +74,7 @@ struct MixedTabView: View {
             let single = compact ? tab.focusedLeaf : tab.layout.zoomed
             let isSplit = single == nil && tab.leaves.count > 1
             SplitTreeView(node: single.map(Node.leaf) ?? tab.layout.root, tree: MixedTabTree(model: model, id: id, isActive: isActive), isSplit: isSplit)
-                .padding(paneStyle == .comfortable && isSplit ? DS.Space.xs + 2 : 0)
+                .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
                 .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
                 .background(theme.background, ignoresSafeAreaEdges: [])
                 .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
@@ -98,15 +98,16 @@ struct HostChip: View {
     var body: some View {
         HStack(spacing: 3) {
             ConnectionGlyph(group.connectionState, healthy: Image(systemName: group.systemImage))
-                .font(.system(size: 9, weight: .semibold))
+                .font(.caption2.weight(.semibold))
+                .imageScale(.small)
             Text(group.name)
                 .font(.caption2.weight(.medium))
                 .lineLimit(1)
         }
-        .foregroundStyle(theme.foreground.opacity(emphasized ? 0.75 : 0.5))
+        .foregroundStyle(emphasized ? DS.Palette.textSecondary : DS.Palette.textTertiary)
         .padding(.horizontal, 5)
         .padding(.vertical, 1)
-        .background(theme.foreground.opacity(0.07), in: .capsule)
+        .background(DS.Palette.hoverFill, in: .capsule)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("on \(group.name)")
     }
@@ -145,18 +146,19 @@ struct MixedHostsLine: View {
         HStack(spacing: DS.Space.xs) {
             ForEach(Array(tab.hosts.enumerated()), id: \.element) { index, host in
                 if index > 0 {
-                    Text("+").foregroundStyle(.tertiary)
+                    Text("+").foregroundStyle(DS.Palette.textTertiary)
                 }
                 HStack(spacing: 2) {
                     let group = model.groups.group(host)
                     ConnectionGlyph(model.connectionState(ofGroup: host), healthy: Image(systemName: group?.systemImage ?? "server.rack"))
-                        .font(.system(size: 9))
+                        .font(.caption2)
+                        .imageScale(.small)
                     Text(model.groupName(host)).lineLimit(1)
                 }
             }
         }
         .font(DS.Font.sidebarSubtitle)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DS.Palette.textSecondary)
     }
 }
 
@@ -173,17 +175,18 @@ struct MixedSidebarSection: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: DS.Space.s) {
                     Image(systemName: "rectangle.split.2x1")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .font(DS.Font.section.weight(.regular))
+                        .imageScale(.small)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .opacity(DS.Opacity.mutedGlyph)
                         .frame(width: 16)
                     Text("Mixed")
                         .font(DS.Font.section)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                     Spacer()
                 }
                 .padding(.leading, DS.Space.l)
-                .padding(.trailing, DS.Space.s + 2)
+                .padding(.trailing, DS.Space.gap10)
                 .padding(.top, DS.Space.m)
                 .padding(.bottom, DS.Space.xs)
                 .accessibilityElement(children: .combine)
@@ -220,14 +223,14 @@ private struct MixedTabRow: View {
         Button {
             withAnimation(DS.Motion.snappy) { model.focus(ref) }
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s + 2) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
                 Text("\(number)")
                     .font(DS.Font.sidebarSubtitle.monospacedDigit())
-                    .foregroundStyle(isActive ? .secondary : .tertiary)
+                    .foregroundStyle(isActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     .frame(width: 20, alignment: .trailing)
                     .lineLimit(1)
                 VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: DS.Space.xs + 2) {
+                    HStack(spacing: DS.Space.row) {
                         TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
                             .font(DS.Font.sidebarTitle)
@@ -236,13 +239,13 @@ private struct MixedTabRow: View {
                             .truncationMode(.middle)
                     }
                     MixedHostsLine(tab: tab)
-                        .padding(.leading, ProgramMark.rowSlot + DS.Space.xs + 2)
+                        .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
                 }
                 Spacer(minLength: DS.Space.xs)
                 if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(shortcut)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .transition(.opacity)
                 }
             }
@@ -279,13 +282,13 @@ struct MixedTabChip: View {
         let ref = WindowModel.mixedRef(tab.id)
         ZStack {
             if isActive {
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.primary.opacity(0.11))
-                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
+                    .fill(DS.Palette.selectedFill)
+                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.tabPill).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                     .padding(.vertical, 3)
             } else if isHovered {
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.primary.opacity(0.05))
+                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
+                    .fill(DS.Palette.hoverFill)
                     .padding(.vertical, 3)
             }
             VStack(spacing: 0) {
@@ -294,14 +297,15 @@ struct MixedTabChip: View {
                     .truncationMode(.middle)
                 Text(tab.hosts.map(model.groupName).joined(separator: " + "))
                     .font(DS.Font.meta)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .lineLimit(1)
             }
             .font(.callout.weight(isActive ? .medium : .regular))
-            .foregroundStyle(isActive ? .primary : .secondary)
+            .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
             .padding(.horizontal, 40)
             HStack(spacing: 0) {
                 Button("Close Tab", systemImage: "xmark") { model.closeMixedTab(tab.id) }
+                    .help("Close Tab (⌘W)")
                     .font(.caption2.weight(.bold))
                     .frame(width: 22, height: 22)
                     .opacity(isHovered ? 1 : 0)
@@ -310,7 +314,7 @@ struct MixedTabChip: View {
                 if let number = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(number)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                         .padding(.trailing, DS.Space.s)
                 }
             }
@@ -418,18 +422,18 @@ private struct ColumnHeader: View {
 
     var body: some View {
         let (title, host, program) = describe()
-        HStack(spacing: DS.Space.xs + 2) {
+        HStack(spacing: DS.Space.row) {
             ProgramMark(program, size: 12)
-                .foregroundStyle(theme.foreground.opacity(isActive ? 1 : 0.6))
+                .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
             Text(title)
                 .font(.caption.weight(isActive ? .semibold : .regular))
-                .foregroundStyle(theme.foreground.opacity(isActive ? 0.9 : 0.6))
+                .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let host {
                 Text(host)
                     .font(.caption)
-                    .foregroundStyle(theme.foreground.opacity(0.45))
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -467,14 +471,16 @@ private struct EmptyColumn: View {
     var body: some View {
         VStack(spacing: DS.Space.m) {
             Image(systemName: "rectangle.righthalf.inset.filled")
-                .font(.system(size: 28))
-                .foregroundStyle(theme.foreground.opacity(0.4))
+                .font(.title)
+                .imageScale(.large)
+                .foregroundStyle(DS.Palette.textTertiary)
             Text("Choose a tab for this column, or open a new one.")
                 .font(.callout)
-                .foregroundStyle(theme.foreground.opacity(0.6))
+                .foregroundStyle(DS.Palette.textSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 240)
             Button("New Tab", systemImage: "plus") { model.newTabInOtherColumn() }
+                .help("New Tab in This Column")
                 .buttonStyle(.glass)
                 .accessibilityIdentifier("column-new-tab")
         }

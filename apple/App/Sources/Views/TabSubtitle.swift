@@ -39,7 +39,7 @@ struct TabSubtitle: View {
                             .fixedSize()
                     }
                     .font(DS.Font.sidebarSubtitle)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(running.command ?? "A command") running for \(CommandBlocks.elapsed(seconds: seconds))")
                 } else {
@@ -55,7 +55,7 @@ struct TabSubtitle: View {
         if let context {
             Text(context)
                 .font(DS.Font.sidebarSubtitle)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.Palette.textTertiary)
                 .lineLimit(1)
                 .truncationMode(.head)
         }

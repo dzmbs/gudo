@@ -150,7 +150,7 @@ private struct ShareRoot: View {
     private func rowText(_ title: String, _ subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title).font(DS.Font.rowTitle)
-            Text(subtitle).font(DS.Font.rowSubtitle).foregroundStyle(.secondary)
+            Text(subtitle).font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
         }
     }
 
@@ -165,7 +165,7 @@ private struct ShareRoot: View {
                         .lineLimit(1)
                     Text(headerSubtitle)
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .contentTransition(.numericText())
                 }
                 Spacer()
@@ -190,7 +190,7 @@ private struct ShareRoot: View {
                 .accessibilityIdentifier("invite-name")
             RolePicker(roles: $draft.roles)
                 .listRowInsets(EdgeInsets(top: DS.Space.s, leading: DS.Space.m, bottom: DS.Space.s, trailing: DS.Space.m))
-            VStack(alignment: .leading, spacing: DS.Space.xs + 2) {
+            VStack(alignment: .leading, spacing: DS.Space.row) {
                 Picker("Scope", selection: $draft.scope) {
                     ForEach(InviteDraft.ScopeChoice.allCases) { Text($0.title).tag($0) }
                 }
@@ -199,7 +199,7 @@ private struct ShareRoot: View {
                 .accessibilityIdentifier("invite-scope")
                 Text(draft.scope.detail)
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .contentTransition(.opacity)
             }
             .padding(.vertical, 2)
@@ -216,7 +216,7 @@ private struct ShareRoot: View {
                         Text("Ask Me First")
                         Text("Whoever opens the link knocks; you let them in.")
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                 }
                 .accessibilityIdentifier("invite-knock")
@@ -309,7 +309,7 @@ private struct ShareRoot: View {
                 ForEach(Role.invitable.filter { me.roles.contains($0) }, id: \.self) { role in
                     Label(role.summary, systemImage: role.systemImage)
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
             }
         } header: {
@@ -334,7 +334,7 @@ private struct ShareRoot: View {
             }
             if session.participants.isEmpty {
                 Text("Nobody else is here yet.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
         } header: {
             SectionTitle("People Here", count: session.participants.count)
@@ -421,10 +421,10 @@ private struct RolePicker: View {
             }
         } label: {
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: DS.Space.xs + 2) {
+                HStack(spacing: DS.Space.row) {
                     Image(systemName: role.systemImage)
                         .symbolVariant(on ? .fill : .none)
-                        .foregroundStyle(on ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(on ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.textSecondary))
                         .frame(width: 18)
                     Text(role.title)
                         .font(DS.Font.rowTitleEmphasis)
@@ -438,11 +438,11 @@ private struct RolePicker: View {
                 }
                 Text(role.summary)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
             }
-            .padding(DS.Space.s + 2)
+            .padding(DS.Space.gap10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(on ? AnyShapeStyle(DS.Palette.accent.opacity(0.10)) : AnyShapeStyle(DS.Palette.hoverFill), in: .rect(cornerRadius: DS.Radius.control))
             .overlay {
@@ -530,7 +530,7 @@ private struct InviteResult: View {
                 .accessibilityIdentifier("invite-summary")
             Text(invite.link)
                 .font(DS.Font.literalSmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(3)
                 .truncationMode(.middle)
                 .textSelection(.enabled)
@@ -539,11 +539,11 @@ private struct InviteResult: View {
             if let expires = RelativeTime.string(ms: invite.expiresMs) {
                 Label("Expires \(expires)", systemImage: "clock")
                     .font(DS.Font.meta)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             } else {
                 Label("Never expires", systemImage: "infinity")
                     .font(DS.Font.meta)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
         }
     }
@@ -571,7 +571,7 @@ private struct PersonRow: View {
             PresenceAvatar(person.avatar, size: 30)
                 .opacity(person.state == .away ? 0.45 : 1)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: DS.Space.xs + 2) {
+                HStack(spacing: DS.Space.row) {
                     Text(isMe ? "\(person.name) (you)" : person.name)
                         .font(DS.Font.rowTitle)
                         .lineLimit(1)
@@ -588,18 +588,18 @@ private struct PersonRow: View {
                 }
                 Text(person.whereabouts(paneTitle: workspace.paneTitle))
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(person.typing ? AnyShapeStyle(person.avatar.color) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(person.typing ? AnyShapeStyle(person.avatar.color) : AnyShapeStyle(DS.Palette.textSecondary))
                     .lineLimit(1)
             }
             Spacer(minLength: DS.Space.s)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(roleWords(person.roles))
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                 if person.scope != .daemon {
                     Text(person.scope.title)
                         .font(DS.Font.meta)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                 }
             }
         }

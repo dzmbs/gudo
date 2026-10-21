@@ -16,6 +16,10 @@ struct TabBar: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
     @Namespace private var selection
+    /// leaves the strip, so the next close button lands under it.
+    @State private var isPointerInside = false
+    @State private var frozenWidth: CGFloat?
+    @State private var chipWidth: CGFloat = 0
 
     var body: some View {
         let groups = model.groups.groups
@@ -30,7 +34,7 @@ struct TabBar: View {
             ForEach(model.composites.tabs) { tab in
                 MixedTabChip(tab: tab, isActive: WindowModel.mixedRef(tab.id) == active)
                     .frame(maxWidth: .infinity)
-                Rectangle().fill(Color.primary.opacity(0.14)).frame(width: 1, height: 16)
+                Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
             }
             ForEach(groups) { group in
                 ForEach(group.tabs) { tab in
@@ -43,19 +47,30 @@ struct TabBar: View {
                             .opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 1)
                     }
                     TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: mixed, namespace: selection)
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: frozenWidth ?? .infinity)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { if frozenWidth == nil { chipWidth = $0 } }
                 }
             }
+            if frozenWidth != nil { Spacer(minLength: 0) }
             NewTabButton(workspace: workspace)
                 .padding(.leading, DS.Space.xs)
         }
         .buttonStyle(.bar)
         .labelStyle(.iconOnly)
-        .padding(.horizontal, DS.Space.xs + 2)
-        .frame(height: 34)
+        .padding(.horizontal, DS.Space.row)
+        .frame(height: DS.Size.tabStrip)
         .background(DS.Palette.base)
         .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
+        // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         .animation(DS.Motion.quick, value: active)
+        .onHover { inside in
+            isPointerInside = inside
+            if !inside, frozenWidth != nil { withAnimation(DS.Motion.quick) { frozenWidth = nil } }
+        }
+        .onChange(of: all.count) { old, new in
+            if new < old, isPointerInside, chipWidth > 0 { frozenWidth = chipWidth }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-bar")
     }
@@ -97,11 +112,11 @@ private struct TabChip: View {
                 VStack(spacing: 0) {
                     Text(title)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
                     if showsHost {
                         Text(group.name)
                             .font(DS.Font.meta)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.Palette.textTertiary)
                             .lineLimit(1)
                     }
                 }
@@ -122,7 +137,7 @@ private struct TabChip: View {
                 if CommandKeyState.shared.held, let number = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(number)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.trailing, DS.Space.s)
                         .transition(.opacity)
                 }
@@ -130,7 +145,7 @@ private struct TabChip: View {
             .padding(.leading, 3)
             .animation(DS.Motion.quick, value: CommandKeyState.shared.held)
         }
-        .frame(height: 34)
+        .frame(height: DS.Size.tabStrip)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
         .onHover { hovering in withAnimation(DS.Motion.hover) { isHovered = hovering } }
@@ -153,10 +168,19 @@ private struct TabChip: View {
             workspace?.apply(.moveTab(TabId(raw), to: index))
             return true
         }
-        .help([group.isLocal ? nil : group.name, workspace?.directory(of: tab) ?? title].compactMap(\.self).joined(separator: " · "))
+        .help(Self.tooltip(title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab)))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: nil))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tabbar-\(ref)")
+    }
+
+    /// (the context line: branch, program or task), each once.
+    static func tooltip(title: String, host: String?, directory: String?, context: String?) -> String {
+        var lines = [title]
+        let place = [host, directory].compactMap(\.self).joined(separator: " · ")
+        if !place.isEmpty, place != title { lines.append(place) }
+        if let context, !context.isEmpty, context != title, context != directory, context != "~" { lines.append(context) }
+        return lines.joined(separator: "\n")
     }
 }

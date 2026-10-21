@@ -96,7 +96,7 @@ public struct CommandPalette: View {
 
             if results.isEmpty {
                 Text("No matches")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .top)
                     .padding(DS.Space.l)
                     .frame(height: Self.listHeight, alignment: .top)
@@ -153,7 +153,7 @@ public struct CommandPalette: View {
                 } else if let image = command.systemImage {
                     Image(systemName: image)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection) : AnyShapeStyle(DS.Palette.textSecondary))
                         .frame(width: 16)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -161,7 +161,7 @@ public struct CommandPalette: View {
                         .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection) : AnyShapeStyle(.primary))
                     if let subtitle = command.subtitle {
                         Text(subtitle).font(.caption)
-                            .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.75)) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.75)) : AnyShapeStyle(DS.Palette.textSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -172,15 +172,15 @@ public struct CommandPalette: View {
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
                         .background(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.18)) : AnyShapeStyle(DS.Palette.selectedFill), in: .capsule)
-                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(DS.Palette.textSecondary))
                 }
                 // The first five results run with ⌘1–⌘5 while a query narrows them.
                 if !trimmed.isEmpty, index < 5 {
                     ShortcutLabel(["⌘", "\(index + 1)"])
-                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(DS.Palette.textSecondary))
                 } else if let shortcut = command.shortcut {
                     ShortcutLabel(shortcut)
-                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(DS.Palette.onSelection.opacity(0.85)) : AnyShapeStyle(DS.Palette.textSecondary))
                 }
             }
             .padding(.horizontal, DS.Space.s)

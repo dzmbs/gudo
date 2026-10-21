@@ -45,10 +45,10 @@ struct GitSettingsSection: View {
                             .frame(width: 18)
                         VStack(alignment: .leading, spacing: 0) {
                             Text(script.name)
-                            Text(script.command).font(DS.Font.literalSmall).foregroundStyle(.tertiary).lineLimit(1)
+                            Text(script.command).font(DS.Font.literalSmall).foregroundStyle(DS.Palette.textTertiary).lineLimit(1)
                         }
                         Spacer()
-                        if script.isDefault { Text("⌘R").font(.caption).foregroundStyle(.secondary) }
+                        if script.isDefault { Text("⌘R").font(.caption).foregroundStyle(DS.Palette.textSecondary) }
                     }
                     .contentShape(.rect)
                 }

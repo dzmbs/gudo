@@ -129,6 +129,7 @@ struct InboxView: View {
                     .accessibilityIdentifier("inbox-new")
                 } else {
                     Button("New Agent", systemImage: "plus", action: onLaunch)
+                        .help("New Agent")
                         .accessibilityIdentifier("inbox-new-agent")
                 }
             }
@@ -477,6 +478,20 @@ private struct InboxFilterBar: View {
     @Namespace private var pill
 
     var body: some View {
+        // Equal segments when the words fit; at large text sizes or in a narrow window the
+        // track scrolls instead of cutting "Needs You" to "Ne…".
+        ViewThatFits(in: .horizontal) {
+            track
+            ScrollView(.horizontal) {
+                track
+            }
+            .scrollIndicators(.never)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inbox-filters")
+    }
+
+    private var track: some View {
         HStack(spacing: 2) {
             ForEach(InboxFilter.allCases) { filter in
                 let count = counts[filter] ?? 0
@@ -488,23 +503,24 @@ private struct InboxFilterBar: View {
                         Text(filter.title)
                             .font(.footnote.weight(isSelected ? .semibold : .regular))
                             .lineLimit(1)
+                            .fixedSize()
                         if filter != .all, count > 0 {
                             Text("\(count)")
                                 .font(DS.Font.meta)
                                 .foregroundStyle(filter == .needsYou ? AnyShapeStyle(DS.Palette.attention)
-                                    : filter == .errors ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
+                                    : filter == .errors ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
                                 .contentTransition(.numericText())
                         }
                     }
-                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .foregroundStyle(isSelected ? DS.Palette.text : DS.Palette.textSecondary)
                     .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, DS.Space.row - 1)
+                    .padding(.vertical, DS.Space.xs)
                     .frame(maxWidth: .infinity)
                     .background {
                         if isSelected {
-                            RoundedRectangle(cornerRadius: DS.Radius.control - 2)
+                            RoundedRectangle(cornerRadius: DS.Radius.field)
                                 .fill(DS.Palette.overlay)
-                                .overlay(RoundedRectangle(cornerRadius: DS.Radius.control - 2).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                                .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                                 .shadow(color: .black.opacity(0.08), radius: 1, y: 0.5)
                                 .matchedGeometryEffect(id: "pill", in: pill)
                         }
@@ -519,8 +535,6 @@ private struct InboxFilterBar: View {
         }
         .padding(2)
         .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("inbox-filters")
     }
 }
 
@@ -563,13 +577,13 @@ private struct InboxRow: View {
                 header
                 Text(verbatim: item.prompt)
                     .font(item.isCommand ? DS.Font.literal : DS.Font.rowSubtitle)
-                    .foregroundStyle(item.request == nil ? .secondary : .primary)
+                    .foregroundStyle(item.request == nil ? DS.Palette.textSecondary : DS.Palette.text)
                     .lineLimit(item.request == nil ? 1 : 2)
                 request
                 if let summary = item.summary {
                     Text(verbatim: summary)
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
                         .lineLimit(3)
                 }
                 ForEach(rules) { rule in AutoApprovalChip(rule: rule) { revoke(rule) } }
@@ -596,7 +610,7 @@ private struct InboxRow: View {
         if item.isCommand {
             Image(systemName: item.state == .error ? "xmark.circle" : "checkmark.circle")
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
+                .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
         } else {
             StatusIndicator(item.state, size: 14)
                 .opacity(item.state.needsYou ? 1 : DS.Opacity.mutedGlyph)
@@ -621,7 +635,7 @@ private struct InboxRow: View {
             .layoutPriority(1)
             Text("\(item.hostName) · \(item.sessionTitle)")
                 .font(.footnote)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.Palette.textTertiary)
                 .lineLimit(1)
             Spacer(minLength: DS.Space.s)
             if item.unseen {
@@ -634,7 +648,7 @@ private struct InboxRow: View {
             TimelineView(.periodic(from: .now, by: item.state == .working ? 1 : 30)) { context in
                 Text(age(at: context.date))
                     .font(DS.Font.meta)
-                    .foregroundStyle(item.state == .working ? AnyShapeStyle(item.state.color) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(item.state == .working ? AnyShapeStyle(item.state.color) : AnyShapeStyle(DS.Palette.textSecondary))
             }
             if item.paneId != nil {
                 Button("Open Pane", systemImage: "arrow.up.right", action: open)
@@ -657,7 +671,7 @@ private struct InboxRow: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(tool)
                             .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.Palette.textTertiary)
                         Text(verbatim: detail)
                             .font(DS.Font.literal)
                             .textSelection(.enabled)
@@ -671,7 +685,7 @@ private struct InboxRow: View {
                     if let note = approval?.block ?? approval?.progress {
                         Label(note, systemImage: approval?.block != nil ? "lock" : "person.2")
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .accessibilityIdentifier("inbox-approval-note-\(item.id)")
                     }
                     verbs
@@ -765,7 +779,7 @@ private struct InboxRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(tool) · edited")
                     .font(.caption2.weight(.medium))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                 TextField("Command", text: $edited, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(DS.Font.literal)
@@ -834,7 +848,10 @@ private struct InboxRow: View {
             isComposerFocused = true
         }
         .buttonStyle(.glass)
+        #if os(macOS)
         .controlSize(.small)
+        #endif
+        .help("Reply to \(item.agent.title)")
         .accessibilityIdentifier("inbox-reply-\(item.id)")
     }
 
@@ -843,7 +860,7 @@ private struct InboxRow: View {
             TextField("Reply to \(item.agent.title)", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
-                .padding(.horizontal, DS.Space.s + 2)
+                .padding(.horizontal, DS.Space.gap10)
                 .padding(.vertical, DS.Space.s)
                 .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.control))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
@@ -867,11 +884,14 @@ private struct InboxRow: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.primaryGlass)
                 .buttonBorderShape(.circle)
+                #if os(macOS)
                 .controlSize(.small)
+                #endif
+                .help("Send (↩)")
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
                 .accessibilityIdentifier("inbox-send")
         }
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .movingTransition(.top)
     }
 
     private func send() {
@@ -916,7 +936,7 @@ private struct AutoApprovalChip: View {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 Text("Auto-approving \(Text(verbatim: rule.label).font(DS.Font.literalSmall)) · \(remaining(at: context.date))")
                     .font(DS.Font.meta)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }

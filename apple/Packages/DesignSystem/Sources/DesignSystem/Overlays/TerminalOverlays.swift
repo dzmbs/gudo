@@ -94,7 +94,7 @@ public struct ProcessExitedBar: View {
             .foregroundStyle(.primary)
             .opacity(isHovered ? 0 : 1)
             .onHover { isHovered = $0 }
-            .transition(.move(edge: .bottom))
+            .movingTransition(.bottom)
             .accessibilityLabel(message)
     }
 }
@@ -163,8 +163,8 @@ public struct SecureInputBadge: View {
                             .blur(radius: 4, opaque: true)
                             .mask(RadialGradient(colors: [.clear, .black], center: .center, startRadius: 0, endRadius: 25))
                             .opacity(gradientOpacity)))
-            .mask(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(DS.Palette.border, lineWidth: 1))
+            .mask(RoundedRectangle(cornerRadius: DS.Radius.secureBadge))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.secureBadge).stroke(DS.Palette.border, lineWidth: 1))
             .onTapGesture { isExplaining = true }
             .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
                 Text("Secure input is on while the terminal reads a password. Other apps can't read what you type here.")

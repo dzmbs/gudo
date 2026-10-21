@@ -35,7 +35,7 @@ struct GrantsView: View {
             Section {
                 if active.isEmpty {
                     Text(loaded ? "No active invites. Create one in Share Session." : "Loading invites…")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
                 ForEach(active, id: \.grant.grantId) { info in
                     GrantRow(info: info, session: session)
@@ -119,11 +119,11 @@ private struct GrantRow: View {
         let grant = info.grant
         HStack(alignment: .top, spacing: DS.Space.m) {
             Image(systemName: info.revoked ? "xmark.circle" : grant.roles.contains(.driver) ? "keyboard" : grant.roles.contains(.prompter) ? "text.bubble" : "eye")
-                .foregroundStyle(info.revoked ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
+                .foregroundStyle(info.revoked ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
                 .frame(width: 22)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: DS.Space.xs + 2) {
+                HStack(spacing: DS.Space.row) {
                     Text(grant.label.isEmpty ? "Guest" : grant.label)
                         .font(DS.Font.rowTitleEmphasis)
                     if grant.delegate {
@@ -135,15 +135,15 @@ private struct GrantRow: View {
                 }
                 Text("\(roleWords(grant.roles)) · \(grant.scope.title)")
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                 Text(statusLine)
                     .font(DS.Font.meta)
-                    .foregroundStyle(info.revoked ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(info.revoked ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textTertiary))
             }
             Spacer(minLength: 0)
             Text(groupedHex(grant.grantId, groups: 2))
                 .font(DS.Font.literalSmall)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.Palette.textTertiary)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
@@ -175,17 +175,17 @@ private struct DeviceRow: View {
     var body: some View {
         HStack(spacing: DS.Space.m) {
             Image(systemName: device.kind == .owner ? "laptopcomputer.and.iphone" : "person.crop.circle")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(isMe ? "\(device.name) (this device)" : device.name.isEmpty ? "Device" : device.name)
                     .font(DS.Font.rowTitle)
                 Text("\(device.kind == .owner ? "Owner" : "Guest") · first seen \(RelativeTime.string(ms: device.firstSeenMs) ?? "")")
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                 Text(groupedHex(device.device))
                     .font(DS.Font.literalSmall)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
             }
             Spacer()
             if device.revoked {
@@ -193,7 +193,7 @@ private struct DeviceRow: View {
             } else if device.connected > 0 {
                 HStack(spacing: 4) {
                     Circle().fill(DS.Palette.done).frame(width: 7, height: 7)
-                    Text("Connected").font(DS.Font.meta).foregroundStyle(.secondary)
+                    Text("Connected").font(DS.Font.meta).foregroundStyle(DS.Palette.textSecondary)
                 }
             }
         }
@@ -259,9 +259,9 @@ struct AuditLogView: View {
             .chromeRows()
             Section {
                 if session.auditPage == nil {
-                    Text("Reading the log…").foregroundStyle(.secondary)
+                    Text("Reading the log…").foregroundStyle(DS.Palette.textSecondary)
                 } else if records.isEmpty {
-                    Text(query.isEmpty ? "Nothing recorded yet." : "No records match “\(query)”.").foregroundStyle(.secondary)
+                    Text(query.isEmpty ? "Nothing recorded yet." : "No records match “\(query)”.").foregroundStyle(DS.Palette.textSecondary)
                 }
                 ForEach(records, id: \.seq) { record in
                     AuditRow(record: record, session: session, isExpanded: expanded.contains(record.seq))
@@ -299,7 +299,7 @@ struct AuditLogView: View {
                          ? "\(page.total) records; every hash and approval signature re-verified on the host."
                          : "A record does not match the hash chain or a signature failed. Treat this host's history as untrusted.")
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
             }
             .padding(.vertical, 2)
@@ -327,7 +327,7 @@ private struct AuditRow: View {
                     if let subtitle {
                         Text(subtitle)
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .lineLimit(2)
                     }
                 }
@@ -336,10 +336,10 @@ private struct AuditRow: View {
                     let date = Date(timeIntervalSince1970: Double(record.atMs) / 1000)
                     Text(date, format: Calendar.current.isDateInToday(date) ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day().hour().minute())
                         .font(DS.Font.meta)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                     Text("#\(record.seq)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                 }
             }
             if let approval = record.approval {
@@ -424,7 +424,7 @@ private struct AuditRow: View {
     }
 
     @ViewBuilder private func approvalCard(_ approval: ApprovalAudit) -> some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs + 2) {
+        VStack(alignment: .leading, spacing: DS.Space.row) {
             Text(approval.summary)
                 .font(DS.Font.literalSmall)
                 .lineLimit(isExpanded ? nil : 2)
@@ -435,7 +435,7 @@ private struct AuditRow: View {
                 Text("Option “\(approval.option)”")
             }
             .font(DS.Font.meta)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             if isExpanded {
                 Divider()
                 field("Signer device", groupedHex(record.actor?.device ?? "", groups: 8))
@@ -445,18 +445,18 @@ private struct AuditRow: View {
             } else {
                 Text("Tap for the signer's key and signature")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
             }
         }
-        .padding(DS.Space.s + 2)
+        .padding(DS.Space.gap10)
         .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
         .padding(.leading, 22 + DS.Space.m)
     }
 
     private func field(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(label).font(.caption2).foregroundStyle(.tertiary)
-            Text(value).font(DS.Font.literalSmall).foregroundStyle(.secondary).textSelection(.enabled)
+            Text(label).font(.caption2).foregroundStyle(DS.Palette.textTertiary)
+            Text(value).font(DS.Font.literalSmall).foregroundStyle(DS.Palette.textSecondary).textSelection(.enabled)
         }
     }
 

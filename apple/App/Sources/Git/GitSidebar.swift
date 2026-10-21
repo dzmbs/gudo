@@ -37,13 +37,31 @@ final class CommandKeyState {
         #if os(macOS)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
-            MainActor.assumeIsolated {
-                if self?.held != held { withAnimation(DS.Motion.quick) { self?.held = held } }
-            }
+            MainActor.assumeIsolated { self?.commandChanged(held) }
             return event
         }
         #endif
     }
+
+    #if os(macOS)
+    @ObservationIgnored private var pending: Task<Void, Never>?
+
+    /// flash them; ⌘ up hides them at once.
+    private func commandChanged(_ down: Bool) {
+        pending?.cancel()
+        guard down else {
+            if held { withAnimation(DS.Motion.quick) { held = false } }
+            return
+        }
+        pending = Task { @MainActor [weak self] in
+            guard (try? await Task.sleep(for: CommandKeyState.delay)) != nil, let self, !self.held else { return }
+            withAnimation(DS.Motion.quick) { self.held = true }
+        }
+    }
+    #endif
+
+    /// How long ⌘ is held before the shortcut hints show.
+    static let delay = Duration.milliseconds(750)
 }
 
 private struct GitRowStyle: ViewModifier {
@@ -84,7 +102,7 @@ struct RepoSectionHeader: View {
         HStack(spacing: 6) {
             Text(repo.name)
                 .font(DS.Font.section)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(1)
             Spacer(minLength: DS.Space.xs)
             Button("New Task in \(repo.name)", systemImage: "plus") {
@@ -93,7 +111,7 @@ struct RepoSectionHeader: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.plain)
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             #if os(macOS)
             .opacity(hovered ? 1 : 0)
             #else
@@ -143,7 +161,7 @@ struct WorktreeRow: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(worktree.displayBranch)
                         .font(GitRow.title)
-                        .foregroundStyle(idle ? .secondary : .primary)
+                        .foregroundStyle(idle ? DS.Palette.textSecondary : DS.Palette.text)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if worktree.subtitle != nil || port != nil {
@@ -160,7 +178,7 @@ struct WorktreeRow: View {
                             }
                         }
                         .font(GitRow.subtitle)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                         .lineLimit(1)
                     }
                 }
@@ -208,11 +226,11 @@ struct WorktreeTabRow: View {
                 TabLeadingMark(program: model.programIdentity(of: tab, onGroup: host), state: isActive ? nil : agent)
                 Text(title)
                     .font(GitRow.subtitle)
-                    .foregroundStyle(isActive ? .primary : .secondary)
+                    .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
                     .lineLimit(1)
                 Spacer(minLength: DS.Space.xs)
                 if CommandKeyState.shared.held, let number {
-                    Text("⌘\(number)").font(.caption).foregroundStyle(.secondary)
+                    Text("⌘\(number)").font(.caption).foregroundStyle(DS.Palette.textSecondary)
                 }
             }
             .modifier(GitRowStyle(selected: isActive, depth: 1))
@@ -240,7 +258,7 @@ private struct BranchGlyph: View {
     var body: some View {
         Image(systemName: pr?.kind.systemImage ?? "arrow.triangle.branch")
             .font(GitRow.subtitle.weight(.medium))
-            .foregroundStyle(selected || pr == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(pr!.kind.color))
+            .foregroundStyle(selected || pr == nil ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(pr!.kind.color))
             .opacity(selected ? 1 : DS.Opacity.mutedGlyph)
             .overlay(alignment: .bottomTrailing) {
                 if let pr, pr.state == .open {
@@ -271,7 +289,7 @@ private struct Accessories: View {
                 if let pr {
                     Text("#\(pr.number)")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
                 if let agent {
                     AgentGlyph(state: agent)
@@ -279,7 +297,7 @@ private struct Accessories: View {
             }
             .opacity(held ? 0 : 1)
             if held, let number {
-                Text("⌘\(number)").font(.caption).foregroundStyle(.secondary)
+                Text("⌘\(number)").font(.caption).foregroundStyle(DS.Palette.textSecondary)
             }
         }
         .fixedSize()
@@ -404,7 +422,7 @@ struct NeedsYouSection: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
                     SectionDot(DS.Palette.attention)
-                    Text("Needs you").font(DS.Font.section).foregroundStyle(.secondary)
+                    Text("Needs you").font(DS.Font.section).foregroundStyle(DS.Palette.textSecondary)
                 }
                 .padding(.leading, DS.Space.l + DS.Space.xs)
                 .padding(.top, DS.Space.m)
@@ -420,7 +438,7 @@ struct NeedsYouSection: View {
                                 Text(title).font(GitRow.title).lineLimit(1)
                                 Text([item.host, item.context].compactMap(\.self).joined(separator: " · "))
                                     .font(GitRow.subtitle)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(DS.Palette.textTertiary)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: DS.Space.xs)

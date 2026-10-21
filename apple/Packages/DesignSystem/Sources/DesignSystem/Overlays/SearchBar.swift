@@ -86,7 +86,7 @@ public struct TerminalSearchBar: View {
                     } label: {
                         Text(verbatim: "Aa")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(caseSensitive.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(caseSensitive.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(DS.Palette.textSecondary))
                             .frame(minWidth: 22)
                             .background(
                                 RoundedRectangle(cornerRadius: DS.Radius.field)
@@ -112,7 +112,7 @@ public struct TerminalSearchBar: View {
             .buttonStyle(.bar)
             .chromeContent()
             .padding(8)
-            .floatingPanel(cornerRadius: 14)
+            .floatingPanel(cornerRadius: DS.Radius.searchPanel)
             // The count lives inside the field, where accessibility does not reach it: the bar
             // carries it ("3/17", "-/17").
             .accessibilityElement(children: .contain)
@@ -151,7 +151,7 @@ public struct TerminalSearchBar: View {
             }
         }
         .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DS.Palette.textSecondary)
         .padding(.trailing, 8)
         .accessibilityIdentifier("search-count")
     }

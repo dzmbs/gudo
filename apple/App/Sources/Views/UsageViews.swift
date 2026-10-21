@@ -21,7 +21,7 @@ extension UsageTone {
 /// One meter's text, tinted only when it needs the user.
 struct UsageMeterLine: View {
     let meter: UsageMeter
-    var quiet: HierarchicalShapeStyle = .tertiary
+    var quiet: ChromeStyle = DS.Palette.textTertiary
 
     var body: some View {
         HStack(spacing: 4) {
@@ -89,7 +89,7 @@ struct UsageDetailView: View {
                         ? "This host hasn't reported agent usage. Usage needs the latest helper and a connection as the host's owner."
                         : "No Claude Code or Codex on this host.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(details) { detail in
@@ -129,7 +129,7 @@ private struct AgentUsageSection: View {
                     if let reset = row.reset {
                         Text(reset)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -138,13 +138,13 @@ private struct AgentUsageSection: View {
             if let note = detail.note {
                 Text(note)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let source = detail.source {
                 Text(source)
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
             }
         }
     }
@@ -177,13 +177,13 @@ struct InboxUsageStrip: View {
                             detailRow = row.id
                         } label: {
                             HStack(spacing: DS.Space.s) {
-                                UsageMeterLine(meter: row.meter, quiet: .secondary)
+                                UsageMeterLine(meter: row.meter, quiet: DS.Palette.textSecondary)
                                 Spacer(minLength: DS.Space.s)
                                 // The host's name once, on its first line.
                                 if rows.first(where: { $0.host.id == row.host.id })?.id == row.id {
                                     Text(row.host.name)
                                         .font(DS.Font.meta)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(DS.Palette.textTertiary)
                                         .lineLimit(1)
                                 }
                             }

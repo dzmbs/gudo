@@ -123,7 +123,7 @@ struct KnockRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: DS.Space.m) {
             PresenceAvatar(knock.avatar, size: 30)
-            VStack(alignment: .leading, spacing: DS.Space.xs + 2) {
+            VStack(alignment: .leading, spacing: DS.Space.row) {
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
                     Text("\(knock.name) wants to join")
                         .font(DS.Font.rowTitleEmphasis)
@@ -132,12 +132,12 @@ struct KnockRow: View {
                     TimelineView(.periodic(from: .now, by: 15)) { context in
                         Text(waited(at: context.date))
                             .font(DS.Font.meta)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                 }
                 Text(detail)
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(2)
                 HStack {
                     Spacer()
@@ -180,7 +180,7 @@ struct KnockBanner: View {
                         .lineLimit(1)
                     Text(session.knocks.count > 1 ? "\(session.knocks.count - 1) more in the Inbox" : "Their link offers \(roleWords(knock.roles))")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: DS.Space.s)
@@ -190,11 +190,11 @@ struct KnockBanner: View {
             .padding(.trailing, DS.Space.s)
             .padding(.vertical, DS.Space.s)
             .frame(maxWidth: 460)
-            .floatingPanel(cornerRadius: 20)
+            .floatingPanel(cornerRadius: DS.Radius.card)
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.l)
             .sensoryFeedback(DS.Haptic.attention, trigger: knock.knockId)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .movingTransition(.bottom)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("knock-banner")
         }
@@ -237,7 +237,7 @@ struct ApprovalRulesSection: View {
                 .accessibilityIdentifier("approval-max-risk")
             } else {
                 Label("Update the helper on this host to set approval rules.", systemImage: "arrow.up.circle")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
         } header: {
             SectionTitle("Agent Approvals")

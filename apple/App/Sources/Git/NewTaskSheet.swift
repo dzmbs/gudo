@@ -126,7 +126,7 @@ struct NewTaskSheet: View {
                             Text("New Worktree")
                             Text("Its own branch, PORT and tab, so it can't trip over your checkout.")
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(DS.Palette.textSecondary)
                         }
                     }
                     .disabled(repo == nil && host?.directory == nil)
@@ -152,7 +152,7 @@ struct NewTaskSheet: View {
                                 .buttonStyle(.borderless)
                                 .help("Another name")
                         }
-                        TextField(derivedBranch, text: $branch, prompt: Text(derivedBranch).foregroundStyle(.tertiary))
+                        TextField(derivedBranch, text: $branch, prompt: Text(derivedBranch).foregroundStyle(DS.Palette.textTertiary))
                             .font(DS.Font.literal)
                             .autocorrectionDisabled()
                             #if os(iOS)
@@ -180,7 +180,7 @@ struct NewTaskSheet: View {
                             .overlay(alignment: .topLeading) {
                                 if prompt.isEmpty {
                                     Text("What should \(runner.title) do? (optional)")
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(DS.Palette.textTertiary)
                                         .padding(.top, 8)
                                         .padding(.leading, 5)
                                         .allowsHitTesting(false)
@@ -214,7 +214,7 @@ struct NewTaskSheet: View {
                         HStack(spacing: DS.Space.s) {
                             Spinner()
                                 .frame(width: 14, height: 14)
-                            Text("Starting…").foregroundStyle(.secondary)
+                            Text("Starting…").foregroundStyle(DS.Palette.textSecondary)
                         }
                     } else {
                         Button("Start", action: start)

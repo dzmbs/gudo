@@ -240,7 +240,7 @@ private struct JoinCard: View {
                         .accessibilityIdentifier("join-inviter")
                     Text(info.label.isEmpty ? "to their terminal" : "as \(info.label)")
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
             }
             .padding(.vertical, 4)
@@ -249,7 +249,7 @@ private struct JoinCard: View {
                 Label {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(role.title).font(DS.Font.rowTitleEmphasis)
-                        Text(role.summary).font(DS.Font.rowSubtitle).foregroundStyle(.secondary)
+                        Text(role.summary).font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
                     }
                 } icon: {
                     Image(systemName: role.systemImage).foregroundStyle(DS.Palette.accent)
@@ -269,7 +269,7 @@ private struct JoinCard: View {
             LabeledContent("Host") {
                 Text(groupedHex(info.daemonId))
                     .font(DS.Font.literalSmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
         } header: {
             SectionTitle("Invitation")
@@ -303,7 +303,7 @@ private struct KnockWaiting: View {
                     .accessibilityIdentifier("knock-status")
                 Text(asked ? "You join the moment they do. Keep this open." : "Reaching \(who)’s host.")
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
             Spacer(minLength: DS.Space.s)
             Button("Stop", action: cancel)

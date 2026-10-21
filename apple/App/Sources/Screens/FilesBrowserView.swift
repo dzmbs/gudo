@@ -179,7 +179,10 @@ private struct DirectoryListing: View {
             .overlay {
                 if visible.isEmpty {
                     if filter.isEmpty {
-                        EmptyState("Empty Folder", systemImage: "folder", message: "Drop files here or use + to upload.") {}
+                        EmptyState("Empty Folder", systemImage: "folder", message: "Drop files here, or upload some from this device.") {
+                            Button("Upload Files…", systemImage: "square.and.arrow.up") { isImporting = true }
+                                .buttonStyle(.glass)
+                        }
                     } else {
                         ContentUnavailableView.search(text: filter)
                     }
@@ -309,7 +312,7 @@ private struct DirectoryListing: View {
             .floatingPanel()
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.s)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .movingTransition(.bottom)
             .accessibilityIdentifier("files-transfer")
         }
     }
@@ -553,7 +556,7 @@ private struct TextPreview: View {
                     ForEach(lines.indices, id: \.self) { index in
                         Text(verbatim: "\(index + 1)")
                             .font(DS.Font.literal.monospacedDigit())
-                            .foregroundStyle(theme.foreground.opacity(0.3))
+                            .foregroundStyle(DS.Palette.textQuaternary)
                             .frame(height: 18)
                     }
                 }

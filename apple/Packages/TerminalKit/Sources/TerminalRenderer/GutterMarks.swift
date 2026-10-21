@@ -15,6 +15,8 @@ public struct GutterMark: Equatable, Sendable {
     public var tint: Tint
     /// 0…1.
     public var opacity: Double
+    /// colour at a few percent), 0 for none.
+    public var rowTint: Double
 
     /// A colour of the terminal's current theme, so the stripe follows theme and OSC 4/10
     /// changes.
@@ -25,12 +27,13 @@ public struct GutterMark: Equatable, Sendable {
         case rgb(RGB)
     }
 
-    public init(id: UInt64, row: Int, rows: Int, tint: Tint, opacity: Double = 1) {
+    public init(id: UInt64, row: Int, rows: Int, tint: Tint, opacity: Double = 1, rowTint: Double = 0) {
         self.id = id
         self.row = row
         self.rows = rows
         self.tint = tint
         self.opacity = opacity
+        self.rowTint = rowTint
     }
 
     func color(_ colors: RenderState.Colors) -> RGB {
