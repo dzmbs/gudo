@@ -1,4 +1,5 @@
 import DesignSystem
+import HostKit
 import PaneLayout
 import TerminalRenderer
 import SwiftUI
@@ -59,7 +60,14 @@ struct WorkspaceView: View {
                             .onTapGesture { model.isPaletteShown = false }
                         CommandPalette(
                             isPresented: $model.isPaletteShown, commands: PaletteCommands.all(workspace: workspace, model: model),
-                            placeholder: PaletteCommands.placeholder(model.paletteMode))
+                            placeholder: PaletteCommands.placeholder(model.paletteMode),
+                            // goes back to every command.
+                            onScope: model.paletteMode == .commands ? { query in
+                                guard query == "/" else { return false }
+                                model.paletteMode = .workflows
+                                return true
+                            } : nil,
+                            onDeleteEmpty: model.paletteMode == .workflows ? { model.paletteMode = .commands } : nil)
                             // A fresh query and selection per mode (⌘K, ⌘P, ⌥⌘T).
                             .id(model.paletteMode)
                             .padding(.top, 44)
@@ -68,7 +76,25 @@ struct WorkspaceView: View {
                     }
                 }
             }
+            .overlay(alignment: .top) {
+                if let panel = model.workflowPanel {
+                    ZStack(alignment: .top) {
+                        Color.black.opacity(0.0001)
+                            .ignoresSafeArea()
+                            .onTapGesture { model.workflowPanel = nil }
+                        WorkflowPanelHost(panel: panel)
+                            .id(panel.id)
+                            .padding(.top, 44)
+                            .transition(.opacity)
+                    }
+                }
+            }
             .animation(DS.Motion.palette, value: model.isPaletteShown)
+            .animation(DS.Motion.palette, value: model.workflowPanel?.id)
+            // The host's workflow files changed while the palette lists them: read them again.
+            .onChange(of: (workspace.host as? DaemonConnection)?.workspace.workflowsRev) {
+                if model.isPaletteShown { model.loadWorkflows() }
+            }
             .toastHost(model.toasts)
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()

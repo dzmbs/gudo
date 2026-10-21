@@ -74,6 +74,17 @@ final class KeyBar: UIInputView {
     /// The active profile (for tests and the design layer).
     private(set) var profile = KeyBarProfile.shell
 
+    /// The focused pane's repository workflows: first in the snippets row, before the user's
+    /// own snippets (`Model/Workflows.swift`).
+    var workflows: [KeyBarWorkflow] = [] {
+        didSet { if workflows != oldValue, snippetsShown { rebuildSnippets() } }
+    }
+    /// A workflow in the row was tapped (its id): the window types it or opens its form.
+    var onWorkflow: ((String) -> Void)?
+    /// The snippets row was shown: read the pane's workflows again (it may have changed
+    /// directory since it was focused).
+    var onSnippetsShown: (() -> Void)?
+
     static let hardwareModeKey = "keyBar.hardwareKeyboard"
     /// The older switch for the full bar with a hardware keyboard (UI tests pass it).
     static let fullWithHardwareKeyboardKey = "keyBar.fullWithHardwareKeyboard"
@@ -858,12 +869,24 @@ final class KeyBar: UIInputView {
 
     private func toggleSnippets() {
         snippetsShown.toggle()
-        if snippetsShown { rebuildSnippets() }
+        if snippetsShown {
+            rebuildSnippets()
+            onSnippetsShown?()
+        }
         apply()
     }
 
     private func rebuildSnippets() {
         snippetStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for (index, workflow) in workflows.enumerated() {
+            let button = UIButton(configuration: style.button(.init(
+                title: workflow.name, symbol: workflow.hasArguments ? "curlybraces" : "text.cursor", active: false)))
+            button.accessibilityIdentifier = "keybar-workflow-\(index)"
+            button.accessibilityLabel = "Workflow \(workflow.name)"
+            let id = workflow.id
+            button.addAction(UIAction { [weak self] _ in self?.onWorkflow?(id) }, for: .touchUpInside)
+            snippetStack.addArrangedSubview(button)
+        }
         for (index, snippet) in snippets.snippets.enumerated() {
             let button = UIButton(configuration: style.button(.init(
                 title: snippet.label, symbol: snippet.sendReturn ? nil : "text.cursor", active: false)))

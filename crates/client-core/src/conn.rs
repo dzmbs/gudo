@@ -343,6 +343,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
                 Caps::KNOCK
             }
             | Caps::APPROVALS
+            | Caps::WORKFLOWS
             | if inner.options.askpass {
                 Caps::ASKPASS
             } else {

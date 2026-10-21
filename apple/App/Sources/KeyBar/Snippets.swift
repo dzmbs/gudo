@@ -42,3 +42,11 @@ final class SnippetStore {
         if let data = try? JSONEncoder().encode(snippets) { defaults.set(data, forKey: Self.key) }
     }
 }
+
+/// A repository workflow as the key bar's snippets row shows it (`KeyBar.workflows`).
+struct KeyBarWorkflow: Equatable {
+    var id: String
+    var name: String
+    /// Tapping opens the argument form instead of typing the command.
+    var hasArguments: Bool
+}

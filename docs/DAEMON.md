@@ -868,6 +868,55 @@ to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests op
   without the capability. Unit tests: `gh` JSON and errors, line counting, event filtering, the
   config file, branch names. Goldens: `crates/proto/tests/golden_repo.rs`.
 
+### 5.13 Workflows (`proto::workflow`)
+
+format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template functions in
+`crates/proto/src/workflow.rs`.
+
+- **Where**: `~/.config/unnamed/workflows/*.yaml|*.yml` (`$XDG_CONFIG_HOME/unnamed/workflows` when
+  set; global, every pane) and `<repository>/.unnamed/workflows/` (the repository a pane's
+  directory is in: the nearest ancestor with `.git`; a linked worktree without its own directory
+  falls back to the main worktree's, found through `.git` → `gitdir` → `commondir`). Hidden
+  files are skipped; symlinked files are followed.
+  `{{arg}}`), `description`, `tags`, `arguments: [{name, description, default_value}]`,
+  `shells`, `author`, `source_url` (`author_url` and any other field are ignored). Ours on top:
+  `shell` (one shell) and `raw: true` on an argument. A file holds one workflow or a list
+  (`id` is the path, `#n` for list entries). A missing `name` takes the file's stem; scalars may
+  be numbers (`default_value: 8080`); placeholders the file does not list become arguments.
+  Names are `[A-Za-z_][A-Za-z0-9_-]*`; anything else between braces (`{{.State.Status}}`) stays
+  literal.
+- **Safety**: only parsed, never run (serde-saphyr: no tags, `reject_unsupported_tags`). Limits:
+  256 files per directory, 64 KiB per file, a YAML budget (64 aliases and anchors, depth 16,
+  20 000 nodes, 4 documents), 32 arguments, 16 KiB commands, 200-character names. A bad file is
+  reported in `problems` with a one-line message and no source snippet (a symlink to some other
+  file does not leak it).
+- **Requests** (`WorkspaceRequest`, `Caps::WORKFLOWS`): `WorkflowList{pane_id?}` →
+  `Workflows(WorkflowList{rev, repo?, repo_name?, workflows, problems})`: the repository's (by
+  name), then the global ones (by name); without a pane only the global ones. Drive on the pane
+  (Drive on the host without one). `WorkflowSave{scope, pane_id?, workflow: WorkflowDraft}` →
+  `WorkflowSaved(Workflow)`: writes `<slug>.yaml` (`-2`… if taken, `O_EXCL`, never replacing a
+  file) in the global directory or the pane's repository's (created if missing; `NotFound` when
+  the pane is not in one), validated by reading it back. Drive on the host.
+- **Freshness and pushes**: a directory is re-read when its files' names, sizes or mtimes
+  changed, so a list is never stale. Every directory listed is watched (non-recursive `notify`;
+  while it does not exist, its parent or grandparent, re-armed as directories appear; at most 64,
+  least recently listed dropped), debounced 150 ms; a change in it or on the way to it bumps
+  `rev` and pushes `ServerCtl::WorkflowsChanged{rev}` to clients with `Caps::WORKFLOWS` (the
+  client core always announces it), which list again. A save pushes at once.
+- **Filling in** (`proto::render`, exported to Swift as `workflowRender`): each placeholder
+  takes the typed value, else the default, else empty, shell-quoted for where it sits in the
+  command: unquoted → one POSIX word (`'…'` with `'\''`, safe words as is, empty `''`); inside
+  `'…'` → `'\''` for each quote; inside `"…"` → `\`, `"`, `$` and `` ` `` escaped. `raw`
+  arguments go in as typed. The app types the result into the pane as a bracketed paste and
+  never presses Return unless asked (⌘↩).
+- **Tests**: `cargo test -p proto` (placeholders, quoting in each context, defaults, raw);
+  billion-laughs file refused with short messages, YAML round trip of drafts with quotes,
+  control characters and multi-line commands, slugs, repository and linked-worktree discovery,
+  directory limits, XDG); `cargo test -p daemon --test it workflows` (a pane in a repository vs
+  outside, an edited file and a new global file pushing `WorkflowsChanged`, the workflow
+  directory created after the first list, saving twice → `-2`, global save, refusals). Goldens:
+  `crates/proto/tests/golden_workflow.rs`. App: `apple/scripts/workflows-ui-test.sh`.
+
 
 Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
 hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, end to end
@@ -1816,6 +1865,9 @@ can answer (`-S` left alone). Goldens: `proto/tests/golden_askpass.rs`.
   are caught as detected prompts, curses pinentry is not); raw-mode password readers are not
   detected; a prompt in a pane of another session than the one attached waits until the app
   attaches there (or times out); the app does not yet badge a tab whose pane has an open prompt.
+  ignored (they are free text); no per-shell quoting (fish reads the POSIX quoting the same way
+  except inside `"…"`, where it does not treat `` ` `` specially); a watched directory that is
+  deleted and recreated is re-armed only on the next event or list.
 - `SetSizePolicy` is ignored (`LastInput`, restricted to the lease holder when a pane is
   leased). The ticket's relay URL is the one known at
   mint time; `endpoint.json` is refreshed as iroh's addresses change.

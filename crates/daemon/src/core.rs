@@ -81,6 +81,8 @@ pub(crate) enum Event {
     ApprovalStatus(proto::ApprovalStatus),
     /// An approval request's extras or a pane's auto-approve rules changed (`approve`).
     Approval(proto::ApprovalPush),
+    /// A watched workflow directory changed (the new revision).
+    Workflows(u64),
 }
 
 /// What restoring a pane after a daemon restart needs.

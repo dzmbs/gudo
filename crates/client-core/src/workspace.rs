@@ -23,7 +23,7 @@ use proto::{
 };
 use proto::{
     ArchivedWorktree, PrCheckout, PrCreate, PrMerge, PullRequest, RepoSnapshot, ScriptRun,
-    TaskCreate, TaskCreated, WorktreeSettings,
+    TaskCreate, TaskCreated, Workflow, WorkflowList, WorkflowSave, WorktreeSettings,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -71,6 +71,11 @@ pub enum WorkspaceEvent {
     Repos {
         /// The snapshot.
         snapshot: RepoSnapshot,
+    },
+    /// A workflow file the daemon listed changed: list again ([`Client::workflow_list`]).
+    WorkflowsChanged {
+        /// The new revision.
+        rev: u64,
     },
 }
 
@@ -140,6 +145,7 @@ impl WsState {
                 *lock(&self.repos) = Some(snapshot.clone());
                 WorkspaceEvent::Repos { snapshot }
             }
+            ServerCtl::WorkflowsChanged { rev } => WorkspaceEvent::WorkflowsChanged { rev },
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
@@ -701,6 +707,19 @@ impl Client {
     pub async fn script_run(&self, run: ScriptRun) -> Result<PaneId, WsError> {
         expect!(self.workspace(WorkspaceRequest::ScriptRun(run)).await?,
             WorkspaceResponse::PaneCreated { pane_id } => pane_id)
+    }
+
+    /// The workflows `pane` can use: its repository's, then the global ones (only the global
+    /// ones without a pane).
+    pub async fn workflow_list(&self, pane: Option<PaneId>) -> Result<WorkflowList, WsError> {
+        expect!(self.workspace(WorkspaceRequest::WorkflowList { pane_id: pane }).await?,
+            WorkspaceResponse::Workflows(list) => list)
+    }
+
+    /// Writes a new workflow file on the host; the workflow as saved.
+    pub async fn workflow_save(&self, save: WorkflowSave) -> Result<Workflow, WsError> {
+        expect!(self.workspace(WorkspaceRequest::WorkflowSave(save)).await?,
+            WorkspaceResponse::WorkflowSaved(w) => w)
     }
 }
 
