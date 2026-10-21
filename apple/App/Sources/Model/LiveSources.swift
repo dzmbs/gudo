@@ -79,7 +79,8 @@ final class LiveHostDirectory: HostDirectory {
             statusLine: statusLine ?? entry.machine,
             progress: app.hosts.installs[entry.id]?.summary ?? app.hosts.helperUpdates[entry.id]?.summary,
             canInstallHelper: entry.canInstallHelper,
-            helper: entry.helper.map(HelperOffer.init))
+            helper: entry.helper.map(HelperOffer.init),
+            isTailscale: entry.isTailscale, needsTailscale: entry.needsTailscale)
     }
 
     func connect(_ id: HostSummary.ID) {

@@ -71,6 +71,8 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER).pair
             CFBundleURLSchemes: [$(BRAND_URL_SCHEME)]
+        # "Open Tailscale" for hosts on a tailnet (canOpenURL needs the scheme listed).
+        LSApplicationQueriesSchemes: [tailscale]
         # Launch on the terminal background so the first frame never flashes white.
         UILaunchScreen:
           UIColorName: LaunchBackground

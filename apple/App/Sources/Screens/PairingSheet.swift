@@ -145,13 +145,34 @@ struct PairingSheet: View {
                 preview("User", parsed.user ?? defaultUser, placeholder: parsed.user == nil)
                 preview("Host", parsed.host, placeholder: false)
                 preview("Port", parsed.port.map(String.init) ?? "22", placeholder: parsed.port == nil)
+                if isTailnet {
+                    // Quiet while typing: what the address is, and what it needs.
+                    LabeledContent("Network") {
+                        HStack(spacing: DS.Space.xs) {
+                            TailscaleTag()
+                            Text("needs Tailscale connected here")
+                                .font(DS.Font.rowSubtitle)
+                                .foregroundStyle(DS.Palette.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .accessibilityIdentifier("pairing-tailscale")
+                }
             }
         } footer: {
-            footer(default: Text(live == nil
-                ? "Uses keys from your keychain and ~/.ssh/config. The host key is shown on first connect."
-                : "Opens a plain SSH shell at once. Install the helper afterwards to keep sessions running while this device sleeps."))
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                footer(default: Text(live == nil
+                    ? "Uses keys from your keychain and ~/.ssh/config. The host key is shown on first connect."
+                    : "Opens a plain SSH shell at once. Install the helper afterwards to keep sessions running while this device sleeps."))
+                if error != nil, isTailnet {
+                    TailscaleHint()
+                }
+            }
         }
     }
+
+    /// The destination is a tailnet address or MagicDNS name (100.64.0.0/10, `*.ts.net`).
+    private var isTailnet: Bool { parsed.map { Tailscale.isTailnet(host: $0.host) } ?? false }
 
     private var defaultUser: String {
         #if os(macOS)
@@ -539,7 +560,12 @@ struct SSHConfigImportSheet: View {
         NavigationStack {
             List(hosts.sshConfigAliases, id: \.alias, selection: $selected) { host in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(host.alias).font(DS.Font.rowTitleEmphasis)
+                    HStack(spacing: DS.Space.s) {
+                        Text(host.alias).font(DS.Font.rowTitleEmphasis)
+                        if Tailscale.isTailnet(host: host.hostName) || Tailscale.isTailnet(host: host.alias) {
+                            TailscaleTag()
+                        }
+                    }
                     Text("\(host.user.map { "\($0)@" } ?? "")\(host.hostName):\(host.port)\(host.proxyJump.isEmpty ? "" : " via \(host.proxyJump.joined(separator: ", "))")")
                         .font(DS.Font.literalSmall)
                         .foregroundStyle(.secondary)
