@@ -97,6 +97,11 @@ private final class FocusOnTouch: PlatformGestureRecognizer {
         #endif
     }
 
+    #if os(macOS)
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+    #endif
+
     #if os(iOS)
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         onTouch?()
