@@ -8,7 +8,7 @@
 //! | `daemon.key` | iroh Ed25519 secret key, 32 raw bytes, mode 0600 |
 //! | `owner.json` | the owner principal |
 //! | `devices.json` | the device allowlist |
-//! | `pairing.json` | unused pairing secrets with expiry |
+//! | `pairing.json` | unused pairing secrets with expiry (changed under `pairing.lock`) |
 //! | `endpoint.json` | where the running daemon listens (written by `run`) |
 
 use std::io;
@@ -263,16 +263,18 @@ fn load_or_create_owner(dir: &Path) -> io::Result<PrincipalId> {
 /// Removes `secret` from the pending list if present and unexpired, returning its principal.
 fn consume_pairing_secret(dir: &Path, secret: PairingSecret) -> io::Result<Option<PrincipalId>> {
     let path = dir.join(PAIRING_FILE);
-    let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
-    let now = now_millis();
-    let wanted = hex(&secret.0);
-    let found = entries
-        .iter()
-        .position(|e| e.secret == wanted && e.expires > now);
-    let principal = found.and_then(|i| unhex(&entries.remove(i).principal).map(PrincipalId));
-    entries.retain(|e| e.expires > now);
-    write_json(&path, &entries)?;
-    Ok(principal)
+    fsutil::with_lock(&path, || {
+        let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
+        let now = now_millis();
+        let wanted = hex(&secret.0);
+        let found = entries
+            .iter()
+            .position(|e| e.secret == wanted && e.expires > now);
+        let principal = found.and_then(|i| unhex(&entries.remove(i).principal).map(PrincipalId));
+        entries.retain(|e| e.expires > now);
+        write_json(&path, &entries)?;
+        Ok(principal)
+    })
 }
 
 /// Records where the running daemon listens.
@@ -314,15 +316,17 @@ pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
     let secret = PairingSecret(fsutil::random::<16>());
     let expires = now_millis() + ttl.as_millis() as u64;
     let path = state_dir.join(PAIRING_FILE);
-    let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
-    let now = now_millis();
-    entries.retain(|e| e.expires > now);
-    entries.push(PairingEntry {
-        secret: hex(&secret.0),
-        principal: hex(&owner.0),
-        expires,
-    });
-    write_json(&path, &entries)?;
+    fsutil::with_lock(&path, || {
+        let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
+        let now = now_millis();
+        entries.retain(|e| e.expires > now);
+        entries.push(PairingEntry {
+            secret: hex(&secret.0),
+            principal: hex(&owner.0),
+            expires,
+        });
+        write_json(&path, &entries)
+    })?;
     Ok(Ticket {
         v: Ticket::VERSION,
         daemon_id,
@@ -362,4 +366,95 @@ pub fn paired_devices(state_dir: &Path) -> io::Result<usize> {
             .unwrap_or_default()
             .len(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use super::*;
+
+    /// A state dir as a started daemon leaves it: key, owner and `endpoint.json`.
+    fn started_daemon() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let info = EndpointInfo {
+            daemon_id: hex(&identity.daemon_id().0),
+            addrs: vec!["127.0.0.1:1".parse().expect("addr")],
+            relay_url: None,
+            relays: proto::TicketRelays::default(),
+            pid: std::process::id(),
+            started_at: now_millis(),
+        };
+        write_endpoint_info(dir.path(), &info).expect("endpoint");
+        dir
+    }
+
+    /// The daemon mints its startup ticket while `hostd pair` (another process) mints one, and
+    /// devices pair while others are minted: every secret handed out stays valid, once. (A
+    /// lost write here was a ticket the daemon refused with `InvalidGrant`.)
+    #[test]
+    fn concurrent_mints_and_consumes_lose_no_secret() {
+        let dir = started_daemon();
+        let dir = dir.path();
+        let minted: Vec<PairingSecret> = thread::scope(|s| {
+            let minters: Vec<_> = (0..6)
+                .map(|_| {
+                    s.spawn(|| {
+                        (0..10)
+                            .map(|_| mint_ticket(dir, PAIRING_TTL).expect("mint").secret)
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            minters
+                .into_iter()
+                .flat_map(|minter| minter.join().expect("minter"))
+                .collect()
+        });
+        assert_eq!(minted.len(), 60);
+
+        let consumed: usize = thread::scope(|s| {
+            let consumers: Vec<_> = minted
+                .chunks(10)
+                .map(|chunk| {
+                    s.spawn(move || {
+                        chunk
+                            .iter()
+                            .filter(|secret| {
+                                consume_pairing_secret(dir, PairingSecret(secret.0))
+                                    .expect("consume")
+                                    .is_some()
+                            })
+                            .count()
+                    })
+                })
+                .collect();
+            // Tickets minted meanwhile must survive the consumers' rewrites.
+            let late: Vec<_> = (0..10)
+                .map(|_| mint_ticket(dir, PAIRING_TTL).expect("mint").secret)
+                .collect();
+            let consumed = consumers
+                .into_iter()
+                .map(|c| c.join().expect("consumer"))
+                .sum();
+            for secret in late {
+                assert!(
+                    consume_pairing_secret(dir, secret)
+                        .expect("consume")
+                        .is_some(),
+                    "a ticket minted while others paired is still valid"
+                );
+            }
+            consumed
+        });
+        assert_eq!(consumed, minted.len(), "every minted secret pairs");
+        for secret in &minted {
+            assert_eq!(
+                consume_pairing_secret(dir, PairingSecret(secret.0)).expect("consume"),
+                None,
+                "a secret pairs once"
+            );
+        }
+    }
 }

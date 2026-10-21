@@ -206,4 +206,24 @@ nonisolated final class LocalDaemon {
         let again = try #require(try model.open(hostId) as? DaemonConnection)
         try await eventually("reconnected by saved ticket", timeout: .seconds(15)) { again.isReady && again.status.isLive }
     }
+
+    /// Tickets minted the moment a daemon starts (as the UI tests' daemons are) all pair; a
+    /// used ticket is refused on another device and leaves no host there, which then pairs
+    /// with a new ticket.
+    @Test func freshTicketsPairAndAUsedOneLeavesNothingBehind() async throws {
+        let daemon = try LocalDaemon()
+        let first = makeModel()
+        let used = try PairingTicket(try await daemon.ticket())
+        let hostId = try await first.pair(used, name: "local")
+        #expect(first.connection(hostId)?.status.isLive == true)
+
+        let other = makeModel()
+        await #expect(throws: PairingError.self) { try await other.pair(used, name: "local") }
+        #expect(other.records.isEmpty)
+        #expect(other.connections.isEmpty)
+
+        let id = try await other.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        #expect(other.records.map(\.id) == [id])
+        #expect(other.connection(id)?.status.isLive == true)
+    }
 }
