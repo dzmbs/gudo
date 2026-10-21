@@ -226,10 +226,11 @@ final class EditorPanesUITests: XCTestCase {
         waitForWorkbench("proj", timeout: 60)
         shot("editor-restored")
 
-        // The bar's ✕ closes an editor pane. (⌘W does on the Mac; on the iPad the system's own
-        // Close Window takes ⌘W while a web view has the keyboard: APP-ARCHITECTURE §20.)
-        element("editor-close").tap()
-        XCTAssertTrue(row("proj, VS Code on").waitForNonExistence(timeout: 10), "the editor closed")
+        // ⌘W in VS Code closes its pane, not the window (the system's Close Window is ⇧⌘W).
+        webField.tap()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(row("proj, VS Code on").waitForNonExistence(timeout: 10), "⌘W closed the editor pane")
+        XCTAssertTrue(row("site, VS Code on").exists, "the window stayed open")
         closeEditors()
     }
 

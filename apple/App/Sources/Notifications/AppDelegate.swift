@@ -7,7 +7,7 @@ import UIKit
 /// builds with the push entitlement (`PUSH_ENTITLEMENT = YES` in Brand.xcconfig → `PUSH_YES`)
 /// registers for remote notifications. A free account has no push entitlement, so the default
 /// build never calls `registerForRemoteNotifications` and works with local notifications only.
-final class AppDelegate: NSObject, UIApplicationDelegate {
+final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         AppNotifications.shared.install()
         AgentLiveActivities.shared.install()
@@ -24,6 +24,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
         AppModel.log.error("remote notifications unavailable: \(error.localizedDescription, privacy: .public)")
+    }
+
+    /// ⌘W is Close Pane (a terminal's or a VS Code pane's). iPadOS binds File ▸ Close Window to
+    /// ⌘W too, and while a web view has the keyboard the system's item won, closing the whole
+    /// window. Close Window moves to ⇧⌘W, as in Safari.
+    override func buildMenu(with builder: any UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        guard builder.system == .main else { return }
+        builder.replaceChildren(ofMenu: .close) { children in
+            children.map { element in
+                guard let command = element as? UIKeyCommand, let action = command.action,
+                      command.input?.lowercased() == "w", command.modifierFlags == .command else { return element }
+                let moved = UIKeyCommand(title: command.title, image: command.image, action: action,
+                                         input: "w", modifierFlags: [.command, .shift], propertyList: command.propertyList)
+                moved.discoverabilityTitle = command.discoverabilityTitle
+                return moved
+            }
+        }
     }
 
     /// Windows (Windows/ExternalDisplay.swift): an external display without Stage Manager gets a
