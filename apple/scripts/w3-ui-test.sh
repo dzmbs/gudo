@@ -5,6 +5,9 @@
 #
 #   apple/scripts/w3-ui-test.sh [simulator-udid] [test-name …]
 #
+# UI_TEST_CLASS picks another suite on the same fixtures (default W3UITests), e.g.
+# UI_TEST_CLASS=AgentApprovalsUITests for agent toasts and the approval verbs.
+#
 # Needs `cargo build -p hostd` (unnamed-hostd and un-hook) and the app project (xcodegen).
 set -euo pipefail
 
@@ -19,11 +22,12 @@ daemon() { PORT="${PORT:-47613}" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
 trap 'daemon stop; pkill -f "http.server 18765" 2>/dev/null || true; rm -rf "$state"' EXIT
 
+suite="${UI_TEST_CLASS:-W3UITests}"
 only=()
 if [[ $# -gt 0 ]]; then
-  for name in "$@"; do only+=("-only-testing:AppUITests/W3UITests/$name"); done
+  for name in "$@"; do only+=("-only-testing:AppUITests/$suite/$name"); done
 else
-  only=("-only-testing:AppUITests/W3UITests")
+  only=("-only-testing:AppUITests/$suite")
 fi
 
 log="$state/xcodebuild.log"

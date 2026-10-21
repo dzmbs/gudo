@@ -397,6 +397,64 @@ final class LiveAgentFeed: AgentFeed {
         daemon.decide(requestId: request, optionId: option.id)
     }
 
+    // MARK: Approval verbs (edited input, approve all like this)
+
+    /// The live agent behind an item: its daemon, pane, the request it is blocked on and that
+    /// request's allow option.
+    private func blocked(_ id: AgentItem.ID) -> (daemon: DaemonConnection, pane: UInt64, request: UInt64, allow: UInt32)? {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let raw = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
+              let agent = daemon.meta[PaneId(raw)]?.agent,
+              case .blocked(let request, _, let options) = agent.state, answered[id] != request,
+              let allow = Self.option(options, allow: true)
+        else { return nil }
+        return (daemon, raw, request, allow.id)
+    }
+
+    func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions? {
+        guard let target = blocked(id),
+              let info = target.daemon.approvals.request(pane: target.pane, blockedOn: target.request)
+        else { return nil }
+        guard info.editableInput != nil || info.like != nil else { return nil }
+        return AgentApprovalOptions(editableInput: info.editableInput, likeThis: info.like?.label)
+    }
+
+    func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval] {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let raw = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection
+        else { return [] }
+        return (daemon.approvals.rules[raw] ?? []).map { rule in
+            AgentAutoApproval(id: rule.id, label: rule.match.label, expiresAt: rule.expiresAt,
+                              turnsLeft: rule.turnsLeft, uses: rule.uses, grantedBy: rule.grantedBy)
+        }
+    }
+
+    func approveEdited(_ id: AgentItem.ID, input: String) async throws {
+        guard let target = blocked(id) else { throw HostError.notConnected }
+        try await target.daemon.approvals.approveEdited(paneId: target.pane, requestId: target.request, optionId: target.allow, input: input)
+        answered[id] = target.request
+    }
+
+    func approveAllLikeThis(_ id: AgentItem.ID) async throws {
+        guard let target = blocked(id),
+              let like = target.daemon.approvals.request(pane: target.pane, blockedOn: target.request)?.like
+        else { throw ApprovalUnavailable() }
+        try await target.daemon.approvals.approveAllLikeThis(
+            paneId: target.pane, requestId: target.request, match: like,
+            minutes: AgentAutoApproval.minutes, turns: AgentAutoApproval.turns)
+        answered[id] = target.request
+    }
+
+    func revokeAutoApproval(_ id: AgentItem.ID, rule: AgentAutoApproval.ID) async throws {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let raw = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection
+        else { throw HostError.notConnected }
+        try await daemon.approvals.revoke(paneId: raw, ruleId: rule)
+    }
+
     /// The option that means yes (or no): by its words, else the first (last).
     static func option(_ options: [DecisionOption], allow: Bool) -> DecisionOption? {
         let yes = ["allow", "yes", "approve", "accept", "proceed", "continue"]

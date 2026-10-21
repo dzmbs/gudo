@@ -56,6 +56,8 @@ while IFS= read -r line; do
   echo "prompt: $line"
   case "$line" in
     *permission*)
+      # "slowly": think a while first (time to leave the agent's tab, for the toast test).
+      case "$line" in *slowly*) sleep 4 ;; esac
       echo "asking to run: rm -rf build"
       payload=$(/usr/bin/python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"hook_event_name":"PermissionRequest","cwd":sys.argv[2],"tool_name":"Bash","tool_input":{"command":"rm -rf build"}}))' "$sid" "$PWD")
       out=$(send PermissionRequest "$payload")

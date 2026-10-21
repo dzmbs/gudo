@@ -130,6 +130,8 @@ final class WindowModel {
     /// The editor is presented (full screen on iPhone and iPad).
     var isEditorShown = false
     let toasts = ToastCenter()
+    /// Agents on other tabs and hosts that need you or finished (`AgentToasts`).
+    let agentToasts = AgentToasts()
     /// The git-native workspace of this window (worktree, pull request, scripts).
     let git = GitUI()
 
@@ -244,6 +246,7 @@ final class WindowModel {
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
         followGroups()
+        followAgentToasts()
     }
 
     /// The window closed: its terminals stop and the daemons stop counting its panes as shown.

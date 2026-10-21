@@ -68,6 +68,7 @@ struct WorkspaceView: View {
             }
             .animation(DS.Motion.overlay, value: model.isPaletteShown)
             .toastHost(model.toasts)
+            .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()
             .portOffers(model)
             .editorPresentation(model)

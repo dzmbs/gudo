@@ -109,6 +109,44 @@ final class MockAgentFeed: AgentFeed {
         return nil
     }
 
+    /// Standing approvals per item (the renderer agent has one in the screenshots).
+    var rules: [AgentItem.ID: [AgentAutoApproval]] = [
+        "a3": [AgentAutoApproval(id: "r1", label: "cargo bench …", expiresAt: .now + 42 * 60, turnsLeft: 7, uses: 3, grantedBy: "iPad")],
+    ]
+
+    func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions? {
+        guard case .permission(_, let detail)? = items.first(where: { $0.id == id })?.request else { return nil }
+        let words = detail.split(separator: " ").prefix(2).joined(separator: " ")
+        return AgentApprovalOptions(editableInput: detail, likeThis: "\(words) …")
+    }
+
+    func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval] { rules[id] ?? [] }
+
+    func approveEdited(_ id: AgentItem.ID, input: String) async throws { transition(id, to: .working) }
+
+    func approveAllLikeThis(_ id: AgentItem.ID) async throws {
+        guard let label = approvalOptions(id)?.likeThis else { return }
+        rules[id, default: []].append(AgentAutoApproval(
+            id: UUID().uuidString, label: label, expiresAt: .now + Double(AgentAutoApproval.minutes * 60),
+            turnsLeft: AgentAutoApproval.turns, uses: 1, grantedBy: "This device"))
+        transition(id, to: .working)
+    }
+
+    func revokeAutoApproval(_ id: AgentItem.ID, rule: AgentAutoApproval.ID) async throws {
+        rules[id]?.removeAll { $0.id == rule }
+    }
+
+    /// Design fixtures: an agent changes state as a live one would (on a host, in a pane).
+    func simulate(_ id: AgentItem.ID, state: AgentState, request: AgentItem.Request? = nil, summary: String? = nil) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].state = state
+        items[index].request = request
+        items[index].summary = summary
+        items[index].since = .now
+        items[index].hostId = items[index].hostName
+        items[index].paneId = 90 + UInt64(index)
+    }
+
     private func transition(_ id: AgentItem.ID, to state: AgentState) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index].state = state

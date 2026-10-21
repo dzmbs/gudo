@@ -79,7 +79,7 @@ struct WorkspaceCommands: Commands {
                 .disabled(editorHasKeys)
             Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
             Divider()
-            buttons([.commandPalette, .commandPaletteGhostty, .inbox, .hosts, .shortcuts])
+            buttons([.commandPalette, .commandPaletteGhostty, .inbox, .jumpToWaitingAgent, .hosts, .shortcuts])
             Button("Add Host…") { model?.addHost() }
             Divider()
         }
