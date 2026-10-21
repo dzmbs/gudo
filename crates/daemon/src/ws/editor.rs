@@ -11,6 +11,9 @@
 //! socket opens the file in the window already showing the folder. Without a window (or on a
 //! failure) it falls back to a URL the app loads, whose `payload` (`openFile` +
 //! `gotoLineMode`) makes the workbench open the file at the line.
+//!
+//! The port handed to the app is not the server's own but that of a compressing proxy in
+//! front of it ([`super::editor_proxy`]), unless `editor.compress = false`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,6 +26,7 @@ use proto::{
 };
 use tokio::process::{Child, Command};
 
+use super::editor_proxy::{AssetCache, EditorProxy};
 use crate::config::Config;
 use crate::fsutil;
 use crate::procinfo;
@@ -77,8 +81,13 @@ const VSCODIUM_BUILDS: &[(&str, &str, &str, &str)] = &[
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct Running {
+    /// `info.port` is the proxy's port when there is one, else the server's.
     info: EditorInstance,
+    /// The server's own port.
+    upstream: u16,
     child: Child,
+    /// Dropped (stopped) with the server.
+    _proxy: Option<EditorProxy>,
 }
 
 impl Drop for Running {
@@ -96,6 +105,8 @@ pub(crate) struct Editors {
     running: tokio::sync::Mutex<HashMap<String, Running>>,
     /// Serialises the openvscode download.
     install: tokio::sync::Mutex<()>,
+    /// Compressed static assets, shared by every editor's proxy.
+    cache: std::sync::OnceLock<std::sync::Arc<AssetCache>>,
 }
 
 /// The VS Code CLI: the user's own, else the one the daemon installed from Microsoft.
@@ -381,12 +392,24 @@ impl Editors {
                 pid,
                 started_at: UnixMillis(crate::identity::now_millis()),
             },
+            upstream: port,
             child,
+            _proxy: None,
         };
         wait_ready(&mut run, &log_path).await?;
+        if cfg.editor_compress {
+            let cache = self
+                .cache
+                .get_or_init(|| AssetCache::new(cfg.state_dir.join("editors").join("cache")));
+            let proxy = EditorProxy::start(port, Some(std::sync::Arc::clone(cache)))
+                .await
+                .map_err(|e| WsError::Failed(format!("starting the editor proxy: {e}")))?;
+            run.info.port = proxy.port();
+            run._proxy = Some(proxy);
+        }
         let info = run.info.clone();
         self.running.lock().await.insert(folder_s, run);
-        tracing::info!(?kind, port, folder = %folder.display(), "editor started");
+        tracing::info!(?kind, port, proxy = info.port, folder = %folder.display(), "editor started");
         Ok(info)
     }
 
@@ -400,6 +423,9 @@ impl Editors {
     }
 
     pub async fn stop_all(&self) {
+        if let Some(cache) = self.cache.get() {
+            cache.close();
+        }
         self.running.lock().await.clear();
     }
 
@@ -531,7 +557,7 @@ async fn wait_ready(run: &mut Running, log: &Path) -> Result<(), WsError> {
                 log_tail(log)
             )));
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", run.info.port))
+        if tokio::net::TcpStream::connect(("127.0.0.1", run.upstream))
             .await
             .is_ok()
         {

@@ -1153,6 +1153,222 @@ async fn editor_servers_launch_per_folder_and_open_files() {
     assert!(TcpStream::connect(("127.0.0.1", e2.port)).await.is_err());
 }
 
+/// A stand-in for the VS Code server's static assets and websockets: checks the token
+/// cookie like the real one, sends a versioned asset chunked with a one-year `max-age`, and
+/// echoes on an upgraded `/ws`.
+const FAKE_STATIC_EDITOR: &str = r#"#!/usr/bin/env python3
+import http.server, sys
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+token = args[args.index("--connection-token") + 1]
+JS = "".join("export function f%d(x) { return x * %d; }\n" % (i, i) for i in range(5000)).encode()
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_GET(self):
+        if ("vscode-tkn=" + token) not in (self.headers.get("Cookie") or ""):
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path == "/ws":
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.end_headers()
+            self.wfile.flush()
+            while True:
+                b = self.connection.recv(4096)
+                if not b:
+                    return
+                self.connection.sendall(b)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/javascript")
+        self.send_header("Cache-Control", "public, max-age=31536000")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        for i in range(0, len(JS), 16384):
+            c = JS[i:i + 16384]
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(c), c))
+        self.wfile.write(b"0\r\n\r\n")
+    def log_message(self, *a):
+        pass
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+"#;
+
+/// One request through a forward; returns the head and the de-chunked body.
+async fn http_exchange(port: u16, path: &str, headers: &str) -> (String, Vec<u8>) {
+    let mut tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    tcp.write_all(
+        format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n{headers}\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), tcp.read_to_end(&mut raw))
+        .await
+        .unwrap()
+        .unwrap();
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8(raw[..split].to_vec()).unwrap();
+    let mut body = raw[split + 4..].to_vec();
+    if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        let (mut rest, mut out) = (&body[..], Vec::new());
+        loop {
+            let line = rest.windows(2).position(|w| w == b"\r\n").unwrap();
+            let size =
+                usize::from_str_radix(std::str::from_utf8(&rest[..line]).unwrap().trim(), 16)
+                    .unwrap();
+            if size == 0 {
+                break;
+            }
+            out.extend_from_slice(&rest[line + 2..line + 2 + size]);
+            rest = &rest[line + 4 + size..];
+        }
+        body = out;
+    }
+    (head, body)
+}
+
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        k.eq_ignore_ascii_case(name).then(|| v.trim())
+    })
+}
+
+/// The editor's port is the compressing proxy's: through the app's forward, assets come back
+/// brotli-encoded (then from the on-disk cache, with a length), the token is still the
+/// server's to check, and websockets pass. `editor.compress = false` hands out the server.
+#[tokio::test(flavor = "multi_thread")]
+async fn editor_traffic_is_compressed_through_the_forward() {
+    if !have("python3") {
+        eprintln!("skipping: python3 not installed");
+        return;
+    }
+    let commit = "807ba2d6075c29587f884698cd7370c81ab0724c";
+    let asset = format!("/stable-{commit}/static/out/workbench.js");
+    for compress in [true, false] {
+        let (_state, state) = canonical_tempdir();
+        let (_home, home) = canonical_tempdir();
+        let codium = home.join("codium");
+        let server = codium.join("bin/codium-server");
+        std::fs::create_dir_all(server.parent().unwrap()).unwrap();
+        std::fs::write(&server, FAKE_STATIC_EDITOR).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let home2 = home.clone();
+        let daemon = start_with(&state, move |c| {
+            c.pane_env.push(("HOME".into(), s(&home2)));
+            c.fs_allow.push(home2);
+            c.vscodium_dir = Some(codium);
+            c.editor_compress = compress;
+        })
+        .await;
+        let c = connected(&daemon).await;
+        let e = c
+            .client
+            .editor_launch(EditorLaunch {
+                folder: s(&home),
+                choice: EditorChoice::Only(EditorKind::Vscodium),
+                accept_vscode_license: false,
+            })
+            .await
+            .unwrap();
+        let local = c
+            .client
+            .forward(0, ForwardTarget::Tcp { port: e.port })
+            .unwrap();
+        let cookie = format!("Cookie: vscode-tkn={}\r\n", e.token);
+        let accept = "Accept-Encoding: gzip, deflate, br\r\n";
+        let plain_len = (0..5000)
+            .map(|i| format!("export function f{i}(x) {{ return x * {i}; }}\n").len())
+            .sum::<usize>();
+
+        let (head, body) = http_exchange(local, &asset, &format!("{cookie}{accept}")).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        if !compress {
+            assert_eq!(header(&head, "content-encoding"), None, "{head}");
+            assert_eq!(body.len(), plain_len);
+            drop(c);
+            daemon.shutdown().await;
+            continue;
+        }
+        assert_eq!(header(&head, "content-encoding"), Some("br"), "{head}");
+        let mut plain = Vec::new();
+        brotli::BrotliDecompress(&mut &body[..], &mut plain).unwrap();
+        assert_eq!(plain.len(), plain_len);
+        assert!(body.len() * 5 < plain_len, "{} of {plain_len}", body.len());
+
+        // Without the token the server still refuses, cache or not.
+        let (head, _) = http_exchange(local, &asset, accept).await;
+        assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+
+        // Once stored (and recompressed), the next load comes from disk with a length.
+        let cached = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let (head, body) = http_exchange(local, &asset, &format!("{cookie}{accept}")).await;
+                if header(&head, "content-length").is_some() {
+                    return (head, body);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("served from the cache");
+        assert_eq!(header(&cached.0, "content-encoding"), Some("br"));
+        let mut again = Vec::new();
+        brotli::BrotliDecompress(&mut &cached.1[..], &mut again).unwrap();
+        assert_eq!(again, plain);
+        assert!(
+            std::fs::read_dir(state.join(format!("editors/cache/stable-{commit}")))
+                .unwrap()
+                .count()
+                >= 1
+        );
+
+        // A websocket through forward and proxy.
+        let mut ws = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+        ws.write_all(
+            format!(
+                "GET /ws HTTP/1.1\r\nHost: localhost\r\n{cookie}Connection: Upgrade\r\n\
+                 Upgrade: websocket\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut b = [0; 1];
+            ws.read_exact(&mut b).await.unwrap();
+            head.push(b[0]);
+        }
+        assert!(
+            head.starts_with(b"HTTP/1.1 101"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+        ws.write_all(b"\x81\x04ping").await.unwrap();
+        let mut back = [0; 6];
+        tokio::time::timeout(Duration::from_secs(10), ws.read_exact(&mut back))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&back, b"\x81\x04ping");
+        drop(ws);
+        drop(c);
+        daemon.shutdown().await;
+    }
+}
+
 /// VSCodium: chosen explicitly or as the configured default, launched with a token and no
 /// licence flag, per folder, stopped with the daemon. A fake `codium-server` stands in.
 #[tokio::test(flavor = "multi_thread")]

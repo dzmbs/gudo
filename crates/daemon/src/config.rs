@@ -136,6 +136,10 @@ pub struct Config {
     /// The editor `EditorChoice::Auto` launches (`editor.default` in `config.toml`:
     /// `"vscode"`, the default, or `"vscodium"`).
     pub editor_default: proto::EditorKind,
+    /// Put the compressing proxy (`ws/editor_proxy.rs`) in front of editor servers, so the
+    /// app's forward carries brotli/gzip instead of ~24 MB of plain JavaScript on a cold load
+    /// (`editor.compress` in `config.toml`; default on).
+    pub editor_compress: bool,
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
@@ -275,6 +279,7 @@ impl Config {
             openvscode_dir: None,
             vscodium_dir: None,
             editor_default: proto::EditorKind::VsCode,
+            editor_compress: true,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
@@ -303,6 +308,7 @@ impl Config {
     /// openvscode = "/opt/openvscode-server"
     /// vscodium = "/opt/vscodium-reh-web"   # instead of the pinned download
     /// default = "vscode"           # "vscode" | "vscodium": what `Auto` launches
+    /// compress = true              # brotli/gzip proxy in front of the editor server
     ///
     /// [relay]                     # docs/RELAYS.md
     /// mode = "custom"              # "default" | "custom" | "local-only"
@@ -368,6 +374,9 @@ impl Config {
                 DefaultEditor::Vscode => proto::EditorKind::VsCode,
                 DefaultEditor::Vscodium => proto::EditorKind::Vscodium,
             };
+        }
+        if let Some(compress) = file.editor.compress {
+            self.editor_compress = compress;
         }
         if self.relay == RelayMode::Default {
             self.relay = file
@@ -579,6 +588,7 @@ struct EditorSection {
     openvscode: Option<PathBuf>,
     vscodium: Option<PathBuf>,
     default: Option<DefaultEditor>,
+    compress: Option<bool>,
 }
 
 /// `editor.default`.

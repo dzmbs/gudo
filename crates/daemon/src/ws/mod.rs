@@ -5,6 +5,7 @@
 
 mod attention;
 mod editor;
+mod editor_proxy;
 mod files;
 mod gh;
 pub(crate) mod git;
