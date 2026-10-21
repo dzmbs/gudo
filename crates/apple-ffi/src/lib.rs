@@ -26,6 +26,7 @@
 //! Byte payloads cross as `Data` with bulk copies ([`Bytes`], not UniFFI's byte-by-byte
 //! `Vec<u8>` converter), no serialization format. Input (`send_input`) is borrowed from Swift.
 
+mod approvals;
 mod art_types;
 mod artifacts;
 mod askpass;
@@ -35,6 +36,7 @@ mod client;
 mod editor;
 mod extras;
 mod mp;
+mod mp2;
 mod notify;
 mod repo;
 mod ssh_api;
@@ -48,6 +50,10 @@ use std::sync::OnceLock;
 
 use tokio::runtime::Runtime;
 
+pub use approvals::{
+    ApprovalError, ApprovalEvent, ApprovalInfo, ApprovalListener, ApprovalRuleMatch,
+    AutoApproveRule, approval_like_this,
+};
 pub use art_types::*;
 pub use artifacts::{
     ArtifactListener, DownloadedBlob, excalidraw_element, excalidraw_wins, pack_ink_points,
@@ -83,6 +89,10 @@ pub use mp::{
     JoinInfo, Lease, LeaseMode, LeaseOutcome, MultiplayerError, MultiplayerEvent,
     MultiplayerListener, Participant, Presence, PresenceState, RevokeResult, RevokeTarget, Role,
     Scope, inspect_invite,
+};
+pub use mp2::{
+    ApprovalMode, ApprovalPolicy, ApprovalStatus, ApprovalVote, Knock, KnockError, KnockListener,
+    KnockOutcome, KnockResult, Risk, knock_invite, risk_of_tool,
 };
 pub use notify::{
     ApnsEnvironment, PushActionError, PushActionOffer, PushCapKind, PushDecision, PushError,

@@ -62,6 +62,22 @@ struct NewTaskSheet: View {
         return snapshot.worktrees.first { $0.repo == repoPath && $0.main }?.setup
     }
 
+    /// The `PORT`s the chosen repository's worktrees hold now.
+    private var portsInUse: [UInt16] {
+        guard let hostID, let daemon = model.app.hosts.connection(hostID) as? DaemonConnection,
+              let hub = daemon.existingWorkspace, let snapshot = hub.repos, let repoPath else { return [] }
+        return snapshot.worktrees.filter { $0.repo == repoPath }.compactMap { hub.port(ofWorktree: $0.path) }.sorted()
+    }
+
+    /// The host gives the worktree its `PORT` when it makes it (the lowest free one), so the
+    /// sheet says that, and which ones are taken; the toast after Start says the one it got.
+    private var portNote: some View {
+        let taken = portsInUse.map(String.init).joined(separator: ", ")
+        return (Text("Gets its own ") + Text("PORT").font(DS.Font.literalSmall)
+            + Text(taken.isEmpty ? " from the host, free for its dev server." : " from the host (in use here: \(taken))."))
+            .accessibilityIdentifier("task-port-note")
+    }
+
     /// The branch the host will use when the field is empty (as the daemon derives it).
     private var derivedBranch: String {
         let slug = name.lowercased().map { $0.isLetter || $0.isNumber || "/._".contains($0) ? String($0) : "-" }.joined()
@@ -146,8 +162,11 @@ struct NewTaskSheet: View {
                     } header: {
                         Text("Name and branch")
                     } footer: {
-                        if let setup {
-                            (Text("Runs setup first: ") + Text(setup).font(DS.Font.literalSmall))
+                        VStack(alignment: .leading, spacing: DS.Space.xs) {
+                            if let setup {
+                                (Text("Runs setup first: ") + Text(setup).font(DS.Font.literalSmall))
+                            }
+                            portNote
                         }
                     }
                     .chromeRows()
@@ -252,7 +271,11 @@ struct NewTaskSheet: View {
             do {
                 let note = try await feed.launch(request)
                 isStarting = false
-                if let note {
+                if worktree {
+                    // "fix-login started on hetzner · PORT 4102 · running setup first: npm i"
+                    let text = ["\(name) started on \(host.name)", note].compactMap(\.self).joined(separator: " · ")
+                    model.toasts.show(Toast(text, systemImage: "arrow.triangle.branch", style: .success))
+                } else if let note {
                     model.toasts.show(Toast(note, systemImage: "hammer", style: .neutral))
                 } else {
                     model.toasts.show(Toast("\(worktree ? name : runner.title) started on \(host.name)", systemImage: runner.systemImage, style: .success))

@@ -278,6 +278,16 @@ bitset! {
         /// Wants `ServerCtl::Repos` (repository, worktree, branch and pull request state of
         /// every pane); the daemon only watches repositories while such a client is connected.
         REPO_STATUS = 8;
+        /// Can wait for an owner after presenting a knock invite (`ServerCtl::KnockAnswer`);
+        /// on an owner device, wants `ServerCtl::Knock`. Without it a knock invite is refused
+        /// as an invalid grant.
+        KNOCK = 9;
+        /// Understands approval policies: wants `ServerCtl::ApprovalPolicy` and
+        /// `ServerCtl::ApprovalStatus`.
+        APPROVAL_POLICY = 10;
+        /// Wants `ServerCtl::Approval` pushes (what may be done with an open approval
+        /// request, auto-approve rules in force) and may send `ClientCtl::Approval`.
+        APPROVALS = 11;
     }
 }
 
@@ -289,5 +299,10 @@ bitset! {
         SELF_UPGRADE = 0;
         /// Answers `WorkspaceRequest::UsageWatch` / `UsageUnwatch` (agent plan usage).
         AGENT_USAGE = 1;
+        /// Keeps drawings' finished versions and answers `ArtifactRequest::History` /
+        /// `Restore`.
+        ARTIFACT_HISTORY = 2;
+        /// policies (`MpRequest::RegisterInvite` … `Claim`).
+        MP2 = 3;
     }
 }

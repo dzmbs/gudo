@@ -3,6 +3,7 @@ import Foundation
 import HostKit
 import Observation
 import PaneLayout
+import TerminalCore
 
 /// What the detail column (or the iPhone tab) shows.
 enum Destination: String, Hashable {
@@ -17,6 +18,8 @@ enum PaletteMode: Equatable {
     case commands
     case goToTab
     case newTabOnHost
+    /// Split with Host… (⇧⌥⌘D): the host the new pane opens on.
+    case splitWithHost
 }
 
 /// Modal surfaces. One at a time, like the system's own sheets.
@@ -62,9 +65,18 @@ final class WindowModel {
     var searchNeedle = "" {
         didSet { if searchNeedle != oldValue { updateSearchCount() } }
     }
+    /// Find matches the needle's case exactly (the bar's "Aa").
+    var searchCaseSensitive = false {
+        didSet { if searchCaseSensitive != oldValue { updateSearchCount() } }
+    }
     /// Matches of `searchNeedle` in the focused pane's whole scrollback (daemon panes).
     var searchTotal: Int?
     @ObservationIgnored var searchCountTask: Task<Void, Never>?
+    /// The searched pane's own search: its terminal's matches and the selected one (`PaneSearch.swift`).
+    var searchStatus = SearchStatus.idle
+    @ObservationIgnored weak var searchPane: Pane?
+    /// Fetching older scrollback from the host to reach a match only the host still has.
+    @ObservationIgnored var searchHistoryTask: Task<Void, Never>?
     /// The Add Host sheet's starting mode and destination (quick connect pre-fills SSH).
     var pairingMode = PairingSheet.Mode.ssh
     var pairingDestination = ""
@@ -112,6 +124,28 @@ final class WindowModel {
     /// The window's host link in the design system's words; `.connected` for the local workspace.
     private(set) var liveConnection = ConnectionState.connected
 
+    // MARK: Mixed tabs and Two Columns (Model/MixedTabs.swift)
+
+    /// The mixed tab on screen (`groups.composites`), if any. The detail column shows it, and
+    /// `target` follows its focused pane's host, so the window's actions act on that pane.
+    var activeMixedTab: TabId? {
+        didSet { if activeMixedTab != oldValue { reportViews() } }
+    }
+    /// Two Columns: the user's choice for this window; nil follows the window's shape (on for a
+    /// foldable's open inner screen, `WidthBucket.isTwoSegment`).
+    var twoColumnsChoice: Bool?
+    /// The window's size (`WindowRoot` measures it): automatic Two Columns.
+    var windowSize = CGSize.zero
+    /// Two Columns: the tab in the column without focus, and which column has the current tab.
+    var pairedTab: TabRef?
+    var currentColumnIsLeft = true
+    /// The tab on screen before the last change (Two Columns keeps it in the other column).
+    @ObservationIgnored var lastCurrentTab: TabRef?
+    /// Two Columns: the empty column asked for a new tab; it lands there.
+    @ObservationIgnored var columnAwaitsTab = false
+    /// When each host's link went down (the reconnect card's "last contact").
+    @ObservationIgnored var hostDownSince: [String: Date] = [:]
+
     let app: AppModel
     let hosts: any HostDirectory
     let agents: any AgentFeed
@@ -129,7 +163,11 @@ final class WindowModel {
     var browserURL: URL?
     /// The editor is presented (full screen on iPhone and iPad).
     var isEditorShown = false
+    /// The editor opens on the Remote Tunnel's offer (palette) instead of the default path.
+    var editorTunnelOffer = false
     let toasts = ToastCenter()
+    /// Agents on other tabs and hosts that need you or finished (`AgentToasts`).
+    let agentToasts = AgentToasts()
     /// The git-native workspace of this window (worktree, pull request, scripts).
     let git = GitUI()
 
@@ -244,6 +282,8 @@ final class WindowModel {
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
         followGroups()
+        startMixedTabs()
+        followAgentToasts()
     }
 
     /// The window closed: its terminals stop and the daemons stop counting its panes as shown.
@@ -318,7 +358,8 @@ final class WindowModel {
 
     /// The tab on screen, as a reference that names its host.
     var currentTab: TabRef? {
-        workspace?.session.activeTabId.map { TabRef(hostId: currentGroupId, tab: $0) }
+        if let activeMixedTab { return TabRef(hostId: HostGroups.mixedId, tab: activeMixedTab) }
+        return workspace?.session.activeTabId.map { TabRef(hostId: currentGroupId, tab: $0) }
     }
 
     func workspace(ofGroup id: String) -> Workspace? {
@@ -327,7 +368,8 @@ final class WindowModel {
 
     /// Shows a target in this window: this device, or a host (opened and kept open, connecting
     /// it if needed). A host already open shows at once: nothing redials.
-    func show(_ selected: WorkspaceTarget) {
+    func show(_ selected: WorkspaceTarget, keepingMixedTab: Bool = false) {
+        if !keepingMixedTab { activeMixedTab = nil }
         if case .host(let id) = selected {
             do {
                 try groups.open(id)
@@ -344,12 +386,24 @@ final class WindowModel {
     /// and the host selects the tab.
     func focus(_ ref: TabRef) {
         destination = .terminal
+        if ref.hostId == HostGroups.mixedId {
+            focusMixedTab(ref.tab)
+            return
+        }
+        activeMixedTab = nil
         if ref.hostId != currentGroupId { show(ref.hostId == HostGroups.localId ? .local : .host(ref.hostId)) }
         if workspace?.session.activeTabId != ref.tab { workspace?.selectTab(ref.tab) }
     }
 
     /// Focuses a pane on any host (the sidebar's agent rows).
     func focus(pane: PaneId, onGroup id: String) {
+        if let mixed = groups.composites.tab(containing: HostPane(hostId: id, pane: pane)),
+           let leaf = mixed.leaf(for: HostPane(hostId: id, pane: pane))
+        {
+            destination = .terminal
+            focusLeaf(leaf, inMixedTab: mixed.id)
+            return
+        }
         guard let tab = workspaces[id]?.session.tabs.first(where: { $0.root.panes.contains(pane) }) else { return }
         focus(TabRef(hostId: id, tab: tab.id))
         workspace?.apply(.focus(pane))
@@ -368,6 +422,7 @@ final class WindowModel {
             return
         }
         destination = .terminal
+        activeMixedTab = nil
         if host != currentGroupId { show(host == HostGroups.localId ? .local : .host(host)) }
         workspace?.apply(.newTab)
     }
@@ -433,10 +488,15 @@ final class WindowModel {
 
     /// Launch restore: reopens the hosts this window had open and selects the last-focused tab
     /// once its host has a layout (a daemon's arrives after connecting).
-    func restore(openHosts ids: [String], collapsed: Set<String>, focus ref: TabRef?) {
+    func restore(openHosts ids: [String], collapsed: Set<String>, focus ref: TabRef?, mixedTabs: [CompositeTab] = []) {
         groups.restore(ids)
         groups.collapsed = collapsed.intersection(Set(ids))
+        restoreMixedTabs(mixedTabs, openHosts: ids)
         syncWorkspaces()
+        if let ref, ref.hostId == HostGroups.mixedId {
+            select(ref, pane: nil)
+            return
+        }
         guard let ref, ref.hostId != HostGroups.localId else {
             // Local shells do not outlive the app: this device's tabs are new ones.
             return
@@ -449,6 +509,10 @@ final class WindowModel {
     /// device, after connecting for a host. A tab the host no longer has leaves the host shown.
     func select(_ ref: TabRef, pane: PaneId?) {
         destination = .terminal
+        if ref.hostId == HostGroups.mixedId {
+            if groups.composites.tab(ref.tab) != nil { focusMixedTab(ref.tab) }
+            return
+        }
         show(ref.hostId == HostGroups.localId ? .local : .host(ref.hostId))
         pendingFocus = ref
         Task { [weak self] in
@@ -626,22 +690,26 @@ final class WindowModel {
     /// Tells each daemon what this window shows of it: the shown host's visible panes and
     /// focus, nothing for the hosts it does not show (stream priorities, attention seen, push
     /// suppression; DAEMON.md).
-    private func reportViews() {
-        for open in workspaces.values {
+    /// With a mixed tab or Two Columns on screen, every host with a visible pane hears it; only
+    /// the focused pane's host hears a focus (`screenViews`).
+    func reportViews() {
+        let views = destination == .terminal && isOnScreen && !isClosed ? screenViews() : [:]
+        for (id, open) in workspaces {
             guard let daemon = open.host as? DaemonConnection else { continue }
-            let shows = open === workspace && destination == .terminal && isOnScreen && !isClosed
-            let view: (focused: PaneId?, visible: [PaneId]) = shows ? open.layout.view : (nil, [])
+            let view = views[id] ?? (nil, [])
             daemon.setWindowView(self, focused: view.focused, visible: view.visible)
         }
     }
 
-    /// Re-reports when the shown workspace's tab, focus or splits change.
+    /// Re-reports when the shown workspace's tab, focus or splits change (or a mixed tab's, or
+    /// the other column's).
     private func followView() {
         guard !isClosed else { return }
         let observed = workspace
         reportViews()
         withObservationTracking {
             _ = observed?.layout.view
+            _ = screenViews()
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.workspace === observed else { return }

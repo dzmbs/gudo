@@ -33,6 +33,9 @@ struct WorkspaceSidebar: View {
 
                 NeedsYouSection()
 
+                // Tabs whose panes live on several hosts, at the window's top.
+                MixedSidebarSection(numbers: numbers)
+
                 ForEach(groups) { group in
                     HostGroupSection(group: group, numbers: numbers)
                 }
@@ -475,9 +478,10 @@ private struct TabRow: View {
                         TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
                             .font(DS.Font.sidebarTitle)
-                            .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .shimmering(state == .working, text: title)
+                            .foregroundStyle(.primary)
                         if tab.zoomed != nil {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.caption2)
@@ -571,9 +575,11 @@ private struct GroupAgents: View {
                             HStack(spacing: DS.Space.xs + 1) {
                                 ProgramMark(program, size: 12)
                                     .foregroundStyle(.primary)
-                                Text(program.isShell ? "agent" : program.displayName)
+                                let name = program.isShell ? "agent" : program.displayName
+                                Text(name)
                                     .font(DS.Font.rowSubtitle)
                                     .lineLimit(1)
+                                    .shimmering(row.state == .working, text: name)
                             }
                             Text("\(row.number)")
                                 .font(DS.Font.meta)
@@ -673,8 +679,7 @@ struct CompactTerminalView: View {
             .labelStyle(.iconOnly)
             .padding(.horizontal, DS.Space.s)
             .frame(height: 36)
-            ActiveTabView(workspace: workspace, compact: true)
-                .id(ObjectIdentifier(workspace))
+            TerminalArea(workspace: workspace, compact: true)
         }
         .chromeContent()
         // The bar is the window's base: the terminal's own background under Match Terminal.
@@ -685,6 +690,22 @@ struct CompactTerminalView: View {
         let groups = model.groups.groups
         let total = model.groups.tabs.count
         return Menu {
+            if !model.composites.tabs.isEmpty {
+                Section("Mixed") {
+                    ForEach(model.composites.tabs) { mixed in
+                        Button {
+                            model.focus(WindowModel.mixedRef(mixed.id))
+                        } label: {
+                            let title = model.title(ofMixedTab: mixed)
+                            if model.currentTab == WindowModel.mixedRef(mixed.id) {
+                                Label(title, systemImage: "checkmark")
+                            } else {
+                                Label(title, systemImage: "rectangle.split.2x1")
+                            }
+                        }
+                    }
+                }
+            }
             // One section per host, its status in the header: every tab on every host is a tap away.
             ForEach(groups) { group in
                 Section {
@@ -730,7 +751,7 @@ struct CompactTerminalView: View {
                 // Status UX §3.2 iPhone bar: the tab's title, the host's name as a second line,
                 // a state glyph after it only when the host is not live. No dot.
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(workspace.session.activeTab.map(workspace.title(of:)) ?? (workspace.canOpenTabs ? "No Tabs" : Brand.name))
+                    Text(model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.session.activeTab.map(workspace.title(of:)) ?? (workspace.canOpenTabs ? "No Tabs" : Brand.name))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)

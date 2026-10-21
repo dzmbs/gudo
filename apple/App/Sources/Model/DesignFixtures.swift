@@ -1,6 +1,7 @@
 import DesignSystem
 import Foundation
 import PaneLayout
+import SwiftUI
 
 /// Puts a window into a known state for design review and screenshots:
 /// `-screen <name>` (UserDefaults argument domain). Names are listed in docs/DESIGN.md
@@ -84,6 +85,16 @@ enum DesignFixtures {
                 if let id = workspace.focusedPane { _ = workspace.panes[id]?.view.becomeFirstResponder() }
             }
             #endif
+        case "agent-toast":
+            // Two agents on another host start needing you and finish, a moment apart: the toast
+            // stack (`AgentToasts`), approve from it, ⇧⌘A.
+            guard let feed = model.agents as? MockAgentFeed else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            withAnimation(DS.Motion.snappy) {
+                feed.simulate("a3", state: .blocked, request: .permission(tool: "Bash", detail: "cargo bench -p renderer"))
+            }
+            try? await Task.sleep(for: .seconds(0.6))
+            withAnimation(DS.Motion.snappy) { feed.simulate("a4", state: .done, summary: "The reconnect test waited on a stale timer; fixed.") }
         case "reconnect": model.connectionOverride = .reconnecting(attempt: 3, since: Date(timeIntervalSinceNow: -14))
         case "overlays":
             let panes = workspace.session.activeTab?.root.panes ?? []

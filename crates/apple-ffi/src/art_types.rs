@@ -682,6 +682,45 @@ pub struct ArtifactInfo {
     pub canvas_panes: Vec<u64>,
 }
 
+/// One finished version of a drawing ([`DaemonClient::artifact_history`](crate::DaemonClient::artifact_history)).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ArtifactVersion {
+    /// The drawing's version (an Excalidraw scene's revision).
+    pub version: u64,
+    /// When it was recorded (Unix ms).
+    pub at_ms: u64,
+    /// Who finished it.
+    pub by: Actor,
+    /// The render shown then (`nil` when nobody rendered it).
+    pub image: Option<ImageRef>,
+    /// Live elements in it.
+    pub elements: u32,
+    /// This version restored an older one.
+    pub restored_from: Option<u64>,
+}
+
+impl From<proto::ArtifactVersion> for ArtifactVersion {
+    fn from(v: proto::ArtifactVersion) -> Self {
+        Self {
+            version: v.version,
+            at_ms: v.at.0,
+            by: v.by.into(),
+            image: v.image.map(Into::into),
+            elements: v.elements,
+            restored_from: v.restored_from,
+        }
+    }
+}
+
+/// What a restore did.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct RestoredVersion {
+    /// The drawing now.
+    pub info: ArtifactInfo,
+    /// The history entry the restore made (`restored_from` names the version brought back).
+    pub version: ArtifactVersion,
+}
+
 impl From<proto::ArtifactInfo> for ArtifactInfo {
     fn from(i: proto::ArtifactInfo) -> Self {
         Self {

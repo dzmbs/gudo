@@ -11,7 +11,10 @@ use crate::event::{
     EventKind, Seq, Source, Turn, TurnOutcome,
 };
 use crate::hook::{self, Common};
-use crate::launch::{LaunchContext, LaunchMode, LaunchSpec, SupportFile, pane_env, shell_quote};
+use crate::launch::{
+    LaunchContext, LaunchMode, LaunchSpec, SupportFile, mcp_args, mcp_server_name, pane_env,
+    shell_quote,
+};
 use crate::manifest::Manifest;
 use crate::signal::{Claim, Signal};
 
@@ -19,7 +22,7 @@ const BUNDLED_MANIFEST: &str = include_str!("../manifests/claude.toml");
 
 /// Version of the hook settings file we generate. Bump when its contents change so a running
 /// session keeps the file it was launched with.
-const SETTINGS_VERSION: u32 = 2;
+const SETTINGS_VERSION: u32 = 3;
 
 /// Seconds a `PermissionRequest` hook may wait for a phone decision. Claude's own limit is 600.
 const PERMISSION_TIMEOUT_SECS: u32 = 590;
@@ -51,6 +54,29 @@ impl ClaudeCode {
             .join(format!("settings.v{SETTINGS_VERSION}.json"))
     }
 
+    /// Returns where this pane's MCP config (passed with `--mcp-config`) lives.
+    pub fn mcp_config_path(ctx: &LaunchContext) -> PathBuf {
+        ctx.state_dir
+            .join("claude")
+            .join("mcp")
+            .join(format!("{}.json", ctx.pane_id.as_str()))
+    }
+
+    /// Builds the MCP config passed with `--mcp-config`: the daemon's drawings server
+    /// (`<hook_bin> mcp …`, docs/DAEMON.md §7.12) for this pane. Claude adds it to the user's
+    /// own servers.
+    pub fn mcp_config(ctx: &LaunchContext) -> Value {
+        json!({
+            "mcpServers": {
+                mcp_server_name(): {
+                    "type": "stdio",
+                    "command": ctx.hook_bin,
+                    "args": mcp_args(ctx),
+                }
+            }
+        })
+    }
+
     /// Builds the settings file passed with `--settings`. Hook arrays merge with the user's own
     /// settings levels, so this adds our hooks without editing user config.
     ///
@@ -75,6 +101,9 @@ impl ClaudeCode {
         };
         let short = Some(HOOK_TIMEOUT_SECS);
         json!({
+            // The drawings server's tools only read (docs/DAEMON.md §7.12); permission arrays
+            // merge with the user's own.
+            "permissions": { "allow": [format!("mcp__{}", mcp_server_name())] },
             "statusLine": {
                 "type": "command",
                 "command": format!("{bin} claude StatusLine"),
@@ -350,8 +379,9 @@ impl AgentAdapter for ClaudeCode {
         &self.manifest
     }
 
-    /// `claude --session-id <id> --settings <file>` or `claude --resume <id> --settings <file>`.
-    /// `--resume` does not restore `--settings`, so every launch passes it.
+    /// `claude --session-id <id> --mcp-config <file> --settings <file>`, or `--resume <id>`
+    /// first. `--resume` does not restore either, so every launch passes both. `--mcp-config`
+    /// takes several values, so an option must follow it.
     fn launch(&self, ctx: &LaunchContext, mode: &LaunchMode) -> LaunchSpec {
         let settings = Self::settings_path(ctx);
         let mut args: Vec<OsString> = Vec::new();
@@ -364,18 +394,31 @@ impl AgentAdapter for ClaudeCode {
                 args.extend(["--resume".into(), session_id.as_str().into()]);
             }
         }
-        args.extend(["--settings".into(), settings.clone().into()]);
-        let contents = serde_json::to_string_pretty(&Self::hook_settings(ctx))
-            .expect("serializing a JSON value cannot fail");
+        let mcp = Self::mcp_config_path(ctx);
+        args.extend([
+            "--mcp-config".into(),
+            mcp.clone().into(),
+            "--settings".into(),
+            settings.clone().into(),
+        ]);
+        let pretty = |v: &Value| {
+            serde_json::to_string_pretty(v).expect("serializing a JSON value cannot fail")
+        };
         LaunchSpec {
             program: "claude".into(),
             args,
             env: pane_env(ctx),
             cwd: ctx.cwd.clone(),
-            files: vec![SupportFile {
-                path: settings,
-                contents,
-            }],
+            files: vec![
+                SupportFile {
+                    path: settings,
+                    contents: pretty(&Self::hook_settings(ctx)),
+                },
+                SupportFile {
+                    path: mcp,
+                    contents: pretty(&Self::mcp_config(ctx)),
+                },
+            ],
         }
     }
 
@@ -592,8 +635,10 @@ mod tests {
                 "claude",
                 "--session-id",
                 "0b4f…uuid",
+                "--mcp-config",
+                "/state/claude/mcp/p_9f2.json",
                 "--settings",
-                "/state/claude/settings.v2.json"
+                "/state/claude/settings.v3.json"
             ]
         );
         assert_eq!(spec.cwd, ctx.cwd);
@@ -616,6 +661,37 @@ mod tests {
             settings["hooks"]["PreToolUse"][0]["matcher"],
             "AskUserQuestion"
         );
+        assert_eq!(
+            settings["permissions"]["allow"],
+            json!(["mcp__unnamed_drawings"])
+        );
+    }
+
+    #[test]
+    fn launch_adds_the_drawings_mcp_server() {
+        let ctx = test_context();
+        let spec = ClaudeCode::new().launch(&ctx, &LaunchMode::Fresh { session_id: None });
+        assert_eq!(spec.files[1].path, ClaudeCode::mcp_config_path(&ctx));
+        let config: Value = serde_json::from_str(&spec.files[1].contents).unwrap();
+        assert_eq!(
+            config,
+            json!({
+                "mcpServers": {
+                    "unnamed_drawings": {
+                        "type": "stdio",
+                        "command": "/opt/un/bin/un-hook",
+                        "args": ["mcp", "--state", "/state", "--pane", "p_9f2"],
+                    }
+                }
+            })
+        );
+        // Additive: never the flag that would drop the user's own servers.
+        assert!(
+            !spec
+                .display_argv()
+                .iter()
+                .any(|a| a == "--strict-mcp-config")
+        );
     }
 
     #[test]
@@ -632,8 +708,10 @@ mod tests {
                 "claude",
                 "--resume",
                 "abc123",
+                "--mcp-config",
+                "/state/claude/mcp/p_9f2.json",
                 "--settings",
-                "/state/claude/settings.v2.json"
+                "/state/claude/settings.v3.json"
             ]
         );
     }

@@ -1,8 +1,8 @@
 # Third-party notices (Apple apps)
 
 The Apple apps include code and data derived from the projects below. Each notice applies to the
-files listed under it. Nothing from Rex, iTerm2 or Warp is included: those were studied for layout
-and behaviour only (docs/DESIGN.md says which ideas came from where).
+files listed under it. Nothing from Rex or iTerm2 is included, and from Warp only the MIT shimmer maths below: the rest
+was studied for layout and behaviour only (docs/DESIGN.md says which ideas came from where).
 
 ## Ghostty
 
@@ -122,3 +122,28 @@ React and react-dom 19.1.0 (MIT). `App/Resources/Excalidraw/` is a build of it
 canvas panes, bundled offline. Its fonts (Excalifont, Virgil, Nunito, Lilita One, Comic Shanns,
 Cascadia Code, Liberation Sans, Assistant) ship under their own open licences (SIL OFL 1.1 /
 Apache 2.0); the Xiaolai CJK face is left out. Full text: `App/Resources/Excalidraw/LICENSE-excalidraw.txt`.
+
+## Warp UI framework (shimmer maths)
+
+Source: https://github.com/warpdotdev/warp, `crates/warpui_core/src/elements/shimmer_math.rs`
+(the `warpui_core` crate is MIT; the rest of Warp is AGPL-3.0 and none of it is included). Ported
+to Swift in `Packages/DesignSystem/Sources/DesignSystem/Components/Shimmer.swift` (`ShimmerMath`).
+
+```
+Copyright (C) 2020-2026 Denver Technologies, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```

@@ -104,7 +104,8 @@
       "steps": [
         { "do": "type", "text": "top -s 1\n" },
         { "do": "waitProcess", "name": "top", "state": "running" },
-        { "do": "waitText", "text": "Processes:", "timeout": 10 },
+        { "do": "assert", "altScreen": true, "name": "top's DECSET 1049 reached the terminal at once" },
+        { "do": "waitText", "text": "Processes:", "timeout": 45, "name": "top's first frame: it samples every process first (5-25 s on a loaded Mac)" },
         { "do": "screenshot", "name": "07-top" },
         { "do": "key", "key": "q" },
         { "do": "waitProcess", "name": "top", "state": "gone", "timeout": 3 },

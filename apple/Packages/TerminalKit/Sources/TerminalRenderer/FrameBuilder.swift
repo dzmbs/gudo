@@ -45,11 +45,14 @@ struct FrameOverlay: Equatable {
     var barCursor = false
     /// Cells of the hyperlink under the pointer (underlined, as Ghostty does on hover).
     var hoveredLink: (row: Int, columns: ClosedRange<Int>)?
+    /// Scrollback search matches in the viewport, recolored like Ghostty's (`search-*` colors).
+    var searchHighlights: [SearchHighlight] = []
 
     static func == (a: Self, b: Self) -> Bool {
         a.focused == b.focused && a.cursorBlinkOn == b.cursorBlinkOn && a.textBlinkOn == b.textBlinkOn
             && a.cells == b.cells && a.cursorOverride == b.cursorOverride && a.barCursor == b.barCursor
             && a.hoveredLink?.row == b.hoveredLink?.row && a.hoveredLink?.columns == b.hoveredLink?.columns
+            && a.searchHighlights == b.searchHighlights
     }
 }
 
@@ -58,6 +61,15 @@ struct FrameStyle {
     var selectionBackground: RGB?
     var selectionForeground: RGB?
     var faintAlpha: UInt8 = 128
+    var search = SearchColors()
+}
+
+/// Background and text colors of search matches (all, and the selected one).
+struct SearchColors {
+    var background = RGB(r: 0xFF, g: 0xE0, b: 0x82)
+    var foreground = RGB(r: 0, g: 0, b: 0)
+    var selectedBackground = RGB(r: 0xF2, g: 0xA5, b: 0x7E)
+    var selectedForeground = RGB(r: 0, g: 0, b: 0)
 }
 
 /// Turns a `RenderState` into `FrameContents`, rebuilding only dirty rows.
@@ -114,6 +126,11 @@ final class FrameBuilder {
         for cell in overlay.cells where cell.y >= 0 && cell.y < Int(rows) {
             overlayRows[cell.y, default: []].append(cell)
         }
+        // Search matches per row: (columns, selected).
+        var highlightRows: [Int: [(ClosedRange<Int>, Bool)]] = [:]
+        for h in overlay.searchHighlights where h.row >= 0 && h.row < Int(rows) {
+            highlightRows[h.row, default: []].append((h.columns, h.selected))
+        }
 
         var stats = BuildStats()
         var next: [RowID: CachedRow] = [:]
@@ -134,6 +151,7 @@ final class FrameBuilder {
             }
             next[id] = cached
             let rowStart = frame.bgCells.count
+            let textStart = frame.text.count
             frame.bgCells.append(contentsOf: cached.bg)
 
             if let cells = overlayRows[Int(y)] {
@@ -153,6 +171,9 @@ final class FrameBuilder {
                     instance.gridPos.y = UInt16(y)
                     frame.text.append(instance)
                 }
+            }
+            if let ranges = highlightRows[Int(y)] {
+                highlight(ranges, rowStart: rowStart, textStart: textStart, cols: Int(cols), frame: &frame)
             }
             rowWide.append(cached.wide)
             rowFg.append(cached.fg)
@@ -175,6 +196,26 @@ final class FrameBuilder {
             addCursor(state.cursor, overlay: overlay, colors: colors, rowWide: rowWide, rowFg: rowFg, fonts: fonts, frame: &frame)
         }
         return stats
+    }
+
+    /// Recolors a row's search matches after assembly (the cached row stays as the terminal has
+    /// it): the match color behind, the match text color on its glyphs and decorations. The
+    /// selected match wins where two overlap.
+    private func highlight(_ ranges: [(ClosedRange<Int>, Bool)], rowStart: Int, textStart: Int, cols: Int, frame: inout FrameContents) {
+        let colors = style.search
+        var cellColor = [Int: (bg: SIMD4<UInt8>, fg: SIMD4<UInt8>)]()
+        for (columns, selected) in ranges.sorted(by: { !$0.1 && $1.1 }) {
+            let bg = rgba(selected ? colors.selectedBackground : colors.background)
+            let fg = rgba(selected ? colors.selectedForeground : colors.foreground)
+            for x in columns where x >= 0 && x < cols { cellColor[x] = (bg, fg) }
+        }
+        for (x, color) in cellColor { frame.bgCells[rowStart + x] = color.bg }
+        for i in textStart..<frame.text.count {
+            guard let color = cellColor[Int(frame.text[i].gridPos.x)] else { continue }
+            // Faint text stays faint on the match color.
+            let alpha = frame.text[i].color.w
+            frame.text[i].color = SIMD4(color.fg.x, color.fg.y, color.fg.z, alpha)
+        }
     }
 
     private func buildRow(_ row: Row, cols: Int, colors: RenderState.Colors, fonts: FontGrid, blinkOn: Bool) -> CachedRow {

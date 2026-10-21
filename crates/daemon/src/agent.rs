@@ -8,6 +8,9 @@
 //! [`HookResponse`], whose `stdout` the shim prints for the agent. A `PermissionRequest` is held
 //! open until a client decides (or [`PERMISSION_WAIT`] passes), which is how an approval from a
 //! phone reaches Claude Code.
+//!
+//! The askpass helper ([`crate::askpass::AskpassCall`]) and the MCP pull channel
+//! ([`crate::art::pull::PullCall`]) share the socket; each is told apart by its own field.
 
 use std::collections::HashMap;
 use std::io;
@@ -273,6 +276,18 @@ impl AgentRuntime {
         self.take(update)
     }
 
+    /// The wire id of the dialog currently showing, if blocked, with the option that allows
+    /// it once.
+    pub fn blocked_wire(&mut self) -> Option<(RequestId, agents::RequestId, Option<OptionId>)> {
+        let request = self.blocked_request()?;
+        let wire = self.wire_request(&request);
+        let allow = self
+            .approval_options(wire)
+            .and_then(|b| b.approve)
+            .map(|(id, _)| id);
+        Some((wire, request, allow))
+    }
+
     /// The string id of the dialog currently showing, if blocked.
     pub fn blocked_request(&self) -> Option<agents::RequestId> {
         self.arbiter
@@ -325,6 +340,39 @@ impl AgentRuntime {
                 .collect(),
             request: blocked.request_id,
         })
+    }
+
+    /// What an approval policy needs to know about open request `id`: the tool asking, and
+    /// for `option`, whether it allows the call. `None` unless the agent is blocked on `id`.
+    pub fn request_facts(&self, id: RequestId, option: Option<OptionId>) -> Option<RequestFacts> {
+        let request = self.requests.iter().find(|(w, _)| *w == id)?.1.clone();
+        let blocked = self
+            .arbiter
+            .status()
+            .blocked()
+            .filter(|b| b.request_id == request)?;
+        let chosen = option.and_then(|o| blocked.blocker.options.get(o.0 as usize));
+        Some(RequestFacts {
+            tool: blocked.blocker.tool.clone(),
+            allows: chosen.map(|o| o.id != ApprovalChoice::Deny),
+            option: chosen.map(|o| o.label.clone()),
+            summary: blocked
+                .blocker
+                .summary
+                .clone()
+                .or(blocked.blocker.tool.clone())
+                .unwrap_or_default(),
+            request,
+        })
+    }
+
+    /// The wire id of the request the agent is blocked on now, if it asked through a hook.
+    pub fn open_request(&self) -> Option<RequestId> {
+        let blocked = self.arbiter.status().blocked()?;
+        self.requests
+            .iter()
+            .find(|(_, r)| *r == blocked.request_id)
+            .map(|(w, _)| *w)
     }
 
     pub fn knows_request(&self, id: RequestId) -> bool {
@@ -399,6 +447,21 @@ pub(crate) struct BlockedDetail {
     pub options: Vec<(String, ApprovalChoice)>,
 }
 
+/// An open approval request, as the approval policy sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequestFacts {
+    /// The tool asking (`Bash`, `Edit`).
+    pub tool: Option<String>,
+    /// Whether the option asked about allows the call (`None` without an option).
+    pub allows: Option<bool>,
+    /// That option's label.
+    pub option: Option<String>,
+    /// What the agent wants to do.
+    pub summary: String,
+    /// The arbiter's id for the call.
+    pub request: agents::RequestId,
+}
+
 /// An accepted decision, with what the audit log records about it.
 pub(crate) struct DecidedRequest {
     /// The answer for the hook.
@@ -416,7 +479,37 @@ pub(crate) struct DecidedRequest {
 struct Pending {
     request: agents::RequestId,
     suggestions: Vec<Value>,
+    /// The agent asking, the tool and its input (for edited approvals and rules).
+    agent: Option<AgentKind>,
+    tool: String,
+    input: Value,
     reply: oneshot::Sender<HookResponse>,
+}
+
+/// A hook-held permission request: what the tool wants to do.
+#[derive(Debug, Clone)]
+pub(crate) struct HeldRequest {
+    pub request: agents::RequestId,
+    pub agent: Option<AgentKind>,
+    pub tool: String,
+    pub input: Value,
+}
+
+impl HeldRequest {
+    /// The text a rule matches and a person may edit: the shell command for shell tools,
+    /// nothing for other tools (their rules match the tool alone).
+    pub fn command(&self) -> Option<&str> {
+        grants::is_shell_tool(&self.tool)
+            .then(|| self.input.get("command").and_then(Value::as_str))
+            .flatten()
+    }
+
+    /// The editable input: Claude Code takes `updatedInput` for its `Bash` tool.
+    pub fn editable(&self) -> Option<&str> {
+        (self.agent == Some(AgentKind::Claude) && self.tool == "Bash")
+            .then(|| self.command())
+            .flatten()
+    }
 }
 
 /// The hook socket and the hook decisions waiting for a client.
@@ -507,6 +600,41 @@ impl HookServer {
         }
     }
 
+    /// Answers a held request with "allow", running `command` instead of what the agent
+    /// asked for (Claude Code's `updatedInput`). False if the request is no longer held.
+    pub fn resolve_edited(&self, pane: PaneId, request: &agents::RequestId, command: &str) -> bool {
+        let mut pending = lock(&self.pending);
+        if !pending.get(&pane).is_some_and(|p| &p.request == request) {
+            return false;
+        }
+        let p = pending.remove(&pane).expect("checked above");
+        let mut input = p.input.clone();
+        if let Some(obj) = input.as_object_mut() {
+            obj.insert("command".into(), command.into());
+        }
+        let stdout = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow", "updatedInput": input },
+            }
+        })
+        .to_string();
+        let _ = p.reply.send(HookResponse {
+            stdout: Some(stdout),
+        });
+        true
+    }
+
+    /// The request a hook holds open on `pane`, if any.
+    pub fn held(&self, pane: PaneId) -> Option<HeldRequest> {
+        lock(&self.pending).get(&pane).map(|p| HeldRequest {
+            request: p.request.clone(),
+            agent: p.agent,
+            tool: p.tool.clone(),
+            input: p.input.clone(),
+        })
+    }
+
     /// Whether a hook holds request `request` of `pane` open, so a decision reaches the agent.
     pub fn is_pending(&self, pane: PaneId, request: &agents::RequestId) -> bool {
         lock(&self.pending)
@@ -546,6 +674,14 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         let written = write.write_all(&out).await;
         zeroize::Zeroize::zeroize(&mut out);
         written?;
+        return write.shutdown().await;
+    }
+    // So does the MCP pull channel (§7.12).
+    if let Ok(call) = serde_json::from_str::<crate::art::pull::PullCall>(&line) {
+        let reply = crate::art::pull::serve(core, call).await;
+        let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        out.push(b'\n');
+        write.write_all(&out).await?;
         return write.shutdown().await;
     }
     let request: HookRequest = serde_json::from_str(&line).map_err(io::Error::other)?;
@@ -607,9 +743,23 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         Pending {
             request: request_id,
             suggestions,
+            agent: agent_kind(&request.agent),
+            tool: request
+                .payload
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            input: request
+                .payload
+                .get("tool_input")
+                .cloned()
+                .unwrap_or(Value::Null),
             reply: tx,
         },
     );
+    // An auto-approve rule may answer at once; otherwise clients learn what they may do.
+    crate::approve::request_held(core, pane_id);
     match tokio::time::timeout(PERMISSION_WAIT, rx).await {
         Ok(Ok(response)) => response,
         // No decision: the agent falls back to its own prompt in the terminal.

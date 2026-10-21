@@ -49,6 +49,19 @@ final class WindowsTests: XCTestCase {
         XCTAssertEqual(WidthBucket.of(width: 612, current: .compact), .regular)
     }
 
+    /// Two Columns turns on by itself only on a phone window regular both ways: a foldable's
+    /// open inner screen. Phones in portrait or landscape, iPads and Macs never.
+    func testTwoColumnsComeOnByThemselvesOnlyOnAnOpenFoldable() {
+        // Open foldables' inner screens (portrait and landscape).
+        XCTAssertTrue(WidthBucket.isTwoSegment(width: 678, height: 870, isPhone: true))
+        XCTAssertTrue(WidthBucket.isTwoSegment(width: 870, height: 678, isPhone: true))
+        // iPhones: portrait is compact, landscape is short.
+        XCTAssertFalse(WidthBucket.isTwoSegment(width: 440, height: 956, isPhone: true))
+        XCTAssertFalse(WidthBucket.isTwoSegment(width: 956, height: 440, isPhone: true))
+        // A wide iPad or Mac window: the user's choice (View ▸ Two Columns), never automatic.
+        XCTAssertFalse(WidthBucket.isTwoSegment(width: 1366, height: 1024, isPhone: false))
+    }
+
     // MARK: Handoff
 
     private func payload(kind: HandoffPayload.Kind = .daemon, hostId: String? = "A", daemonId: String? = "d1", ssh: String? = nil, origin: String = "other") -> HandoffPayload {

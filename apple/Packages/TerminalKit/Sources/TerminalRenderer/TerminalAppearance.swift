@@ -23,6 +23,12 @@ public struct TerminalAppearance: Sendable, Equatable {
     /// default).
     public var selectionBackground: RGB?
     public var selectionForeground: RGB?
+    /// `search-background` / `search-foreground`: every match of a scrollback search.
+    public var searchBackground = RGB(r: 0xFF, g: 0xE0, b: 0x82)
+    public var searchForeground = RGB(r: 0, g: 0, b: 0)
+    /// `search-selected-background` / `search-selected-foreground`: the match next/previous is on.
+    public var searchSelectedBackground = RGB(r: 0xF2, g: 0xA5, b: 0x7E)
+    public var searchSelectedForeground = RGB(r: 0, g: 0, b: 0)
     /// `faint-opacity`.
     public var faintOpacity: Double = 0.5
     /// `window-padding-x/y` in points.

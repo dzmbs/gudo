@@ -63,6 +63,26 @@ impl Drawer {
     fn session(&self) -> SessionId {
         self.c.layout.as_ref().expect("attached").session_id
     }
+
+    /// Pumps updates until the cached Excalidraw scene `id` satisfies `pred`.
+    async fn until_ex(
+        &mut self,
+        id: ArtifactId,
+        what: &str,
+        pred: impl Fn(&drawing::ExScene) -> bool,
+    ) {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            if self.c.client.excalidraw_scene(id).is_some_and(|s| pred(&s)) {
+                return;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.updates.recv()).await {
+                Ok(Some(u)) => self.seen.push(u),
+                _ => panic!("timed out waiting for {what}"),
+            }
+        }
+    }
 }
 
 fn is_event(u: &ArtifactUpdate, f: impl Fn(&ArtifactEvent) -> bool) -> bool {
@@ -1225,5 +1245,501 @@ async fn inline_placements_follow_output_survive_reattach_and_capture_kitty_imag
     let scene = a.c.client.excalidraw_get(d.artifact_id, 0).await.unwrap();
     assert_eq!(scene.elements.len(), 9);
     drop(a);
+    daemon.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A canvas pane shared by peers: owner, a second device, a driver guest and a viewer
+// ---------------------------------------------------------------------------------------------
+
+/// An Excalidraw element as the editor emits it: the common fields plus `extra`.
+fn ex_el(
+    id: &str,
+    kind: &str,
+    version: u64,
+    nonce: u32,
+    extra: serde_json::Value,
+) -> client_core::proto::ExElement {
+    let mut v = serde_json::json!({
+        "id": id, "type": kind, "x": 120.5, "y": 80.0, "width": 240.0, "height": 120.0,
+        "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+        "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1,
+        "opacity": 100, "groupIds": [], "frameId": null, "roundness": {"type": 3},
+        "seed": 1_968_410_350u32, "version": version, "versionNonce": nonce,
+        "isDeleted": false, "boundElements": null, "updated": 1_729_000_000_000u64,
+        "link": null, "locked": false,
+    });
+    let fields = v.as_object_mut().unwrap();
+    fields.extend(extra.as_object().unwrap().clone());
+    drawing::parse_element(&v.to_string()).unwrap()
+}
+
+fn ex_rect(id: &str, version: u64, nonce: u32, label: &str) -> client_core::proto::ExElement {
+    ex_el(
+        id,
+        "rectangle",
+        version,
+        nonce,
+        serde_json::json!({"customData": {"label": label}}),
+    )
+}
+
+/// A Pencil / finger stroke: `n` points with pressures.
+fn ex_freedraw(id: &str, version: u64, nonce: u32, n: usize) -> client_core::proto::ExElement {
+    let points: Vec<[f32; 2]> = (0..n)
+        .map(|i| [i as f32 * 1.5, (i as f32 / 4.0).sin() * 12.0])
+        .collect();
+    let pressures: Vec<f32> = (0..n).map(|i| 0.3 + (i % 7) as f32 * 0.05).collect();
+    ex_el(
+        id,
+        "freedraw",
+        version,
+        nonce,
+        serde_json::json!({
+            "roundness": null, "points": points, "pressures": pressures,
+            "simulatePressure": false, "lastCommittedPoint": points.last(),
+        }),
+    )
+}
+
+fn ex_text(id: &str, version: u64, nonce: u32, text: &str) -> client_core::proto::ExElement {
+    ex_el(
+        id,
+        "text",
+        version,
+        nonce,
+        serde_json::json!({
+            "roundness": null, "text": text, "originalText": text, "fontSize": 20,
+            "fontFamily": 5, "textAlign": "left", "verticalAlign": "top", "containerId": null,
+            "autoResize": true, "lineHeight": 1.25,
+        }),
+    )
+}
+
+/// `el` as a tombstone (Excalidraw keeps deleted elements with `isDeleted`).
+fn ex_deleted(mut el: client_core::proto::ExElement) -> client_core::proto::ExElement {
+    el.json = el
+        .json
+        .replace(r#""isDeleted":false"#, r#""isDeleted":true"#);
+    el.deleted = true;
+    el
+}
+
+/// The element `id` of a cached scene.
+fn ex_find(s: &drawing::ExScene, id: &str) -> Option<client_core::proto::ExElement> {
+    s.with_revisions()
+        .find(|(e, _)| e.id == id)
+        .map(|(e, _)| e.clone())
+}
+
+/// The canvas panes of the last `Canvases` push a drawer has seen.
+fn last_canvases(d: &Drawer) -> Option<Vec<client_core::proto::CanvasPane>> {
+    d.seen.iter().rev().find_map(|u| match u {
+        ArtifactUpdate::Event(e) => match &**e {
+            ArtifactEvent::Canvases { canvases, .. } => Some(canvases.clone()),
+            _ => None,
+        },
+        ArtifactUpdate::Synced { .. } => None,
+    })
+}
+
+/// Waits for a `Canvases` push that shows `pane` with `artifact`, or (`None`) without it.
+async fn wait_canvas(d: &mut Drawer, what: &str, pane: PaneId, artifact: Option<ArtifactId>) {
+    d.wait(what, |u| {
+        is_event(u, |e| {
+            matches!(e, ArtifactEvent::Canvases { canvases, .. }
+                if canvases.iter().find(|c| c.pane_id == pane).map(|c| c.artifact_id) == artifact)
+        })
+    })
+    .await;
+}
+
+fn all_leaves(c: &TestClient) -> Vec<PaneId> {
+    c.layout
+        .as_ref()
+        .map(|l| {
+            l.tabs
+                .iter()
+                .flat_map(|t| crate::support::leaves(&t.root))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn percentiles(mut lat: Vec<Duration>) -> String {
+    lat.sort();
+    let at = |q: f64| lat[((lat.len() - 1) as f64 * q).round() as usize].as_secs_f64() * 1e3;
+    format!(
+        "p50 {:.2} ms, p99 {:.2} ms, max {:.2} ms (n={})",
+        at(0.5),
+        at(0.99),
+        at(1.0),
+        lat.len()
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn canvas_pane_with_peers_syncs_inks_resyncs_and_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    // A: the owner's Mac; B: the owner's iPad (a second paired device).
+    let mut a = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    let shell = a.c.attach_and_follow().await;
+    let session = a.session();
+    let mut b = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    b.c.client.attach(None);
+    b.c.until("b layout", |c| c.layout.is_some()).await;
+
+    // A splits a canvas pane off the shell: the daemon makes an Excalidraw scene and both
+    // devices learn which leaf it is.
+    let OpOutcome::PaneCreated { pane_id: canvas } =
+        a.c.op(LayoutOp::Split {
+            pane_id: shell,
+            axis: Axis::Horizontal,
+            launch: PaneLaunch::Canvas { artifact_id: None },
+        })
+        .await
+    else {
+        panic!("canvas split failed")
+    };
+    for p in [&mut a, &mut b] {
+        p.wait("canvas created", |u| {
+            is_event(
+                u,
+                |e| matches!(e, ArtifactEvent::Canvases { canvases, .. } if canvases.iter().any(|c| c.pane_id == canvas)),
+            )
+        })
+        .await;
+    }
+    let id =
+        a.c.client
+            .canvas_panes(session)
+            .iter()
+            .find(|c| c.pane_id == canvas)
+            .expect("canvas on a")
+            .artifact_id;
+    assert_eq!(
+        a.c.client.canvas_panes(session),
+        b.c.client.canvas_panes(session)
+    );
+    b.c.until("canvas leaf on b", |c| all_leaves(c).contains(&canvas))
+        .await;
+    let info = b.c.client.artifact_get(id, u64::MAX).await.unwrap().info;
+    assert_eq!(info.kind, ArtifactKind::Excalidraw);
+    assert_eq!(info.canvas_panes, vec![canvas]);
+
+    // A driver guest joins and attaches later: the canvas list comes with the attach.
+    let mut spec = GrantSpec::new(Roles::DRIVER, Scope::Daemon);
+    spec.label = "dee".into();
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite =
+        a.c.client
+            .create_invite(spec, "owner".into())
+            .await
+            .unwrap();
+    let mut d = Drawer::new(TestClient::join(
+        &invite.to_string(),
+        ClientConfig::generate_key(),
+    ));
+    d.c.client.attach(None);
+    d.c.until("driver layout", |c| c.layout.is_some()).await;
+    wait_canvas(&mut d, "canvases on attach", canvas, Some(id)).await;
+
+    // A draws a box, a pressure stroke and a label; B gets each put live.
+    let mut lat = Vec::new();
+    let first = [
+        ex_rect("box", 1, 1_000, "a1"),
+        ex_freedraw("ink", 1, 2_000, 40),
+        ex_text("label", 1, 3_000, "auth service"),
+    ];
+    for el in &first {
+        let sent = Instant::now();
+        let (_, rejected) =
+            a.c.client
+                .excalidraw_put(id, vec![el.clone()], None, vec![])
+                .await
+                .unwrap();
+        assert!(rejected.is_empty());
+        b.until_ex(id, "a's element on b", |s| {
+            ex_find(s, &el.id).as_ref() == Some(el)
+        })
+        .await;
+        lat.push(sent.elapsed());
+    }
+    // The stroke grows as the editor reports it (a put per ~50 ms onChange in the app).
+    for v in 2..=40u64 {
+        let el = ex_freedraw("ink", v, 2_000 + v as u32, 40 + v as usize * 4);
+        let sent = Instant::now();
+        a.c.client
+            .excalidraw_put(id, vec![el], None, vec![])
+            .await
+            .unwrap();
+        b.until_ex(id, "stroke growth on b", |s| {
+            ex_find(s, "ink").is_some_and(|e| e.version == v)
+        })
+        .await;
+        lat.push(sent.elapsed());
+    }
+    println!(
+        "canvas put A→daemon→B push (loopback, debug): {}",
+        percentiles(lat)
+    );
+    let full = a.c.client.excalidraw_get(id, 0).await.unwrap();
+    assert_eq!(full.elements, ex_state(&a.c, id));
+    assert_eq!(full.elements, ex_state(&b.c, id));
+    assert_eq!(full.info.elements, 3);
+
+    // B moves A's box (a higher version) and adds its own; the driver adds a note.
+    b.c.client
+        .excalidraw_put(
+            id,
+            vec![
+                ex_rect("box", 2, 1_001, "b-moved"),
+                ex_rect("b-box", 1, 7, "b1"),
+            ],
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+    let (_, rejected) =
+        d.c.client
+            .excalidraw_put(id, vec![ex_text("note", 1, 9, "LGTM")], None, vec![])
+            .await
+            .unwrap();
+    assert!(rejected.is_empty());
+    for p in [&mut a, &mut b, &mut d] {
+        p.until_ex(id, "everyone's edits", |s| {
+            ex_find(s, "box").is_some_and(|e| e.json.contains("b-moved"))
+                && ex_find(s, "b-box").is_some()
+                && ex_find(s, "note").is_some()
+        })
+        .await;
+    }
+
+    // A conflict: A and B change the box at the same version at once. Excalidraw's rule
+    // (a tie goes to the lower versionNonce) picks B's on every replica, in either order.
+    let (ra, rb) = tokio::join!(
+        a.c.client
+            .excalidraw_put(id, vec![ex_rect("box", 3, 900, "a-loses")], None, vec![]),
+        b.c.client
+            .excalidraw_put(id, vec![ex_rect("box", 3, 400, "b-wins")], None, vec![]),
+    );
+    ra.unwrap();
+    rb.unwrap();
+    for p in [&mut a, &mut b, &mut d] {
+        p.until_ex(id, "the conflict settled", |s| {
+            ex_find(s, "box").is_some_and(|e| e.version_nonce == 400)
+        })
+        .await;
+    }
+    let daemon_box =
+        a.c.client
+            .excalidraw_get(id, 0)
+            .await
+            .unwrap()
+            .elements
+            .into_iter()
+            .find(|e| e.id == "box");
+    assert_eq!(daemon_box, Some(ex_rect("box", 3, 400, "b-wins")));
+    assert_eq!(ex_state(&a.c, id), ex_state(&b.c, id));
+    assert_eq!(ex_state(&a.c, id), ex_state(&d.c, id));
+
+    // Live ink on the canvas from A reaches B and the driver, stamped with A (whatever A
+    // claims), never echoed to A.
+    let me = a.c.client.me().unwrap().actor;
+    let forged = d.c.client.me().unwrap().actor;
+    let mut lat = Vec::new();
+    for chunk in 0..60u32 {
+        let sent = Instant::now();
+        a.c.client.ink_live(InkLive {
+            artifact_id: id,
+            stroke_id: ElementId(9),
+            actor: forged,
+            chunk,
+            tool: Tool::Pen,
+            style: Style {
+                color: 0x1e1e_1eff,
+                width: 2.0,
+            },
+            points: drawing::pack(&[InkPoint::at(chunk as f32, 4.0, chunk * 16)]),
+            done: chunk == 59,
+        });
+        for p in [&mut b, &mut d] {
+            let u = p
+                .wait("ink chunk", |u| {
+                    is_event(u, |e| {
+                        matches!(e, ArtifactEvent::Ink(i) if i.artifact_id == id && i.chunk == chunk)
+                    })
+                })
+                .await;
+            let ArtifactUpdate::Event(e) = u else {
+                unreachable!()
+            };
+            let ArtifactEvent::Ink(ink) = *e else {
+                unreachable!()
+            };
+            assert_eq!(ink.actor, me);
+        }
+        lat.push(sent.elapsed());
+    }
+    println!(
+        "canvas ink A→daemon→B and driver (loopback, debug): {}",
+        percentiles(lat)
+    );
+
+    // B deletes A's label: a tombstone at a higher version.
+    b.c.client
+        .excalidraw_put(
+            id,
+            vec![ex_deleted(ex_text("label", 2, 3_001, "auth service"))],
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+    for p in [&mut a, &mut d] {
+        p.until_ex(id, "label deleted", |s| {
+            ex_find(s, "label").is_some_and(|e| e.deleted)
+        })
+        .await;
+    }
+    assert_eq!(a.c.client.excalidraw_scene(id).unwrap().live(), 4);
+    assert!(
+        !a.seen
+            .iter()
+            .any(|u| is_event(u, |e| matches!(e, ArtifactEvent::Ink(_))))
+    );
+
+    // B is suspended while A redraws the stroke, deletes B's box and changes the
+    // background; B comes back caught up, with the canvas list again.
+    b.c.client.suspend();
+    a.c.client
+        .excalidraw_put(
+            id,
+            vec![
+                ex_freedraw("ink", 41, 5, 300),
+                ex_deleted(ex_rect("b-box", 2, 8, "b1")),
+            ],
+            Some(r##"{"viewBackgroundColor":"#ffffff","gridSize":null}"##.into()),
+            vec![],
+        )
+        .await
+        .unwrap();
+    let rev = a.c.client.excalidraw_scene(id).unwrap().revision;
+    b.seen.clear();
+    b.c.client.reconnect();
+    b.wait("b resynced", |u| {
+        matches!(u, ArtifactUpdate::Synced { artifact_id, version } if *artifact_id == id && *version == rev)
+    })
+    .await;
+    wait_canvas(&mut b, "canvases after reconnect", canvas, Some(id)).await;
+    assert_eq!(ex_state(&a.c, id), ex_state(&b.c, id));
+    let sb = b.c.client.excalidraw_scene(id).unwrap();
+    assert_eq!(sb.live(), 3);
+    assert!(sb.app_state.unwrap().contains("viewBackgroundColor"));
+
+    // A viewer sees the canvas and the scene and follows live edits, but cannot put.
+    let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite =
+        a.c.client
+            .create_invite(spec, "owner".into())
+            .await
+            .unwrap();
+    let mut v = Drawer::new(TestClient::join(
+        &invite.to_string(),
+        ClientConfig::generate_key(),
+    ));
+    v.c.client.attach(None);
+    v.c.until("viewer layout", |c| c.layout.is_some()).await;
+    wait_canvas(&mut v, "canvases on the viewer", canvas, Some(id)).await;
+    let seen = v.c.client.excalidraw_get(id, 0).await.unwrap();
+    assert_eq!(seen.elements, ex_state(&a.c, id));
+    let r =
+        v.c.client
+            .excalidraw_put(id, vec![ex_rect("box", 99, 0, "vandal")], None, vec![])
+            .await;
+    assert!(matches!(r, Err(ArtifactError::Forbidden(_))), "{r:?}");
+    a.c.client
+        .excalidraw_put(id, vec![ex_rect("box", 4, 1, "after-viewer")], None, vec![])
+        .await
+        .unwrap();
+    for p in [&mut v, &mut b] {
+        p.until_ex(id, "a's edit after the refused put", |s| {
+            ex_find(s, "box").is_some_and(|e| e.json.contains("after-viewer"))
+        })
+        .await;
+    }
+    assert_eq!(ex_state(&v.c, id), ex_state(&a.c, id));
+
+    // A second canvas pane on the same scene, in its own tab. Closing it keeps the scene.
+    let OpOutcome::TabCreated {
+        pane_id: tab_canvas,
+        ..
+    } =
+        a.c.op(LayoutOp::NewTab {
+            session_id: session,
+            name: "board".into(),
+            launch: PaneLaunch::Canvas {
+                artifact_id: Some(id),
+            },
+        })
+        .await
+    else {
+        panic!("canvas tab failed")
+    };
+    for p in [&mut a, &mut b, &mut d, &mut v] {
+        wait_canvas(p, "tab canvas", tab_canvas, Some(id)).await;
+    }
+    for p in [&mut a, &mut b, &mut d, &mut v] {
+        p.seen.clear();
+    }
+    assert_eq!(
+        a.c.op(LayoutOp::ClosePane {
+            pane_id: tab_canvas
+        })
+        .await,
+        OpOutcome::Done
+    );
+    for p in [&mut a, &mut b, &mut d, &mut v] {
+        wait_canvas(p, "tab canvas closed", tab_canvas, None).await;
+        let left = last_canvases(p).unwrap();
+        assert!(left.iter().any(|c| c.pane_id == canvas));
+    }
+    let kept = b.c.client.excalidraw_get(id, 0).await.unwrap();
+    assert_eq!(kept.info.canvas_panes, vec![canvas]);
+    assert_eq!(kept.elements, ex_state(&a.c, id));
+
+    // Deleting the scene closes its canvas pane on every client.
+    for p in [&mut a, &mut b, &mut d, &mut v] {
+        p.seen.clear();
+    }
+    b.c.client.artifact_delete(id).await.unwrap();
+    for p in [&mut a, &mut b, &mut d, &mut v] {
+        p.wait("deleted", |u| {
+            is_event(
+                u,
+                |e| matches!(e, ArtifactEvent::Deleted { artifact_id, .. } if *artifact_id == id),
+            )
+        })
+        .await;
+        wait_canvas(p, "canvas closed with its scene", canvas, None).await;
+        p.c.until("canvas leaf gone", |c| !all_leaves(c).contains(&canvas))
+            .await;
+        assert!(p.c.client.canvas_panes(session).is_empty());
+        assert!(p.c.client.excalidraw_scene(id).is_none());
+    }
+    assert!(matches!(
+        a.c.client.excalidraw_get(id, 0).await,
+        Err(ArtifactError::NotFound(_))
+    ));
+    drop((a, b, d, v));
     daemon.shutdown().await;
 }

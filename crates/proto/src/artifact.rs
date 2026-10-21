@@ -567,6 +567,25 @@ pub enum ArtifactRequest {
     /// An image (PNG, JPEG) or an `.excalidraw` file pasted or dropped onto a terminal pane:
     /// it becomes an artifact placed inline at the cursor row → [`ArtifactResponse::Placed`].
     Import(ImportRequest),
+    /// The versions a drawing or Excalidraw scene was finished at (placed from the overlay,
+    /// given a preview, or left alone for a while), newest first →
+    /// [`ArtifactResponse::History`]. Only daemons offering
+    /// [`DaemonFeatures::ARTIFACT_HISTORY`](crate::DaemonFeatures::ARTIFACT_HISTORY)
+    /// understand it; older ones drop a connection that sends it.
+    History {
+        /// The drawing.
+        artifact_id: ArtifactId,
+    },
+    /// Brings a drawing back to a version from its history, as a new version on top (nothing
+    /// is lost: the version it replaces stays in the history) → [`ArtifactResponse::Restored`].
+    /// Open editors get the change as ordinary pushes, and every placement of the drawing
+    /// shows the restored render. Same feature gate as [`ArtifactRequest::History`].
+    Restore {
+        /// The drawing.
+        artifact_id: ArtifactId,
+        /// A version from its history.
+        version: u64,
+    },
 }
 
 /// One Excalidraw element as the editor holds it.
@@ -724,6 +743,23 @@ pub struct Exported {
     pub blob: Option<BlobHash>,
 }
 
+/// One entry of a drawing's history ([`ArtifactRequest::History`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactVersion {
+    /// The drawing's version (an Excalidraw scene's revision) it shows.
+    pub version: u64,
+    /// When it was recorded.
+    pub at: UnixMillis,
+    /// Who finished it.
+    pub by: Actor,
+    /// The render shown then (`None` for versions recorded while nobody rendered it).
+    pub image: Option<ImageRef>,
+    /// Live elements in it.
+    pub elements: u32,
+    /// This version restored an older one.
+    pub restored_from: Option<u64>,
+}
+
 /// What a send did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sent {
@@ -779,6 +815,15 @@ pub enum ArtifactResponse {
     Placed(Placement),
     /// A pane's placements.
     Placements(Vec<Placement>),
+    /// A drawing's history, newest first.
+    History(Vec<ArtifactVersion>),
+    /// The drawing after a restore, and the history entry the restore made.
+    Restored {
+        /// The artifact now.
+        info: ArtifactInfo,
+        /// The new version (its `restored_from` names the version brought back).
+        version: ArtifactVersion,
+    },
 }
 
 /// Why an artifact request failed.

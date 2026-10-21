@@ -229,6 +229,45 @@ pub(crate) fn place(
     Ok((placement, replaced))
 }
 
+/// Shows `image` (a render of `version`) in every placement of `artifact`, keeping each one's
+/// row, column and width (the height follows the image); returns the changed placements.
+pub(crate) fn reshow(
+    core: &Core,
+    artifact: ArtifactId,
+    version: u64,
+    image: ImageRef,
+) -> Vec<Placement> {
+    let ids: Vec<u64> = lock(&core.art.state)
+        .placements
+        .values()
+        .filter(|p| p.artifact_id == artifact)
+        .map(|p| p.placement_id)
+        .collect();
+    let mut changed = Vec::new();
+    for id in ids {
+        let size = {
+            let st = lock(&core.art.state);
+            st.placements.get(&id).map(|p| (p.pane_id, p.col, p.cols))
+        };
+        let Some((pane, col, cols)) = size else {
+            continue;
+        };
+        let pane_size = core.pane(pane).map(|e| e.pane.size());
+        let mut st = lock(&core.art.state);
+        let Some(p) = st.placements.get_mut(&id) else {
+            continue;
+        };
+        if let Some(pane_size) = pane_size {
+            (p.cols, p.rows) = size_for(&image, pane_size, col, cols, 0);
+        }
+        p.image = image;
+        p.version = version;
+        changed.push(p.clone());
+        core.art.save_index(&st);
+    }
+    changed
+}
+
 /// Removes a placement and its pin.
 pub(crate) fn unplace(core: &Core, id: u64) -> Option<Placement> {
     let (p, key) = core.art.remove_placement(id)?;

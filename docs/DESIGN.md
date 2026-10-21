@@ -133,7 +133,7 @@ titles align to one column.
 | resize overlay | visible 750 ms after the last change | cols × rows | Ghostty `resize-overlay-duration` |
 | toast | 2.4 s | | — |
 
-Only the working spinner loops; under Reduce Motion it stands still (and still reads as
+Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
 "working"), and the secure-input gradient stops.
 
 ### Haptics (iPhone/iPad, touch only)

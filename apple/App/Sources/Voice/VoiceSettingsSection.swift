@@ -18,6 +18,7 @@ struct VoiceSettingsSection: View {
     var body: some View {
         Section {
             Toggle("Dictation", isOn: $enabled)
+                .settingAnchor("dictation")
             if enabled {
                 Picker("Language", selection: $localeIdentifier) {
                     Text("System (\(SystemSpeechRecognizer.displayName(Locale.current)))").tag("")

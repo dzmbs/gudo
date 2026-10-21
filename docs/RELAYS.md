@@ -35,8 +35,28 @@ custom-relay daemon sets to its home relay among its own). With default relays n
 appended and the ticket is byte-identical to before. Extras of a newer version are ignored.
 
 On the app side `client_core::Client::connect*` reads the extras: if the app's own
-`RelayMode` is `Disabled` (a "local only" switch in the app) that wins; otherwise the daemon's
+`RelayMode` is `Disabled` (a "local only" switch in the app) that wins; then a local-only
+daemon (`Disabled` in the ticket) is dialled directly; then the app's own relays
+(`ConnectOptions::relay_urls`, `relay_auth_token`) replace the ticket's; otherwise the daemon's
 choice is used. `ConnectOptions::relay_ca_der` adds trust roots for a private-CA relay.
+`Client::set_relays` changes all of this on a running client (a new endpoint, then the usual
+resume).
+
+### In the app: Settings › Network
+
+- **Default** follows each host's ticket.
+- **Direct and Local Network Only** is `RelayMode.disabled` for every host: no relay, no
+  lookup, whatever the ticket says.
+- **Custom Relay** sends every host through the user's `iroh-relay` (URL checked as typed,
+  `https://` assumed; optional access token kept in the Keychain). The hosts must use the same
+  relay; local-only hosts stay direct.
+- **Relay Certificate Authorities**: import a `.pem` (one or more certificates), `.crt`, `.cer`
+  or `.der` from Files; each shows its subject and expiry and can be removed. They go into
+  `relay_ca_der` for every connection.
+
+Saved in `relay-settings.json` next to `hosts.json` (`HostKit.RelaySettings`); a change redials
+open hosts at once. The pairing sheet shows which relay a pasted ticket's host will use and
+whether the setting decided it.
 
 ### Local-only (LAN / Tailscale / VPN)
 
@@ -110,8 +130,8 @@ parsers still read extended tickets.
 
 - The managed default (Iroh Services behind `relays.<domain>`) still uses n0's public relays
 - A daemon whose home relay changes while no client is connected relies on the app redialling
-- The app has no UI yet for its own "local only" switch or for importing a private CA (both
-  exist in client-core and apple-ffi: `RelayMode.disabled`, `ConnectOptions(relayCaDer:)` with
-  `DaemonClient.connectWith`, and `inspectPairTicket(…).relays` shows the ticket's choice).
+- No per-host override of the Network setting: it applies to every host.
+- The private-CA path is tested in Rust against an in-process relay; the app's UI test imports
+  a CA and connects directly (no relay runs in the simulator test).
 - The Docker setup was written against the iroh-relay 1.3.0 config schema but not run on a
   real VPS here.

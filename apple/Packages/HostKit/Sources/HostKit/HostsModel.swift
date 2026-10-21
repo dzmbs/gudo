@@ -53,6 +53,8 @@ public final class HostsModel {
     public let network = NetworkMonitor()
     /// Hosts imported from `~/.ssh/config` (aliases), not yet saved.
     public private(set) var sshConfigAliases: [SshHostConfig] = []
+    /// How daemons are reached (Settings › Network), for every daemon connection.
+    public private(set) var relaySettings: RelaySettings
 
     public struct Configuration: Sendable {
         /// Relay use for daemon connections (`.disabled` for LAN-only tests).
@@ -74,6 +76,8 @@ public final class HostsModel {
     @ObservationIgnored private lazy var knownHosts = KnownHosts.load(from: secrets)
     @ObservationIgnored var dialer: DaemonDialer?
     @ObservationIgnored var joinDialer: DaemonDialer?
+    /// Knocks with a knock invite (`knockInvite`); tests replace it.
+    @ObservationIgnored var knocker: Knocker?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
     public init(secrets: any SecretStore, repository: HostRepository, configuration: Configuration = .init()) {
@@ -81,6 +85,7 @@ public final class HostsModel {
         self.repository = repository
         self.configuration = configuration
         records = repository.load()
+        relaySettings = RelaySettings.load(directory: repository.directory, secrets: secrets)
         keys = KeyStore(secrets: secrets, directory: repository.directory)
         network.onChange = { [weak self] in self?.networkChanged() }
     }
@@ -192,12 +197,19 @@ public final class HostsModel {
         if let dialer { return dialer }
         let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
         deviceKey = key
-        let config = ClientConfig(secretKey: key, relay: configuration.relay, mirrorVt: configuration.mirrorVt)
+        let config = clientConfig(key)
         // The app shows native password prompts (AskpassSession), so it asks the daemon for them.
-        let options = ConnectOptions(relayCaDer: [], askpass: true)
+        let options = relaySettings.connectOptions(askpass: true)
         return { ticket, listener in
             try DaemonClient.connectWith(ticket: ticket, config: config, options: options, listener: listener)
         }
+    }
+
+    /// This device's key (created on first use).
+    func deviceKeyData() throws -> Data {
+        let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
+        deviceKey = key
+        return key
     }
 
     /// Dials with an invite (`DaemonClient.join`): the device key proves who redeemed it.
@@ -205,11 +217,50 @@ public final class HostsModel {
         if let joinDialer { return joinDialer }
         let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
         deviceKey = key
-        let config = ClientConfig(secretKey: key, relay: configuration.relay, mirrorVt: configuration.mirrorVt)
-        let options = ConnectOptions(relayCaDer: [], askpass: true)
+        let config = clientConfig(key)
+        let options = relaySettings.connectOptions(askpass: true)
         return { invite, listener in
             try DaemonClient.joinWith(invite: invite, config: config, options: options, listener: listener)
         }
+    }
+
+    /// The client config for this device's key: the relay settings' direct-only choice wins
+    /// over every ticket.
+    func clientConfig(_ key: Data, mirrorVt: Bool? = nil) -> ClientConfig {
+        ClientConfig(secretKey: key, relay: relaySettings.clientRelay(base: configuration.relay), mirrorVt: mirrorVt ?? configuration.mirrorVt)
+    }
+
+    /// Saves new relay settings; open daemon connections redial with them at once.
+    public func setRelaySettings(_ settings: RelaySettings) throws {
+        try settings.save(directory: repository.directory, secrets: secrets)
+        let changed = settings.clientRelay(base: configuration.relay) != relaySettings.clientRelay(base: configuration.relay)
+            || settings.connectOptions(askpass: true) != relaySettings.connectOptions(askpass: true)
+        relaySettings = settings
+        guard changed else { return }
+        let relay = settings.clientRelay(base: configuration.relay), options = settings.connectOptions(askpass: true)
+        for case let daemon as DaemonConnection in connections.values {
+            daemon.setRelays(relay, options: options)
+        }
+    }
+
+    /// Adds the CA certificates in a PEM (one or more blocks) or DER file to the relay
+    /// settings. Returns those that were new.
+    @discardableResult
+    public func importRelayCertificates(_ file: Data) throws -> [RelayCertificate] {
+        var settings = relaySettings
+        let added = try RelayCertificate.parse(file).filter { certificate in
+            guard !settings.certificates.contains(certificate.der) else { return false }
+            settings.certificates.append(certificate.der)
+            return true
+        }
+        try setRelaySettings(settings)
+        return added
+    }
+
+    public func removeRelayCertificate(_ der: Data) throws {
+        var settings = relaySettings
+        settings.certificates.removeAll { $0 == der }
+        try setRelaySettings(settings)
     }
 
     private func openSSH(_ record: HostRecord, password: String?) throws -> SshConnection {
@@ -687,11 +738,14 @@ public enum HelperUpdateError: Error, Equatable, LocalizedError {
 public enum PairingError: Error, Equatable, LocalizedError {
     case refused(String)
     case timedOut
+    /// The owner turned a knock away.
+    case turnedAway
 
     public var errorDescription: String? {
         switch self {
         case .refused(let reason): "The host refused this device (\(reason)). Ask it for a new ticket (its helper's `pair` command)."
         case .timedOut: "The host did not answer. Check that it is running and reachable."
+        case .turnedAway: "The owner didn't let you in."
         }
     }
 }

@@ -31,7 +31,14 @@ struct TerminalHost {
         #if os(macOS)
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            pane?.placeView()
+            pane?.placeView(joining: window == nil ? nil : self)
+        }
+
+        /// Empty (the pane's view is in another container): transparent to the pointer, so a
+        /// container on its way out, or not yet holding the view, never swallows clicks and wheel
+        /// events meant for the terminal under it.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            subviews.isEmpty ? nil : super.hitTest(point)
         }
 
         override func resizeSubviews(withOldSize oldSize: NSSize) {
@@ -40,7 +47,11 @@ struct TerminalHost {
         #else
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            pane?.placeView()
+            pane?.placeView(joining: window == nil ? nil : self)
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            subviews.isEmpty ? nil : super.hitTest(point, with: event)
         }
 
         override func layoutSubviews() {
@@ -88,11 +99,24 @@ struct TerminalHost {
 }
 
 extension Pane {
-    /// Keeps `view` in a host container that is in a window: it stays put while its container is
-    /// on screen, and moves to another on-screen host when its container leaves the window.
-    func placeView() {
-        if let current = view.superview as? TerminalHost.Container, current.window != nil, hosts.contains(current) { return }
-        guard let target = hosts.allObjects.first(where: { $0.window != nil }) else { return }
+    /// Keeps `view` in a host container that is in a window: it moves to a container that joins
+    /// the window its current one is in, and to another on-screen host when its container leaves
+    /// the window; otherwise it stays put.
+    ///
+    /// The newcomer wins because SwiftUI rebuilds a pane's place (a NavigationStack swapping its
+    /// root at launch, an identity change) by inserting the new representable on top and keeping
+    /// the old one in the window while its removal animates, for most of a second. Staying in the
+    /// old container then left the live, topmost one empty: the terminal sat under it, and wheel
+    /// and clicks went to the empty container (less, vim and htop could not be scrolled).
+    func placeView(joining newcomer: TerminalHost.Container? = nil) {
+        let target: TerminalHost.Container
+        if let current = view.superview as? TerminalHost.Container, current.window != nil, hosts.contains(current) {
+            guard let newcomer, newcomer !== current, newcomer.window === current.window else { return }
+            target = newcomer
+        } else {
+            guard let onScreen = hosts.allObjects.first(where: { $0.window != nil }) else { return }
+            target = onScreen
+        }
         // Moving the view resigns first responder; a terminal being typed into keeps the keyboard.
         #if os(macOS)
         let hadKeyboard = view.window?.firstResponder === view
@@ -105,14 +129,16 @@ extension Pane {
         #if os(macOS)
         // AppKit hands first responder to the window as soon as the old container leaves it, so
         // the view no longer knows it had the keyboard: the focused pane takes it back whenever
-        // nothing else in the window has it.
-        if let window = target.window,
-           hadKeyboard || (isFocusedPane() && (window.firstResponder == nil || window.firstResponder === window))
+        // nothing else in the window has it. Only the focused pane: taking first responder
+        // focuses the pane, and a pane moved into a new split (its sibling just took focus) had
+        // the keyboard a moment ago.
+        if let window = target.window, isFocusedPane(),
+           hadKeyboard || window.firstResponder == nil || window.firstResponder === window
         {
             window.makeFirstResponder(view)
         }
         #else
-        if hadKeyboard { view.becomeFirstResponder() }
+        if hadKeyboard, isFocusedPane() { view.becomeFirstResponder() }
         #endif
         // Assistive technologies cache the element tree; tell them the terminal moved.
         #if os(macOS)

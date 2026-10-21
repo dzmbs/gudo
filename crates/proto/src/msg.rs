@@ -273,6 +273,14 @@ pub enum ClientCtl {
         /// The request.
         req: crate::askpass::AskpassRequest,
     },
+    /// Approves with edited input, or adds or revokes an auto-approve rule; answered by
+    /// [`ServerCtl::ApprovalResult`]. Needs Approver on the pane.
+    Approval {
+        /// Client-chosen id echoed in the result.
+        req_id: u64,
+        /// The request.
+        req: crate::approve::ApprovalRequest,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -616,6 +624,34 @@ pub enum ServerCtl {
     /// The repositories, worktrees, branches and pull requests of the panes (sent whole, to
     /// clients with [`Caps::REPO_STATUS`], after attaching and on every change).
     Repos(crate::repo::RepoSnapshot),
+    /// A knock arrived or ended. Sent to owner devices with [`Caps::KNOCK`]; pending knocks
+    /// are sent right after `Joined`.
+    Knock(crate::mp::KnockUpdate),
+    /// The answer to a connection that knocked (it presented a knock invite with
+    /// [`Caps::KNOCK`]); such a connection gets no `Welcome` and may only `Ping`, `SetName`
+    /// and `Bye` while it waits.
+    KnockAnswer(crate::mp::KnockAnswer),
+    /// The approval policy of the attached session (after attaching and on every change), to
+    /// clients with [`Caps::APPROVAL_POLICY`].
+    ApprovalPolicy {
+        /// The session.
+        session_id: SessionId,
+        /// The rules.
+        policy: crate::mp::ApprovalPolicy,
+    },
+    /// An open approval request's votes or claim changed (two-person rule, claims), to
+    /// clients with [`Caps::APPROVAL_POLICY`] that can see its pane.
+    ApprovalStatus(crate::mp::ApprovalStatus),
+    /// Answers [`ClientCtl::Approval`].
+    ApprovalResult {
+        /// The request's id.
+        req_id: u64,
+        /// The answer.
+        result: Result<crate::approve::ApprovalResponse, crate::approve::ApprovalError>,
+    },
+    /// An approval request's extras or a pane's auto-approve rules changed. Sent only to
+    /// clients with [`Caps::APPROVALS`] that can see the pane.
+    Approval(crate::approve::ApprovalPush),
 }
 
 /// A successful [`ClientCtl::Attach`].

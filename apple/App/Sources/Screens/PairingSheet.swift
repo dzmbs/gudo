@@ -217,9 +217,35 @@ struct PairingSheet: View {
                 }
                 .accessibilityIdentifier("pairing-ticket")
             Button("Paste", systemImage: "doc.on.clipboard", action: paste)
+            if let parsed = try? PairingTicket(ticket) {
+                ticketRelay(parsed)
+            }
         } footer: {
             footer(default: Text("Run \(Text(verbatim: "\(Brand.name) pair").font(DS.Font.literalSmall)) on the host to print a ticket and its QR code. Tickets expire after 10 minutes."))
         }
+    }
+
+    /// Which relay the host will be reached through: the ticket's choice, or this device's
+    /// Network setting when that wins.
+    private func ticketRelay(_ parsed: PairingTicket) -> some View {
+        let relay = (live?.relaySettings ?? RelaySettings()).relay(for: parsed.info.relays)
+        return LabeledContent {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(relay.name)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if relay.bySetting {
+                    Text("Your Network setting")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        } label: {
+            Text("Relay")
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("pairing-ticket-relay")
     }
 
     private func paste() {

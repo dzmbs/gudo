@@ -56,10 +56,20 @@ while IFS= read -r line; do
   echo "prompt: $line"
   case "$line" in
     *permission*)
+      # "slowly": think a while first (time to leave the agent's tab, for the toast test).
+      case "$line" in *slowly*) sleep 4 ;; esac
       echo "asking to run: rm -rf build"
       payload=$(/usr/bin/python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"hook_event_name":"PermissionRequest","cwd":sys.argv[2],"tool_name":"Bash","tool_input":{"command":"rm -rf build"}}))' "$sid" "$PWD")
       out=$(send PermissionRequest "$payload")
-      case "$out" in *'"allow"'*) echo "decision: allowed" ;; *'"deny"'*) echo "decision: denied" ;; *) echo "decision: none" ;; esac
+      # An edited approval (updatedInput) runs the edited command instead.
+      edited=$(printf '%s' "$out" | /usr/bin/python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["decision"]["updatedInput"]["command"])
+except Exception: pass' 2>/dev/null)
+      case "$out" in
+        *'"allow"'*) if [ -n "$edited" ]; then echo "decision: allowed (edited: $edited)"; else echo "decision: allowed"; fi ;;
+        *'"deny"'*) echo "decision: denied" ;;
+        *) echo "decision: none" ;;
+      esac
       ;;
   esac
   # A real turn takes seconds; the daemon snapshots the tree when the turn starts.
@@ -79,7 +89,30 @@ args = sys.argv[1:]
 if "--version" in args:
     print("1.105.0\nfakecommit\narm64")
     sys.exit(0)
-port = int(args[args.index("--port") + 1])
+# `code tunnel …`'s stand-in (the opt-in Remote Tunnel): never signed in at first; the login
+# prints a GitHub device code and completes by itself after a few seconds (in real life the user
+# enters the code in their browser); the tunnel prints its vscode.dev link and stays up.
+if args[:1] == ["tunnel"]:
+    import os, time
+    here = os.path.dirname(os.path.abspath(__file__))
+    signed_in = os.path.join(here, "tunnel-signed-in")
+    rest = args[1:]
+    if rest[:1] == ["status"]:
+        print('{"tunnel":null,"service_installed":false}')
+        sys.exit(0)
+    if rest[:2] == ["user", "show"]:
+        sys.exit(0 if os.path.exists(signed_in) else 1)
+    if rest[:2] == ["user", "login"]:
+        print("To grant access to the server, please log into https://github.com/login/device and use code FAKE-1234", flush=True)
+        time.sleep(8)
+        open(signed_in, "w").close()
+        sys.exit(0)
+    name = rest[rest.index("--name") + 1] if "--name" in rest else "box"
+    print("*\n* Visual Studio Code Server\n*", flush=True)
+    print("Open this link in your browser https://vscode.dev/tunnel/%s/home/me" % name, flush=True)
+    while True:
+        time.sleep(1000)
+port =int(args[args.index("--port") + 1])
 token = args[args.index("--connection-token") + 1]
 PAGE = b"""<!doctype html><html><head><meta name=viewport content="width=device-width">
 <title>Fake VS Code</title><style>body{background:#1f1f1f;color:#ccc;font:16px -apple-system}</style></head>
@@ -108,6 +141,40 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
 chmod +x "$bin/code"
+
+# vscode.dev's stand-in for the tunnel test (the app is pointed at it with -testTunnelWebBase,
+# so nothing is downloaded): a page whose Sign In button opens a popup, like vscode.dev's
+# GitHub sign-in; the popup tells its opener and closes itself.
+#   vscode-dev-stub <port>
+cat >"$bin/vscode-dev-stub" <<'EOF'
+#!/usr/bin/env python3
+import http.server, sys
+MAIN = b"""<!doctype html><html><head><meta name=viewport content="width=device-width">
+<title>Fake vscode.dev</title><style>body{background:#1f1f1f;color:#ccc;font:16px -apple-system}
+button{font-size:20px;padding:12px 24px}</style></head>
+<body><h1>Fake vscode.dev workbench</h1><p id=where></p><p id=state>Signed out</p>
+<button id=signin onclick="window.open('/popup', 'signin', 'width=480,height=640')">Sign In</button>
+<script>
+document.getElementById('where').textContent = 'Tunnel ' + location.pathname;
+window.addEventListener('message', function (e) { document.getElementById('state').textContent = 'Popup said ' + e.data; });
+</script></body></html>"""
+POPUP = b"""<!doctype html><html><head><meta name=viewport content="width=device-width">
+<title>Fake sign-in</title><style>body{background:#fff;color:#111;font:16px -apple-system}
+button{font-size:20px;padding:12px 24px}</style></head>
+<body><h1>Fake sign-in popup</h1>
+<button id=finish onclick="window.opener.postMessage('signed-in', '*'); window.close()">Finish Sign In</button>
+</body></html>"""
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(POPUP if self.path.startswith("/popup") else MAIN)
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+EOF
+chmod +x "$bin/vscode-dev-stub"
 
 cat >"$dir/config.toml" <<EOF
 [editor]

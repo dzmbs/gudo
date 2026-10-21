@@ -23,6 +23,8 @@ final class OverlayModel {
     var canStart = false
     /// The one-line "what is this for" hint (until the first drawing is finished).
     var showsHint = false
+    /// The editor holds the scene (VoiceOver and UI tests read it as the toolbar's value).
+    var loaded = false
     @ObservationIgnored var onAction: (DrawingAction) -> Void = { _ in }
     @ObservationIgnored var onCancel: () -> Void = {}
     @ObservationIgnored var onRemove: () -> Void = {}
@@ -102,6 +104,7 @@ struct OverlayToolbar: View {
         .animation(DS.Motion.overlay, value: model.showsHint)
         .fixedSize()
         .accessibilityElement(children: .contain)
+        .accessibilityValue(model.loaded ? "ready" : "loading")
         .accessibilityIdentifier("drawing.toolbar")
     }
 
@@ -220,7 +223,10 @@ struct DrawingMenuContent: View {
 
     var body: some View {
         ForEach(menu.sections) { section in
-            if let title = section.title {
+            if section.submenu, let title = section.title {
+                Menu { items(section) } label: { Label(title, systemImage: section.systemImage ?? "ellipsis") }
+                    .accessibilityIdentifier("drawing.menu.\(title.lowercased())")
+            } else if let title = section.title {
                 Section(title) { items(section) }
             } else {
                 Section { items(section) }
@@ -296,6 +302,7 @@ final class PlacedNoticeModel {
         case .done(.kept), .done(.shared): "Kept in terminal"
         case .done(.sent(let name)): "Sent to \(name)"
         case .done(.copied): "Image copied"
+        case .done(.copiedText): "Text copied"
         case .done(.saved(let name)): "Saved \u{201C}\(name)\u{201D}"
         }
     }
@@ -305,7 +312,7 @@ final class PlacedNoticeModel {
         case .working, .failed: nil
         case .done(.kept), .done(.shared): "tap it to send, copy or edit"
         case .done(.sent): "in the prompt as an image · also kept here"
-        case .done(.copied), .done(.saved): "also kept in the terminal"
+        case .done(.copied), .done(.copiedText), .done(.saved): "also kept in the terminal"
         }
     }
 
@@ -315,6 +322,7 @@ final class PlacedNoticeModel {
         case .failed: "exclamationmark.triangle.fill"
         case .done(.sent): "paperplane.fill"
         case .done(.copied): "doc.on.doc"
+        case .done(.copiedText): "text.quote"
         case .done(.saved): "square.and.arrow.down"
         case .done: "pin.fill"
         }

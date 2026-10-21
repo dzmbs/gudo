@@ -18,7 +18,7 @@ use tokio::task::{AbortHandle, JoinSet};
 
 use crate::core::{ConnId, Core, Event, lock};
 use crate::forward;
-use crate::mp::{Authz, Need, Target, policy};
+use crate::mp::{Authz, Knocker, Need, Redeemed, Target, policy};
 use crate::net::{self, NetError};
 use crate::stream::{Class, PaneStream, Start, StreamCmd, priority};
 
@@ -86,13 +86,16 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     let handshake = handshake(&core, &hello, device);
     if hello.caps.contains(Caps::DAEMON_INFO) {
         let mut info = daemon_info(&core);
-        if handshake.is_err() {
+        if !matches!(handshake, Ok(Admission::Join(..))) {
             info.hostname.clear();
         }
         net::send(&mut ctl_tx, &ServerCtl::DaemonInfo(info)).await?;
     }
     let (authz, maintenance) = match handshake {
-        Ok(a) => a,
+        Ok(Admission::Join(authz, maintenance)) => (authz, maintenance),
+        Ok(Admission::Knock(knocker)) => {
+            return serve_knock(core, conn, ctl_tx, ctl_rx, knocker).await;
+        }
         Err(reason) => {
             net::send(&mut ctl_tx, &ServerCtl::Refused { reason }).await?;
             let _ = ctl_tx.finish();
@@ -131,7 +134,15 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     };
     let id = core.next_conn_id();
     let _ = ctl.send(ServerCtl::Joined(authz.join_info(&authz.name)));
+    if hello.caps.contains(Caps::KNOCK) && is_owner(&core, &authz) {
+        for knock in core.mp.knocks() {
+            let _ = ctl.send(ServerCtl::Knock(proto::KnockUpdate::Added(knock)));
+        }
+    }
     core.mp.join(&core, id, &authz, ctl.clone(), conn.clone());
+    if authz.history == proto::History::SinceJoin {
+        open_views(&core, &authz).await;
+    }
     let client = Arc::new(Client {
         id,
         core: Arc::clone(&core),
@@ -146,6 +157,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     });
     core.client_connected(true);
     core.askpass.register(client.id, &client.authz, client.caps);
+    client.approvals_state();
     let repo_watch = client.caps.contains(Caps::REPO_STATUS);
     if repo_watch {
         core.ws.repos.watch(true);
@@ -200,13 +212,22 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
     if core.cfg.self_exe.is_some() {
         features |= DaemonFeatures::SELF_UPGRADE;
     }
-    features |= DaemonFeatures::AGENT_USAGE;
+    features |=
+        DaemonFeatures::AGENT_USAGE | DaemonFeatures::ARTIFACT_HISTORY | DaemonFeatures::MP2;
     crate::info::build_info(features)
 }
 
-/// Checks a `Hello`. `Ok((authz, true))` admits an owner device whose snapshot format does
-/// not match, for an upgrade only (clients announcing [`Caps::DAEMON_INFO`]).
-fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<(Authz, bool), RefuseReason> {
+/// What a `Hello` leads to.
+enum Admission {
+    /// The connection joins; `true` admits an owner device whose snapshot format does not
+    /// match, for an upgrade only (clients announcing [`Caps::DAEMON_INFO`]).
+    Join(Authz, bool),
+    /// A knock invite: the connection waits for an owner ([`serve_knock`]).
+    Knock(Knocker),
+}
+
+/// Checks a `Hello`.
+fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, RefuseReason> {
     if hello.device_id != device {
         return Err(RefuseReason::DeviceMismatch);
     }
@@ -217,12 +238,20 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<(Authz, boo
     {
         return Err(RefuseReason::SnapshotFormat { daemon: format });
     }
-    let _ = WIRE_VERSION;
     if hello.grant.v == SignedGrant::CHAIN {
         return core
             .mp
-            .redeem(core, device, hello.principal_id, &hello.grant.token)
-            .map(|authz| (authz, false));
+            .redeem(
+                core,
+                device,
+                hello.principal_id,
+                &hello.grant.token,
+                hello.caps,
+            )
+            .map(|redeemed| match redeemed {
+                Redeemed::Joined(authz) => Admission::Join(authz, false),
+                Redeemed::Knock(knocker) => Admission::Knock(knocker),
+            });
     }
     if core.mp.device_revoked(device) {
         return Err(RefuseReason::Revoked);
@@ -230,6 +259,7 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<(Authz, boo
     let principal = core
         .identity
         .authorize(device, hello.principal_id, &hello.grant)?;
+    let _ = WIRE_VERSION;
     let actor = Actor { principal, device };
     if hello.grant.v == SignedGrant::PAIRING {
         core.mp.audit.append(
@@ -241,7 +271,120 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<(Authz, boo
             },
         );
     }
-    Ok((Authz::owner(actor), maintenance))
+    Ok(Admission::Join(Authz::owner(actor), maintenance))
+}
+
+/// Opens since-join views (multiplayer `History::SinceJoin`) on every pane in scope that
+/// existed when the guest first joined, so their history starts there even before they
+/// subscribe. Panes created later are shown whole.
+async fn open_views(core: &Arc<Core>, authz: &Authz) {
+    let panes: Vec<_> = core
+        .pane_entries()
+        .into_iter()
+        .filter(|(id, e)| {
+            core.scope_within(Scope::Pane(*id), authz.scope) && e.existed_at(authz.joined_at)
+        })
+        .map(|(_, e)| Arc::clone(&e.pane))
+        .collect();
+    let principal = authz.actor.principal;
+    let opened = tokio::task::spawn_blocking(move || {
+        for pane in panes {
+            if let Err(e) = pane.open_view(principal) {
+                tracing::warn!(pane = %pane.id, "opening a since-join view: {e}");
+            }
+        }
+    })
+    .await;
+    if let Err(e) = opened {
+        tracing::warn!("opening since-join views: {e}");
+    }
+}
+
+/// A connection that presented a knock invite: it waits here, seeing nothing, until an owner
+/// admits it (it is sent a grant to reconnect with) or turns it away, or it leaves. It may
+/// only ping and say its name.
+async fn serve_knock(
+    core: Arc<Core>,
+    conn: Connection,
+    ctl_tx: SendStream,
+    mut ctl_rx: RecvStream,
+    mut knocker: Knocker,
+) -> Result<(), NetError> {
+    let (ctl, ctl_out) = mpsc::unbounded_channel();
+    let writer = tokio::spawn(write_ctl(ctl_tx, ctl_out));
+    // The knocker says who it is right after `Hello`; wait a moment for it, so the owner (and
+    // the audit log) see the name rather than a placeholder.
+    let first = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        net::recv(&mut ctl_rx),
+    )
+    .await;
+    let mut named = None;
+    match first {
+        Ok(Ok(Some(ClientCtl::Multiplayer {
+            req_id,
+            req: MpRequest::SetName { name },
+        }))) => {
+            let name: String = name.trim().chars().take(64).collect();
+            if !name.is_empty() {
+                knocker.name = name;
+            }
+            named = Some(req_id);
+        }
+        Ok(Ok(None | Some(ClientCtl::Bye { .. })) | Err(_)) => {
+            writer.abort();
+            return Ok(());
+        }
+        _ => {}
+    }
+    let id = match core.mp.knock(&core, knocker, ctl.clone(), conn.clone()) {
+        Ok(id) => id,
+        Err(reason) => {
+            let _ = ctl.send(ServerCtl::Refused { reason });
+            drop(ctl);
+            let _ = writer.await;
+            return Ok(());
+        }
+    };
+    let _ = ctl.send(ServerCtl::KnockAnswer(proto::KnockAnswer::Waiting {
+        knock_id: id,
+    }));
+    if let Some(req_id) = named {
+        let _ = ctl.send(ServerCtl::MultiplayerResult {
+            req_id,
+            result: Ok(MpResponse::Done),
+        });
+    }
+    // The knocker pings every few seconds; silence this long means it is gone.
+    const LOBBY_IDLE: std::time::Duration = std::time::Duration::from_secs(45);
+    let result = loop {
+        let Ok(msg) = tokio::time::timeout(LOBBY_IDLE, net::recv(&mut ctl_rx)).await else {
+            break Ok(());
+        };
+        match msg {
+            Ok(Some(ClientCtl::Ping { nonce })) => {
+                let _ = ctl.send(ServerCtl::Pong { nonce });
+            }
+            Ok(Some(ClientCtl::Multiplayer { req_id, req })) => {
+                let result = match req {
+                    MpRequest::SetName { name } => {
+                        core.mp.rename_knock(&core, id, &name);
+                        Ok(MpResponse::Done)
+                    }
+                    _ => Err(MpError::Forbidden(
+                        "waiting for the owner to let you in".into(),
+                    )),
+                };
+                let _ = ctl.send(ServerCtl::MultiplayerResult { req_id, result });
+            }
+            Ok(Some(ClientCtl::Bye { .. }) | None) => break Ok(()),
+            Ok(Some(_)) => {}
+            Err(e) => break Err(e),
+        }
+    };
+    core.mp.withdraw_knock(&core, id);
+    writer.abort();
+    result
 }
 
 /// Whether `authz` is the daemon's owner: a paired owner device on the whole daemon, not a
@@ -548,6 +691,18 @@ impl Client {
         }
     }
 
+    /// The principal whose since-join view this connection sees `pane` through: guests
+    /// with `History::SinceJoin` on panes that existed when they first joined.
+    fn viewer(&self, pane: PaneId) -> Option<proto::PrincipalId> {
+        if self.authz.history != proto::History::SinceJoin {
+            return None;
+        }
+        let entry = self.core.pane(pane)?;
+        entry
+            .existed_at(self.authz.joined_at)
+            .then_some(self.actor.principal)
+    }
+
     fn in_session(&self, pane: PaneId) -> bool {
         let session = lock(&self.state).session;
         // One lock at a time: `pane_allowed` takes the layout lock itself.
@@ -743,6 +898,159 @@ impl Client {
                     self.send(ServerCtl::Repos(snapshot));
                 }
             }
+            Event::Knock(update) => {
+                if self.caps.contains(Caps::KNOCK) && is_owner(&self.core, &self.authz) {
+                    self.send(ServerCtl::Knock(update));
+                }
+            }
+            Event::ApprovalPolicy(session_id, policy) => {
+                if self.caps.contains(Caps::APPROVAL_POLICY)
+                    && lock(&self.state).session == Some(session_id)
+                {
+                    self.send(ServerCtl::ApprovalPolicy { session_id, policy });
+                }
+            }
+            Event::ApprovalStatus(status) => {
+                if self.caps.contains(Caps::APPROVAL_POLICY) && self.pane_allowed(status.pane_id) {
+                    self.send(ServerCtl::ApprovalStatus(status));
+                }
+            }
+            Event::Approval(push) => {
+                let pane = match &push {
+                    proto::ApprovalPush::Request(info) => info.pane_id,
+                    proto::ApprovalPush::Rules { pane_id, .. } => *pane_id,
+                };
+                if self.caps.contains(Caps::APPROVALS) && self.pane_allowed(pane) {
+                    self.send(ServerCtl::Approval(push));
+                }
+            }
+        }
+    }
+
+    /// The open requests' extras and the rules in force, for a connection that just arrived.
+    fn approvals_state(&self) {
+        if !self.caps.contains(Caps::APPROVALS) {
+            return;
+        }
+        let (open, panes) = self.core.approvals.snapshot();
+        for info in open {
+            if self.pane_allowed(info.pane_id) {
+                self.send(ServerCtl::Approval(proto::ApprovalPush::Request(info)));
+            }
+        }
+        for pane in panes {
+            if self.pane_allowed(pane) {
+                let rules = self.core.approvals.rules(pane);
+                self.send(ServerCtl::Approval(proto::ApprovalPush::Rules {
+                    pane_id: pane,
+                    rules,
+                }));
+            }
+        }
+    }
+
+    /// An approval extra: approve with edited input, add or revoke an auto-approve rule.
+    /// Each needs Approver on the pane, and the first two a signature by this device.
+    fn approval(
+        &self,
+        req: proto::ApprovalRequest,
+    ) -> Result<proto::ApprovalResponse, proto::ApprovalError> {
+        use proto::ApprovalError as E;
+        self.live().map_err(|e| E::Forbidden(e.to_string()))?;
+        let daemon = self.core.identity.daemon_id();
+        let name = self.core.mp.name_of(self.id);
+        match req {
+            proto::ApprovalRequest::ApproveEdited { decide, input } => {
+                if decide.actor != self.actor {
+                    return Err(E::Forbidden(
+                        "the decision's actor is not this connection".into(),
+                    ));
+                }
+                let pane = self
+                    .core
+                    .request_pane(decide.request_id)
+                    .ok_or(E::NotFound)?;
+                self.allow(Need::Approve, Target::Pane(pane))
+                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                if !grants::verify_approval(daemon, &decide) {
+                    return Err(E::Forbidden(
+                        "the decision is not signed by this device".into(),
+                    ));
+                }
+                let input = input.trim();
+                if input.is_empty() || input.len() > 64 * 1024 {
+                    return Err(E::Invalid("the command is empty or too long".into()));
+                }
+                let (original, allow) =
+                    crate::approve::editable(&self.core, pane, decide.request_id)?;
+                if decide.option_id != allow {
+                    return Err(E::Invalid("an edited request can only be allowed".into()));
+                }
+                let sig = decide.sig.clone();
+                let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
+                    self.core.mp.audit.append(
+                        AuditKind::Approval,
+                        crate::mp::AuditEntry {
+                            pane_id: Some(decided.pane_id),
+                            detail: format!(
+                                "{name} edited {original:?} to {input:?} and chose {:?}",
+                                details.option
+                            ),
+                            approval: Some(proto::ApprovalAudit {
+                                request_id: decide.request_id,
+                                agent_request: details.request.to_string(),
+                                option_id: decide.option_id,
+                                option: details.option.clone(),
+                                tool: details.tool.clone(),
+                                summary: format!("{original} → {input}"),
+                                signed: proto::approval_signing_bytes(
+                                    daemon,
+                                    decide.request_id,
+                                    decide.option_id,
+                                    decide.actor,
+                                ),
+                                sig,
+                            }),
+                            ..self.authz.audit()
+                        },
+                    );
+                };
+                match self
+                    .core
+                    .decide_with(self.actor, &decide, Some(input), record)
+                {
+                    Ok(_) => Ok(proto::ApprovalResponse::Done),
+                    Err(Some(_)) => Err(E::AlreadyDecided),
+                    Err(None) => Err(E::NotFound),
+                }
+            }
+            proto::ApprovalRequest::AddRule(rule) => {
+                if rule.actor != self.actor {
+                    return Err(E::Forbidden(
+                        "the rule's actor is not this connection".into(),
+                    ));
+                }
+                self.allow(Need::Approve, Target::Pane(rule.pane_id))
+                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                grants::check_rule(
+                    daemon,
+                    &rule,
+                    proto::UnixMillis(crate::identity::now_millis()),
+                )
+                .map_err(|e| match e {
+                    grants::RuleError::Signature => E::Forbidden(e.to_string()),
+                    _ => E::Invalid(e.to_string()),
+                })?;
+                crate::approve::add_rule(&self.core, rule, name)?;
+                Ok(proto::ApprovalResponse::Done)
+            }
+            proto::ApprovalRequest::RevokeRule { rule_id } => {
+                let pane = crate::approve::rule_pane(&self.core, rule_id).ok_or(E::NotFound)?;
+                self.allow(Need::Approve, Target::Pane(pane))
+                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                crate::approve::revoke(&self.core, rule_id, self.actor, &name)?;
+                Ok(proto::ApprovalResponse::Done)
+            }
         }
     }
 
@@ -901,10 +1209,17 @@ impl Client {
                 {
                     entry.pane.anchor_remove(artifact_id.0);
                 }
-                let info = art.delete(artifact_id)?;
+                // Close the canvas panes while the artifact still holds them, so clients hear
+                // `PaneClosed` and the new `Canvases` list.
                 for pane in &info.canvas_panes {
                     Arc::clone(core).apply_op(proto::LayoutOp::ClosePane { pane_id: *pane });
                 }
+                let info = match art.delete(artifact_id) {
+                    Ok(info) => info,
+                    // Closing its last pane closed the session, and its artifacts with it.
+                    Err(ArtifactError::NotFound(_)) if !info.canvas_panes.is_empty() => info,
+                    Err(e) => return Err(e),
+                };
                 core.emit_artifact(
                     info.session_id,
                     ArtifactEvent::Deleted {
@@ -958,6 +1273,9 @@ impl Client {
                 let info = art.update(artifact_id, |i| {
                     i.preview = Some(proto::Preview { image, version });
                 })?;
+                if version == info.version {
+                    art.checkpoint(artifact_id, self.actor, Some(image), None);
+                }
                 core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
                 Ok(ArtifactResponse::Info(info))
             }
@@ -1022,6 +1340,18 @@ impl Client {
                 })
                 .await
                 .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                // Finishing a drawing from the overlay records that version.
+                if art
+                    .info(placement.artifact_id)
+                    .is_some_and(|i| i.version == placement.version)
+                {
+                    art.checkpoint(
+                        placement.artifact_id,
+                        self.actor,
+                        Some(placement.image),
+                        None,
+                    );
+                }
                 if let Some(session) = core.session_of_pane(placement.pane_id) {
                     if let Some(old) = replaced {
                         core.emit_artifact(
@@ -1098,7 +1428,101 @@ impl Client {
                 );
                 Ok(ArtifactResponse::Sent(sent))
             }
+            ArtifactRequest::History { artifact_id } => {
+                self.visible_artifact(artifact_id)?;
+                art.history(artifact_id).map(ArtifactResponse::History)
+            }
+            ArtifactRequest::Restore {
+                artifact_id,
+                version,
+            } => self.restore(artifact_id, version).await,
         }
+    }
+
+    /// Brings a drawing back to `version` as a new version: the content goes out like any
+    /// edit (open editors and caches converge), the result is recorded in the history, and
+    /// every placement shows that version's render.
+    async fn restore(
+        &self,
+        artifact_id: proto::ArtifactId,
+        version: u64,
+    ) -> Result<ArtifactResponse, ArtifactError> {
+        let core = &self.core;
+        let art = &core.art;
+        self.visible_artifact(artifact_id)?;
+        let then = art.history_entry(artifact_id, version)?;
+        let info = match art.restore_plan(artifact_id, version)? {
+            crate::art::history::RestorePlan::Excalidraw(put) => {
+                let applied = art.ex_put(put)?;
+                core.emit_artifact(
+                    applied.info.session_id,
+                    ArtifactEvent::Excalidraw {
+                        artifact_id,
+                        version: applied.info.version,
+                        elements: applied.won,
+                        app_state: applied.app_state,
+                        files: applied.files,
+                    },
+                    None,
+                );
+                applied.info
+            }
+            crate::art::history::RestorePlan::Ops(ops) => {
+                let (info, batch) = art.apply(artifact_id, self.actor, ops)?;
+                core.emit_artifact(
+                    info.session_id,
+                    ArtifactEvent::Changed {
+                        info: info.clone(),
+                        batch,
+                    },
+                    None,
+                );
+                info
+            }
+        };
+        // The old render shows the same content; without one the daemon renders it.
+        let image = match then.image {
+            Some(image) => Some(image),
+            None => {
+                let core2 = Arc::clone(core);
+                tokio::task::spawn_blocking(move || {
+                    let e =
+                        crate::art::export(&core2.art, artifact_id, None, proto::ExportFormat::Png)
+                            .ok()?;
+                    match e.blob {
+                        Some(hash) => core2.art.read_blob(&hash).ok().map(|(i, _)| i),
+                        None => core2.art.put_blob(&e.data).ok(),
+                    }
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+        };
+        let info = match image {
+            Some(image) => art.update(artifact_id, |i| {
+                i.preview = Some(proto::Preview {
+                    image,
+                    version: i.version,
+                });
+            })?,
+            None => info,
+        };
+        core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
+        if let Some(image) = image {
+            for p in crate::art::place::reshow(core, artifact_id, info.version, image) {
+                if let Some(session) = core.session_of_pane(p.pane_id) {
+                    core.emit_artifact(session, ArtifactEvent::Placed(p), None);
+                }
+            }
+        }
+        let entry = art
+            .checkpoint(artifact_id, self.actor, image, Some(version))
+            .ok_or_else(|| ArtifactError::Failed("the restored version was not recorded".into()))?;
+        Ok(ArtifactResponse::Restored {
+            info,
+            version: entry,
+        })
     }
 
     /// Live ink: drawers only, on a visible drawing; stamped with the actor and fanned out to
@@ -1232,9 +1656,10 @@ impl Client {
                 .filter(|_| client.in_session(pane_id))
                 .map(|e| Arc::clone(&e.pane));
             let max = max.clamp(16 << 10, 2 << 20);
+            let viewer = client.viewer(pane_id);
             let chunk = match pane {
                 Some(pane) => tokio::task::spawn_blocking(move || {
-                    pane.history_page(snapshot_seq, offset, max)
+                    pane.history_page(viewer, snapshot_seq, offset, max)
                 })
                 .await
                 .ok()
@@ -1325,54 +1750,67 @@ impl Client {
                 query,
                 cursor,
                 limit,
-            } => self.query(
-                pane_id,
-                move |e, _| e.pane.search(&query, cursor, limit),
-                move |result| ServerCtl::SearchResult {
-                    req_id,
+            } => {
+                let viewer = self.viewer(pane_id);
+                self.query(
                     pane_id,
-                    result,
-                },
-            ),
+                    move |e, _| e.pane.search(viewer, &query, cursor, limit),
+                    move |result| ServerCtl::SearchResult {
+                        req_id,
+                        pane_id,
+                        result,
+                    },
+                )
+            }
             ClientCtl::Links {
                 req_id,
                 pane_id,
                 commands,
-            } => self.query(
-                pane_id,
-                move |e, core| {
-                    let cwd = lock(&e.meta).cwd.clone().map(std::path::PathBuf::from);
-                    let home = core.cfg.pane_var("HOME").map(std::path::PathBuf::from);
-                    Ok(e.pane.links(commands, cwd.as_deref(), home.as_deref()))
-                },
-                move |result| ServerCtl::LinksResult {
-                    req_id,
+            } => {
+                let viewer = self.viewer(pane_id);
+                self.query(
                     pane_id,
-                    result,
-                },
-            ),
-            ClientCtl::Commands { req_id, pane_id } => self.query(
-                pane_id,
-                |e, _| Ok(e.pane.commands()),
-                move |result| ServerCtl::CommandsResult {
-                    req_id,
+                    move |e, core| {
+                        let cwd = lock(&e.meta).cwd.clone().map(std::path::PathBuf::from);
+                        let home = core.cfg.pane_var("HOME").map(std::path::PathBuf::from);
+                        Ok(e.pane
+                            .links(viewer, commands, cwd.as_deref(), home.as_deref()))
+                    },
+                    move |result| ServerCtl::LinksResult {
+                        req_id,
+                        pane_id,
+                        result,
+                    },
+                )
+            }
+            ClientCtl::Commands { req_id, pane_id } => {
+                let viewer = self.viewer(pane_id);
+                self.query(
                     pane_id,
-                    result,
-                },
-            ),
+                    move |e, _| Ok(e.pane.commands(viewer)),
+                    move |result| ServerCtl::CommandsResult {
+                        req_id,
+                        pane_id,
+                        result,
+                    },
+                )
+            }
             ClientCtl::CommandOutput {
                 req_id,
                 pane_id,
                 command_id,
-            } => self.query(
-                pane_id,
-                move |e, _| e.pane.command_output(command_id),
-                move |result| ServerCtl::CommandOutputResult {
-                    req_id,
+            } => {
+                let viewer = self.viewer(pane_id);
+                self.query(
                     pane_id,
-                    result,
-                },
-            ),
+                    move |e, _| e.pane.command_output(viewer, command_id),
+                    move |result| ServerCtl::CommandOutputResult {
+                        req_id,
+                        pane_id,
+                        result,
+                    },
+                )
+            }
             ClientCtl::Resize { pane_id, size } => {
                 if !self.pane_allowed(pane_id) {
                     return;
@@ -1447,6 +1885,10 @@ impl Client {
                     client.send(ServerCtl::AssistResult { req_id, result });
                 });
             }
+            ClientCtl::Approval { req_id, req } => {
+                let result = self.approval(req);
+                self.send(ServerCtl::ApprovalResult { req_id, result });
+            }
             ClientCtl::Askpass { req_id, req } => {
                 let client = Arc::clone(self);
                 tokio::spawn(async move {
@@ -1520,6 +1962,28 @@ impl Client {
         }
         let name = self.core.mp.name_of(self.id);
         let sig = decide.sig.clone();
+        let signed_bytes = proto::approval_signing_bytes(
+            daemon,
+            decide.request_id,
+            decide.option_id,
+            decide.actor,
+        );
+        let ballot = crate::mp::approvals::Ballot {
+            actor: self.actor,
+            name: &name,
+            owner: is_owner(&self.core, &self.authz),
+        };
+        match crate::mp::gate_decision(
+            &self.core,
+            ballot,
+            decide.request_id,
+            decide.option_id,
+            (signed_bytes, sig.clone()),
+        ) {
+            Ok(crate::mp::Gate::Proceed) => {}
+            Ok(crate::mp::Gate::Held) => return,
+            Err(e) => return refuse(e.to_string()),
+        }
         let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
             let signed = proto::approval_signing_bytes(
                 daemon,
@@ -1547,7 +2011,7 @@ impl Client {
             );
         };
         match self.core.decide(self.actor, &decide, record) {
-            Ok(_) => {}
+            Ok(_) => self.core.mp.approvals.forget(decide.request_id),
             Err(Some(by)) => self.send(ServerCtl::AlreadyDecided {
                 request_id: decide.request_id,
                 by,
@@ -1599,6 +2063,10 @@ impl Client {
             proto::AssistRequest::AnswerBlocked(a) => Some((a.pane_id, a.label.clone())),
             _ => None,
         };
+        if let Some((pane, _)) = &audit {
+            self.screen_answer_allowed(*pane)
+                .map_err(|e| proto::AssistError::Denied(e.to_string()))?;
+        }
         let caller = crate::assist::Caller {
             conn: self.id,
             actor: self.actor,
@@ -1618,6 +2086,66 @@ impl Client {
         result
     }
 
+    /// Whether this connection may answer a dialog read off a pane's screen under the
+    /// session's approval policy (a screen answer has no request id or tool, so the
+    /// policy's stricter rules keep it to owners).
+    fn screen_answer_allowed(&self, pane: PaneId) -> Result<(), MpError> {
+        let owner = is_owner(&self.core, &self.authz);
+        let policy = self.core.mp.policy_of_pane(&self.core, pane);
+        crate::mp::approvals::screen_answer(policy, owner)?;
+        if policy.mode == proto::ApprovalMode::Claim
+            && !owner
+            && let Some(claim) = self.core.mp.approvals.claimant_on(pane)
+            && claim.actor.principal != self.actor.principal
+        {
+            return Err(MpError::Conflict(format!(
+                "{} claimed this request",
+                claim.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// Claims an open approval request (or releases a claim), and withdraws its attention
+    /// item so nobody else is notified about it.
+    fn claim(&self, request: proto::RequestId, claim: bool) -> Result<MpResponse, MpError> {
+        let (pane, facts) = self
+            .core
+            .request_facts(request, None)
+            .ok_or_else(|| MpError::NotFound("the request is no longer open".into()))?;
+        self.allow(Need::Approve, Target::Pane(pane))?;
+        let mp = &self.core.mp;
+        let policy = mp.policy_of_pane(&self.core, pane);
+        let name = mp.name_of(self.id);
+        let ballot = crate::mp::approvals::Ballot {
+            actor: self.actor,
+            name: &name,
+            owner: is_owner(&self.core, &self.authz),
+        };
+        let risk = proto::Risk::of_tool(facts.tool.as_deref());
+        let status = mp
+            .approvals
+            .claim(policy, pane, request, risk, ballot, claim)?;
+        mp.audit.append(
+            AuditKind::Claim,
+            crate::mp::AuditEntry {
+                pane_id: Some(pane),
+                detail: if claim {
+                    format!("{name} claimed {}", facts.summary)
+                } else {
+                    format!("{name} released {}", facts.summary)
+                },
+                ..self.authz.audit()
+            },
+        );
+        if claim {
+            crate::ws::agent_unblocked(&self.core, pane);
+        }
+        self.core
+            .emit(crate::core::Event::ApprovalStatus(status.clone()));
+        Ok(MpResponse::Approval(status))
+    }
+
     /// A multiplayer request.
     async fn multiplayer(&self, req: MpRequest) -> Result<MpResponse, MpError> {
         let core = &self.core;
@@ -1632,8 +2160,41 @@ impl Client {
                 Ok(MpResponse::Done)
             }
             MpRequest::RegisterGrant(chain) => mp
-                .register(core, &self.authz, &chain)
+                .register(core, &self.authz, &chain, proto::InviteTerms::default())
                 .map(MpResponse::Grant),
+            MpRequest::RegisterInvite { chain, terms } => mp
+                .register(core, &self.authz, &chain, terms)
+                .map(MpResponse::Grant),
+            MpRequest::Knocks => {
+                self.allow(Need::Own, Target::Daemon)?;
+                Ok(MpResponse::Knocks(mp.knocks()))
+            }
+            MpRequest::AnswerKnock { knock_id, admit } => {
+                self.allow(Need::Own, Target::Daemon)?;
+                mp.answer_knock(core, &self.authz, knock_id, admit)
+            }
+            MpRequest::GetApprovalPolicy { session_id } => {
+                self.allow(Need::View, Target::Session(session_id))?;
+                Ok(MpResponse::ApprovalPolicy(mp.policy(session_id)))
+            }
+            MpRequest::SetApprovalPolicy { session_id, policy } => {
+                self.allow(Need::Own, Target::Session(session_id))?;
+                if !is_owner(core, &self.authz) {
+                    return Err(MpError::Forbidden(
+                        "only the host's owner sets approval rules".into(),
+                    ));
+                }
+                if lock(&core.layout).session(session_id).is_none() {
+                    return Err(MpError::NotFound(format!("session {session_id}")));
+                }
+                Ok(MpResponse::ApprovalPolicy(mp.set_policy(
+                    core,
+                    &self.authz,
+                    session_id,
+                    policy,
+                )))
+            }
+            MpRequest::Claim { request_id, claim } => self.claim(request_id, claim),
             MpRequest::ListGrants => {
                 self.allow(Need::Own, Target::Daemon)?;
                 Ok(MpResponse::Grants(mp.list_grants()))
@@ -1811,6 +2372,18 @@ impl Client {
         self.send(ServerCtl::Participants {
             participants: self.core.mp.participants(&self.core, &self.authz),
         });
+        if self.caps.contains(Caps::APPROVAL_POLICY) {
+            let mp = &self.core.mp;
+            self.send(ServerCtl::ApprovalPolicy {
+                session_id: session,
+                policy: mp.policy(session),
+            });
+            for status in mp.approvals.all(|p| mp.policy_of_pane(&self.core, p)) {
+                if self.pane_allowed(status.pane_id) {
+                    self.send(ServerCtl::ApprovalStatus(status));
+                }
+            }
+        }
         let canvases = self
             .core
             .art
@@ -1851,8 +2424,14 @@ impl Client {
             return;
         };
         let pane = Arc::clone(&entry.pane);
+        let viewer = self.viewer(pane_id);
+        // A since-join guest never resumes from before its view opened: the ring would
+        // replay output it must not see.
+        let floor = viewer.map_or(Seq(0), |p| pane.view_start(p));
         let start = match lock(&self.state).resume.remove(&pane_id) {
-            Some(point) if point.snap_gen == pane.snap_gen => Start::Resume(point.last_seq),
+            Some(point) if point.snap_gen == pane.snap_gen && point.last_seq >= floor => {
+                Start::Resume(point.last_seq)
+            }
             _ => Start::Snapshot,
         };
         let Ok(mut send) = self.conn.open_uni().await else {
@@ -1876,6 +2455,7 @@ impl Client {
             cmds: cmds_rx,
             class,
             one_shot: mode == SubscribeMode::Snapshot,
+            viewer,
         };
         let task = tokio::spawn(async move {
             match stream.run(start).await {

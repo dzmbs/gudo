@@ -38,7 +38,7 @@ use proto::{
 
 pub use push::{ActionOffer, Decision, Kind, Notification, PushError, x25519_keypair};
 
-use crate::conn::{endpoint_builder, recv, send, ticket_addr};
+use crate::conn::{Route, endpoint_builder, recv, send, ticket_addr};
 use crate::{Client, ClientConfig, ConnectOptions};
 
 impl Client {
@@ -149,15 +149,15 @@ pub async fn send_action(
         sig,
     };
     let unreachable = |e: &dyn std::fmt::Display| ActionError::Unreachable(e.to_string());
-    let endpoint = endpoint_builder(config.relay, &extras.relays, &options)
+    let route = Route::new(config.relay, &extras.relays, &options);
+    let endpoint = endpoint_builder(&route, &options)
         .map_err(|e| unreachable(&e))?
         .secret_key(iroh::SecretKey::from_bytes(&key))
         .bind()
         .await
         .map_err(|e| unreachable(&e))?;
     let result = tokio::time::timeout(timeout, async {
-        let addr =
-            ticket_addr(&ticket, config.relay, &extras.relays).map_err(|e| unreachable(&e))?;
+        let addr = ticket_addr(&ticket, &route).map_err(|e| unreachable(&e))?;
         let conn = endpoint
             .connect(addr, proto::ALPN)
             .await

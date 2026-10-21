@@ -68,6 +68,10 @@ struct PRPopover: View {
                 } else {
                     empty
                 }
+                if let port = git.port(of: worktree) {
+                    Divider()
+                    WorktreePortRow(port: port) { git.openPort(of: worktree) }
+                }
                 if let hint = GhHint(git.gh) {
                     Divider()
                     GhHintView(hint: hint)
@@ -187,6 +191,29 @@ struct PRPopover: View {
     }
 }
 
+/// The worktree's `PORT` (what `$PORT` is in its panes) and Open localhost:PORT.
+struct WorktreePortRow: View {
+    let port: UInt16
+    let open: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("PORT").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Text(verbatim: String(port))
+                .font(DS.Font.literalSmall)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("worktree-port")
+            Spacer(minLength: DS.Space.s)
+            Button("Open localhost:\(String(port))", action: open)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("Forward the host's port \(String(port)) here and open it in the browser")
+                .accessibilityIdentifier("worktree-open-port")
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// One check: coloured symbol, name (a link to its page), the status word right-aligned.
 private struct CheckRow: View {
     let check: PrCheck
@@ -299,6 +326,9 @@ struct OpenInMenu: View {
             Button("VS Code", systemImage: "chevron.left.forwardslash.chevron.right") { model.openEditor() }
             Button("Files", systemImage: "folder") { model.sheet = .files }
             Button("Diff", systemImage: "plusminus") { model.sheet = .diff }
+            if let worktree = git.worktree, let port = git.port(of: worktree) {
+                Button("localhost:\(String(port))", systemImage: "globe") { git.openPort(of: worktree) }
+            }
             if let pr = git.pr {
                 Divider()
                 Button("GitHub · #\(pr.number)", systemImage: "arrow.up.right.square") { git.openOnGitHub(pr) }

@@ -338,6 +338,45 @@ pub enum MpRequest {
         /// The name.
         name: String,
     },
+    /// Like [`RegisterGrant`](Self::RegisterGrant), with terms the daemon enforces on the
+    /// chain and everything attenuated from it (knock, history) → [`MpResponse::Grant`].
+    /// A delegating holder may only add terms to what its own grant carries.
+    RegisterInvite {
+        /// The signed chain.
+        chain: GrantChain,
+        /// Its terms.
+        terms: InviteTerms,
+    },
+    /// Pending knocks → [`MpResponse::Knocks`]. Owner only.
+    Knocks,
+    /// Admits (with roles) or denies a knock → [`MpResponse::Admitted`] or
+    /// [`MpResponse::Done`]. Owner only.
+    AnswerKnock {
+        /// The knock.
+        knock_id: KnockId,
+        /// `None` denies.
+        admit: Option<Admit>,
+    },
+    /// A session's approval policy → [`MpResponse::ApprovalPolicy`]. Any role in scope.
+    GetApprovalPolicy {
+        /// The session.
+        session_id: SessionId,
+    },
+    /// Sets a session's approval policy → [`MpResponse::ApprovalPolicy`]. Owner only.
+    SetApprovalPolicy {
+        /// The session.
+        session_id: SessionId,
+        /// The rules.
+        policy: ApprovalPolicy,
+    },
+    /// Claims an open approval request (or gives a claim up) → [`MpResponse::Approval`].
+    /// Approver role on the request's pane.
+    Claim {
+        /// The request.
+        request_id: RequestId,
+        /// `false` releases this principal's claim (an owner may release anyone's).
+        claim: bool,
+    },
 }
 
 /// Answer to [`MpRequest::TakeControl`] and friends.
@@ -390,6 +429,14 @@ pub enum MpResponse {
     },
     /// Audit records.
     Audit(AuditPage),
+    /// Pending knocks.
+    Knocks(Vec<Knock>),
+    /// The grant a knock was admitted with.
+    Admitted(GrantInfo),
+    /// A session's approval policy.
+    ApprovalPolicy(ApprovalPolicy),
+    /// An approval request's state after a claim.
+    Approval(ApprovalStatus),
 }
 
 /// Why a multiplayer request (or any request refused by policy) failed.
@@ -536,6 +583,15 @@ pub enum AuditKind {
     Approval,
     /// A connection was refused or a request denied by policy.
     Denied,
+    /// Someone knocked with a knock invite.
+    Knock,
+    /// An owner admitted or denied a knock.
+    KnockAnswered,
+    /// A session's approval policy changed.
+    Policy,
+    /// An approval request was claimed or released, or an approval was held for a second
+    /// person.
+    Claim,
 }
 
 /// A decided approval, as the audit log keeps it.
@@ -598,4 +654,349 @@ pub struct AuditPage {
     pub total: u64,
     /// The whole log's hash chain and approval signatures verified.
     pub chain_ok: bool,
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum History {
+    /// Everything still in scrollback.
+    #[default]
+    Full,
+    /// Only output written after the guest first joined: scrollback from before is withheld
+    /// (snapshots, history pages, search, links and command output). The screen as it was at
+    /// that moment stays visible, because it is the live session they join.
+    SinceJoin,
+}
+
+/// Conditions the daemon enforces on an invite and every grant attenuated from it. The owner
+/// (or the delegating holder) sets them when registering the invite
+/// ([`MpRequest::RegisterInvite`]); they live in the daemon's grant table, not in the signed
+/// grant, so a guest cannot strip them. A copy rides in the invite text
+/// ([`Invite::to_string_with_terms`]) only so the join card can say what will happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct InviteTerms {
+    /// Redeeming does not join: it asks the owner, who admits with a role or denies
+    /// ([`Knock`]).
+    pub knock: bool,
+    /// How much scrollback the guest sees.
+    pub history: History,
+}
+
+impl InviteTerms {
+    /// The format version of the terms appended to an invite's text.
+    pub const VERSION: u16 = 1;
+    /// Marks the start of the terms after an invite's bytes.
+    const MAGIC: u8 = 0xE9;
+
+    /// The stricter of two sets of terms: a child can only add conditions.
+    #[must_use]
+    pub fn strictest(self, other: Self) -> Self {
+        let since_join = self.history == History::SinceJoin || other.history == History::SinceJoin;
+        Self {
+            knock: self.knock || other.knock,
+            history: if since_join {
+                History::SinceJoin
+            } else {
+                History::Full
+            },
+        }
+    }
+}
+
+impl Invite {
+    /// The invite's text with `terms` appended for the join card. Readers that predate terms
+    /// ignore the trailing bytes, as with [`TicketExtras`](crate::TicketExtras); default terms
+    /// append nothing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use proto::{DaemonId, GrantChain, History, Invite, InviteTerms};
+    ///
+    /// let invite = Invite {
+    ///     v: Invite::VERSION,
+    ///     daemon_id: DaemonId([7; 32]),
+    ///     addrs: vec![],
+    ///     relay_url: None,
+    ///     inviter: "alice".into(),
+    ///     chain: GrantChain { links: vec![] },
+    /// };
+    /// let terms = InviteTerms { knock: true, history: History::SinceJoin };
+    /// let text = invite.to_string_with_terms(terms);
+    /// assert_eq!(Invite::parse_with_terms(&text)?, (invite.clone(), terms));
+    /// // Older readers still parse it.
+    /// assert_eq!(text.parse::<Invite>()?, invite);
+    /// # Ok::<(), proto::TicketError>(())
+    /// ```
+    pub fn to_string_with_terms(&self, terms: InviteTerms) -> String {
+        if terms == InviteTerms::default() {
+            return self.to_string();
+        }
+        let mut bytes = postcard::to_stdvec(self).expect("invites always encode");
+        bytes.push(InviteTerms::MAGIC);
+        bytes.extend(
+            postcard::to_stdvec(&(InviteTerms::VERSION, terms)).expect("terms always encode"),
+        );
+        format!("{}{}", Self::prefix(), BASE32_NOPAD.encode(&bytes))
+    }
+
+    /// Parses an invite and the terms appended to it (default terms when there are none, or
+    /// when they are of a newer version).
+    ///
+    /// # Errors
+    ///
+    /// As [`Invite::from_str`].
+    pub fn parse_with_terms(s: &str) -> Result<(Self, InviteTerms), TicketError> {
+        let invite: Self = s.parse()?;
+        let bytes = invite_bytes(s)?;
+        let (_, rest) = postcard::take_from_bytes::<Self>(&bytes).map_err(TicketError::Decode)?;
+        let terms = match rest.split_first() {
+            Some((&InviteTerms::MAGIC, tail)) => postcard::from_bytes::<(u16, InviteTerms)>(tail)
+                .ok()
+                .filter(|(v, _)| *v == InviteTerms::VERSION)
+                .map(|(_, t)| t)
+                .unwrap_or_default(),
+            _ => InviteTerms::default(),
+        };
+        Ok((invite, terms))
+    }
+}
+
+/// The base32 payload of an invite's text, decoded.
+fn invite_bytes(s: &str) -> Result<Vec<u8>, TicketError> {
+    let s = s.trim();
+    let prefix = Invite::prefix();
+    let head = &prefix[..prefix.len() - 1];
+    let payload = match s.get(..head.len()) {
+        Some(h) if h.eq_ignore_ascii_case(head) => s[head.len()..]
+            .strip_prefix(['/', '#'])
+            .ok_or(TicketError::Encoding)?,
+        _ => s,
+    };
+    let cleaned: String = payload
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    BASE32_NOPAD
+        .decode(cleaned.as_bytes())
+        .map_err(|_| TicketError::Encoding)
+}
+
+/// Identifies a pending knock on one daemon run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct KnockId(pub u64);
+
+impl fmt::Display for KnockId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Knock {
+    /// The knock.
+    pub knock_id: KnockId,
+    /// Who knocks (their guest principal and device).
+    pub actor: Actor,
+    /// The name they gave, or the invite's label.
+    pub name: String,
+    /// The invite (leaf grant) they knock with.
+    pub grant_id: GrantId,
+    /// The roles the invite offers; the owner may admit with others.
+    pub roles: Roles,
+    /// What they would join.
+    pub scope: Scope,
+    /// When they knocked.
+    pub at: UnixMillis,
+}
+
+/// How a knock ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KnockOutcome {
+    /// An owner let them in with these roles.
+    Admitted {
+        /// The roles granted.
+        roles: Roles,
+    },
+    /// An owner said no.
+    Denied,
+    /// They stopped waiting (disconnected).
+    Withdrawn,
+}
+
+/// A change to the pending knocks, sent to owner devices with
+/// [`Caps::KNOCK`](crate::Caps::KNOCK).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KnockUpdate {
+    /// Someone knocks (or a knock changed, e.g. its name): replace any entry with this id.
+    Added(Knock),
+    /// A knock is no longer pending.
+    Gone {
+        /// The knock.
+        knock_id: KnockId,
+        /// Why.
+        outcome: KnockOutcome,
+        /// Who answered it, for admitted and denied knocks.
+        by: Option<Actor>,
+    },
+}
+
+/// What the knocking connection hears
+/// ([`ServerCtl::KnockAnswer`](crate::ServerCtl::KnockAnswer)).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KnockAnswer {
+    /// The owner has been asked; keep the connection open.
+    Waiting {
+        /// The knock.
+        knock_id: KnockId,
+    },
+    /// Admitted: a grant chain bound to this device, signed by the daemon. Reconnect with it
+    /// (`SignedGrant::CHAIN`); the daemon closes this connection.
+    Admitted(GrantChain),
+    /// Refused; the daemon closes this connection.
+    Denied,
+}
+
+/// An owner's "Admit as…" for a knock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Admit {
+    /// Roles to grant (within the knock invite's scope).
+    pub roles: Roles,
+    /// How much scrollback they see.
+    pub history: History,
+    pub expires: Option<UnixMillis>,
+}
+
+/// How risky an agent's tool call is, for [`ApprovalPolicy::max_risk`]. Ordered: a cap
+/// allows everything up to and including it.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
+pub enum Risk {
+    /// Reads files or the web; changes nothing.
+    ReadOnly,
+    /// Edits files in the workspace.
+    Edits,
+    /// Runs commands, or anything not known to be safer.
+    #[default]
+    Any,
+}
+
+impl Risk {
+    /// Classifies a tool by name (Claude Code's and Codex's tools; case-insensitive).
+    /// Unknown or missing tools are [`Risk::Any`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use proto::Risk;
+    ///
+    /// assert_eq!(Risk::of_tool(Some("Read")), Risk::ReadOnly);
+    /// assert_eq!(Risk::of_tool(Some("MultiEdit")), Risk::Edits);
+    /// assert_eq!(Risk::of_tool(Some("Bash")), Risk::Any);
+    /// assert_eq!(Risk::of_tool(None), Risk::Any);
+    /// ```
+    pub fn of_tool(tool: Option<&str>) -> Self {
+        const READ_ONLY: &[&str] = &[
+            "read",
+            "glob",
+            "grep",
+            "ls",
+            "webfetch",
+            "websearch",
+            "web_search",
+            "notebookread",
+            "todoread",
+            "todowrite",
+            "view_image",
+        ];
+        const EDITS: &[&str] = &[
+            "edit",
+            "multiedit",
+            "write",
+            "notebookedit",
+            "apply_patch",
+            "applypatch",
+        ];
+        let Some(tool) = tool.map(|t| t.trim().to_ascii_lowercase()) else {
+            return Self::Any;
+        };
+        if READ_ONLY.contains(&tool.as_str()) {
+            Self::ReadOnly
+        } else if EDITS.contains(&tool.as_str()) {
+            Self::Edits
+        } else {
+            Self::Any
+        }
+    }
+}
+
+impl fmt::Display for Risk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ReadOnly => "read-only",
+            Self::Edits => "edits",
+            Self::Any => "commands",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ApprovalMode {
+    /// Any approver; the first valid decision wins.
+    #[default]
+    AnyApprover,
+    /// Only owners answer.
+    OwnerOnly,
+    /// Allowing a [`Risk::Any`] call needs two different people; the agent stays blocked
+    /// until the second approves. One "deny" ends it.
+    TwoPerson,
+    /// An approver claims a request ("I'll take this one"); then only they (or an owner)
+    /// answer it, and its notification is withdrawn for everyone else.
+    Claim,
+}
+
+/// A session's approval rules. Owners are never held back by `max_risk`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct ApprovalPolicy {
+    /// Who may answer.
+    pub mode: ApprovalMode,
+    /// The riskiest call a non-owner approver may allow; above it only an owner can (anyone
+    /// with the approver role may still deny).
+    pub max_risk: Risk,
+}
+
+/// One person's part in an approval: an approval cast, or a claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalVote {
+    /// Who.
+    pub actor: Actor,
+    /// Their display name.
+    pub name: String,
+    /// When.
+    pub at: UnixMillis,
+}
+
+/// Where an open approval request stands under its session's policy. Sent while it is open,
+/// whenever a vote or claim changes, to clients with
+/// [`Caps::APPROVAL_POLICY`](crate::Caps::APPROVAL_POLICY).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalStatus {
+    /// The agent's pane.
+    pub pane_id: PaneId,
+    /// The request.
+    pub request_id: RequestId,
+    /// The call's risk class.
+    pub risk: Risk,
+    /// The session's mode.
+    pub mode: ApprovalMode,
+    /// Approvals cast that have not decided yet (two-person rule).
+    pub approvals: Vec<ApprovalVote>,
+    /// Distinct approvals an "allow" needs (2 under the two-person rule for risky calls).
+    pub needed: u8,
+    /// Who claimed it.
+    pub claimed_by: Option<ApprovalVote>,
 }

@@ -379,9 +379,15 @@ final class PaneDrawing: NSObject {
         }
     }
 
-    private func showToast(_ message: String, failure: Bool = false) {
+    func showToast(_ message: String, failure: Bool = false) {
         ActiveWindow.model?.toasts.show(Toast(
             message, systemImage: failure ? "exclamationmark.triangle.fill" : "arrow.up.circle.fill", style: failure ? .failure : .success))
+    }
+
+    /// Outlines a placement this device just made, once it is drawn.
+    func flash(_ placementId: UInt64) {
+        flashPlacement = placementId
+        surface?.invalidateInlineImages()
     }
 
     // MARK: Draw mode
@@ -602,15 +608,15 @@ final class PaneDrawing: NSObject {
             model.phase = .working("Sending to \(destination.agent.title)…")
         case .start(let kind):
             model.phase = .working("Starting \(kind.title)…")
-        case .copy, .share, .save:
-            model.phase = .working("Preparing the image…")
+        case .copy, .copyText, .share, .export:
+            model.phase = .working("Preparing the drawing…")
         }
         model.onDismiss = { [weak self] in self?.dismissNotice() }
         model.onSend = { [weak self] in
             guard let self, let primary else { return }
             self.deliver(placement, png: png, action: .send(primary), anchor: anchor)
         }
-        let quiet = action == .copy || action == .share || action == .save
+        let quiet = action.isTakeaway
         if !quiet { showNotice(model) }
         guard action != .keep else {
             CanvasWebView.log.info("done: kept (\(primary.map { "Send to \($0.agent.title) offered" } ?? "no agent", privacy: .public))")
@@ -727,12 +733,15 @@ final class PaneDrawing: NSObject {
     func menu(for placement: Placement) -> DrawingMenu {
         let list = agentDestinations()
         let primary = primaryDestination(in: list)
-        var menu = DrawingMenu.make(destinations: list, primary: primary, canStart: canStartAgent, includeKeep: false, placement: true)
+        var menu = DrawingMenu.make(
+            destinations: list, primary: primary, canStart: canStartAgent, includeKeep: false, placement: true,
+            history: !isReadOnly && hub.client.offersDrawingHistory())
         if isReadOnly {
             // Viewers can take a copy; nothing that changes the host.
             menu.sections = menu.sections.compactMap { section in
-                let items = section.items.filter { $0.action == .copy || $0.action == .share || $0.action == .save }
-                return items.isEmpty ? nil : DrawingMenu.Section(title: section.title, items: items)
+                var kept = section
+                kept.items = section.items.filter { $0.action?.isTakeaway == true }
+                return kept.items.isEmpty ? nil : kept
             }
         }
         return menu
@@ -745,6 +754,7 @@ final class PaneDrawing: NSObject {
         }
         switch item.placementAction {
         case .edit: reopen(placement)
+        case .history: break  // a submenu, filled when it opens (`historyEntries`)
         case .delete:
             let client = hub.client
             Task {

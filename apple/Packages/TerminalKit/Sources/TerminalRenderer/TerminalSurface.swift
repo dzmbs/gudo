@@ -118,6 +118,8 @@ public final class TerminalSurface {
     private var offscreenTexture: MTLTexture?
     private nonisolated let wakePending = Atomic<Bool>(false)
     private nonisolated let outputPending = Atomic<Bool>(false)
+    /// Output arrived since the search last caught up (its own flag: the predictor takes the other).
+    private nonisolated let searchOutputPending = Atomic<Bool>(false)
 
     // Blink: both phases flip on one timer while something blinks.
     private var cursorBlinkOn = true
@@ -147,7 +149,10 @@ public final class TerminalSurface {
     private static func frameStyle(_ a: TerminalAppearance) -> FrameStyle {
         FrameStyle(
             selectionBackground: a.selectionBackground, selectionForeground: a.selectionForeground,
-            faintAlpha: UInt8(clamping: Int((a.faintOpacity * 255).rounded())))
+            faintAlpha: UInt8(clamping: Int((a.faintOpacity * 255).rounded())),
+            search: SearchColors(
+                background: a.searchBackground, foreground: a.searchForeground,
+                selectedBackground: a.searchSelectedBackground, selectedForeground: a.searchSelectedForeground))
     }
 
     /// Seconds spent compiling shaders.metal at startup.
@@ -374,14 +379,11 @@ public final class TerminalSurface {
         return []
     }
 
-    /// The OSC 8 link under a view point and the run of cells on that row that carry it.
-    public func link(at point: CGPoint) -> (url: String, row: Int, columns: ClosedRange<Int>)? {
-        let cell = cell(at: point)
-        guard let uri = terminal.hyperlink(atViewport: cell), let grid else { return nil }
-        var lo = cell.x, hi = cell.x
-        while lo > 0, terminal.hyperlink(atViewport: GridPoint(x: lo - 1, y: cell.y)) == uri { lo -= 1 }
-        while hi + 1 < Int(grid.cols), terminal.hyperlink(atViewport: GridPoint(x: hi + 1, y: cell.y)) == uri { hi += 1 }
-        return (uri, cell.y, lo...hi)
+    /// The link under a view point: an OSC 8 hyperlink, or a URL or path printed there
+    /// (`Terminal.link(atViewport:)`), with the cells it covers on that row.
+    public func link(at point: CGPoint) -> TerminalLink? {
+        guard grid != nil else { return nil }
+        return terminal.link(atViewport: cell(at: point))
     }
 
     /// The selection's ends in view points: the top-left of its first cell and the bottom-right
@@ -421,7 +423,61 @@ public final class TerminalSurface {
     /// reconcile against the new screen on the next frame.
     public nonisolated func outputArrived() {
         outputPending.store(true, ordering: .releasing)
+        searchOutputPending.store(true, ordering: .releasing)
         setNeedsRender()
+    }
+
+    // MARK: Search
+
+    /// The scrollback search (libghostty-vt's, over this terminal's own scrollback), while one is
+    /// running: every match in view is highlighted, the selected one in the stronger color.
+    public private(set) var search: TerminalSearch?
+    /// The search's count and selection changed (main actor; after frames and `selectMatch`).
+    public var onSearchStatus: ((SearchStatus) -> Void)?
+    private var lastSearchStatus = SearchStatus.idle
+
+    /// Searches for `needle` (empty ends the search and clears the highlights). The same needle
+    /// again keeps the selection.
+    public func setSearch(_ needle: String, caseSensitive: Bool = false) {
+        if needle.isEmpty {
+            search = nil
+        } else {
+            let search = self.search ?? TerminalSearch(terminal: terminal)
+            search.setNeedle(needle, caseSensitive: caseSensitive)
+            self.search = search
+            searchOutputPending.store(true, ordering: .releasing)
+        }
+        reportSearchStatus(search?.status ?? .idle)
+        invalidateOverlay()
+    }
+
+    /// Selects the next (older) or previous (newer) match and scrolls to it. False without matches.
+    @discardableResult
+    public func selectMatch(_ direction: TerminalSearch.Direction) -> Bool {
+        guard let search else { return false }
+        // Catch up first, so the match is chosen among everything printed so far.
+        if !search.status.isComplete || searchOutputPending.exchange(false, ordering: .acquiringAndReleasing) {
+            search.run()
+        }
+        let found = search.select(direction)
+        reportSearchStatus(search.status)
+        invalidateOverlay()
+        return found
+    }
+
+    private func reportSearchStatus(_ status: SearchStatus) {
+        guard status != lastSearchStatus else { return }
+        lastSearchStatus = status
+        onSearchStatus?(status)
+    }
+
+    /// Advances the search on a frame and returns the highlights for the viewport.
+    private func searchHighlights() -> [SearchHighlight] {
+        guard let search, let grid else { return [] }
+        // The viewport's match list is refreshed by feeding, so feed on every frame it is shown.
+        let output = searchOutputPending.exchange(false, ordering: .acquiringAndReleasing)
+        reportSearchStatus(search.update(outputChanged: output))
+        return search.viewportHighlights(rows: Int(grid.rows), cols: Int(grid.cols))
     }
 
     // MARK: Inline images
@@ -557,8 +613,9 @@ public final class TerminalSurface {
     fileprivate func tick(_ link: CADisplayLink) {
         wakePending.store(false, ordering: .releasing)
         let rendered = renderIfDirty()
-        // Keep ticking while predictions wait for confirmation, so their timeouts fire.
-        if !rendered, !(predictor?.isActive ?? false) { link.isPaused = true }
+        // Keep ticking while predictions wait for confirmation, so their timeouts fire, and while
+        // a search is still working through the scrollback.
+        if !rendered, !(predictor?.isActive ?? false), search?.status.isComplete ?? true { link.isPaused = true }
     }
 
     private func currentOverlay(cursor: RenderState.Cursor) -> FrameOverlay {
@@ -567,6 +624,7 @@ public final class TerminalSurface {
         overlay.cursorBlinkOn = cursorBlinkOn
         overlay.textBlinkOn = textBlinkOn
         overlay.hoveredLink = hoveredLink
+        overlay.searchHighlights = searchHighlights()
         let cols = Int(grid?.cols ?? 1)
 
         if let predictor, terminal.viewportAtBottom {

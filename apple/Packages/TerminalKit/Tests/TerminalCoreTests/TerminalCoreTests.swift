@@ -52,6 +52,35 @@ private func text(_ state: RenderState, row y: Int) -> String {
     #expect(after.allSatisfy { $0.dirty })
 }
 
+/// macOS `top`, byte for byte as captured from a PTY: it enters the alternate screen at once,
+/// then writes its first frame only after sampling every process, which can take seconds. The
+/// pane is legitimately blank in between; the frame must reach both the text and the renderer.
+@Test func fullScreenAppFirstFrameAfterAlternateScreenSwitch() {
+    let terminal = Terminal(cols: 40, rows: 6) { _ in }
+    let state = RenderState()
+    terminal.write(Array("% top -s 1\r\n".utf8))
+    state.update(from: terminal)
+    state.markClean()
+
+    terminal.write(Array("\u{1b}[?1049h\u{1b}[1;6r\u{1b}(B\u{1b}[m\u{1b}[4l\u{1b}[?7h\u{1b}[?1h\u{1b}=".utf8))
+    #expect(terminal.modes.altScreen)
+    state.update(from: terminal)
+    #expect(state.dirty == .full)
+    #expect((0..<6).allSatisfy { text(state, row: $0).trimmingCharacters(in: .whitespaces).isEmpty })
+    state.markClean()
+
+    terminal.write(Array("\u{1b}[H\u{1b}[2JProcesses: 612 total, 3 running\r\nLoad Avg: 2.10".utf8))
+    state.update(from: terminal)
+    #expect(state.dirty != .clean)
+    #expect(text(state, row: 0).hasPrefix("Processes: 612 total"))
+    #expect(text(state, row: 1).hasPrefix("Load Avg: 2.10"))
+    #expect(terminal.visibleText().contains("Processes:"))
+
+    terminal.write(Array("\u{1b}[?1049l".utf8))
+    #expect(!terminal.modes.altScreen)
+    #expect(terminal.visibleText().hasPrefix("% top -s 1"))
+}
+
 @Test func encodesKeysWithTerminalModes() {
     let terminal = Terminal(cols: 80, rows: 24) { _ in }
     let ctrlC = KeyEvent(key: PhysicalKey(macKeyCode: 0x08)!, action: .press, mods: .control, text: "c", unshiftedCodepoint: 0x63)

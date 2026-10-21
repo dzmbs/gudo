@@ -140,9 +140,16 @@ nonisolated enum MockMultiplayer {
             client: MockMultiplayerClient())
         session.seed(grants: grants, devices: devices, audit: audit,
                      leaseRequests: UserDefaults.standard.bool(forKey: "mockLeaseRequest")
-                        ? [.init(paneId: 3, by: mira, name: "Mira Holt")] : [])
+                        ? [.init(paneId: 3, by: mira, name: "Mira Holt")] : [],
+                     knocks: UserDefaults.standard.bool(forKey: "mockKnock") ? [knock] : [],
+                     approvalPolicy: ApprovalPolicy(mode: .twoPerson, maxRisk: .edits))
         return session
     }()
+
+    /// `-mockKnock YES`: someone at the door.
+    static let knock = Knock(knockId: 1, actor: Actor(principal: "e5".padding(toLength: 32, withPad: "0", startingAt: 0), device: "e5".padding(toLength: 64, withPad: "5", startingAt: 0)),
+                             name: "Priya Nair", grantId: "g6".padding(toLength: 32, withPad: "0", startingAt: 0), roles: [.viewer],
+                             scope: .session(sessionId: 1), atMs: now - 40_000)
 
     static func grant(_ id: String, _ label: String, _ roles: [Role], _ scope: Scope, expires: UInt64?, uses: UInt32?, bound: Int, revoked: Bool = false, issuedAgo: UInt64) -> GrantInfo {
         GrantInfo(
@@ -215,4 +222,16 @@ nonisolated final class MockMultiplayerClient: MultiplayerClientAPI {
     func leases() async throws -> [Lease] { [] }
     func prompt(paneId: UInt64, text: String, submit: Bool) async throws -> UInt32 { UInt32(text.count) }
     func audit(after: UInt64?, limit: UInt32) async throws -> AuditPage { MockMultiplayer.audit }
+    func pendingKnocks() -> [Knock] { [] }
+    func admitKnock(knockId: UInt64, roles: [Role], sinceJoin: Bool, ttlSecs: UInt64?) async throws -> GrantInfo {
+        MockMultiplayer.grant("g6", "Priya Nair", roles, .session(sessionId: 1), expires: MockMultiplayer.now + 7 * 86_400_000, uses: 1, bound: 1, issuedAgo: 0)
+    }
+    func denyKnock(knockId: UInt64) async throws {}
+    func approvalPolicyCached() -> ApprovalPolicy? { nil }
+    func approvalStatuses() -> [ApprovalStatus] { [] }
+    func setApprovalPolicy(sessionId: UInt64, policy: ApprovalPolicy) async throws -> ApprovalPolicy { policy }
+    func claimApproval(requestId: UInt64, claim: Bool) async throws -> ApprovalStatus {
+        ApprovalStatus(paneId: 3, requestId: requestId, risk: .any, mode: .claim, approvals: [], needed: 1,
+                       claimedBy: claim ? ApprovalVote(actor: MockMultiplayer.owner, name: "Alex Kim", atMs: MockMultiplayer.now) : nil)
+    }
 }

@@ -262,6 +262,39 @@ final class LiveAgentFeed: AgentFeed {
     func approve(_ id: AgentItem.ID) { decide(id, allow: true) }
     func deny(_ id: AgentItem.ID) { decide(id, allow: false) }
 
+    var knocks: [KnockItem] {
+        daemons.flatMap { id, name, daemon in
+            let session = daemon.multiplayer
+            guard session.isOwner else { return [KnockItem]() }
+            return session.knocks.map { KnockItem(hostId: id, hostName: name, knock: $0, session: session) }
+        }
+    }
+
+    func approval(_ id: AgentItem.ID) -> ApprovalContext? {
+        guard let (daemon, pane) = try? target(id),
+              let agent = daemon.meta[PaneId(pane)]?.agent,
+              case .blocked(let request, _, _) = agent.state
+        else { return nil }
+        let session = daemon.multiplayer
+        guard session.me != nil else { return nil }
+        // The host classifies each request's risk (from the tool) when the agent blocks.
+        let risk = session.approvalStatuses[request]?.risk ?? .any
+        let mine = session.approvalStatuses[request]?.claimedBy?.actor.principal == session.myPrincipal
+        return ApprovalContext(
+            block: session.approvalBlock(requestId: request, risk: risk),
+            progress: session.approvalProgress(requestId: request),
+            claimMode: session.approvalPolicy.mode == .claim && session.canApprove,
+            claimedByMe: mine,
+            approvedAlready: session.approvedAlready(requestId: request))
+    }
+
+    func claim(_ id: AgentItem.ID, _ claim: Bool) {
+        guard let (daemon, pane) = try? target(id),
+              case .blocked(let request, _, _)? = daemon.meta[PaneId(pane)]?.agent?.state
+        else { return }
+        Task { await daemon.multiplayer.claim(request, claim) }
+    }
+
     func reply(_ id: AgentItem.ID, text: String) async throws {
         let (daemon, pane) = try target(id)
         let api = try daemon.workspace.client()
@@ -323,7 +356,9 @@ final class LiveAgentFeed: AgentFeed {
                     }
                 }
             }
-            return made.setup.map { "Running setup first: \($0)" }
+            daemon.workspace.notePort(made.worktree.port, worktree: made.worktree.path)
+            return [made.worktree.port.map { "PORT \($0)" }, made.setup.map { "running setup first: \($0)" }]
+                .compactMap(\.self).joined(separator: " · ").nonEmpty
         }
         if request.shell {
             guard let session = daemon.layout.sessionId else { throw HostError.notConnected }
@@ -395,6 +430,64 @@ final class LiveAgentFeed: AgentFeed {
         guard let option = Self.option(options, allow: allow) else { return }
         answered[id] = request
         daemon.decide(requestId: request, optionId: option.id)
+    }
+
+    // MARK: Approval verbs (edited input, approve all like this)
+
+    /// The live agent behind an item: its daemon, pane, the request it is blocked on and that
+    /// request's allow option.
+    private func blocked(_ id: AgentItem.ID) -> (daemon: DaemonConnection, pane: UInt64, request: UInt64, allow: UInt32)? {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let raw = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
+              let agent = daemon.meta[PaneId(raw)]?.agent,
+              case .blocked(let request, _, let options) = agent.state, answered[id] != request,
+              let allow = Self.option(options, allow: true)
+        else { return nil }
+        return (daemon, raw, request, allow.id)
+    }
+
+    func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions? {
+        guard let target = blocked(id),
+              let info = target.daemon.approvals.request(pane: target.pane, blockedOn: target.request)
+        else { return nil }
+        guard info.editableInput != nil || info.like != nil else { return nil }
+        return AgentApprovalOptions(editableInput: info.editableInput, likeThis: info.like?.label)
+    }
+
+    func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval] {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let raw = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection
+        else { return [] }
+        return (daemon.approvals.rules[raw] ?? []).map { rule in
+            AgentAutoApproval(id: rule.id, label: rule.match.label, expiresAt: rule.expiresAt,
+                              turnsLeft: rule.turnsLeft, uses: rule.uses, grantedBy: rule.grantedBy)
+        }
+    }
+
+    func approveEdited(_ id: AgentItem.ID, input: String) async throws {
+        guard let target = blocked(id) else { throw HostError.notConnected }
+        try await target.daemon.approvals.approveEdited(paneId: target.pane, requestId: target.request, optionId: target.allow, input: input)
+        answered[id] = target.request
+    }
+
+    func approveAllLikeThis(_ id: AgentItem.ID) async throws {
+        guard let target = blocked(id),
+              let like = target.daemon.approvals.request(pane: target.pane, blockedOn: target.request)?.like
+        else { throw ApprovalUnavailable() }
+        try await target.daemon.approvals.approveAllLikeThis(
+            paneId: target.pane, requestId: target.request, match: like,
+            minutes: AgentAutoApproval.minutes, turns: AgentAutoApproval.turns)
+        answered[id] = target.request
+    }
+
+    func revokeAutoApproval(_ id: AgentItem.ID, rule: AgentAutoApproval.ID) async throws {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let raw = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection
+        else { throw HostError.notConnected }
+        try await daemon.approvals.revoke(paneId: raw, ruleId: rule)
     }
 
     /// The option that means yes (or no): by its words, else the first (last).
@@ -795,149 +888,6 @@ extension DiffFile {
     }
 }
 
-// MARK: - Editor
-
-/// VS Code for the window's folder: `openEditor` (serve-web, the licence accepted by using the
-/// app — Settings → About lists it; VSCodium takes over by itself where Microsoft's CLI cannot
-/// run) over a local forward, one session per host and folder, reused when reopened.
-@MainActor
-@Observable
-final class LiveEditorSource: EditorSource {
-    @ObservationIgnored weak var window: WindowModel?
-    @ObservationIgnored let app: AppModel
-    private(set) var phase = EditorPhase.idle
-    private(set) var folder = "~"
-    private(set) var hostName = ""
-    var pendingURL: URL?
-
-    /// Open sessions by "host|folder".
-    @ObservationIgnored private var sessions: [String: (hub: DaemonWorkspace, session: EditorSession)] = [:]
-    @ObservationIgnored private var current: String?
-    @ObservationIgnored private var opening: Task<Void, Never>?
-    /// When the last open started, for the timing log.
-    @ObservationIgnored private var startedAt: ContinuousClock.Instant?
-
-    init(app: AppModel) {
-        self.app = app
-    }
-
-    /// Tests: where the source acts, instead of the window's host.
-    @ObservationIgnored var contextOverride: (() -> HostContext?)?
-
-    private var context: HostContext? {
-        if let contextOverride { return contextOverride() }
-        return HostContext.resolve(app: app, window: window)
-    }
-
-    var unavailableReason: String? { context == nil ? HostContext.noHost : nil }
-
-    func open() async {
-        // One open at a time: the screen's own open and a file open race on presentation.
-        if let opening {
-            await opening.value
-            return
-        }
-        let task = Task { await performOpen() }
-        opening = task
-        await task.value
-        opening = nil
-    }
-
-    private func performOpen() async {
-        // The window's host may still be connecting: wait for it (saying so) rather than fail.
-        if context == nil, window?.workspace?.host is DaemonConnection {
-            phase = .checking
-            hostName = window?.hostName ?? ""
-            for _ in 0..<150 where context == nil {
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-        }
-        // Just after connecting the panes may not have said where they are yet.
-        for _ in 0..<20 where context != nil && context?.directory == nil {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-        guard let context else {
-            phase = .failed(HostContext.noHost)
-            return
-        }
-        hostName = context.name
-        let directory = context.directory ?? "~"
-        // The repository root when the pane is inside one (VS Code shows the project), else the directory.
-        var target = directory
-        if let status = try? await context.api().gitStatus(path: directory) { target = status.root }
-        folder = target
-        let key = "\(context.hostId)|\(target)"
-        current = key
-        if let existing = sessions[key], let url = URL(string: existing.session.url) {
-            phase = .loading(url)
-            return
-        }
-        await start(context: context, folder: target, key: key)
-    }
-
-    private func start(context: HostContext, folder: String, key: String) async {
-        startedAt = .now
-        phase = .checking
-        do {
-            let api = try context.api()
-            if let status = try? await api.editorStatus(),
-               let vscode = status.available.first(where: { $0.kind == .vsCode }) {
-                phase = vscode.installed ? .starting : .installing
-            } else {
-                phase = .starting
-            }
-            let session = try await api.openEditor(folder: folder, acceptVscodeLicense: true)
-            sessions[key] = (context.hub, session)
-            let elapsed = startedAt.map { (ContinuousClock.now - $0) / .milliseconds(1) } ?? 0
-            log.info("editor ready host=\(context.hostId, privacy: .public) kind=\(String(describing: session.instance.kind), privacy: .public) installed=\(session.installedCli) in \(elapsed, format: .fixed(precision: 0)) ms")
-            guard current == key else { return }
-            if let url = URL(string: session.url) {
-                phase = .loading(url)
-            } else {
-                phase = .failed("The editor answered with an address this device cannot open.")
-            }
-        } catch {
-            guard current == key else { return }
-            phase = .failed(ScreenError.describe(error))
-        }
-    }
-
-    func didLoad() {
-        if case .loading(let url) = phase {
-            phase = .ready(url)
-            if let startedAt {
-                log.info("editor workbench loaded \((ContinuousClock.now - startedAt) / .milliseconds(1), format: .fixed(precision: 0)) ms after open")
-                self.startedAt = nil
-            }
-        }
-    }
-
-    func open(path: String, line: Int?, column: Int?) async {
-        if current == nil || sessions[current ?? ""] == nil { await open() }
-        guard let key = current, let (hub, session) = sessions[key], let api = try? hub.client() else { return }
-        do {
-            if let next = try await api.editorOpenInSession(
-                session: session, path: path, line: line.map { UInt32($0) }, column: column.map { UInt32($0) }),
-                let url = URL(string: next) {
-                pendingURL = url
-            }
-        } catch {
-            log.error("editor open \(path, privacy: .public): \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    func close(stopServer: Bool) async {
-        defer {
-            phase = .idle
-            current = nil
-        }
-        guard stopServer, let key = current, let (hub, session) = sessions.removeValue(forKey: key),
-              let api = try? hub.client()
-        else { return }
-        try? await api.closeEditor(session: session, stopServer: true)
-    }
-}
-
 // MARK: - Ports
 
 @MainActor
@@ -1029,13 +979,16 @@ final class LivePortSource: PortSource {
         return Self.url(for: port, localPort: local)
     }
 
-    /// `http://localhost:<local>` plus the path of the URL the server printed.
+    /// `http://localhost:<local>` plus the path of the URL the server printed. A printed
+    /// `*.localhost` name is kept (S-BR1's fallback): it resolves to loopback, so it reaches the
+    /// forward, and a server that routes by name (`app.localhost`) still sees it.
     static func url(for port: DetectedPort, localPort: UInt16) -> URL {
         var components = URLComponents()
         components.scheme = port.url.flatMap { URL(string: $0)?.scheme } == "https" ? "https" : "http"
         components.host = "localhost"
         components.port = Int(localPort)
         if let printed = port.url.flatMap(URLComponents.init(string:)) {
+            if let host = printed.host?.lowercased(), host.hasSuffix(".localhost") { components.host = host }
             components.path = printed.path
             components.query = printed.query
         }
@@ -1116,10 +1069,10 @@ final class LiveLinkSource: LinkSource {
         return (output.mark.command, output.text)
     }
 
-    func countMatches(_ needle: String) async throws -> Int? {
+    func countMatches(_ needle: String, caseSensitive: Bool) async throws -> Int? {
         guard let target, !needle.isEmpty else { return nil }
         let page = try await target.hub.search(
-            pane: target.pane, query: SearchQuery(pattern: needle, mode: .plain, case: .smart), limit: 1)
+            pane: target.pane, query: SearchQuery(pattern: needle, mode: .plain, case: caseSensitive ? .sensitive : .insensitive), limit: 1)
         return Int(page.total)
     }
 }
@@ -1156,16 +1109,19 @@ extension WindowModel {
         }
     }
 
-    /// Counts matches for the scrollback search bar over the daemon's whole scrollback
-    /// (debounced; `searchTotal` stays nil for local panes).
+    /// Applies the needle to the searched pane (highlights, its own count) and counts matches
+    /// over the daemon's whole scrollback (debounced; `searchTotal` stays nil for local and
+    /// plain-SSH panes, whose terminal holds all of it).
     func updateSearchCount() {
+        applySearch()
         searchCountTask?.cancel()
-        let needle = searchNeedle
+        let needle = searchNeedle, caseSensitive = searchCaseSensitive
+        if needle.isEmpty { searchTotal = nil }
         searchCountTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
             guard let self, !Task.isCancelled else { return }
-            let total = try? await self.links.countMatches(needle)
-            guard !Task.isCancelled, self.searchNeedle == needle else { return }
+            let total = try? await self.links.countMatches(needle, caseSensitive: caseSensitive)
+            guard !Task.isCancelled, self.searchNeedle == needle, self.searchCaseSensitive == caseSensitive else { return }
             self.searchTotal = total ?? nil
         }
     }

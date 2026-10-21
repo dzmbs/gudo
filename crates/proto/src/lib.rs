@@ -43,6 +43,9 @@
 //! - The git-native workspace (repositories, worktrees and branches per pane, pull requests
 //!   through the host's `gh`, tasks, archive, scripts) is pushed as [`ServerCtl::Repos`] to
 //!   clients with [`Caps::REPO_STATUS`], with its requests in [`WorkspaceRequest`]; see [`repo`].
+//! - Approval extras (approve with edited input, "approve all like this" rules) are
+//!   [`ClientCtl::Approval`] → [`ServerCtl::ApprovalResult`], with pushes as
+//!   [`ServerCtl::Approval`], for clients with [`Caps::APPROVALS`]; see [`approve`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -63,6 +66,7 @@
 //! every client message is checked against a [`GrantId`], and input and decisions carry the
 //! acting principal.
 
+pub mod approve;
 pub mod artifact;
 pub mod askpass;
 pub mod assist;
@@ -78,6 +82,7 @@ mod ticket;
 pub mod usage;
 pub mod workspace;
 
+pub use approve::*;
 pub use artifact::*;
 pub use askpass::*;
 pub use assist::*;

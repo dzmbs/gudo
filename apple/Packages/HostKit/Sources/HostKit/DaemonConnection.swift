@@ -60,6 +60,8 @@ public final class DaemonConnection: HostConnection {
     public let multiplayer = MultiplayerSession()
     /// Native password prompts from this host's panes (docs/DAEMON.md §9).
     public let askpass = AskpassSession()
+    /// Approve with an edited command, auto-approve rules (docs/DAEMON.md §6.9).
+    public let approvals = ApprovalSession()
     /// The daemon's workspace pushes (attention feed, ports, files), fanned out to observers.
     @ObservationIgnored public let workspaceEvents = WorkspaceEventHub()
     /// What the daemon said about itself on the latest connection (build, protocol level,
@@ -156,6 +158,7 @@ public final class DaemonConnection: HostConnection {
         self.client = client
         if let mp = client as? any MultiplayerClientAPI { multiplayer.attach(mp) }
         if let ap = client as? any AskpassClientAPI { askpass.attach(ap) }
+        if let ac = client as? any ApprovalClientAPI { approvals.attach(ac) }
         if let source = client as? any WorkspaceEventSource { workspaceEvents.attach(source) }
         pushClient = client as? any PushClientAPI
         pump = Task { [weak self] in
@@ -206,9 +209,23 @@ public final class DaemonConnection: HostConnection {
         client.reconnect()
     }
 
+    /// The relay settings changed: redial on an endpoint built from them. Panes resume as
+    /// after any reconnect; a suspended connection uses them when it resumes.
+    public func setRelays(_ relay: RelayMode, options: ConnectOptions) {
+        guard let client = client as? any RelaySettingsClient else { return }
+        Self.log.info("relay settings changed: redialing host=\(self.hostId, privacy: .public)")
+        if status != .suspended {
+            status = .connecting(.dialing)
+            dials += 1
+            timings.dialStarted = .now
+        }
+        client.setRelays(relay: relay, options: options)
+    }
+
     public func close() {
         multiplayer.detach()
         askpass.detach()
+        approvals.detach()
         pump?.cancel()
         events?.finish()
         client = nil

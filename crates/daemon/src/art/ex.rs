@@ -182,6 +182,43 @@ impl Art {
         }
     }
 
+    /// The artifact as an `.excalidraw` file: a scene with its images embedded, or an image
+    /// as a scene holding it (the same file `Client::excalidraw_file` builds).
+    pub fn excalidraw_file(&self, id: ArtifactId) -> Result<Vec<u8>> {
+        let info = self.info(id).ok_or_else(|| not_found(id))?;
+        let file = match (info.kind, info.image) {
+            (ArtifactKind::Excalidraw, _) => {
+                let scene = self.ex_get(id, 0)?;
+                let mut files = Vec::with_capacity(scene.files.len());
+                for f in scene.files {
+                    let (image, bytes) = self.read_blob(&f.image.hash)?;
+                    files.push((f.file_id, image.media.mime().to_owned(), bytes));
+                }
+                drawing::ExcalidrawFile {
+                    elements: scene.elements,
+                    app_state: scene.app_state,
+                    files,
+                }
+            }
+            (ArtifactKind::Image, Some(image)) => {
+                let (image, bytes) = self.read_blob(&image.hash)?;
+                drawing::ExcalidrawFile::from_image(
+                    &image.hash.to_hex(),
+                    image.media.mime(),
+                    bytes,
+                    image.width,
+                    image.height,
+                )
+            }
+            _ => {
+                return Err(ArtifactError::Invalid(
+                    "ink drawings export as PNG or SVG".into(),
+                ));
+            }
+        };
+        Ok(file.to_json().into_bytes())
+    }
+
     /// Creates an Excalidraw scene from a parsed `.excalidraw` file (images stored as blobs).
     pub fn ex_import(
         &self,

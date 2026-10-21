@@ -149,4 +149,93 @@ final class GitUITests: XCTestCase {
         XCTAssertTrue(element("pr-button").waitForExistence(timeout: 20), "the new tab is in fix-login (#41 in the toolbar)")
         shot("sidebar-fix-login")
     }
+
+    /// A new worktree's `PORT` (the daemon's, from `worktrees.json`) shows in its sidebar row
+    /// and the toolbar popover; Open localhost:PORT reaches a server the tab started on `$PORT`.
+    /// Then the sidebar's menu archives it (asking first: setup left an untracked file), the
+    /// palette restores it, and the menu deletes it.
+    func testWorktreePortThenArchiveRestoreAndDelete() throws {
+        try launch()
+        XCTAssertTrue(element("pr-button").waitForExistence(timeout: 30), "the focused pane's worktree in the toolbar")
+        newTask("brave-heron")
+        let worktree = fixtures + "/work/.unnamed/worktrees/proj/brave-heron"
+        let port = try XCTUnwrap(waitForPort(of: "brave-heron"), "the daemon gave the worktree a PORT")
+
+        // The sidebar row and the toolbar popover show it.
+        let row = element("worktree-row-brave-heron")
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "the new worktree's row")
+        let labelled = NSPredicate(format: "label CONTAINS %@", "PORT \(port)")
+        expectation(for: labelled, evaluatedWith: row)
+        waitForExpectations(timeout: 20)
+        shot("sidebar-port")
+
+        // A server on $PORT in the worktree's tab (setup runs first; wait for its prompt).
+        let deadline = Date().addingTimeInterval(15)
+        while !FileManager.default.fileExists(atPath: worktree + "/.setup-done") && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
+        panes.firstMatch.tap()
+        app.typeText("python3 -m http.server $PORT --bind 127.0.0.1\n")
+
+        element("pr-button").tap()
+        XCTAssertTrue(element("pr-popover").waitForExistence(timeout: 5), "the popover opens")
+        let shown = element("worktree-port")
+        XCTAssertTrue(shown.waitForExistence(timeout: 5), "the popover shows the PORT")
+        XCTAssertTrue(shown.label.contains("\(port)") || (shown.value as? String)?.contains("\(port)") == true, "PORT \(port): \(shown.label)")
+        shot("popover-port")
+        element("worktree-open-port").tap()
+        XCTAssertTrue(text(containing: "Directory listing").waitForExistence(timeout: 30), "localhost:\(port) loads through the forward")
+        shot("worktree-port-browser")
+        element("browser-done").tap()
+        // Back to the ports list, which lists it; then close the sheet.
+        XCTAssertTrue(element("port-\(port)").waitForExistence(timeout: 5), "the ports list shows it")
+        app.buttons["Done"].firstMatch.tap()
+
+        // Archive from the sidebar: it has an untracked file, so it asks.
+        row.press(forDuration: 1.2)
+        let archive = app.buttons["Archive Worktree…"].firstMatch
+        XCTAssertTrue(archive.waitForExistence(timeout: 5), "the row's menu offers Archive")
+        archive.tap()
+        let confirmArchive = app.buttons["Archive with Changes"].firstMatch
+        XCTAssertTrue(confirmArchive.waitForExistence(timeout: 5), "archiving with changes asks first")
+        shot("archive-confirm")
+        confirmArchive.tap()
+        XCTAssertTrue(text(containing: "Archived brave-heron").waitForExistence(timeout: 15), "says so")
+        XCTAssertTrue(row.waitForNonExistence(timeout: 15), "the row goes")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: worktree), "the directory is gone")
+
+        // Restore from the palette: it comes back with its tab.
+        XCTAssertTrue(element("worktree-row-main").waitForExistence(timeout: 10))
+        palette("Restore brave-heron")
+        XCTAssertTrue(text(containing: "Restored brave-heron").waitForExistence(timeout: 20), "says so")
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the row is back")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree + "/.setup-done"), "with its changes")
+        shot("restored")
+
+        // Delete from the sidebar: asks, then removes the directory.
+        row.press(forDuration: 1.2)
+        let delete = app.buttons["Delete Worktree…"].firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), "the row's menu offers Delete")
+        delete.tap()
+        let confirmDelete = app.buttons["Delete Worktree"].firstMatch
+        XCTAssertTrue(confirmDelete.waitForExistence(timeout: 5), "deleting asks first")
+        shot("delete-confirm")
+        confirmDelete.tap()
+        XCTAssertTrue(text(containing: "Deleted brave-heron").waitForExistence(timeout: 15), "says so")
+        XCTAssertTrue(row.waitForNonExistence(timeout: 15), "the row goes")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: worktree), "the directory is gone")
+    }
+
+    /// The `PORT` the daemon recorded for a worktree (`<state>/worktrees.json`).
+    private func waitForPort(of name: String, timeout: TimeInterval = 30) -> UInt16? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let data = FileManager.default.contents(atPath: fixtures + "/worktrees.json"),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let ports = json["ports"] as? [String: Any],
+               let port = ports.first(where: { $0.key.hasSuffix("/" + name) })?.value as? Int {
+                return UInt16(port)
+            }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        return nil
+    }
 }

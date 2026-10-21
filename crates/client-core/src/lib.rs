@@ -27,10 +27,12 @@
 //! # }
 //! ```
 
+mod approvals;
 mod artifacts;
 mod askpass;
 mod assist;
 mod conn;
+pub mod knock;
 mod mirror;
 mod mp;
 pub mod push;
@@ -41,7 +43,7 @@ mod workspace;
 
 use std::collections::HashMap;
 use std::net::TcpListener as StdTcpListener;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use iroh::endpoint::Connection;
@@ -56,6 +58,7 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::mirror::Mirror;
 
+pub use approvals::{ApprovalEvent, ApprovalEventQueue, ApprovalListener};
 pub use artifacts::{ArtifactEventQueue, ArtifactListener, ArtifactUpdate};
 pub use askpass::{AskpassEvent, AskpassEventQueue, AskpassListener};
 pub use assist::{AssistEvent, AssistEventQueue, AssistListener};
@@ -121,6 +124,12 @@ pub struct ConnectOptions {
     /// Extra CA certificates (DER) to trust for the daemon's self-hosted relays, e.g. a
     /// private CA. The usual web roots stay trusted.
     pub relay_ca_der: Vec<Vec<u8>>,
+    /// This device's own relays (self-hosted `iroh-relay` URLs), used for every daemon instead
+    /// of the ones its ticket names. Empty: follow the ticket. A local-only daemon
+    /// (`TicketRelays::Disabled`) and [`RelayMode::Disabled`] still mean direct only.
+    pub relay_urls: Vec<String>,
+    /// The shared token for [`relay_urls`](Self::relay_urls) (sent as `Authorization: Bearer`).
+    pub relay_auth_token: Option<String>,
     /// Show native password prompts: announce `Caps::ASKPASS`, so the daemon sends this
     /// connection the askpass prompts of panes it may drive (see [`AskpassListener`]).
     /// Leave it off in clients that cannot show them: the helper then asks on the terminal.
@@ -403,6 +412,11 @@ pub(crate) struct Inner {
     pub relays: proto::TicketRelays,
     pub options: ConnectOptions,
     pub config: ClientConfig,
+    /// How to reach the daemon now: `config.relay` and the relay parts of `options` at first,
+    /// replaced by [`Client::set_relays`].
+    pub net: Mutex<(RelayMode, ConnectOptions)>,
+    /// `net` changed: bind a new endpoint before the next dial.
+    pub rebind: AtomicBool,
     pub listener: Arc<dyn ClientListener>,
     pub wanted: Mutex<Wanted>,
     pub mirrors: Mutex<HashMap<PaneId, Mirror>>,
@@ -427,6 +441,8 @@ pub(crate) struct Inner {
     pub assist: assist::AssistState,
     /// Askpass requests in flight, open and detected password prompts.
     pub askpass: askpass::AskpassState,
+    /// Approval extras in flight, open requests' extras, auto-approve rules.
+    pub approvals: approvals::ApprovalState,
     /// What the daemon said about itself on the last connection.
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
     /// The last connection was for an upgrade only.
@@ -583,6 +599,8 @@ impl Client {
         let inner = Arc::new(Inner {
             ticket,
             relays,
+            net: Mutex::new((config.relay, options.clone())),
+            rebind: AtomicBool::new(false),
             options,
             config,
             listener,
@@ -604,6 +622,7 @@ impl Client {
             art: artifacts::ArtState::default(),
             assist: assist::AssistState::default(),
             askpass: askpass::AskpassState::default(),
+            approvals: approvals::ApprovalState::default(),
             daemon_info: Mutex::new(None),
             incompatible: Mutex::new(false),
         });
@@ -843,6 +862,28 @@ impl Client {
     /// Output applied so far for a pane.
     pub fn pane_seq(&self, pane_id: PaneId) -> Option<u64> {
         lock(&self.inner.mirrors).get(&pane_id).map(Mirror::seq)
+    }
+
+    /// Changes how the daemon is reached (the app's relay settings): `relay` and the relay
+    /// parts of `options` (`relay_ca_der`, `relay_urls`, `relay_auth_token`; `askpass` stays
+    /// as connected). Drops the connection and redials on a new endpoint, keeping all resume
+    /// state; a suspended client uses them when it resumes.
+    pub fn set_relays(&self, relay: RelayMode, options: &ConnectOptions) {
+        {
+            let mut net = lock(&self.inner.net);
+            net.0 = relay;
+            net.1.relay_ca_der.clone_from(&options.relay_ca_der);
+            net.1.relay_urls.clone_from(&options.relay_urls);
+            net.1.relay_auth_token.clone_from(&options.relay_auth_token);
+        }
+        self.inner.rebind.store(true, Ordering::SeqCst);
+        if *lock(&self.inner.paused) {
+            return;
+        }
+        if let Some(conn) = lock(&self.inner.connection).take() {
+            conn.close(0u32.into(), b"relay settings");
+        }
+        self.inner.reconnect.notify_one();
     }
 
     /// Drops the connection and redials immediately (network change, app foregrounded).

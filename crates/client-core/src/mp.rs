@@ -12,9 +12,11 @@ use std::time::Duration;
 
 use grants::{DeviceKey, GrantSpec};
 use proto::{
-    Actor, AuditPage, AuditQuery, Decided, DeviceInfo, GrantChain, GrantInfo, InputRejectReason,
-    Invite, JoinInfo, Lease, LeaseOutcome, MpError, MpRequest, MpResponse, PaneId, Participant,
-    Presence, PresenceState, PrincipalId, RequestId, RevokeTarget, ServerCtl, UnixMillis,
+    Actor, Admit, ApprovalPolicy, ApprovalStatus, AuditPage, AuditQuery, Decided, DeviceInfo,
+    GrantChain, GrantInfo, InputRejectReason, Invite, InviteTerms, JoinInfo, Knock, KnockId,
+    KnockUpdate, Lease, LeaseOutcome, MpError, MpRequest, MpResponse, PaneId, Participant,
+    Presence, PresenceState, PrincipalId, RequestId, RevokeTarget, ServerCtl, SessionId,
+    UnixMillis,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -83,6 +85,24 @@ pub enum MultiplayerEvent {
     },
     /// This connection's grant was revoked; the daemon closes it.
     Revoked,
+    /// Someone knocked, or a knock ended (owner devices only). The current list is
+    /// [`Client::pending_knocks`].
+    Knock {
+        /// The change.
+        update: KnockUpdate,
+    },
+    /// The attached session's approval policy (after attaching and on every change).
+    ApprovalPolicy {
+        /// The session.
+        session_id: SessionId,
+        /// The rules.
+        policy: ApprovalPolicy,
+    },
+    /// An open approval request's votes or claim changed.
+    ApprovalStatus {
+        /// Where it stands.
+        status: ApprovalStatus,
+    },
 }
 
 /// Receives [`MultiplayerEvent`]s. Must return quickly; it runs on the network threads.
@@ -121,6 +141,9 @@ pub(crate) struct MpState {
     me: Mutex<Option<JoinInfo>>,
     participants: Mutex<Vec<Participant>>,
     leases: Mutex<HashMap<PaneId, Lease>>,
+    knocks: Mutex<Vec<Knock>>,
+    policy: Mutex<Option<(SessionId, ApprovalPolicy)>>,
+    approvals: Mutex<HashMap<RequestId, ApprovalStatus>>,
     /// The invite this client joined with (guests).
     pub(crate) invite: Option<Invite>,
 }
@@ -165,7 +188,34 @@ impl MpState {
             ServerCtl::Forbidden { what, reason } => {
                 (MultiplayerEvent::Forbidden { what, reason }, None)
             }
-            ServerCtl::Decided(decided) => (MultiplayerEvent::Decided { decided }, None),
+            ServerCtl::Decided(decided) => {
+                lock(&self.approvals).remove(&decided.request_id);
+                (MultiplayerEvent::Decided { decided }, None)
+            }
+            ServerCtl::Knock(update) => {
+                let mut knocks = lock(&self.knocks);
+                match &update {
+                    KnockUpdate::Added(knock) => {
+                        knocks.retain(|k| k.knock_id != knock.knock_id);
+                        knocks.push(knock.clone());
+                    }
+                    KnockUpdate::Gone { knock_id, .. } => {
+                        knocks.retain(|k| k.knock_id != *knock_id)
+                    }
+                }
+                (MultiplayerEvent::Knock { update }, None)
+            }
+            ServerCtl::ApprovalPolicy { session_id, policy } => {
+                *lock(&self.policy) = Some((session_id, policy));
+                (
+                    MultiplayerEvent::ApprovalPolicy { session_id, policy },
+                    None,
+                )
+            }
+            ServerCtl::ApprovalStatus(status) => {
+                lock(&self.approvals).insert(status.request_id, status.clone());
+                (MultiplayerEvent::ApprovalStatus { status }, None)
+            }
             ServerCtl::AlreadyDecided { request_id, by } => {
                 (MultiplayerEvent::AlreadyDecided { request_id, by }, None)
             }
@@ -177,6 +227,12 @@ impl MpState {
             l.on_multiplayer_event(event);
         }
         pass
+    }
+
+    /// A new connection: knocks are re-sent by the daemon after `Joined`.
+    pub(crate) fn reset_for_connection(&self) {
+        lock(&self.knocks).clear();
+        lock(&self.approvals).clear();
     }
 
     /// The connection dropped: requests in flight will not be answered.
@@ -367,11 +423,30 @@ impl Client {
     ///
     /// [`MpError::Invalid`] if the child would widen the guest's grant, or the daemon's
     /// refusal to register it.
-    pub async fn create_invite(
+    pub async fn create_invite(&self, spec: GrantSpec, inviter: String) -> Result<Invite, MpError> {
+        self.create_invite_with_terms(spec, inviter, InviteTerms::default())
+            .await
+    }
+
+    /// Like [`create_invite`](Self::create_invite), with terms the daemon enforces on the
+    /// invite: knock to join, and scrollback only from joining. Share the invite as
+    /// [`Invite::to_string_with_terms`] so the join card can say what will happen.
+    ///
+    /// # Errors
+    ///
+    /// As [`create_invite`](Self::create_invite); [`MpError::Failed`] when the daemon is too
+    /// old for invite terms.
+    pub async fn create_invite_with_terms(
         &self,
         mut spec: GrantSpec,
         inviter: String,
+        terms: InviteTerms,
     ) -> Result<Invite, MpError> {
+        if terms != InviteTerms::default() && !self.daemon_has(proto::DaemonFeatures::MP2) {
+            return Err(MpError::Failed(
+                "the host's helper is too old for knock or since-joining invites; update it".into(),
+            ));
+        }
         let key = DeviceKey::from_seed(&self.inner.config.secret_key)
             .map_err(|e| MpError::Invalid(e.to_string()))?;
         let ticket = &self.inner.ticket;
@@ -394,7 +469,12 @@ impl Client {
             }
             None => grants::issue(&key, ticket.daemon_id, &spec, now_millis()),
         };
-        self.register_grant(chain.clone()).await?;
+        if terms == InviteTerms::default() {
+            self.register_grant(chain.clone()).await?;
+        } else {
+            expect!(self.multiplayer(MpRequest::RegisterInvite { chain: chain.clone(), terms }).await?,
+                MpResponse::Grant(_) => ())?;
+        }
         Ok(Invite {
             v: Invite::VERSION,
             daemon_id: ticket.daemon_id,
@@ -403,6 +483,76 @@ impl Client {
             inviter,
             chain,
         })
+    }
+
+    /// Whether the daemon announced `feature` on this connection.
+    fn daemon_has(&self, feature: proto::DaemonFeatures) -> bool {
+        lock(&self.inner.daemon_info)
+            .as_ref()
+            .is_some_and(|i| i.features.contains(feature))
+    }
+
+    /// Knocks waiting for an owner, as last pushed (owner devices).
+    pub fn pending_knocks(&self) -> Vec<Knock> {
+        lock(&self.inner.mp.knocks).clone()
+    }
+
+    /// The attached session's approval policy, as last pushed.
+    pub fn approval_policy_cached(&self) -> Option<(SessionId, ApprovalPolicy)> {
+        *lock(&self.inner.mp.policy)
+    }
+
+    /// Open approval requests with votes or a claim, as last pushed.
+    pub fn approval_statuses(&self) -> Vec<ApprovalStatus> {
+        lock(&self.inner.mp.approvals).values().cloned().collect()
+    }
+
+    /// Knocks waiting for an owner, asked now (owner only).
+    pub async fn knocks(&self) -> Result<Vec<Knock>, MpError> {
+        expect!(self.multiplayer(MpRequest::Knocks).await?, MpResponse::Knocks(k) => k)
+    }
+
+    /// Admits a knock with `admit`'s roles (`Some`), or turns it away (`None`). Returns the
+    /// grant the guest joins with, if admitted.
+    pub async fn answer_knock(
+        &self,
+        knock_id: KnockId,
+        admit: Option<Admit>,
+    ) -> Result<Option<GrantInfo>, MpError> {
+        match self
+            .multiplayer(MpRequest::AnswerKnock { knock_id, admit })
+            .await?
+        {
+            MpResponse::Admitted(info) => Ok(Some(info)),
+            MpResponse::Done => Ok(None),
+            other => Err(MpError::Failed(format!("unexpected answer {other:?}"))),
+        }
+    }
+
+    /// A session's approval policy, asked now.
+    pub async fn approval_policy(&self, session_id: SessionId) -> Result<ApprovalPolicy, MpError> {
+        expect!(self.multiplayer(MpRequest::GetApprovalPolicy { session_id }).await?,
+            MpResponse::ApprovalPolicy(p) => p)
+    }
+
+    /// Sets a session's approval policy (owner only).
+    pub async fn set_approval_policy(
+        &self,
+        session_id: SessionId,
+        policy: ApprovalPolicy,
+    ) -> Result<ApprovalPolicy, MpError> {
+        expect!(self.multiplayer(MpRequest::SetApprovalPolicy { session_id, policy }).await?,
+            MpResponse::ApprovalPolicy(p) => p)
+    }
+
+    /// Claims an open approval request ("I'll take this one"), or releases the claim.
+    pub async fn claim(
+        &self,
+        request_id: RequestId,
+        claim: bool,
+    ) -> Result<ApprovalStatus, MpError> {
+        expect!(self.multiplayer(MpRequest::Claim { request_id, claim }).await?,
+            MpResponse::Approval(s) => s)
     }
 
     /// Records a signed grant with the daemon so it is listed and revocable before use.

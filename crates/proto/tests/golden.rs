@@ -525,6 +525,7 @@ fn every_message_matches_its_frozen_bytes() {
     multiplayer_messages(&mut c);
     artifact_messages(&mut c);
     artifact_messages_2(&mut c);
+    artifact_history_messages(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -3120,4 +3121,64 @@ fn artifact_messages_2(c: &mut Checker) {
     ] {
         c.check(name, msg, golden);
     }
+}
+
+/// Drawing history: `DaemonFeatures::ARTIFACT_HISTORY` (bit 2), `ArtifactRequest::History` /
+/// `Restore` (appended after `Import`, 0x0f/0x10) and `ArtifactResponse::History` /
+/// `Restored` (appended after `Placements`, 0x0c/0x0d).
+fn artifact_history_messages(c: &mut Checker) {
+    let req = |req: ArtifactRequest| ClientCtl::Artifact { req_id: 6, req };
+    let res = |result: Result<ArtifactResponse, ArtifactError>| ServerCtl::ArtifactResult {
+        req_id: 6,
+        result,
+    };
+    let version = ArtifactVersion {
+        version: 7,
+        at: UnixMillis(1000),
+        by: ACTOR,
+        image: Some(image_ref()),
+        elements: 3,
+        restored_from: Some(4),
+    };
+    c.check(
+        "DaemonFeatures::ARTIFACT_HISTORY",
+        DaemonFeatures::ARTIFACT_HISTORY,
+        "020000000104",
+    );
+    c.check(
+        "ClientCtl::Artifact(History)",
+        req(ArtifactRequest::History {
+            artifact_id: ArtifactId(5),
+        }),
+        "050000000117060f05",
+    );
+    c.check(
+        "ClientCtl::Artifact(Restore)",
+        req(ArtifactRequest::Restore {
+            artifact_id: ArtifactId(5),
+            version: 4,
+        }),
+        "06000000011706100504",
+    );
+    c.check(
+        "ServerCtl::ArtifactResult(History)",
+        res(Ok(ArtifactResponse::History(vec![
+            version.clone(),
+            ArtifactVersion {
+                version: 4,
+                image: None,
+                restored_from: None,
+                ..version.clone()
+            },
+        ]))),
+        "9a000000012206000c0207e80711111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222201555555555555555555555555555555555555555555555555555555555555555500e8078005e00303010404e807111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222000300",
+    );
+    c.check(
+        "ServerCtl::ArtifactResult(Restored)",
+        res(Ok(ArtifactResponse::Restored {
+            info: artifact_info(),
+            version,
+        })),
+        "d2000000012206000d0502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c010400010907e80711111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222201555555555555555555555555555555555555555555555555555555555555555500e8078005e003030104",
+    );
 }

@@ -1,0 +1,124 @@
+import XCTest
+
+/// Multiplayer flows against real local daemons (apple/scripts/multiplayer-flows-ui-test.sh):
+///
+/// - **Join link**: a guest opens `<scheme>://join/…` (another daemon, whose owner is the `un`
+///   CLI), reads the card and joins; the session shows them as a viewer.
+/// - **Knock**: "Kim Lee" knocks with an ask-first link (`un join` waits in the script); the
+///   owner app shows the knock over the terminal and admits her as a driver.
+/// - **Take control**: "Rex Diaz" (CLI driver) holds the pane's lease; the owner sees who drives
+///   and takes control.
+///
+/// Each test skips without the environment the script provides.
+@MainActor
+final class MultiplayerFlowsUITests: XCTestCase {
+    override nonisolated func setUp() {
+        continueAfterFailure = false
+    }
+
+    private var env: [String: String] { ProcessInfo.processInfo.environment }
+
+    private func shot(_ app: XCUIApplication, _ name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any)[identifier].firstMatch
+    }
+
+    private func launchOwner() throws -> XCUIApplication {
+        let ticket = env["PAIR_TICKET"] ?? ""
+        try XCTSkipIf(ticket.isEmpty, "no daemon ticket (run apple/scripts/multiplayer-flows-ui-test.sh)")
+        let app = XCUIApplication()
+        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-liveActivities", "NO"]
+        app.launch()
+        XCTAssertTrue(element(app, "presence-button").waitForExistence(timeout: 40), "paired with the daemon")
+        return app
+    }
+
+    /// A guest opens an invite link from Messages: the card says who invites and with what
+    /// rights, they join, and the window shows them as a viewer of the owner's terminal.
+    func testJoinLinkAsGuest() throws {
+        let link = env["JOIN_LINK"] ?? ""
+        try XCTSkipIf(link.isEmpty, "no invite link (run apple/scripts/multiplayer-flows-ui-test.sh)")
+        let app = XCUIApplication()
+        app.launchArguments += ["-testRelay", "disabled", "-liveActivities", "NO"]
+        app.launch()
+        app.open(try XCTUnwrap(URL(string: link)))
+
+        let inviter = element(app, "join-inviter")
+        XCTAssertTrue(inviter.waitForExistence(timeout: 20), "the deep link opens the join card")
+        XCTAssertEqual(inviter.label, "Ola invites you")
+        let join = element(app, "join-button")
+        XCTAssertTrue(join.label.contains("Viewer"), join.label)
+        shot(app, "flows-1-join-card")
+        join.tap()
+
+        let banner = element(app, "guest-banner")
+        XCTAssertTrue(banner.waitForExistence(timeout: 40), "joined: the guest's role banner shows")
+        XCTAssertTrue(banner.label.contains("View only"), banner.label)
+        shot(app, "flows-2-joined")
+    }
+
+    /// Kim knocks with an ask-first link; the owner sees her over the terminal and lets her in
+    /// as a driver from the banner.
+    func testKnockAndAdmit() throws {
+        try XCTSkipIf((env["KNOCKER"] ?? "").isEmpty, "no knock in progress (run apple/scripts/multiplayer-flows-ui-test.sh)")
+        let app = try launchOwner()
+        let banner = element(app, "knock-banner")
+        XCTAssertTrue(banner.waitForExistence(timeout: 30), "the knock shows over the terminal")
+        XCTAssertTrue(app.staticTexts["Kim Lee is asking to join"].firstMatch.exists, "by name")
+        shot(app, "flows-3-knock")
+
+        element(app, "knock-admit").tap()
+        // Menu items carry their titles (identifiers do not reach UIKit's menu).
+        let driver = app.buttons["Driver"].firstMatch
+        XCTAssertTrue(driver.waitForExistence(timeout: 5), "Admit as… lists the roles")
+        shot(app, "flows-4-admit-as")
+        driver.tap()
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 20), "answered: the banner goes away")
+
+        // The audit log records the knock and the admission.
+        element(app, "presence-button").tap()
+        let audit = element(app, "open-audit")
+        for _ in 0..<8 where !(audit.exists && audit.isHittable) {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        audit.tap()
+        XCTAssertTrue(element(app, "audit-chain-ok").waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Let someone in"].firstMatch.waitForExistence(timeout: 10), "the admission is audited")
+        // Access records only: the knock sits among the joins, not under every lease and prompt.
+        app.buttons["Access"].firstMatch.tap()
+        let knocked = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Kim Lee knocked'")).firstMatch
+        for _ in 0..<6 where !knocked.exists {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        shot(app, "flows-5-audit-access")
+        XCTAssertTrue(knocked.exists, "the knock is audited")
+        shot(app, "flows-5-audit")
+    }
+
+    /// Rex drives the pane; the owner's pane says so and Take Control moves the lease to them
+    /// (at once if Rex is idle, else after he hands over or goes idle).
+    func testTakeControlFromDriver() throws {
+        try XCTSkipIf((env["DRIVER"] ?? "").isEmpty, "no driver holding a lease (run apple/scripts/multiplayer-flows-ui-test.sh)")
+        let app = try launchOwner()
+        let take = element(app, "take-control")
+        XCTAssertTrue(take.waitForExistence(timeout: 30), "the pane shows who drives and offers Take Control")
+        XCTAssertTrue(app.staticTexts["Rex Diaz is driving"].firstMatch.exists, "names the driver")
+        shot(app, "flows-6-driven")
+        take.tap()
+        XCTAssertTrue(app.staticTexts["Rex Diaz is driving"].firstMatch.waitForNonExistence(timeout: 20), "the lease moves to the owner")
+        XCTAssertFalse(take.exists)
+        // Share Session shows the owner (this device) driving now.
+        element(app, "presence-button").tap()
+        let me = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'person-' AND label CONTAINS '(you)'")).firstMatch
+        XCTAssertTrue(me.waitForExistence(timeout: 10))
+        XCTAssertTrue(me.label.contains("Driving"), me.label)
+        shot(app, "flows-7-driving")
+    }
+}

@@ -17,6 +17,7 @@ struct GitSettingsSection: View {
                 Text("Rebase and Merge").tag("rebase")
             }
             .accessibilityIdentifier("settings-merge-strategy")
+            .settingAnchor("merge-strategy")
             Picker("Delete Merged Worktrees", selection: $autoDeleteDays) {
                 Text("Never").tag(0)
                 Text("After 1 Day").tag(1)
@@ -26,6 +27,7 @@ struct GitSettingsSection: View {
                 Text("After 30 Days").tag(30)
             }
             .accessibilityIdentifier("settings-auto-delete")
+            .settingAnchor("auto-delete")
             .onChange(of: autoDeleteDays) {
                 NotificationCenter.default.post(name: GitSettings.autoDeleteChanged, object: nil)
             }
@@ -59,6 +61,7 @@ struct GitSettingsSection: View {
             Button("Add Script", systemImage: "plus") {
                 editing = ScriptDef(name: "", command: "", icon: "play", tint: "green", isDefault: scripts.isEmpty)
             }
+            .settingAnchor("git-scripts")
         } header: {
             Text("Scripts")
         } footer: {
