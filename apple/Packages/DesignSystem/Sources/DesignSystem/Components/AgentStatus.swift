@@ -149,7 +149,7 @@ public struct CountBadge: View {
                 .font(.caption2.weight(.semibold).monospacedDigit())
                 // The window's base colour on the amber: dark text on a dark theme's light amber,
                 // light on a light theme's deep one.
-                .foregroundStyle(urgent ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(.secondary))
+                .foregroundStyle(urgent ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(DS.Palette.textSecondary))
                 .padding(.horizontal, 5)
                 .frame(minWidth: 16, minHeight: 16)
                 .background(urgent ? AnyShapeStyle(DS.Palette.blocked) : AnyShapeStyle(DS.Palette.selectedFill), in: .capsule)

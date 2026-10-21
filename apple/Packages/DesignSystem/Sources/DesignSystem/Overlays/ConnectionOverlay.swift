@@ -138,7 +138,7 @@ struct GraceSpinner: View {
         Group {
             if shown {
                 if reduceMotion {
-                    Image(systemName: "circle.dotted").foregroundStyle(.secondary)
+                    Image(systemName: "circle.dotted").foregroundStyle(DS.Palette.textSecondary)
                 } else {
                     ProgressView().controlSize(.mini)
                 }
@@ -186,7 +186,7 @@ private struct ConnectionOverlayModifier: ViewModifier {
                 .overlay {
                     if let card = presentation.card {
                         ConnectionCard(state: state, card: card, onRetry: onRetry, onDisconnect: onDisconnect)
-                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                            .scalingTransition(0.96)
                     }
                 }
                 .animation(DS.Motion.overlay, value: presentation)
@@ -249,7 +249,7 @@ private struct ConnectionNotice: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: DS.Space.xs + 2) {
+        HStack(spacing: DS.Space.row) {
             ConnectionGlyph(state)
                 .font(.caption)
             Text(text)
@@ -259,7 +259,7 @@ private struct ConnectionNotice: View {
         .font(DS.Font.overlay)
         .foregroundStyle(DS.Palette.textSecondary)
         .padding(.horizontal, DS.Space.m)
-        .padding(.vertical, DS.Space.xs + 2)
+        .padding(.vertical, DS.Space.row)
         .floatingCapsule()
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("connection-notice")
@@ -281,7 +281,7 @@ private struct ConnectionCard: View {
             }
             Text(card.detail)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: DS.Space.s) {
                 Button("Disconnect", action: onDisconnect)

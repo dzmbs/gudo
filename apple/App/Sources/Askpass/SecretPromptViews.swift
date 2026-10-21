@@ -29,7 +29,7 @@ struct AskpassPaneOverlay: View {
                     .id("askpass-\(prompt.id)")
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, DS.Space.l)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .movingTransition(.top)
                 } else if let detected = session.detected[pane.rawValue] {
                     if opened == detected {
                         SecretPromptCard(target: .detected(detected), hostId: hostId, session: session, isStale: false) {
@@ -39,12 +39,12 @@ struct AskpassPaneOverlay: View {
                         .id("detected-\(pane.rawValue)-\(detected.atSeq)")
                         .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, DS.Space.l)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .movingTransition(.top)
                     } else {
                         SecretPromptChip { opened = detected }
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                             .padding(.bottom, DS.Space.m)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .movingTransition(.bottom)
                     }
                 }
             }
@@ -158,10 +158,10 @@ struct SecretPromptCard: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: DS.Space.s + 2) {
+        HStack(alignment: .top, spacing: DS.Space.gap10) {
             Image(systemName: entry.copy.symbol)
                 .font(.title3)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: 22)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
@@ -170,7 +170,7 @@ struct SecretPromptCard: View {
                     .lineLimit(2)
                 Text(subtitle)
                     .font(DS.Font.literalSmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .accessibilityLabel(subtitleForVoiceOver)
@@ -183,7 +183,7 @@ struct SecretPromptCard: View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Text(entry.copy.fieldLabel)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(3)
                 .accessibilityHidden(true)
             HStack(spacing: DS.Space.s) {

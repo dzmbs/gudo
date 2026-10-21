@@ -170,13 +170,13 @@ struct SettingsResultRow: View {
                 if let key = entry.key {
                     Text(key)
                         .font(DS.Font.literalSmall)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                 }
             }
             Spacer(minLength: DS.Space.s)
             Text(entry.breadcrumb)
                 .font(DS.Font.rowSubtitle)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(1)
         }
         .contentShape(.rect)

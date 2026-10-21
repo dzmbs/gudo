@@ -17,7 +17,7 @@ public struct ShortcutLabel: View {
         }
         // The row's own font; `.secondary` is relative to the row's colour (the selection's
         // text on the palette's selected row).
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DS.Palette.textSecondary)
         .monospacedDigit()
         .accessibilityLabel(symbols.joined())
     }

@@ -182,7 +182,7 @@ struct PortOfferBanner: ViewModifier {
                 .frame(maxWidth: 520)
                 .floatingCapsule()
                 .padding(.top, 60)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .movingTransition(.top)
                 .task(id: port.port) {
                     try? await Task.sleep(for: .seconds(15))
                     withAnimation(DS.Motion.overlay) { model.ports.dismissOffer() }

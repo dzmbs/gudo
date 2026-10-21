@@ -186,7 +186,7 @@ struct PairingSheet: View {
         LabeledContent(label) {
             Text(value)
                 .font(placeholder ? DS.Font.rowSubtitle : DS.Font.literal)
-                .foregroundStyle(placeholder ? .tertiary : .secondary)
+                .foregroundStyle(placeholder ? DS.Palette.textTertiary : DS.Palette.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -209,7 +209,7 @@ struct PairingSheet: View {
                     if ticket.isEmpty {
                         Text("Pairing ticket")
                             .font(DS.Font.literalSmall)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.Palette.textTertiary)
                             .padding(.top, 8)
                             .padding(.leading, 5)
                             .allowsHitTesting(false)
@@ -232,13 +232,13 @@ struct PairingSheet: View {
         return LabeledContent {
             VStack(alignment: .trailing, spacing: 1) {
                 Text(relay.name)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if relay.bySetting {
                     Text("Your Network setting")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                 }
             }
         } label: {
@@ -568,7 +568,7 @@ struct SSHConfigImportSheet: View {
                     }
                     Text("\(host.user.map { "\($0)@" } ?? "")\(host.hostName):\(host.port)\(host.proxyJump.isEmpty ? "" : " via \(host.proxyJump.joined(separator: ", "))")")
                         .font(DS.Font.literalSmall)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
             }
             #if os(iOS)

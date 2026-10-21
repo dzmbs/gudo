@@ -201,7 +201,7 @@ private struct ConfigLabel: View {
             Text(title)
             Text(key)
                 .font(DS.Font.literalSmall)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.Palette.textTertiary)
         }
     }
 }
@@ -222,7 +222,7 @@ private struct AppearanceSection: View {
                     ConfigLabel("Theme", key: "theme")
                     Spacer()
                     ThemeSwatch(theme: ThemeCatalog.theme(named: theme))
-                    Text(theme).foregroundStyle(.secondary).lineLimit(1)
+                    Text(theme).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
                 }
             }
             .accessibilityIdentifier("settings-theme")
@@ -263,7 +263,7 @@ private struct FontSection: View {
     var body: some View {
         Section {
             LabeledContent {
-                Text(TerminalPreferences.Default.fontFamily).foregroundStyle(.secondary)
+                Text(TerminalPreferences.Default.fontFamily).foregroundStyle(DS.Palette.textSecondary)
             } label: {
                 ConfigLabel("Family", key: "font-family")
             }
@@ -272,7 +272,7 @@ private struct FontSection: View {
                 HStack {
                     ConfigLabel("Size", key: "font-size")
                     Spacer()
-                    Text("\(Int(fontSize)) pt").monospacedDigit().foregroundStyle(.secondary)
+                    Text("\(Int(fontSize)) pt").monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
                 }
             }
             .settingAnchor("font-size")
@@ -280,7 +280,7 @@ private struct FontSection: View {
                 .font(TerminalFont.font(size: fontSize))
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
         } header: {
             Text("Font")
         }
@@ -315,7 +315,7 @@ private struct SplitsSection: View {
                 HStack {
                     ConfigLabel("Unfocused Pane Opacity", key: "unfocused-split-opacity")
                     Spacer()
-                    Text(opacity, format: .percent.precision(.fractionLength(0))).monospacedDigit().foregroundStyle(.secondary)
+                    Text(opacity, format: .percent.precision(.fractionLength(0))).monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
                 }
                 Slider(value: $opacity, in: 0.15...1)
             }
@@ -481,11 +481,11 @@ private struct ThemeCard: View {
                 .opacity(isSelected ? 1 : 0)
         }
         .padding(.horizontal, DS.Space.m)
-        .padding(.vertical, DS.Space.s + 2)
+        .padding(.vertical, DS.Space.gap10)
         .background(theme.background, in: .rect(cornerRadius: DS.Radius.control))
         .overlay {
             RoundedRectangle(cornerRadius: DS.Radius.control)
-                .strokeBorder(isSelected ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(theme.foreground.opacity(0.12)), lineWidth: isSelected ? 2 : 0.5)
+                .strokeBorder(isSelected ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isSelected ? 2 : 0.5)
         }
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
@@ -541,7 +541,7 @@ private struct KeyBarProfilesView: View {
                         Spacer()
                         Text(profile.programs.sorted().prefix(3).joined(separator: ", "))
                             .font(DS.Font.literalSmall)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                     ScrollView(.horizontal) {
                         HStack(spacing: DS.Space.xs) {
@@ -613,7 +613,7 @@ private struct AcknowledgementsView: View {
     private func ack(_ name: String, _ detail: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(name)
-            Text(detail).font(.footnote).foregroundStyle(.secondary)
+            Text(detail).font(.footnote).foregroundStyle(DS.Palette.textSecondary)
         }
         .chromeRows()
     }
@@ -624,7 +624,7 @@ private struct AcknowledgementsView: View {
                 Text(title)
                 Spacer()
                 Image(systemName: "arrow.up.forward.square")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
         }
         .accessibilityIdentifier("ack-\(title)")

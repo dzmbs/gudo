@@ -90,7 +90,7 @@ struct ScriptDef: Codable, Hashable, Identifiable, Sendable {
         case "blue": AnyShapeStyle(DS.Palette.info)
         case "purple", "magenta": AnyShapeStyle(DS.Palette.merged)
         case let hex? where hex.hasPrefix("#") && hex.count == 7: AnyShapeStyle(Color(hex: hex))
-        default: AnyShapeStyle(.secondary)
+        default: AnyShapeStyle(DS.Palette.textSecondary)
         }
     }
 }

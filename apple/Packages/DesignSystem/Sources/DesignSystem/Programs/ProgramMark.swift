@@ -34,7 +34,7 @@ public struct ProgramMark: View {
         ZStack {
             art
                 .id(identity.id)
-                .transition(.opacity.combined(with: .scale(scale: 0.7)))
+                .scalingTransition(0.7)
         }
         .frame(width: size, height: size)
         .animation(DS.Motion.indicator, value: identity.id)

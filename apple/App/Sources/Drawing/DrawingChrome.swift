@@ -264,7 +264,7 @@ private struct ToolButton: View {
                 .font(.system(size: 15, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? .primary : .secondary)
                 .frame(width: 32, height: 32)
-                .background(Circle().fill(selected ? Color.primary.opacity(0.14) : .clear))
+                .background(Circle().fill(DS.Palette.pressedFill.opacity(selected ? 1 : 0)))
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
@@ -367,7 +367,7 @@ struct PlacedNotice: View {
             }
             .padding(.leading, DS.Space.m)
             .padding(.trailing, model.offersSend ? 6 : DS.Space.m)
-            .padding(.vertical, model.offersSend ? 6 : DS.Space.s + 2)
+            .padding(.vertical, model.offersSend ? 6 : DS.Space.gap10)
             .floatingCapsule(interactive: true)
         }
         .fixedSize()

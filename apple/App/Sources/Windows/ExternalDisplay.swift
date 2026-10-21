@@ -73,7 +73,7 @@ struct ExternalDisplayRoot: View {
                     Text("Open a terminal on the iPad to show it here")
                         .font(DS.Font.title)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

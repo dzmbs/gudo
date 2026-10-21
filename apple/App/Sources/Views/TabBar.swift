@@ -30,7 +30,7 @@ struct TabBar: View {
             ForEach(model.composites.tabs) { tab in
                 MixedTabChip(tab: tab, isActive: WindowModel.mixedRef(tab.id) == active)
                     .frame(maxWidth: .infinity)
-                Rectangle().fill(Color.primary.opacity(0.14)).frame(width: 1, height: 16)
+                Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
             }
             ForEach(groups) { group in
                 ForEach(group.tabs) { tab in
@@ -51,8 +51,8 @@ struct TabBar: View {
         }
         .buttonStyle(.bar)
         .labelStyle(.iconOnly)
-        .padding(.horizontal, DS.Space.xs + 2)
-        .frame(height: 34)
+        .padding(.horizontal, DS.Space.row)
+        .frame(height: DS.Size.tabStrip)
         .background(DS.Palette.base)
         .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
         .animation(DS.Motion.quick, value: active)
@@ -101,7 +101,7 @@ private struct TabChip: View {
                     if showsHost {
                         Text(group.name)
                             .font(DS.Font.meta)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.Palette.textTertiary)
                             .lineLimit(1)
                     }
                 }
@@ -122,7 +122,7 @@ private struct TabChip: View {
                 if CommandKeyState.shared.held, let number = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(number)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.trailing, DS.Space.s)
                         .transition(.opacity)
                 }
@@ -130,7 +130,7 @@ private struct TabChip: View {
             .padding(.leading, 3)
             .animation(DS.Motion.quick, value: CommandKeyState.shared.held)
         }
-        .frame(height: 34)
+        .frame(height: DS.Size.tabStrip)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
         .onHover { hovering in withAnimation(DS.Motion.hover) { isHovered = hovering } }

@@ -18,6 +18,11 @@ public extension DS {
         public static let xxl: CGFloat = 24
         public static let xxxl: CGFloat = 32
         public static let row: CGFloat = 6
+        /// A leading slot to its title in dense rows, and a toast's vertical padding.
+        public static let gap10: CGFloat = 10
+        /// A capsule's or badge's horizontal padding (h 7 / v 3, the Ghostty palette badge).
+        public static let badgeH: CGFloat = 7
+        public static let badgeV: CGFloat = 3
     }
 }
 
@@ -70,6 +75,7 @@ public extension DS {
         /// Horizontal tab strip height (macOS 26 titlebar tabs are 28 inside a 36 bar).
         public static let tabBar: CGFloat = 36
         public static let tab: CGFloat = 28
+        public static let tabStrip: CGFloat = 34
         /// Presence avatar diameter.
         public static let avatar: CGFloat = 22
         #if os(macOS)
@@ -98,6 +104,11 @@ public extension DS {
         public static let hover = Animation.easeInOut(duration: 0.1)
         /// Overlays appearing and disappearing (Ghostty search bar corner snap: easeOut 0.2).
         public static let overlay = Animation.easeOut(duration: 0.2)
+        #if os(macOS)
+        public static let palette: Animation? = nil
+        #else
+        public static let palette: Animation? = .easeOut(duration: 0.15)
+        #endif
         /// Badges and indicators changing state (Ghostty KeyStateIndicator: response 0.3, damping 0.8).
         public static let indicator = Animation.spring(response: 0.3, dampingFraction: 0.8)
         /// Bell border (Ghostty BellBorderOverlay: easeInOut 0.3).
@@ -110,5 +121,28 @@ public extension DS {
         /// Toasts stay this long (long enough to read eight words).
         public static let toastDuration = Duration.milliseconds(2400)
         public static let feedbackDelay = Duration.milliseconds(200)
+    }
+}
+
+// MARK: - Reduce Motion
+
+public extension View {
+    /// Slides in from `edge` with a fade; under Reduce Motion, only the fade.
+    func movingTransition(_ edge: Edge) -> some View {
+        modifier(MotionAwareTransition(moving: .move(edge: edge)))
+    }
+
+    /// Grows from `scale` with a fade; under Reduce Motion, only the fade.
+    func scalingTransition(_ scale: CGFloat, anchor: UnitPoint = .center) -> some View {
+        modifier(MotionAwareTransition(moving: .scale(scale: scale, anchor: anchor)))
+    }
+}
+
+private struct MotionAwareTransition: ViewModifier {
+    let moving: AnyTransition
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.transition(reduceMotion ? .opacity : moving.combined(with: .opacity))
     }
 }

@@ -57,7 +57,7 @@ struct VoiceSettingsSection: View {
                         Text("Speech Model")
                         Text(fallback ? "Until then, the older on-device recognizer is used." : "Needed to dictate in this language.")
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                 }
             }

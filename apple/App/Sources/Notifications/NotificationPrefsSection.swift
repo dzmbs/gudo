@@ -37,7 +37,7 @@ struct NotificationPrefsSection: View {
             Label {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                    Text(detail).font(DS.Font.rowSubtitle).foregroundStyle(.secondary)
+                    Text(detail).font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
                 }
             } icon: {
                 Image(systemName: image)

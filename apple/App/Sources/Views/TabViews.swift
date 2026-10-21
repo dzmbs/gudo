@@ -21,12 +21,12 @@ struct WorkspaceSidebar: View {
         let numbers = Dictionary(uniqueKeysWithValues: model.groups.tabs.enumerated().map { ($1, $0 + 1) })
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(spacing: 1) {
+                VStack(spacing: 0) {
                     destinationRow(.inbox, title: "Inbox", systemImage: "tray") {
                         CountBadge(model.needsYouCount)
                     }
                     destinationRow(.hosts, title: "Hosts", systemImage: "server.rack") {
-                        Text("\(model.hosts.hosts.count)").font(DS.Font.meta).foregroundStyle(.tertiary)
+                        Text("\(model.hosts.hosts.count)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
                     }
                 }
                 .padding(.top, DS.Space.s)
@@ -48,6 +48,8 @@ struct WorkspaceSidebar: View {
             .animation(DS.Motion.snappy, value: model.groups.collapsed)
         }
         .scrollIndicators(.never)
+        // Dense rows in a fixed column: they grow with Dynamic Type up to accessibility 1
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .chromeContent()
         .background(DS.Palette.sidebar, ignoresSafeAreaEdges: .all)
         #if os(macOS)
@@ -65,7 +67,7 @@ struct WorkspaceSidebar: View {
         } label: {
             ListRow(Text(title)) {
                 Image(systemName: systemImage)
-                    .foregroundStyle(selected ? .primary : .secondary)
+                    .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
             } trailing: {
                 trailing()
             }
@@ -74,6 +76,24 @@ struct WorkspaceSidebar: View {
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-\(title.lowercased())")
+    }
+}
+
+/// The sidebar's width: the user's (dragged) width, widened as Dynamic Type grows so its
+/// rows keep their titles and state words on one line.
+enum SidebarWidth {
+    static let range: ClosedRange<Double> = 200...360
+    static let standard = 248.0
+
+    static func effective(_ stored: Double, for size: DynamicTypeSize) -> Double {
+        let extra: Double = switch size {
+        case ...DynamicTypeSize.large: 0
+        case .xLarge: 12
+        case .xxLarge: 24
+        case .xxxLarge: 44
+        default: 72
+        }
+        return min(max(stored, range.lowerBound) + extra, range.upperBound + 72)
     }
 }
 
@@ -87,7 +107,7 @@ extension View {
     func sidebarHeader() -> some View {
         padding(.horizontal, DS.Space.l + DS.Space.xs)
             .padding(.top, DS.Space.xl)
-            .padding(.bottom, DS.Space.xs + 2)
+            .padding(.bottom, DS.Space.row)
     }
 }
 
@@ -152,11 +172,11 @@ private struct HostGroupSection: View {
             if group.kind == .daemon || LaunchOptions.fakeUsage {
                 HostUsageMeters(hostId: group.id, hostName: group.name)
                     .padding(.leading, DS.Space.l + 16 + DS.Space.s)
-                    .padding(.trailing, DS.Space.s + 2)
+                    .padding(.trailing, DS.Space.gap10)
                     .padding(.bottom, DS.Space.xs)
             }
             if !collapsed {
-                VStack(spacing: 1) {
+                VStack(spacing: 0) {
                     // A daemon's tabs the git way once it has sent its repositories
                     // (Git/GitSidebar.swift): loose tabs, then repository → worktree.
                     if let sidebar = model.groups.repoSidebar(for: group) {
@@ -197,30 +217,36 @@ private struct HostGroupHeader: View {
                 ConnectionGlyph(
                     state,
                     healthy: Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack")
-                        .foregroundStyle(.secondary).opacity(DS.Opacity.mutedGlyph))
-                    .font(.system(size: 13))
-                    .frame(width: 16)
+                        .foregroundStyle(DS.Palette.textSecondary).opacity(DS.Opacity.mutedGlyph))
+                    // The header's own text style, so the glyph grows with Dynamic Type.
+                    .font(DS.Font.section.weight(.regular))
+                    .imageScale(.small)
+                    .frame(minWidth: 16)
                     .help(group.failure ?? (live ? group.name : state.title))
                 Text(group.name)
                     .font(DS.Font.section)
                     // Headers stay quiet; the rows under them lead.
-                    .foregroundStyle(live ? .secondary : .tertiary)
+                    .foregroundStyle(live ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    // The name takes the squeeze, never the badges and + beside it.
+                    .layoutPriority(-1)
                 if group.kind == .ssh {
                     // Plain SSH: tabs do not outlive the connection (no daemon to keep them).
                     Text("SSH")
                         .font(DS.Font.badge)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 4)
+                        .foregroundStyle(DS.Palette.textTertiary)
+                        .padding(.horizontal, DS.Space.xs)
                         .padding(.vertical, 1)
-                        .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(.tertiary, lineWidth: 0.5))
+                        .fixedSize()
+                        .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip).strokeBorder(DS.Palette.textTertiary, lineWidth: 0.5))
                         .help("Plain SSH: tabs end with the connection. Install the helper to keep them.")
                 }
                 Spacer(minLength: DS.Space.xs)
                 if collapsed, !group.tabs.isEmpty {
                     Text("\(group.tabs.count)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                         .contentTransition(.numericText())
                 }
                 // The host's agents at a glance (§3.4 aggregate: blocked > error > done > working).
@@ -246,7 +272,7 @@ private struct HostGroupHeader: View {
             UsageDetailView(hostName: group.name, report: model.usage.usage(forHost: group.id))
         }
         .padding(.leading, DS.Space.l)
-        .padding(.trailing, DS.Space.s + 2)
+        .padding(.trailing, DS.Space.gap10)
         .padding(.top, DS.Space.m)
         .padding(.bottom, DS.Space.xs)
         .contentShape(.rect)
@@ -286,6 +312,8 @@ private struct HostGroupHeader: View {
 struct AgentGlyph: View {
     let state: AgentState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 14 pt at the default size, growing with Dynamic Type so the glyph never clips.
+    @ScaledMetric(relativeTo: .caption) private var slot: CGFloat = 14
 
     static func priority(_ state: AgentState) -> Int {
         switch state {
@@ -302,7 +330,7 @@ struct AgentGlyph: View {
             switch state {
             case .working:
                 if reduceMotion {
-                    Image(systemName: "circle.dotted").foregroundStyle(.secondary)
+                    Image(systemName: "circle.dotted").foregroundStyle(DS.Palette.textSecondary)
                 } else {
                     ProgressView().controlSize(.mini)
                 }
@@ -316,8 +344,8 @@ struct AgentGlyph: View {
                 EmptyView()
             }
         }
-        .font(.system(size: 12))
-        .frame(width: 14, height: 14)
+        .font(.caption)
+        .frame(width: slot, height: slot)
         .accessibilityLabel(label)
     }
 
@@ -409,14 +437,14 @@ private struct GroupPlaceholder: View {
                 model.show(.host(group.id))
             }
         } label: {
-            HStack(spacing: DS.Space.s + 2) {
+            HStack(spacing: DS.Space.gap10) {
                 Image(systemName: group.isReady || group.isLocal ? "plus" : group.failure != nil ? "arrow.clockwise" : "ellipsis")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .frame(width: 16)
                 Text(group.isReady || group.isLocal ? "New Terminal" : group.failure != nil ? "Retry" : "Waiting for the host…")
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
             .sidebarRow(selected: false)
         }
@@ -432,7 +460,7 @@ private struct NoHostsRow: View {
     var body: some View {
         Button { model.addHost() } label: {
             ListRow(Text("Add Host…")) {
-                Image(systemName: "plus.circle").foregroundStyle(.secondary)
+                Image(systemName: "plus.circle").foregroundStyle(DS.Palette.textSecondary)
             } trailing: {
                 EmptyView()
             }
@@ -452,6 +480,8 @@ private struct TabRow: View {
     let number: Int
     let group: HostGroup
     @Environment(WindowModel.self) private var model
+    /// Two digits at the row's size (⌘-numbers run past 9 across hosts).
+    @ScaledMetric(relativeTo: .footnote) private var numberWidth: CGFloat = 20
 
     var body: some View {
         let workspace = model.workspace(ofGroup: group.id)
@@ -466,15 +496,15 @@ private struct TabRow: View {
         Button {
             withAnimation(DS.Motion.snappy) { model.focus(ref) }
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s + 2) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
                 Text("\(number)")
                     .font(DS.Font.sidebarSubtitle.monospacedDigit())
-                    .foregroundStyle(isActive ? .secondary : .tertiary)
+                    .foregroundStyle(isActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     // Two digits fit (⌘-numbers run past 9 across hosts), so titles stay aligned.
-                    .frame(width: 20, alignment: .trailing)
+                    .frame(width: numberWidth, alignment: .trailing)
                     .lineLimit(1)
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: DS.Space.xs + 2) {
+                    HStack(spacing: DS.Space.row) {
                         TabLeadingMark(program: program, state: isActive ? nil : state)
                         Text(title)
                             .font(DS.Font.sidebarTitle)
@@ -485,7 +515,7 @@ private struct TabRow: View {
                         if tab.zoomed != nil {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(DS.Palette.textTertiary)
                         }
                     }
                     // Only a line that says something: not "~", not empty, not the title again;
@@ -494,14 +524,14 @@ private struct TabRow: View {
                     if informative != nil || running != nil {
                         TabSubtitle(context: informative, running: running)
                             // Under the title, past the mark slot and its spacing.
-                            .padding(.leading, ProgramMark.rowSlot + DS.Space.xs + 2)
+                            .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
                     }
                 }
                 Spacer(minLength: DS.Space.xs)
                 if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(shortcut)")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .transition(.opacity)
                 }
             }
@@ -563,35 +593,43 @@ private struct GroupAgents: View {
             }
         }
         if !rows.isEmpty {
-            VStack(spacing: 1) {
+            VStack(spacing: 0) {
                 ForEach(rows) { row in
                     Button {
                         model.focus(pane: row.pane, onGroup: group.id)
                     } label: {
                         let program = model.programIdentity(ofPane: row.pane, onGroup: group.id)
-                        HStack(spacing: DS.Space.s + 2) {
+                        // and the state word keeps its colour. The name takes the squeeze.
+                        HStack(spacing: DS.Space.gap10) {
                             AgentGlyph(state: row.state)
-                                .frame(width: 16)
-                            HStack(spacing: DS.Space.xs + 1) {
+                                .frame(minWidth: 16)
+                            HStack(spacing: DS.Space.xs) {
                                 ProgramMark(program, size: 12)
                                     .foregroundStyle(.primary)
+                                    .opacity(DS.Opacity.mutedGlyph)
                                 let name = program.isShell ? "agent" : program.displayName
                                 Text(name)
-                                    .font(DS.Font.rowSubtitle)
+                                    .font(DS.Font.sidebarSubtitle)
                                     .lineLimit(1)
                                     .shimmering(row.state == .working, text: name)
                             }
+                            .layoutPriority(-1)
                             Text("\(row.number)")
                                 .font(DS.Font.meta)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(DS.Palette.textTertiary)
+                                .fixedSize()
                             Spacer(minLength: DS.Space.xs)
                             Text(row.state.title.lowercased())
                                 .font(DS.Font.meta)
                                 .foregroundStyle(row.state.color)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                         .sidebarRow(selected: false)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(model.programIdentity(ofPane: row.pane, onGroup: group.id).displayName), tab \(row.number), \(row.state.title)")
                     .accessibilityIdentifier("agent-\(group.name)-\(row.pane.rawValue)")
                 }
             }
@@ -743,7 +781,7 @@ struct CompactTerminalView: View {
                 }
             }
         } label: {
-            HStack(spacing: DS.Space.xs + 2) {
+            HStack(spacing: DS.Space.row) {
                 if let tab = workspace.session.activeTab {
                     ProgramMark(model.programIdentity(of: tab, onGroup: workspace.groupId))
                         .foregroundStyle(.primary)
@@ -758,7 +796,7 @@ struct CompactTerminalView: View {
                     HStack(spacing: DS.Space.xs) {
                         Text(model.hostName)
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.Palette.textTertiary)
                             .lineLimit(1)
                         if !model.connection.isLive {
                             ConnectionGlyph(model.connection)
@@ -768,11 +806,11 @@ struct CompactTerminalView: View {
                 }
                 Image(systemName: "chevron.down")
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                 if total > 1 {
                     Text("\(total)")
                         .font(.caption2.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.horizontal, 5)
                         .background(DS.Palette.selectedFill, in: .capsule)
                 }

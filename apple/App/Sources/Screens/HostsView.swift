@@ -209,7 +209,7 @@ struct HostsView: View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: "terminal")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: 16)
             TextField("user@host", text: $destination)
                 .font(DS.Font.literal)
@@ -229,7 +229,7 @@ struct HostsView: View {
                     .buttonStyle(.bar)
             }
         }
-        .padding(.horizontal, DS.Space.s + 2)
+        .padding(.horizontal, DS.Space.gap10)
         .frame(height: Self.fieldHeight)
         .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(isQuickConnectFocused ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isQuickConnectFocused ? 1 : 0.5))
@@ -356,7 +356,7 @@ private struct HostRow: View {
                     if host.isPinned {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.Palette.textTertiary)
                     }
                     if host.isTailscale {
                         TailscaleTag()
@@ -366,7 +366,7 @@ private struct HostRow: View {
                 }
                 Text(host.address)
                     .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 detail
@@ -409,7 +409,7 @@ private struct HostRow: View {
                 }
             }
             .font(DS.Font.meta)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             .fixedSize()
         }
     }
@@ -439,44 +439,44 @@ private struct HostRow: View {
             case .reconnecting(let attempt, _):
                 Text("\(Text("Reconnecting").foregroundStyle(DS.Palette.attention)) · attempt \(attempt)")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             case .connecting, .offline:
                 Text(host.connection.title)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             case .unreachable(let reason, let hint):
                 let why = [reason, hint].compactMap(\.self).joined(separator: " ")
                 Text("\(Text("Can't reach").foregroundStyle(DS.Palette.error)) · \(why)")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .font(.footnote)
                     .lineLimit(2)
             case .needsAttention(let reason, _):
                 Text("\(Text("Can't connect").foregroundStyle(DS.Palette.error)) · \(reason)")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .font(.footnote)
                     .lineLimit(2)
             case .disconnected:
                 Text(host.statusLine ?? lastUsed)
                     .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
             case .connected, .slow, .paused:
                 if let helper = host.helper, helper.canUpdate {
                     // Quiet: a newer helper is an offer, not a problem (the menu has the action).
                     Label(helper.message, systemImage: "arrow.down.circle")
                         .labelStyle(.titleAndIcon)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                         .accessibilityIdentifier("helper-update-\(host.name)")
                 } else if let line = host.lastLine {
                     Text(line)
                         .font(DS.Font.literalSmall)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                         .lineLimit(1)
                 } else if let status = host.statusLine {
                     Text(status)
                         .font(.footnote)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.Palette.textTertiary)
                         .monospacedDigit()
                 }
             }

@@ -97,7 +97,7 @@ struct DiffReviewView: View {
                     .frame(width: 16, height: 16)
                 Text("Reading the repository…")
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
             .opacity(showsProgress ? 1 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -157,13 +157,13 @@ struct DiffReviewView: View {
                 .foregroundStyle(theme.foreground)
             HStack(spacing: DS.Space.xs) {
                 Text("\(files.count) \(files.count == 1 ? "file" : "files")")
-                    .foregroundStyle(.secondary)
-                Text("·").foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                Text("·").foregroundStyle(DS.Palette.textTertiary)
                 Text("+\(additions)").foregroundStyle(theme.ansi(2))
                 Text("−\(deletions)").foregroundStyle(theme.ansi(1))
                 if let repository, repository.ahead + repository.behind > 0 {
-                    Text("·").foregroundStyle(.tertiary)
-                    Text(aheadBehind(repository)).foregroundStyle(.secondary)
+                    Text("·").foregroundStyle(DS.Palette.textTertiary)
+                    Text(aheadBehind(repository)).foregroundStyle(DS.Palette.textSecondary)
                 }
             }
             .font(.subheadline.monospacedDigit())
@@ -265,7 +265,7 @@ struct DiffReviewView: View {
                         .font(DS.Font.rowTitleEmphasis)
                     Text(reviewer.map { "Goes to \($0) as one prompt" } ?? "No agent runs in this repository")
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
                 Spacer()
                 Button("Copy", systemImage: "doc.on.doc") { DiffPasteboard.copy(formattedNotes) }
@@ -289,7 +289,7 @@ struct DiffReviewView: View {
             .floatingPanel()
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.s)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .movingTransition(.bottom)
         }
     }
 
@@ -369,7 +369,7 @@ private struct FileHeader: View {
             HStack(spacing: DS.Space.s) {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                     .frame(width: 12)
                 StatusLetter(status: file.status)
@@ -408,9 +408,9 @@ private struct FileHeader: View {
     private var pathText: Text {
         let name = (file.path as NSString).lastPathComponent
         let directory = String(file.path.dropLast(name.count))
-        var text = Text("\(Text(directory).foregroundStyle(.secondary))\(Text(name).foregroundStyle(theme.foreground).fontWeight(.medium))")
+        var text = Text("\(Text(directory).foregroundStyle(DS.Palette.textSecondary))\(Text(name).foregroundStyle(theme.foreground).fontWeight(.medium))")
         if let old = file.oldPath {
-            text = Text("\(Text(old + " → ").foregroundStyle(.tertiary))\(text)")
+            text = Text("\(Text(old + " → ").foregroundStyle(DS.Palette.textTertiary))\(text)")
         }
         return text.font(DS.Font.literal)
     }
@@ -557,7 +557,7 @@ private struct FileDiffBody: View {
     private func placeholder(_ text: String) -> some View {
         Text(text)
             .font(DS.Font.rowSubtitle)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             .padding(.horizontal, DS.Space.l)
             .padding(.vertical, DS.Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -567,13 +567,13 @@ private struct FileDiffBody: View {
     private func hunkHeader(_ hunk: DiffHunk) -> some View {
         Text(verbatim: hunk.header)
             .font(DS.Font.literalSmall)
-            .foregroundStyle(theme.foreground.opacity(0.45))
+            .foregroundStyle(DS.Palette.textTertiary)
             .lineLimit(1)
             .padding(.leading, (split ? Self.numberWidth : Self.numberWidth * 2) + DS.Space.l)
             .padding(.trailing, DS.Space.l)
             .frame(height: 24)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.foreground.opacity(0.04))
+            .background(DS.Palette.hoverFill)
     }
 
     private func unifiedRow(_ line: DiffLine) -> some View {
@@ -583,7 +583,7 @@ private struct FileDiffBody: View {
             mark(line.kind)
             Text(verbatim: line.text.isEmpty ? " " : line.text)
                 .font(DS.Font.literal)
-                .foregroundStyle(theme.foreground.opacity(line.kind == .context ? 0.78 : 1))
+                .foregroundStyle(line.kind == .context ? DS.Palette.textSecondary : DS.Palette.text)
                 .lineLimit(1)
                 .fixedSize()
                 .padding(.trailing, DS.Space.l)
@@ -609,7 +609,7 @@ private struct FileDiffBody: View {
                 mark(kind)
                 Text(verbatim: line.text.isEmpty ? " " : line.text)
                     .font(DS.Font.literal)
-                    .foregroundStyle(theme.foreground.opacity(kind == .context ? 0.78 : 1))
+                    .foregroundStyle(kind == .context ? DS.Palette.textSecondary : DS.Palette.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.trailing, DS.Space.s)
                     .fixedSize(horizontal: false, vertical: true)
@@ -625,7 +625,7 @@ private struct FileDiffBody: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier("diff-line-\(file.path)-\(line.id)\(oldSide ? "-old" : "")")
         } else {
-            theme.foreground.opacity(0.025)
+            Rectangle().fill(DS.Palette.hoverFill.opacity(0.5))
                 .frame(maxWidth: .infinity, minHeight: Self.lineHeight, maxHeight: .infinity)
         }
     }
@@ -654,7 +654,7 @@ private struct FileDiffBody: View {
     private func number(_ value: Int?) -> some View {
         Text(value.map(String.init) ?? "")
             .font(DS.Font.literalSmall.monospacedDigit())
-            .foregroundStyle(theme.foreground.opacity(0.32))
+            .foregroundStyle(DS.Palette.textTertiary)
             .frame(width: Self.numberWidth, alignment: .trailing)
             .padding(.trailing, DS.Space.xs)
             .frame(height: Self.lineHeight)
@@ -711,7 +711,7 @@ private struct NoteCard: View {
                 .buttonStyle(.bar)
                 .controlSize(.small)
         }
-        .padding(DS.Space.s + 2)
+        .padding(DS.Space.gap10)
         .background(DS.Palette.accent.opacity(0.1), in: .rect(cornerRadius: DS.Radius.control))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.accent.opacity(0.35), lineWidth: 0.5))
         .padding(.leading, FileDiffBody.numberWidth + DS.Space.l)
@@ -733,7 +733,7 @@ private struct NoteComposer: View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             Text("Note on line \(anchor.number)")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
             TextField("What should change here?", text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -758,7 +758,7 @@ private struct NoteComposer: View {
             .controlSize(.small)
         }
         .padding(DS.Space.m)
-        .background(theme.foreground.opacity(0.05), in: .rect(cornerRadius: DS.Radius.control))
+        .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
         .padding(.leading, FileDiffBody.numberWidth + DS.Space.l)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.xs)

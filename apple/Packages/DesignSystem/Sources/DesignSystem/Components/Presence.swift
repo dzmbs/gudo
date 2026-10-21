@@ -79,7 +79,7 @@ public struct PresenceStack: View {
             if participants.count > limit {
                 Text("+\(participants.count - limit)")
                     .font(.caption2.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .frame(width: DS.Size.avatar, height: DS.Size.avatar)
                     .background(DS.Palette.selectedFill, in: .circle)
             }

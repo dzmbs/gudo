@@ -94,7 +94,7 @@ public struct ProcessExitedBar: View {
             .foregroundStyle(.primary)
             .opacity(isHovered ? 0 : 1)
             .onHover { isHovered = $0 }
-            .transition(.move(edge: .bottom))
+            .movingTransition(.bottom)
             .accessibilityLabel(message)
     }
 }

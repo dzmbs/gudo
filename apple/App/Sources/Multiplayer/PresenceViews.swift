@@ -57,7 +57,7 @@ struct PanePresence: View {
                         }
                     }
                     if people.contains(where: \.typing) {
-                        TypingDots(color: people.first(where: \.typing).map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(.secondary))
+                        TypingDots(color: people.first(where: \.typing).map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(DS.Palette.textSecondary))
                     }
                 }
                 .accessibilityElement(children: .ignore)
@@ -68,7 +68,7 @@ struct PanePresence: View {
     }
 
     private func driverColor(_ session: MultiplayerSession, _ principal: String) -> AnyShapeStyle {
-        session.participants.first { $0.actor.principal == principal }.map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(.secondary)
+        session.participants.first { $0.actor.principal == principal }.map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(DS.Palette.textSecondary)
     }
 
     private func label(_ session: MultiplayerSession, _ people: [UnnamedCore.Participant], _ driver: String?) -> String {
@@ -112,12 +112,12 @@ struct MultiplayerPaneOverlay: View {
                     LeaseRequestCard(session: session, request: request)
                         .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, DS.Space.l)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .movingTransition(.top)
                 } else if showsControlChip(session) {
                     ControlChip(session: session, pane: pane.rawValue)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(DS.Space.s)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                        .scalingTransition(0.96, anchor: .topTrailing)
                 }
                 // A prompter's composer sits on every agent pane (it is their only input); the
                 // role banner only on the focused pane.
@@ -125,7 +125,7 @@ struct MultiplayerPaneOverlay: View {
                     guestBar(session)
                         .frame(maxHeight: .infinity, alignment: .bottom)
                         .padding(DS.Space.s)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .movingTransition(.bottom)
                 }
             }
             .animation(DS.Motion.panel, value: session.leaseRequests)
@@ -164,7 +164,7 @@ private struct ControlChip: View {
                     let left = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(pending.since)))
                     Text(left > 0 ? "· yours if idle \(left) s" : "· waiting for an answer")
                         .font(DS.Font.meta)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .contentTransition(.numericText(countsDown: true))
                 }
                 Button("Cancel") { session.cancelTake(pane) }
@@ -210,7 +210,7 @@ private struct LeaseRequestCard: View {
     let request: MultiplayerSession.LeaseRequest
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.s + 2) {
+        VStack(alignment: .leading, spacing: DS.Space.gap10) {
             HStack(spacing: DS.Space.m) {
                 if let person = session.participants.first(where: { $0.actor.device == request.by.device }) {
                     PresenceAvatar(person.avatar, size: 28)
@@ -223,7 +223,7 @@ private struct LeaseRequestCard: View {
                         let left = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(request.at)))
                         Text(left > 0 ? "Hands over in \(left) s if you stay idle" : "Hands over when you stop typing")
                             .font(DS.Font.meta)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .lineLimit(1)
                             .contentTransition(.numericText(countsDown: true))
                     }
@@ -261,14 +261,14 @@ private struct GuestBanner: View {
     var body: some View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: session.canPrompt ? "text.bubble" : "eye")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
             Text(message)
                 .font(.callout)
                 .lineLimit(1)
             if let expires = session.me?.expiresMs, let text = RelativeTime.string(ms: expires) {
                 Text("· ends \(text)")
                     .font(DS.Font.meta)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
             }
         }

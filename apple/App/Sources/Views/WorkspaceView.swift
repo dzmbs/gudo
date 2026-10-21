@@ -38,7 +38,8 @@ enum TabPlacement {
 struct WorkspaceView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @AppStorage("sidebarWidth") private var sidebarWidth = 248.0
+    @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     #if os(macOS)
@@ -62,11 +63,12 @@ struct WorkspaceView: View {
                             // A fresh query and selection per mode (⌘K, ⌘P, ⌥⌘T).
                             .id(model.paletteMode)
                             .padding(.top, 44)
-                            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                            // animation); a 0.15 s fade on iPad, where the glass needs a frame.
+                            .transition(.opacity)
                     }
                 }
             }
-            .animation(DS.Motion.overlay, value: model.isPaletteShown)
+            .animation(DS.Motion.palette, value: model.isPaletteShown)
             .toastHost(model.toasts)
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()
@@ -139,8 +141,8 @@ struct WorkspaceView: View {
         HStack(spacing: 0) {
             if model.isSidebarShown {
                 SidebarColumn(workspace: workspace)
-                    .frame(width: sidebarWidth)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .frame(width: SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize))
+                    .movingTransition(.leading)
                 SidebarDivider(width: $sidebarWidth)
             }
             NavigationStack {
@@ -170,6 +172,8 @@ private struct SettingsToolbarButton: View {
 
     var body: some View {
         Button("Settings", systemImage: "gearshape") { model.sheet = .settings }
+            .keyboardShortcut(",", modifiers: .command)
+            .help("Settings (⌘,)")
             .accessibilityIdentifier("open-settings")
     }
 }
@@ -185,8 +189,11 @@ private struct SidebarColumn: View {
         #if os(iOS)
         NavigationStack {
             WorkspaceSidebar()
+                // The app's name is not drawn: in a 200–360 pt column between two glass
+                // buttons a title collided with them at large text sizes. VoiceOver keeps it.
                 .navigationTitle(Brand.name)
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar(removing: .title)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         SettingsToolbarButton()
@@ -267,10 +274,10 @@ private struct SidebarDivider: View {
                             .onChanged { value in
                                 let origin = start ?? width
                                 start = origin
-                                width = min(max(origin + value.translation.width, 200), 360)
+                                width = min(max(origin + value.translation.width, SidebarWidth.range.lowerBound), SidebarWidth.range.upperBound)
                             }
                             .onEnded { _ in start = nil })
-                    .onTapGesture(count: 2) { width = 248 }
+                    .onTapGesture(count: 2) { width = SidebarWidth.standard }
                     .ignoresSafeArea()
             }
             .accessibilityHidden(true)
@@ -305,7 +312,7 @@ private struct DetailColumn: View {
             if !model.isSidebarShown && showsTabBar {
                 TabBar(workspace: workspace)
                     .chromeContent()
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .movingTransition(.top)
             }
             switch model.destination {
             case .terminal:
@@ -352,13 +359,24 @@ private struct DetailColumn: View {
         }
     }
 
-    /// The split state only: the host is named once, by the toolbar's host button.
+    /// task, the program, `repo:branch` or the directory) when it says something the title
+    /// does not, then the split state. The host is named once, by the toolbar's host button.
     private var subtitle: String {
         if let mixed = model.activeMixed {
             return mixed.hosts.map(model.groupName).joined(separator: " + ")
         }
-        guard let tab = workspace.session.activeTab, tab.root.panes.count > 1 else { return "" }
-        return tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed"
+        guard let tab = workspace.session.activeTab else { return "" }
+        let title = workspace.title(of: tab)
+        var parts: [String] = []
+        if let context = workspace.context(of: tab)?.trimmingCharacters(in: .whitespaces),
+           !context.isEmpty, context != "~", context != title
+        {
+            parts.append(context)
+        }
+        if tab.root.panes.count > 1 {
+            parts.append(tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -400,7 +418,9 @@ private struct TerminalToolbar: ToolbarContent {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Find", systemImage: "magnifyingglass") { model.isSearchShown.toggle() }
-                .help("Find (⌘F)")
+                .lit(model.isSearchShown && model.destination == .terminal)
+                .help(model.isSearchShown ? "Hide Find (⌘F)" : "Find (⌘F)")
+                .accessibilityIdentifier("find-button")
                 .disabled(model.destination != .terminal)
             Menu("Pane", systemImage: "rectangle.split.2x1") {
                 PaneMenuItems(workspace: workspace, model: model)
@@ -413,7 +433,7 @@ private struct TerminalToolbar: ToolbarContent {
                     .disabled(!DrawingCommands.canDraw(in: workspace))
                 #endif
             }
-            .help("Pane")
+            .help("Pane: split, zoom, close, Two Columns")
             .menuIndicator(.hidden)
             .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
@@ -448,7 +468,7 @@ private struct HostToolbarButton: View {
                     Text(model.hostName).lineLimit(1)
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .padding(.horizontal, 6)
             }
             .help(model.connection.isQuiet ? model.hostName : "\(model.hostName) · \(model.connection.title)")
@@ -467,16 +487,16 @@ private struct HostToolbarButton: View {
             if let address = model.hosts.hosts.first(where: { $0.id == workspace.hostId })?.address, !address.isEmpty {
                 Text(address)
                     .font(DS.Font.literalSmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .textSelection(.enabled)
             }
-            HStack(spacing: DS.Space.xs + 2) {
+            HStack(spacing: DS.Space.row) {
                 ConnectionGlyph(model.connection)
                 Text(workspace.host?.status.summary ?? model.connection.title)
                     .monospacedDigit()
             }
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             Divider().padding(.vertical, DS.Space.xs)
             HStack {
                 Button("All Hosts") {
@@ -527,6 +547,8 @@ private struct CompactRoot: View {
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button("Settings", systemImage: "gearshape") { model.sheet = .settings }
+                                    .keyboardShortcut(",", modifiers: .command)
+                                    .help("Settings (⌘,)")
                             }
                         }
                 }
@@ -552,7 +574,7 @@ struct ActiveTabView: View {
                 let single = compact ? tab.focused : tab.zoomed
                 let isSplit = single == nil && tab.root.panes.count > 1
                 SplitTreeView(node: single.map(Node.leaf) ?? tab.root, workspace: workspace, isSplit: isSplit)
-                    .padding(paneStyle == .comfortable && isSplit ? DS.Space.xs + 2 : 0)
+                    .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
                     .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
                     // Lost link: the last frame stays, dimmed and desaturated, under the card.
                     .connectionOverlay(
@@ -598,7 +620,7 @@ private struct ConnectingView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Text(detail(context.date))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .monospacedDigit()
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: 360)
@@ -666,14 +688,14 @@ private struct WelcomeView: View {
             Image(systemName: workspace.canOpenTabs ? "terminal" : "server.rack")
                 .font(.title)
                 .imageScale(.large)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
             VStack(spacing: DS.Space.xs) {
                 Text(title)
                     .font(DS.Font.title)
                     .foregroundStyle(.primary)
                 Text(message)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 340)
             }
@@ -733,7 +755,7 @@ private struct WelcomeView: View {
     private func welcomeRow(_ title: String, systemImage: String, keys: [String]?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             // The sidebar's row: a 16 pt glyph slot at 0.6, the label leading.
-            HStack(spacing: DS.Space.s + 2) {
+            HStack(spacing: DS.Space.gap10) {
                 Image(systemName: systemImage)
                     .frame(width: 16)
                     .foregroundStyle(.primary)

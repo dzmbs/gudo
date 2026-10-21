@@ -67,7 +67,7 @@ public struct BarButtonStyle: ButtonStyle {
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .labelStyle(.iconOnly)
-            .foregroundStyle(isHovered || configuration.isPressed ? .primary : .secondary)
+            .foregroundStyle(isHovered || configuration.isPressed ? DS.Palette.text : DS.Palette.textSecondary)
             .frame(minWidth: 26, minHeight: 26)
             .padding(.horizontal, 2)
             .background(
@@ -125,5 +125,28 @@ public extension ButtonStyle where Self == RowButtonStyle {
     static func row(selected: Bool) -> RowButtonStyle { RowButtonStyle(isSelected: selected) }
     static func paletteRow(selected: Bool) -> RowButtonStyle {
         RowButtonStyle(isSelected: selected, isProminent: true, cornerRadius: DS.Radius.paletteRow)
+    }
+}
+
+public extension View {
+    /// A toolbar toggle that is on (Find while the search bar is open): lit with the terminal's
+    /// accent. VoiceOver hears it as selected.
+    func lit(_ isOn: Bool) -> some View {
+        modifier(LitModifier(isOn: isOn))
+    }
+}
+
+private struct LitModifier: ViewModifier {
+    let isOn: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                Capsule()
+                    .fill(DS.Palette.ink.opacity(isOn ? 0.2 : 0))
+                    .padding(-DS.Space.xs)
+            }
+            .animation(DS.Motion.quick, value: isOn)
+            .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }

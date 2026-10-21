@@ -6,6 +6,7 @@ import SwiftUI
 /// card, ↩ approves and Esc (⌘.) denies it, as in the Inbox.
 struct AgentToastStack: View {
     @Environment(WindowModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let toasts = model.agentToasts
@@ -13,7 +14,7 @@ struct AgentToastStack: View {
         VStack(alignment: .trailing, spacing: DS.Space.s) {
             ForEach(Array(toasts.cards.enumerated()), id: \.element.id) { index, card in
                 AgentToastCard(card: card, isNewest: index == 0)
-                    .transition(.asymmetric(
+                    .transition(reduceMotion ? .opacity : .asymmetric(
                         insertion: .move(edge: compact ? .top : .trailing).combined(with: .opacity),
                         removal: .opacity.combined(with: .scale(scale: 0.96))))
             }
@@ -64,7 +65,7 @@ private struct AgentToastCard: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
                 .font(.caption2.weight(.bold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: 20, height: 20)
                 .background(DS.Palette.raised, in: .circle)
                 .overlay(Circle().strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
@@ -115,7 +116,7 @@ private struct AgentToastCard: View {
                 .lineLimit(1)
             Text("\(item.hostName) · \(item.sessionTitle)")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)
@@ -139,7 +140,7 @@ private struct AgentToastCard: View {
             (item.summary ?? (item.prompt == "Working…" ? nil : item.prompt)).map { line in
                 AnyView(Text(verbatim: line)
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(card.kind == .failed ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(card.kind == .failed ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
                     .lineLimit(2))
             }
         }
@@ -150,7 +151,7 @@ private struct AgentToastCard: View {
             if isNewest, card.kind == .needsYou {
                 ShortcutLabel(["⇧", "⌘", "A"])
                     .font(DS.Font.meta)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .help("Jump to the agent waiting longest (⇧⌘A)")
             }
             Spacer(minLength: 0)

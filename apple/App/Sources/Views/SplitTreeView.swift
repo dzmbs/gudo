@@ -95,7 +95,7 @@ private struct SplitContainer: View {
     /// Drag translation already applied, so each change sends only the new delta.
     @State private var appliedTranslation: CGFloat?
 
-    private var gap: CGFloat { paneStyle == .comfortable ? DS.Space.xs + 2 : DS.Size.dividerVisible }
+    private var gap: CGFloat { paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible }
 
     var body: some View {
         GeometryReader { geometry in
@@ -319,13 +319,13 @@ private struct PaneHeader: View {
     var body: some View {
         let state = model.paneStatus.state(of: id.description)
         let program = model.programIdentity(ofPane: id, onGroup: workspace.groupId)
-        HStack(spacing: DS.Space.xs + 2) {
+        HStack(spacing: DS.Space.row) {
             ProgramMark(program, size: 12)
-                .foregroundStyle(theme.foreground.opacity(isFocused ? 1 : 0.7))
+                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
             // Shells keep their own word ("zsh", "canvas"); programs their display name.
             Text(program.isShell ? workspace.programName(of: id) : program.displayName)
                 .font(.caption.weight(isFocused ? .semibold : .regular))
-                .foregroundStyle(theme.foreground.opacity(isFocused ? 0.9 : 0.6))
+                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
                 .lineLimit(1)
             if namesHost, let group = model.groups.group(workspace.groupId) {
                 HostChip(group: group, emphasized: isFocused)
@@ -343,7 +343,7 @@ private struct PaneHeader: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(theme.foreground.opacity(0.7))
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .frame(width: 24, height: 20)
                     .contentShape(.rect)
             }

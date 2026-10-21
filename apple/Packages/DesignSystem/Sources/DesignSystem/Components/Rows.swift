@@ -31,7 +31,7 @@ public struct ListRow<Leading: View, Trailing: View>: View {
                 if let subtitle {
                     subtitle
                         .font(subtitleIsLiteral ? DS.Font.literalSmall : DS.Font.rowSubtitle)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                         .truncationMode(subtitleIsLiteral ? .middle : .tail)
                 }
@@ -39,7 +39,7 @@ public struct ListRow<Leading: View, Trailing: View>: View {
             Spacer(minLength: DS.Space.s)
             trailing
                 .font(DS.Font.meta)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
         }
         .padding(.vertical, DS.Space.xxs)
         .accessibilityElement(children: .combine)
@@ -63,14 +63,14 @@ public struct SectionTitle: View {
     }
 
     public var body: some View {
-        HStack(spacing: DS.Space.xs + 2) {
+        HStack(spacing: DS.Space.row) {
             Text(title)
             if let count {
-                Text("\(count)").foregroundStyle(.tertiary).monospacedDigit()
+                Text("\(count)").foregroundStyle(DS.Palette.textTertiary).monospacedDigit()
             }
         }
         .font(DS.Font.section)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DS.Palette.textSecondary)
         .textCase(nil)
     }
 }

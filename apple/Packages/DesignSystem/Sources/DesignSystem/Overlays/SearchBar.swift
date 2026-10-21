@@ -86,7 +86,7 @@ public struct TerminalSearchBar: View {
                     } label: {
                         Text(verbatim: "Aa")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(caseSensitive.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(caseSensitive.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(DS.Palette.textSecondary))
                             .frame(minWidth: 22)
                             .background(
                                 RoundedRectangle(cornerRadius: DS.Radius.field)
@@ -151,7 +151,7 @@ public struct TerminalSearchBar: View {
             }
         }
         .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DS.Palette.textSecondary)
         .padding(.trailing, 8)
         .accessibilityIdentifier("search-count")
     }
