@@ -257,7 +257,7 @@ final class MockLinkSource: LinkSource {
     var isAvailable: Bool { true }
     func links() async throws -> [DetectedLink] { MockLinks.links }
     func lastCommandOutput() async throws -> (command: String?, output: String) { ("cargo test", "test result: ok. 42 passed") }
-    func countMatches(_ needle: String) async throws -> Int? { 14 }
+    func countMatches(_ needle: String, caseSensitive: Bool) async throws -> Int? { 14 }
 }
 
 final class MockDiffSource: DiffSource {

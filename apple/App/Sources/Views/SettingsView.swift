@@ -43,6 +43,7 @@ struct SettingsView: View {
                 FontSection().chromeRows()
                 CursorSection().chromeRows()
                 SplitsSection().chromeRows()
+                LinksSettingsSection().chromeRows()
                 KeyboardSection().chromeRows()
                 PasswordsSection().chromeRows()
                 VoiceSettingsSection().chromeRows()
@@ -69,7 +70,7 @@ struct SettingsView: View {
     @ViewBuilder private func detail(_ pane: SettingsPane) -> some View {
         switch pane {
         case .appearance: AppearanceSection()
-        case .terminal: FontSection(); CursorSection(); SplitsSection(); PasswordsSection()
+        case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection(); PasswordsSection()
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
         case .notifications: NotificationsSection()
         case .agents: AgentsSettingsSection()

@@ -239,7 +239,7 @@ protocol LinkSource: AnyObject {
     /// The last finished command and its output (`command`, `output`).
     func lastCommandOutput() async throws -> (command: String?, output: String)
     /// How many matches `needle` has in the focused pane's scrollback (nil when unknown).
-    func countMatches(_ needle: String) async throws -> Int?
+    func countMatches(_ needle: String, caseSensitive: Bool) async throws -> Int?
 }
 
 // MARK: - Files

@@ -33,7 +33,7 @@ struct WorkspaceCommands: Commands {
         }
         #endif
         CommandGroup(after: .textEditing) {
-            buttons([.find])
+            buttons([.find, .findNext, .findPrevious])
         }
         // A terminal has no rich text: the system's Format ▸ Font items (Bold ⌘B, Italic ⌘I,
         // Underline ⌘U) and Print (⌘P) would answer those chords before the terminal and the

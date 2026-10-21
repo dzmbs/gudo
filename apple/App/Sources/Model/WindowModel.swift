@@ -3,6 +3,7 @@ import Foundation
 import HostKit
 import Observation
 import PaneLayout
+import TerminalCore
 
 /// What the detail column (or the iPhone tab) shows.
 enum Destination: String, Hashable {
@@ -64,9 +65,18 @@ final class WindowModel {
     var searchNeedle = "" {
         didSet { if searchNeedle != oldValue { updateSearchCount() } }
     }
+    /// Find matches the needle's case exactly (the bar's "Aa").
+    var searchCaseSensitive = false {
+        didSet { if searchCaseSensitive != oldValue { updateSearchCount() } }
+    }
     /// Matches of `searchNeedle` in the focused pane's whole scrollback (daemon panes).
     var searchTotal: Int?
     @ObservationIgnored var searchCountTask: Task<Void, Never>?
+    /// The searched pane's own search: its terminal's matches and the selected one (`PaneSearch.swift`).
+    var searchStatus = SearchStatus.idle
+    @ObservationIgnored weak var searchPane: Pane?
+    /// Fetching older scrollback from the host to reach a match only the host still has.
+    @ObservationIgnored var searchHistoryTask: Task<Void, Never>?
     /// The Add Host sheet's starting mode and destination (quick connect pre-fills SSH).
     var pairingMode = PairingSheet.Mode.ssh
     var pairingDestination = ""

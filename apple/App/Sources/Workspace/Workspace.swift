@@ -463,6 +463,8 @@ final class Workspace {
         PaneDrawing.attach(to: pane, workspace: self)
         // Shell command marks: gutter stripes, the command menu, ⌘↑/⌘↓ between prompts.
         PaneCommandMarks.attach(to: pane, workspace: self)
+        // Links: localhost in the in-app browser, paths in the editor, the rest per the setting.
+        PaneLinks.attach(to: pane, workspace: self)
         #if os(iOS)
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
