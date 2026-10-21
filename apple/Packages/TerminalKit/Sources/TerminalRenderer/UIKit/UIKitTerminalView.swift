@@ -955,11 +955,23 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
         {
             actions.append(extra)
         }
-        if UIPasteboard.general.hasStrings {
-            actions.append(UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.paste(nil) })
+        // The system's own Paste command (it reaches `paste(_:)` through the responder chain,
+        // gated by `canPerformAction`), so reading another app's text counts as the user's paste.
+        // A custom action reading `UIPasteboard.general` is a programmatic read: iOS asks "Allow
+        // Paste?" or, as on a fresh iOS 27 install, returns nil without asking, and nothing pastes.
+        if let paste = Self.command(#selector(UIResponderStandardEditActions.paste(_:)), in: suggestedActions) {
+            actions.append(paste)
         }
         actions.append(UIAction(title: "Select All") { [weak self] _ in self?.selectAll(nil) })
         return UIMenu(children: actions)
+    }
+
+    private static func command(_ action: Selector, in elements: [UIMenuElement]) -> UICommand? {
+        for element in elements {
+            if let command = element as? UICommand, command.action == action { return command }
+            if let menu = element as? UIMenu, let command = command(action, in: menu.children) { return command }
+        }
+        return nil
     }
 
     public func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {

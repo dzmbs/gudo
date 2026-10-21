@@ -81,9 +81,15 @@ final class GitUITests: XCTestCase {
         palette("New Task")
         let nameField = element("task-name")
         XCTAssertTrue(nameField.waitForExistence(timeout: 10), "the New Task sheet opens with a name")
-        nameField.tap()
-        nameField.typeKey("a", modifierFlags: .command)
-        nameField.typeText(name)
+        // Replace the generated name by deleting it from the end, not with ⌘A: even with the
+        // field focused, ⌘A sometimes left nothing selected and the typed name was appended to
+        // the generated one. The tap at the field's trailing edge puts the caret at the end.
+        nameField.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: nameField)
+        waitForExpectations(timeout: 5)
+        let generated = nameField.value as? String ?? ""
+        nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: generated.count) + name)
+        XCTAssertEqual(nameField.value as? String, name, "the task is named \(name)")
         app.buttons["Shell"].firstMatch.tap()
         shot("new-task")
         element("launch-start").tap()
@@ -174,6 +180,13 @@ final class GitUITests: XCTestCase {
         while !FileManager.default.fileExists(atPath: worktree + "/.setup-done") && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
         panes.firstMatch.tap()
         app.typeText("python3 -m http.server $PORT --bind 127.0.0.1\n")
+        // The server being up brings the "localhost:PORT is up" offer, which slides in from
+        // under the toolbar: a tap on the toolbar while it moves did not open the popover.
+        // Dismiss it so the toolbar is still.
+        let offer = element("port-offer")
+        XCTAssertTrue(offer.waitForExistence(timeout: 15), "the server's port is offered")
+        offer.buttons["Dismiss"].firstMatch.tap()
+        XCTAssertTrue(offer.waitForNonExistence(timeout: 5), "the offer goes")
 
         element("pr-button").tap()
         XCTAssertTrue(element("pr-popover").waitForExistence(timeout: 5), "the popover opens")
