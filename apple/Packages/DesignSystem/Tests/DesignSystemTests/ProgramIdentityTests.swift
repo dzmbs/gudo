@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import DesignSystem
 
@@ -51,10 +52,34 @@ func programNamesNormalize(name: String, id: String) {
     for (id, logo) in ProgramCatalog.logos {
         #expect(ProgramCatalog.entry(id: id)?.logo == logo, "logo for \(id)")
     }
-    // Agents and programs whose terms do not allow their logo here show a neutral symbol
-    for id in ["claude", "codex", "gemini", "copilot", "vim", "python", "node", "docker", "kubectl", "go", "rustc", "psql", "htop"] {
+    for id in ["claude", "codex", "gemini", "copilot", "vim", "emacs", "htop", "docker", "kubectl", "python", "node",
+               "bun", "deno", "go", "rustc", "cargo", "psql"] {
+        #expect(ProgramCatalog.entry(id: id)?.logo != nil, "\(id) ships its logo")
+    }
+    // No official artwork could be sourced (redis-cli: brand kit unreachable; bash: not published
+    // by GNU), or none exists (nano, lazygit, K9s), or no licence (zsh, fish, OpenSSH): a symbol.
+    for id in ["redis-cli", "bash", "nano", "lazygit", "k9s", "zsh", "fish", "ssh"] {
         #expect(ProgramCatalog.entry(id: id)?.logo == nil, "\(id) ships no logo")
     }
+    #expect(ProgramCatalog.identity(process: "ipython").logo?.asset == "PythonLogo")
+    #expect(ProgramCatalog.identity(process: "rustup").logo?.asset == "RustLogo")
+}
+
+/// Every shipped logo records where each of its files came from and when, so the legal switch
+/// (`ProgramCatalog.logos`) doubles as the provenance list.
+@Test func shippedLogosRecordTheirSource() throws {
+    let date = try Regex(#"^20\d\d-[01]\d-[0-3]\d$"#)
+    for (id, logo) in ProgramCatalog.logos {
+        #expect(!logo.sources.isEmpty, "\(id) records its source")
+        #expect(logo.sources.count <= 2, "\(id): one file, or light and dark")
+        for source in logo.sources {
+            let url = URL(string: source.replacingOccurrences(of: " ", with: "%20"))
+            #expect(url?.scheme == "https" && url?.host?.isEmpty == false, "\(id) source \(source) is an https URL")
+        }
+        #expect(logo.retrieved.wholeMatch(of: date) != nil, "\(id) records its retrieval date: \(logo.retrieved)")
+    }
+    let risky = ProgramCatalog.logos.filter { $0.value.clearance == .ownerApprovedRisk }.keys
+    #expect(Set(risky) == ["claude", "codex", "gemini", "copilot", "docker", "kubectl", "python", "node", "go", "rustc", "cargo", "psql"])
 }
 
 @Test func shippedLogosAreInTheBundle() {

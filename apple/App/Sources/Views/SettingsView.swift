@@ -590,10 +590,26 @@ private struct AcknowledgementsView: View {
                 ack("tmux logo", "Copyright (c) 2015, Jason Long · ISC License: Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies. THE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. Drawn in one colour.")
                 ack("Helix logo", "@jakenvac · Mozilla Public License 2.0 · source: github.com/helix-editor/helix")
                 ack("btop logo", "Aristocratos · Apache License 2.0 · github.com/aristocratos/btop")
+                ack("Emacs logo", "Copyright (C) 2015-2026 Free Software Foundation, Inc. · Nicolas Petton · GNU General Public License v3 or later · unmodified; source: git.savannah.gnu.org/cgit/emacs.git")
+                ack("htop logo", "htop authors · GNU General Public License v2 or later · unmodified; source: github.com/htop-dev/htop")
+                ack("Rust and Cargo logos", "Rust Foundation · Creative Commons Attribution 4.0 · creativecommons.org/licenses/by/4.0 · unmodified · Rust and Cargo are trademarks of the Rust Foundation")
+                ack("Claude logo", "Anthropic, PBC · Claude is a trademark of Anthropic, PBC")
+                ack("OpenAI logo", "OpenAI · labels Codex · OpenAI, Codex and the OpenAI logo are trademarks of OpenAI")
+                ack("Gemini CLI icon", "Google LLC · Gemini is a trademark of Google LLC")
+                ack("GitHub Copilot icon", "GitHub, Inc. · GitHub and Copilot are trademarks of GitHub, Inc.")
+                ack("Vim logo", "The Vim project · vim.org")
+                ack("Docker logo", "Docker, Inc. · Docker and the Docker logo are trademarks or registered trademarks of Docker, Inc. in the United States and/or other countries")
+                ack("Kubernetes logo", "The Linux Foundation · labels kubectl · Kubernetes is a registered trademark of The Linux Foundation")
+                ack("Python logo", "Python Software Foundation · “Python” and the Python logos are trademarks or registered trademarks of the Python Software Foundation")
+                ack("Node.js logo", "OpenJS Foundation · Node.js is a trademark of the OpenJS Foundation")
+                ack("Bun logo", "Oven · bun.com")
+                ack("Deno logo", "Deno Land Inc. · Deno is a registered trademark of Deno Land Inc.")
+                ack("Go logo", "Google LLC · Go and the Go Logo are trademarks of Google LLC")
+                ack("PostgreSQL logo", "PostgreSQL Community Association · Postgres, PostgreSQL and the Slonik logo are trademarks or registered trademarks of the PostgreSQL Community Association of Canada")
             } header: {
                 Text("Program logos")
             } footer: {
-                Text("Shown next to a tab to say which program runs in it. The names and logos belong to their owners, who do not endorse this app.")
+                Text("Claude is a trademark of Anthropic, PBC; the other names and logos above are trademarks of their owners. Names and logos are used only to identify the program running in a tab; this app is not affiliated with or endorsed by them.")
             }
             Section {
                 ack("Visual Studio Code", "Microsoft Software License Terms · the editor. Its server and CLI are downloaded from Microsoft onto your own hosts when you open the editor; they are not part of this app.")
