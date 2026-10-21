@@ -1,3 +1,4 @@
+import DrawingKit
 import Foundation
 import HostKit
 import UniformTypeIdentifiers
@@ -7,21 +8,6 @@ import UIKit
 #else
 import AppKit
 #endif
-
-/// PNG and the `.excalidraw` scene; a pane of this app gets this reference too, so a drop
-/// places the same drawing there (same host), uploads it (another host), or hands it to the
-/// agent running in that pane.
-nonisolated struct DrawingDragRef: Codable, Equatable, Sendable {
-    var hostId: String
-    var paneId: UInt64
-    var placementId: UInt64
-    var artifactId: UInt64
-    /// The image shown (a blob on the source host).
-    var imageHash: String
-
-    /// The private pasteboard type that carries it inside the app (Mac).
-    static let typeIdentifier = "dev.unnamed.drawing-ref"
-}
 
 extension PaneDrawing {
     /// The host this pane is on.
@@ -137,30 +123,14 @@ extension PaneDrawing {
     /// What dragging `placement` into another app offers: the PNG and, for scenes and
     /// images, the `.excalidraw` file (loaded only when the destination asks for it).
     func itemProvider(for placement: Placement) -> NSItemProvider {
-        let provider = NSItemProvider()
-        provider.suggestedName = "Drawing"
         let hub = hub
         let hash = placement.image.hash
         let artifact = placement.artifactId
-        provider.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { completion in
-            Task { @MainActor in
-                let png = await hub.png(hash: hash)
-                completion(png, png == nil ? ArtifactError.NotFound(message: "the drawing's image") : nil)
-            }
-            return nil
-        }
-        provider.registerFileRepresentation(forTypeIdentifier: UTType.excalidraw.identifier, fileOptions: [], visibility: .all) { completion in
-            Task { @MainActor in
-                do {
-                    let scene = try await hub.client.excalidrawFile(artifactId: artifact)
-                    completion(try PaneDrawing.exportFile(scene, format: .excalidraw), false, nil)
-                } catch {
-                    completion(nil, false, error)
-                }
-            }
-            return nil
-        }
-        return provider
+        return DrawingTransfer.itemProvider(
+            png: { @MainActor in await hub.png(hash: hash) },
+            sceneFile: { @MainActor in
+                try PaneDrawing.exportFile(try await hub.client.excalidrawFile(artifactId: artifact), format: .excalidraw)
+            })
     }
 }
 #endif

@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         AppNotifications.shared.install()
         AgentLiveActivities.shared.install()
+        AgentsLiveActivity.shared.install()
         #if PUSH_YES
         application.registerForRemoteNotifications()
         #endif

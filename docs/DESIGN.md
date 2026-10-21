@@ -77,14 +77,21 @@ terminal background.
 | `meta` | caption, monospaced digits | ages, counts, ⌘N hints |
 | `badge` | caption2 medium | pills (Ghostty palette badge) |
 | `literal` / `literalSmall` | SF Mono callout / caption | paths, commands, hosts, code |
-| `paletteQuery` | 20 pt light | command palette field (Ghostty) |
+| `tabTitle` | callout (Mac), subheadline (touch) | tab strip |
 | `keyCap` | 12 pt medium rounded | shortcut key caps (Ghostty `KeyCap`) |
 | `overlay` | callout, monospaced digits | cols × rows, exit bar |
 
 ### Spacing, sizes, radii
 
-Grid: 4 pt with a 2 pt half step: `2 4 8 12 16 20 24 32`. Leading slots in rows are 22 pt so
-titles align to one column.
+Grid: 4 pt with a 2 pt half step: `2 4 8 12 16 20 24 32`, plus `row` 6 (glyph to label, a dense
+row's vertical inset), `gap10` 10 (a leading slot to its title) and the badge padding 7 / 3. No
+arithmetic on spacing tokens. Leading slots in rows are 22 pt so titles align to one column.
+
+No point sizes in chrome: every label and glyph is a text style (`.imageScale` for glyphs), so it
+follows Dynamic Type; the exceptions are the Ghostty key cap (12 pt rounded) and the two 10 pt
+check badges drawn inside a fixed corner frame. Fixed-height bands clamp their text where it stops
+fitting: the sidebar at accessibility 1 (its column widens with the text size, `SidebarWidth`), the
+tab strip at XXL, pane headers and the iPhone bar at XL.
 
 | Size | Value | Source |
 |---|---|---|
@@ -99,8 +106,11 @@ titles align to one column.
 | `chip` | 4 | resize overlay, key caps (Ghostty) |
 | `field` | 6 | search field, bar buttons (Ghostty) |
 | `control` | 8 | row highlights, inline code blocks |
-| tab pill | 7 | Ghostty/AppKit selected tab |
-| `panel` | 16 (palette 20, search 14, reconnect 22) | floating glass panels; glass reads smaller than an opaque edge |
+| `tabPill` | 7 | Ghostty/AppKit selected tab |
+| `secureBadge` | 12 | Ghostty's secure-input badge |
+| `searchPanel` | 14 | scrollback search bar glass |
+| `panel` | 16 | floating glass panels (palette); glass reads smaller than an opaque edge |
+| `card` / `largeCard` | 20 / 22 | glass cards over the terminal (secret prompt, knock) / reconnect and control-request cards |
 
 ### Materials (Liquid Glass) rules
 
@@ -134,7 +144,9 @@ titles align to one column.
 | toast | 2.4 s | | — |
 
 Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
-"working"), and the secure-input gradient stops.
+"working"), and the secure-input gradient stops. Anything that slides or grows in (sidebar, tab strip, toasts,
+agent toasts, notices, banners, the exit bar) uses `movingTransition(_:)` / `scalingTransition(_:)`: under Reduce
+Motion it only fades.
 
 ### Haptics (iPhone/iPad, touch only)
 
@@ -150,7 +162,7 @@ Only the working spinner and the working shimmer loop; under Reduce Motion both 
 
 | Component | File | Notes / reference |
 |---|---|---|
-| `ListRow`, `SectionTitle`, `EmptyState` | `Components/Rows.swift` | dense rows with fixed leading slot; `ContentUnavailableView` |
+| `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the ink at 20 % behind the glyph (T4) |
 | `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | Ghostty `SearchButtonStyle` hover/press fills; iPad pointer highlight |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
@@ -203,6 +215,10 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   group with Hosts, Find, the pane menu and the command palette; the tab-placement toggle on its
   own. Never accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
   buttons' frames in both placements and attaches screenshots.
+- The title's subtitle is the tab's context (agent task, program, `repo:branch` or directory)
+  20 % while the search bar is open (T4). The host button opens its details on hover: the state
+  word and name, "address · 3 tabs · 12 ms", one row per tab with its state, All Hosts and
+  Disconnect (O1). Every icon control has a tooltip with its shortcut.
 - The toolbar background is hidden: the sidebar color runs up behind the traffic lights and the
   terminal background behind the rest. The window title's folder is the proxy icon
   (`navigationDocument`) for local tabs.
@@ -226,13 +242,15 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - A host with no tabs shows one row "New Terminal" (`plus` in `.secondary`) under its header
   (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
 - One row per tab: its number across all hosts (tertiary, monospaced), a leading slot (16 pt on
-  holds the focused pane's program mark (14 / 16 pt: the official logo where its terms allow,
+  holds the focused pane's program mark (14 / 16 pt: the official logo, unmodified, where one ships (`ProgramCatalog.logos`; the owner's dark variant in dark),
   replaced by the agent glyph on unfocused tabs (§3.4: working = mini spinner, needs input =
   amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
   every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1–8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
   10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder within a host; context
-  menu Rename / Close. Under a group's tabs, its agents.
+  menu Rename / Close. Under a group's tabs, its agents. Rows touch (no gap); the host's agent
+  glyph opens its agents on hover (`HoverPopover`). On iPad the sidebar's bar holds Settings (⌘,)
+  and New Tab only: no app name.
 - Footer: Settings only (no connection summary, §3.7 rule 1).
 - Tab strip: a single-host window shows no host; with tabs from several hosts, each tab gets the
   host's name as a second line (`meta`, `.tertiary`).
@@ -258,6 +276,8 @@ close button on hover at the leading edge; one-pixel separators between unselect
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
 tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill of the ink at 10 %
 (radius 7, hairline edge), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
+After a close under the pointer the tabs keep their width until the pointer leaves the strip
+decided against: it carries + and the drop target).
 The strip sits under the shared toolbar (Mac and iPad alike) on the window base (the terminal
 background) with a one-pixel `separator` rule. Drag
 tabs to reorder.
@@ -269,7 +289,11 @@ tabs to reorder.
   split divider", ±2.5 %). Split sizes snap to whole cells (main's `SplitSnapping`).
 - No focus ring. Unfocused panes are dimmed with the background at 1 − `unfocused-split-opacity`.
 - Pane header (only in splits, 24 pt, on the terminal background): program mark (12 pt),
-  program's display name, status glyph and state word in its color, and the pane menu (… on hover/focus). Tap focuses.
+  program's display name, status glyph and state word in its color, and the pane menu (… on
+  hover/focus on the Mac; at 0.6 on touch, where there is no hover). Tap focuses.
+  it failed), a failed command's rows tinted with the theme's red at 6 %, its ✓ / ✗ exit and run
+  time at the right of its prompt row on hover, and the command whose output fills the top of the
+  pane pinned there as a small header while you scroll.
 - Overlays on the grid: cols × rows centered while resizing (hidden while the software keyboard
   moves, so it only answers user resizes); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
@@ -537,6 +561,7 @@ Ghostty's config as native settings; each control shows its Ghostty key in SF Mo
 card in its own background with its name in its foreground, a prompt in its colours and four 12 pt
 swatches (red, green, blue, yellow), the selected card ringed in the accent; the setting row
 shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Panes (compact/comfortable).
+theme, each from the same picker; the system's appearance writes `theme` (`Views/ThemePair.swift`).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
 from the real profiles). Notifications. About and Acknowledgements. Mac: a split view (200 pt list of
@@ -581,6 +606,9 @@ Return. Canvas panes show the same editor full size on the terminal background. 
 - [x] SF Symbols only; SF Pro chrome; SF Mono literals; JetBrains Mono grid.
 - [x] Light and dark everywhere; Dynamic Type through text styles on iOS; VoiceOver labels on
       dividers (adjustable), status glyphs, avatars, badges; Reduce Motion respected.
+- [x] Tooltips with the shortcut on every icon control (`.help`), hover-to-peek popovers, hover fills
+      on rows and tabs, pointer highlight on bar buttons; hover-only affordances visible at 0.6 on touch.
+- [x] Dynamic Type from XS to AX5 without overlap: fixed bands clamp, the sidebar widens.
 - [ ] Context menu *previews* (live pane thumbnails) — needs the renderer's snapshot API wired
       into `contextMenu(menuItems:preview:)`.
 

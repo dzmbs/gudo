@@ -38,7 +38,8 @@ enum TabPlacement {
 struct WorkspaceView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
-    @AppStorage("sidebarWidth") private var sidebarWidth = 248.0
+    @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     #if os(macOS)
@@ -62,11 +63,12 @@ struct WorkspaceView: View {
                             // A fresh query and selection per mode (⌘K, ⌘P, ⌥⌘T).
                             .id(model.paletteMode)
                             .padding(.top, 44)
-                            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                            // animation); a 0.15 s fade on iPad, where the glass needs a frame.
+                            .transition(.opacity)
                     }
                 }
             }
-            .animation(DS.Motion.overlay, value: model.isPaletteShown)
+            .animation(DS.Motion.palette, value: model.isPaletteShown)
             .toastHost(model.toasts)
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()
@@ -79,6 +81,7 @@ struct WorkspaceView: View {
             // The whole window follows the terminal theme: surfaces, text, accent and states
             // (`ChromePalette`), light or dark by `window-theme` (Ghostty: Match Terminal).
             .chromeTheme(theme, windowTheme: windowTheme)
+            .modifier(ThemePairFollower())
             .focusedSceneValue(workspace)
             .focusedSceneValue(model)
             .renameTabPrompt(workspace)
@@ -138,8 +141,8 @@ struct WorkspaceView: View {
         HStack(spacing: 0) {
             if model.isSidebarShown {
                 SidebarColumn(workspace: workspace)
-                    .frame(width: sidebarWidth)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .frame(width: SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize))
+                    .movingTransition(.leading)
                 SidebarDivider(width: $sidebarWidth)
             }
             NavigationStack {
@@ -169,6 +172,8 @@ private struct SettingsToolbarButton: View {
 
     var body: some View {
         Button("Settings", systemImage: "gearshape") { model.sheet = .settings }
+            .keyboardShortcut(",", modifiers: .command)
+            .help("Settings (⌘,)")
             .accessibilityIdentifier("open-settings")
     }
 }
@@ -184,8 +189,11 @@ private struct SidebarColumn: View {
         #if os(iOS)
         NavigationStack {
             WorkspaceSidebar()
+                // The app's name is not drawn: in a 200–360 pt column between two glass
+                // buttons a title collided with them at large text sizes. VoiceOver keeps it.
                 .navigationTitle(Brand.name)
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar(removing: .title)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         SettingsToolbarButton()
@@ -266,10 +274,10 @@ private struct SidebarDivider: View {
                             .onChanged { value in
                                 let origin = start ?? width
                                 start = origin
-                                width = min(max(origin + value.translation.width, 200), 360)
+                                width = min(max(origin + value.translation.width, SidebarWidth.range.lowerBound), SidebarWidth.range.upperBound)
                             }
                             .onEnded { _ in start = nil })
-                    .onTapGesture(count: 2) { width = 248 }
+                    .onTapGesture(count: 2) { width = SidebarWidth.standard }
                     .ignoresSafeArea()
             }
             .accessibilityHidden(true)
@@ -304,7 +312,7 @@ private struct DetailColumn: View {
             if !model.isSidebarShown && showsTabBar {
                 TabBar(workspace: workspace)
                     .chromeContent()
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .movingTransition(.top)
             }
             switch model.destination {
             case .terminal:
@@ -351,14 +359,25 @@ private struct DetailColumn: View {
         }
     }
 
-    /// The split state only: the host is named once, by the toolbar's host button.
+    /// task, the program, `repo:branch` or the directory) when it says something the title
+    /// does not, then the split state. The host is named once, by the toolbar's host button.
     private var subtitle: String {
         if let mixed = model.activeMixed {
             let hosts = mixed.hosts.map(model.groupName).joined(separator: " + ")
             return mixed.isEditorOnly ? "VS Code · \(hosts)" : hosts
         }
-        guard let tab = workspace.session.activeTab, tab.root.panes.count > 1 else { return "" }
-        return tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed"
+        guard let tab = workspace.session.activeTab else { return "" }
+        let title = workspace.title(of: tab)
+        var parts: [String] = []
+        if let context = workspace.context(of: tab)?.trimmingCharacters(in: .whitespaces),
+           !context.isEmpty, context != "~", context != title
+        {
+            parts.append(context)
+        }
+        if tab.root.panes.count > 1 {
+            parts.append(tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -400,7 +419,9 @@ private struct TerminalToolbar: ToolbarContent {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Find", systemImage: "magnifyingglass") { model.isSearchShown.toggle() }
-                .help("Find (⌘F)")
+                .lit(model.isSearchShown && model.destination == .terminal)
+                .help(model.isSearchShown ? "Hide Find (⌘F)" : "Find (⌘F)")
+                .accessibilityIdentifier("find-button")
                 .disabled(model.destination != .terminal)
             Menu("Pane", systemImage: "rectangle.split.2x1") {
                 PaneMenuItems(workspace: workspace, model: model)
@@ -413,7 +434,7 @@ private struct TerminalToolbar: ToolbarContent {
                     .disabled(!DrawingCommands.canDraw(in: workspace))
                 #endif
             }
-            .help("Pane")
+            .help("Pane: split, zoom, close, Two Columns")
             .menuIndicator(.hidden)
             .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             .accessibilityIdentifier("pane-menu")
@@ -432,8 +453,9 @@ private struct TerminalToolbar: ToolbarContent {
 }
 
 
-/// name, the icon replaced by the state glyph only while the link is not healthy. The popover is
-/// the one place the round trip is shown. On this device's own window it opens Hosts.
+/// name, the icon replaced by the state glyph only while the link is not healthy. Hovering opens
+/// them; the popover is the one place the round trip is shown. On this device's own window it
+/// opens Hosts.
 private struct HostToolbarButton: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -441,19 +463,28 @@ private struct HostToolbarButton: View {
 
     var body: some View {
         if workspace.isRemote {
-            Button { showsDetails.toggle() } label: {
+            HoverPopover(isPresented: $showsDetails) {
                 // A plain stack, not a Label: iPad toolbars reduce a Label to its icon.
-                HStack(spacing: 6) {
+                HStack(spacing: DS.Space.row) {
                     ConnectionGlyph(model.connection, healthy: Image(systemName: "server.rack"))
                     Text(model.hostName).lineLimit(1)
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .padding(.horizontal, DS.Space.row)
+                .contentShape(.rect)
+            } content: {
+                HostDetailsPopover(workspace: workspace) {
+                    showsDetails = false
+                    toggleHosts()
+                } onDisconnect: {
+                    showsDetails = false
+                    model.disconnect()
+                }
             }
             .help(model.connection.isQuiet ? model.hostName : "\(model.hostName) · \(model.connection.title)")
+            .accessibilityLabel("\(model.hostName), \(model.connection.title)")
             .accessibilityIdentifier("hosts-button")
-            .popover(isPresented: $showsDetails) { details }
         } else {
             Button("Hosts", systemImage: "server.rack") { toggleHosts() }
                 .help("Hosts (⇧⌘H)")
@@ -461,45 +492,87 @@ private struct HostToolbarButton: View {
         }
     }
 
-    private var details: some View {
-        VStack(alignment: .leading, spacing: DS.Space.s) {
-            Text(model.hostName).font(.headline)
-            if let address = model.hosts.hosts.first(where: { $0.id == workspace.hostId })?.address, !address.isEmpty {
-                Text(address)
-                    .font(DS.Font.literalSmall)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+    private func toggleHosts() {
+        withAnimation(DS.Motion.snappy) { model.destination = model.destination == .hosts ? .terminal : .hosts }
+    }
+}
+
+/// one line "address · 3 tabs · 12 ms", a divider, one row per tab (its mark or agent glyph, its
+/// name, its state word right-aligned), then All Hosts and Disconnect. System padding and
+/// spacing (O3), 260–480 wide, scrolling past 400.
+private struct HostDetailsPopover: View {
+    let workspace: Workspace
+    let onAllHosts: () -> Void
+    let onDisconnect: () -> Void
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        let group = model.groups.groups.first { $0.id == workspace.hostId }
+        let tabs = group?.tabs ?? []
+        VStack(alignment: .leading) {
+            (Text(stateWord + " ").foregroundStyle(DS.Palette.textSecondary) + Text(model.hostName))
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(summary(tabs: tabs.count))
+                .font(.subheadline)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .monospacedDigit()
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            if !tabs.isEmpty, let group {
+                Divider()
+                ForEach(tabs) { tab in
+                    let ref = group.ref(tab.id)
+                    let state = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }.min { $0.urgency < $1.urgency }
+                    let title = model.workspace(ofGroup: group.id)?.title(of: tab) ?? tab.title ?? "Shell"
+                    Button {
+                        model.focus(ref)
+                    } label: {
+                        HStack(spacing: DS.Space.row) {
+                            TabLeadingMark(program: model.programIdentity(of: tab, onGroup: group.id), state: state)
+                            Text(title).lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: DS.Space.s)
+                            Text(model.currentTab == ref ? "Open" : state.flatMap { $0 == .idle || $0 == .unknown ? nil : $0.title } ?? "")
+                                .foregroundStyle(DS.Palette.textSecondary)
+                        }
+                        .font(.caption)
+                        .padding(.vertical, DS.Space.xxs)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("host-details-tab-\(tab.id.rawValue)")
+                }
             }
-            HStack(spacing: DS.Space.xs + 2) {
-                ConnectionGlyph(model.connection)
-                Text(workspace.host?.status.summary ?? model.connection.title)
-                    .monospacedDigit()
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            Divider().padding(.vertical, DS.Space.xs)
+            Divider()
             HStack {
-                Button("All Hosts") {
-                    showsDetails = false
-                    toggleHosts()
-                }
+                Button("All Hosts", action: onAllHosts)
+                    .help("Hosts (⇧⌘H)")
                 Spacer()
-                Button("Disconnect", role: .destructive) {
-                    showsDetails = false
-                    model.disconnect()
-                }
+                Button("Disconnect", role: .destructive, action: onDisconnect)
             }
             .buttonStyle(.borderless)
         }
-        .chromeContent()
-        .padding(DS.Space.l)
-        .frame(minWidth: 260)
-        .presentationCompactAdaptation(.popover)
+        .hoverPopoverFrame()
         .accessibilityIdentifier("host-details")
     }
 
-    private func toggleHosts() {
-        withAnimation(DS.Motion.snappy) { model.destination = model.destination == .hosts ? .terminal : .hosts }
+    /// The status word before the name: "Connected", "Reconnecting", …
+    private var stateWord: String {
+        model.connection.title
+    }
+
+    private func summary(tabs: Int) -> String {
+        var parts: [String] = []
+        if let address = model.hosts.hosts.first(where: { $0.id == workspace.hostId })?.address, !address.isEmpty {
+            parts.append(address)
+        }
+        parts.append(tabs == 1 ? "1 tab" : "\(tabs) tabs")
+        if let status = workspace.host?.status, case .connected(let rtt?) = status {
+            parts.append("\(Int((rtt / .milliseconds(1)).rounded())) ms")
+        } else if let status = workspace.host?.status, !status.isLive {
+            parts.append(status.summary)
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -527,6 +600,8 @@ private struct CompactRoot: View {
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button("Settings", systemImage: "gearshape") { model.sheet = .settings }
+                                    .keyboardShortcut(",", modifiers: .command)
+                                    .help("Settings (⌘,)")
                             }
                         }
                 }
@@ -552,7 +627,7 @@ struct ActiveTabView: View {
                 let single = compact ? tab.focused : tab.zoomed
                 let isSplit = single == nil && tab.root.panes.count > 1
                 SplitTreeView(node: single.map(Node.leaf) ?? tab.root, workspace: workspace, isSplit: isSplit)
-                    .padding(paneStyle == .comfortable && isSplit ? DS.Space.xs + 2 : 0)
+                    .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
                     .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
                     // Lost link: the last frame stays, dimmed and desaturated, under the card.
                     .connectionOverlay(
@@ -598,7 +673,7 @@ private struct ConnectingView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Text(detail(context.date))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .monospacedDigit()
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: 360)
@@ -666,14 +741,14 @@ private struct WelcomeView: View {
             Image(systemName: workspace.canOpenTabs ? "terminal" : "server.rack")
                 .font(.title)
                 .imageScale(.large)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
             VStack(spacing: DS.Space.xs) {
                 Text(title)
                     .font(DS.Font.title)
                     .foregroundStyle(.primary)
                 Text(message)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 340)
             }
@@ -733,7 +808,7 @@ private struct WelcomeView: View {
     private func welcomeRow(_ title: String, systemImage: String, keys: [String]?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             // The sidebar's row: a 16 pt glyph slot at 0.6, the label leading.
-            HStack(spacing: DS.Space.s + 2) {
+            HStack(spacing: DS.Space.gap10) {
                 Image(systemName: systemImage)
                     .frame(width: 16)
                     .foregroundStyle(.primary)

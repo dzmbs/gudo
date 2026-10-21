@@ -446,6 +446,7 @@ final class PaneDrawing: NSObject {
         #endif
         overlay.view.frame = view.bounds
         view.addSubview(overlay.view)
+        publishDrawingFocus()
         if let tray = trayView {
             #if os(iOS)
             view.bringSubviewToFront(tray)
@@ -468,6 +469,7 @@ final class PaneDrawing: NSObject {
         overlay?.view.removeFromSuperview()
         overlay = nil
         hiddenPlacement = nil
+        publishDrawingFocus()
         if Self.active === self, !isWriting { Self.active = nil }
         // Give the keyboard back only if the terminal had it (never pop up the software one).
         guard keyboardBeforeOverlay else { return }
@@ -855,6 +857,51 @@ final class PaneDrawing: NSObject {
             canvas.close()
             self.canvas = nil
         }
+        publishDrawingFocus()
+    }
+
+    // MARK: Handoff
+
+    /// Tells the window which drawing this pane has open (its Handoff activity carries it).
+    func publishDrawingFocus() {
+        let open: HandoffPayload.Drawing? = if let canvas {
+            HandoffPayload.Drawing(artifact: canvas.artifactId, canvas: true)
+        } else if let overlay, let artifact = overlay.artifactId {
+            HandoffPayload.Drawing(artifact: artifact, placement: overlay.reopenedPlacementId, canvas: false)
+        } else {
+            nil
+        }
+        let pane = PaneId(paneId)
+        guard let workspace, workspace.drawingFocus[pane] != open else { return }
+        workspace.drawingFocus[pane] = open
+    }
+
+    /// Opens a drawing continued from another device (Handoff): its placement here reopened in
+    /// draw mode, or a drawing not placed yet opened over this pane; a canvas pane only needs
+    /// to be there. False while the pane is not ready for it yet (placements still loading, the
+    /// canvas not pushed yet), so the caller tries again; `settled` once placements had time to
+    /// arrive, so an unplaced drawing opens.
+    func continueDrawing(_ ref: HandoffPayload.Drawing, settled: Bool) -> Bool {
+        if ref.canvas { return canvas?.artifactId == ref.artifact }
+        if overlay?.artifactId == ref.artifact { return true }
+        guard overlay == nil, canvas == nil, pane != nil, !isReadOnly, surface?.grid != nil else { return false }
+        let placed = entries.values.filter { $0.pin != nil && $0.placement.artifactId == ref.artifact }
+        if let entry = placed.first(where: { $0.placement.placementId == ref.placement }) ?? placed.first {
+            reopen(entry.placement)
+            return true
+        }
+        guard settled else { return false }
+        claim { [weak self] in
+            guard let self, self.overlay == nil, let origin = self.tracker.terminal.pinRow(viewportRow: self.cursorRow) else { return }
+            self.present(DrawOverlay(drawing: self, origin: origin, reopened: nil, tool: DrawOverlay.lastTool, existing: ref.artifact))
+        }
+        return true
+    }
+
+    /// The cursor's viewport row.
+    private var cursorRow: Int {
+        let rows = Int(surface?.grid?.rows ?? 1)
+        return min(max(surface?.terminal.cursorPosition.y ?? 0, 0), rows - 1)
     }
 
     var sessionId: UInt64 {

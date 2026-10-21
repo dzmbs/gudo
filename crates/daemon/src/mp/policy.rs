@@ -200,7 +200,11 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::VsCodeTunnelStart(_)
         | R::VsCodeTunnelStop => (Need::Own, Target::Daemon),
         // Pushes carry agent prompts from every pane, and guests have no push scope yet
-        R::PushRegister(_) | R::PushUnregister | R::PushStatus | R::PushAction(_) => {
+        R::PushRegister(_)
+        | R::PushUnregister
+        | R::PushStatus
+        | R::PushAction(_)
+        | R::PushActivity(_) => {
             (Need::Own, Target::Daemon)
         }
         // The owner's plan and its limits; a guest has no business there.

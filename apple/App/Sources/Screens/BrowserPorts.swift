@@ -10,8 +10,11 @@ struct BrowserSheet: View {
     var body: some View {
         Group {
             if let url = model.browserURL {
-                BrowserView(initialURL: url, onDone: { withAnimation(DS.Motion.snappy) { model.browserURL = nil } }, doneTitle: "Ports")
-                    .id(url)
+                BrowserView(
+                    initialURL: url, dataStore: DevServerRouting.shared.store(forHost: model.browserHost),
+                    routedHost: model.browserHost.map { (id: $0, name: model.ports.hostName) },
+                    onDone: { withAnimation(DS.Motion.snappy) { model.browserURL = nil } }, doneTitle: "Ports")
+                    .id("\(model.browserHost ?? "")|\(url)")
             } else {
                 NavigationStack {
                     PortsList()
@@ -182,7 +185,7 @@ struct PortOfferBanner: ViewModifier {
                 .frame(maxWidth: 520)
                 .floatingCapsule()
                 .padding(.top, 60)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .movingTransition(.top)
                 .task(id: port.port) {
                     try? await Task.sleep(for: .seconds(15))
                     withAnimation(DS.Motion.overlay) { model.ports.dismissOffer() }
@@ -209,6 +212,7 @@ extension WindowModel {
             let url = try await ports.open(port)
             ports.dismissOffer()
             browserURL = url
+            browserHost = ports.hostId
             if sheet != .browser {
                 if sheet != nil {
                     sheet = nil

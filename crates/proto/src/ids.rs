@@ -304,5 +304,8 @@ bitset! {
         ARTIFACT_HISTORY = 2;
         /// policies (`MpRequest::RegisterInvite` … `Claim`).
         MP2 = 3;
+        /// Sends the agents Live Activity (start, update, end) through the push relay and
+        /// answers `WorkspaceRequest::PushActivity`.
+        LIVE_ACTIVITY = 4;
     }
 }

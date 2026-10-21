@@ -62,6 +62,16 @@ pub struct PushConfig {
     pub attempts: u32,
     /// First retry delay; doubled each attempt.
     pub backoff: Duration,
+    /// Send the agents Live Activity (start, update, end; `push.live_activity`, default on).
+    pub live_activity: bool,
+    /// How long agent states settle before the Live Activity is updated (a burst of changes
+    /// becomes one push).
+    pub activity_debounce: Duration,
+    /// Least time between two routine Live Activity updates to a device
+    /// (`push.activity_interval_ms`); an agent newly needing the user goes at once.
+    pub activity_interval: Duration,
+    /// How long every agent must stay idle before the Live Activity ends.
+    pub activity_end_after: Duration,
 }
 
 impl Default for PushConfig {
@@ -73,6 +83,10 @@ impl Default for PushConfig {
             action_ttl: Duration::from_secs(60 * 60),
             attempts: 5,
             backoff: Duration::from_secs(1),
+            live_activity: true,
+            activity_debounce: Duration::from_secs(1),
+            activity_interval: Duration::from_secs(15),
+            activity_end_after: Duration::from_secs(120),
         }
     }
 }
@@ -136,6 +150,10 @@ pub struct Config {
     /// The editor `EditorChoice::Auto` launches (`editor.default` in `config.toml`:
     /// `"vscode"`, the default, or `"vscodium"`).
     pub editor_default: proto::EditorKind,
+    /// Put the compressing proxy (`ws/editor_proxy.rs`) in front of editor servers, so the
+    /// app's forward carries brotli/gzip instead of ~24 MB of plain JavaScript on a cold load
+    /// (`editor.compress` in `config.toml`; default on).
+    pub editor_compress: bool,
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
@@ -275,6 +293,7 @@ impl Config {
             openvscode_dir: None,
             vscodium_dir: None,
             editor_default: proto::EditorKind::VsCode,
+            editor_compress: true,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
@@ -303,6 +322,7 @@ impl Config {
     /// openvscode = "/opt/openvscode-server"
     /// vscodium = "/opt/vscodium-reh-web"   # instead of the pinned download
     /// default = "vscode"           # "vscode" | "vscodium": what `Auto` launches
+    /// compress = true              # brotli/gzip proxy in front of the editor server
     ///
     /// [relay]                     # docs/RELAYS.md
     /// mode = "custom"              # "default" | "custom" | "local-only"
@@ -314,6 +334,8 @@ impl Config {
     /// enabled = true
     /// relay = "https://push.example.com"
     /// delay_ms = 3000
+    /// live_activity = true          # the agents Live Activity
+    /// activity_interval_ms = 15000  # least time between routine updates
     ///
     /// [multiplayer]
     /// lease_idle_secs = 5
@@ -369,6 +391,9 @@ impl Config {
                 DefaultEditor::Vscodium => proto::EditorKind::Vscodium,
             };
         }
+        if let Some(compress) = file.editor.compress {
+            self.editor_compress = compress;
+        }
         if self.relay == RelayMode::Default {
             self.relay = file
                 .relay
@@ -383,6 +408,12 @@ impl Config {
         }
         if let Some(ms) = file.push.delay_ms {
             self.push.delay = Duration::from_millis(ms);
+        }
+        if let Some(on) = file.push.live_activity {
+            self.push.live_activity = on;
+        }
+        if let Some(ms) = file.push.activity_interval_ms {
+            self.push.activity_interval = Duration::from_millis(ms);
         }
         if let Some(secs) = file.multiplayer.lease_idle_secs {
             self.lease_idle = Duration::from_secs(secs);
@@ -550,6 +581,8 @@ struct PushSection {
     enabled: Option<bool>,
     relay: Option<String>,
     delay_ms: Option<u64>,
+    live_activity: Option<bool>,
+    activity_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -579,6 +612,7 @@ struct EditorSection {
     openvscode: Option<PathBuf>,
     vscodium: Option<PathBuf>,
     default: Option<DefaultEditor>,
+    compress: Option<bool>,
 }
 
 /// `editor.default`.

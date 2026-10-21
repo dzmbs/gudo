@@ -25,14 +25,59 @@ final class ProgramLogoUITests: XCTestCase {
         add(shot)
     }
 
-    private func launchPrograms() -> XCUIApplication {
+    /// `light`: a light terminal theme with the window forced light; otherwise the default dark
+    /// theme with the window forced dark (the marks' dark variants).
+    private func launchPrograms(light: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-screen", "programs", "-mock", "-sidebarShown", "YES", "-noAutoFocus", "YES",
             "-restoreLastTarget", "NO", "-ApplePersistenceIgnoreState", "YES",
+            "-window-theme", light ? "light" : "dark",
         ]
+        if light { app.launchArguments += ["-theme", "Builtin Light"] }
         app.launch()
         return app
+    }
+
+    /// id and display name, as the `programs` fixture's tabs 13–24 run them.
+    private let approvedMarks: [(id: String, name: String)] = [
+        ("gemini", "Gemini CLI"), ("copilot", "GitHub Copilot CLI"), ("emacs", "Emacs"), ("docker", "Docker"),
+        ("kubectl", "kubectl"), ("node", "Node.js"), ("bun", "Bun"), ("deno", "Deno"), ("go", "Go"),
+        ("cargo", "Cargo"), ("rustc", "Rust"), ("psql", "psql"),
+    ]
+
+    /// Every approved mark is in the sidebar under its program's name (scrolling the list to it
+    /// where the window is short), and the screenshots show them in `scheme`.
+    private func checkApprovedMarks(_ app: XCUIApplication, scheme: String) {
+        XCTAssertTrue(element(app, "tab-row-2").waitForExistence(timeout: 20), "the fixture opened its tabs")
+        // Original twelve that now carry logos: vim, htop, python.
+        for (id, name) in [("vim", "Vim"), ("htop", "htop"), ("python", "Python")] {
+            XCTAssertEqual(element(app, "program-mark-\(id)").label, name, "\(id) mark")
+        }
+        let sidebar = app.collectionViews.firstMatch
+        for (id, name) in approvedMarks {
+            let mark = element(app, "program-mark-\(id)")
+            for _ in 0..<3 where !mark.exists { sidebar.swipeUp(velocity: .slow) }
+            XCTAssertTrue(mark.exists, "the \(name) tab shows its mark")
+            XCTAssertEqual(mark.label, name)
+        }
+        // redis-cli: no official artwork could be sourced, so its kind's symbol shows (still a mark).
+        XCTAssertEqual(element(app, "program-mark-redis-cli").label, "redis-cli")
+        attach(app, "programs-sidebar-\(scheme)")
+    }
+
+    func testApprovedMarksDark() throws {
+        #if os(iOS)
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad and Mac")
+        #endif
+        checkApprovedMarks(launchPrograms(), scheme: "dark")
+    }
+
+    func testApprovedMarksLight() throws {
+        #if os(iOS)
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad and Mac")
+        #endif
+        checkApprovedMarks(launchPrograms(light: true), scheme: "light")
     }
 
     func testTabsShowTheirProgramsMark() throws {

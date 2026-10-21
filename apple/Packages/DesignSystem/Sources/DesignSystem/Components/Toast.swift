@@ -56,11 +56,11 @@ private struct ToastHost: ViewModifier {
                 }
                 .chromeContent()
                 .padding(.horizontal, DS.Space.l)
-                .padding(.vertical, DS.Space.s + 2)
+                .padding(.vertical, DS.Space.gap10)
                 .floatingCapsule(interactive: true)
                 .onTapGesture { center.dismiss() }
                 .padding(.top, DS.Space.s)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .movingTransition(.top)
                 .id(toast.id)
                 .accessibilityAddTraits(.isStaticText)
                 .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)

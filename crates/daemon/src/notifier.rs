@@ -12,7 +12,12 @@
 //! with its decision over iroh ([`action`]), signed with the device key, so Approve / Deny work
 //! from the lock screen without opening the app.
 //!
+//! The agents Live Activity ([`activity`]) goes the same way: a summary of this host's agents,
+//! sealed to the device, as `start` (push-to-start), `update` and `end` pushes.
+//!
 //! Registrations persist in `<state>/push.json` (mode 0600).
+
+mod activity;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +26,8 @@ use std::time::Duration;
 
 use proto::{
     Actor, AttentionItem, AttentionKind, AttentionSeen, AttentionUpdate, Decide, Decided, DeviceId,
-    PushActionRequest, PushPrefs, PushRegistration, PushStatus, UnixMillis, WsError,
+    PushActionRequest, PushActivityToken, PushPrefs, PushRegistration, PushStatus, UnixMillis,
+    WsError,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -43,8 +49,12 @@ struct Registration {
     seal_key: String,
     relay_url: Option<String>,
     prefs: PushPrefs,
+    /// Push-to-start capability for the agents Live Activity.
     #[serde(default)]
     activity_cap: Option<String>,
+    /// The running Live Activity's update capability (`PushActivity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    activity_update_cap: Option<String>,
     registered_at: u64,
 }
 
@@ -55,6 +65,10 @@ pub(crate) struct Push {
     /// Last delivery error per device (hex), cleared on success.
     errors: Mutex<HashMap<String, String>>,
     http: OnceLock<reqwest::Client>,
+    /// Wakes the Live Activity task (a device's activity token changed).
+    activity_wake: tokio::sync::Notify,
+    /// What each device's Live Activity was sent (hex device key).
+    activities: Mutex<HashMap<String, activity::DeviceState>>,
 }
 
 impl Push {
@@ -76,6 +90,8 @@ impl Push {
             regs: Mutex::new(regs),
             errors: Mutex::new(HashMap::new()),
             http: OnceLock::new(),
+            activity_wake: tokio::sync::Notify::new(),
+            activities: Mutex::new(HashMap::new()),
         }
     }
 
@@ -97,6 +113,17 @@ impl Push {
         let before = regs.len();
         regs.retain(|r| r.device != device);
         if regs.len() != before {
+            self.save(&regs);
+        }
+    }
+
+    /// Changes one device's registration; saved when `edit` returns true.
+    fn update(&self, device: &str, edit: impl FnOnce(&mut Registration) -> bool) {
+        let mut regs = lock(&self.regs);
+        let Some(reg) = regs.iter_mut().find(|r| r.device == device) else {
+            return;
+        };
+        if edit(reg) {
             self.save(&regs);
         }
     }
@@ -153,6 +180,11 @@ pub(crate) fn register(
     let device = hex(&actor.device.0);
     {
         let mut regs = lock(&core.push.regs);
+        // A running Live Activity outlives a re-registration (each launch).
+        let activity_update_cap = regs
+            .iter()
+            .find(|r| r.device == device)
+            .and_then(|r| r.activity_update_cap.clone());
         regs.retain(|r| r.device != device);
         regs.push(Registration {
             device: device.clone(),
@@ -161,12 +193,34 @@ pub(crate) fn register(
             relay_url: reg.relay_url,
             prefs: reg.prefs,
             activity_cap: reg.activity_cap,
+            activity_update_cap,
             registered_at: now_millis(),
         });
         core.push.save(&regs);
     }
     lock(&core.push.errors).remove(&device);
+    core.push.activity_wake.notify_one();
     tracing::info!(device = %&device[..8], "push registration updated");
+    Ok(status(core, actor.device))
+}
+
+/// `PushActivity`: the device's running agents Live Activity (its update capability), or that
+/// it ended.
+pub(crate) fn activity_token(
+    core: &Core,
+    actor: Actor,
+    token: PushActivityToken,
+) -> Result<PushStatus, WsError> {
+    if let Some(cap) = &token.cap
+        && (cap.is_empty() || cap.len() > MAX_CAP_LEN)
+    {
+        return Err(WsError::Invalid("bad activity capability".into()));
+    }
+    let device = hex(&actor.device.0);
+    if !lock(&core.push.regs).iter().any(|r| r.device == device) {
+        return Err(WsError::NotFound("register for push first".into()));
+    }
+    activity::token_changed(core, &device, token.cap);
     Ok(status(core, actor.device))
 }
 
@@ -308,8 +362,9 @@ pub(crate) fn action(
 
 // --- delivery -----------------------------------------------------------------------------------
 
-/// Watches the attention feed and pushes items that stay unseen.
+/// Watches the attention feed and pushes items that stay unseen; runs the Live Activity.
 pub(crate) async fn run(core: Arc<Core>) {
+    tokio::spawn(activity::run(Arc::clone(&core)));
     let mut events = core.events.subscribe();
     loop {
         match events.recv().await {
@@ -494,6 +549,35 @@ async fn send(
         }
     };
     let collapse = push::collapse_id(&seed, item.pane_id, kind.category());
+    let attempts = core.cfg.push.attempts;
+    post(core, reg, attempts, || push::RelayRequest {
+        v: push::RelayRequest::VERSION,
+        daemon: String::new(),
+        cap: reg.cap.clone(),
+        push_type: push::PushType::Alert,
+        category: Some(kind.category()),
+        collapse: Some(collapse.clone()),
+        sealed: sealed.clone(),
+        ts: 0,
+        nonce: String::new(),
+        event: None,
+        stale: None,
+        dismiss: None,
+        urgent: false,
+    })
+    .await
+}
+
+/// Signs and POSTs a relay request (from `make`, given a fresh daemon key, `ts` and nonce on
+/// each attempt: the relay refuses replays) to the device's relay, retrying 429 / 5xx /
+/// network errors with exponential back-off up to `attempts` times.
+async fn post(
+    core: &Core,
+    reg: &Registration,
+    attempts: u32,
+    make: impl Fn() -> push::RelayRequest,
+) -> Result<(), SendError> {
+    let seed = core.identity.secret.to_bytes();
     let relay = reg
         .relay_url
         .clone()
@@ -503,22 +587,13 @@ async fn send(
 
     let mut backoff = core.cfg.push.backoff;
     let mut last = String::new();
-    for attempt in 1..=core.cfg.push.attempts.max(1) {
-        // Fresh timestamp and nonce per attempt: the relay refuses replays.
+    let attempts = attempts.max(1);
+    for attempt in 1..=attempts {
         let request = push::RelayRequest {
-            v: push::RelayRequest::VERSION,
             daemon: daemon.clone(),
-            cap: reg.cap.clone(),
-            push_type: push::PushType::Alert,
-            category: Some(kind.category()),
-            collapse: Some(collapse.clone()),
-            sealed: sealed.clone(),
             ts: now_millis(),
             nonce: push::nonce(),
-            event: None,
-            stale: None,
-            dismiss: None,
-            urgent: false,
+            ..make()
         };
         let body = serde_json::to_vec(&request).map_err(|e| SendError::Failed(e.to_string()))?;
         let signature = push::sign_request(&seed, &body);
@@ -533,7 +608,7 @@ async fn send(
             .await;
         let wait = match response {
             Ok(r) if r.status().is_success() => {
-                tracing::debug!(item = item.id, attempt, "pushed");
+                tracing::debug!(attempt, "pushed");
                 return Ok(());
             }
             Ok(r) if r.status().as_u16() == 410 => return Err(SendError::Gone),
@@ -560,7 +635,7 @@ async fn send(
                 backoff
             }
         };
-        if attempt < core.cfg.push.attempts {
+        if attempt < attempts {
             tokio::time::sleep(wait).await;
             backoff *= 2;
         }
@@ -594,6 +669,7 @@ mod tests {
             relay_url: None,
             prefs: PushPrefs::default(),
             activity_cap: None,
+            activity_update_cap: Some("u".into()),
             registered_at: 1,
         };
         lock(&push.regs).push(reg.clone());

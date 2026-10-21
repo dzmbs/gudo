@@ -61,6 +61,7 @@ struct HostNotices: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                             Button("Dismiss", systemImage: "xmark") { app.hosts.dismissNotes(hostId) }
+                                .help("Dismiss")
                                 .labelStyle(.iconOnly)
                                 .buttonStyle(.bar)
                         }
@@ -83,10 +84,10 @@ struct HostNotices: View {
             }
             content()
         }
-        .padding(.horizontal, DS.Space.m + 2)
-        .padding(.vertical, DS.Space.s + 1)
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
         .floatingPanel(cornerRadius: DS.Radius.panel)
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .movingTransition(.top)
     }
 }
 
@@ -108,7 +109,7 @@ private struct InstallHelperOffer: View {
                         .font(.callout.weight(.semibold))
                     Text(error ?? "Install the helper to keep sessions running while this device sleeps.")
                         .font(.footnote)
-                        .foregroundStyle(error == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(DS.Palette.error))
+                        .foregroundStyle(error == nil ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(DS.Palette.error))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -134,7 +135,7 @@ private struct InstallHelperOffer: View {
         .padding(DS.Space.m)
         .frame(width: 320)
         .floatingPanel(cornerRadius: DS.Radius.panel)
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .movingTransition(.top)
     }
 }
 
@@ -151,7 +152,7 @@ private struct HelperUpdateNotice: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
             Image(systemName: advice.kind == .update ? "arrow.down.circle" : "exclamationmark.triangle")
-                .foregroundStyle(advice.kind == .update ? AnyShapeStyle(.secondary) : AnyShapeStyle(DS.Palette.error))
+                .foregroundStyle(advice.kind == .update ? AnyShapeStyle(DS.Palette.textSecondary) : AnyShapeStyle(DS.Palette.error))
             Text(error ?? advice.message)
                 .foregroundStyle(error == nil ? AnyShapeStyle(.primary) : AnyShapeStyle(DS.Palette.error))
                 .fixedSize(horizontal: false, vertical: true)
@@ -171,14 +172,15 @@ private struct HelperUpdateNotice: View {
             }
             if advice.kind == .update {
                 Button("Not Now", systemImage: "xmark", action: onDismiss)
+                    .help("Not Now")
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bar)
             }
         }
-        .padding(.horizontal, DS.Space.m + 2)
-        .padding(.vertical, DS.Space.s + 1)
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
         .floatingPanel(cornerRadius: DS.Radius.panel)
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .movingTransition(.top)
     }
 
     private func update() {
@@ -211,8 +213,8 @@ struct StalePaneOverlay: View {
                     Color.black.opacity(0.35)
                     Label(reason, systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption)
-                        .padding(.horizontal, DS.Space.s + 2)
-                        .padding(.vertical, DS.Space.xs + 1)
+                        .padding(.horizontal, DS.Space.gap10)
+                        .padding(.vertical, DS.Space.xs)
                         .floatingCapsule()
                         .padding(DS.Space.s)
                 } else {

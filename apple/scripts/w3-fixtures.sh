@@ -185,6 +185,71 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 EOF
 chmod +x "$bin/vscode-dev-stub"
 
+# A dev server for S-BR1 (the browser keeps the origin): prints a URL like Vite does, sets a
+# cookie from the page, echoes what it was sent on /whoami and over a websocket on /ws.
+cat >"$bin/devserver" <<'EOF'
+#!/usr/bin/python3
+import base64, hashlib, http.server, socketserver, sys
+port, name = int(sys.argv[1]), (sys.argv[2] if len(sys.argv) > 2 else "localhost")
+PAGE = b"""<!doctype html><title>devserver</title><body style="font: 24px -apple-system">
+<p id=r>checking</p><script>
+document.cookie = "dev=yes; path=/";
+const out = { origin: location.origin };
+fetch("/whoami").then(r => r.text()).then(t => {
+  out.who = t;
+  const ws = new WebSocket("ws://" + location.host + "/ws");
+  ws.onopen = () => ws.send("hello");
+  ws.onmessage = e => { out.ws = e.data; finish(); };
+  ws.onerror = () => { out.ws = "error"; finish(); };
+}).catch(e => { out.who = "fetch failed"; finish(); });
+function finish() {
+  document.getElementById("r").textContent = "origin=" + out.origin + " " + out.who + " ws=" + out.ws;
+}
+</script>"""
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_GET(self):
+        if self.path == "/ws":
+            key = self.headers.get("Sec-WebSocket-Key", "")
+            accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+            self.wfile.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n" % accept).encode())
+            self.wfile.flush()
+            head = self.rfile.read(2)
+            length = head[1] & 0x7F
+            mask = self.rfile.read(4)
+            data = bytes(b ^ mask[i % 4] for i, b in enumerate(self.rfile.read(length)))
+            reply = b"echo:" + data
+            self.wfile.write(bytes([0x81, len(reply)]) + reply)
+            self.wfile.flush()
+            # Stay open until the page closes it (an abrupt close can beat the message).
+            try:
+                while self.rfile.read(1):
+                    pass
+            except OSError:
+                pass
+            self.close_connection = True
+            return
+        if self.path == "/whoami":
+            cookies = "; ".join(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip().startswith("dev="))
+            body = ("cookie=%s" % (cookies or "none")).encode()
+            kind = "text/plain"
+        else:
+            body, kind = PAGE, "text/html"
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+class S(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+server = S(("127.0.0.1", port), H)
+print("  Local:   http://%s:%d/" % (name, port), flush=True)
+server.serve_forever()
+EOF
+chmod +x "$bin/devserver"
+
 cat >"$dir/config.toml" <<EOF
 [editor]
 code = "$bin/code"

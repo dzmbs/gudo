@@ -116,7 +116,7 @@ decision signature, then applies the decision as that device (`Decided.decided_b
 the item seen everywhere. A second tap gets `Conflict`/`NotFound`; another device's token
 gets `Denied`.
 
-## 6. Live Activities (designed; daemon does not send them yet)
+## 6. Live Activities
 
 One activity aggregates all agents of all hosts (04 open question 3). Channel:
 
@@ -143,9 +143,40 @@ One activity aggregates all agents of all hosts (04 open question 3). Channel:
   (`Opened.activity()`: running / blocked / done counts and a headline per host) using the same
   Keychain group.
 
-Remaining: the daemon side (aggregate per host, send on change with rate limiting, end when
-per-run activity (`AgentRunAttributes`: working / needs you / done / failed) it updates while
-alive.
+Daemon (`crates/daemon/src/notifier/activity.rs`, 2026-10-21): it summarises its agents (working,
+needing the user, finished turns nobody has seen, one headline: the first blocker, else the first
+working agent, else the last finished turn) and, after `activity_debounce` (1 s), sends each device:
+
+- `start` to the push-to-start capability (`PushRegistration.activity_cap`) when agents become
+  active and the device reports no running activity; once per busy spell (a dismissed activity is
+  not forced back while the same agents work on);
+- `update` to the running activity's capability when the summary changed: at once and `urgent`
+  when more agents need the user, otherwise at most every `push.activity_interval_ms` (15 s);
+- `end` (`dismiss` = now + 10 min) once every agent stayed idle for `activity_end_after` (2 min);
+  the activity's capability is then forgotten. `stale` = now + 15 min on start and update.
+
+A `410` forgets that capability (start or update). `push.live_activity = false` turns it off;
+daemons that send it offer `DaemonFeatures::LIVE_ACTIVITY` and answer
+`WorkspaceRequest::PushActivity { cap }` (the running activity's update capability, `None` when it
+ended or was dismissed; needs a push registration). The update capability survives
+re-registration (each launch).
+
+App: `AgentsLiveActivity` (push builds) registers the push-to-start token
+(`pushToStartTokenUpdates`) with every daemon's push registration (`HostsModel.registerPush(…,
+activityStartToken:)`), and each running activity's update token (`pushTokenUpdates`) with every
+connected daemon (`registerActivityToken`), `nil` when it ends; two activities started at once by
+two hosts: the newer is ended. The widget (`AgentsActivity`, `NotifyKit.AgentsActivityReader`)
+opens each push's sealed row, keeps the other hosts' rows (app group, dropped after 20 minutes)
+and shows the sum; tapping it opens the Inbox. With push, the local per-run activity
+(`AgentRunAttributes`) is not started.
+
+Tests: `activity.rs` unit tests (start once per spell, rate limit, urgent, end),
+`cargo test -p daemon --test it live_activity` (fake relay: start, token handover, urgent update,
+finished, end, gone token, dismissal), the ignored `local_dev_relay_live_activity` (real Worker in
+`wrangler dev` + fake APNs: well-formed `liveactivity` requests whose content state opens),
+`NotifyKitTests.AgentsActivityTests` (shared vector, merging), `HostKitTests.PushRegistrationTests`.
+
+Remaining (paid account): real push-to-start and update tokens and delivery on a device, the
 
 ## 7. Local development (no Apple account)
 

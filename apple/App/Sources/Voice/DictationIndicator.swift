@@ -15,13 +15,13 @@ private struct DictationIndicator: ViewModifier {
                 case .starting, .listening, .finishing:
                     capsule {
                         Image(systemName: "mic.fill")
-                            .foregroundStyle(voice.phase == .listening ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(voice.phase == .listening ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
                             .symbolEffect(.pulse, isActive: voice.phase == .starting)
                         Text(title)
                             .font(.callout.weight(.medium))
                         Text(SystemSpeechRecognizer.displayName(voice.settings.locale))
                             .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("dictation-listening")
@@ -45,7 +45,7 @@ private struct DictationIndicator: ViewModifier {
             }
             .padding(.bottom, DS.Space.xxl)
             .padding(.horizontal, DS.Space.l)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .movingTransition(.bottom)
         }
         .animation(DS.Motion.overlay, value: voice.phase)
     }
@@ -61,7 +61,7 @@ private struct DictationIndicator: ViewModifier {
     private func capsule(@ViewBuilder _ content: () -> some View) -> some View {
         HStack(spacing: DS.Space.s) { content() }
             .padding(.horizontal, DS.Space.l)
-            .padding(.vertical, DS.Space.s + 2)
+            .padding(.vertical, DS.Space.gap10)
             .floatingCapsule(interactive: false)
     }
 }

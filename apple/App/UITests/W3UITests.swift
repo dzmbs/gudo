@@ -368,6 +368,35 @@ final class W3UITests: XCTestCase {
         app.typeKey("c", modifierFlags: .control)
     }
 
+    /// S-BR1: a dev server opens at exactly the URL it printed (`http://web.localhost:48311`,
+    /// `http://localhost:48312`), through the host's proxy: the page's `location.origin` is that
+    /// URL's, its cookie reaches the server and a websocket (HMR) echoes. `browser-routed` counts
+    /// the connections the app sent to the host, so a direct load (same Mac) cannot pass for it.
+    func testDevServerKeepsItsOrigin() throws {
+        try launch()
+        for (port, name) in [(48311, "web.localhost"), (48312, "localhost")] {
+            type(inPane: "devserver \(port) \(name)\n")
+            let offer = element("port-offer-open")
+            XCTAssertTrue(offer.waitForExistence(timeout: 30), "the new server is offered")
+            offer.tap()
+            let result = text(containing: "ws=")
+            XCTAssertTrue(result.waitForExistence(timeout: 30), "the page ran its checks")
+            let shown = result.label.isEmpty ? (result.value as? String ?? "") : result.label
+            XCTAssertTrue(shown.contains("origin=http://\(name):\(port) "), "the printed origin: \(shown)")
+            XCTAssertTrue(shown.contains("cookie=dev=yes"), "the page's cookie reaches the server: \(shown)")
+            XCTAssertTrue(shown.contains("ws=echo:hello"), "the websocket goes through: \(shown)")
+            let routed = element("browser-routed")
+            XCTAssertTrue(routed.waitForExistence(timeout: 5))
+            XCTAssertGreaterThan(Int(routed.value as? String ?? "0") ?? 0, 0, "the page went through the host's proxy")
+            XCTAssertTrue(element("browser-address").label.contains("\(name):\(port)"), element("browser-address").label)
+            shot("browser-origin-\(name)")
+            element("browser-done").tap()
+            app.buttons["Done"].firstMatch.tap()
+            type(inPane: "")
+            app.typeKey("c", modifierFlags: .control)
+        }
+    }
+
     // MARK: Links, command output
 
     func testCopyLastCommandOutput() throws {

@@ -6,7 +6,9 @@ import AppKit
 #endif
 
 /// logo where one ships, unaltered in its own colours or drawn in the text colour where the owner
-/// allows a monochrome version; otherwise its kind's SF Symbol in the inherited foreground style.
+/// allows a monochrome version (the owner's dark-background variant, where it publishes one,
+/// follows the scheme through the asset's dark appearance); otherwise its kind's SF Symbol in the
+/// inherited foreground style.
 /// A new program cross-fades in place, so the row never jumps. Its accessibility label is the
 /// program's display name.
 public struct ProgramMark: View {
@@ -34,7 +36,7 @@ public struct ProgramMark: View {
         ZStack {
             art
                 .id(identity.id)
-                .transition(.opacity.combined(with: .scale(scale: 0.7)))
+                .scalingTransition(0.7)
         }
         .frame(width: size, height: size)
         .animation(DS.Motion.indicator, value: identity.id)
@@ -90,12 +92,20 @@ extension ProgramLogoImage {
         if let cached = cache[logo] { return cached }
         let side = menuSide
         #if canImport(UIKit)
-        guard let source = UIImage(named: logo.asset, in: .module, with: nil) else { return nil }
-        let fitted = fit(source.size, in: side)
-        let drawn = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
-            source.draw(in: CGRect(x: (side - fitted.width) / 2, y: (side - fitted.height) / 2, width: fitted.width, height: fitted.height))
+        // Light and dark renders in one asset, so a set with the owner's dark variant (Codex,
+        // Copilot, Deno, Go, Rust) still follows the scheme.
+        let asset = UIImageAsset()
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            guard let source = UIImage(named: logo.asset, in: .module, compatibleWith: traits) else { return nil }
+            let fitted = fit(source.size, in: side)
+            let format = UIGraphicsImageRendererFormat(for: traits)
+            let drawn = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
+                source.draw(in: CGRect(x: (side - fitted.width) / 2, y: (side - fitted.height) / 2, width: fitted.width, height: fitted.height))
+            }.withRenderingMode(logo.template ? .alwaysTemplate : .alwaysOriginal)
+            asset.register(drawn, with: traits)
         }
-        let image = Image(uiImage: drawn.withRenderingMode(logo.template ? .alwaysTemplate : .alwaysOriginal))
+        let image = Image(uiImage: asset.image(with: UITraitCollection.current))
         #else
         guard let source = Bundle.module.image(forResource: logo.asset) else { return nil }
         let fitted = fit(source.size, in: side)

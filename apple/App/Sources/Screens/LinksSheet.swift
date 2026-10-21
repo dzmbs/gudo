@@ -114,6 +114,7 @@ struct LinksSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done", systemImage: "xmark") { dismiss() }
+                        .help("Done (Esc)")
                 }
             }
             .task { await load() }
@@ -142,7 +143,7 @@ private struct LinkRow: View {
     var body: some View {
         ListRow(text, leading: {
             Image(systemName: link.kind == .url ? "link" : "doc.text")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
         }) {
             Text(where_)
         }
@@ -158,7 +159,7 @@ private struct LinkRow: View {
         case .path:
             let parts = PathParts(link.text)
             let font = DS.Font.literal
-            return Text("\(Text(verbatim: parts.directory).font(font).foregroundStyle(.secondary))\(Text(verbatim: parts.name).font(font.weight(.medium)))\(Text(verbatim: parts.position).font(font).foregroundStyle(.secondary))")
+            return Text("\(Text(verbatim: parts.directory).font(font).foregroundStyle(DS.Palette.textSecondary))\(Text(verbatim: parts.name).font(font.weight(.medium)))\(Text(verbatim: parts.position).font(font).foregroundStyle(DS.Palette.textSecondary))")
         }
     }
 

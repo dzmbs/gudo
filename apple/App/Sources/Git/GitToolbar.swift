@@ -27,7 +27,7 @@ struct PRToolbarButton: View {
     private var label: some View {
         HStack(spacing: 6) {
             Image(systemName: pr?.kind.systemImage ?? "arrow.triangle.branch")
-                .foregroundStyle(pr.map { AnyShapeStyle($0.kind.color) } ?? AnyShapeStyle(.secondary))
+                .foregroundStyle(pr.map { AnyShapeStyle($0.kind.color) } ?? AnyShapeStyle(DS.Palette.textSecondary))
                 .opacity(DS.Opacity.mutedGlyph)
                 .overlay(alignment: .bottomTrailing) {
                     if let pr {
@@ -43,7 +43,7 @@ struct PRToolbarButton: View {
             }
         }
         .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DS.Palette.textSecondary)
         .padding(.horizontal, 6)
         .fixedSize()
         .contentShape(.rect)
@@ -87,15 +87,15 @@ struct PRPopover: View {
 
     @ViewBuilder
     private func prBody(_ pr: PullRequest) -> some View {
-        (Text(pr.stateWord + " ").foregroundStyle(.secondary)
+        (Text(pr.stateWord + " ").foregroundStyle(DS.Palette.textSecondary)
             + Text(pr.title)
-            + Text(" #\(pr.number)").foregroundStyle(.secondary))
+            + Text(" #\(pr.number)").foregroundStyle(DS.Palette.textSecondary))
             .font(.headline)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
         Text(summary(pr))
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
         HStack(spacing: 6) {
             DiffStat(added: pr.additions, removed: pr.deletions, font: .subheadline)
@@ -106,7 +106,7 @@ struct PRPopover: View {
         if !pr.checks.isEmpty {
             HStack(spacing: 6) {
                 ChecksRing(pr.checkKinds)
-                Text(pr.checksSummary.words).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Text(pr.checksSummary.words).font(.caption).foregroundStyle(DS.Palette.textSecondary).monospacedDigit()
             }
             Divider()
             ForEach(Array(pr.checks.enumerated()), id: \.offset) { _, check in
@@ -142,7 +142,7 @@ struct PRPopover: View {
                 .help("Open on GitHub (⌃⌘G)")
             Spacer(minLength: DS.Space.s)
             if let busy = git.busy {
-                Text(busy).font(.caption).foregroundStyle(.secondary)
+                Text(busy).font(.caption).foregroundStyle(DS.Palette.textSecondary)
             } else {
                 if pr.state == .open, pr.hasRerunnableFailures {
                     Button("Re-run Failed") { git.rerunFailed(worktree) }
@@ -169,13 +169,13 @@ struct PRPopover: View {
             ? "\(worktree.displayBranch) is the repository's main branch."
             : "\(worktree.displayBranch) has no open pull request.")
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.Palette.textSecondary)
         if !worktree.main, case .ready = git.gh {
             Divider()
             HStack {
                 Spacer()
                 if let busy = git.busy {
-                    Text(busy).font(.caption).foregroundStyle(.secondary)
+                    Text(busy).font(.caption).foregroundStyle(DS.Palette.textSecondary)
                 } else {
                     Button("Create Pull Request") {
                         git.isPRPopoverShown = false
@@ -198,7 +198,7 @@ struct WorktreePortRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text("PORT").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Text("PORT").font(.caption.weight(.medium)).foregroundStyle(DS.Palette.textSecondary)
             Text(verbatim: String(port))
                 .font(DS.Font.literalSmall)
                 .textSelection(.enabled)
@@ -231,7 +231,7 @@ private struct CheckRow: View {
                 Text(check.name)
             }
             Spacer(minLength: DS.Space.s)
-            Text(check.status.kind.word).foregroundStyle(.secondary)
+            Text(check.status.kind.word).foregroundStyle(DS.Palette.textSecondary)
         }
         .font(.caption)
         .lineLimit(1)
@@ -249,7 +249,7 @@ struct GhHintView: View {
             Label(hint.title, systemImage: "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(DS.Palette.attention)
-            Text(hint.detail).font(.caption).foregroundStyle(.secondary)
+            Text(hint.detail).font(.caption).foregroundStyle(DS.Palette.textSecondary)
             if let command = hint.command {
                 HStack(spacing: 6) {
                     Text(command)
@@ -257,7 +257,7 @@ struct GhHintView: View {
                         .textSelection(.enabled)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 4)
-                        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: DS.Radius.chip))
+                        .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.chip))
                     Button(copied ? "Copied" : "Copy") {
                         Pasteboard.copy(command)
                         copied = true
@@ -334,6 +334,7 @@ struct OpenInMenu: View {
             Button("Diff", systemImage: "plusminus") { model.sheet = .diff }
             if let worktree = git.worktree, let port = git.port(of: worktree) {
                 Button("localhost:\(String(port))", systemImage: "globe") { git.openPort(of: worktree) }
+                    .help("Open localhost:\(String(port)) in the browser")
             }
             if let pr = git.pr {
                 Divider()

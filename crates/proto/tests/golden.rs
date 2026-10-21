@@ -526,6 +526,7 @@ fn every_message_matches_its_frozen_bytes() {
     artifact_messages(&mut c);
     artifact_messages_2(&mut c);
     artifact_history_messages(&mut c);
+    live_activity_messages(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -3180,5 +3181,33 @@ fn artifact_history_messages(c: &mut Checker) {
             version,
         })),
         "d2000000012206000d0502000174011111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222220a1403020001555555555555555555555555555555555555555555555555555555555555555500e8078005e0030301030084070c010400010907e80711111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222201555555555555555555555555555555555555555555555555555555555555555500e8078005e003030104",
+    );
+}
+
+/// Live Activity pushes: `DaemonFeatures::LIVE_ACTIVITY` (bit 4) and
+/// `WorkspaceRequest::PushActivity` (appended after `ScriptRun`, 0x2f).
+fn live_activity_messages(c: &mut Checker) {
+    c.check(
+        "DaemonFeatures::LIVE_ACTIVITY",
+        DaemonFeatures::LIVE_ACTIVITY,
+        "020000000110",
+    );
+    c.check(
+        "ClientCtl::Workspace(PushActivity(Some))",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::PushActivity(PushActivityToken {
+                cap: Some("u".into()),
+            }),
+        },
+        "070000000115092f010175",
+    );
+    c.check(
+        "ClientCtl::Workspace(PushActivity(None))",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::PushActivity(PushActivityToken { cap: None }),
+        },
+        "050000000115092f00",
     );
 }

@@ -12,6 +12,10 @@ nonisolated public protocol PushClientAPI: AnyObject, Sendable {
     func pushRegister(registration: PushRegistration) async throws -> PushStatus
     func pushUnregister() async throws -> PushStatus
     func pushStatus() async throws -> PushStatus
+    /// The running agents Live Activity's capability (nil: it ended).
+    func pushActivity(cap: String?) async throws -> PushStatus
+    /// The daemon sends the agents Live Activity.
+    func offersLiveActivity() -> Bool
 }
 
 extension DaemonClient: PushClientAPI {}
@@ -54,28 +58,48 @@ extension HostsModel {
 
     /// Registers this device's APNs token with the relay for one connected daemon, then the
     /// capability and sealing key with the daemon. Re-run on every launch and token change.
+    /// `activityStartToken` (ActivityKit push-to-start) lets the daemon start the agents Live
+    /// Activity; it is sent only to daemons that offer Live Activities.
     public func registerPush(
         hostId: String, apnsToken: Data, environment: ApnsEnvironment, prefs: PushPrefs,
+        activityStartToken: Data? = nil,
         relayURL: URL = URL(string: defaultPushRelayUrl())!, session: URLSession = .shared
     ) async throws -> PushStatus {
         guard let record = record(hostId), let daemonId = record.daemonId, !record.isGuest,
               let connection = connection(hostId) as? DaemonConnection, let client = connection.push
         else { throw PushRegistrationError.notConnected }
-        var request = URLRequest(url: relayURL.appending(path: "v1/register"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = Data(pushRelayRegisterBody(apnsToken: apnsToken, environment: environment, daemonId: daemonId, kind: .alert).utf8)
-        let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let cap = object["cap"] as? String
-        else {
-            throw PushRegistrationError.relay(String(decoding: data.prefix(200), as: UTF8.self))
+        let relay = PushRelay(url: relayURL, session: session)
+        let cap = try await relay.capability(token: apnsToken, environment: environment, daemonId: daemonId, kind: .alert)
+        var activityCap: String?
+        if let activityStartToken, client.offersLiveActivity() {
+            activityCap = try await relay.capability(token: activityStartToken, environment: environment, daemonId: daemonId, kind: .activity)
         }
         let key = try pushSealKey()
         let status = try await client.pushRegister(registration: PushRegistration(
-            cap: cap, sealKey: key.publicKey, relayUrl: relayURL.absoluteString, prefs: prefs, activityCap: nil))
-        Self.pushLog.info("push registered host=\(hostId, privacy: .public) devices=\(status.devices)")
+            cap: cap, sealKey: key.publicKey, relayUrl: relayURL.absoluteString, prefs: prefs, activityCap: activityCap))
+        Self.pushLog.info("push registered host=\(hostId, privacy: .public) devices=\(status.devices) activity=\(activityCap != nil)")
+        return status
+    }
+
+    /// Hands one connected daemon the running agents Live Activity's push token (through a
+    /// relay capability bound to it), or `nil` once the activity ended: the daemon then sends
+    /// its updates there. No-op (nil) for daemons without Live Activities.
+    @discardableResult
+    public func registerActivityToken(
+        hostId: String, token: Data?, environment: ApnsEnvironment,
+        relayURL: URL = URL(string: defaultPushRelayUrl())!, session: URLSession = .shared
+    ) async throws -> PushStatus? {
+        guard let record = record(hostId), let daemonId = record.daemonId, !record.isGuest,
+              let connection = connection(hostId) as? DaemonConnection, let client = connection.push
+        else { throw PushRegistrationError.notConnected }
+        guard client.offersLiveActivity() else { return nil }
+        var cap: String?
+        if let token {
+            cap = try await PushRelay(url: relayURL, session: session)
+                .capability(token: token, environment: environment, daemonId: daemonId, kind: .activity)
+        }
+        let status = try await client.pushActivity(cap: cap)
+        Self.pushLog.info("live activity token host=\(hostId, privacy: .public) running=\(cap != nil)")
         return status
     }
 
@@ -90,5 +114,32 @@ extension HostsModel {
             ticket: ticket, config: clientConfig(key, mirrorVt: false),
             options: relaySettings.connectOptions(askpass: false), token: token,
             decision: approve ? .approve : .deny, timeoutMs: UInt64(timeout / .milliseconds(1)))
+    }
+}
+
+/// `POST <relay>/v1/register`: trades an APNs or ActivityKit token for a capability bound to
+/// one daemon.
+public struct PushRelay: Sendable {
+    public var url: URL
+    public var session: URLSession
+
+    public init(url: URL, session: URLSession = .shared) {
+        self.url = url
+        self.session = session
+    }
+
+    public func capability(token: Data, environment: ApnsEnvironment, daemonId: String, kind: PushCapKind) async throws -> String {
+        var request = URLRequest(url: url.appending(path: "v1/register"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(pushRelayRegisterBody(apnsToken: token, environment: environment, daemonId: daemonId, kind: kind).utf8)
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cap = object["cap"] as? String
+        else {
+            throw PushRegistrationError.relay(String(decoding: data.prefix(200), as: UTF8.self))
+        }
+        return cap
     }
 }

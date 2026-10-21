@@ -142,7 +142,7 @@ struct WindowProbe: View {
                     .accessibilityValue(value)
                     .accessibilityIdentifier("window-probe")
             }
-            .font(.system(size: 10))
+            .font(.caption2)
             .buttonStyle(.bordered)
             .controlSize(.mini)
             .opacity(0.3)
@@ -169,6 +169,7 @@ struct WindowProbe: View {
         }
         if let missing = model.handoffMissing { fields["missing"] = missing.hostName }
         if let result = model.continuedResult { fields["continued"] = result }
+        if let drawing = model.continuedDrawing { fields["continuedDrawing"] = drawing }
         let data = (try? encoder.encode(fields)) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }

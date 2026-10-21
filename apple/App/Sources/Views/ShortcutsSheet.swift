@@ -32,7 +32,7 @@ struct ShortcutsSheet: View {
                                     Text(action.title)
                                     Spacer()
                                     ShortcutLabel(action.shortcut.symbols)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(DS.Palette.textSecondary)
                                 }
                                 .accessibilityElement(children: .combine)
                             }

@@ -187,6 +187,10 @@ policy is always `LastInput` for now.
 
 - `daemon.key` (Ed25519, iroh endpoint id), `owner.json` (the single owner principal),
   `devices.json` (allowlist: device key → principal), `pairing.json` (pending one-time secrets).
+  `hostd pair` (another process) and the daemon (its startup ticket, every pairing attempt)
+  both rewrite `pairing.json`, so each read-modify-write holds an exclusive `flock` on
+  `pairing.lock`: unlocked, a ticket minted while the daemon wrote its own was lost and refused
+  with `InvalidGrant`, and a secret consumed by one pairing could survive another's rewrite.
 - A ticket (`proto::Ticket`, `unnamed://pair/<base32>`) carries the daemon id, direct
   addresses, home relay, owner principal, a 128-bit one-time secret and expiry. Dialing by key
   pins the daemon in the TLS handshake.
@@ -333,6 +337,16 @@ Default state directory: `$XDG_STATE_HOME/unnamed`, else `~/.local/state/unnamed
 - **No inbound ports or security-group rules are needed.** Cloud VMs normally allow outbound
   UDP, so iroh hole-punches a direct path; where UDP is blocked the n0 relay over HTTPS (443)
   carries the connection. `--no-relay` is only for LAN/Tailscale setups.
+- **Direct-only devices and restarts.** A device with relays off (`un --no-relay`, the app's
+  local-only switch) dials only the direct addresses in the ticket it paired with. iroh binds
+  random UDP ports, so a restart or upgrade used to move the daemon away from every such
+  ticket (`un --no-relay forward` then timed out "waiting for layout"; with relays, address
+  lookup hid it). The daemon now records the sockets it bound (`endpoint.json` `bound`) and
+  binds the same ports on the next start (the default binds and `--bind` with port 0; a port
+  taken in the meantime falls back to a fresh one, which a direct-only device only learns
+  from a new ticket). `un` reports a daemon it never reached as such, with the last dial
+  error, instead of "timed out waiting for layout", and `un forward` no longer attaches.
+  Test: `a_direct_only_ticket_still_reaches_the_daemon_after_a_restart`.
 - `service install` writes `~/.config/systemd/user/unnamed-hostd.service`
   (`Restart=on-failure`); run `sudo loginctl enable-linger $USER` once so it starts at boot and
   survives logout. Stopping the service ends the panes; the layout and agent sessions come back
@@ -401,6 +415,7 @@ code = "/usr/local/bin/code"     # default: PATH + usual app bundle locations
 openvscode = "/opt/openvscode-server"   # instead of the pinned download
 vscodium = "/opt/vscodium-reh-web"      # instead of the pinned VSCodium download
 default = "vscode"               # what `Auto` launches: "vscode" (default) | "vscodium"
+compress = true                  # brotli/gzip proxy in front of the editor server (§5.3)
 ```
 
 driver with a daemon- or session-wide grant; editor and tunnel launches need the owner.
@@ -515,10 +530,61 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
 
 - `EditorLaunch{folder, choice: Auto|Only(kind), accept_vscode_license}`. Auto runs
   `code serve-web` (the user's CLI, else the managed one) only with the licence accepted. One server per folder, reused
-  (the app's editor panes, several at once, are one server each; why not one per host: APP-ARCHITECTURE §20 "Daemon"); bound to `127.0.0.1` on a
+  (the app's editor panes, several at once, are one server each, each behind its own compressing proxy sharing one
+  asset cache; why not one server per host: APP-ARCHITECTURE §20 "Daemon"); bound to `127.0.0.1` on a
   free port with a random 128-bit `--connection-token`; own process group, killed on
   `EditorStop` and daemon shutdown; logs in `<state>/editors/`. Returns port, token and
   `url_path` (`/?tkn=…&folder=…`; the server answers with the token cookie and a redirect).
+  The returned port is the **compressing proxy's** (below), not the server's; the app forwards
+  whatever port it gets, so nothing changed there.
+- **Compression (`ws/editor_proxy.rs`).** The VS Code server sends everything uncompressed
+  HTTP/1.1 reverse proxy (hyper) on another loopback port; it is what `EditorInstance.port`
+  names and what the forward reaches. Generic port forwards are untouched.
+  - Honours `Accept-Encoding` with q-values, brotli preferred, then gzip. Compresses `text/*`,
+    JavaScript, JSON (source maps), `+json`/`+xml`, SVG, wasm, ttf/otf and icons, status 200
+    only. Streams: output goes out as the compressor produces it, and is flushed when the
+    server pauses for 20 ms (flushing on every read costs brotli ~20 % of its gain).
+  - Leaves alone: websocket upgrades (spliced both ways), `Range` requests and `206`s, bodies
+    already encoded, bodies under 1 KiB, images and woff/woff2, `Cache-Control: no-transform`.
+    `HEAD` answers with the headers `GET` would have (encoding, no length).
+  - A strong `ETag` on a transformed body becomes weak and marked (`"x"` → `W/"x;unz"`); the
+    mark comes off again in `If-None-Match`, so the server's own comparison still answers 304
+    (the 304 carries the weak tag). The server's weak tags pass unchanged. `Vary:
+    Accept-Encoding` on everything compressible.
+  - **Asset cache.** Versioned static assets (`/<quality>-<40 hex commit>/static/…` with a
+    `max-age` of at least a day and no `Set-Cookie`, i.e. VS Code's one-year assets) are kept
+    per server version in `<state>/editors/cache/<quality>-<commit>/<sha256 of path>.{br,gz}`
+    (3 versions; older ones are removed when a new one appears). The first load streams
+    brotli at level 5 (≈50 MB/s on one core) and stores it; a background job then rewrites
+    it once at level 11 (workbench.js: 4.6 → 3.9 MB, ~20 s of one core per server version,
+    one job at a time, stopped at shutdown and resumed on the next hit). Later loads are
+    served from the file with a `Content-Length`. The server is still asked every time — it
+    checks the connection token and says what the asset is — only its body is not read.
+  - `editor.compress = false` hands out the server's own port instead.
+  - Measured 2026-10-21 (pinned VSCodium Web Host — the same server code as serve-web, which
+    is not installed on the Mac — over iroh, `--no-relay`, Playwright 1.64.1, release build,
+
+    | Chromium, cold load to editor | bytes | workbench | editor |
+    |---|---|---|---|
+    | loopback, off | 23.3 MB | 1.5–2.0 s | 3.1–3.9 s |
+    | loopback, on (cached) | 4.4 MB | 1.7 s | 3.1 s |
+    | same, on, first load ever (q5 streamed) | 6.1 MB | 1.6 s | 3.9 s |
+    | same, on, cached (q11) | 4.3 MB | 1.5–1.7 s | 3.3–4.2 s |
+    | 2 MB/s + 80 ms (cellular-like), off | 22.6 MB | 13.0 s | 21.0–22.8 s |
+    | same, on, cached | 4.3 MB | 3.3 s | 11.1 s |
+
+    **WebKit offers only `gzip, deflate` to an `http://` origin** (checked: Playwright WebKit
+    on `127.0.0.1` and `localhost`; Chromium offers `br, zstd` too), and WKWebView loads the
+    editor from `http://localhost:<port>`, so the app gets gzip: 23.3 → 5.8 MB (loopback
+    WebKit, editor 2.1–2.5 s vs 2.2–3.2 s off). Getting brotli into WKWebView would need the
+    client side of the forward to ask for it and decode locally (not built).
+  - Tests: unit tests (negotiation, what is compressed, immutability, ETag round trip, cache
+    keys, rewrite, pruning, shutdown) and HTTP tests over sockets in
+    `ws/editor_proxy/http_tests.rs` (chunked bodies, bytes arriving before the server
+    finishes, cache hits with the server still asked, ranges/encoded/tiny/binary untouched,
+    HEAD, ETag → 304, websocket passthrough, keep-alive); end to end through the iroh forward
+    with a fake server: `editor_traffic_is_compressed_through_the_forward` (token still
+    enforced, cache, websocket, `compress = false`).
 - openvscode-server **v1.109.5** is downloaded on first use (curl, else wget) from the GitHub
   release, checked against pinned SHA-256s (linux-x64 `b433bf4f…`, linux-arm64 `36d9c140…`),
   unpacked to `<state>/editors/`. Verified end to end in the Linux VM (download + verify +

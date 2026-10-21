@@ -3,6 +3,7 @@ import DrawingKit
 import Foundation
 import HostKit
 import PaneLayout
+import SwiftUI
 import TerminalCore
 import TerminalRenderer
 import UnnamedCore
@@ -99,6 +100,71 @@ final class PaneCommandMarks: NSObject {
         #else
         pane.view.contextActions = { [weak self] point in self?.menu(at: point) ?? [] }
         #endif
+        let previousPointer = pane.view.onPointerMoved
+        pane.view.onPointerMoved = { [weak self] point in
+            previousPointer?(point)
+            self?.pointer = point
+            self?.updateOverlays()
+        }
+    }
+
+
+    /// The pointer over the pane, for the hovered command's result.
+    private var pointer: CGPoint?
+    private lazy var resultBadge = CommandBadge(identifier: "command-result")
+    private lazy var stickyHeader = CommandBadge(identifier: "command-sticky", sticky: true)
+
+    /// ✗ and run time at the right of its prompt row, and the command whose output fills the
+    /// top of the pane pinned there while you scroll through it.
+    private func updateOverlays() {
+        guard let view = pane?.view, let surface else { return }
+        let frames = surface.gutterMarkFrames
+        let palette = Self.palette()
+        // The hovered command's result, on its first (prompt) row when that row is on screen.
+        var shownResult = false
+        if let pointer, let hit = frames.last(where: { $0.rect.minY <= pointer.y && pointer.y < $0.rect.maxY }),
+           hit.mark.row >= 0, let block = entries.first(where: { $0.block.id == hit.mark.id })?.block,
+           let text = Self.result(block)
+        {
+            let color = block.status.isFailure ? palette.error.color : palette.done.color
+            resultBadge.show(text, color: color, palette: palette, in: view)
+            resultBadge.place(trailing: view.bounds.width - 8, top: hit.rect.minY + 1, in: view)
+            shownResult = true
+        }
+        if !shownResult { resultBadge.hide() }
+        // The sticky header: a command whose prompt scrolled above the top while its output
+        // still fills it.
+        if let top = frames.first(where: { $0.mark.row < 0 && $0.rect.maxY > 24 }),
+           let block = entries.first(where: { $0.block.id == top.mark.id })?.block, let command = block.mark.command
+        {
+            let status = Self.result(block).map { "  \($0)" } ?? ""
+            stickyHeader.show("$ \(command)\(status)", color: palette.textSecondary, palette: palette, in: view)
+            stickyHeader.place(leading: max(surface.paddingPoints, 4) + 4, top: 2, maxWidth: view.bounds.width - 16, in: view)
+        } else {
+            stickyHeader.hide()
+        }
+    }
+
+    /// The chrome's palette for the user's theme, derived once per theme (this runs per frame).
+    private static var cachedPalette: (key: String, palette: ChromePalette)?
+
+    private static func palette() -> ChromePalette {
+        let defaults = UserDefaults.standard
+        let key = "\(defaults.string(forKey: TerminalPreferences.Key.theme) ?? "")|\(defaults.string(forKey: TerminalPreferences.Key.windowTheme) ?? "")"
+        if let cachedPalette, cachedPalette.key == key { return cachedPalette.palette }
+        let palette = ChromePalette.fromPreferences()
+        cachedPalette = (key, palette)
+        return palette
+    }
+
+    /// "✓ 4s", "✗ 1 · 2m 03s", nil while running.
+    static func result(_ block: CommandBlock) -> String? {
+        guard let end = block.mark.finished else { return nil }
+        let time = CommandBlocks.elapsed(seconds: Int((Double(end.durationMs) / 1000).rounded()))
+        switch block.status {
+        case .failed(let code): return "✗ \(code) · \(time)"
+        default: return "✓ \(time)"
+        }
     }
 
     isolated deinit {
@@ -183,9 +249,12 @@ final class PaneCommandMarks: NSObject {
         let top = terminal.viewportTopRow
         return screenRows().map { entry, first, last in
             let (tint, opacity) = Self.style(entry.block.status)
-            return GutterMark(id: entry.block.id, row: first - top, rows: last - first + 1, tint: tint, opacity: opacity)
+            let rowTint = entry.block.status.isFailure ? Self.failedRowTint : 0
+            return GutterMark(id: entry.block.id, row: first - top, rows: last - first + 1, tint: tint, opacity: opacity, rowTint: rowTint)
         }
     }
+
+    static let failedRowTint = 0.06
 
     /// faintly for a success, a little stronger while it runs.
     static func style(_ status: CommandStatus) -> (GutterMark.Tint, Double) {
@@ -404,6 +473,7 @@ final class PaneCommandMarks: NSObject {
             marker.removeFromSuperview()
             markers[id] = nil
         }
+        updateOverlays()
     }
 }
 
@@ -474,5 +544,93 @@ final class MenuAction: NSObject {
         item.representedObject = target
         return item
     }
+}
+#endif
+
+/// A small label over the grid: the hovered command's result, or the sticky command header.
+/// Takes no touches; on the theme's raised surface with a hairline, like the chrome.
+#if os(iOS)
+@MainActor
+final class CommandBadge {
+    private let label = PaddedLabel()
+    private let sticky: Bool
+
+    init(identifier: String, sticky: Bool = false) {
+        self.sticky = sticky
+        label.isUserInteractionEnabled = false
+        label.font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .medium)
+        label.layer.cornerRadius = DS.Radius.chip
+        label.layer.masksToBounds = true
+        label.layer.borderWidth = 0.5
+        label.lineBreakMode = .byTruncatingTail
+        label.accessibilityIdentifier = identifier
+    }
+
+    func show(_ text: String, color: Color, palette: ChromePalette, in view: UIView) {
+        if label.superview !== view { view.addSubview(label) }
+        label.text = text
+        label.textColor = UIColor(color)
+        label.backgroundColor = UIColor(palette.raisedColor)
+        label.layer.borderColor = UIColor(palette.hairline).cgColor
+        label.isHidden = false
+    }
+
+    func place(trailing: CGFloat, top: CGFloat, in view: UIView) {
+        let size = label.intrinsicContentSize
+        label.frame = CGRect(x: trailing - size.width, y: top, width: size.width, height: size.height)
+    }
+
+    func place(leading: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: UIView) {
+        let size = label.intrinsicContentSize
+        label.frame = CGRect(x: leading, y: top, width: min(size.width, maxWidth - leading), height: size.height)
+    }
+
+    func hide() { label.isHidden = true }
+}
+
+private final class PaddedLabel: UILabel {
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.insetBy(dx: 6, dy: 2)) }
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(width: size.width + 12, height: size.height + 4)
+    }
+}
+#else
+@MainActor
+final class CommandBadge {
+    private let field = NSTextField(labelWithString: "")
+    private let sticky: Bool
+
+    init(identifier: String, sticky: Bool = false) {
+        self.sticky = sticky
+        field.font = NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .medium)
+        field.wantsLayer = true
+        field.layer?.cornerRadius = DS.Radius.chip
+        field.layer?.borderWidth = 0.5
+        field.lineBreakMode = .byTruncatingTail
+        field.drawsBackground = true
+        field.setAccessibilityIdentifier(identifier)
+    }
+
+    func show(_ text: String, color: Color, palette: ChromePalette, in view: NSView) {
+        if field.superview !== view { view.addSubview(field) }
+        field.stringValue = " \(text) "
+        field.textColor = NSColor(color)
+        field.backgroundColor = NSColor(palette.raisedColor)
+        field.layer?.borderColor = NSColor(palette.hairline).cgColor
+        field.isHidden = false
+    }
+
+    func place(trailing: CGFloat, top: CGFloat, in view: NSView) {
+        let size = field.intrinsicContentSize
+        field.frame = CGRect(x: trailing - size.width, y: top, width: size.width, height: size.height + 2)
+    }
+
+    func place(leading: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: NSView) {
+        let size = field.intrinsicContentSize
+        field.frame = CGRect(x: leading, y: top, width: min(size.width, maxWidth - leading), height: size.height + 2)
+    }
+
+    func hide() { field.isHidden = true }
 }
 #endif

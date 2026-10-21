@@ -28,6 +28,9 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     public var onOpenLink: ((TerminalLink) -> Void)?
     /// The link under the pointer changed (nil: none), for a status line showing its target.
     public var onHoverLink: ((TerminalLink?) -> Void)?
+    /// The pointer over the terminal (view points), nil when it leaves: hover affordances
+    /// drawn by the host (a command's ✓/✗ and run time).
+    public var onPointerMoved: ((CGPoint?) -> Void)?
     private var hoveredLinkTarget: TerminalLink?
     private var lastMousePoint: CGPoint?
 
@@ -229,6 +232,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public func mouseMoved(with event: NSEvent) {
         let p = point(event)
         lastMousePoint = p
+        onPointerMoved?(p)
         updateHoverLink(at: p, flags: event.modifierFlags)
         if surface.reportsMouse(shift: event.modifierFlags.contains(.shift)) {
             emit(surface.mouse(.motion, button: nil, at: p, mods: KeyModifiers(event.modifierFlags)))
@@ -237,6 +241,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     override public func mouseExited(with event: NSEvent) {
         lastMousePoint = nil
+        onPointerMoved?(nil)
         setHoverLink(nil)
     }
 

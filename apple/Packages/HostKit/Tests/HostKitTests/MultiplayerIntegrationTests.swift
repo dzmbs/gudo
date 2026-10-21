@@ -22,13 +22,7 @@ import UnnamedCore
     @Test func inviteJoinViewerDriverLeaseRevokeAudit() async throws {
         let daemon = try LocalDaemon()
         let owner = makeModel()
-        // A fresh daemon occasionally refuses its very first pairing secret; a new ticket works.
-        let ownerHost: String
-        do {
-            ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
-        } catch PairingError.refused {
-            ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
-        }
+        let ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
         let ownerConnection = try #require(owner.connection(ownerHost) as? DaemonConnection)
         let mp = ownerConnection.multiplayer
         try await eventually("owner identity") { mp.me != nil }
@@ -160,12 +154,7 @@ extension MultiplayerIntegrationTests {
     @Test func knockAdmitJoinAndApprovalRules() async throws {
         let daemon = try LocalDaemon()
         let owner = makeModel()
-        let ownerHost: String
-        do {
-            ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
-        } catch PairingError.refused {
-            ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
-        }
+        let ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
         let ownerConnection = try #require(owner.connection(ownerHost) as? DaemonConnection)
         let mp = ownerConnection.multiplayer
         try await eventually("owner identity") { mp.me != nil }

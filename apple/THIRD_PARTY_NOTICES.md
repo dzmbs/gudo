@@ -71,11 +71,29 @@ design layer.
 ## Program logos
 
 `Packages/DesignSystem/Sources/DesignSystem/Resources/ProgramLogos.xcassets` holds the official
-logos of six programs, shown at 14 pt next to a tab to say which program runs in it. Each is the
-project's own artwork as published (byte-identical unless noted). The names and logos belong to
-their owners, who do not endorse this app. Sourcing, terms and the programs that show a neutral
-symbol instead: `docs/research/17-program-logos.md`. The same credits appear in Settings ▸
-Acknowledgements ▸ Program logos.
+logos of 23 programs, shown at 14–16 pt next to a tab to say which program runs in it (nominative
+use). Each file is the owner's own artwork as downloaded (byte-identical unless noted), in its own
+colours; where the owner publishes a dark-background variant it is the image set's dark
+appearance. Every logo is switched on by one line in `ProgramCatalog.logos`, which records each
+file's exact source URL, retrieval date and clearance. Sourcing and terms:
+`docs/research/17-program-logos.md`; permission requests: `docs/legal/logo-permission-requests.md`.
+The same credits appear in Settings ▸ Acknowledgements ▸ Program logos.
+
+Trademarks: Claude is a trademark of Anthropic, PBC. OpenAI, Codex and the OpenAI logo are
+trademarks of OpenAI. Gemini and Go are trademarks of Google LLC. GitHub and Copilot are
+trademarks of GitHub, Inc. Docker and the Docker logo are trademarks or registered trademarks of
+Docker, Inc. in the United States and/or other countries. Kubernetes is a registered trademark of
+The Linux Foundation. "Python" and the Python logos are trademarks or registered trademarks of the
+Python Software Foundation. Node.js is a trademark of the OpenJS Foundation. Deno is a registered
+trademark of Deno Land Inc. Rust and Cargo are trademarks of the Rust Foundation. Postgres,
+PostgreSQL and the Slonik logo are trademarks or registered trademarks of the PostgreSQL Community
+Association of Canada. Git, Neovim, Helix, tmux, btop, Ruby, Vim, Emacs, htop and Bun belong to
+their owners. Names and logos are used only to identify the program running in a tab; this app is
+not affiliated with or endorsed by any of them.
+
+"Owner-approved risk; permission requested" below marks logos whose owners' terms ask for
+permission before this use; they ship on the app owner's decision of 2026-10-21 and the requests
+are drafted in `docs/legal/logo-permission-requests.md`.
 
 | Logo | Source | Licence / terms | Monochrome | Size / clear space | Nominative use in an app UI |
 |---|---|---|---|---|---|
@@ -85,6 +103,23 @@ Acknowledgements ▸ Program logos.
 | tmux (`TmuxLogo`, `logo/tmux-logomark.svg`) | https://github.com/tmux/tmux/tree/master/logo | ISC (notice below) | Allowed; drawn in the label colour (template) | None stated | Allowed with the notice |
 | btop (`BtopLogo`, `Img/icon.svg`) | https://github.com/aristocratos/btop | Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0), Copyright Aristocratos; unmodified | Shipped in colour | None stated | Allowed; Apache §6 grants no trademark rights beyond describing the origin, which is this use |
 | Ruby (`RubyLogo`, `ruby-mark.pdf`) | https://www.ruby-lang.org/en/about/logo/ (`ruby-logo-kit.zip`, `ruby.pdf`) | "The Ruby Logo is Copyright (c) 2006, Yukihiro Matsumoto. It is licensed under the terms of the Creative Commons Attribution-ShareAlike 2.5 agreement" (https://creativecommons.org/licenses/by-sa/2.5/). Changed: the page is cropped to the gem (artwork unchanged); the cropped file is CC BY-SA 2.5. "We ask that you do not use the logo to represent something other than the Ruby Programming language." | Allowed (adaptations stay BY-SA); shipped in colour | None stated | Allowed with attribution |
+| Emacs (`EmacsLogo`, `emacs.svg`) | https://git.savannah.gnu.org/cgit/emacs.git/plain/etc/images/icons/hicolor/scalable/apps/emacs.svg (retrieved 2026-10-21) | "Copyright (C) 2015-2026 Free Software Foundation, Inc."; author Nicolas Petton; GNU General Public License version 3 or later (https://www.gnu.org/licenses/gpl-3.0.html). Unmodified; the SVG is its own source form, available at the URL above | Shipped in colour | None stated | Allowed by the licence |
+| htop (`HtopLogo`, `htop.svg`) | https://raw.githubusercontent.com/htop-dev/htop/main/htop.svg (retrieved 2026-10-21) | GNU General Public License version 2 or later (https://www.gnu.org/licenses/old-licenses/gpl-2.0.html), the htop repository's licence. Unmodified; the SVG is its own source form | Shipped in colour | None stated | Allowed by the licence |
+| Vim (`VimLogo`, `vimlogo.svg`) | https://www.vim.org/images/vimlogo.svg from https://www.vim.org/logos.php (retrieved 2026-10-21) | No licence or terms published; permission requested | Shipped in colour | None stated | Terms silent |
+| Bun (`BunLogo`, `logo.svg`) | https://bun.com/logo.svg from https://bun.com/press-kit (retrieved 2026-10-21) | "Please don't stretch, recolour or put a hat on the bun without asking." Unmodified; permission requested | Not recoloured | None stated (the kit offers `icon.svg` for small sizes; the colour logo was chosen as it reads at 14 pt in both schemes) | Terms silent |
+| Deno (`DenoLogo`, `icon-light.svg`, dark appearance `icon-dark.svg`) | https://deno.com/logos/icon-light.svg and https://deno.com/logos/icon-dark.svg from https://deno.com/brand (retrieved 2026-10-21) | Deno Logo Guidelines (in https://deno.com/logos/deno_assets.zip): black and white only; light version on light backgrounds, outlined dark version on dark; "Yes, use logo mark independently". Permission requested | The owner's two versions, per scheme | Clear space "ideally two times" the mark-to-wordmark gap (applies to the full logo) | Terms silent |
+| Claude Code (`ClaudeLogo`, `Claude Spark - Clay.svg`) | https://www.anthropic.com/press-kit (the press-kit zip, `Anthropic media resources/Anthropic logos/Claude logos/3 Claude Spark/SVG/Claude Spark - Clay.svg`; retrieved 2026-10-21) | Anthropic trademark guidelines (https://www.anthropic.com/legal/trademark-guidelines): use only as permitted and approved; "No alterations of our trademarks (changes to color, font, proportion, or otherwise)". Unmodified | Shipped in its clay colour | "reasonable space"; sizes supplied on request | Owner-approved risk; permission requested |
+| OpenAI Codex (`CodexLogo`, `OpenAI-black-monoblossom.svg`, dark appearance `OpenAI-white-monoblossom.svg`) | https://cdn.openai.com/brand/OpenAI-Logos-2025.zip, linked from https://openai.com/brand/ (`OpenAI-logos(new)/SVGs/`; retrieved 2026-10-21). OpenAI publishes no Codex-specific mark | OpenAI brand guidelines: "Use the logo exactly as provided"; do not "Use the logo without permission"; permissions via partnercomms@openai.com. Unmodified | The owner's black and white Blossoms, per scheme | "prescribed spacing" | Owner-approved risk; permission requested |
+| Gemini CLI (`GeminiCLILogo`, `gemini-cli-icon_full-color.svg`) | https://geminicli.com/brandassets/gemini-cli-icon_full-color.svg from https://geminicli.com/brand-kit/ (the project's homepage per github.com/google-gemini/gemini-cli; retrieved 2026-10-21) | Gemini CLI logo and icon usage guidelines (in the brand kit): "should not ever be altered"; the icon is for "where the brand has to be separated from the product name". Google brand features need permission. Unmodified | Shipped in full colour | Clear space defined for the logo lockup | Owner-approved risk; permission requested |
+| GitHub Copilot CLI (`CopilotLogo`, `Copilot_Icon_Black.svg`, dark appearance `Copilot_Icon_White.svg`) | https://brand.github.com/GitHub_Logos.zip (`GitHub Logos/SVG/`; retrieved 2026-10-21) | GitHub logo guidelines (https://brand.github.com/foundations/logo): no use without GitHub's prior written permission; do not modify. Unmodified | The owner's black and white icons, per scheme | Clear-space files in the kit | Owner-approved risk; permission requested |
+| Docker (`DockerLogo`, `docker-mark-ocean-blue.svg`) | https://www.docker.com/static/Docker-Logos-1.zip from https://www.docker.com/company/newsroom/media-resources/ (`docker-logos/SVG/`; retrieved 2026-10-21) | Docker trademark guidelines (https://www.docker.com/legal/trademark-guidelines/): logos only "following authorization from us"; must appear in a primary brand colour; "Don't decolorize". Unmodified, Ocean Blue | Ocean Blue in both schemes | "at least 24px": 14 pt is 28 px on Retina Macs, 16 pt is 32–48 px on iPad and iPhone | Owner-approved risk; permission requested |
+| kubectl (`KubernetesLogo`, `kubernetes-icon-color.svg`) | https://raw.githubusercontent.com/cncf/artwork/main/projects/kubernetes/icon/color/kubernetes-icon-color.svg (retrieved 2026-10-21). CNCF publishes no kubectl mark; the Kubernetes icon labels its CLI | Linux Foundation trademark usage (https://www.linuxfoundation.org/legal/trademark-usage): no logos in a commercial context without written permission; no colour variations. Unmodified | Shipped in colour | Not stated | Owner-approved risk; permission requested |
+| Python (`PythonLogo`, `python-logo-only.svg`) | https://s3.dualstack.us-east-2.amazonaws.com/pythondotorg-assets/media/files/python-logo-only.svg, linked from https://www.python.org/community/logos/ (retrieved 2026-10-21) | PSF Trademark Usage Policy (https://www.python.org/psf/trademarks/): other commercial uses need prior written permission. Unmodified | Shipped in colour | Not stated | Owner-approved risk; permission requested |
+| Node.js (`NodeLogo`, `nodejsHex.svg`) | https://nodejs.org/static/logos/nodejsHex.svg from https://nodejs.org/en/about/branding ("Node.js® Hex Logo"; retrieved 2026-10-21) | OpenJS Foundation trademark policy (https://trademark-policy.openjsf.org/): no logos in a commercial context unless expressly permitted. Unmodified | Shipped in colour | Not stated | Owner-approved risk; permission requested |
+| Go (`GoLogo`, `go-logo-blue.svg`, dark appearance `go-logo-white.svg`) | https://go.dev/images/go-logo-blue.svg and https://go.dev/images/go-logo-white.svg from https://go.dev/brand (retrieved 2026-10-21) | Go brand and trademark guidelines: "Do not use the Go Logo or Go as a stylized form without permission"; not "modified in any form". Unmodified | The owner's blue and white logos, per scheme | Not stated (a wide wordmark: fitted to the slot's width) | Owner-approved risk; permission requested |
+| Rust (`RustLogo`, `rust-logo.svg`, dark appearance `rust-logo-white-outline.svg`) | https://raw.githubusercontent.com/rust-lang/rust-artwork/main/logo/rust-logo.svg and `…/logo/rust-logo-white-outline.svg` (the project's version "to make it usable on dark backgrounds"; retrieved 2026-10-21) | Creative Commons Attribution 4.0 (https://creativecommons.org/licenses/by/4.0/), Rust Foundation; also trademarks: "most commercial uses require permission" (https://rustfoundation.org/policy/rust-trademark-policy/). Unmodified | The owner's two versions, per scheme | Not stated | Owner-approved risk; permission requested |
+| Cargo (`CargoLogo`, `Cargo-Logo-Small.png`) | https://raw.githubusercontent.com/rust-lang/cargo/master/doc/book/src/images/Cargo-Logo-Small.png (the only official file; raster, 306×275; retrieved 2026-10-21) | As Rust: CC BY 4.0, Rust Foundation trademark. Unmodified | Shipped in colour | Not stated | Owner-approved risk; permission requested |
+| PostgreSQL (`PostgreSQLLogo`, `PostgreSQL_logo.3colors.svg`) | https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg from https://wiki.postgresql.org/wiki/Logo (retrieved 2026-10-21) | PostgreSQL trademark policy (https://www.postgresql.org/about/policies/trademarks/): "For pretty much any use not discussed above, you must contact us for permission". Unmodified | Shipped in colour | Not stated | Owner-approved risk; permission requested |
 
 tmux logo notice:
 
@@ -104,10 +139,11 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-Not shipped (a neutral SF Symbol shows; their terms forbid this use, need written permission, or
-say nothing): Claude Code, OpenAI Codex, Gemini CLI, GitHub Copilot CLI, vim, Emacs, nano, htop,
-lazygit, Docker, kubectl, K9s, Python, Node.js, Bun, Deno, Go, Rust/Cargo, PostgreSQL, Redis,
-OpenSSH, bash, zsh, fish. No artwork from `reference/rootshell` is included.
+Not shipped (a neutral SF Symbol shows): Redis (its brand kit at https://brand.redis.io/ failed
+TLS on 2026-10-21 and its guidelines PDF is gone; the repository has no logo), bash (its logo is
+published only in a designer's repository, not by GNU, under the Free Art License), nano, lazygit
+and K9s (no graphic mark), OpenSSH, zsh and fish (no licence). No artwork from
+`reference/rootshell` or any icon pack is included.
 
 Program name normalisation (`ProgramCatalog.normalize`: login-shell dashes, launchers such as
 `sudo`/`env`, versioned interpreters, `nvim` → Neovim) follows the rules of rootshell's

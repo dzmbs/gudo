@@ -165,11 +165,11 @@ struct EditorPaneView: View {
                     .frame(width: 14, height: 14)
                 Text("Resuming VS Code")
                     .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(theme.foreground.opacity(0.8))
+                    .foregroundStyle(DS.Palette.text)
             }
             .padding(.horizontal, DS.Space.m)
             .padding(.vertical, DS.Space.s)
-            .background(theme.surface(0.12), in: .capsule)
+            .background(DS.Palette.raised, in: .capsule)
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("editor-resuming")
@@ -192,15 +192,15 @@ struct EditorPaneView: View {
                 .accessibilityIdentifier("editor-close")
             Image(systemName: source.mode == .tunnel ? "point.3.connected.trianglepath.dotted" : "chevron.left.forwardslash.chevron.right")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(theme.foreground.opacity(0.5))
+                .foregroundStyle(DS.Palette.textSecondary)
                 .help(source.mode == .tunnel ? "Through a VS Code Remote Tunnel (vscode.dev)" : "VS Code")
             HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
                 Text(verbatim: pane.member.folderName)
                     .font(isSplit ? .caption.weight(isFocused ? .semibold : .regular) : .callout.weight(.medium))
-                    .foregroundStyle(theme.foreground.opacity(isFocused ? 1 : 0.7))
+                    .foregroundStyle((isFocused ? DS.Palette.text : DS.Palette.textSecondary))
                 Text(verbatim: source.hostName)
                     .font(DS.Font.literalSmall)
-                    .foregroundStyle(theme.foreground.opacity(0.5))
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
             .lineLimit(1)
             Spacer(minLength: DS.Space.s)
@@ -273,15 +273,15 @@ private struct EditorProgress: View {
             VStack(spacing: DS.Space.s) {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                     .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(theme.foreground.opacity(0.85))
+                    .foregroundStyle(DS.Palette.text)
                     .symbolEffect(.pulse, options: .repeating, isActive: isWorking)
                 Text(title)
                     .font(DS.Font.title)
-                    .foregroundStyle(theme.foreground)
+                    .foregroundStyle(DS.Palette.text)
                     .multilineTextAlignment(.center)
                 Text(verbatim: folder)
                     .font(DS.Font.literalSmall)
-                    .foregroundStyle(theme.foreground.opacity(0.5))
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
@@ -289,7 +289,7 @@ private struct EditorProgress: View {
                 VStack(spacing: DS.Space.m) {
                     Text(reason)
                         .font(DS.Font.rowSubtitle)
-                        .foregroundStyle(theme.foreground.opacity(0.75))
+                        .foregroundStyle(DS.Palette.text)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 420)
                         .textSelection(.enabled)
@@ -304,7 +304,7 @@ private struct EditorProgress: View {
                         Button("Open Through a Remote Tunnel Instead…", action: useTunnel)
                             .buttonStyle(.plain)
                             .font(DS.Font.rowSubtitle)
-                            .foregroundStyle(theme.foreground.opacity(0.6))
+                            .foregroundStyle(DS.Palette.textSecondary)
                             .accessibilityIdentifier("editor-failed-tunnel")
                     }
                 }
@@ -316,10 +316,10 @@ private struct EditorProgress: View {
                 }
                 .padding(DS.Space.l)
                 .frame(width: 340)
-                .background(theme.surface(0.10), in: .rect(cornerRadius: DS.Radius.panel))
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
                 Text(footnote)
                     .font(.footnote)
-                    .foregroundStyle(theme.foreground.opacity(0.5))
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 360)
                     .contentTransition(.opacity)
@@ -400,20 +400,20 @@ private struct EditorProgress: View {
                         .frame(width: 14, height: 14)
                 case .pending:
                     Circle()
-                        .strokeBorder(theme.foreground.opacity(0.25), lineWidth: 1.5)
+                        .strokeBorder(DS.Palette.border, lineWidth: 1.5)
                         .frame(width: 14, height: 14)
                 }
             }
             .frame(width: 18, height: 18)
             Text(label(step))
                 .font(DS.Font.rowTitle)
-                .foregroundStyle(theme.foreground.opacity(state == .pending ? 0.45 : 1))
+                .foregroundStyle((state == .pending ? DS.Palette.textTertiary : DS.Palette.text))
             Spacer()
             if state == .active {
                 TimelineView(.periodic(from: since, by: 1)) { context in
                     Text("\(max(0, Int(context.date.timeIntervalSince(since)))) s")
                         .font(DS.Font.meta)
-                        .foregroundStyle(theme.foreground.opacity(0.5))
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .contentTransition(.numericText())
                 }
             }

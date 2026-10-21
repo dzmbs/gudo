@@ -149,6 +149,7 @@ private struct CertificatesSection: View {
                         .foregroundStyle(certificate.isExpired ? DS.Palette.error : DS.Palette.textSecondary)
                 } trailing: {
                     Button("Remove", systemImage: "minus.circle.fill", role: .destructive) { remove(certificate) }
+                        .help("Remove this certificate")
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                         .foregroundStyle(DS.Palette.error)
