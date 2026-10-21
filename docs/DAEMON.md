@@ -187,6 +187,10 @@ policy is always `LastInput` for now.
 
 - `daemon.key` (Ed25519, iroh endpoint id), `owner.json` (the single owner principal),
   `devices.json` (allowlist: device key → principal), `pairing.json` (pending one-time secrets).
+  `hostd pair` (another process) and the daemon (its startup ticket, every pairing attempt)
+  both rewrite `pairing.json`, so each read-modify-write holds an exclusive `flock` on
+  `pairing.lock`: unlocked, a ticket minted while the daemon wrote its own was lost and refused
+  with `InvalidGrant`, and a secret consumed by one pairing could survive another's rewrite.
 - A ticket (`proto::Ticket`, `unnamed://pair/<base32>`) carries the daemon id, direct
   addresses, home relay, owner principal, a 128-bit one-time secret and expiry. Dialing by key
   pins the daemon in the TLS handshake.

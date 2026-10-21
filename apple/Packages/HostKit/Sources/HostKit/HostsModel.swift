@@ -370,7 +370,22 @@ public final class HostsModel {
             if let previous { connections[record.id] = previous }
             throw error
         }
-        try await waitUntilReady(connection)
+        do {
+            try await waitUntilReady(connection)
+        } catch {
+            Self.log.error("pairing host=\(record.id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            // A refused first pairing (the ticket was used, expired or is not this daemon's)
+            // leaves no host behind that could never connect: a new ticket starts clean. One
+            // that only timed out stays and keeps dialling.
+            if existing == nil, case PairingError.refused = error {
+                connections[record.id] = nil
+                connection.close()
+                try? secrets.remove(record.ticketKey)
+                records.removeAll { $0.id == record.id }
+                persist()
+            }
+            throw error
+        }
         previous?.close()
         touch(record.id)
         Self.log.info("paired host=\(record.id, privacy: .public) daemon=\(ticket.info.daemonId.prefix(12), privacy: .public)")

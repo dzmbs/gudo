@@ -4,6 +4,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Writes `data` to `path` atomically: a temporary file in the same directory, `fsync`, rename,
 /// then `fsync` of the directory, so a crash leaves either the old or the new contents.
@@ -13,10 +14,13 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(dir)?;
+    // Unique per process and write: two threads writing the same file must not share one.
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     let tmp = dir.join(format!(
-        ".{}.tmp{}",
+        ".{}.tmp{}.{}",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("state"),
-        std::process::id()
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::Relaxed)
     ));
     {
         let mut file = OpenOptions::new()
@@ -30,6 +34,22 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     }
     fs::rename(&tmp, path)?;
     File::open(dir)?.sync_all()
+}
+
+/// Runs `update` holding an exclusive lock on `<path>.lock` (`pairing.json` →
+/// `pairing.lock`), for a read-modify-write of a state file that the daemon and `hostd`
+/// commands (other processes) both change. Without it, `hostd pair` minting while the daemon
+/// mints its startup ticket or consumes another one loses a secret, and its ticket is refused.
+/// Waits for the lock; it goes when `update` returns.
+pub(crate) fn with_lock<T>(path: &Path, update: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let lock = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path.with_extension("lock"))?;
+    lock.lock()?;
+    update()
 }
 
 /// Creates `dir` (and parents) with mode 0700 for the leaf.
