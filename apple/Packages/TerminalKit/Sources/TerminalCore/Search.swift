@@ -51,16 +51,22 @@ public final class TerminalSearch {
         case previous
     }
 
+    typealias Range = (start: GridPoint, end: GridPoint)
+
     private let terminal: Terminal
     private var search: GhosttySearch?
     /// The terminal handle `search` is bound to; a snapshot restore replaces the handle.
     private var boundHandle: GhosttyTerminal?
     public private(set) var needle = ""
     public private(set) var caseSensitive = false
-    /// For each match (newest first), whether its text has the needle's exact case; nil when
-    /// every match counts.
-    private var exact: [Bool]?
-    private var exactTotal = -1
+    /// Every match (exact case only, with `caseSensitive`) in screen coordinates, newest first;
+    /// nil until needed or after output moved them.
+    private var ordered: [Range]?
+    /// The selected match: its first cell's row, tracked by libghostty-vt so it follows
+    /// scrolling, history paged in above it and pruning. The selection is ours, not the
+    /// search's: libghostty-vt's own is dropped when a restored terminal's history grows.
+    private var selectedRef: GhosttyTrackedGridRef?
+    private var selectedX = 0
     public private(set) var status = SearchStatus.idle
 
     public init(terminal: Terminal) {
@@ -68,8 +74,11 @@ public final class TerminalSearch {
     }
 
     deinit {
-        guard let search else { return }
-        terminal.withHandle { _ in ghostty_search_free(search) }
+        let search = search, ref = selectedRef
+        terminal.withHandle { _ in
+            if let ref { ghostty_tracked_grid_ref_free(ref) }
+            if let search { ghostty_search_free(search) }
+        }
     }
 
     public var isActive: Bool { !needle.isEmpty }
@@ -81,11 +90,10 @@ public final class TerminalSearch {
         self.needle = needle
         self.caseSensitive = caseSensitive
         guard restart else { return }
-        exact = nil
-        exactTotal = -1
         terminal.withHandle { t in
             bind(t)
-            guard let search else { return }
+            clearSelection()
+            ordered = nil
             apply(needle: needle, to: search)
         }
         status = needle.isEmpty ? .idle : SearchStatus(total: 0, selected: nil, isComplete: false)
@@ -98,12 +106,13 @@ public final class TerminalSearch {
         guard isActive else { return .idle }
         let deadline = ContinuousClock.now + .microseconds(Int64(budget * 1_000_000))
         var state = GHOSTTY_SEARCH_STATUS_RUNNING
-        terminal.withHandle { t in
+        status = terminal.withHandle { t in
             if bind(t) { apply(needle: needle, to: search) }
-            guard let search else { return }
+            guard let search else { return .idle }
+            let before = total(search)
             ghostty_search_feed(search)
             repeat {
-                guard ghostty_search_tick(search, &state) == GHOSTTY_SUCCESS else { return }
+                guard ghostty_search_tick(search, &state) == GHOSTTY_SUCCESS else { break }
                 if state == GHOSTTY_SEARCH_STATUS_FEED_REQUIRED {
                     ghostty_search_feed(search)
                     state = GHOSTTY_SEARCH_STATUS_RUNNING
@@ -112,9 +121,9 @@ public final class TerminalSearch {
             if state != GHOSTTY_SEARCH_STATUS_COMPLETE {
                 ghostty_search_get(search, GHOSTTY_SEARCH_DATA_STATUS, &state)
             }
-            refreshExact(t, search, force: outputChanged)
+            if outputChanged || total(search) != before { ordered = nil }
+            return readStatus(t, search, complete: state == GHOSTTY_SEARCH_STATUS_COMPLETE)
         }
-        status = readStatus(complete: state == GHOSTTY_SEARCH_STATUS_COMPLETE)
         return status
     }
 
@@ -122,13 +131,13 @@ public final class TerminalSearch {
     @discardableResult
     public func run() -> SearchStatus {
         guard isActive else { return .idle }
-        terminal.withHandle { t in
+        status = terminal.withHandle { t in
             if bind(t) { apply(needle: needle, to: search) }
-            guard let search else { return }
+            guard let search else { return .idle }
             ghostty_search_run(search)
-            refreshExact(t, search, force: true)
+            ordered = nil
+            return readStatus(t, search, complete: true)
         }
-        status = readStatus(complete: true)
         return status
     }
 
@@ -137,28 +146,24 @@ public final class TerminalSearch {
     @discardableResult
     public func select(_ direction: Direction) -> Bool {
         guard isActive else { return false }
-        let found: Bool = terminal.withHandle { t in
+        var found = false
+        let complete = status.isComplete
+        status = terminal.withHandle { t in
             if bind(t) { apply(needle: needle, to: search) }
-            guard let search else { return false }
-            var scroll = GHOSTTY_SEARCH_SCROLL_NONE
-            ghostty_search_set(search, GHOSTTY_SEARCH_OPT_SELECT_SCROLL, &scroll)
-            let option = direction == .next ? GHOSTTY_SEARCH_OPT_SELECT_NEXT : GHOSTTY_SEARCH_OPT_SELECT_PREV
-            var total = 0
-            ghostty_search_get(search, GHOSTTY_SEARCH_DATA_TOTAL_MATCHES, &total)
-            // With exact case, step over matches that differ in case (at most once round).
-            for _ in 0..<max(1, total) {
-                guard ghostty_search_set(search, option, nil) == GHOSTTY_SUCCESS else { return false }
-                guard let exact else { break }
-                var index = 0
-                if ghostty_search_get(search, GHOSTTY_SEARCH_DATA_SELECTED_INDEX, &index) == GHOSTTY_SUCCESS,
-                   exact.indices.contains(index) ? exact[index] : isExact(t, selected(search)) { break }
+            guard let search else { return .idle }
+            let matches = orderedMatches(t, search)
+            guard !matches.isEmpty else { return readStatus(t, search, complete: complete) }
+            let index: Int = switch (selectedIndex(t, matches), direction) {
+            case (nil, _): 0
+            case (let i?, .next): (i + 1) % matches.count
+            case (let i?, .previous): (i - 1 + matches.count) % matches.count
             }
-            guard let match = selected(search), let range = Self.screenRange(t, match) else { return false }
-            if exact != nil, !matchesCase(t, match) { return false }
+            let range = matches[index]
+            setSelection(t, range.start)
             Self.reveal(t, range)
-            return true
+            found = true
+            return readStatus(t, search, complete: complete)
         }
-        status = readStatus(complete: status.isComplete)
         return found
     }
 
@@ -166,8 +171,9 @@ public final class TerminalSearch {
     public var selectedRange: (start: GridPoint, end: GridPoint)? {
         guard isActive, let search else { return nil }
         return terminal.withHandle { t in
-            guard boundHandle == t, let match = selected(search) else { return nil }
-            return Self.screenRange(t, match)
+            guard boundHandle == t else { return nil }
+            let matches = orderedMatches(t, search)
+            return selectedIndex(t, matches).map { matches[$0] }
         }
     }
 
@@ -176,25 +182,15 @@ public final class TerminalSearch {
         guard isActive, let search, rows > 0, cols > 0 else { return [] }
         return terminal.withHandle { t in
             guard boundHandle == t else { return [] }
-            var buffer = GhosttySelectionBuffer(ptr: nil, cap: 0, len: 0)
-            // Asked with no room first: the answer is the count.
-            _ = ghostty_search_get(search, GHOSTTY_SEARCH_DATA_VIEWPORT_MATCHES, &buffer)
-            guard buffer.len > 0 else { return [] }
-            var matches = [GhosttySelection](repeating: Self.emptySelection, count: buffer.len)
-            let ok = matches.withUnsafeMutableBufferPointer { storage in
-                buffer = GhosttySelectionBuffer(ptr: storage.baseAddress, cap: storage.count, len: 0)
-                return ghostty_search_get(search, GHOSTTY_SEARCH_DATA_VIEWPORT_MATCHES, &buffer) == GHOSTTY_SUCCESS
-            }
-            guard ok else { return [] }
             let top = Self.viewportTop(t)
-            let chosen = selected(search).flatMap { Self.screenRange(t, $0) }
+            let chosen = selectedStart(t)
             var out: [SearchHighlight] = []
-            for match in matches.prefix(buffer.len) {
+            for match in selections(search, GHOSTTY_SEARCH_DATA_VIEWPORT_MATCHES) {
                 guard let range = Self.screenRange(t, match) else { continue }
                 let first = range.start.y - top, last = range.end.y - top
                 guard last >= 0, first < rows else { continue }
-                if exact != nil, !matchesCase(t, match) { continue }
-                let isSelected = chosen.map { $0.start == range.start && $0.end == range.end } ?? false
+                if needsExactFilter, !matchesCase(t, match) { continue }
+                let isSelected = chosen == range.start
                 for row in max(first, 0)...min(last, rows - 1) {
                     let lo = row == first ? range.start.x : 0
                     let hi = row == last ? range.end.x : cols - 1
@@ -213,14 +209,16 @@ public final class TerminalSearch {
     @discardableResult
     private func bind(_ t: GhosttyTerminal) -> Bool {
         if search != nil, boundHandle == t { return false }
+        // A restore replaced (and freed) the handle the search and the selection's tracked
+        // cell belonged to: both detect that and free only their own memory (as `RowPin` does).
         if let search { ghostty_search_free(search) }
+        clearSelection()
         search = nil
+        ordered = nil
         var created: GhosttySearch?
         guard ghostty_search_new(nil, &created, t) == GHOSTTY_SUCCESS, let created else { return false }
         search = created
         boundHandle = t
-        exact = nil
-        exactTotal = -1
         return true
     }
 
@@ -242,57 +240,81 @@ public final class TerminalSearch {
         caseSensitive && needle.utf8.contains { (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) }
     }
 
-    private func refreshExact(_ t: GhosttyTerminal, _ search: GhosttySearch, force: Bool) {
-        guard needsExactFilter else {
-            exact = nil
-            return
-        }
+    private func total(_ search: GhosttySearch) -> Int {
         var total = 0
         ghostty_search_get(search, GHOSTTY_SEARCH_DATA_TOTAL_MATCHES, &total)
-        guard force || total != exactTotal || exact == nil else { return }
-        exactTotal = total
-        guard total > 0 else {
-            exact = []
-            return
-        }
-        var matches = [GhosttySelection](repeating: Self.emptySelection, count: total)
+        return total
+    }
+
+    private func selections(_ search: GhosttySearch, _ data: GhosttySearchData) -> [GhosttySelection] {
+        var buffer = GhosttySelectionBuffer(ptr: nil, cap: 0, len: 0)
+        // Asked with no room first: the answer is the count.
+        _ = ghostty_search_get(search, data, &buffer)
+        guard buffer.len > 0 else { return [] }
+        var matches = [GhosttySelection](repeating: Self.emptySelection, count: buffer.len)
         var written = 0
         let ok = matches.withUnsafeMutableBufferPointer { storage in
-            var buffer = GhosttySelectionBuffer(ptr: storage.baseAddress, cap: storage.count, len: 0)
-            let result = ghostty_search_get(search, GHOSTTY_SEARCH_DATA_MATCHES, &buffer)
-            written = buffer.len
+            var b = GhosttySelectionBuffer(ptr: storage.baseAddress, cap: storage.count, len: 0)
+            let result = ghostty_search_get(search, data, &b)
+            written = b.len
             return result == GHOSTTY_SUCCESS
         }
-        guard ok else { return }
-        exact = matches.prefix(written).map { matchesCase(t, $0) }
+        return ok ? Array(matches.prefix(written)) : []
+    }
+
+    /// Every match, newest (lowest on the screen) first.
+    private func orderedMatches(_ t: GhosttyTerminal, _ search: GhosttySearch) -> [Range] {
+        if let ordered { return ordered }
+        let exact = needsExactFilter
+        let ranges = selections(search, GHOSTTY_SEARCH_DATA_MATCHES).compactMap { match -> Range? in
+            if exact, !matchesCase(t, match) { return nil }
+            return Self.screenRange(t, match)
+        }
+        let sorted = ranges.sorted { $0.start > $1.start }
+        ordered = sorted
+        return sorted
+    }
+
+    private func selectedStart(_ t: GhosttyTerminal) -> GridPoint? {
+        guard let selectedRef else { return nil }
+        var out = GhosttyPointCoordinate()
+        guard ghostty_tracked_grid_ref_point(selectedRef, GHOSTTY_POINT_TAG_SCREEN, &out) == GHOSTTY_SUCCESS else { return nil }
+        return GridPoint(x: selectedX, y: Int(out.y))
+    }
+
+    private func selectedIndex(_ t: GhosttyTerminal, _ matches: [Range]) -> Int? {
+        guard let start = selectedStart(t) else { return nil }
+        return matches.firstIndex { $0.start == start }
+    }
+
+    private func setSelection(_ t: GhosttyTerminal, _ start: GridPoint) {
+        clearSelection()
+        var point = GhosttyPoint()
+        point.tag = GHOSTTY_POINT_TAG_SCREEN
+        point.value.coordinate = GhosttyPointCoordinate(x: 0, y: UInt32(clamping: start.y))
+        var ref: GhosttyTrackedGridRef?
+        guard ghostty_terminal_grid_ref_track(t, point, &ref) == GHOSTTY_SUCCESS, let ref else { return }
+        selectedRef = ref
+        selectedX = start.x
+    }
+
+    private func clearSelection() {
+        if let ref = selectedRef { ghostty_tracked_grid_ref_free(ref) }
+        selectedRef = nil
     }
 
     private func matchesCase(_ t: GhosttyTerminal, _ match: GhosttySelection) -> Bool {
         Self.text(t, match) == needle
     }
 
-    private func isExact(_ t: GhosttyTerminal, _ match: GhosttySelection?) -> Bool {
-        match.map { matchesCase(t, $0) } ?? false
-    }
-
-    private func selected(_ search: GhosttySearch) -> GhosttySelection? {
-        var match = Self.emptySelection
-        guard ghostty_search_get(search, GHOSTTY_SEARCH_DATA_SELECTED_MATCH, &match) == GHOSTTY_SUCCESS else { return nil }
-        return match
-    }
-
-    private func readStatus(complete: Bool) -> SearchStatus {
-        guard isActive, let search else { return .idle }
-        var total = 0
-        var index = 0
-        ghostty_search_get(search, GHOSTTY_SEARCH_DATA_TOTAL_MATCHES, &total)
-        let hasSelection = ghostty_search_get(search, GHOSTTY_SEARCH_DATA_SELECTED_INDEX, &index) == GHOSTTY_SUCCESS
-        guard let exact else {
-            return SearchStatus(total: total, selected: hasSelection ? index : nil, isComplete: complete)
+    private func readStatus(_ t: GhosttyTerminal, _ search: GhosttySearch, complete: Bool) -> SearchStatus {
+        guard isActive else { return .idle }
+        // The full list is read only when it matters: a selection to place, or exact case.
+        guard selectedRef != nil || needsExactFilter else {
+            return SearchStatus(total: total(search), selected: nil, isComplete: complete)
         }
-        let selected: Int? = hasSelection && exact.indices.contains(index) && exact[index]
-            ? exact[..<index].lazy.filter { $0 }.count : nil
-        return SearchStatus(total: exact.lazy.filter { $0 }.count, selected: selected, isComplete: complete)
+        let matches = orderedMatches(t, search)
+        return SearchStatus(total: matches.count, selected: selectedIndex(t, matches), isComplete: complete)
     }
 
     private static var emptySelection: GhosttySelection {

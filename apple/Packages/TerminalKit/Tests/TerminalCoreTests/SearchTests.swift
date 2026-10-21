@@ -149,4 +149,44 @@ private func lines(_ texts: [String]) -> [UInt8] {
         try restored.appendHistory(history)
         #expect(search.run().total == 3)
     }
+
+    /// A daemon pane: history paged in above the screen keeps the selection on its match and
+    /// adds the older matches after it.
+    @Test func selectionSurvivesHistoryPagedIn() throws {
+        // Enough scrollback that READY holds only the recent part.
+        let source = Terminal(cols: 30, rows: 10) { _ in }
+        source.write(lines((0..<20000).map { $0 % 2000 == 1995 ? "line \($0) match" : "line \($0)" }))
+        let snapshot = try #require(source.encodeSnapshot())
+        let (ready, history) = try #require(Terminal.splitSnapshot(snapshot))
+        let restored = Terminal(cols: 30, rows: 10) { _ in }
+        try restored.restore(snapshot: ready)
+        let search = TerminalSearch(terminal: restored)
+        search.setNeedle("match", caseSensitive: false)
+        let before = search.run().total
+        #expect(search.select(.next))
+        #expect(search.status.selected == 0)
+        try restored.appendHistory(history)
+        search.update(budget: 0.05)
+        #expect(search.run().total == 10)
+        #expect(before < 10)
+        #expect(search.status.selected == 0, "still on the newest match")
+        search.select(.next)
+        #expect(search.status.selected == 1)
+    }
+
+    /// The selection survives the feeds a render loop does after it, with the viewport scrolled.
+    @Test func selectionSurvivesFeeds() {
+        let search = TerminalSearch(terminal: terminal())
+        search.setNeedle("match", caseSensitive: false)
+        search.update(budget: 0.01)
+        search.select(.next)
+        #expect(search.status.selected == 0)
+        for _ in 0..<3 { search.update(budget: 0.01, outputChanged: false) }
+        #expect(search.status.selected == 0)
+        search.select(.next)
+        #expect(search.status.selected == 1)
+        for _ in 0..<3 { search.update(budget: 0.01, outputChanged: false) }
+        #expect(search.status.selected == 1)
+        #expect(search.viewportHighlights(rows: 10, cols: 30).contains { $0.selected })
+    }
 }
