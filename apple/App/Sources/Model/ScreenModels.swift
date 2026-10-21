@@ -182,7 +182,20 @@ protocol AgentFeed: AnyObject, Observable {
     /// Starts Claude Code or Codex in a new pane; returns a note when the first prompt could not
     /// be typed (the pane runs either way).
     func launch(_ request: AgentLaunchRequest) async throws -> String?
+    /// People asking to join hosts this device owns (multiplayer knocks).
+    var knocks: [KnockItem] { get }
+    /// What the session's approval rules say about answering this request here.
+    func approval(_ id: AgentItem.ID) -> ApprovalContext?
+    /// Claims a request ("I'll take this one"), or releases the claim.
+    func claim(_ id: AgentItem.ID, _ claim: Bool)
 }
+
+extension AgentFeed {
+    var knocks: [KnockItem] { [] }
+    func approval(_ id: AgentItem.ID) -> ApprovalContext? { nil }
+    func claim(_ id: AgentItem.ID, _ claim: Bool) {}
+}
+
 
 // MARK: - Panes: status, links, search
 

@@ -37,7 +37,7 @@ unset XDG_CONFIG_HOME
 log="$state/xcodebuild.log"
 status=0
 TEST_RUNNER_PAIR_TICKET="$ticket_app" xcodebuild -project "$apple/App.xcodeproj" -scheme App \
-  -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$apple/build/DerivedData" \
+  -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "${DERIVED_DATA:-$apple/build/DerivedData}" \
   -resultBundlePath "$state/result.xcresult" \
   -only-testing:AppUITests/MultiplayerUITests test >"$log" 2>&1 || status=$?
 grep -E "Test Case|error:|passed|failed|TEST (SUCCEEDED|FAILED)" "$log" | tail -20

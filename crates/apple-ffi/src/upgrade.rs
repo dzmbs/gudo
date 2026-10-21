@@ -34,6 +34,8 @@ pub struct DaemonInfo {
     pub arch: String,
     /// It answers `usage_watch` (agent plan usage).
     pub agent_usage: bool,
+    #[uniffi(default = false)]
+    pub multiplayer2: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -50,6 +52,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             os_name: i.os_name,
             arch: i.arch,
             agent_usage: i.features.contains(proto::DaemonFeatures::AGENT_USAGE),
+            multiplayer2: i.features.contains(proto::DaemonFeatures::MP2),
         }
     }
 }

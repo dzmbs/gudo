@@ -228,8 +228,8 @@ struct AuditLogView: View {
         func matches(_ kind: AuditKind) -> Bool {
             switch self {
             case .all: true
-            case .approvals: kind == .approval
-            case .access: [.join, .leave, .paired, .grantRegistered, .grantRedeemed, .revoked, .denied].contains(kind)
+            case .approvals: [.approval, .claim, .policy].contains(kind)
+            case .access: [.join, .leave, .paired, .grantRegistered, .grantRedeemed, .revoked, .denied, .knock, .knockAnswered].contains(kind)
             case .control: kind == .lease || kind == .prompt
             }
         }
@@ -367,6 +367,11 @@ private struct AuditRow: View {
         case .lease: return "\(actorName) took control"
         case .prompt: return "\(actorName) prompted an agent"
         case .denied: return "Refused"
+        // A knocker is nobody the host knows yet: the record names them.
+        case .knock: return (record.detail.components(separatedBy: " knocked").first ?? actorName) + " knocked"
+        case .knockAnswered: return record.detail.hasPrefix("admitted") ? "Let someone in" : record.detail.hasSuffix("stopped waiting") ? "Stopped waiting" : "Turned someone away"
+        case .policy: return "Approval rules changed"
+        case .claim: return "\(actorName) \(record.detail.contains(" released ") ? "released" : "claimed") a request"
         }
     }
 
@@ -403,6 +408,10 @@ private struct AuditRow: View {
         case .lease: "keyboard"
         case .prompt: "text.bubble"
         case .denied: "hand.raised.fill"
+        case .knock: "hand.wave"
+        case .knockAnswered: record.detail.hasPrefix("admitted") ? "door.left.hand.open" : "door.left.hand.closed"
+        case .policy: "checkmark.shield"
+        case .claim: "hand.point.up.left"
         }
     }
 

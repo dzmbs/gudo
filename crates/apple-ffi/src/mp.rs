@@ -14,11 +14,11 @@ use crate::on_runtime;
 
 // --- hex ids --------------------------------------------------------------------------------
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn unhex<const N: usize>(what: &str, text: &str) -> Result<[u8; N], MultiplayerError> {
+pub(crate) fn unhex<const N: usize>(what: &str, text: &str) -> Result<[u8; N], MultiplayerError> {
     let text = text.trim();
     let invalid = || MultiplayerError::Invalid {
         message: format!("{what}: expected {} hex digits, got {text:?}", N * 2),
@@ -112,7 +112,7 @@ const ROLES: [(Role, proto::Roles); 5] = [
     (Role::Owner, proto::Roles::OWNER),
 ];
 
-fn roles_to_ffi(roles: proto::Roles) -> Vec<Role> {
+pub(crate) fn roles_to_ffi(roles: proto::Roles) -> Vec<Role> {
     ROLES
         .iter()
         .filter(|(_, bit)| roles.contains(*bit))
@@ -120,7 +120,7 @@ fn roles_to_ffi(roles: proto::Roles) -> Vec<Role> {
         .collect()
 }
 
-fn roles_from_ffi(roles: &[Role]) -> proto::Roles {
+pub(crate) fn roles_from_ffi(roles: &[Role]) -> proto::Roles {
     ROLES
         .iter()
         .filter(|(r, _)| roles.contains(r))
@@ -639,6 +639,14 @@ pub enum AuditKind {
     Approval,
     /// Refused by policy.
     Denied,
+    /// Someone knocked with a knock invite.
+    Knock,
+    /// An owner admitted or turned away a knock (or the knocker left).
+    KnockAnswered,
+    /// A session's approval rules changed.
+    Policy,
+    /// An approval request was claimed or released.
+    Claim,
 }
 
 impl From<proto::AuditKind> for AuditKind {
@@ -655,6 +663,10 @@ impl From<proto::AuditKind> for AuditKind {
             K::Prompt => Self::Prompt,
             K::Approval => Self::Approval,
             K::Denied => Self::Denied,
+            K::Knock => Self::Knock,
+            K::KnockAnswered => Self::KnockAnswered,
+            K::Policy => Self::Policy,
+            K::Claim => Self::Claim,
         }
     }
 }
@@ -769,6 +781,12 @@ pub struct InviteOptions {
     pub label: String,
     /// Who invites, for the join card.
     pub inviter: String,
+    /// Joining asks the owner first (knock to join).
+    #[uniffi(default = false)]
+    pub knock: bool,
+    /// The guest sees scrollback only from when they joined.
+    #[uniffi(default = false)]
+    pub since_join: bool,
 }
 
 /// A created invite.
@@ -845,6 +863,32 @@ pub enum MultiplayerEvent {
     },
     /// This connection's grant was revoked; the daemon closes it.
     Revoked,
+    /// Someone knocked, or a knock changed (owner devices): replace any entry with its id.
+    KnockAdded {
+        /// The knock.
+        knock: crate::mp2::Knock,
+    },
+    /// A knock is no longer waiting.
+    KnockGone {
+        /// The knock.
+        knock_id: u64,
+        /// How it ended.
+        outcome: crate::mp2::KnockOutcome,
+        /// Who answered it.
+        by: Option<Actor>,
+    },
+    /// The attached session's approval rules (after attaching and on every change).
+    ApprovalPolicy {
+        /// The session.
+        session_id: u64,
+        /// The rules.
+        policy: crate::mp2::ApprovalPolicy,
+    },
+    /// An open approval request's votes or claim changed.
+    ApprovalStatus {
+        /// Where it stands.
+        status: crate::mp2::ApprovalStatus,
+    },
 }
 
 impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
@@ -879,6 +923,30 @@ impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
                 by: by.into(),
             },
             E::Revoked => Self::Revoked,
+            E::Knock {
+                update: proto::KnockUpdate::Added(knock),
+            } => Self::KnockAdded {
+                knock: knock.into(),
+            },
+            E::Knock {
+                update:
+                    proto::KnockUpdate::Gone {
+                        knock_id,
+                        outcome,
+                        by,
+                    },
+            } => Self::KnockGone {
+                knock_id: knock_id.0,
+                outcome: outcome.into(),
+                by: by.map(Into::into),
+            },
+            E::ApprovalPolicy { session_id, policy } => Self::ApprovalPolicy {
+                session_id: session_id.0,
+                policy: policy.into(),
+            },
+            E::ApprovalStatus { status } => Self::ApprovalStatus {
+                status: status.into(),
+            },
         }
     }
 }
@@ -920,6 +988,10 @@ pub struct InviteInfo {
     pub expires_ms: Option<u64>,
     /// Distinct devices that may redeem it.
     pub max_uses: Option<u32>,
+    /// Joining asks the owner first.
+    pub knock: bool,
+    /// Scrollback is shown only from joining.
+    pub since_join: bool,
 }
 
 /// Reads an invite link (`unnamed://join/…` or `#…`, any case) without dialling.
@@ -929,12 +1001,10 @@ pub struct InviteInfo {
 /// [`ClientError::Ticket`] if it does not parse.
 #[uniffi::export]
 pub fn inspect_invite(invite: String) -> Result<InviteInfo, ClientError> {
-    let parsed: proto::Invite =
-        invite
-            .parse()
-            .map_err(|e: proto::TicketError| ClientError::Ticket {
-                message: e.to_string(),
-            })?;
+    let (parsed, terms) =
+        proto::Invite::parse_with_terms(&invite).map_err(|e| ClientError::Ticket {
+            message: e.to_string(),
+        })?;
     let leaf = parsed.chain.leaf().cloned();
     Ok(InviteInfo {
         daemon_id: hex(&parsed.daemon_id.0),
@@ -949,6 +1019,8 @@ pub fn inspect_invite(invite: String) -> Result<InviteInfo, ClientError> {
         scope: leaf.as_ref().map_or(Scope::Daemon, |g| g.scope.into()),
         expires_ms: leaf.as_ref().and_then(|g| g.expires.map(|e| e.0)),
         max_uses: leaf.and_then(|g| g.max_uses),
+        knock: terms.knock,
+        since_join: terms.history == proto::History::SinceJoin,
     })
 }
 
@@ -1047,10 +1119,18 @@ impl DaemonClient {
         spec.delegate = options.delegate;
         spec.label = options.label;
         let inviter = options.inviter;
+        let terms = proto::InviteTerms {
+            knock: options.knock,
+            history: if options.since_join {
+                proto::History::SinceJoin
+            } else {
+                proto::History::Full
+            },
+        };
         let invite: proto::Invite = self
-            .mp_call(|c| async move { c.create_invite(spec, inviter).await })
+            .mp_call(|c| async move { c.create_invite_with_terms(spec, inviter, terms).await })
             .await?;
-        let link = invite.to_string();
+        let link = invite.to_string_with_terms(terms);
         let leaf = invite.chain.leaf();
         Ok(CreatedInvite {
             qr_payload: link.to_ascii_uppercase(),

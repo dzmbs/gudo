@@ -8,6 +8,7 @@ mod codex;
 mod e2e;
 mod history;
 mod multiplayer;
+mod multiplayer_mp2;
 mod notify;
 mod pull;
 mod relays;

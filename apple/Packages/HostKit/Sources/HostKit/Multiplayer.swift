@@ -30,6 +30,13 @@ nonisolated public protocol MultiplayerClientAPI: AnyObject, Sendable {
     func leases() async throws -> [Lease]
     func prompt(paneId: UInt64, text: String, submit: Bool) async throws -> UInt32
     func audit(after: UInt64?, limit: UInt32) async throws -> AuditPage
+    func pendingKnocks() -> [Knock]
+    func admitKnock(knockId: UInt64, roles: [Role], sinceJoin: Bool, ttlSecs: UInt64?) async throws -> GrantInfo
+    func denyKnock(knockId: UInt64) async throws
+    func approvalPolicyCached() -> ApprovalPolicy?
+    func approvalStatuses() -> [ApprovalStatus]
+    func setApprovalPolicy(sessionId: UInt64, policy: ApprovalPolicy) async throws -> ApprovalPolicy
+    func claimApproval(requestId: UInt64, claim: Bool) async throws -> ApprovalStatus
 }
 
 extension DaemonClient: MultiplayerClientAPI {}
@@ -92,6 +99,66 @@ nonisolated public extension Scope {
     }
 }
 
+nonisolated public extension ApprovalMode {
+    /// "Any approver", "Owner only", …
+    var title: String {
+        switch self {
+        case .anyApprover: "Any Approver"
+        case .ownerOnly: "Owner Only"
+        case .twoPerson: "Two People"
+        case .claim: "Claim First"
+        }
+    }
+
+    /// What it means, in one sentence.
+    var summary: String {
+        switch self {
+        case .anyApprover: "Anyone with the approver role answers. The first answer counts."
+        case .ownerOnly: "Only you answer. Approvers see requests but cannot decide them."
+        case .twoPerson: "Running a command needs two different people to approve. One no is enough to stop it."
+        case .claim: "An approver claims a request, then only they or you can answer it. The others stop being notified."
+        }
+    }
+
+    static let ordered: [ApprovalMode] = [.anyApprover, .ownerOnly, .twoPerson, .claim]
+}
+
+nonisolated public extension Risk {
+    /// "Reads", "Edits", "Commands".
+    var title: String {
+        switch self {
+        case .readOnly: "Reads Only"
+        case .edits: "Reads and Edits"
+        case .any: "Anything"
+        }
+    }
+
+    /// A short noun for a request of this risk: "a read", "an edit", "a command".
+    var noun: String {
+        switch self {
+        case .readOnly: "a read"
+        case .edits: "an edit"
+        case .any: "a command"
+        }
+    }
+
+    static let ordered: [Risk] = [.readOnly, .edits, .any]
+
+    /// Ordered from least to most risky.
+    var rank: Int {
+        switch self {
+        case .readOnly: 0
+        case .edits: 1
+        case .any: 2
+        }
+    }
+}
+
+nonisolated public extension ApprovalPolicy {
+    /// The daemon's default: any approver, any risk.
+    static let standard = ApprovalPolicy(mode: .anyApprover, maxRisk: .any)
+}
+
 /// Everything multiplayer for one daemon connection, on the main actor. Pushes arrive through
 /// `MultiplayerListener` on a runtime thread and are applied here in order.
 @MainActor
@@ -120,6 +187,12 @@ public final class MultiplayerSession {
     public private(set) var isRevoked = false
     /// Decisions on agent requests, newest last (who approved what).
     public private(set) var decisions: [Decided] = []
+    /// People waiting to be let in (owner devices), oldest first.
+    public private(set) var knocks: [Knock] = []
+    /// The attached session's approval rules (the default until the host says otherwise).
+    public private(set) var approvalPolicy: ApprovalPolicy = .standard
+    /// Open approval requests with votes or a claim, by request id.
+    public private(set) var approvalStatuses: [UInt64: ApprovalStatus] = [:]
 
     /// How long the holder may stay idle before the daemon hands the lease over
     /// (`[multiplayer] lease_idle_secs`, default 5 s).
@@ -127,6 +200,8 @@ public final class MultiplayerSession {
 
     /// Called with the panes whose raw input must not be sent (`PaneRouter` gate).
     @ObservationIgnored var onInputGate: ((InputGate) -> Void)?
+    /// Called once per new knock (not for renames), for a notification.
+    @ObservationIgnored public var onKnockArrived: ((Knock) -> Void)?
 
     @ObservationIgnored private var client: (any MultiplayerClientAPI)?
     @ObservationIgnored private var pump: Task<Void, Never>?
@@ -214,6 +289,9 @@ public final class MultiplayerSession {
         if let me = client.me() { self.me = me }
         let list = client.participantList()
         if !list.isEmpty { participants = list }
+        knocks = client.pendingKnocks()
+        if let policy = client.approvalPolicyCached() { approvalPolicy = policy }
+        approvalStatuses = Dictionary(client.approvalStatuses().map { ($0.requestId, $0) }, uniquingKeysWith: { $1 })
         refreshGate()
     }
 
@@ -277,7 +355,23 @@ public final class MultiplayerSession {
         case .revoked:
             isRevoked = true
             post(.revoked, "Your access to this host was revoked", failure: true)
+        case .knockAdded(let knock):
+            if let index = knocks.firstIndex(where: { $0.knockId == knock.knockId }) {
+                knocks[index] = knock
+            } else {
+                knocks.append(knock)
+                Self.log.info("knock \(knock.knockId) from \(knock.name, privacy: .public)")
+                onKnockArrived?(knock)
+            }
+        case .knockGone(let knockId, _, _):
+            knocks.removeAll { $0.knockId == knockId }
+        case .approvalPolicy(_, let policy):
+            approvalPolicy = policy
+        case .approvalStatus(let status):
+            approvalStatuses[status.requestId] = status
         }
+        if case .decided(let decided) = event { approvalStatuses[decided.requestId] = nil }
+        if case .joined = event { knocks = []; approvalStatuses = [:] }
         refreshGate()
     }
 
@@ -492,6 +586,88 @@ public final class MultiplayerSession {
         }
     }
 
+    // MARK: Knocks (owner)
+
+    /// Lets someone in with `roles`. `sinceJoin` hides the scrollback from before now.
+    public func admit(_ knock: Knock, roles: [Role], sinceJoin: Bool) async {
+        guard let client else { return }
+        do {
+            _ = try await client.admitKnock(knockId: knock.knockId, roles: roles, sinceJoin: sinceJoin, ttlSecs: nil)
+            knocks.removeAll { $0.knockId == knock.knockId }
+            Self.log.info("admitted knock \(knock.knockId) as \(roleWords(roles), privacy: .public)")
+        } catch {
+            fail(error)
+        }
+    }
+
+    /// Turns someone away.
+    public func turnAway(_ knock: Knock) async {
+        guard let client else { return }
+        do {
+            try await client.denyKnock(knockId: knock.knockId)
+            knocks.removeAll { $0.knockId == knock.knockId }
+        } catch {
+            fail(error)
+        }
+    }
+
+    // MARK: Approval rules
+
+    /// Sets the session's approval rules (owner).
+    public func setApprovalPolicy(_ policy: ApprovalPolicy, session: UInt64) async {
+        guard let client else { return }
+        let previous = approvalPolicy
+        approvalPolicy = policy
+        do {
+            approvalPolicy = try await client.setApprovalPolicy(sessionId: session, policy: policy)
+        } catch {
+            approvalPolicy = previous
+            fail(error)
+        }
+    }
+
+    /// Claims a request ("I'll take this one"), or gives the claim up.
+    public func claim(_ requestId: UInt64, _ claim: Bool = true) async {
+        guard let client else { return }
+        do {
+            let status = try await client.claimApproval(requestId: requestId, claim: claim)
+            approvalStatuses[requestId] = status
+        } catch {
+            fail(error)
+        }
+    }
+
+    /// Why this device cannot approve a request of `risk` here (nil: it can). Denying is never
+    /// held back.
+    public func approvalBlock(requestId: UInt64, risk: Risk) -> String? {
+        guard me != nil else { return nil }
+        if !canApprove { return "Your invite can't answer approvals." }
+        if isOwner { return nil }
+        let policy = approvalPolicy
+        if policy.mode == .ownerOnly { return "Only the owner answers approvals here." }
+        if risk.rank > policy.maxRisk.rank { return "Allowing \(risk.noun) needs the owner here." }
+        if policy.mode == .claim, let claim = approvalStatuses[requestId]?.claimedBy, claim.actor.principal != myPrincipal {
+            return "\(claim.name) claimed this request."
+        }
+        return nil
+    }
+
+    /// "Mira approved · needs one more", or nil when there is nothing to say.
+    public func approvalProgress(requestId: UInt64) -> String? {
+        guard let status = approvalStatuses[requestId] else { return nil }
+        if let claim = status.claimedBy {
+            return claim.actor.principal == myPrincipal ? "You claimed this" : "Claimed by \(claim.name)"
+        }
+        guard status.needed > 1, let first = status.approvals.first else { return nil }
+        let who = first.actor.principal == myPrincipal ? "You" : first.name
+        return "\(who) approved · needs a second person"
+    }
+
+    /// Whether this device already cast the approval a two-person request is holding.
+    public func approvedAlready(requestId: UInt64) -> Bool {
+        approvalStatuses[requestId]?.approvals.contains { $0.actor.principal == myPrincipal } ?? false
+    }
+
     // MARK: Notices
 
     /// Typed into a pane the gate closed: say why, at most every few seconds.
@@ -535,6 +711,15 @@ public final class MultiplayerSession {
 
     static func forbiddenText(what: String?, reason: String) -> String {
         let lower = reason.lowercased()
+        // Approval rules and claims answer in sentences ("only the owner answers approvals in
+        // this session"); missing roles name the role ("needs the driver role; …").
+        if !lower.contains(" role") {
+            let prefix = ["forbidden: ", "conflict: ", "not found: ", "invalid: "].first { reason.hasPrefix($0) }
+            let plain = prefix.map { String(reason.dropFirst($0.count)) } ?? reason
+            if what == "Decide" || what == nil, !plain.isEmpty {
+                return plain.prefix(1).uppercased() + plain.dropFirst() + (plain.hasSuffix(".") ? "" : ".")
+            }
+        }
         let role = ["owner", "driver", "approver", "prompter"].first { lower.contains($0) }
         if let role {
             let article = role == "owner" || role == "approver" ? "an" : "a"
@@ -557,12 +742,16 @@ public final class MultiplayerSession {
     }
 
     /// Seeds owner data for previews.
-    public func seed(grants: [GrantInfo] = [], devices: [DeviceInfo] = [], audit: AuditPage? = nil, invites: [CreatedInvite] = [], leaseRequests: [LeaseRequest] = []) {
+    public func seed(grants: [GrantInfo] = [], devices: [DeviceInfo] = [], audit: AuditPage? = nil, invites: [CreatedInvite] = [], leaseRequests: [LeaseRequest] = [],
+                     knocks: [Knock] = [], approvalPolicy: ApprovalPolicy = .standard, approvalStatuses: [ApprovalStatus] = []) {
         self.grants = grants
         self.devices = devices
         self.auditPage = audit
         self.invites = invites
         self.leaseRequests = leaseRequests
+        self.knocks = knocks
+        self.approvalPolicy = approvalPolicy
+        self.approvalStatuses = Dictionary(approvalStatuses.map { ($0.requestId, $0) }, uniquingKeysWith: { $1 })
     }
 }
 

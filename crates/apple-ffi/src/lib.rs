@@ -35,6 +35,7 @@ mod client;
 mod editor;
 mod extras;
 mod mp;
+mod mp2;
 mod notify;
 mod repo;
 mod ssh_api;
@@ -83,6 +84,10 @@ pub use mp::{
     JoinInfo, Lease, LeaseMode, LeaseOutcome, MultiplayerError, MultiplayerEvent,
     MultiplayerListener, Participant, Presence, PresenceState, RevokeResult, RevokeTarget, Role,
     Scope, inspect_invite,
+};
+pub use mp2::{
+    ApprovalMode, ApprovalPolicy, ApprovalStatus, ApprovalVote, Knock, KnockError, KnockListener,
+    KnockOutcome, KnockResult, Risk, knock_invite, risk_of_tool,
 };
 pub use notify::{
     ApnsEnvironment, PushActionError, PushActionOffer, PushCapKind, PushDecision, PushError,

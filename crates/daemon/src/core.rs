@@ -73,6 +73,12 @@ pub(crate) enum Event {
     Askpass(proto::AskpassPush),
     /// The repository snapshot changed (read it from `ws.repos`).
     Repos,
+    /// A knock arrived or ended (owner devices hear it).
+    Knock(proto::KnockUpdate),
+    /// A session's approval policy changed.
+    ApprovalPolicy(SessionId, proto::ApprovalPolicy),
+    /// An open approval request's votes or claim changed.
+    ApprovalStatus(proto::ApprovalStatus),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -120,6 +126,17 @@ pub(crate) struct PaneEntry {
     task: Mutex<Option<AbortHandle>>,
     /// When the pane's process started, for matching a Codex rollout to it.
     launched_at: SystemTime,
+}
+
+impl PaneEntry {
+    /// Whether the pane existed at `at` (its process started no later).
+    pub fn existed_at(&self, at: proto::UnixMillis) -> bool {
+        let started = self
+            .launched_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        started <= at.0
+    }
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -396,6 +413,27 @@ impl Core {
                 .is_some_and(|rt| rt.knows_request(id))
                 .then_some(pane)
         })
+    }
+
+    /// The pane of open request `id` and what an approval policy needs to know about it
+    /// (with `option`, whether that option allows the call).
+    pub fn request_facts(
+        &self,
+        id: proto::RequestId,
+        option: Option<proto::OptionId>,
+    ) -> Option<(PaneId, crate::agent::RequestFacts)> {
+        self.pane_entries().into_iter().find_map(|(pane, entry)| {
+            lock(&entry.agent)
+                .as_ref()
+                .and_then(|rt| rt.request_facts(id, option))
+                .map(|facts| (pane, facts))
+        })
+    }
+
+    /// The hook request a pane's agent is blocked on now.
+    pub fn open_request(&self, pane: PaneId) -> Option<proto::RequestId> {
+        let entry = self.pane(pane)?;
+        lock(&entry.agent).as_ref()?.open_request()
     }
 
     /// Whether an agent runs (or ran) in the pane.
@@ -1010,6 +1048,19 @@ impl Core {
                 agents::Notify::Failed => AgentNotice::Failed { message },
             };
             crate::ws::agent_notice(self, id, kind, notice);
+        }
+        // Votes and claims belong to one request; drop them once the agent moved on, and
+        // tell clients the risk of a new one so they can say who may answer it.
+        let open = self.open_request(id);
+        self.mp.approvals.forget_pane_except(id, open);
+        if let Some(request) = open
+            && let Some((_, facts)) = self.request_facts(request, None)
+        {
+            let policy = self.mp.policy_of_pane(self, id);
+            let risk = proto::Risk::of_tool(facts.tool.as_deref());
+            if let Some(status) = self.mp.approvals.open(policy, id, request, risk) {
+                self.emit(Event::ApprovalStatus(status));
+            }
         }
         if !blocked {
             crate::ws::agent_unblocked(self, id);

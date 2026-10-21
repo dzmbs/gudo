@@ -1003,6 +1003,65 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 - `proto` goldens for every new message and variant; invite text round trip.
 
 
+Clients and daemons find each other through `Caps::KNOCK`, `Caps::APPROVAL_POLICY` and
+`DaemonFeatures::MP2`. Code: `crates/daemon/src/mp/approvals.rs`, `mp/mod.rs` (knocks, terms),
+`pane.rs` (views), `crates/client-core/src/knock.rs`, `crates/apple-ffi/src/mp2.rs`. Tests:
+`cargo test -p daemon --test it multiplayer_mp2`, `proto --test golden_mp2`, the decision
+table in `mp/approvals.rs`, `ghostty-vt --test it forget`.
+
+**Invite terms.** `MpRequest::RegisterInvite{chain, terms}` records `InviteTerms{knock,
+history}` with the grant in `grants.json`. They are not in the signed grant: the daemon looks
+them up for every link of a presented chain and applies the strictest, so a delegated child
+can add terms but never drop its parent's, and a guest cannot strip them from a link. A copy
+rides after the invite's bytes (`Invite::to_string_with_terms`, marker `0xE9`; old parsers
+ignore it) only so the join card can say "asks first" and "earlier output hidden". `un invite
+--knock --history since-join`.
+
+**Knock to join.** A chain whose terms say `knock` does not join. With `Caps::KNOCK` the
+connection waits in a lobby: no `Welcome`, nothing visible; it hears
+`ServerCtl::KnockAnswer(Waiting{knock_id})` and may only `Ping`, `SetName` and `Bye` (it pings
+every 10 s; 45 s of silence ends it). Without the cap the grant is refused as invalid, so old
+apps never get in. Knocks bind and use up nothing; at most 8 wait per invite; the same device
+knocking again replaces its knock. Owner devices with the cap get `ServerCtl::Knock(Added |
+Gone)` (and every pending knock right after `Joined`). `MpRequest::AnswerKnock{knock_id,
+admit}` (owner, daemon scope): `Admit{roles, history, expires}` mints a new root grant signed
+by the daemon key, on the invite's scope, bound to the knocking device, single use, expiring
+`KnockAnswer::Admitted(chain)` and reconnects with it (`knock::knock` returns the invite to
+join with). `None` sends `Denied`. Revoking or expiring the knock invite turns its waiting
+knockers away. Audited: `Knock`, `KnockAnswered` (admitted as …, turned away, stopped
+waiting). `un knocks [--watch]`, `un admit N --role driver`, `un deny N`, `un join` knocks.
+
+(`MpRequest::SetApprovalPolicy`, `un policy --mode two-person --max-risk edits`), everyone in
+the session hears `ServerCtl::ApprovalPolicy` on attach and on change. Enforced where
+decisions are signed, before the agent is answered: `Decide`, push actions and on-screen
+dialog answers (`AnswerBlocked`).
+
+| Mode | Rule |
+|---|---|
+| `AnyApprover` (default) | first valid decision wins |
+| `OwnerOnly` | only paired owner devices decide |
+| `TwoPerson` | allowing a `Risk::Any` call needs two different principals; the first approval is held (audited with its signature, "1 of 2"), one "no" ends it |
+| `Claim` | `MpRequest::Claim{request_id}` reserves a request: only the claimer (or an owner) answers it; claiming withdraws its attention item (notifications) |
+
+`max_risk` caps what non-owners may allow (`Risk::of_tool`: reads, edits, anything else);
+denying is never capped. On-screen answers carry no request id or tool, so non-owners may use
+them only under `AnyApprover`/`Claim` without a risk cap. `ServerCtl::ApprovalStatus` (risk,
+mode, held approvals, claim) goes to clients in scope when a request opens and on every vote or
+claim. Refusals name the rule and are audited as `Denied`; claims and policy changes as
+`Claim` and `Policy`.
+
+that existed when its device first redeemed the grant, only what was written afterwards: the
+daemon keeps a *view* per guest principal and pane, a copy of the terminal made from the
+snapshot's READY section with all history erased (`Terminal::forget_history`, both screens),
+fed the same output and resizes under the pane's lock. Its snapshots, history pages, search,
+links and command list (commands that started later, rows shifted) are served instead of the
+pane's; a resume point before the view's start falls back to a snapshot, so the ring never
+replays earlier bytes. The screen at the moment of joining stays visible: it is the live
+session they join. Views open at join, or on first use after a daemon restart (which only
+hides more), and are dropped once the principal's access ends. Panes created later are shown
+whole. Not covered: inline images anchored in earlier rows and agent turn transcripts.
+
+
 `proto::artifact` (wire), `crates/drawing` (model shared with client-core and `un`: packed
 ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/src/art/`
 (store, send, blob streams), `crates/daemon/src/anchor.rs` (row anchors),

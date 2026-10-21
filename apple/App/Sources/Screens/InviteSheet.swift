@@ -78,6 +78,9 @@ private struct ShareRoot: View {
     var body: some View {
         Form {
             header.chromeRows()
+            if session.isOwner, !session.knocks.isEmpty {
+                waiting.chromeRows()
+            }
             people.chromeRows()
             if session.isOwner {
                 if let created {
@@ -92,6 +95,8 @@ private struct ShareRoot: View {
                 yourAccess.chromeRows()
             }
             if session.isOwner {
+                ApprovalRulesSection(session: session, sessionId: sessionId, supported: supportsMP2)
+                    .chromeRows()
                 Section {
                     NavigationLink(value: ShareRoute.grants) {
                         Label { rowText("Access & Grants", "Links, devices, revoke") } icon: { Image(systemName: "key") }
@@ -116,6 +121,29 @@ private struct ShareRoot: View {
             }
         } message: { person in
             Text("\(person.name) is disconnected at once and their link stops working. Anything they already started keeps running.")
+        }
+    }
+
+    /// The host speaks MP2: knock links, scrollback since joining, approval rules.
+    private var supportsMP2: Bool {
+        LaunchOptions.mock || workspace.daemon?.daemonInfo?.multiplayer2 == true
+    }
+
+    private var sessionId: UInt64? {
+        workspace.daemon?.layout.sessionId ?? (LaunchOptions.mock ? 1 : nil)
+    }
+
+    // MARK: Knocks
+
+    private var waiting: some View {
+        Section {
+            ForEach(session.knocks, id: \.knockId) { knock in
+                KnockRow(knock: knock, session: session)
+            }
+        } header: {
+            SectionTitle("Asking to Join", count: session.knocks.count)
+        } footer: {
+            Text("They only see the session once you let them in. Earlier output stays hidden unless you choose otherwise.")
         }
     }
 
@@ -182,6 +210,22 @@ private struct ShareRoot: View {
                 ForEach(InviteDraft.Uses.allCases) { Text($0.title).tag($0) }
             }
             Toggle("Can Invite Others", isOn: $draft.delegate)
+            if supportsMP2 {
+                Toggle(isOn: $draft.knock) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Ask Me First")
+                        Text("Whoever opens the link knocks; you let them in.")
+                            .font(DS.Font.rowSubtitle)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityIdentifier("invite-knock")
+                Picker("Earlier Output", selection: $draft.sinceJoin) {
+                    Text("Hidden").tag(true)
+                    Text("Visible").tag(false)
+                }
+                .accessibilityIdentifier("invite-history")
+            }
             Button(action: create) {
                 HStack {
                     Spacer()
@@ -208,8 +252,20 @@ private struct ShareRoot: View {
         } header: {
             SectionTitle("Invite")
         } footer: {
-            Text("Signed by this device and end-to-end encrypted. Only one person drives a pane at a time; everything is recorded in the audit log.")
+            Text(composerFooter)
         }
+        .onAppear {
+            // Older helpers take neither knock links nor history limits.
+            if !supportsMP2 {
+                draft.knock = false
+                draft.sinceJoin = false
+            }
+        }
+    }
+
+    private var composerFooter: String {
+        let history = draft.sinceJoin ? "They see output from when they join, not what came before. " : ""
+        return history + "Signed by this device and end-to-end encrypted. Only one person drives a pane at a time; everything is recorded in the audit log."
     }
 
     private func create() {
@@ -246,6 +302,9 @@ private struct ShareRoot: View {
                 LabeledContent("Covers", value: me.scope.title)
                 if let expires = RelativeTime.string(ms: me.expiresMs) {
                     LabeledContent("Expires", value: expires)
+                }
+                if session.canApprove {
+                    LabeledContent("Approvals", value: session.approvalPolicy.words)
                 }
                 ForEach(Role.invitable.filter { me.roles.contains($0) }, id: \.self) { role in
                     Label(role.summary, systemImage: role.systemImage)

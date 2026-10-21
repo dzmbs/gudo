@@ -1,4 +1,5 @@
 import DesignSystem
+import HostKit
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -25,8 +26,9 @@ struct InboxView: View {
 
     var body: some View {
         let items = feed.items
+        let knocks = feed.knocks
         Group {
-            if items.isEmpty {
+            if items.isEmpty && knocks.isEmpty {
                 EmptyState(
                     "Nothing Needs You", systemImage: "tray",
                     message: "Agents on your hosts report here when they need approval, ask a question, or finish."
@@ -36,7 +38,7 @@ struct InboxView: View {
                         .disabled(feed.launchHosts.isEmpty && !LaunchOptions.mock)
                 }
             } else {
-                list(items)
+                list(items, knocks: knocks)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { InboxUsageStrip() }
@@ -103,12 +105,22 @@ struct InboxView: View {
         return "\(total) new · " + unseen.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
     }
 
-    private func list(_ items: [AgentItem]) -> some View {
+    private func list(_ items: [AgentItem], knocks: [KnockItem]) -> some View {
         let needsYou = items.filter(\.state.needsYou).sorted { $0.since > $1.since }
         let running = items.filter { $0.state == .working }.sorted { $0.since > $1.since }
         let finished = items.filter { $0.state == .done || $0.state == .idle }.sorted { $0.since > $1.since }
         // list on the base, hairlines inset to the text column.
         return List {
+            if !knocks.isEmpty {
+                Section {
+                    ForEach(knocks) { item in
+                        KnockRow(knock: item.knock, session: item.session, hostName: item.hostName)
+                            .chromeRows()
+                    }
+                } header: {
+                    SectionTitle("Asking to join", count: knocks.count)
+                }
+            }
             section("Needs you", needsYou)
             section("Running", running)
             section("Finished", finished)
@@ -117,6 +129,7 @@ struct InboxView: View {
         .scrollContentBackground(.hidden)
         .background(DS.Palette.base)
         .animation(DS.Motion.snappy, value: items)
+        .animation(DS.Motion.snappy, value: knocks.map(\.id))
         .accessibilityIdentifier("inbox-list")
     }
 
@@ -127,6 +140,8 @@ struct InboxView: View {
                 ForEach(items) { item in
                     InboxRow(
                         item: item,
+                        approval: feed.approval(item.id),
+                        claim: { feed.claim(item.id, $0) },
                         open: { open(item) },
                         approve: {
                             approvedCount += 1
@@ -195,6 +210,9 @@ struct InboxView: View {
 /// One agent: status glyph, agent and where it runs, age, prompt, then what it needs.
 private struct InboxRow: View {
     let item: AgentItem
+    /// The session's approval rules as they apply here (multiplayer).
+    let approval: ApprovalContext?
+    let claim: (Bool) -> Void
     let open: () -> Void
     let approve: () -> Void
     let deny: () -> Void
@@ -312,13 +330,25 @@ private struct InboxRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                if let note = approval?.block ?? approval?.progress {
+                    Label(note, systemImage: approval?.block != nil ? "lock" : "person.2")
+                        .font(DS.Font.rowSubtitle)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("inbox-approval-note-\(item.id)")
+                }
                 HStack(spacing: DS.Space.s) {
                     Spacer()
+                    if let approval, approval.claimMode, approval.block == nil || approval.claimedByMe {
+                        Button(approval.claimedByMe ? "Release" : "Claim") { claim(!approval.claimedByMe) }
+                            .buttonStyle(.glass)
+                            .accessibilityIdentifier("inbox-claim-\(item.id)")
+                    }
                     Button("Deny", action: deny)
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("inbox-deny-\(item.id)")
-                    Button("Approve", action: approve)
+                    Button(approval?.approvedAlready == true ? "Approved" : "Approve", action: approve)
                         .buttonStyle(.primaryGlass)
+                        .disabled(approval?.block != nil || approval?.approvedAlready == true)
                         .accessibilityIdentifier("inbox-approve-\(item.id)")
                 }
                 #if os(macOS)

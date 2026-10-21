@@ -49,6 +49,7 @@ struct SettingsView: View {
                 NotificationsSection().chromeRows()
                 AgentsSettingsSection().chromeRows()
                 GitSettingsSection().chromeRows()
+                NetworkSettingsSection().chromeRows()
                 AboutSection().chromeRows()
             }
             .chromeGrouped()
@@ -73,6 +74,7 @@ struct SettingsView: View {
         case .notifications: NotificationsSection()
         case .agents: AgentsSettingsSection()
         case .git: GitSettingsSection()
+        case .network: NetworkSettingsSection()
         case .about: AboutSection()
         }
     }
@@ -89,7 +91,7 @@ private enum SettingsPage: Hashable {
 #if os(macOS)
 /// The Mac Settings window's panes, in its sidebar.
 private enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case appearance, terminal, keyboard, notifications, agents, git, about
+    case appearance, terminal, keyboard, notifications, agents, git, network, about
     var id: String { rawValue }
 
     var title: String {
@@ -100,6 +102,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .notifications: "Notifications"
         case .agents: "Agents"
         case .git: "Git"
+        case .network: "Network"
         case .about: "About"
         }
     }
@@ -112,6 +115,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .notifications: "bell.badge"
         case .agents: "sparkle"
         case .git: "arrow.triangle.branch"
+        case .network: "network"
         case .about: "info.circle"
         }
     }

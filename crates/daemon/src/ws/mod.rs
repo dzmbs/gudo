@@ -417,7 +417,7 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
     let command = mark.command.clone().unwrap_or_else(|| "command".into());
     let last_line = core
         .pane(mark.pane_id)
-        .and_then(|entry| entry.pane.command_output(Some(mark.command_id)).ok())
+        .and_then(|entry| entry.pane.command_output(None, Some(mark.command_id)).ok())
         .and_then(|output| last_output_line(&output.text));
     let body = match last_line {
         Some(line) => format!("after {} · {line}", run_time(duration)),

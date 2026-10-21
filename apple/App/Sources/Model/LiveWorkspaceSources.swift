@@ -262,6 +262,39 @@ final class LiveAgentFeed: AgentFeed {
     func approve(_ id: AgentItem.ID) { decide(id, allow: true) }
     func deny(_ id: AgentItem.ID) { decide(id, allow: false) }
 
+    var knocks: [KnockItem] {
+        daemons.flatMap { id, name, daemon in
+            let session = daemon.multiplayer
+            guard session.isOwner else { return [KnockItem]() }
+            return session.knocks.map { KnockItem(hostId: id, hostName: name, knock: $0, session: session) }
+        }
+    }
+
+    func approval(_ id: AgentItem.ID) -> ApprovalContext? {
+        guard let (daemon, pane) = try? target(id),
+              let agent = daemon.meta[PaneId(pane)]?.agent,
+              case .blocked(let request, _, _) = agent.state
+        else { return nil }
+        let session = daemon.multiplayer
+        guard session.me != nil else { return nil }
+        // The host classifies each request's risk (from the tool) when the agent blocks.
+        let risk = session.approvalStatuses[request]?.risk ?? .any
+        let mine = session.approvalStatuses[request]?.claimedBy?.actor.principal == session.myPrincipal
+        return ApprovalContext(
+            block: session.approvalBlock(requestId: request, risk: risk),
+            progress: session.approvalProgress(requestId: request),
+            claimMode: session.approvalPolicy.mode == .claim && session.canApprove,
+            claimedByMe: mine,
+            approvedAlready: session.approvedAlready(requestId: request))
+    }
+
+    func claim(_ id: AgentItem.ID, _ claim: Bool) {
+        guard let (daemon, pane) = try? target(id),
+              case .blocked(let request, _, _)? = daemon.meta[PaneId(pane)]?.agent?.state
+        else { return }
+        Task { await daemon.multiplayer.claim(request, claim) }
+    }
+
     func reply(_ id: AgentItem.ID, text: String) async throws {
         let (daemon, pane) = try target(id)
         let api = try daemon.workspace.client()

@@ -324,6 +324,18 @@ impl Terminal {
         )
     }
 
+    /// Erases all scrollback history, on both screens, keeping what is on them.
+    ///
+    /// Afterwards the byte limit is zero, so no new history is kept either; set a limit
+    /// with [`set_scrollback_max_bytes`](Self::set_scrollback_max_bytes) to grow it again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OutOfMemory`] if pruning needs to allocate and cannot.
+    pub fn forget_history(&mut self) -> Result<(), Error> {
+        self.set_scrollback_max_bytes(Some(0))
+    }
+
     /// Caps scrollback at roughly `limit` lines, or removes the line cap with `None`.
     ///
     /// The cap is approximate: whole pages are pruned, so somewhat more lines survive.

@@ -330,6 +330,39 @@ impl AgentRuntime {
         })
     }
 
+    /// What an approval policy needs to know about open request `id`: the tool asking, and
+    /// for `option`, whether it allows the call. `None` unless the agent is blocked on `id`.
+    pub fn request_facts(&self, id: RequestId, option: Option<OptionId>) -> Option<RequestFacts> {
+        let request = self.requests.iter().find(|(w, _)| *w == id)?.1.clone();
+        let blocked = self
+            .arbiter
+            .status()
+            .blocked()
+            .filter(|b| b.request_id == request)?;
+        let chosen = option.and_then(|o| blocked.blocker.options.get(o.0 as usize));
+        Some(RequestFacts {
+            tool: blocked.blocker.tool.clone(),
+            allows: chosen.map(|o| o.id != ApprovalChoice::Deny),
+            option: chosen.map(|o| o.label.clone()),
+            summary: blocked
+                .blocker
+                .summary
+                .clone()
+                .or(blocked.blocker.tool.clone())
+                .unwrap_or_default(),
+            request,
+        })
+    }
+
+    /// The wire id of the request the agent is blocked on now, if it asked through a hook.
+    pub fn open_request(&self) -> Option<RequestId> {
+        let blocked = self.arbiter.status().blocked()?;
+        self.requests
+            .iter()
+            .find(|(_, r)| *r == blocked.request_id)
+            .map(|(w, _)| *w)
+    }
+
     pub fn knows_request(&self, id: RequestId) -> bool {
         self.requests.iter().any(|(w, _)| *w == id)
     }
@@ -400,6 +433,21 @@ pub(crate) struct BlockedDetail {
     pub summary: String,
     /// The hook's options, in order: `(label, choice)`.
     pub options: Vec<(String, ApprovalChoice)>,
+}
+
+/// An open approval request, as the approval policy sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequestFacts {
+    /// The tool asking (`Bash`, `Edit`).
+    pub tool: Option<String>,
+    /// Whether the option asked about allows the call (`None` without an option).
+    pub allows: Option<bool>,
+    /// That option's label.
+    pub option: Option<String>,
+    /// What the agent wants to do.
+    pub summary: String,
+    /// The arbiter's id for the call.
+    pub request: agents::RequestId,
 }
 
 /// An accepted decision, with what the audit log records about it.
