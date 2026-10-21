@@ -3,6 +3,7 @@ import Foundation
 import HostKit
 import PaneLayout
 import UnnamedCore
+import Network
 import XCTest
 @testable import App
 
@@ -449,7 +450,10 @@ final class WorkspaceScreenModelTests: XCTestCase {
 
     // MARK: Ports
 
+    /// The fallback (no proxy): a forward on the same port number, else any.
     func testPortsSortHTTPFirstAndForwardOnTheSamePort() async throws {
+        DevServerRouting.shared.isEnabled = false
+        defer { DevServerRouting.shared.isEnabled = true }
         let client = FakeWorkspaceClient()
         client.state.withLock { state in
             state.ports = [
@@ -472,6 +476,50 @@ final class WorkspaceScreenModelTests: XCTestCase {
         let busy = DetectedPort(port: 8000, process: "python3", url: nil, isHTTP: true, loopbackOnly: false, pane: nil)
         let fallback = try await ports.open(busy)
         XCTAssertEqual(fallback.port, 50_000, "a port taken here falls back to any free one")
+    }
+
+    /// S-BR1: a dev server opens at the URL it printed, in the host's own data store, and its
+    /// connections reach the host's forward of that port.
+    func testPortsOpenAtThePrintedURLThroughTheHost() async throws {
+        let client = FakeWorkspaceClient()
+        let ports = LivePortSource(app: .shared)
+        let context = try fakeContext(client)
+        ports.contextOverride = { context }
+        XCTAssertEqual(ports.hostId, "h1")
+
+        let named = DetectedPort(port: 48_325, process: "node", url: "http://app.localhost:48325/app?x=1", isHTTP: true, loopbackOnly: true, pane: nil)
+        let url = try await ports.open(named)
+        XCTAssertEqual(url.absoluteString, "http://app.localhost:48325/app?x=1", "the printed name and port are kept")
+        let store = try XCTUnwrap(DevServerRouting.shared.store(forHost: "h1"))
+        XCTAssertEqual(store.proxyConfigurations.count, 1, "the host's store goes through its proxy")
+        XCTAssertNil(DevServerRouting.shared.store(forHost: "other"), "other hosts have their own")
+        XCTAssertFalse(client.calls.contains { $0.hasPrefix("forward") }, "forwards are made when the page connects")
+
+        let plain = DetectedPort(port: 48_326, process: "python3", url: nil, isHTTP: true, loopbackOnly: true, pane: nil)
+        let localURL = try await ports.open(plain)
+        XCTAssertEqual(localURL.absoluteString, "http://localhost:48326/", "the same port here, served by the app")
+        // A connection to it asks the host for a forward of 48326.
+        let connection = NWConnection(host: "127.0.0.1", port: 48_326, using: .tcp)
+        connection.start(queue: .global())
+        connection.send(content: Data("GET / HTTP/1.1\r\nHost: localhost:48326\r\n\r\n".utf8), completion: .idempotent)
+        defer { connection.cancel() }
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, !client.forwards().contains(where: { if case .tcp(48_326) = $0.target { true } else { false } }) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(client.forwards().contains { $0.localPort >= 50_000 && $0.target == .tcp(port: 48_326) }, "\(client.forwards())")
+    }
+
+    func testDevServerPageURLs() {
+        func url(_ port: UInt16, _ printed: String?) -> String {
+            DevServerRouting.pageURL(for: DetectedPort(port: port, process: "", url: printed, isHTTP: true, loopbackOnly: true, pane: nil)).absoluteString
+        }
+        XCTAssertEqual(url(3000, nil), "http://localhost:3000/")
+        XCTAssertEqual(url(3000, "http://127.0.0.1:3000/a"), "http://127.0.0.1:3000/a")
+        XCTAssertEqual(url(5173, "https://app.localhost:5173/"), "https://app.localhost:5173/")
+        XCTAssertEqual(url(3000, "http://192.168.1.4:3000/x?y=1"), "http://localhost:3000/x?y=1", "a LAN address: the host's loopback")
+        XCTAssertEqual(DevServerRouting.storeIdentifier("h1"), DevServerRouting.storeIdentifier("h1"), "the same store across launches")
+        XCTAssertNotEqual(DevServerRouting.storeIdentifier("h1"), DevServerRouting.storeIdentifier("h2"))
     }
 
     func testNewHTTPPortIsOffered() throws {

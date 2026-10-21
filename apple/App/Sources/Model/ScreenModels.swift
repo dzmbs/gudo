@@ -573,10 +573,13 @@ nonisolated struct DetectedPort: Identifiable, Hashable, Sendable {
 protocol PortSource: AnyObject, Observable {
     var ports: [DetectedPort] { get }
     var hostName: String { get }
+    /// The host whose ports these are (its web data store shows them; nil: none).
+    var hostId: String? { get }
     /// A port that appeared since the user last looked (the "open it?" offer).
     var offer: DetectedPort? { get }
     func dismissOffer()
-    /// A local URL for the port: a forward to the host's `localhost:<port>`, on the same port
-    /// number when it is free here so the app's own absolute URLs keep working.
+    /// The URL to open for the port: the one the server printed, routed to the host
+    /// (`DevServerRouting`), else a forward to the host's `localhost:<port>` on the same port
+    /// number when it is free here, else on any.
     func open(_ port: DetectedPort) async throws -> URL
 }

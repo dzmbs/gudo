@@ -1,4 +1,5 @@
 import DesignSystem
+import HostKit
 import SwiftUI
 import WebKit
 
@@ -7,12 +8,34 @@ import WebKit
 /// The page itself stays edge to edge; glass is only on the controls.
 struct BrowserView: View {
     var initialURL: URL
+    /// The host a dev server page comes from (its data store routes to it, S-BR1): named next
+    /// to the address.
+    var routedHost: (id: String, name: String)?
     var onOpenExternally: (URL) -> Void = { _ in }
     /// Shows a leading "Done" / back control (the browser sheet, the ports list).
     var onDone: (() -> Void)?
     var doneTitle = "Done"
 
-    @State private var page = WebPage()
+    @State private var page: WebPage
+    #if DEBUG
+    /// UI tests: connections sent to `routedHost` (proof the page went through the host).
+    @State private var routedCount = 0
+    #endif
+
+    /// `dataStore`: a host's own store for its dev servers (`DevServerRouting`), else the default.
+    init(
+        initialURL: URL, dataStore: WKWebsiteDataStore? = nil, routedHost: (id: String, name: String)? = nil,
+        onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done"
+    ) {
+        self.initialURL = initialURL
+        self.routedHost = routedHost
+        self.onOpenExternally = onOpenExternally
+        self.onDone = onDone
+        self.doneTitle = doneTitle
+        var configuration = WebPage.Configuration()
+        if let dataStore { configuration.websiteDataStore = dataStore }
+        _page = State(initialValue: WebPage(configuration: configuration))
+    }
     @Environment(\.terminalTheme) private var theme
     @State private var address = ""
     @FocusState private var isEditing: Bool
@@ -55,6 +78,22 @@ struct BrowserView: View {
         .onChange(of: page.url) { _, url in
             if !isEditing { address = url?.absoluteString ?? "" }
         }
+        #if DEBUG
+        .overlay(alignment: .bottomTrailing) {
+            if let routedHost {
+                Color.clear.frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("browser-routed")
+                    .accessibilityValue("\(routedCount)")
+                    .task {
+                        while !Task.isCancelled {
+                            routedCount = DevServerRouting.shared.routedConnections(forHost: routedHost.id)
+                            try? await Task.sleep(for: .milliseconds(300))
+                        }
+                    }
+            }
+        }
+        #endif
     }
 
     // MARK: Bars
@@ -186,6 +225,13 @@ struct BrowserView: View {
                             .font(.callout)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                        if let servingHost {
+                            Text(servingHost)
+                                .font(DS.Font.literalSmall)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .layoutPriority(-1)
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, DS.Space.m)
@@ -193,7 +239,7 @@ struct BrowserView: View {
                     .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Address, \(displayHost)")
+                .accessibilityLabel("Address, \(displayHost)" + (servingHost.map { ", on \($0)" } ?? ""))
             }
         }
         .frame(minHeight: 28)
@@ -206,9 +252,16 @@ struct BrowserView: View {
     private var displayHost: String {
         let url = page.url ?? initialURL
         guard let host = url.host() else { return url.absoluteString }
-        let isLocal = host == "localhost" || host == "127.0.0.1" || host.hasSuffix(".local")
+        let isLocal = host == "localhost" || host == "127.0.0.1" || host.hasSuffix(".local") || host.hasSuffix(".localhost")
         if isLocal, let port = url.port { return "\(host):\(port)" }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    /// The host serving the page, when it is one of its dev servers (`localhost:3000` there).
+    private var servingHost: String? {
+        guard let routedHost, !routedHost.name.isEmpty, let host = (page.url ?? initialURL).host(),
+              DevServerNames.isRouted(host) else { return nil }
+        return routedHost.name
     }
 
     /// A 2 pt accent line that fills while loading and fades when done.
