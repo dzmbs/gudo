@@ -572,59 +572,6 @@ extension PaneDrawing {
     private static nonisolated(unsafe) var sceneKey: UInt8 = 0
 }
 
-/// A drawing dragged out: a promised PNG file, plus PNG data, the `.excalidraw` scene and the
-/// in-app reference on the same pasteboard item.
-nonisolated final class DrawingFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate {
-    private let png: Data
-    private let scene: Data?
-    private let ref: DrawingDragRef
-    private let name: String
-
-    init(png: Data, scene: Data?, ref: DrawingDragRef, name: String) {
-        self.png = png
-        self.scene = scene
-        self.ref = ref
-        self.name = name
-        super.init()
-        fileType = UTType.png.identifier
-        delegate = self
-    }
-
-    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        var types = super.writableTypes(for: pasteboard) + [.png, NSPasteboard.PasteboardType(DrawingDragRef.typeIdentifier)]
-        if scene != nil { types.append(NSPasteboard.PasteboardType(UTType.excalidraw.identifier)) }
-        return types
-    }
-
-    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
-        super.writableTypes(for: pasteboard).contains(type) ? super.writingOptions(forType: type, pasteboard: pasteboard) : []
-    }
-
-    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        switch type.rawValue {
-        case NSPasteboard.PasteboardType.png.rawValue: png
-        case DrawingDragRef.typeIdentifier: try? JSONEncoder().encode(ref)
-        case UTType.excalidraw.identifier: scene
-        default: super.pasteboardPropertyList(forType: type)
-        }
-    }
-
-    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
-        name
-    }
-
-    // The completion-handler form: the compiler crashes emitting the `async` one's thunk
-    // (Swift 6.4).
-    func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping @Sendable ((any Error)?) -> Void) {
-        do {
-            try png.write(to: url, options: .atomic)
-            completionHandler(nil)
-        } catch {
-            completionHandler(error)
-        }
-    }
-}
-
 /// Over a drawing placed in the output: its accessibility element (VoiceOver, UI tests), its
 /// menu on a click, and a drag source (into other apps as a PNG file + data + the scene, into
 /// this app's panes as the drawing itself). Passes everything through while the pane draws.
@@ -665,7 +612,7 @@ final class PlacementMarker: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        .copy
+        DrawingFilePromise.operation
     }
 
     func setIdentifier(_ id: String, label: String) {

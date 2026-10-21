@@ -20,9 +20,14 @@ private struct Vectors: Decodable {
         var name: String
         var sealed: String
     }
+    struct Activity: Decodable {
+        var json: String
+        var sealed: String
+    }
     var device_secret: String
     var payloads: [Payload]
     var rejects: [Reject]
+    var activity: Activity
 
     static func load() throws -> Vectors {
         let url = URL(fileURLWithPath: #filePath)
@@ -272,5 +277,72 @@ private final class FakeClient: NotificationActionClient {
         #expect(approval?.actions[2].options.contains(.foreground) == true)
         #expect(categories["AGENT_BLOCKED"]?.actions.map(\.identifier) == ["OPEN"])
         #expect(categories.keys.sorted() == ["AGENT_APPROVAL", "AGENT_BLOCKED", "AGENT_DONE", "COMMAND_DONE"])
+    }
+}
+
+/// The agents Live Activity's content state (docs/PUSH.md §6): the shared activity vector
+/// opens to its host's row, other hosts' rows are kept and summed, stale and foreign ones are
+/// not.
+@Suite struct AgentsActivityTests {
+    final class Rows: @unchecked Sendable {
+        let value = Mutex<[AgentsBoard.Host]>([])
+    }
+
+    private func reader(_ vectors: Vectors, rows: Rows, paired: Set<String>? = nil) throws -> AgentsActivityReader {
+        let key = try vectors.deviceKey()
+        let daemons = paired ?? [vectors.daemon]
+        return AgentsActivityReader(
+            deviceKey: { key }, pairedDaemons: { daemons },
+            loadRows: { rows.value.withLock { $0 } }, saveRows: { new in rows.value.withLock { $0 = new } })
+    }
+
+    private func row(_ daemon: String, running: UInt32 = 0, blocked: UInt32 = 0, done: UInt32 = 0, at: UInt64) throws -> AgentsBoard.Host {
+        let json = """
+        {"v":1,"daemon":"\(daemon)","host":"box","running":\(running),"blocked":\(blocked),"done":\(done),"headline":"codex is working","at":\(at)}
+        """
+        return AgentsBoard.Host(try JSONDecoder().decode(ActivityState.self, from: Data(json.utf8)))
+    }
+
+    @Test func opensTheVectorAndSumsEveryHost() throws {
+        let vectors = try Vectors.load()
+        let rows = Rows()
+        // When the vector was made (Unix ms 1760000000000) plus a minute.
+        let now = Date(timeIntervalSince1970: 1_760_000_060)
+        let other = try row(String(repeating: "b", count: 64), running: 1, at: 1_759_999_990_000)
+        let stale = try row(String(repeating: "c", count: 64), running: 4, at: 1_759_990_000_000)
+        rows.value.withLock { $0 = [other, stale] }
+        let board = try #require(try reader(vectors, rows: rows).board(for: AgentsActivityState(s: vectors.activity.sealed), now: now))
+        // The vector's host: 2 working, 1 needs you, 3 done; the other host 1 working; the
+        // stale one (over 20 minutes old) is gone.
+        #expect(board.hosts.map(\.host) == ["studio-mac", "box"])
+        #expect(board.running == 3)
+        #expect(board.blocked == 1)
+        #expect(board.done == 3)
+        #expect(board.phase == .blocked)
+        #expect(board.headline.hasPrefix("claude: approve"))
+        #expect(board.summary == "1 needs you · 3 working · 3 done")
+        #expect(rows.value.withLock { $0.count } == 2, "kept for the next push")
+    }
+
+    @Test func aLatePushNeverReplacesANewerRow() throws {
+        let vectors = try Vectors.load()
+        let rows = Rows()
+        let newer = try row(vectors.daemon, at: 1_760_000_050_000)
+        rows.value.withLock { $0 = [newer] }
+        let board = try #require(try reader(vectors, rows: rows).board(
+            for: AgentsActivityState(s: vectors.activity.sealed), now: Date(timeIntervalSince1970: 1_760_000_060)))
+        #expect(board.hosts.isEmpty, "the newer row says nothing runs")
+        #expect(board.summary == "All quiet")
+    }
+
+    @Test func refusesUnpairedHostsMissingKeysAndOtherFormats() throws {
+        let vectors = try Vectors.load()
+        let state = AgentsActivityState(s: vectors.activity.sealed)
+        #expect(try reader(vectors, rows: Rows(), paired: []).board(for: state) == nil)
+        var keyless = try reader(vectors, rows: Rows())
+        keyless.deviceKey = { nil }
+        #expect(keyless.board(for: state) == nil)
+        #expect(try reader(vectors, rows: Rows()).board(for: AgentsActivityState(s: vectors.activity.sealed, v: 2)) == nil)
+        #expect(try reader(vectors, rows: Rows()).board(for: AgentsActivityState(s: vectors.payloads[0].sealed)) == nil, "a notification is no activity")
     }
 }

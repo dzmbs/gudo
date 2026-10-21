@@ -43,6 +43,9 @@ final class Workspace {
     private(set) var grids: [PaneId: GridSize] = [:]
     /// Transient per-pane states drawn over the terminal (Ghostty's surface overlays).
     var notices: [PaneId: PaneNotice] = [:]
+    /// Drawings open in this window's panes: draw mode, or a canvas pane (set by
+    /// `PaneDrawing`; the window's Handoff activity carries the one in view).
+    var drawingFocus: [PaneId: HandoffPayload.Drawing] = [:]
     /// What runs in each pane (program and directory), refreshed about once a second.
     private(set) var foregrounds: [PaneId: PaneForeground] = [:]
     /// Until when grid changes come from the software keyboard rather than the user.

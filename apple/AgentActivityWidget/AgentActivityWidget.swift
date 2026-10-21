@@ -10,6 +10,7 @@ import WidgetKit
 struct AgentActivityBundle: WidgetBundle {
     var body: some Widget {
         AgentRunActivity()
+        AgentsActivity()
     }
 }
 
@@ -123,6 +124,96 @@ private struct LockScreenView: View {
                 }
             }
             .font(.caption2)
+        }
+        .foregroundStyle(Look.foreground)
+        .padding(14)
+    }
+}
+
+/// The agents Live Activity the daemons push (docs/PUSH.md §6): all hosts in one, each host's
+/// row sealed to this device and opened here with the shared sealing key. A state that does
+/// not open (a build without the push entitlement, an unpaired host) shows a neutral line.
+struct AgentsActivity: Widget {
+    private static let reader = AgentsActivityReader.shared()
+    private static let scheme = Bundle.main.object(forInfoDictionaryKey: "BrandURLScheme") as? String ?? "unnamed"
+
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: AgentsActivityAttributes.self) { context in
+            AgentsLockScreen(board: Self.reader.board(for: context.state))
+                .activityBackgroundTint(Look.background)
+                .activitySystemActionForegroundColor(Look.foreground)
+                .widgetURL(URL(string: "\(Self.scheme)://inbox"))
+        } dynamicIsland: { context in
+            let board = Self.reader.board(for: context.state)
+            let phase = board?.phase ?? .working
+            return DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Label("Agents", systemImage: "sparkle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Look.foreground)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    PhaseBadge(phase: phase)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(board?.headline ?? "Your agents are running.")
+                            .font(.system(.callout, design: .monospaced))
+                            .lineLimit(2)
+                            .foregroundStyle(Look.foreground)
+                        Text(board?.summary ?? "")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } compactLeading: {
+                Image(systemName: phase.systemImage)
+                    .foregroundStyle(Look.color(phase))
+            } compactTrailing: {
+                Text(board.map { "\($0.blocked > 0 ? $0.blocked : $0.running > 0 ? $0.running : $0.done)" } ?? "")
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Look.color(phase))
+            } minimal: {
+                Image(systemName: phase.systemImage)
+                    .foregroundStyle(Look.color(phase))
+            }
+            .keylineTint(Look.color(phase))
+        }
+    }
+}
+
+private struct AgentsLockScreen: View {
+    let board: AgentsBoard?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkle")
+                Text("Agents").fontWeight(.semibold)
+                Spacer()
+                if let board { PhaseBadge(phase: board.phase) }
+            }
+            .font(.caption)
+            if let board {
+                Text(board.headline)
+                    .font(.system(.callout, design: .monospaced))
+                    .lineLimit(2)
+                ForEach(board.hosts.prefix(3), id: \.daemon) { host in
+                    HStack {
+                        Text(host.host).lineLimit(1)
+                        Spacer()
+                        Text(host.board.summary)
+                            .foregroundStyle(Look.color(host.board.phase))
+                    }
+                    .font(.caption2)
+                }
+            } else {
+                Text("Your agents are running.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
         .foregroundStyle(Look.foreground)
         .padding(14)

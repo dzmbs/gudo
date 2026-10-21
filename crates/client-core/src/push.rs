@@ -32,8 +32,9 @@ use std::time::Duration;
 
 use iroh::endpoint::Connection;
 use proto::{
-    Caps, ClientCtl, Decided, Hello, LinkClass, PushActionRequest, PushRegistration, PushStatus,
-    ServerCtl, SignedGrant, Ticket, WorkspaceRequest, WorkspaceResponse, WsError,
+    Caps, ClientCtl, Decided, Hello, LinkClass, PushActionRequest, PushActivityToken,
+    PushRegistration, PushStatus, ServerCtl, SignedGrant, Ticket, WorkspaceRequest,
+    WorkspaceResponse, WsError,
 };
 
 pub use push::{ActionOffer, Decision, Kind, Notification, PushError, x25519_keypair};
@@ -68,6 +69,22 @@ impl Client {
     /// [`WsError::Disconnected`].
     pub async fn push_status(&self) -> Result<PushStatus, WsError> {
         status(self.workspace(WorkspaceRequest::PushStatus).await?)
+    }
+
+    /// Hands the daemon the relay capability of this device's running agents Live Activity
+    /// (its ActivityKit update token), or `None` once it ended. The daemon then sends
+    /// `update` / `end` pushes to it instead of a push-to-start. Needs a push registration
+    /// and a daemon offering [`proto::DaemonFeatures::LIVE_ACTIVITY`].
+    ///
+    /// # Errors
+    ///
+    /// [`WsError::NotFound`] without a push registration, [`WsError::Invalid`] for an
+    /// oversized capability, [`WsError::Disconnected`].
+    pub async fn push_activity(&self, cap: Option<String>) -> Result<PushStatus, WsError> {
+        status(
+            self.workspace(WorkspaceRequest::PushActivity(PushActivityToken { cap }))
+                .await?,
+        )
     }
 }
 

@@ -27,12 +27,23 @@ struct WindowRequest: Codable, Hashable {
 }
 
 /// The Handoff and drag-out activity of a window (`NSUserActivity`): which host, tab and pane it
-/// shows. Another device continues it on the same host if it has that host (matched by the
-/// daemon's id or the SSH address, never by this device's host ids); this device (a tab dragged
-/// out into a new window) uses the host id.
+/// shows, and the drawing open there (draw mode, or a focused canvas pane). Another device
+/// continues it on the same host if it has that host (matched by the daemon's id or the SSH
+/// address, never by this device's host ids), with the drawing open again; this device (a tab
+/// dragged out into a new window) uses the host id.
 struct HandoffPayload: Codable, Equatable {
     enum Kind: String, Codable {
         case daemon, ssh, local
+    }
+
+    /// A drawing open in the window: a daemon artifact, the same on every device of the host.
+    struct Drawing: Codable, Equatable {
+        /// The Excalidraw scene.
+        var artifact: UInt64
+        /// The placement being edited in draw mode (nil: a new drawing, not placed yet).
+        var placement: UInt64?
+        /// A canvas pane (focused), rather than draw mode over a terminal.
+        var canvas: Bool
     }
 
     var kind: Kind
@@ -49,6 +60,8 @@ struct HandoffPayload: Codable, Equatable {
     var origin: String
     /// Where it was made ("This iPad"), for messages.
     var device: String
+    /// The drawing open in `pane` (absent in payloads from builds before drawing Handoff).
+    var drawing: Drawing?
 
     static let activityType = (Bundle.main.bundleIdentifier ?? "dev.unnamed.app") + ".terminal"
     static let userInfoKey = "payload"
@@ -67,17 +80,31 @@ struct HandoffPayload: Codable, Equatable {
     static func current(in window: WindowModel) -> HandoffPayload? {
         guard window.destination == .terminal, let workspace = window.workspace,
               let tab = workspace.session.activeTab else { return nil }
-        let pane = tab.focused.rawValue
+        var pane = tab.focused.rawValue
         guard let hostId = workspace.hostId else {
             return HandoffPayload(
                 kind: .local, hostId: nil, hostName: WindowModel.deviceName, tab: tab.id.rawValue, pane: pane,
                 origin: installation, device: WindowModel.deviceName)
         }
         let record = window.app.hosts.record(hostId)
+        let drawing = openDrawing(focus: workspace.drawingFocus, tabPanes: tab.root.panes, focused: tab.focused)
+        if let drawing { pane = drawing.pane.rawValue }
         return HandoffPayload(
             kind: record?.kind == .ssh ? .ssh : .daemon, hostId: hostId, hostName: record?.name ?? hostId,
             daemonId: record?.daemonId, ssh: record?.ssh?.display, tab: tab.id.rawValue, pane: pane,
-            origin: installation, device: WindowModel.deviceName)
+            origin: installation, device: WindowModel.deviceName, drawing: drawing?.drawing)
+    }
+
+    /// The drawing a tab shows: draw mode on any of its panes (one pane draws at a time), else
+    /// the focused pane's canvas.
+    static func openDrawing(
+        focus: [PaneId: Drawing], tabPanes: [PaneId], focused: PaneId
+    ) -> (pane: PaneId, drawing: Drawing)? {
+        if let pane = tabPanes.first(where: { focus[$0].map { !$0.canvas } ?? false }), let drawing = focus[pane] {
+            return (pane, drawing)
+        }
+        if let drawing = focus[focused], drawing.canvas { return (focused, drawing) }
+        return nil
     }
 
     /// Whether another device can continue it: this device's own shell lives here only.
@@ -94,7 +121,7 @@ struct HandoffPayload: Codable, Equatable {
 
     init(
         kind: Kind, hostId: String?, hostName: String, daemonId: String? = nil, ssh: String? = nil,
-        tab: UInt64?, pane: UInt64?, origin: String, device: String
+        tab: UInt64?, pane: UInt64?, origin: String, device: String, drawing: Drawing? = nil
     ) {
         self.kind = kind
         self.hostId = hostId
@@ -105,6 +132,7 @@ struct HandoffPayload: Codable, Equatable {
         self.pane = pane
         self.origin = origin
         self.device = device
+        self.drawing = drawing
     }
 
     init?(userInfo: [AnyHashable: Any]?) {

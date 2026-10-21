@@ -15,10 +15,31 @@ import UIKit
 enum ExternalDisplay {
     /// The scene configuration for an external display's non-interactive role, nil for others.
     static func configuration(for session: UISceneSession) -> UISceneConfiguration? {
-        guard session.role == .windowExternalDisplayNonInteractive else { return nil }
-        let configuration = UISceneConfiguration(name: "External Display", sessionRole: session.role)
+        configuration(for: session.role)
+    }
+
+    static func configuration(for role: UISceneSession.Role) -> UISceneConfiguration? {
+        guard role == .windowExternalDisplayNonInteractive else { return nil }
+        let configuration = UISceneConfiguration(name: "External Display", sessionRole: role)
         configuration.delegateClass = ExternalDisplaySceneDelegate.self
         return configuration
+    }
+
+    /// The tab the display shows for the iPad window's: the same, or for a mixed tab (which
+    /// belongs to its window) the focused pane's host tab.
+    static func mirroredTab(current: TabRef?, activeTab: TabId?, focusedGroup: String) -> TabRef? {
+        guard let current else { return nil }
+        guard current.hostId == HostGroups.mixedId else { return current }
+        return activeTab.map { TabRef(hostId: focusedGroup, tab: $0) }
+    }
+
+    /// The font that makes the iPad's grid fill the display: the iPad's size scaled by how much
+    /// larger the display's terminal area is, a hair under so the grid is never a column short.
+    /// Nil until both areas are known.
+    static func fontSize(_ source: CGFloat, presenterArea: CGSize, display: CGSize) -> CGFloat? {
+        guard presenterArea.width > 0, presenterArea.height > 0, display.width > 0, display.height > 0 else { return nil }
+        let scale = min(display.width / presenterArea.width, display.height / presenterArea.height) * 0.99
+        return (source * scale).rounded(.down)
     }
 }
 
@@ -115,12 +136,10 @@ struct ExternalDisplayRoot: View {
     }
 
     private func mirror(_ presenter: WindowModel?) {
-        guard let presenter, var ref = presenter.currentTab else { return }
-        // A mixed tab belongs to its window: the display shows its focused pane's host tab.
-        if ref.hostId == HostGroups.mixedId {
-            guard let tab = presenter.workspace?.session.activeTabId else { return }
-            ref = TabRef(hostId: presenter.currentGroupId, tab: tab)
-        }
+        guard let presenter, let ref = ExternalDisplay.mirroredTab(
+            current: presenter.currentTab, activeTab: presenter.workspace?.session.activeTabId,
+            focusedGroup: presenter.currentGroupId)
+        else { return }
         let pane = presenter.workspace?.focusedPane
         if model.currentTab != ref || model.workspace?.focusedPane != pane {
             model.select(ref, pane: pane)
@@ -128,10 +147,10 @@ struct ExternalDisplayRoot: View {
         // Same grid, bigger cells: scale the iPad's font by how much larger this display's
         // terminal area is (a hair under, so the grid is never a column short).
         guard let workspace = model.workspace, let source = presenter.workspace,
-              presenter.terminalArea.width > 0, presenter.terminalArea.height > 0, size.width > 0 else { return }
-        let scale = min(size.width / presenter.terminalArea.width, size.height / presenter.terminalArea.height) * 0.99
+              let fontSize = ExternalDisplay.fontSize(source.appearance.fontSize, presenterArea: presenter.terminalArea, display: size)
+        else { return }
         var appearance = source.appearance
-        appearance.fontSize = (source.appearance.fontSize * scale).rounded(.down)
+        appearance.fontSize = fontSize
         if workspace.appearance.fontSize != appearance.fontSize { workspace.appearance = appearance }
     }
 }

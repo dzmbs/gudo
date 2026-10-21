@@ -76,6 +76,38 @@ final class WindowsTests: XCTestCase {
         XCTAssertNil(HandoffPayload(userInfo: nil))
     }
 
+    // MARK: Handoff of drawings
+
+    func testADrawingSurvivesTheActivityAndOldPayloadsHaveNone() throws {
+        var original = payload()
+        original.drawing = HandoffPayload.Drawing(artifact: 12, placement: 30, canvas: false)
+        let restored = try XCTUnwrap(HandoffPayload(userInfo: original.userInfo()))
+        XCTAssertEqual(restored.drawing, HandoffPayload.Drawing(artifact: 12, placement: 30, canvas: false))
+        // A payload from a build before drawing Handoff still continues (no drawing).
+        let old = #"{"kind":"daemon","hostId":"A","hostName":"studio","daemonId":"d1","tab":4,"pane":9,"origin":"o","device":"This Mac"}"#
+        let decoded = try JSONDecoder().decode(HandoffPayload.self, from: Data(old.utf8))
+        XCTAssertNil(decoded.drawing)
+        // The drawing does not change where the activity continues.
+        let records = [HostRecord(id: "B", name: "studio", kind: .daemon, daemonId: "d1")]
+        XCTAssertEqual(original.resolve(records: records, installation: "me"), .host(id: "B", tab: TabId(4), pane: PaneId(9)))
+    }
+
+    func testDrawModeInTheTabWinsOverTheFocusedCanvas() {
+        let draw = HandoffPayload.Drawing(artifact: 5, placement: nil, canvas: false)
+        let canvas = HandoffPayload.Drawing(artifact: 7, canvas: true)
+        let tab = [PaneId(1), PaneId(2), PaneId(3)]
+        // Draw mode on an unfocused pane of the tab: the activity names that pane.
+        let drawing = HandoffPayload.openDrawing(focus: [PaneId(2): draw, PaneId(3): canvas], tabPanes: tab, focused: PaneId(3))
+        XCTAssertEqual(drawing?.pane, PaneId(2))
+        XCTAssertEqual(drawing?.drawing, draw)
+        // Only the focused canvas pane counts.
+        XCTAssertEqual(HandoffPayload.openDrawing(focus: [PaneId(3): canvas], tabPanes: tab, focused: PaneId(3))?.drawing, canvas)
+        XCTAssertNil(HandoffPayload.openDrawing(focus: [PaneId(3): canvas], tabPanes: tab, focused: PaneId(1)))
+        // Draw mode in another tab is not this window's activity.
+        XCTAssertNil(HandoffPayload.openDrawing(focus: [PaneId(9): draw], tabPanes: tab, focused: PaneId(1)))
+        XCTAssertNil(HandoffPayload.openDrawing(focus: [:], tabPanes: tab, focused: PaneId(1)))
+    }
+
     func testAnotherDeviceContinuesOnItsOwnRecordOfTheSameDaemon() {
         let records = [
             HostRecord(id: "B", name: "studio here", kind: .daemon, daemonId: "d1"),
