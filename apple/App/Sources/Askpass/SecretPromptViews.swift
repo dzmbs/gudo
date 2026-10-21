@@ -144,7 +144,7 @@ struct SecretPromptCard: View {
         }
         .padding(DS.Space.m)
         .frame(maxWidth: 420)
-        .floatingPanel(cornerRadius: 20)
+        .floatingPanel(cornerRadius: DS.Radius.card)
         .padding(.horizontal, DS.Space.m)
         .sensoryFeedback(DS.Haptic.attention, trigger: entry.copy.title)
         .accessibilityElement(children: .contain)

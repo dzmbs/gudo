@@ -69,7 +69,8 @@ struct ExternalDisplayRoot: View {
             } else {
                 VStack(spacing: DS.Space.m) {
                     Image(systemName: "rectangle.on.rectangle")
-                        .font(.system(size: 40, weight: .light))
+                        .font(.largeTitle.weight(.light))
+                        .imageScale(.large)
                     Text("Open a terminal on the iPad to show it here")
                         .font(DS.Font.title)
                 }

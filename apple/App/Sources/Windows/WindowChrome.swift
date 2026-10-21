@@ -142,7 +142,7 @@ struct WindowProbe: View {
                     .accessibilityValue(value)
                     .accessibilityIdentifier("window-probe")
             }
-            .font(.system(size: 10))
+            .font(.caption2)
             .buttonStyle(.bordered)
             .controlSize(.mini)
             .opacity(0.3)

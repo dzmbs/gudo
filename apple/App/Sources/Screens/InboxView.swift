@@ -478,6 +478,20 @@ private struct InboxFilterBar: View {
     @Namespace private var pill
 
     var body: some View {
+        // Equal segments when the words fit; at large text sizes or in a narrow window the
+        // track scrolls instead of cutting "Needs You" to "Ne…".
+        ViewThatFits(in: .horizontal) {
+            track
+            ScrollView(.horizontal) {
+                track
+            }
+            .scrollIndicators(.never)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inbox-filters")
+    }
+
+    private var track: some View {
         HStack(spacing: 2) {
             ForEach(InboxFilter.allCases) { filter in
                 let count = counts[filter] ?? 0
@@ -489,6 +503,7 @@ private struct InboxFilterBar: View {
                         Text(filter.title)
                             .font(.footnote.weight(isSelected ? .semibold : .regular))
                             .lineLimit(1)
+                            .fixedSize()
                         if filter != .all, count > 0 {
                             Text("\(count)")
                                 .font(DS.Font.meta)
@@ -503,9 +518,9 @@ private struct InboxFilterBar: View {
                     .frame(maxWidth: .infinity)
                     .background {
                         if isSelected {
-                            RoundedRectangle(cornerRadius: DS.Radius.control - 2)
+                            RoundedRectangle(cornerRadius: DS.Radius.field)
                                 .fill(DS.Palette.overlay)
-                                .overlay(RoundedRectangle(cornerRadius: DS.Radius.control - 2).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                                .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                                 .shadow(color: .black.opacity(0.08), radius: 1, y: 0.5)
                                 .matchedGeometryEffect(id: "pill", in: pill)
                         }
@@ -520,8 +535,6 @@ private struct InboxFilterBar: View {
         }
         .padding(2)
         .background(DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("inbox-filters")
     }
 }
 

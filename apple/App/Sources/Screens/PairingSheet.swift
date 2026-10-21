@@ -520,7 +520,7 @@ private struct Viewfinder: View {
             if !(scanning && Self.hasCamera) {
                 VStack(spacing: DS.Space.s) {
                     Image(systemName: "qrcode.viewfinder")
-                        .font(.system(size: 36, weight: .light))
+                        .font(.largeTitle.weight(.light))
                     Text(Self.hasCamera || !scanning ? "Point at the QR code shown by the host" : "No camera available")
                         .font(.footnote)
                         .multilineTextAlignment(.center)

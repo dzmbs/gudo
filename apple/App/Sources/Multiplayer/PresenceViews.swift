@@ -48,7 +48,8 @@ struct PanePresence: View {
                 HStack(spacing: 4) {
                     if let driver, driver != session.myPrincipal {
                         Image(systemName: "keyboard.fill")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.caption2.weight(.semibold))
+                            .imageScale(.small)
                             .foregroundStyle(driverColor(session, driver))
                     }
                     HStack(spacing: -3) {
@@ -245,7 +246,7 @@ private struct LeaseRequestCard: View {
         }
         .padding(DS.Space.m)
         .frame(maxWidth: 380)
-        .floatingPanel(cornerRadius: 20)
+        .floatingPanel(cornerRadius: DS.Radius.card)
         .padding(.horizontal, DS.Space.m)
         .sensoryFeedback(DS.Haptic.attention, trigger: request.id)
         .accessibilityElement(children: .contain)
@@ -331,7 +332,7 @@ private struct PromptComposer: View {
             .padding(.leading, DS.Space.m)
             .padding(.trailing, DS.Space.xs)
             .padding(.vertical, DS.Space.xs)
-            .floatingPanel(cornerRadius: 22)
+            .floatingPanel(cornerRadius: DS.Radius.largeCard)
         }
         .frame(maxWidth: 640)
         .onChange(of: text.isEmpty) { _, empty in session.setTyping(empty ? nil : pane) }

@@ -559,7 +559,7 @@ private struct TabRow: View {
                         Text(title)
                             .font(DS.Font.sidebarTitle)
                             .lineLimit(1)
-                            .truncationMode(.middle)
+                            .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
                             .shimmering(state == .working, text: title)
                             .foregroundStyle(.primary)
                         if tab.zoomed != nil {

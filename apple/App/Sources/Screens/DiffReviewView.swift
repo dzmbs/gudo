@@ -84,7 +84,11 @@ struct DiffReviewView: View {
             EmptyState("No Host", systemImage: "server.rack", message: reason) {}
         } else if let files {
             if files.isEmpty {
-                EmptyState("No Changes", systemImage: "checkmark.circle", message: emptyMessage) {}
+                EmptyState("No Changes", systemImage: "checkmark.circle", message: emptyMessage) {
+                    Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }
+                        .buttonStyle(.glass)
+                        .help("Reload (⌘R)")
+                }
             } else {
                 review(files)
             }

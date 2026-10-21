@@ -56,6 +56,14 @@ public extension DS {
         public static let panel: CGFloat = 16
         /// The selected tab's pill in the tab strip (Ghostty/AppKit native tabs: 7).
         public static let tabPill: CGFloat = 7
+        /// The scrollback search bar's glass (Ghostty's search overlay, grown for glass).
+        public static let searchPanel: CGFloat = 14
+        /// Ghostty's secure-input badge.
+        public static let secureBadge: CGFloat = 12
+        /// Glass cards over the terminal: secret prompts, knocks, control requests.
+        public static let card: CGFloat = 20
+        /// The reconnect card and the control-request card (the tallest glass on the grid).
+        public static let largeCard: CGFloat = 22
         public static let tabSelection: CGFloat = 16.5
     }
 }

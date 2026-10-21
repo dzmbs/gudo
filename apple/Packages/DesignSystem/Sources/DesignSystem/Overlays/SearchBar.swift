@@ -112,7 +112,7 @@ public struct TerminalSearchBar: View {
             .buttonStyle(.bar)
             .chromeContent()
             .padding(8)
-            .floatingPanel(cornerRadius: 14)
+            .floatingPanel(cornerRadius: DS.Radius.searchPanel)
             // The count lives inside the field, where accessibility does not reach it: the bar
             // carries it ("3/17", "-/17").
             .accessibilityElement(children: .contain)

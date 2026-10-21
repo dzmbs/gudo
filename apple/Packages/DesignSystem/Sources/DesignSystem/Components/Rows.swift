@@ -75,8 +75,10 @@ public struct SectionTitle: View {
     }
 }
 
-/// An empty or zero-data state: the system `ContentUnavailableView`, with one primary action and
-/// an optional quiet secondary one. Copy names the next step, not the absence.
+/// welcome view: the glyph in `title` at the large scale, 12, then the title (`title3`
+/// semibold) and one line (`subheadline`) 4 apart, then the actions. Greys are the theme's
+/// (`DS.Palette`), never a fixed opacity of the foreground. Copy names the next step, not the
+/// absence; give it an action whenever there is one.
 public struct EmptyState<Actions: View>: View {
     let title: String
     let systemImage: String
@@ -91,14 +93,33 @@ public struct EmptyState<Actions: View>: View {
     }
 
     public var body: some View {
-        ContentUnavailableView {
-            Label(title, systemImage: systemImage)
+        VStack(spacing: DS.Space.m) {
+            Image(systemName: systemImage)
                 .symbolRenderingMode(.hierarchical)
-        } description: {
-            Text(message)
-        } actions: {
-            actions
+                .font(.title)
+                .imageScale(.large)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .accessibilityHidden(true)
+            VStack(spacing: DS.Space.xs) {
+                Text(title)
+                    .font(DS.Font.title)
+                    .foregroundStyle(DS.Palette.text)
+                    .multilineTextAlignment(.center)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: 360)
+            HStack(spacing: DS.Space.s) {
+                actions
+            }
+            .padding(.top, DS.Space.xs)
         }
+        .padding(DS.Space.xxxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
     }
 }
 

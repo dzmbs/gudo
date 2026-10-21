@@ -98,7 +98,8 @@ struct HostChip: View {
     var body: some View {
         HStack(spacing: 3) {
             ConnectionGlyph(group.connectionState, healthy: Image(systemName: group.systemImage))
-                .font(.system(size: 9, weight: .semibold))
+                .font(.caption2.weight(.semibold))
+                .imageScale(.small)
             Text(group.name)
                 .font(.caption2.weight(.medium))
                 .lineLimit(1)
@@ -150,7 +151,8 @@ struct MixedHostsLine: View {
                 HStack(spacing: 2) {
                     let group = model.groups.group(host)
                     ConnectionGlyph(model.connectionState(ofGroup: host), healthy: Image(systemName: group?.systemImage ?? "server.rack"))
-                        .font(.system(size: 9))
+                        .font(.caption2)
+                        .imageScale(.small)
                     Text(model.groupName(host)).lineLimit(1)
                 }
             }
@@ -173,7 +175,8 @@ struct MixedSidebarSection: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: DS.Space.s) {
                     Image(systemName: "rectangle.split.2x1")
-                        .font(.system(size: 13))
+                        .font(DS.Font.section.weight(.regular))
+                        .imageScale(.small)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .opacity(DS.Opacity.mutedGlyph)
                         .frame(width: 16)
@@ -279,12 +282,12 @@ struct MixedTabChip: View {
         let ref = WindowModel.mixedRef(tab.id)
         ZStack {
             if isActive {
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
                     .fill(DS.Palette.selectedFill)
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.tabPill).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                     .padding(.vertical, 3)
             } else if isHovered {
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: DS.Radius.tabPill)
                     .fill(DS.Palette.hoverFill)
                     .padding(.vertical, 3)
             }
@@ -468,7 +471,8 @@ private struct EmptyColumn: View {
     var body: some View {
         VStack(spacing: DS.Space.m) {
             Image(systemName: "rectangle.righthalf.inset.filled")
-                .font(.system(size: 28))
+                .font(.title)
+                .imageScale(.large)
                 .foregroundStyle(DS.Palette.textTertiary)
             Text("Choose a tab for this column, or open a new one.")
                 .font(.callout)

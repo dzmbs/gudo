@@ -190,7 +190,7 @@ struct KnockBanner: View {
             .padding(.trailing, DS.Space.s)
             .padding(.vertical, DS.Space.s)
             .frame(maxWidth: 460)
-            .floatingPanel(cornerRadius: 20)
+            .floatingPanel(cornerRadius: DS.Radius.card)
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.l)
             .sensoryFeedback(DS.Haptic.attention, trigger: knock.knockId)

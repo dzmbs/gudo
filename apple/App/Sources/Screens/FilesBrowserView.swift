@@ -179,7 +179,10 @@ private struct DirectoryListing: View {
             .overlay {
                 if visible.isEmpty {
                     if filter.isEmpty {
-                        EmptyState("Empty Folder", systemImage: "folder", message: "Drop files here or use + to upload.") {}
+                        EmptyState("Empty Folder", systemImage: "folder", message: "Drop files here, or upload some from this device.") {
+                            Button("Upload Files…", systemImage: "square.and.arrow.up") { isImporting = true }
+                                .buttonStyle(.glass)
+                        }
                     } else {
                         ContentUnavailableView.search(text: filter)
                     }
