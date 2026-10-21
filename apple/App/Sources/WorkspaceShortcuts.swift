@@ -23,8 +23,15 @@ enum WorkspaceShortcuts {
     private static let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.drawActions + WorkspaceAction.tabActions
 
     private static func handle(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command), let window = NSApp.keyWindow, window.attachedSheet == nil,
-              window.firstResponder is TerminalView || window.firstResponder === window,
+        guard event.modifierFlags.contains(.command), let window = NSApp.keyWindow, window.attachedSheet == nil else { return false }
+        // A VS Code pane has the keyboard: only the shortcuts that lead back out are the app's,
+        // taken before the page could (the workbench would claim ⌘1 and ⌘W for itself).
+        if let model = ActiveWindow.model(editingIn: window) {
+            guard let action = action(for: event), action.passesEditor, let workspace = model.workspace else { return false }
+            action.perform(on: workspace, window: model)
+            return true
+        }
+        guard window.firstResponder is TerminalView || window.firstResponder === window,
               let workspace = ActiveWindow.workspace(in: window), let action = action(for: event)
         else { return false }
         action.perform(on: workspace, window: ActiveWindow.model(for: workspace))

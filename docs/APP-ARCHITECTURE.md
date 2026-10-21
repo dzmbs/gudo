@@ -259,7 +259,7 @@ tested against fakes.
 | New Agent (`LaunchAgentSheet`) | `LiveAgentFeed.launch` | connected daemons; `launchAgentPane` split off the host's focused pane in its directory, or in a fresh `worktreeCreate` (own branch and `PORT`); the sheet closes as soon as the pane exists and the window shows it; the first prompt is typed through `prompt` once the agent reports idle (≤ 60 s, a toast says if it could not be) |
 | Diff review (`Screens/DiffReviewView.swift`) | `LiveDiffSource` | `gitStatus` (repo, branch, ↑↓), `gitDiff` HEAD→worktree (untracked included) or staged, `listTurns` of the agent panes in the repo + `turnDiff` ("what this agent turn changed"); side by side on iPad/Mac (regular width; Layout menu: automatic/unified/side by side), unified on iPhone; monospace on the terminal background, palette green/red only; tap a line → note; notes → `sendReview` to the turn's agent (or the focused / first agent in the repo), Copy otherwise |
 | Files (`Screens/FilesBrowserView.swift`) | `LiveFileSource` | `fsList` + `gitStatus` letters (a directory with changes inside gets M), `fsStat` / `fsRead` preview (UTF-8 text up to 1 MiB with line numbers, images up to 24 MiB, else a card), `fsWatch` (reloads on change), New Folder `fsMkdir`, Rename `fsRename` (never overwrites), Move to Trash `fsDelete(.trash)`, upload from the Files picker or by drop `uploadFile(createNew)` ("name 2.ext" when taken) with progress, download `downloadFile` → share sheet (iOS) / ~/Downloads + Finder (Mac); Open in VS Code, Reveal in Terminal (`cd`), Insert Path |
-| Editor (`Screens/EditorView.swift`) | `LiveEditorSource` | `editorStatus` (is VS Code's CLI there?) → `openEditor(folder: <repo root or directory>, acceptVscodeLicense: true)` → WebKit `WebPage` on the forward; full screen on iPhone/iPad, a large sheet on Mac; steps "Set up VS Code on host (first run only) → Start the editor → Open the workbench" with seconds, never a licence prompt or sign-in, nothing about the VSCodium fallback; sessions kept per host+folder (closing leaves the server running; More → Stop Editor ends it, `closeEditor(stopServer:)`); a path from Links opens with `editorOpenInSession`; while it is up the app's ⌘ shortcuts are disabled so every key reaches VS Code |
+| Editor (`Screens/EditorView.swift`) | `LiveEditorSource` | `editorStatus` (is VS Code's CLI there?) → `openEditor(folder: <repo root or directory>, acceptVscodeLicense: true)` → a `WKWebView` on the forward, in an editor pane of the split tree (§20); steps "Set up VS Code on host (first run only) → Start the editor → Open the workbench" with seconds, never a licence prompt or sign-in, nothing about the VSCodium fallback; sessions kept per host+folder (closing leaves the server running; More → Stop Editor ends it, `closeEditor(stopServer:)`); a path from Links opens with `editorOpenInSession`; while an editor pane has the focus the app's ⌘ shortcuts step aside (except ⌘1–⌘9, ⌘W, ⌃⌘\`, §20) so every other key reaches VS Code |
 | Browser (`Screens/BrowserPorts.swift`, `BrowserView.swift`) | `LivePortSource` | `ports` / `.portsChanged` (HTTP first, process and pane); a new HTTP port on the window's host is offered ("localhost:5173 is up · Open", 15 s); Open → `forward(localPort: <same port>, .tcp)` (any free port when taken here; existing forwards reused) → in-app browser with back/forward/reload/share/Open in Safari; palette lists "Open localhost:N" |
 | Links & paths (`Screens/LinksSheet.swift`) | `LiveLinkSource` | `links(paneId:commands: 20)` (screen + the last 20 commands' output, paths resolved, missing ones dimmed); a path opens in VS Code at its line, a URL in the in-app browser (localhost through a forward); local panes: URLs and paths scanned from the visible text |
 | Palette | `PaletteCommands` | Copy Last Command Output (`commandOutput`, the output without the prompt), Open in VS Code, Dev Servers & Ports, Open localhost:N |
@@ -707,3 +707,87 @@ mixedTabsLeadAndHideTheirCarriers`, `WindowsTests.testTwoColumnsComeOnByThemselv
 `MixedTabsUITests` (iPad: `apple/scripts/mixed-ui-test.sh` starts two daemons on 47421/47422 —
 split with host, type in both, ⌘D/⌘W on beta, relaunch restores, kill alpha and beta keeps
 working; Two Columns with this iPad's echo shell).
+
+## 20. VS Code editor panes
+
+editor was one full-window cover per window. It is now a pane kind of the split tree, like a canvas
+pane, but owned by the window rather than any host: any number of editors at once, on different
+folders, worktrees and hosts, in tabs of their own or beside terminals.
+
+**Model.** An editor is a leaf of a window-owned tab (`CompositeTab`, §19): `editors: [PaneId:
+EditorMember]` beside `members`, an `EditorMember` being an id (UUID), a host id and a folder. No host
+knows editor leaves: opening, closing or moving one sends nothing to any daemon. A composite with an
+editor never dissolves (no host tab could show it); one of editors only is a *VS Code tab*
+(`isEditorOnly`). `CompositeTabs.openEditor` (a new tab), `addEditor(_:to:)` (beside the focused
+leaf), `addEditor(_:besideHost:tab:)` (a host tab becomes a composite in place, as Split with Host
+does), `close(leaf:in:)` (an editor leaf just leaves), `dropHost` (closing a host drops its editors).
+Saved with the window's mixed tabs (`@SceneStorage("mixedTabs")`; old saves without `editors` still
+load). `HostGroups.mixedTabs` lists VS Code tabs first, then mixed tabs, so ⌘N numbering matches the
+sidebar.
+
+**Opening.** Open in VS Code (palette, Open In menu, Files, Links, a path ⌘-clicked in a pane) resolves
+the focused pane's host and directory, takes its worktree root (`gitStatus.root`), and:
+- an editor already open on that host and folder (or, for a path, the one whose folder holds it)
+  comes forward and opens the file at the line;
+- else a new VS Code tab (default), or, with ⌥ held / "Open in VS Code Beside" / Open In ▸ VS Code
+  Beside, a leaf right of the focused pane in its tab;
+- "Open VS Code Through a Remote Tunnel…" opens the pane on the tunnel's offer.
+On the Mac the in-app pane is the default too; desktop VS Code (Remote - SSH over our forward,
+`DesktopVSCode`) is "Open in Desktop VS Code" in the palette, Open In and the pane's More menu.
+
+**Panes.** `EditorPanes` (per window) holds an `EditorPane` per open editor: its `LiveEditorSource`
+pinned to the member's host and folder (its own `openEditor` session and forward; the licence sheet
+per host as before, shown in the focused pane; accepting it in one editor lets others on that host go
+on), and its `WKWebView` (`TunnelBrowser`, both modes: serve-web and vscode.dev). The web view belongs
+to the model, not to the view: a tab switch removes the view and brings it back with the same web
+view, so the workbench never reloads. Panes are made when their leaf is first shown, so a relaunch
+restores editor tabs without loading any until looked at; they go when their leaf closes (the server
+keeps running on the host, as before; More ▸ Stop Editor ends it).
+
+**Memory.** An editor off screen for 10 minutes (`-editorSuspendAfter <s>` for tests) is suspended:
+its web view and web content process are released; a JPEG snapshot (taken every minute while on
+screen, at most 900 pt wide) stands in under "Resuming VS Code" when it is shown again, and the
+page it was on reloads (VS Code restores open files and unsaved changes from its own storage).
+
+**Daemon.** No change: `EditorLaunch` already runs one server per folder with its own random
+connection token, reused across opens, so N editor panes on N folders are N servers on the host.
+One `serve-web` per host serving every folder through `?folder=` would save the per-server overhead,
+but `EditorOpen`'s in-window path (the remote CLI through a connected window's
+`VSCODE_IPC_HOOK_CLI`) finds the window by the server's process tree; with several windows on one
+server it could not tell which window shows which folder and could open a file in the wrong editor.
+Revisit with a way to map an extension host to its folder.
+
+**Keyboard.** While an editor leaf has the focus and its workbench is up (`WindowModel.editorHasKeys`)
+every key is VS Code's: the menu commands are disabled (as for the old cover) except
+`WorkspaceAction.passesEditor`, and the Mac's shortcut monitor stands aside unless the key is one of
+those. What stays the app's, and why:
+- **⌘1–⌘9** (select tab / last tab): the way to any other tab. VS Code's own ⌘1–⌘8 only focus editor
+  groups (a browser takes them for its tabs in vscode.dev too).
+- **⌘W** closes the editor pane, as it closes vscode.dev's tab in a browser. Nothing is lost: the
+  server keeps running and VS Code keeps unsaved changes (hot exit).
+- **⌃⌘\` Return to Terminal** (Pane menu): the terminal beside the editor in its tab, else the tab the
+  editor was opened from (`lastTerminalTab`). VS Code binds nothing to ⌃⌘\` (its ⌃\` toggles its own
+  terminal). ⌘⎋ was tried first: on the iPad it never reaches the app while a web view has the keyboard.
+- Clicking or tapping any terminal, row or tab, as always.
+Left to VS Code on purpose: ⌃Tab / ⌃⇧Tab (its recently used editors), ⇧⌘[ ] (previous/next editor),
+⌥⌘arrows (editor navigation, multi-cursor), ⌘P, ⌘K chords, ⌘B, ⌘D, ⌘F, ⌘T, ⌘N. A tap or click in
+the web view focuses its leaf (a gesture recognizer that never cancels the page's own touches; a
+mouse-down monitor on the Mac); the focused leaf's web view takes first responder, and gives it up
+when focus moves to a terminal.
+
+**Chrome.** The sidebar's "VS Code" group lists VS Code tabs (code glyph `ProgramIdentity.vscode`,
+the folder name, its host line); a composite with an editor beside terminals stays under Mixed, its
+mark the code glyph while the editor has the focus. The strip, the iPhone switcher, the palette's Go
+to Tab and Two Columns' headers do the same. The window's target follows the focused editor's host,
+so ⌘T, Files and the toolbar act there. A host going down dims its editor leaves with its connection
+overlay, as for its terminals.
+
+Tests: `EditorLeafTests` (PaneLayout: editor tab, beside a host tab, closing back to the host tab,
+last editor, editors across hosts and ⌘D on an editor, dropping a host, order, round trip and old
+saves), `EditorPanesTests` (one pane per editor and pruning, the web view kept across hide/show,
+suspension only off screen and past the limit, reload on show; placement, bringing an open folder
+forward, ⌘W, `editorHasKeys`, Return to Terminal, the keys that pass), `EditorPanesUITests` (iPad,
+`UI_TEST_CLASS=EditorPanesUITests apple/scripts/w3-ui-test.sh`: two folders in two tabs keeping what
+was typed and their load count, ⌘P reaching VS Code and ⌘2 the app, an editor beside the terminal,
+⌃⌘\` then ⌘K reaching the app, relaunch restoring and lazily loading both tabs, ⌘W; suspension after 3 s
+reloading the page), and the existing `W3UITests` editor tests.

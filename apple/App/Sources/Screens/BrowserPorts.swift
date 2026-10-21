@@ -155,7 +155,7 @@ struct PortOfferBanner: ViewModifier {
 
     func body(content: Content) -> some View {
         content.overlay(alignment: .top) {
-            if let port = model.ports.offer, !model.isEditorShown {
+            if let port = model.ports.offer, !model.editorHasKeys {
                 HStack(spacing: DS.Space.m) {
                     Circle()
                         .fill(DS.Palette.done)

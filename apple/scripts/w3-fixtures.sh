@@ -11,6 +11,10 @@ work="$dir/work"
 bin="$dir/bin"
 repo="$work/proj"
 mkdir -p "$repo/src" "$bin"
+# Two more folders for the editor-pane tests (several VS Code tabs, one beside a terminal).
+mkdir -p "$work/site" "$work/docs"
+printf '<h1>site</h1>\n' >"$work/site/index.html"
+printf '# docs\n' >"$work/docs/README.md"
 
 # The pane shells: HOME is the work directory, so no user dotfiles; start in the repository.
 cat >"$work/.zshrc" <<'EOF'
@@ -117,9 +121,14 @@ token = args[args.index("--connection-token") + 1]
 PAGE = b"""<!doctype html><html><head><meta name=viewport content="width=device-width">
 <title>Fake VS Code</title><style>body{background:#1f1f1f;color:#ccc;font:16px -apple-system}</style></head>
 <body tabindex=0><h1>Fake VS Code workbench</h1><p id=path></p><p>Keys: <span id=keys>none</span></p>
+<p id=loads></p>
 <input id=field aria-label="editor input" autofocus>
 <script>
 document.getElementById('path').textContent = 'Location ' + decodeURIComponent(location.search);
+// How often this page loaded in this origin (one server per folder): a tab switch must not
+// reload it; a suspended editor coming back does.
+localStorage.loads = (+localStorage.loads || 0) + 1;
+document.getElementById('loads').textContent = 'Page loads ' + localStorage.loads;
 var keys = [];
 document.addEventListener('keydown', function (e) {
   keys.push((e.metaKey ? 'cmd+' : '') + (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase());

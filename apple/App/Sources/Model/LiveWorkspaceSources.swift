@@ -59,6 +59,12 @@ struct HostContext {
             directory: pane.flatMap { daemon.meta[$0]?.cwd }?.nonEmpty)
     }
 
+    /// A daemon host by id, while it is live (an editor pane's host; no pane or directory).
+    static func host(_ id: String, app: AppModel) -> HostContext? {
+        guard let daemon = app.hosts.connection(id) as? DaemonConnection, daemon.status.isLive || daemon.isReady else { return nil }
+        return HostContext(hostId: id, name: app.hosts.record(id)?.name ?? id, daemon: daemon, pane: nil, directory: nil)
+    }
+
     static let noHost = "Files, changes, ports and the editor come from a host running the helper. Connect one in Hosts."
 }
 

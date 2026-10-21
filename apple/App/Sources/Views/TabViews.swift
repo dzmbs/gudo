@@ -691,8 +691,8 @@ struct CompactTerminalView: View {
         let total = model.groups.tabs.count
         return Menu {
             if !model.composites.tabs.isEmpty {
-                Section("Mixed") {
-                    ForEach(model.composites.tabs) { mixed in
+                Section("This Window") {
+                    ForEach(model.composites.ordered) { mixed in
                         Button {
                             model.focus(WindowModel.mixedRef(mixed.id))
                         } label: {
@@ -700,7 +700,7 @@ struct CompactTerminalView: View {
                             if model.currentTab == WindowModel.mixedRef(mixed.id) {
                                 Label(title, systemImage: "checkmark")
                             } else {
-                                Label(title, systemImage: "rectangle.split.2x1")
+                                Label(title, systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : "rectangle.split.2x1")
                             }
                         }
                     }

@@ -71,7 +71,6 @@ struct WorkspaceView: View {
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()
             .portOffers(model)
-            .editorPresentation(model)
             .sheet(item: $model.sheet) { route in
                 SheetContent(route: route, workspace: workspace)
                     .environment(model)
@@ -355,7 +354,8 @@ private struct DetailColumn: View {
     /// The split state only: the host is named once, by the toolbar's host button.
     private var subtitle: String {
         if let mixed = model.activeMixed {
-            return mixed.hosts.map(model.groupName).joined(separator: " + ")
+            let hosts = mixed.hosts.map(model.groupName).joined(separator: " + ")
+            return mixed.isEditorOnly ? "VS Code · \(hosts)" : hosts
         }
         guard let tab = workspace.session.activeTab, tab.root.panes.count > 1 else { return "" }
         return tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed"

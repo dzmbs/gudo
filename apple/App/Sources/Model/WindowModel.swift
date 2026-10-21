@@ -152,7 +152,10 @@ final class WindowModel {
     let paneStatus: any PaneStatusSource
     let files: any FileSource
     let diffs: any DiffSource
-    let editor: any EditorSource
+    /// The window's VS Code editors (`Model/EditorPanes.swift`): one per editor leaf.
+    let editors: EditorPanes
+    /// The tab worked in before an editor tab came forward (⌃⌘` goes back to it).
+    @ObservationIgnored var lastTerminalTab: TabRef?
     let ports: any PortSource
     let links: any LinkSource
     /// Agent plan usage per host (sidebar host headers, Inbox).
@@ -161,10 +164,6 @@ final class WindowModel {
     var usageDetailHost: String?
     /// The page the in-app browser opens (a forwarded port, a link).
     var browserURL: URL?
-    /// The editor is presented (full screen on iPhone and iPad).
-    var isEditorShown = false
-    /// The editor opens on the Remote Tunnel's offer (palette) instead of the default path.
-    var editorTunnelOffer = false
     let toasts = ToastCenter()
     /// Agents on other tabs and hosts that need you or finished (`AgentToasts`).
     let agentToasts = AgentToasts()
@@ -201,7 +200,7 @@ final class WindowModel {
             paneStatus = MockPaneStatus()
             files = MockFileSource()
             diffs = MockDiffSource()
-            editor = MockEditorSource()
+            editors = EditorPanes { _ in MockEditorSource() }
             ports = MockPortSource()
             links = MockLinkSource()
         } else {
@@ -213,12 +212,14 @@ final class WindowModel {
             paneStatus = status
             let files = LiveFileSource(app: app)
             let diffs = LiveDiffSource(app: app)
-            let editor = LiveEditorSource(app: app)
+            editors = EditorPanes { [weak app] member in
+                guard let app else { return MockEditorSource() }
+                return LiveEditorSource(app: app, pinned: member)
+            }
             let ports = LivePortSource(app: app)
             let links = LiveLinkSource(app: app)
             self.files = files
             self.diffs = diffs
-            self.editor = editor
             self.ports = ports
             self.links = links
             live.window = self
@@ -226,7 +227,6 @@ final class WindowModel {
             feed.window = self
             files.window = self
             diffs.window = self
-            editor.window = self
             ports.window = self
             links.window = self
         }
@@ -283,6 +283,7 @@ final class WindowModel {
         workspace = local
         followGroups()
         startMixedTabs()
+        followEditors()
         followAgentToasts()
     }
 
@@ -292,6 +293,7 @@ final class WindowModel {
     func close() {
         guard !isClosed else { return }
         isClosed = true
+        editors.stop()
         for open in workspaces.values {
             (open.host as? DaemonConnection)?.setWindowView(self, focused: nil, visible: [])
             open.close()
@@ -385,6 +387,7 @@ final class WindowModel {
     /// Selects a tab on any host: the window switches to that host's workspace (already live)
     /// and the host selects the tab.
     func focus(_ ref: TabRef) {
+        if ref != currentTab { noteLeavingTab() }
         destination = .terminal
         if ref.hostId == HostGroups.mixedId {
             focusMixedTab(ref.tab)

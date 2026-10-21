@@ -324,6 +324,12 @@ struct OpenInMenu: View {
     var body: some View {
         Menu {
             Button("VS Code", systemImage: "chevron.left.forwardslash.chevron.right") { model.openEditor() }
+            Button("VS Code Beside", systemImage: "rectangle.split.2x1") { model.openEditor(placement: .split) }
+            #if os(macOS)
+            if DesktopVSCode.isInstalled {
+                Button("Desktop VS Code", systemImage: "macwindow") { model.openInDesktopVSCode() }
+            }
+            #endif
             Button("Files", systemImage: "folder") { model.sheet = .files }
             Button("Diff", systemImage: "plusminus") { model.sheet = .diff }
             if let worktree = git.worktree, let port = git.port(of: worktree) {

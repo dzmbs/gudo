@@ -514,7 +514,8 @@ The per-folder servers below remain. **`Auto` no longer falls back to openvscode
 openvscode-server must be asked for with `Only(OpenVsCode)`.
 
 - `EditorLaunch{folder, choice: Auto|Only(kind), accept_vscode_license}`. Auto runs
-  `code serve-web` (the user's CLI, else the managed one) only with the licence accepted. One server per folder, reused; bound to `127.0.0.1` on a
+  `code serve-web` (the user's CLI, else the managed one) only with the licence accepted. One server per folder, reused
+  (the app's editor panes, several at once, are one server each; why not one per host: APP-ARCHITECTURE §20 "Daemon"); bound to `127.0.0.1` on a
   free port with a random 128-bit `--connection-token`; own process group, killed on
   `EditorStop` and daemon shutdown; logs in `<state>/editors/`. Returns port, token and
   `url_path` (`/?tkn=…&folder=…`; the server answers with the token cookie and a redirect).

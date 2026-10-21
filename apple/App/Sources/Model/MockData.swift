@@ -279,6 +279,7 @@ final class MockEditorSource: EditorSource {
     var tunnelDesktopURI: URL? { nil }
     func acceptLicence() async {}
     func declineLicence() {}
+    func resumeIfAccepted() async {}
     func openTunnel(account: EditorTunnelAccount) async {}
 }
 

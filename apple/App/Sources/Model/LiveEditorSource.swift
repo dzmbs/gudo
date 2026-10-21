@@ -2,11 +2,13 @@ import Foundation
 import HostKit
 import Observation
 import os
+import PaneLayout
 import UnnamedCore
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
 
-/// VS Code for the window's folder.
+/// VS Code for one folder on one host: an editor pane's (`pinned`, docs/APP-ARCHITECTURE.md
+/// §20), or the window's focused pane's folder when nothing is pinned (tests).
 ///
 /// - Default: `openEditor` (`code serve-web` on the host, VSCodium where Microsoft's CLI cannot
 ///   run) over a local forward; one session per host and folder, reused when reopened. Never a
@@ -33,6 +35,8 @@ final class LiveEditorSource: EditorSource {
     @ObservationIgnored var licence = EditorLicence()
     /// Tests: where the source acts, instead of the window's host.
     @ObservationIgnored var contextOverride: (() -> HostContext?)?
+    /// The editor pane's host and folder: the source always opens exactly that folder there.
+    @ObservationIgnored let pinned: EditorMember?
 
     /// Open sessions by "host|folder".
     @ObservationIgnored private var sessions: [String: (hub: DaemonWorkspace, session: EditorSession)] = [:]
@@ -59,14 +63,26 @@ final class LiveEditorSource: EditorSource {
         var opened = false
     }
 
-    init(app: AppModel) {
+    init(app: AppModel, pinned: EditorMember? = nil) {
         self.app = app
+        self.pinned = pinned
+        if let pinned {
+            folder = pinned.folder
+            hostName = app.hosts.record(pinned.hostId)?.name ?? pinned.hostId
+        }
         EditorLicence.resetForTestsIfAsked()
     }
 
     private var context: HostContext? {
         if let contextOverride { return contextOverride() }
+        if let pinned { return HostContext.host(pinned.hostId, app: app) }
         return HostContext.resolve(app: app, window: window)
+    }
+
+    /// The host the source waits for while it connects (a restored editor's, or the window's).
+    private var isHostConnecting: Bool {
+        if let pinned { return app.hosts.connection(pinned.hostId) is DaemonConnection }
+        return window?.workspace?.host is DaemonConnection
     }
 
     var unavailableReason: String? { context == nil ? HostContext.noHost : nil }
@@ -85,13 +101,19 @@ final class LiveEditorSource: EditorSource {
 
     /// Waits for the window's host and its folder; nil (and `.failed`) when there is none.
     private func resolveTarget() async -> (HostContext, String)? {
-        // The window's host may still be connecting: wait for it (saying so) rather than fail.
-        if context == nil, window?.workspace?.host is DaemonConnection {
+        // The host may still be connecting (a restored editor at launch): wait for it, saying
+        // so, rather than fail.
+        if context == nil, isHostConnecting {
             phase = .checking
-            hostName = window?.hostName ?? ""
-            for _ in 0..<150 where context == nil {
+            if pinned == nil { hostName = window?.hostName ?? "" }
+            for _ in 0..<(pinned == nil ? 150 : 600) where context == nil {
                 try? await Task.sleep(for: .milliseconds(100))
             }
+        }
+        if let pinned, let context {
+            hostName = context.name
+            folder = pinned.folder
+            return (context, pinned.folder)
         }
         // Just after connecting the panes may not have said where they are yet.
         for _ in 0..<20 where context != nil && context?.directory == nil {
@@ -148,6 +170,18 @@ final class LiveEditorSource: EditorSource {
             log.info("VS Code licence accepted by the user for host=\(context.hostId, privacy: .public)")
             await startTunnel(context: context, account: account)
         }
+    }
+
+    /// The licence was accepted for this host meanwhile (in another editor pane): go on
+    /// without asking again.
+    func resumeIfAccepted() async {
+        guard phase == .needsLicence, let pending else { return }
+        let host: String? = switch pending {
+        case .server(let context, _, _): context.hostId
+        case .tunnel: context?.hostId
+        }
+        guard let host, licence.isAccepted(host: host) else { return }
+        await acceptLicence()
     }
 
     func declineLicence() {

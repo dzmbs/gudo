@@ -12,6 +12,8 @@ enum WorkspaceAction: Hashable {
     case toggleZoom, focus(Direction), resize(Direction)
     /// The previous or next shell prompt at the top of the pane (Ghostty's `jump_to_prompt`).
     case previousPrompt, nextPrompt
+    /// From a VS Code pane back to the terminal beside it, or the tab worked in before (⌃⌘`).
+    case returnToTerminal
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
     case draw, newCanvas
     /// A new window with this window's hosts, on its tab (⌘N).
@@ -28,7 +30,7 @@ enum WorkspaceAction: Hashable {
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
-        + [.previousPrompt, .nextPrompt]
+        + [.previousPrompt, .nextPrompt, .returnToTerminal]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
     static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
@@ -36,6 +38,18 @@ enum WorkspaceAction: Hashable {
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
     static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + windowActions + [.newWindow]
+
+    /// Whether the shortcut stays the app's while a VS Code pane has the keyboard
+    /// (docs/APP-ARCHITECTURE.md §20): ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
+    /// groups, which a browser takes for its tabs too), ⌘W closes the editor pane (as it closes
+    /// vscode.dev's tab in a browser), ⌃⌘` goes back to the terminal. Every other key is VS
+    /// Code's: ⌃Tab, ⇧⌘[ ], ⌥⌘arrows, ⌘P, ⌘K, ⌘B, ⌘D, ⌘F …
+    var passesEditor: Bool {
+        switch self {
+        case .selectTab, .lastTab, .closePane, .returnToTerminal: true
+        default: false
+        }
+    }
 
     var title: String {
         switch self {
@@ -50,6 +64,7 @@ enum WorkspaceAction: Hashable {
         case .resize(let direction): "Move Divider \(direction.name)"
         case .previousPrompt: "Jump to Previous Prompt"
         case .nextPrompt: "Jump to Next Prompt"
+        case .returnToTerminal: "Return to Terminal"
         case .previousTab: "Show Previous Tab"
         case .nextTab: "Show Next Tab"
         case .selectTab(let number): "Tab \(number)"
@@ -86,6 +101,9 @@ enum WorkspaceAction: Hashable {
         case .resize(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .control])
         case .previousPrompt: KeyboardShortcut(.upArrow, modifiers: .command)
         case .nextPrompt: KeyboardShortcut(.downArrow, modifiers: .command)
+        // VS Code's ⌃` toggles its own terminal; ⌃⌘` is bound by neither VS Code nor the systems.
+        // (⌘⎋ was tried: on iPad it never reaches the app past a focused web view.)
+        case .returnToTerminal: KeyboardShortcut("`", modifiers: [.command, .control])
         case .previousTab: KeyboardShortcut("[", modifiers: [.command, .shift])
         case .nextTab: KeyboardShortcut("]", modifiers: [.command, .shift])
         case .selectTab(let number): KeyboardShortcut(KeyEquivalent(Character("\(number)")))
@@ -141,6 +159,7 @@ enum WorkspaceAction: Hashable {
         case .hosts: window.destination = window.destination == .hosts ? .terminal : .hosts
         case .toggleSidebar: perform(window: window)
         case .shortcuts: window.sheet = window.sheet == .shortcuts ? nil : .shortcuts
+        case .returnToTerminal: window.returnToTerminal()
         default: perform(on: window.workspace ?? workspace)
         }
     }
@@ -161,7 +180,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab, .newWindow, .splitWithHost: break
+        case .goToTab, .newWindow, .splitWithHost, .returnToTerminal: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.

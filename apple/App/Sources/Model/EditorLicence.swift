@@ -15,6 +15,7 @@ struct EditorLicence {
     static let privacyURL = URL(string: microsoftPrivacyUrl())!
 
     static let key = "editor.vscodeLicenceAccepted"
+    private static var didReset = false
 
     var defaults: UserDefaults = .standard
 
@@ -41,8 +42,10 @@ struct EditorLicence {
     }
 
     /// UI tests (`-editorLicenceReset YES`): every host asks again.
+    /// Once per launch: every editor pane makes its own source.
     static func resetForTestsIfAsked() {
-        guard UserDefaults.standard.bool(forKey: "editorLicenceReset") else { return }
+        guard !didReset, UserDefaults.standard.bool(forKey: "editorLicenceReset") else { return }
+        didReset = true
         UserDefaults.standard.removeObject(forKey: key)
     }
 }

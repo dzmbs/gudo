@@ -16,7 +16,39 @@ public struct HostPane: Hashable, Sendable, Codable, CustomStringConvertible {
     public var description: String { "\(hostId)/\(pane.rawValue)" }
 }
 
-/// A tab whose panes live on more than one host (a "mixed" tab, docs/APP-ARCHITECTURE.md §19).
+/// A VS Code editor in a window's split tree (docs/APP-ARCHITECTURE.md §20): a folder on a host,
+/// shown by the window itself (a web view on that host's editor server), not a pane any host
+/// knows. `id` names it for as long as it is open (its web view and session in the window), and
+/// across relaunches.
+public struct EditorMember: Hashable, Sendable, Codable, Identifiable, CustomStringConvertible {
+    public var id: UUID
+    public var hostId: String
+    /// The folder on the host (the worktree's root when the pane it was opened from is in one).
+    public var folder: String
+
+    public init(id: UUID = UUID(), hostId: String, folder: String) {
+        self.id = id
+        self.hostId = hostId
+        self.folder = folder
+    }
+
+    /// The folder's last component ("proj"), or the folder itself ("~", "/").
+    public var folderName: String {
+        let trimmed = folder.hasSuffix("/") && folder.count > 1 ? String(folder.dropLast()) : folder
+        let name = trimmed.split(separator: "/").last.map(String.init) ?? trimmed
+        return name.isEmpty ? folder : name
+    }
+
+    /// Whether `path` is the folder or inside it.
+    public func contains(path: String) -> Bool {
+        path == folder || path.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
+    }
+
+    public var description: String { "\(hostId):\(folder)" }
+}
+
+/// A tab whose panes live on more than one host (a "mixed" tab, docs/APP-ARCHITECTURE.md §19),
+/// or that holds VS Code editors (`editors`, §20): an editor is a leaf only the window knows.
 /// The window owns it: no host knows the arrangement. Its split tree is an ordinary `Tab` over
 /// the composite's own leaf ids, so every layout op (focus, directional focus, resize, zoom) is
 /// the same code as a host tab's; `members` says which host pane each leaf shows.
@@ -32,8 +64,23 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     public private(set) var layout: Tab
     /// The host pane each leaf shows.
     public private(set) var members: [PaneId: HostPane]
+    /// The editor each editor leaf shows (leaves not in `members`).
+    public private(set) var editors: [PaneId: EditorMember] = [:]
     /// The tab on each host that holds this composite's panes there.
     public internal(set) var carriers: [String: TabId]
+
+    private enum CodingKeys: String, CodingKey {
+        case layout, members, editors, carriers
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        layout = try container.decode(Tab.self, forKey: .layout)
+        members = try container.decode([PaneId: HostPane].self, forKey: .members)
+        // Saved before editors were leaves.
+        editors = try container.decodeIfPresent([PaneId: EditorMember].self, forKey: .editors) ?? [:]
+        carriers = try container.decode([String: TabId].self, forKey: .carriers)
+    }
 
     public var id: TabId { layout.id }
     public var title: String? { layout.title }
@@ -41,17 +88,44 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     public var leaves: [PaneId] { layout.root.panes }
     public var focusedLeaf: PaneId { layout.focused }
     public var focusedMember: HostPane? { members[layout.focused] }
+    /// The focused leaf's editor, when an editor has the focus.
+    public var focusedEditor: EditorMember? { editors[layout.focused] }
+    /// Only editors: a VS Code tab (the sidebar lists it under VS Code, not Mixed).
+    public var isEditorOnly: Bool { members.isEmpty && !editors.isEmpty }
+
+    /// The leaf showing an editor, if any.
+    public func leaf(forEditor id: UUID) -> PaneId? {
+        editors.first { $0.value.id == id }?.key
+    }
 
     /// The leaves on screen: the zoomed one alone, else all.
     public var visibleLeaves: [PaneId] { layout.zoomed.map { [$0] } ?? leaves }
 
-    /// The hosts it shows, in the order their first pane appears.
+    /// The hosts it shows, in the order their first pane (or editor) appears.
     public var hosts: [String] {
+        var result: [String] = []
+        for leaf in leaves {
+            if let host = members[leaf]?.hostId ?? editors[leaf]?.hostId, !result.contains(host) { result.append(host) }
+        }
+        return result
+    }
+
+    /// The hosts whose panes it shows (editors left out): a composite down to one dissolves.
+    public var paneHosts: [String] {
         var result: [String] = []
         for leaf in leaves {
             if let host = members[leaf]?.hostId, !result.contains(host) { result.append(host) }
         }
         return result
+    }
+
+    /// A tab of one editor (Open in VS Code in a new tab).
+    public init(id: TabId, editor: EditorMember) {
+        let leaf = PaneId(1)
+        layout = Tab(id: id, root: .leaf(leaf), focused: leaf)
+        members = [:]
+        editors = [leaf: editor]
+        carriers = [:]
     }
 
     /// A host tab made into a composite (to split it with another host): the same tree, each of
@@ -104,12 +178,25 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     /// Adds `member` beside `leaf` (right of it for `.horizontal`, below for `.vertical`), focused.
     @discardableResult
     public mutating func insert(_ member: HostPane, beside leaf: PaneId, axis: Axis) -> PaneId? {
+        guard let new = splitLeaf(leaf, axis: axis) else { return nil }
+        members[new] = member
+        return new
+    }
+
+    /// Adds an editor beside `leaf`, focused.
+    @discardableResult
+    public mutating func insert(editor: EditorMember, beside leaf: PaneId, axis: Axis) -> PaneId? {
+        guard let new = splitLeaf(leaf, axis: axis) else { return nil }
+        editors[new] = editor
+        return new
+    }
+
+    private mutating func splitLeaf(_ leaf: PaneId, axis: Axis) -> PaneId? {
         var session = Session(tabs: [layout], activeTabId: layout.id)
         let before = Set(leaves)
         session.apply(.split(leaf, axis))
         guard let tab = session.tabs.first, let new = tab.root.panes.first(where: { !before.contains($0) }) else { return nil }
         layout = tab
-        members[new] = member
         return new
     }
 
@@ -117,12 +204,13 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     /// composite is then empty and left as it was).
     @discardableResult
     public mutating func remove(leaf: PaneId) -> Bool {
-        guard members[leaf] != nil else { return true }
+        guard members[leaf] != nil || editors[leaf] != nil else { return true }
         var session = Session(tabs: [layout], activeTabId: layout.id)
         session.apply(.close(leaf))
         guard let tab = session.tabs.first else { return false }
         layout = tab
         members[leaf] = nil
+        editors[leaf] = nil
         return true
     }
 }
@@ -191,6 +279,22 @@ public final class CompositeTabs {
         tabs.first { $0.leaf(for: member) != nil }
     }
 
+    /// The composite showing an editor, if any.
+    public func tab(containingEditor id: UUID) -> CompositeTab? {
+        tabs.first { $0.leaf(forEditor: id) != nil }
+    }
+
+    /// Every editor open in the window, in tab order.
+    public var editors: [EditorMember] {
+        tabs.flatMap { tab in tab.leaves.compactMap { tab.editors[$0] } }
+    }
+
+    /// The tabs in the order the window lists them: VS Code tabs (editors only) first, then
+    /// mixed tabs, each in the order they were made.
+    public var ordered: [CompositeTab] {
+        tabs.filter(\.isEditorOnly) + tabs.filter { !$0.isEditorOnly }
+    }
+
     /// Host tabs that carry a composite: their host groups leave them out (the composite shows
     /// their panes).
     public var carriers: [String: Set<TabId>] {
@@ -218,16 +322,49 @@ public final class CompositeTabs {
     /// Makes a host tab a composite, in its place: the host's group stops listing the tab.
     public func make(fromHost host: String, tab: Tab) -> TabId {
         if let existing = tabs.first(where: { $0.carriers[host] == tab.id }) { return existing.id }
-        let id = TabId((tabs.map(\.id.rawValue).max() ?? 0) + 1)
+        let id = nextId()
         tabs.append(CompositeTab(id: id, hostId: host, tab: tab))
         return id
     }
 
-    /// ⌘D / ⇧⌘D in a composite: a new pane on the focused leaf's host, split in its carrier
-    /// there, placed beside the focused leaf here.
+    /// ⌘D / ⇧⌘D in a composite: a new pane on the focused leaf's host (an editor's host for an
+    /// editor), split in its carrier there, placed beside the focused leaf here.
     public func split(_ id: TabId, axis: Axis) {
-        guard let tab = tab(id), let member = tab.focusedMember else { return }
-        split(id, onHost: member.hostId, axis: axis)
+        guard let tab = tab(id), let host = tab.focusedMember?.hostId ?? tab.focusedEditor?.hostId else { return }
+        split(id, onHost: host, axis: axis)
+    }
+
+    // MARK: Editors
+
+    /// Open in VS Code in a new tab: a composite of one editor.
+    @discardableResult
+    public func openEditor(_ editor: EditorMember) -> TabId {
+        let id = nextId()
+        tabs.append(CompositeTab(id: id, editor: editor))
+        return id
+    }
+
+    /// Open in VS Code beside the focused leaf of a composite.
+    @discardableResult
+    public func addEditor(_ editor: EditorMember, to id: TabId, axis: Axis = .horizontal) -> PaneId? {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
+        var tab = tabs[index]
+        guard let leaf = tab.insert(editor: editor, beside: tab.focusedLeaf, axis: axis) else { return nil }
+        tabs[index] = tab
+        return leaf
+    }
+
+    /// Open in VS Code beside a host tab's focused pane: the tab becomes a composite in its place
+    /// (as for Split with Host), the editor beside that pane.
+    @discardableResult
+    public func addEditor(_ editor: EditorMember, besideHost host: String, tab: Tab, axis: Axis = .horizontal) -> TabId {
+        let id = make(fromHost: host, tab: tab)
+        addEditor(editor, to: id, axis: axis)
+        return id
+    }
+
+    private func nextId() -> TabId {
+        TabId((tabs.map(\.id.rawValue).max() ?? 0) + 1)
     }
 
     /// Split with Host: a new pane on `host` beside the focused leaf.
@@ -275,10 +412,11 @@ public final class CompositeTabs {
         }
     }
 
-    /// Closes a leaf: its pane closes on its host (the host's layout drops it from the carrier).
+    /// Closes a leaf: its pane closes on its host (the host's layout drops it from the carrier);
+    /// an editor leaf just leaves (its server keeps running on the host).
     public func close(leaf: PaneId, in id: TabId) {
-        guard let tab = tab(id), let member = tab.members[leaf] else { return }
-        _ = send(member.hostId, .close(member.pane))
+        guard let tab = tab(id), tab.members[leaf] != nil || tab.editors[leaf] != nil else { return }
+        if let member = tab.members[leaf] { _ = send(member.hostId, .close(member.pane)) }
         remove(leaf: leaf, from: id)
         settle(id)
         if let member = self.tab(id)?.focusedMember { _ = send(member.hostId, .focus(member.pane)) }
@@ -293,11 +431,12 @@ public final class CompositeTabs {
     }
 
     /// The window stopped showing a host (closed or forgotten there; its panes stay on it): its
-    /// leaves leave every composite.
+    /// leaves leave every composite, its editors too.
     public func dropHost(_ host: String) {
         for id in tabs.map(\.id) {
             guard let tab = tab(id) else { continue }
             for (leaf, member) in tab.members where member.hostId == host { remove(leaf: leaf, from: id) }
+            for (leaf, editor) in tab.editors where editor.hostId == host { remove(leaf: leaf, from: id) }
             if let index = tabs.firstIndex(where: { $0.id == id }) { tabs[index].carriers[host] = nil }
             settle(id)
         }
@@ -337,7 +476,7 @@ public final class CompositeTabs {
             }.first
             guard let candidate else { continue }
             pending.removeAll { $0.token == ask.token }
-            let beside = tab.members[ask.beside] != nil ? ask.beside : tab.focusedLeaf
+            let beside = tab.leaves.contains(ask.beside) ? ask.beside : tab.focusedLeaf
             guard let leaf = tab.insert(HostPane(hostId: ask.host, pane: candidate.pane), beside: beside, axis: ask.axis) else { continue }
             tab.carriers[ask.host] = candidate.tab
             tabs[index] = tab
@@ -393,9 +532,10 @@ public final class CompositeTabs {
     }
 
     /// A composite down to one host (and waiting for no other) dissolves into that host's tab.
+    /// One holding an editor stays: no host tab can show it.
     private func settle(_ id: TabId) {
-        guard let tab = tab(id), !pending.contains(where: { $0.composite == id }) else { return }
-        let hosts = tab.hosts
+        guard let tab = tab(id), tab.editors.isEmpty, !pending.contains(where: { $0.composite == id }) else { return }
+        let hosts = tab.paneHosts
         guard hosts.count <= 1 else { return }
         tabs.removeAll { $0.id == id }
         let host = hosts.first

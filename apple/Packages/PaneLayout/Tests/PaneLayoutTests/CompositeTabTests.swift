@@ -4,7 +4,7 @@ import Testing
 
 /// Two hosts with their own layouts, answering ops at once or, like a daemon, on `flush()`.
 @MainActor
-private final class Hosts {
+final class Hosts {
     var sessions: [String: Session]
     /// Hosts whose link is down: unknown to the store.
     var down: Set<String> = []

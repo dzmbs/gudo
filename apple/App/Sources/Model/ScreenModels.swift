@@ -519,7 +519,7 @@ nonisolated struct EditorDeviceCode: Hashable, Sendable {
     var code: String
 }
 
-/// VS Code for the window's project: `code serve-web` over a forward to the host by default
+/// VS Code for an editor pane's folder: `code serve-web` over a forward to the host by default
 /// (never a sign-in); the Remote Tunnel through vscode.dev when the user picks it.
 @MainActor
 protocol EditorSource: AnyObject, Observable {
@@ -531,6 +531,9 @@ protocol EditorSource: AnyObject, Observable {
     func acceptLicence() async
     /// The user cancelled the first-use sheet: nothing is installed or started.
     func declineLicence()
+    /// Waiting on the licence sheet, but the user accepted it for this host in another editor
+    /// meanwhile: go on.
+    func resumeIfAccepted() async
     /// Opens the folder through a VS Code Remote Tunnel instead (opt-in; the host signs in with
     /// the user's own account by device code).
     func openTunnel(account: EditorTunnelAccount) async

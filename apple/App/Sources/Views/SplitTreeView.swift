@@ -19,6 +19,12 @@ protocol PaneTree {
     var padding: CGFloat { get }
     /// The tree mixes hosts: each pane header names its host.
     var namesHosts: Bool { get }
+    /// The VS Code editor a leaf shows, when it is an editor leaf (§20).
+    func editor(_ leaf: PaneId) -> EditorMember?
+}
+
+extension PaneTree {
+    func editor(_ leaf: PaneId) -> EditorMember? { nil }
 }
 
 /// A host's tab: the window's active one, or (Two Columns) another tab of the same window.
@@ -202,7 +208,9 @@ private struct PaneLeaf: View {
     @Environment(\.terminalTheme) private var theme
 
     var body: some View {
-        if let (workspace, pane) = tree.resolve(leaf) {
+        if let editor = tree.editor(leaf) {
+            EditorLeafView(member: editor, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
+        } else if let (workspace, pane) = tree.resolve(leaf) {
             PaneSlot(
                 id: pane, workspace: workspace, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf,
                 namesHost: tree.namesHosts, focus: { tree.focus(leaf: leaf) })
