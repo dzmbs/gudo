@@ -205,6 +205,10 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         }
         // The owner's plan and its limits; a guest has no business there.
         R::UsageWatch(_) | R::UsageUnwatch => (Need::Own, Target::Daemon),
+        // Workflows are typed into a pane (driving it); listing reads files of the pane's
+        // repository and the host's global directory, saving writes one there.
+        R::WorkflowList { pane_id: Some(p) } => (Need::Drive, Target::Pane(*p)),
+        R::WorkflowList { pane_id: None } | R::WorkflowSave(_) => (Need::Drive, Target::Host),
     }
 }
 

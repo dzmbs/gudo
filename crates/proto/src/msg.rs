@@ -652,6 +652,13 @@ pub enum ServerCtl {
     /// An approval request's extras or a pane's auto-approve rules changed. Sent only to
     /// clients with [`Caps::APPROVALS`] that can see the pane.
     Approval(crate::approve::ApprovalPush),
+    /// A workflow directory the daemon has listed changed: ask for the list again
+    /// ([`WorkspaceRequest::WorkflowList`](crate::WorkspaceRequest::WorkflowList)). Sent to
+    /// clients with [`Caps::WORKFLOWS`].
+    WorkflowsChanged {
+        /// The new [`WorkflowList::rev`](crate::WorkflowList::rev).
+        rev: u64,
+    },
 }
 
 /// A successful [`ClientCtl::Attach`].

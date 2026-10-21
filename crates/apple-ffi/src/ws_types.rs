@@ -1445,6 +1445,11 @@ pub enum WorkspaceEvent {
         /// The snapshot.
         snapshot: crate::repo::RepoSnapshot,
     },
+    /// A workflow file the daemon listed changed: list again (`DaemonClient::workflow_list`).
+    WorkflowsChanged {
+        /// The new revision.
+        rev: u64,
+    },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
@@ -1473,6 +1478,7 @@ impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
             E::Repos { snapshot } => Self::Repos {
                 snapshot: snapshot.into(),
             },
+            E::WorkflowsChanged { rev } => Self::WorkflowsChanged { rev },
         }
     }
 }

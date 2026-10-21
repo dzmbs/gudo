@@ -275,6 +275,14 @@ pub enum WorkspaceRequest {
     TaskCreate(crate::repo::TaskCreate),
     /// Runs a script in a new tab → [`WorkspaceResponse::PaneCreated`].
     ScriptRun(crate::repo::ScriptRun),
+    /// The workflows a pane can use (its repository's and the global ones), or only the global
+    /// ones without a pane → [`WorkspaceResponse::Workflows`]. See [`crate::workflow`].
+    WorkflowList {
+        /// The pane whose repository to look in.
+        pane_id: Option<PaneId>,
+    },
+    /// Writes a new workflow file (never replacing one) → [`WorkspaceResponse::WorkflowSaved`].
+    WorkflowSave(crate::workflow::WorkflowSave),
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -343,6 +351,10 @@ pub enum WorkspaceResponse {
     WorktreeSettings(crate::repo::WorktreeSettings),
     /// A new task.
     TaskCreated(crate::repo::TaskCreated),
+    /// Workflows.
+    Workflows(crate::workflow::WorkflowList),
+    /// The workflow as written (its file in [`Workflow::path`](crate::workflow::Workflow::path)).
+    WorkflowSaved(crate::workflow::Workflow),
 }
 
 /// Why a workspace request failed.

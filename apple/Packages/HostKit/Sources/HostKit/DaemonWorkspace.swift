@@ -125,6 +125,10 @@ public final class DaemonWorkspace {
     public private(set) var worktreePorts: [String: UInt16] = [:]
     /// The worktree paths of each repository the ports were last read for.
     @ObservationIgnored private var worktreePortsLoaded: [String: Set<String>] = [:]
+    /// The workflow files' revision as last pushed (`WorkspaceEvent.workflowsChanged`); lists
+    /// read before it are stale. See `Workflows.swift`.
+    public internal(set) var workflowsRev: UInt64 = 0
+    @ObservationIgnored var workflowObservers: [UUID: (UInt64) -> Void] = [:]
 
     @ObservationIgnored private let resolve: () -> (any DaemonWorkspaceAPI)?
     @ObservationIgnored private var installedOn: ObjectIdentifier?
@@ -222,6 +226,7 @@ public final class DaemonWorkspace {
         portObservers[id] = nil
         attentionObservers[id] = nil
         markObservers[id] = nil
+        workflowObservers[id] = nil
     }
 
     // MARK: Commands (shell integration)
@@ -263,6 +268,9 @@ public final class DaemonWorkspace {
         case .repos(let snapshot):
             repos = snapshot
             loadWorktreePortsIfNeeded()
+        case .workflowsChanged(let rev):
+            workflowsRev = rev
+            for observer in workflowObservers.values { observer(rev) }
         }
     }
 

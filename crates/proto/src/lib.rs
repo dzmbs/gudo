@@ -46,6 +46,10 @@
 //! - Approval extras (approve with edited input, "approve all like this" rules) are
 //!   [`ClientCtl::Approval`] → [`ServerCtl::ApprovalResult`], with pushes as
 //!   [`ServerCtl::Approval`], for clients with [`Caps::APPROVALS`]; see [`approve`].
+//! - Workflows (named commands with `{{arguments}}` from YAML files on the host) are
+//!   [`WorkspaceRequest::WorkflowList`] / [`WorkspaceRequest::WorkflowSave`], with
+//!   [`ServerCtl::WorkflowsChanged`] pushed to clients with [`Caps::WORKFLOWS`]; see
+//!   [`workflow`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -80,6 +84,7 @@ pub mod repo;
 mod serde_bytes;
 mod ticket;
 pub mod usage;
+pub mod workflow;
 pub mod workspace;
 
 pub use approve::*;
@@ -102,6 +107,7 @@ pub use msg::*;
 pub use repo::*;
 pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
 pub use usage::*;
+pub use workflow::*;
 pub use workspace::*;
 
 /// QUIC ALPN identifier this crate's messages are spoken under.

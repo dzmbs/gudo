@@ -83,6 +83,8 @@ final class Workspace {
     private static var sharedKeyBarStorage: KeyBar?
     /// Until when the shared key bar's height change resizes the grids.
     static var keyBarResizeUntil = ContinuousClock.now
+    /// The focused pane's repository workflows the key bar shows (`followWorkflows`).
+    @ObservationIgnored let keyBarWorkflows = KeyBarWorkflowState()
     #endif
 
     /// Tabs already given a friendly name (or left unnamed by the user's choice).
@@ -495,6 +497,7 @@ final class Workspace {
             apply(.focus(id))
             onPaneFocus?(id)
             keyBar.onDraw = DrawingCommands.canDraw(in: self) ? { [weak self] in if let self { DrawingCommands.toggleDrawing(in: self) } } : nil
+            followWorkflows(of: pane)
         }
         #if DEBUG
         // `-demoPreedit <text>` shows IME marked text in the first pane, for screenshots and UI

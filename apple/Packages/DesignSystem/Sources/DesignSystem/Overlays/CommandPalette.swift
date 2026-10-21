@@ -37,15 +37,24 @@ public struct CommandPalette: View {
     @Binding var isPresented: Bool
     let commands: [PaletteCommand]
     var placeholder: String
+    /// it switched the palette to that scope (the query is then dropped).
+    var onScope: ((String) -> Bool)?
+    /// ⌫ on an empty query (a scoped palette goes back to all commands).
+    var onDeleteEmpty: (() -> Void)?
 
     @State private var query = ""
     @State private var selection: String?
     @FocusState private var isFocused: Bool
 
-    public init(isPresented: Binding<Bool>, commands: [PaletteCommand], placeholder: String = "Execute a command…") {
+    public init(
+        isPresented: Binding<Bool>, commands: [PaletteCommand], placeholder: String = "Execute a command…",
+        onScope: ((String) -> Bool)? = nil, onDeleteEmpty: (() -> Void)? = nil
+    ) {
         _isPresented = isPresented
         self.commands = commands
         self.placeholder = placeholder
+        self.onScope = onScope
+        self.onDeleteEmpty = onDeleteEmpty
     }
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -77,6 +86,11 @@ public struct CommandPalette: View {
                 .focused($isFocused)
                 .onSubmit { run(results.first { $0.id == selection } ?? results.first) }
                 .onKeyPress(.escape) { close(); return .handled }
+                .onKeyPress(.delete) {
+                    guard query.isEmpty, let onDeleteEmpty else { return .ignored }
+                    onDeleteEmpty()
+                    return .handled
+                }
                 .onKeyPress(.upArrow) { move(-1, in: results); return .handled }
                 .onKeyPress(.downArrow) { move(1, in: results); return .handled }
                 .onKeyPress(keys: ["p", "n"], phases: .down) { press in
@@ -134,7 +148,10 @@ public struct CommandPalette: View {
         .floatingPanel(cornerRadius: DS.Radius.panel)
         .padding()
         .onAppear { Task { isFocused = true } }
-        .onChange(of: query) { selection = nil }
+        .onChange(of: query) {
+            selection = nil
+            if let onScope, onScope(query) { query = "" }
+        }
         .accessibilityIdentifier("command-palette")
     }
 

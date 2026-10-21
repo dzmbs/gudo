@@ -2,6 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+import UnnamedCore
 
 /// Everything the command palette offers, in the order shown with an empty query: what needs the
 /// user first, then tabs, then actions (Raycast's "suggestions first", Ghostty's action list).
@@ -13,6 +14,7 @@ enum PaletteCommands {
         case .goToTab: "Go to a tab on any host…"
         case .newTabOnHost: "New tab on…"
         case .splitWithHost: "Split with a pane on…"
+        case .workflows: "Run a workflow…"
         }
     }
 
@@ -21,6 +23,7 @@ enum PaletteCommands {
         case .goToTab: return tabs(model: model, section: nil)
         case .newTabOnHost: return newTabHosts(model: model)
         case .splitWithHost: return splitHosts(model: model)
+        case .workflows: return workflows(model: model)
         case .commands: break
         }
         var commands: [PaletteCommand] = []
@@ -52,6 +55,8 @@ enum PaletteCommands {
             ("find", "Find in Scrollback", "magnifyingglass", ["⌘", "F"], { model.isSearchShown = true }),
             ("links", "Links & Paths", "link", ["⇧", "⌘", "L"], { model.sheet = .links }),
             ("copy-output", "Copy Last Command Output", "doc.on.clipboard", nil, { Task { await model.copyLastCommandOutput() } }),
+            ("workflows", "Workflows…", "terminal", ["/"], { model.paletteMode = .workflows; model.isPaletteShown = true }),
+            ("new-workflow", "New Workflow from Last Command…", "text.badge.plus", nil, { model.newWorkflowFromLastCommand() }),
             ("diff", "Review Changes", "plusminus", nil, { model.sheet = .diff }),
             ("editor", "Open in VS Code", "chevron.left.forwardslash.chevron.right", nil, { model.openEditor() }),
             ("files", "Browse Files", "folder", nil, { model.sheet = .files }),
@@ -184,6 +189,40 @@ enum PaletteCommands {
                 subtitle: "Archived \(Date(timeIntervalSince1970: Double(archived.archivedAtMs) / 1000).formatted(.relative(presentation: .named)))\(archived.savedChanges ? " · with changes" : "")",
                 section: section, systemImage: "tray.and.arrow.up") { git.restore(archived) })
         }
+        return commands
+    }
+
+    /// "/": the focused pane's workflows, its repository's first, each with its description and
+    /// where it comes from; then New Workflow from Last Command.
+    static func workflows(model: WindowModel) -> [PaletteCommand] {
+        var commands: [PaletteCommand] = []
+        let list = model.workflowList
+        for workflow in list?.workflows ?? [] {
+            let section = workflow.scope == .repo ? "Repository · \(list?.repoName ?? "this repository")" : "Global"
+            let arguments = workflow.arguments.map(\.name).joined(separator: ", ")
+            commands.append(PaletteCommand(
+                id: "workflow-\(workflow.id)", title: workflow.name,
+                subtitle: [workflow.description ?? workflow.command, arguments.isEmpty ? nil : "{\(arguments)}"]
+                    .compactMap(\.self).joined(separator: " · "),
+                section: section, systemImage: workflow.scope == .repo ? "folder" : "globe",
+                badge: workflow.sourceLabel) { model.choose(workflow) })
+        }
+        if let problems = list?.problems, !problems.isEmpty {
+            let names = problems.map { ($0.path as NSString).lastPathComponent }.joined(separator: ", ")
+            commands.append(PaletteCommand(
+                id: "workflow-problems", title: problems.count == 1 ? "1 workflow file could not be read" : "\(problems.count) workflow files could not be read",
+                subtitle: "\(names): \(problems[0].message)", section: "Workflows", systemImage: "exclamationmark.triangle") {})
+        }
+        if list?.workflows.isEmpty ?? true {
+            let dir = ".\(Brand.name.lowercased())/workflows"
+            commands.append(PaletteCommand(
+                id: "workflow-none", title: model.workflowTarget == nil ? "Workflows come from a host running the helper" : list == nil ? "Reading workflows…" : "No workflows yet",
+                subtitle: "YAML files in the repository's \(dir) or ~/.config/\(Brand.name.lowercased())/workflows", section: "Workflows",
+                systemImage: "info.circle") {})
+        }
+        commands.append(PaletteCommand(
+            id: "new-workflow", title: "New Workflow from Last Command…", section: "Workflows", systemImage: "text.badge.plus"
+        ) { model.newWorkflowFromLastCommand() })
         return commands
     }
 

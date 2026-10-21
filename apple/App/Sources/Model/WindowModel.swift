@@ -4,6 +4,7 @@ import HostKit
 import Observation
 import PaneLayout
 import TerminalCore
+import UnnamedCore
 
 /// What the detail column (or the iPhone tab) shows.
 enum Destination: String, Hashable {
@@ -20,6 +21,8 @@ enum PaletteMode: Equatable {
     case newTabOnHost
     /// Split with Host… (⇧⌥⌘D): the host the new pane opens on.
     case splitWithHost
+    /// The focused pane's workflows ("/" in the palette; `Model/Workflows.swift`).
+    case workflows
 }
 
 /// Modal surfaces. One at a time, like the system's own sheets.
@@ -51,10 +54,19 @@ final class WindowModel {
     var isPaletteShown = false {
         didSet {
             if !isPaletteShown { paletteMode = .commands }
-            if isPaletteShown { git.refreshArchived() }
+            if isPaletteShown {
+                git.refreshArchived()
+                loadWorkflows()
+            }
         }
     }
     var paletteMode = PaletteMode.commands
+    /// The focused pane's workflows as last read (`loadWorkflows`), and that pane.
+    var workflowList: WorkflowList?
+    @ObservationIgnored var workflowPane: PaneId?
+    @ObservationIgnored var workflowLoad: Task<Void, Never>?
+    /// The workflow argument form or New Workflow panel over the window.
+    var workflowPanel: WorkflowPanel?
     /// The sidebar (Safari's model): shown, it holds the tabs; hidden, the tabs move to a strip on
     /// top (unless `TabPlacement.showsTabBarKey` is off). Per window; the last choice is the next
     /// window's start.
