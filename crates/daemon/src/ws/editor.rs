@@ -291,17 +291,33 @@ impl Editors {
             )));
         }
         let folder_s = folder.to_string_lossy().into_owned();
-        {
+        let reusable = {
             let mut running = self.running.lock().await;
             reap(&mut running);
-            if let Some(r) = running.get(&folder_s) {
+            running.get(&folder_s).and_then(|r| {
                 let wanted = match req.choice {
                     EditorChoice::Auto => None,
                     EditorChoice::Only(k) => Some(k),
                 };
-                if wanted.is_none_or(|k| k == r.info.kind) {
-                    return Ok(r.info.clone());
-                }
+                wanted
+                    .is_none_or(|k| k == r.info.kind)
+                    .then(|| (r.info.clone(), r.upstream))
+            })
+        };
+        if let Some((info, upstream)) = reusable {
+            if accepts_token(upstream, &info.token).await {
+                return Ok(info);
+            }
+            // Still running but turning its own token away: `code serve-web` that idled out
+            // its server and started a newer one answered every request "Forbidden." from
+            // then on. Replace it.
+            tracing::warn!(folder = %folder.display(), pid = info.pid, "editor refuses its token; restarting it");
+            let mut running = self.running.lock().await;
+            if running
+                .get(&folder_s)
+                .is_some_and(|r| r.info.pid == info.pid)
+            {
+                running.remove(&folder_s);
             }
         }
         let code = find_code(cfg);
@@ -543,6 +559,37 @@ impl Editors {
     }
 }
 
+/// Whether the server on `port` still lets its own token in. False only when it plainly
+/// refuses (401/403, or nothing listens); a slow answer counts as alive, so a busy server is
+/// never restarted under its user.
+async fn accepts_token(port: u16, token: &str) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+    let probe = async {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .ok()?;
+        let request = format!(
+            "GET /?tkn={token} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.ok()?;
+        let mut head = [0u8; 32];
+        let n = stream.read(&mut head).await.ok()?;
+        // "HTTP/1.1 302 Found"
+        std::str::from_utf8(&head[..n])
+            .ok()?
+            .split_whitespace()
+            .nth(1)?
+            .parse::<u16>()
+            .ok()
+    };
+    match tokio::time::timeout(PROBE_TIMEOUT, probe).await {
+        Ok(Some(status)) => !matches!(status, 401 | 403),
+        Ok(None) => false,
+        Err(_) => true,
+    }
+}
+
 fn reap(running: &mut HashMap<String, Running>) {
     running.retain(|_, r| matches!(r.child.try_wait(), Ok(None)));
 }
@@ -713,5 +760,33 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(url_path("t", "/a b"), "/?tkn=t&folder=/a%20b");
+    }
+
+    /// A one-shot server answering with `status`; its port.
+    async fn answering(status: &'static str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf).await;
+            let reply = format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\n\r\n");
+            let _ = stream.write_all(reply.as_bytes()).await;
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_server_refusing_its_token_is_not_reused() {
+        assert!(accepts_token(answering("302 Found").await, "t").await);
+        assert!(accepts_token(answering("200 OK").await, "t").await);
+        assert!(!accepts_token(answering("403 Forbidden").await, "t").await);
+        let gone = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = gone.local_addr().unwrap().port();
+        drop(gone);
+        assert!(!accepts_token(port, "t").await, "nothing listening");
     }
 }
