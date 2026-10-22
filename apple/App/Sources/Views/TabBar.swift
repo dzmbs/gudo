@@ -156,6 +156,7 @@ private struct TabChip: View {
                     workspace.renamingTab = tab.id
                 }
                 Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
+                MergeIntoTabMenu(workspace: workspace, tab: tab.id)
                 Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }
             }
         }
@@ -182,5 +183,25 @@ private struct TabChip: View {
         if !place.isEmpty, place != title { lines.append(place) }
         if let context, !context.isEmpty, context != title, context != directory, context != "~" { lines.append(context) }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// A tab's panes into another tab of its host, as a split on the right (a tab dragged onto a
+/// pane's edge does the same, on that edge).
+struct MergeIntoTabMenu: View {
+    let workspace: Workspace
+    let tab: TabId
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        let targets = model.moveTargets(in: workspace, besides: tab)
+        if !targets.isEmpty {
+            Menu("Merge Into Tab", systemImage: "rectangle.split.2x1") {
+                ForEach(targets) { target in
+                    Button(workspace.title(of: target)) { model.mergeTab(tab, in: workspace, into: target) }
+                }
+            }
+            .accessibilityIdentifier("tab-merge-into")
+        }
     }
 }

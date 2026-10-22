@@ -69,6 +69,12 @@ nonisolated enum LayoutConversion {
             return .moveTab(tabId: tab.rawValue, index: UInt32(clamping: max(index, 0)))
         case .rename(let tab, let title):
             return .renameTab(tabId: tab.rawValue, name: title)
+        case .movePaneToNewTab(let pane):
+            return .breakPane(paneId: pane.rawValue)
+        case .movePane(let pane, let target, let side):
+            return .movePane(paneId: pane.rawValue, target: target.rawValue, side: UnnamedCore.Direction(side))
+        case .mergeTab(let tab, let target, let side):
+            return .mergeTab(tabId: tab.rawValue, target: target.rawValue, side: UnnamedCore.Direction(side))
         }
     }
 
@@ -86,7 +92,8 @@ nonisolated enum LayoutConversion {
     static func isOptimistic(_ op: PaneLayout.LayoutOp) -> Bool {
         switch op {
         case .focus, .focusDirection, .resize, .toggleZoom, .moveTab, .rename: true
-        case .split, .close, .newTab, .closeTab: false
+        // Moves wait for the daemon: an older one refuses them, and the answer is the truth.
+        case .split, .close, .newTab, .closeTab, .movePaneToNewTab, .movePane, .mergeTab: false
         }
     }
 }

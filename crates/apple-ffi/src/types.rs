@@ -387,6 +387,30 @@ pub enum LayoutOp {
         /// The session.
         session_id: u64,
     },
+    /// Moves a pane into a new tab after its own (daemons with `pane_moves`).
+    BreakPane {
+        /// The pane.
+        pane_id: u64,
+    },
+    /// Moves a pane beside `target` on `side` (daemons with `pane_moves`).
+    MovePane {
+        /// The pane.
+        pane_id: u64,
+        /// The pane it goes beside.
+        target: u64,
+        /// Which side of `target`.
+        side: Direction,
+    },
+    /// Moves a tab's panes beside `target` on `side`; the tab closes (daemons with
+    /// `pane_moves`).
+    MergeTab {
+        /// The tab.
+        tab_id: u64,
+        /// The pane they go beside.
+        target: u64,
+        /// Which side of `target`.
+        side: Direction,
+    },
 }
 
 impl From<LayoutOp> for proto::LayoutOp {
@@ -457,6 +481,27 @@ impl From<LayoutOp> for proto::LayoutOp {
             },
             LayoutOp::CloseSession { session_id } => Self::CloseSession {
                 session_id: SessionId(session_id),
+            },
+            LayoutOp::BreakPane { pane_id } => Self::BreakPane {
+                pane_id: PaneId(pane_id),
+            },
+            LayoutOp::MovePane {
+                pane_id,
+                target,
+                side,
+            } => Self::MovePane {
+                pane_id: PaneId(pane_id),
+                target: PaneId(target),
+                side: side.into(),
+            },
+            LayoutOp::MergeTab {
+                tab_id,
+                target,
+                side,
+            } => Self::MergeTab {
+                tab_id: TabId(tab_id),
+                target: PaneId(target),
+                side: side.into(),
             },
         }
     }

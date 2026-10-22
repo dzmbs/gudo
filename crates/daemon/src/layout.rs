@@ -360,13 +360,7 @@ impl Layout {
             return Ok(self.remove_tab(si, ti));
         }
         // Focus moves to the closed pane's sibling subtree (its first leaf), like tmux.
-        let sibling_leaf = remove_leaf(&mut tab.root, pane).expect("pane is in this tab");
-        if tab.focused == pane {
-            tab.focused = sibling_leaf;
-        }
-        if tab.zoomed == Some(pane) {
-            tab.zoomed = None;
-        }
+        detach_leaf(tab, pane);
         self.sessions[si].revision += 1;
         Ok(Removed {
             panes: vec![pane],
@@ -431,6 +425,127 @@ impl Layout {
         tab.focused = pane;
         s.revision += 1;
         Ok(())
+    }
+}
+
+impl Layout {
+    /// Moves `pane` into a new tab right after its own and selects it. A tab's only pane
+    /// stays (`Invalid`): it already is a tab of its own.
+    pub fn break_pane(&mut self, pane: PaneId) -> OpResult<(SessionId, TabId)> {
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        if self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
+            return Err(OpError::Invalid);
+        }
+        detach_leaf(&mut self.sessions[si].tabs[ti], pane);
+        let tab = self.new_tab_layout(String::new(), pane);
+        let tab_id = tab.tab_id;
+        let s = &mut self.sessions[si];
+        s.tabs.insert(ti + 1, tab);
+        s.active_tab = Some(tab_id);
+        s.revision += 1;
+        Ok((s.id, tab_id))
+    }
+
+    /// Moves `pane` beside `target` (same session) on `side`, focused; its tab closes when it
+    /// was the tab's only pane.
+    pub fn move_pane(
+        &mut self,
+        pane: PaneId,
+        target: PaneId,
+        side: Direction,
+    ) -> OpResult<SessionId> {
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        let (target_si, _) = self.locate(target).ok_or(OpError::NotFound)?;
+        if pane == target || si != target_si {
+            return Err(OpError::Invalid);
+        }
+        if self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
+            self.take_tab(si, ti);
+        } else {
+            detach_leaf(&mut self.sessions[si].tabs[ti], pane);
+        }
+        self.insert_beside(si, target, LayoutNode::Leaf(pane), side, pane);
+        Ok(self.sessions[si].id)
+    }
+
+    /// Moves every pane of `tab` beside `target` (in another tab of the same session) on
+    /// `side`, keeping their arrangement and focus; `tab` closes.
+    pub fn merge_tab(
+        &mut self,
+        tab: TabId,
+        target: PaneId,
+        side: Direction,
+    ) -> OpResult<SessionId> {
+        let (si, ti) = self.locate_tab(tab).ok_or(OpError::NotFound)?;
+        let (target_si, target_ti) = self.locate(target).ok_or(OpError::NotFound)?;
+        if si != target_si || ti == target_ti {
+            return Err(OpError::Invalid);
+        }
+        let merged = self.take_tab(si, ti);
+        self.insert_beside(si, target, merged.root, side, merged.focused);
+        Ok(self.sessions[si].id)
+    }
+
+    /// Removes a tab whose panes live on elsewhere in the session (so it is not the last).
+    fn take_tab(&mut self, si: usize, ti: usize) -> TabLayout {
+        let s = &mut self.sessions[si];
+        let tab = s.tabs.remove(ti);
+        if s.active_tab == Some(tab.tab_id) {
+            s.active_tab = s
+                .tabs
+                .get(ti.min(s.tabs.len().saturating_sub(1)))
+                .map(|t| t.tab_id);
+        }
+        tab
+    }
+
+    /// Puts `node` beside the leaf `target` on `side`, focuses `focus` and selects the tab.
+    fn insert_beside(
+        &mut self,
+        si: usize,
+        target: PaneId,
+        node: LayoutNode,
+        side: Direction,
+        focus: PaneId,
+    ) {
+        let s = &mut self.sessions[si];
+        let Some(tab) = s
+            .tabs
+            .iter_mut()
+            .find(|t| leaves(&t.root).any(|p| p == target))
+        else {
+            return;
+        };
+        let (axis, before) = match side {
+            Direction::Left => (Axis::Horizontal, true),
+            Direction::Right => (Axis::Horizontal, false),
+            Direction::Up => (Axis::Vertical, true),
+            Direction::Down => (Axis::Vertical, false),
+        };
+        replace_leaf(&mut tab.root, target, |leaf| {
+            let (first, second) = if before { (node, leaf) } else { (leaf, node) };
+            LayoutNode::Split {
+                axis,
+                ratio: 0.5,
+                first: Box::new(first),
+                second: Box::new(second),
+            }
+        });
+        tab.focused = focus;
+        tab.zoomed = None;
+        s.active_tab = Some(tab.tab_id);
+        s.revision += 1;
+    }
+}
+
+/// Takes leaf `pane` (not the root) out of `tab`, moving focus and zoom off it.
+fn detach_leaf(tab: &mut TabLayout, pane: PaneId) {
+    let sibling = remove_leaf(&mut tab.root, pane).expect("pane is in this tab");
+    if tab.focused == pane {
+        tab.focused = sibling;
+    }
+    if tab.zoomed == Some(pane) {
+        tab.zoomed = None;
     }
 }
 
@@ -744,5 +859,53 @@ mod tests {
         l.toggle_zoom(p2).unwrap();
         l.toggle_zoom(p2).unwrap();
         assert_eq!(l.snapshot(s).unwrap().tabs[0].zoomed, None);
+    }
+
+    #[test]
+    fn break_move_and_merge_keep_panes() {
+        let mut l = Layout::default();
+        let (s, t1, p1) = session_with(&mut l);
+        let p2 = l.alloc_pane();
+        l.split(p1, Axis::Horizontal, p2).unwrap();
+        assert_eq!(l.break_pane(p1).ok().map(|(id, _)| id), Some(s));
+        assert_eq!(l.break_pane(p2), Err(OpError::Invalid), "a tab's only pane");
+        let snap = l.snapshot(s).unwrap();
+        let t2 = snap.tabs[1].tab_id;
+        assert_eq!(snap.tabs[0].root, LayoutNode::Leaf(p2));
+        assert_eq!(snap.tabs[1].root, LayoutNode::Leaf(p1));
+        assert_eq!(snap.active_tab, Some(t2));
+
+        // Back beside p2, on its left: the emptied tab closes.
+        l.move_pane(p1, p2, Direction::Left).unwrap();
+        let snap = l.snapshot(s).unwrap();
+        assert_eq!(snap.tabs.len(), 1);
+        assert_eq!(
+            snap.tabs[0].root,
+            LayoutNode::Split {
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(p1)),
+                second: Box::new(LayoutNode::Leaf(p2)),
+            }
+        );
+        assert_eq!(snap.tabs[0].focused, p1);
+        assert_eq!(l.move_pane(p1, p1, Direction::Up), Err(OpError::Invalid));
+
+        // A two-pane tab merged below p1 keeps its own split and focus.
+        let p3 = l.alloc_pane();
+        let t3 = l.new_tab(s, String::new(), p3).unwrap();
+        let p4 = l.alloc_pane();
+        l.split(p3, Axis::Vertical, p4).unwrap();
+        l.merge_tab(t3, p1, Direction::Down).unwrap();
+        let snap = l.snapshot(s).unwrap();
+        assert_eq!(snap.tabs.len(), 1);
+        assert_eq!(snap.active_tab, Some(t1));
+        assert_eq!(snap.tabs[0].focused, p4);
+        assert_eq!(
+            leaves(&snap.tabs[0].root).collect::<Vec<_>>(),
+            vec![p1, p3, p4, p2]
+        );
+        assert_eq!(l.merge_tab(t1, p1, Direction::Down), Err(OpError::Invalid));
+        assert_eq!(l.all_panes().len(), 4, "no pane was dropped");
     }
 }

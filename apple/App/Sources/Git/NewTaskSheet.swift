@@ -7,7 +7,7 @@ import UnnamedCore
 /// host and repository, a friendly generated name, the branch (derived from the name), and
 /// what runs: Claude Code, Codex or a shell. With New Worktree on, the host makes a worktree on
 /// the new branch, runs the repository's setup command, and opens a tab there; off, the agent
-/// starts in a split of the focused pane as before.
+/// starts in a tab of its own in the focused pane's directory.
 struct NewTaskSheet: View {
     let feed: any AgentFeed
 
@@ -106,13 +106,7 @@ struct NewTaskSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Run", selection: $runner) {
-                        ForEach(Runner.allCases) { runner in
-                            Label(runner.title, systemImage: runner.systemImage).tag(runner)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("task-runner")
+                    RunnerPicker(selection: $runner)
                 }
                 .chromeRows()
                 if let unavailable, let host,
@@ -265,6 +259,7 @@ struct NewTaskSheet: View {
             .onChange(of: hostID) { old, _ in
                 // The first pick (on appearing) keeps the seeded repository.
                 guard old != nil else { return }
+                installs = [:]
                 repoPath = repos.first?.path
                 worktree = repo != nil
             }
@@ -290,10 +285,11 @@ struct NewTaskSheet: View {
 
     /// Asks the host which agents it has; a helper too old to say leaves every agent startable.
     private func checkInstalls() async {
-        installs = [:]
         guard let api = try? daemon?.workspace.client() as? DaemonAgentInstallAPI,
               let list = try? await api.agentInstalls() else { return }
-        installs = Dictionary(list.map { (AgentKind($0.program), $0.state) }) { first, _ in first }
+        let answer = Dictionary(list.map { (AgentKind($0.program), $0.state) }) { first, _ in first }
+        // The notice slides in under the picker rather than pushing the form at once.
+        if answer != installs { withAnimation(DS.Motion.snappy) { installs = answer } }
     }
 
     /// Runs the vendor's installer in a new tab on the host, the user's own act.
@@ -340,6 +336,47 @@ struct NewTaskSheet: View {
                 withAnimation(DS.Motion.snappy) { failure = ScreenError.describe(error) }
             }
         }
+    }
+}
+
+/// What runs, as one segmented row drawn here rather than a `UISegmentedControl`: that one
+/// lays its labels out against the sheet's presentation (and the keyboard rising under it), so
+/// they overlapped for a moment before settling.
+private struct RunnerPicker: View {
+    @Binding var selection: NewTaskSheet.Runner
+    @Namespace private var pill
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(NewTaskSheet.Runner.allCases) { runner in
+                let selected = runner == selection
+                Button {
+                    withAnimation(DS.Motion.snappy) { selection = runner }
+                } label: {
+                    Label(runner.title, systemImage: runner.systemImage)
+                        .font(.subheadline.weight(selected ? .semibold : .regular))
+                        .lineLimit(1)
+                        .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
+                        .frame(maxWidth: .infinity, minHeight: 30)
+                        .background {
+                            if selected {
+                                Capsule()
+                                    .fill(DS.Palette.selectedFill)
+                                    .overlay(Capsule().strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                                    .matchedGeometryEffect(id: "pill", in: pill)
+                            }
+                        }
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(DS.Palette.hoverFill))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Run")
+        .accessibilityIdentifier("task-runner")
     }
 }
 

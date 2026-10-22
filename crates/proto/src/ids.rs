@@ -315,5 +315,7 @@ bitset! {
         WORKFLOWS = 5;
         /// Answers `WorkspaceRequest::AgentInstalls`.
         AGENT_INSTALLS = 6;
+        /// Applies `LayoutOp::BreakPane`, `MovePane` and `MergeTab`.
+        PANE_MOVES = 7;
     }
 }

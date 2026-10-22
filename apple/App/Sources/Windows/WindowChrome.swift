@@ -103,14 +103,18 @@ enum TabDrag {
 #endif
 
 extension View {
-    /// Drag a tab: reorder within its host; on iPad, drop it outside the window for a new one.
+    /// Drag a tab: reorder within its host, onto a pane's edge to merge it there; on iPad, drop
+    /// it outside the window for a new one.
     @ViewBuilder
     func tabDrag(_ ref: TabRef, model: WindowModel) -> some View {
-        #if os(iOS)
-        onDrag { TabDrag.provider(for: ref, in: model) }
-        #else
-        draggable(ref.description)
-        #endif
+        onDrag {
+            model.draggedTab = ref
+            #if os(iOS)
+            return TabDrag.provider(for: ref, in: model)
+            #else
+            return NSItemProvider(object: ref.description as NSString)
+            #endif
+        }
     }
 }
 

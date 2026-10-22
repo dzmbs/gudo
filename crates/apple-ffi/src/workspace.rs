@@ -87,6 +87,11 @@ pub struct AgentLaunch {
     /// How long to wait for the agent to become idle before giving up on the prompt.
     #[uniffi(default = 30000)]
     pub ready_timeout_ms: u64,
+    /// Open the agent in a new tab of this session (selected) instead of splitting
+    /// `split_from`, whose directory it still inherits when `cwd` is `None`. Not with
+    /// `worktree`.
+    #[uniffi(default = None)]
+    pub new_tab_in: Option<u64>,
 }
 
 /// What [`DaemonClient::launch_agent_pane`] did.
@@ -296,8 +301,8 @@ impl DaemonClient {
 
     // --- agents ---------------------------------------------------------------------------
 
-    /// Starts Claude Code or Codex in a new pane (in a worktree, a directory, or resuming a
-    /// session) and, if `prompt` is set, types it through the composer path once the agent
+    /// Starts Claude Code or Codex in a new pane or tab (in a worktree, a directory, or
+    /// resuming a session) and, if `prompt` is set, types it through the composer path once the agent
     /// is idle. Agent state then arrives in `PaneMeta.agent`, raw agent events as
     /// `ClientEvent.agentEvent`, and approvals are answered with
     /// [`decide`](Self::decide) (signed with the device key).
@@ -321,17 +326,27 @@ impl DaemonClient {
                 .await?
             }
             None => {
-                let op = proto::LayoutOp::Split {
-                    pane_id: proto::PaneId(launch.split_from),
-                    axis: launch.axis.into(),
-                    launch: proto::PaneLaunch::Agent {
-                        agent: launch.agent.into(),
-                        resume: launch.resume,
-                        cwd: launch.cwd,
+                let agent = proto::PaneLaunch::Agent {
+                    agent: launch.agent.into(),
+                    resume: launch.resume,
+                    cwd: launch.cwd,
+                };
+                let op = match launch.new_tab_in {
+                    Some(session) => proto::LayoutOp::NewTab {
+                        session_id: proto::SessionId(session),
+                        name: String::new(),
+                        launch: agent,
+                    },
+                    None => proto::LayoutOp::Split {
+                        pane_id: proto::PaneId(launch.split_from),
+                        axis: launch.axis.into(),
+                        launch: agent,
                     },
                 };
                 match self.await_op(op).await? {
-                    OpOutcome::PaneCreated { pane_id } => pane_id,
+                    OpOutcome::PaneCreated { pane_id } | OpOutcome::TabCreated { pane_id, .. } => {
+                        pane_id
+                    }
                     OpOutcome::Failed { code, message } => {
                         return Err(match code {
                             crate::types::OpErrorCode::Forbidden => {

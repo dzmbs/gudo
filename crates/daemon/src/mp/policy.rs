@@ -106,7 +106,10 @@ pub(crate) fn check(core: &Core, authz: &Authz, need: Need, target: Target) -> R
 pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
     use LayoutOp as O;
     match op {
-        O::Split { pane_id, .. } => (Need::Drive, Target::SessionOf(*pane_id)),
+        O::Split { pane_id, .. } | O::BreakPane { pane_id } | O::MovePane { pane_id, .. } => {
+            (Need::Drive, Target::SessionOf(*pane_id))
+        }
+        O::MergeTab { target, .. } => (Need::Drive, Target::SessionOf(*target)),
         O::NewTab { session_id, .. } | O::RenameSession { session_id, .. } => {
             (Need::Drive, Target::Session(*session_id))
         }

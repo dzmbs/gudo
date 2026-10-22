@@ -177,7 +177,7 @@ final class W3UITests: XCTestCase {
     func testAgentNotInstalledOffersTheOfficialInstaller() throws {
         try launch()
         palette("New Agent")
-        let runner = app.segmentedControls["task-runner"].firstMatch
+        let runner = element("task-runner")
         XCTAssertTrue(runner.waitForExistence(timeout: 5))
         runner.buttons.element(boundBy: 1).tap()
         let notice = element("task-agent-missing")
@@ -202,16 +202,18 @@ final class W3UITests: XCTestCase {
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
         prompt.tap()
         prompt.typeText("please ask permission")
-        // In this checkout, beside the shell (a new worktree is the Git suite's case).
+        // In this checkout, in a tab of its own (a new worktree is the Git suite's case).
         let worktree = app.switches["task-worktree"].firstMatch
         XCTAssertTrue(worktree.waitForExistence(timeout: 5))
         if worktree.value as? String == "1" {
             worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         }
         XCTAssertEqual(worktree.value as? String, "0", "no worktree")
+        let before = panes.allElementsBoundByIndex.map(\.identifier)
         element("launch-start").tap()
         XCTAssertTrue(prompt.waitForNonExistence(timeout: 20), "the sheet closes once the pane exists")
-        expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: panes)
+        // Its own tab in front: one pane on screen, the agent's.
+        expectation(for: NSPredicate(format: "count == 1"), evaluatedWith: panes.matching(NSPredicate(format: "NOT (identifier IN %@)", before)))
         waitForExpectations(timeout: 20)
 
         // The agent asks for permission (its PermissionRequest hook): Approve from the Inbox.

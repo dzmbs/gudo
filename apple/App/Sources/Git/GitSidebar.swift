@@ -241,8 +241,10 @@ struct WorktreeTabRow: View {
                 model.focus(TabRef(hostId: host, tab: tab.id))
                 workspace?.renamingTab = tab.id
             }
+            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
             Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace?.apply(.closeTab(tab.id)) }
         }
+        .tabDrag(TabRef(hostId: host, tab: tab.id), model: model)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("worktree-tab-\(number ?? 0)")

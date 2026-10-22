@@ -285,6 +285,8 @@ struct PaneSlot: View {
         .clipShape(.rect(cornerRadius: paneStyle == .comfortable && isSplit ? DS.Radius.pane : 0))
         // Header, banners and bars sit on the terminal: its colours, even in a window kept apart.
         .terminalSurfaceChrome()
+        // A mixed tab's panes stay with it: tabs merge into host tabs only.
+        .tabDropTarget(pane: id, workspace: workspace, enabled: !namesHost)
     }
 
     @ViewBuilder private var content: some View {
@@ -407,6 +409,7 @@ struct PaneMenuItems: View {
         Button("Zoom Pane", systemImage: "arrow.up.left.and.arrow.down.right") {
             focusThen { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
         }
+        moveItems
         Divider()
         Button("Find…", systemImage: "magnifyingglass") { focusThen { model.isSearchShown = true } }
         Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
@@ -414,6 +417,28 @@ struct PaneMenuItems: View {
         Divider()
         Button("Close Pane", systemImage: "xmark", role: .destructive) {
             focusThen { WorkspaceAction.closePane.perform(on: workspace, window: model) }
+        }
+    }
+
+    /// Move to New Tab, and into another tab of the pane's host (not from a mixed tab, whose
+    /// panes stay with it).
+    @ViewBuilder private var moveItems: some View {
+        if let target = pane ?? workspace.focusedPane {
+            let mixed = model.composites.tab(containing: HostPane(hostId: workspace.groupId, pane: target))
+            Button("Move to New Tab", systemImage: "macwindow.badge.plus") {
+                focusThen { WorkspaceAction.movePaneToNewTab.perform(on: workspace, window: model) }
+            }
+            .disabled(mixed.map { $0.leaves.count < 2 } ?? ((workspace.session.tab(containing: target)?.root.panes.count ?? 0) < 2))
+            .accessibilityIdentifier("pane-move-new-tab")
+            let tabs = mixed == nil ? model.moveTargets(in: workspace, besides: workspace.session.tab(containing: target)?.id) : []
+            if !tabs.isEmpty {
+                Menu("Move to Tab", systemImage: "arrow.right.square") {
+                    ForEach(tabs) { tab in
+                        Button(workspace.title(of: tab)) { model.movePane(target, in: workspace, toTab: tab) }
+                    }
+                }
+                .accessibilityIdentifier("pane-move-to-tab")
+            }
         }
     }
 

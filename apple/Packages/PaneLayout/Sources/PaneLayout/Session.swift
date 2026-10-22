@@ -51,6 +51,14 @@ public enum LayoutOp: Hashable, Sendable, Codable {
     case moveTab(TabId, to: Int)
     /// Renames a tab; an empty title goes back to the derived one.
     case rename(TabId, String)
+    /// Moves a pane out of its tab into a new tab right after it, focused. A tab's only pane
+    /// stays where it is.
+    case movePaneToNewTab(PaneId)
+    /// Moves a pane beside another one (in any tab) on `side`, focused; a tab left empty closes.
+    case movePane(PaneId, beside: PaneId, side: Direction)
+    /// Moves every pane of a tab beside a pane of another tab on `side`, keeping their
+    /// arrangement and focus; the tab closes.
+    case mergeTab(TabId, beside: PaneId, side: Direction)
 }
 
 /// Session → ordered tabs → split tree per tab. A value type: `apply` is pure apart from id
@@ -97,6 +105,9 @@ public struct Session: Hashable, Sendable, Codable {
         case .closeTab(let id): closeTab(id)
         case .moveTab(let id, let index): moveTab(id, to: index)
         case .rename(let id, let title): updateTab(id) { $0.title = title.isEmpty ? nil : title }
+        case .movePaneToNewTab(let pane): movePaneToNewTab(pane)
+        case .movePane(let pane, let target, let side): movePane(pane, beside: target, side: side)
+        case .mergeTab(let id, let target, let side): mergeTab(id, beside: target, side: side)
         }
     }
 
@@ -211,6 +222,48 @@ public struct Session: Hashable, Sendable, Codable {
         guard let from = tabs.firstIndex(where: { $0.id == id }) else { return }
         let tab = tabs.remove(at: from)
         tabs.insert(tab, at: min(max(index, 0), tabs.count))
+    }
+
+    private mutating func movePaneToNewTab(_ pane: PaneId) {
+        guard let tab = tab(containing: pane), let index = tabs.firstIndex(of: tab), detach(pane, from: tab.id) else { return }
+        let new = Tab(id: TabId(nextId()), root: .leaf(pane), focused: pane)
+        tabs.insert(new, at: index + 1)
+        activeTabId = new.id
+    }
+
+    private mutating func movePane(_ pane: PaneId, beside target: PaneId, side: Direction) {
+        guard pane != target, let source = tab(containing: pane), tab(containing: target) != nil else { return }
+        if !detach(pane, from: source.id) { tabs.removeAll { $0.id == source.id } }
+        insert(.leaf(pane), beside: target, side: side, focus: pane)
+    }
+
+    private mutating func mergeTab(_ id: TabId, beside target: PaneId, side: Direction) {
+        guard let source = tabs.first(where: { $0.id == id }), let into = tab(containing: target), into.id != id else { return }
+        tabs.removeAll { $0.id == id }
+        insert(source.root, beside: target, side: side, focus: source.focused)
+    }
+
+    /// Takes `pane` out of a tab that keeps others; false when it is the tab's only pane.
+    private mutating func detach(_ pane: PaneId, from id: TabId) -> Bool {
+        guard let tab = tabs.first(where: { $0.id == id }), let (root, nearest) = tab.root.removing(pane) else { return false }
+        updateTab(id) {
+            $0.root = root
+            if $0.focused == pane { $0.focused = nearest }
+            if $0.zoomed == pane { $0.zoomed = nil }
+        }
+        return true
+    }
+
+    private mutating func insert(_ node: Node, beside target: PaneId, side: Direction, focus: PaneId) {
+        guard let tab = tab(containing: target) else { return }
+        updateTab(tab.id) {
+            $0.root = $0.root.replacing(target, with: side.isForward
+                ? .split(axis: side.axis, ratio: 0.5, first: .leaf(target), second: node)
+                : .split(axis: side.axis, ratio: 0.5, first: node, second: .leaf(target)))
+            $0.focused = focus
+            $0.zoomed = nil
+        }
+        activeTabId = tab.id
     }
 
     private mutating func updateTab(_ id: TabId, _ body: (inout Tab) -> Void) {

@@ -29,6 +29,8 @@ public final class WindowLayoutStore: LayoutStore {
     private struct Adoption {
         var tabs: Set<TabId>
         var panes: Set<PaneId>
+        /// A pane this window moved: selected once it has left `from`.
+        var moved: (pane: PaneId, from: TabId)?
         var deadline: ContinuousClock.Instant
     }
 
@@ -73,6 +75,15 @@ public final class WindowLayoutStore: LayoutStore {
             adoptIfReady()
         case .split, .close, .closeTab, .resize, .moveTab, .rename:
             expectNewPanes(op, before: base.session)
+            base.apply(op)
+            adoptIfReady()
+        case .movePaneToNewTab(let pane), .movePane(let pane, _, _):
+            follow(pane, current)
+            base.apply(op)
+            adoptIfReady()
+        case .mergeTab(let id, _, _):
+            guard let tab = current.tabs.first(where: { $0.id == id }) else { return }
+            follow(tab.focused, current)
             base.apply(op)
             adoptIfReady()
         }
@@ -134,6 +145,11 @@ public final class WindowLayoutStore: LayoutStore {
         }
     }
 
+    private func follow(_ pane: PaneId, _ current: Session) {
+        guard let from = current.tab(containing: pane)?.id else { return }
+        pendingAdoption = Adoption(tabs: [], panes: [], moved: (pane, from), deadline: .now + adoptionTimeout)
+    }
+
     /// Selects the tab or pane this window's last op created, once the base has it.
     private func adoptIfReady() {
         guard let adoption = pendingAdoption else { return }
@@ -142,7 +158,12 @@ public final class WindowLayoutStore: LayoutStore {
             pendingAdoption = nil
             return
         }
-        if let tab = shared.tabs.first(where: { !adoption.tabs.contains($0.id) }) {
+        if let moved = adoption.moved {
+            if let tab = shared.tab(containing: moved.pane), tab.id != moved.from {
+                pendingAdoption = nil
+                select(tab: tab.id, pane: moved.pane)
+            }
+        } else if let tab = shared.tabs.first(where: { !adoption.tabs.contains($0.id) }) {
             pendingAdoption = nil
             select(tab: tab.id, pane: tab.focused)
         } else if let pane = shared.panes.subtracting(adoption.panes).first, let tab = shared.tab(containing: pane) {

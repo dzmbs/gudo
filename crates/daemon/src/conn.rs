@@ -216,7 +216,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::ARTIFACT_HISTORY
         | DaemonFeatures::MP2
         | DaemonFeatures::WORKFLOWS
-        | DaemonFeatures::AGENT_INSTALLS;
+        | DaemonFeatures::AGENT_INSTALLS
+        | DaemonFeatures::PANE_MOVES;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }

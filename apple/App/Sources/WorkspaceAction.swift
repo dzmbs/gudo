@@ -12,6 +12,8 @@ enum WorkspaceAction: Hashable {
     /// A pane on another host beside the focused one: the tab becomes a mixed tab.
     case splitWithHost
     case toggleZoom, focus(Direction), resize(Direction)
+    /// Tab); the pane menus also move it into another tab.
+    case movePaneToNewTab
     /// The previous or next shell prompt at the top of the pane (Ghostty's `jump_to_prompt`).
     case previousPrompt, nextPrompt
     /// From a VS Code pane back to the terminal beside it, or the tab worked in before (⌃⌘`).
@@ -33,7 +35,7 @@ enum WorkspaceAction: Hashable {
     case shortcuts
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .splitRight, .splitDown, .splitWithHost, .closePane]
-    static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
+    static let paneActions: [Self] = [.toggleZoom, .movePaneToNewTab] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
@@ -65,6 +67,7 @@ enum WorkspaceAction: Hashable {
         case .splitWithHost: "Split with Host…"
         case .closePane: "Close Pane"
         case .toggleZoom: "Zoom Pane"
+        case .movePaneToNewTab: "Move Pane to New Tab"
         case .focus(let direction): "Select Pane \(direction.name)"
         case .resize(let direction): "Move Divider \(direction.name)"
         case .previousPrompt: "Jump to Previous Prompt"
@@ -105,6 +108,8 @@ enum WorkspaceAction: Hashable {
         case .splitWithHost: KeyboardShortcut("d", modifiers: [.command, .option, .shift])
         case .closePane: KeyboardShortcut("w")
         case .toggleZoom: KeyboardShortcut(.return, modifiers: [.command, .shift])
+        // ⌘T with ⇧ to take the pane along; free in the app, iPadOS and macOS.
+        case .movePaneToNewTab: KeyboardShortcut("t", modifiers: [.command, .shift])
         case .focus(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option])
         case .resize(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .control])
         case .previousPrompt: KeyboardShortcut(.upArrow, modifiers: .command)
@@ -172,6 +177,7 @@ enum WorkspaceAction: Hashable {
         case .shortcuts: window.sheet = window.sheet == .shortcuts ? nil : .shortcuts
         case .returnToTerminal: window.returnToTerminal()
         case .fullScreenEditor: window.toggleEditorFullScreen()
+        case .movePaneToNewTab: window.movePaneToNewTab()
         default: perform(on: window.workspace ?? workspace)
         }
     }
@@ -184,6 +190,7 @@ enum WorkspaceAction: Hashable {
         case .splitDown: workspace.split(.vertical)
         case .closePane: workspace.closeFocusedPane()
         case .toggleZoom: workspace.apply(.toggleZoom)
+        case .movePaneToNewTab: if let pane = workspace.focusedPane, workspace.canMoveToNewTab(pane) { workspace.apply(.movePaneToNewTab(pane)) }
         case .focus(let direction): workspace.apply(.focusDirection(direction))
         case .resize(let direction): workspace.resizeFocusedPane(direction)
         case .previousPrompt: PaneCommandMarks.jumpToPrompt(-1, in: workspace)
