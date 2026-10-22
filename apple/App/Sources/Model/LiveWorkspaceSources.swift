@@ -152,6 +152,13 @@ final class LiveAgentFeed: AgentFeed {
         }.sorted { ($0.state.urgency, $1.since) < ($1.state.urgency, $0.since) }
     }
 
+    /// A directory's last component, "~" for a home directory (not the user's name).
+    static func folder(_ path: String) -> String {
+        let parts = (path as NSString).pathComponents
+        let home = parts == ["/", "root"] || (parts.count == 3 && ["home", "Users"].contains(parts[1]))
+        return home || path == "~" ? "~" : (path as NSString).lastPathComponent
+    }
+
     /// One host's items: live agents (with their latest attention item for summary and unseen),
     /// then finished history whose pane is gone, and long commands. Pure, for tests.
     static func items(
@@ -181,8 +188,11 @@ final class LiveAgentFeed: AgentFeed {
                 }
             }
             let latest = byPane[pane.rawValue]
-            // The pane title is often just the agent's name; say what it is doing instead.
-            if prompt.isEmpty || prompt == AgentKind(agent.kind).title || prompt.lowercased() == agent.kind.lowercased() {
+            // The pane title is often just the agent's name or the shell's directory ("~"); say
+            // what it is doing instead.
+            if prompt.isEmpty || prompt == AgentKind(agent.kind).title || prompt.lowercased() == agent.kind.lowercased()
+                || prompt.hasPrefix("~") || prompt.hasPrefix("/")
+            {
                 switch state {
                 case .working: prompt = "Working…"
                 case .idle, .done: prompt = "Waiting for your next prompt"
@@ -196,7 +206,7 @@ final class LiveAgentFeed: AgentFeed {
             }
             result.append(AgentItem(
                 id: id, agent: AgentKind(agent.kind), hostName: hostName,
-                sessionTitle: meta.cwd.map { ($0 as NSString).lastPathComponent } ?? meta.title,
+                sessionTitle: meta.cwd.map(Self.folder) ?? meta.title,
                 state: state == .idle ? .done : state,
                 since: latest.map { Date(timeIntervalSince1970: Double($0.atMs) / 1000) } ?? .now,
                 prompt: prompt.nonEmpty ?? AgentKind(agent.kind).title,
@@ -224,7 +234,7 @@ final class LiveAgentFeed: AgentFeed {
                 if let duration { words.append(duration.formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow))) }
                 history.append(AgentItem(
                     id: "\(hostId)/a\(item.id)", agent: .other, hostName: hostName,
-                    sessionTitle: mark.cwd.map { ($0 as NSString).lastPathComponent } ?? item.title,
+                    sessionTitle: mark.cwd.map(Self.folder) ?? item.title,
                     state: (exit ?? 0) == 0 ? .done : .error, since: date,
                     prompt: mark.command?.nonEmpty ?? item.title, summary: words.joined(separator: " · ").nonEmpty,
                     hostId: hostId, paneId: item.paneId, unseen: !item.seen, isCommand: true))

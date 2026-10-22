@@ -91,7 +91,7 @@ private struct GitRowStyle: ViewModifier {
 }
 
 /// A repository's header: its name in the section style, quiet (`.secondary`), sentence case,
-/// no icon, the tab count while collapsed, and + New Task (on hover on the Mac, at 0.6 on touch).
+/// no icon, the tab count while collapsed, and + New Agent (on hover on the Mac, at 0.6 on touch).
 struct RepoSectionHeader: View {
     let repo: RepoSidebar.Repo
     let host: String
@@ -105,8 +105,8 @@ struct RepoSectionHeader: View {
                 .foregroundStyle(DS.Palette.textSecondary)
                 .lineLimit(1)
             Spacer(minLength: DS.Space.xs)
-            Button("New Task in \(repo.name)", systemImage: "plus") {
-                model.sheet = .launchAgent
+            Button("New Agent in \(repo.name)", systemImage: "plus") {
+                model.newAgent(onGroup: host, repo: repo.id)
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.plain)
@@ -117,8 +117,8 @@ struct RepoSectionHeader: View {
             #else
             .opacity(DS.Opacity.mutedGlyph)
             #endif
-            .help("New Task in \(repo.name)")
-            .accessibilityIdentifier("repo-new-task-\(repo.name)")
+            .help("New Agent in \(repo.name) (⇧⌘N)")
+            .accessibilityIdentifier("repo-new-agent-\(repo.name)")
         }
         .padding(.leading, DS.Space.l + DS.Space.xs)
         .padding(.trailing, DS.Space.l)

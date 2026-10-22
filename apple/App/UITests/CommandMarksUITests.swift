@@ -126,10 +126,10 @@ final class CommandMarksUITests: XCTestCase {
         menu(on: succeeded, "Re-run")
         waitFor(NSPredicate(format: "count >= 2"), marks("Succeeded").matching(NSPredicate(format: "label == 'Command: true'")), timeout: 20)
 
-        // Ask Agent with no agent in the window: New Task with the command and output as prompt.
+        // Ask Agent with no agent in the window: New Agent with the command and output as prompt.
         menu(on: failed, "Ask Agent")
         let prompt = app.descendants(matching: .any)["launch-prompt"]
-        XCTAssertTrue(prompt.waitForExistence(timeout: 10), "New Task opens")
+        XCTAssertTrue(prompt.waitForExistence(timeout: 10), "New Agent opens")
         waitFor(NSPredicate(format: "value CONTAINS 'failed with exit status 1' AND value CONTAINS 'beta'"), prompt, timeout: 5)
         shot("ask-agent-new-task")
         app.buttons["Cancel"].firstMatch.tap()

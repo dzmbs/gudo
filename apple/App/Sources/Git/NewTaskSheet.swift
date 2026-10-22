@@ -3,7 +3,7 @@ import HostKit
 import SwiftUI
 import UnnamedCore
 
-/// New Task (git workspace; one flow for New Agent, New Worktree and the inbox's +): pick the
+/// New Agent (⇧⌘N, every + and the palette; one flow for agents and worktree tasks): pick the
 /// host and repository, a friendly generated name, the branch (derived from the name), and
 /// what runs: Claude Code, Codex or a shell. With New Worktree on, the host makes a worktree on
 /// the new branch, runs the repository's setup command, and opens a tab there; off, the agent
@@ -226,7 +226,7 @@ struct NewTaskSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .navigationTitle("New Task")
+            .navigationTitle("New Agent")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -250,19 +250,21 @@ struct NewTaskSheet: View {
                 }
             }
             .onAppear {
-                hostID = hostID ?? (hosts.first { $0.id == model.workspace?.hostId } ?? hosts.first)?.id
-                repoPath = repoPath ?? model.git.worktree?.repo ?? repos.first?.path
+                let seed = model.newAgentSeed
+                model.newAgentSeed = NewAgentSeed()
+                hostID = hostID ?? (hosts.first { $0.id == seed.host } ?? hosts.first { $0.id == model.workspace?.hostId } ?? hosts.first)?.id
+                let preferred = [seed.repo, model.git.worktree?.repo].compactMap(\.self)
+                repoPath = repoPath ?? (repos.first { preferred.contains($0.path) } ?? repos.first)?.path
                 worktree = repo != nil
-                if let seeded = model.newTaskPrompt {
-                    model.newTaskPrompt = nil
-                    prompt = seeded
-                }
+                if let seeded = seed.prompt { prompt = seeded }
                 isPromptFocused = true
             }
             .onChange(of: hosts.map(\.id)) { _, ids in
                 if hostID == nil || !ids.contains(hostID!) { hostID = ids.first }
             }
-            .onChange(of: hostID) {
+            .onChange(of: hostID) { old, _ in
+                // The first pick (on appearing) keeps the seeded repository.
+                guard old != nil else { return }
                 repoPath = repos.first?.path
                 worktree = repo != nil
             }
@@ -364,7 +366,7 @@ private struct AgentInstallSection: View {
                     if let offPath {
                         Text("It’s at \(Text(verbatim: offPath).font(DS.Font.literalSmall)), but the login shell’s PATH doesn’t include that folder.")
                     } else if guide.command != nil {
-                        Text("Install it with the official installer, then start the task.")
+                        Text("Install it with the official installer, then start the agent.")
                     } else {
                         Text("Follow the official guide to install it on this host.")
                     }

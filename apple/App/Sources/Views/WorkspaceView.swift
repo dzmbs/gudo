@@ -238,36 +238,38 @@ private struct SidebarColumn: View {
     }
 }
 
-/// New Tab on the current host (⌘T); its menu (long press, or the arrow on the Mac) opens one on
-/// any other host (⌥⌘T). Add Host where nothing can open a tab yet (iPhone, iPad).
+/// + : a menu with the two things to start, New Terminal (⌘T) and New Agent (⇧⌘N), then a
+/// terminal on another host and Add Host. Add Host alone where nothing can open a tab yet.
 struct NewTabButton: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
 
     var body: some View {
         let groups = model.groups.groups
-        if groups.count > 1 {
+        if canOpen {
             Menu {
-                Section("New Tab On") {
-                    ForEach(groups) { group in
-                        Button(group.name, systemImage: group.isLocal ? "laptopcomputer" : group.kind == .ssh ? "terminal" : "server.rack") {
-                            model.newTab(onGroup: group.id)
+                Button("New Terminal", systemImage: "terminal") { model.newTab() }
+                    .accessibilityIdentifier("new-tab-terminal")
+                Button(WorkspaceAction.newAgent.title, systemImage: "sparkle") { model.newAgent() }
+                    .accessibilityIdentifier("new-tab-agent")
+                if groups.count > 1 {
+                    Menu("New Terminal On", systemImage: "plus.rectangle.on.rectangle") {
+                        ForEach(groups) { group in
+                            Button(group.name, systemImage: group.systemImage) { model.newTab(onGroup: group.id) }
                         }
                     }
                 }
                 Divider()
                 Button("Add Host…", systemImage: "plus.circle") { model.addHost() }
             } label: {
-                Label("New Tab", systemImage: "plus")
-            } primaryAction: {
-                model.newTab()
+                Label("New", systemImage: "plus")
             }
             .menuIndicator(.hidden)
-            .help("New Tab on \(model.hostName) (⌘T) · hold for another host (⌥⌘T)")
+            .help("New Terminal (⌘T) or New Agent (⇧⌘N)")
             .accessibilityIdentifier("new-tab")
         } else {
-            Button(canOpen ? "New Tab" : "Add Host", systemImage: "plus") { model.newTab() }
-                .help(canOpen ? "New Tab (⌘T)" : "Add Host")
+            Button("Add Host", systemImage: "plus") { model.newTab() }
+                .help("Add Host")
                 .accessibilityIdentifier("new-tab")
         }
     }
@@ -349,7 +351,7 @@ private struct DetailColumn: View {
                     // add bar items): never above a toolbar.
                     .chromeContent()
             case .inbox:
-                InboxView(feed: model.agents, onLaunch: { model.sheet = .launchAgent }, onNewTerminal: { model.newTab() })
+                InboxView(feed: model.agents, onLaunch: { model.newAgent() }, onNewTerminal: { model.newTab() })
             case .hosts:
                 HostsScreen()
             }
@@ -378,7 +380,7 @@ private struct DetailColumn: View {
         switch model.destination {
         case .terminal:
             model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.session.activeTab.map(workspace.title(of:)) ?? Brand.name
-        case .inbox: "Inbox"
+        case .inbox: Destination.inbox.title
         case .hosts: "Hosts"
         }
     }
@@ -612,9 +614,9 @@ private struct CompactRoot: View {
             SwiftUI.Tab("Terminal", systemImage: "terminal", value: Destination.terminal) {
                 CompactTerminalView(workspace: workspace)
             }
-            SwiftUI.Tab("Inbox", systemImage: "tray", value: Destination.inbox) {
+            SwiftUI.Tab(Destination.inbox.title, systemImage: Destination.inbox.systemImage, value: Destination.inbox) {
                 NavigationStack {
-                    InboxView(feed: model.agents, onLaunch: { model.sheet = .launchAgent }, onNewTerminal: { model.newTab() })
+                    InboxView(feed: model.agents, onLaunch: { model.newAgent() }, onNewTerminal: { model.newTab() })
                 }
             }
             .badge(model.needsYouCount)
@@ -782,7 +784,7 @@ private struct WelcomeView: View {
                         .disabled(!workspace.isLayoutLive)
                         .help(workspace.isLayoutLive ? "" : model.layoutUnavailableHelp)
                         .accessibilityIdentifier("welcome-new-terminal")
-                    welcomeRow("Start an Agent…", systemImage: "sparkle", keys: nil) { model.sheet = .launchAgent }
+                    welcomeRow("New Agent…", systemImage: "sparkle", keys: WorkspaceAction.newAgent.shortcut.symbols) { model.newAgent() }
                     if !workspace.isRemote {
                         welcomeRow("Connect to a Host…", systemImage: "server.rack", keys: nil) { model.addHost() }
                     }
