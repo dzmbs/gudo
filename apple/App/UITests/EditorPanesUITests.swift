@@ -232,6 +232,8 @@ final class EditorPanesUITests: XCTestCase {
 
         // ⌘W in VS Code closes its pane, not the window (the system's Close Window is ⇧⌘W).
         webField.tap()
+        // The simulator drops the first hardware key after a launch (here the relaunch).
+        app.typeKey(XCUIKeyboardKey.shift, modifierFlags: [])
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(row("proj, VS Code on").waitForNonExistence(timeout: 10), "⌘W closed the editor pane")
         XCTAssertTrue(row("site, VS Code on").exists, "the window stayed open")
