@@ -54,6 +54,21 @@ struct WorkspaceCommands: Commands {
             Divider()
             Button("Rename Tab…") { workspace?.renamingTab = workspace?.session.activeTabId }
                 .disabled(workspace?.session.activeTab == nil)
+            if let model, let workspace, model.activeMixed == nil, let tab = workspace.session.activeTab {
+                let targets = model.moveTargets(in: workspace, besides: tab.id)
+                Menu("Move Pane to Tab") {
+                    ForEach(targets) { target in
+                        Button(workspace.title(of: target)) { model.movePane(tab.focused, in: workspace, toTab: target) }
+                    }
+                }
+                .disabled(targets.isEmpty || editorHasKeys)
+                Menu("Merge Tab Into") {
+                    ForEach(targets) { target in
+                        Button(workspace.title(of: target)) { model.mergeTab(tab.id, in: workspace, into: target) }
+                    }
+                }
+                .disabled(targets.isEmpty || editorHasKeys)
+            }
         }
         CommandMenu("Git") {
             Button("Run Script") { model?.git.runDefault() }

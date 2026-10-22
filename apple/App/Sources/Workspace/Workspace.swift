@@ -546,10 +546,10 @@ struct PaneNotice: Equatable {
 }
 
 private extension LayoutOp {
-    /// Starts a new shell on the host (and so needs a live link).
+    /// Starts a new shell on the host or moves panes there (and so needs a live link).
     var opensPane: Bool {
         switch self {
-        case .newTab, .split: true
+        case .newTab, .split, .movePaneToNewTab, .movePane, .mergeTab: true
         default: false
         }
     }

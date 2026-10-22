@@ -170,7 +170,7 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
             var session = Session(tabs: [layout], activeTabId: layout.id)
             session.apply(op)
             if let tab = session.tabs.first { layout = tab }
-        case .split, .close, .newTab, .closeTab, .moveTab:
+        case .split, .close, .newTab, .closeTab, .moveTab, .movePaneToNewTab, .movePane, .mergeTab:
             break
         }
     }
@@ -265,6 +265,9 @@ public final class CompositeTabs {
     }
 
     @ObservationIgnored private var pending: [Pending] = []
+    /// Panes moved out to a tab of their own, until their host has taken them out of the
+    /// carrier (so they are not adopted back as strays meanwhile).
+    @ObservationIgnored private var released: [HostPane: ContinuousClock.Instant] = [:]
 
     public init(tabs: [CompositeTab] = []) {
         self.tabs = tabs
@@ -422,6 +425,29 @@ public final class CompositeTabs {
         if let member = self.tab(id)?.focusedMember { _ = send(member.hostId, .focus(member.pane)) }
     }
 
+    /// Move to New Tab from a composite: an editor leaf becomes a VS Code tab of its own (its id
+    /// is returned); a host pane goes to a new tab on its host (its own carrier's tab when it
+    /// was the composite's last pane there). A composite's only leaf stays.
+    @discardableResult
+    public func moveToNewTab(leaf: PaneId, in id: TabId) -> TabId? {
+        guard let tab = tab(id), tab.leaves.count > 1, tab.leaves.contains(leaf) else { return nil }
+        if let editor = tab.editors[leaf] {
+            remove(leaf: leaf, from: id)
+            settle(id)
+            return openEditor(editor)
+        }
+        guard let member = tab.members[leaf] else { return nil }
+        remove(leaf: leaf, from: id)
+        if self.tab(id)?.panes(onHost: member.hostId).isEmpty == false {
+            released[member] = .now + answerTimeout
+            _ = send(member.hostId, .movePaneToNewTab(member.pane))
+        } else if let index = tabs.firstIndex(where: { $0.id == id }) {
+            tabs[index].carriers[member.hostId] = nil
+        }
+        settle(id)
+        return nil
+    }
+
     /// Closes the whole tab: each host closes its carrier.
     public func closeTab(_ id: TabId) {
         guard let tab = tab(id) else { return }
@@ -507,7 +533,9 @@ public final class CompositeTabs {
     private func adoptStrays(of id: TabId) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         var tab = tabs[index]
-        let taken = Set(tabs.flatMap { other in other.members.values })
+        let now = ContinuousClock.now
+        released = released.filter { $0.value > now }
+        let taken = Set(tabs.flatMap { other in other.members.values }).union(released.keys)
         for (host, carrier) in tab.carriers {
             guard let session = hostSession(host), !pending.contains(where: { $0.composite == id && $0.host == host }),
                   let hostTab = session.tabs.first(where: { $0.id == carrier })

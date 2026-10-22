@@ -632,6 +632,7 @@ private struct TabRow: View {
             }
             Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
                 .accessibilityIdentifier("open-in-new-window")
+            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
             Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace?.apply(.closeTab(tab.id)) }
         }
         .tabDrag(ref, model: model)
@@ -983,7 +984,7 @@ struct SidebarToggle: View {
     }
 }
 
-/// Rename / Open in New Window / Close for a tab, shared by the strip and the compact switcher.
+/// Rename / Open in New Window / Merge / Close for a tab, shared by the strip and the compact switcher.
 struct TabMenu: View {
     let tab: Tab
     let workspace: Workspace
@@ -994,6 +995,7 @@ struct TabMenu: View {
         Button("Open in New Window", systemImage: "macwindow.badge.plus") {
             model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
         }
+        MergeIntoTabMenu(workspace: workspace, tab: tab.id)
         Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }
     }
 }

@@ -69,6 +69,8 @@ final class WindowModel {
     /// What the next New Agent sheet starts with, once: a prompt (Ask Agent about a command with
     /// no agent open), the host and repository whose + opened it.
     @ObservationIgnored var newAgentSeed = NewAgentSeed()
+    /// The tab being dragged from this window's sidebar or strip (panes take it as a split).
+    @ObservationIgnored var draggedTab: TabRef?
     var isPaletteShown = false {
         didSet {
             if !isPaletteShown { paletteMode = .commands }

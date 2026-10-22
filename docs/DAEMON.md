@@ -30,6 +30,11 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   divider on that axis), toggle zoom, new/close/move/select/rename tab, create/rename/close
   session. Closing a tab's last pane closes the tab; closing a session's last tab closes the
   session. A pane whose process exits is closed like `ClosePane`.
+- Pane moves (offered as `DaemonFeatures::PANE_MOVES`; older daemons fail to decode them, so
+  clients send them only to daemons that offer it): `BreakPane` moves a pane into a new tab
+  right after its own (`TabCreated`; a tab's only pane is `Invalid`), `MovePane` puts a pane
+  beside another of the same session on a side, `MergeTab` puts a whole tab's tree beside a pane
+  of another tab and closes that tab. Processes keep running; a tab left empty closes.
 - The daemon is the source of truth. Every change bumps the session's `revision` and is
   view is the truth"). A client applies a layout only if its revision is not older than the
   one it has. `OpResult` is sent after the requesting client's `LayoutChanged`.
@@ -1053,7 +1058,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `GiveControl` | the holder, or owner; the recipient must be a connected driver | pane in scope |
 | `Op`: `Focus`, `Resize` (divider), `ToggleZoom` | driver | pane in scope |
 | `Op`: `FocusDirection`, `SelectTab`, `MoveTab`, `RenameTab` | driver | tab in scope |
-| `Op`: `Split` | driver | the pane's whole session in scope |
+| `Op`: `Split`, `BreakPane`, `MovePane`, `MergeTab` | driver | the (target) pane's whole session in scope |
 | `Op`: `NewTab`, `RenameSession` | driver | session in scope |
 | `Op`: `ClosePane`, `CloseTab`, `CloseSession` | **owner** | in scope |
 | `Op`: `CreateSession`; `Attach` that would create a session | **owner** | daemon |

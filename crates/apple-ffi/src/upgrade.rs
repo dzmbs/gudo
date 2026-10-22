@@ -36,6 +36,9 @@ pub struct DaemonInfo {
     pub agent_usage: bool,
     #[uniffi(default = false)]
     pub multiplayer2: bool,
+    /// It moves panes between tabs and merges tabs (`LayoutOp::BreakPane` …).
+    #[uniffi(default = false)]
+    pub pane_moves: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -53,6 +56,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             arch: i.arch,
             agent_usage: i.features.contains(proto::DaemonFeatures::AGENT_USAGE),
             multiplayer2: i.features.contains(proto::DaemonFeatures::MP2),
+            pane_moves: i.features.contains(proto::DaemonFeatures::PANE_MOVES),
         }
     }
 }

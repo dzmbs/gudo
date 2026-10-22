@@ -241,6 +241,35 @@ pub enum LayoutOp {
         /// The session.
         session_id: SessionId,
     },
+    /// Moves a pane out of its tab into a new tab right after it, focused and selected; the
+    /// process keeps running. A tab's only pane cannot be moved out (`Invalid`). Only daemons
+    /// with [`DaemonFeatures::PANE_MOVES`](crate::DaemonFeatures::PANE_MOVES) understand it.
+    BreakPane {
+        /// The pane.
+        pane_id: PaneId,
+    },
+    /// Moves a pane beside `target` (in the same session), on `side` of it, focused; a tab
+    /// left without panes closes. Needs
+    /// [`DaemonFeatures::PANE_MOVES`](crate::DaemonFeatures::PANE_MOVES).
+    MovePane {
+        /// The pane to move.
+        pane_id: PaneId,
+        /// The pane it goes beside.
+        target: PaneId,
+        /// Which side of `target`.
+        side: Direction,
+    },
+    /// Moves every pane of `tab_id` beside `target` (in another tab of the same session), on
+    /// `side` of it, keeping their arrangement; `tab_id` closes. Needs
+    /// [`DaemonFeatures::PANE_MOVES`](crate::DaemonFeatures::PANE_MOVES).
+    MergeTab {
+        /// The tab whose panes move.
+        tab_id: TabId,
+        /// The pane they go beside.
+        target: PaneId,
+        /// Which side of `target`.
+        side: Direction,
+    },
 }
 
 /// The result of a [`LayoutOp`], in [`ServerCtl::OpResult`](crate::ServerCtl::OpResult).

@@ -385,11 +385,13 @@ final class LiveAgentFeed: AgentFeed {
         }
         let started = ContinuousClock.now
         // The pane first (the sheet closes and the pane shows at once); the first prompt is
-        // typed through the composer path once the agent reports it is ready.
+        // typed through the composer path once the agent reports it is ready. A tab of its own,
+        // in the focused pane's directory.
         let launched = try await api.launchAgentPane(launch: AgentLaunch(
             splitFrom: splitFrom.rawValue, agent: request.agent == .codex ? .codex : .claude, axis: .horizontal,
             worktree: worktree, cwd: worktree == nil ? directory : nil, resume: nil,
-            prompt: nil, submit: true, readyTimeoutMs: 30_000))
+            prompt: nil, submit: true, readyTimeoutMs: 30_000,
+            newTabIn: daemon.layout.sessionId))
         log.info("launched \(request.agent.rawValue, privacy: .public) pane=\(launched.paneId) in \((ContinuousClock.now - started) / .milliseconds(1), format: .fixed(precision: 0)) ms")
         window?.reveal(host: request.hostId, pane: launched.paneId)
         if let prompt = request.prompt.nonEmpty {

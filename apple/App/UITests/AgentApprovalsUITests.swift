@@ -61,7 +61,7 @@ final class AgentApprovalsUITests: XCTestCase {
         field.typeText(command + "\n")
     }
 
-    /// New Agent with `prompt` beside the shell (no worktree); waits for the agent's pane.
+    /// New Agent with `prompt` (no worktree); waits for the agent's own tab.
     private func startAgent(_ prompt: String) {
         palette("New Agent")
         let field = app.textViews.matching(identifier: "launch-prompt").firstMatch
@@ -73,10 +73,10 @@ final class AgentApprovalsUITests: XCTestCase {
         if worktree.value as? String == "1" {
             worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         }
-        let before = panes.count
+        let before = panes.allElementsBoundByIndex.map(\.identifier)
         element("launch-start").tap()
         XCTAssertTrue(field.waitForNonExistence(timeout: 20))
-        expectation(for: NSPredicate(format: "count == %d", before + 1), evaluatedWith: panes)
+        expectation(for: NSPredicate(format: "count == 1"), evaluatedWith: panes.matching(NSPredicate(format: "NOT (identifier IN %@)", before)))
         waitForExpectations(timeout: 20)
     }
 
@@ -111,7 +111,8 @@ final class AgentApprovalsUITests: XCTestCase {
     private func closeAgentPane() {
         let screen = agentScreen(containing: "prompt:")
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-        app.typeKey("1", modifierFlags: .command)
+        // The agent's tab is the last one.
+        app.typeKey("9", modifierFlags: .command)
         if screen.waitForExistence(timeout: 5) { screen.tap() }
         app.typeKey("w", modifierFlags: .command)
     }

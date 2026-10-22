@@ -41,6 +41,10 @@ import UnnamedCore
         // Pane 3 is the bottom of the vertical split: moving its divider up grows it.
         #expect(op(.resize(PaneId(3), .up, amount: 0.05)) == .resize(paneId: 3, axis: .vertical, delta: 0.05))
         #expect(op(.resize(PaneId(1), .up, amount: 0.05)) == nil, "no vertical divider next to pane 1")
+        #expect(op(.movePaneToNewTab(PaneId(3))) == .breakPane(paneId: 3))
+        #expect(op(.movePane(PaneId(3), beside: PaneId(1), side: .left)) == .movePane(paneId: 3, target: 1, side: .left))
+        #expect(op(.mergeTab(TabId(10), beside: PaneId(1), side: .down)) == .mergeTab(tabId: 10, target: 1, side: .down))
+        #expect(!LayoutConversion.isOptimistic(.movePaneToNewTab(PaneId(3))), "the daemon decides")
     }
 }
 

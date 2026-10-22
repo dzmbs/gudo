@@ -615,6 +615,33 @@ impl Core {
                     pane_id,
                 }
             }
+            LayoutOp::BreakPane { pane_id } => {
+                let (session, tab_id) = lock(&self.layout).break_pane(pane_id).map_err(fail)?;
+                self.layout_changed(session, false);
+                OpOutcome::TabCreated { tab_id, pane_id }
+            }
+            LayoutOp::MovePane {
+                pane_id,
+                target,
+                side,
+            } => {
+                let session = lock(&self.layout)
+                    .move_pane(pane_id, target, side)
+                    .map_err(fail)?;
+                self.layout_changed(session, true);
+                OpOutcome::Done
+            }
+            LayoutOp::MergeTab {
+                tab_id,
+                target,
+                side,
+            } => {
+                let session = lock(&self.layout)
+                    .merge_tab(tab_id, target, side)
+                    .map_err(fail)?;
+                self.layout_changed(session, true);
+                OpOutcome::Done
+            }
             LayoutOp::CloseSession { session_id } => {
                 let removed = lock(&self.layout).close_session(session_id).map_err(fail)?;
                 self.after_removal(Some(session_id), removed);
