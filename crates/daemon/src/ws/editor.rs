@@ -27,6 +27,7 @@ use proto::{
 use tokio::process::{Child, Command};
 
 use super::editor_proxy::{AssetCache, EditorProxy};
+use super::vscode_server::{self, Servers};
 use crate::config::Config;
 use crate::fsutil;
 use crate::procinfo;
@@ -87,7 +88,7 @@ struct Running {
     upstream: u16,
     child: Child,
     /// Dropped (stopped) with the server.
-    _proxy: Option<EditorProxy>,
+    proxy: Option<EditorProxy>,
 }
 
 impl Drop for Running {
@@ -107,6 +108,8 @@ pub(crate) struct Editors {
     install: tokio::sync::Mutex<()>,
     /// Compressed static assets, shared by every editor's proxy.
     cache: std::sync::OnceLock<std::sync::Arc<AssetCache>>,
+    /// Microsoft's server, run directly.
+    servers: Servers,
 }
 
 /// The VS Code CLI: the user's own, else the one the daemon installed from Microsoft.
@@ -350,13 +353,31 @@ impl Editors {
                             .into(),
                     ));
                 }
-                let mut cmd = Command::new(code);
-                cmd.args(["serve-web", "--host", "127.0.0.1", "--port"])
-                    .arg(port.to_string())
-                    .arg("--connection-token")
-                    .arg(&token)
-                    .arg("--accept-server-license-terms");
-                cmd
+                let direct = if cfg.vscode_serve_web {
+                    None
+                } else {
+                    self.servers
+                        .ensure(cfg)
+                        .await
+                        .inspect_err(|e| {
+                            tracing::warn!(
+                                "no VS Code server to run directly ({e}); using code serve-web"
+                            )
+                        })
+                        .ok()
+                };
+                match direct {
+                    Some(dir) => vscode_server::command(&dir, port, &token),
+                    None => {
+                        let mut cmd = Command::new(code);
+                        cmd.args(["serve-web", "--host", "127.0.0.1", "--port"])
+                            .arg(port.to_string())
+                            .arg("--connection-token")
+                            .arg(&token)
+                            .arg("--accept-server-license-terms");
+                        cmd
+                    }
+                }
             }
             EditorKind::OpenVsCode => {
                 let dir = self.ensure_openvscode(cfg).await?;
@@ -410,7 +431,7 @@ impl Editors {
             },
             upstream: port,
             child,
-            _proxy: None,
+            proxy: None,
         };
         wait_ready(&mut run, &log_path).await?;
         if cfg.editor_compress {
@@ -421,7 +442,7 @@ impl Editors {
                 .await
                 .map_err(|e| WsError::Failed(format!("starting the editor proxy: {e}")))?;
             run.info.port = proxy.port();
-            run._proxy = Some(proxy);
+            run.proxy = Some(proxy);
         }
         let info = run.info.clone();
         self.running.lock().await.insert(folder_s, run);
@@ -590,8 +611,16 @@ async fn accepts_token(port: u16, token: &str) -> bool {
     }
 }
 
+/// Forgets servers that exited, and stops those no workbench has used for as long as one
+/// may stay away and still come back.
 fn reap(running: &mut HashMap<String, Running>) {
-    running.retain(|_, r| matches!(r.child.try_wait(), Ok(None)));
+    running.retain(|_, r| {
+        matches!(r.child.try_wait(), Ok(None))
+            && r.proxy
+                .as_ref()
+                .and_then(EditorProxy::idle_for)
+                .is_none_or(|idle| idle < vscode_server::RECONNECTION_GRACE)
+    });
 }
 
 /// Waits until the server accepts connections, or fails with the end of its log.

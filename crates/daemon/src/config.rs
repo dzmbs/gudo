@@ -154,6 +154,9 @@ pub struct Config {
     /// app's forward carries brotli/gzip instead of ~24 MB of plain JavaScript on a cold load
     /// (`editor.compress` in `config.toml`; default on).
     pub editor_compress: bool,
+    /// Run VS Code as `code serve-web` instead of Microsoft's server directly
+    /// (`editor.serve_web` in `config.toml`; default off: `ws/vscode_server.rs` says why).
+    pub vscode_serve_web: bool,
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
@@ -294,6 +297,7 @@ impl Config {
             vscodium_dir: None,
             editor_default: proto::EditorKind::VsCode,
             editor_compress: true,
+            vscode_serve_web: false,
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
@@ -393,6 +397,9 @@ impl Config {
         }
         if let Some(compress) = file.editor.compress {
             self.editor_compress = compress;
+        }
+        if let Some(serve_web) = file.editor.serve_web {
+            self.vscode_serve_web = serve_web;
         }
         if self.relay == RelayMode::Default {
             self.relay = file
@@ -613,6 +620,7 @@ struct EditorSection {
     vscodium: Option<PathBuf>,
     default: Option<DefaultEditor>,
     compress: Option<bool>,
+    serve_web: Option<bool>,
 }
 
 /// `editor.default`.

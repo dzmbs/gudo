@@ -430,9 +430,20 @@ bulk) with `StreamHeader::Forward{Tcp{port} | Unix{path}}`. The daemon connects 
 previous write finished, so a stalled reader stops the writer via the TCP window / QUIC flow
 control (test: a server that does not read holds a 256 MiB writer back, then receives every
 byte). EOF on one side finishes only that direction (half-close; test: a server that answers
-after the client's `shutdown(Write)`), a reset maps to a stream reset. Forwards survive
-reconnects (new connections wait for the link); `stop_forward` closes the listener. 64
-concurrent connections through one forward are tested.
+after the client's `shutdown(Write)`), a reset maps to a stream reset. A failure midway (the
+link died, either side reset) ends both directions at once and resets both ends: the local TCP
+peer and the host's server see a reset (`SO_LINGER 0`), never an orderly close, so a browser's
+websocket takes it for a lost link and reconnects. Forwards survive reconnects: a new connection
+waits for the link, and one that met a connection already dead (closed before the client noticed)
+gets one more try on the next live one within 20 s, before any byte flowed. The device's
+listener is bound again on the same port when the client resumes from `suspend` (iOS defuncts a
+suspended app's sockets) and whenever accepting fails. `stop_forward` closes the listener. 64
+concurrent connections through one forward are tested;
+`forwards_wait_out_a_reconnect_and_reset_on_a_broken_link` covers the wait and the resets.
+
+`Client::network_changed` (the device's network changed) keeps a live connection, telling iroh
+to look for paths again (it moves the connection onto one that works, relay or direct, without
+closing it, so forwarded websockets survive); only a client without a live connection redials.
 
 Loopback, one connection, 128 MiB, release build (`forward_throughput_and_latency`):
 
@@ -459,9 +470,10 @@ replaces a LAN one). Scans run every 2 s while any client is connected, at once 
 prints a new URL or a command starts/ends, never with no client; the whole list is pushed when
 it changes. Gap: a URL that scrolls off within one tick is missed (the listener still is).
 
-### 5.3 Editor (`code serve-web` over our forward by default; VS Code tunnel opt-in; VSCodium as automatic fallback; openvscode-server explicit only)
+### 5.3 Editor (Microsoft's VS Code server over our forward by default; VS Code tunnel opt-in; VSCodium as automatic fallback; openvscode-server explicit only)
 
-on the host, reached over our direct iroh port forward** (`EditorLaunch` below; apple-ffi
+on the host — the server `code serve-web` runs, run directly (`ws/vscode_server.rs`) — reached
+over our direct iroh port forward** (`EditorLaunch` below; apple-ffi
 `DaemonClient::open_editor`). No Microsoft relay, no tunnel quota, and **never a GitHub or Microsoft
 sign-in**. The app shows Microsoft's licence terms (VS Code licence, VS Code Server licence, Microsoft
 Privacy Statement) once per host in a first-use sheet and passes `accept_vscode_license` only after the
@@ -528,8 +540,33 @@ The per-folder servers below remain. **`Auto` no longer falls back to openvscode
 `code serve-web` and fails with `Unavailable` (no CLI) or `Denied` (licence not accepted).
 openvscode-server must be asked for with `Only(OpenVsCode)`.
 
+- **Why the server runs directly.** serve-web stops its server an hour after the last
+  connection closed, sends new connections to a newer server as soon as Microsoft ships one, and
+  keeps the server's default reconnection grace (3 h, 5 min once another client came). Each of
+  these ends every open workbench's session ("Cannot reconnect", reload). Run directly, the server
+  gets `--reconnection-grace-time 172800` (48 h: a sleeping iPad comes back to its session) and
+  lives until `EditorStop`, daemon shutdown, or 48 h without any connection through its proxy
+  (`EditorProxy::idle_for`; checked whenever editors are listed, launched or opened).
+  - Download: `/api/update/server-<linux-x64|linux-arm64|linux-armhf|linux-alpine|alpine-arm64|
+    darwin|darwin-arm64>-web/stable/latest` on Microsoft's update service gives `url` and
+    `sha256hash`; curl, else wget; the SHA-256 is checked; unpacked to
+    `<state>/vscode/server/<commit>/` (`latest` names the newest). The service is asked at most
+    hourly, when a server starts; offline, the newest one here is used. The one before stays (it
+    may still run); older ones are removed.
+  - Launch: `bin/code-server --host 127.0.0.1 --port <free> --connection-token <random 128-bit>
+    --accept-server-license-terms --reconnection-grace-time 172800` in the folder. Server data in
+    `~/.vscode-server`, as under serve-web (extensions and settings carry over).
+  - Licence: the same acceptance serve-web needs (the Server licence, accepted in the app); the
+    same Microsoft download serve-web makes. Nothing is fetched without it.
+  - Fallback: when Microsoft publishes no server for the host or the download fails with none
+    here, `code serve-web` as before. `editor.serve_web = true` forces serve-web (tests with a
+    stand-in `code`).
+  - Run for real on macOS arm64 (2026-10-22, VS Code 1.143.0: CLI and server download, launch and
+    workbench through the forward in 34 s on first open, 1.5–2.2 s per warm load in WebKit); the
+    Linux builds go through the same code but were not run yet.
 - `EditorLaunch{folder, choice: Auto|Only(kind), accept_vscode_license}`. Auto runs
-  `code serve-web` (the user's CLI, else the managed one) only with the licence accepted. One server per folder, reused
+  VS Code (the server directly, else `code serve-web`; the user's CLI or the managed one must be
+  there) only with the licence accepted. One server per folder, reused
   (the app's editor panes, several at once, are one server each, each behind its own compressing proxy sharing one
   asset cache; why not one server per host: APP-ARCHITECTURE §20 "Daemon"); bound to `127.0.0.1` on a
   free port with a random 128-bit `--connection-token`; own process group, killed on

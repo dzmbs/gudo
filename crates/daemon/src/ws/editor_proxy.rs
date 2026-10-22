@@ -21,10 +21,10 @@ use std::convert::Infallible;
 use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
 use hyper::body::{Body, Frame, Incoming, SizeHint};
@@ -83,6 +83,7 @@ impl Coding {
 /// The proxy for one editor server. Dropping it stops the listener and its connections.
 pub(crate) struct EditorProxy {
     port: u16,
+    shared: Arc<Shared>,
     task: JoinHandle<()>,
 }
 
@@ -105,14 +106,24 @@ impl EditorProxy {
             client,
             upstream,
             cache,
+            open: AtomicUsize::new(0),
+            idle_since: Mutex::new(Instant::now()),
         });
-        let task = tokio::spawn(accept(listener, shared));
-        Ok(Self { port, task })
+        let task = tokio::spawn(accept(listener, Arc::clone(&shared)));
+        Ok(Self { port, shared, task })
     }
 
     /// The port the app's forward should target.
     pub(crate) fn port(&self) -> u16 {
         self.port
+    }
+
+    /// How long no connection has been open (`None` while one is: a workbench, a load).
+    pub(crate) fn idle_for(&self) -> Option<Duration> {
+        if self.shared.open.load(Ordering::SeqCst) > 0 {
+            return None;
+        }
+        Some(lock(&self.shared.idle_since).elapsed())
     }
 }
 
@@ -126,6 +137,28 @@ struct Shared {
     client: Client<HttpConnector, Incoming>,
     upstream: u16,
     cache: Option<Arc<AssetCache>>,
+    /// Connections open now, websockets included.
+    open: AtomicUsize,
+    /// When the last connection closed.
+    idle_since: Mutex<Instant>,
+}
+
+/// Counts as an open connection while it lives.
+struct Busy(Arc<Shared>);
+
+impl Busy {
+    fn new(shared: &Arc<Shared>) -> Self {
+        shared.open.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(shared))
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        if self.0.open.fetch_sub(1, Ordering::SeqCst) == 1 {
+            *lock(&self.0.idle_since) = Instant::now();
+        }
+    }
 }
 
 async fn accept(listener: TcpListener, shared: Arc<Shared>) {
@@ -138,6 +171,7 @@ async fn accept(listener: TcpListener, shared: Arc<Shared>) {
                 let _ = tcp.set_nodelay(true);
                 let shared = Arc::clone(&shared);
                 connections.spawn(async move {
+                    let _busy = Busy::new(&shared);
                     let service = hyper::service::service_fn(move |req| {
                         let shared = Arc::clone(&shared);
                         async move { Ok::<_, Infallible>(handle(&shared, req).await) }
@@ -156,7 +190,7 @@ async fn accept(listener: TcpListener, shared: Arc<Shared>) {
     }
 }
 
-async fn handle(shared: &Shared, req: Request<Incoming>) -> Response<ProxyBody> {
+async fn handle(shared: &Arc<Shared>, req: Request<Incoming>) -> Response<ProxyBody> {
     match proxy(shared, req).await {
         Ok(resp) => resp,
         Err(e) => {
@@ -171,7 +205,7 @@ async fn handle(shared: &Shared, req: Request<Incoming>) -> Response<ProxyBody> 
 }
 
 async fn proxy(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     mut req: Request<Incoming>,
 ) -> Result<Response<ProxyBody>, BoxError> {
     let path = req
@@ -277,14 +311,16 @@ async fn proxy(
 /// Forwards an `Upgrade` request as it is and, on `101`, splices the two upgraded
 /// connections (VS Code's websockets: extension host, file system, terminals).
 async fn upgrade(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     mut req: Request<Incoming>,
 ) -> Result<Response<ProxyBody>, BoxError> {
     let downstream = hyper::upgrade::on(&mut req);
     let mut resp = shared.client.request(req).await?;
     if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
         let upstream = hyper::upgrade::on(&mut resp);
+        let busy = Busy::new(shared);
         tokio::spawn(async move {
+            let _busy = busy;
             let (Ok(down), Ok(up)) = tokio::join!(downstream, upstream) else {
                 return;
             };

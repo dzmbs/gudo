@@ -762,6 +762,7 @@ fn open_editor_falls_back_to_vscodium_when_vscode_cannot_be_had() {
     let host = Host::start_with(move |c| {
         c.vscodium_dir = Some(dir);
         c.code_cli = Some(code);
+        c.vscode_serve_web = true;
     });
     let (client, _events) = host.client();
     let session = host
