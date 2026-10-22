@@ -51,6 +51,43 @@ import Testing
         window.firstResponder?.tryToPerform(#selector(NSText.copy(_:)), with: nil)
         #expect(NSPasteboard.general.string(forType: .string) == "world")
     }
+
+    @Test func copyJoinsSoftWrapsTrimsBlanksKeepsNewlines() throws {
+        let (view, window, _) = try makeView()
+        // 50 columns wrap on a 40-column grid; a hard newline; trailing blanks.
+        view.surface.terminal.write(Array((String(repeating: "a", count: 50) + "\r\nnext   \r\n").utf8))
+        view.surface.terminal.selectAll()
+        window.firstResponder?.tryToPerform(#selector(NSText.copy(_:)), with: nil)
+        #expect(NSPasteboard.general.string(forType: .string) == String(repeating: "a", count: 50) + "\nnext")
+    }
+
+    @Test func doubleClickSelectsAWholeURL() throws {
+        let (view, window, _) = try makeView()
+        view.surface.terminal.write(Array("see https://example.com/a/b ok".utf8))
+        let rect = view.surface.rect(for: GridPoint(x: 12, y: 0))
+        #expect(rect != .zero)
+        let point = view.convert(CGPoint(x: rect.midX, y: rect.midY), to: nil)
+        for clicks in 1...2 {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: Double(clicks) * 0.1, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: clicks, pressure: 1))
+                if type == .leftMouseDown { view.mouseDown(with: event) } else { view.mouseUp(with: event) }
+            }
+        }
+        #expect(view.surface.terminal.selectionText() == "https://example.com/a/b")
+    }
+
+    @Test func droppedTextAndFilesPaste() throws {
+        let board = NSPasteboard(name: NSPasteboard.Name("terminal-drop-test"))
+        board.clearContents()
+        board.setString("git status", forType: .string)
+        #expect(TerminalView.droppedText(board) == "git status")
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/a b/it's.txt") as NSURL, URL(fileURLWithPath: "/tmp/plain.txt") as NSURL])
+        #expect(TerminalView.droppedText(board) == "'/tmp/a b/it'\\''s.txt' /tmp/plain.txt")
+        board.releaseGlobally()
+    }
 }
 #endif
 
