@@ -775,9 +775,8 @@ those. On the iPad the web view's container answers those keys itself from the r
 - **⌘1–⌘9** (select tab / last tab): the way to any other tab. VS Code's own ⌘1–⌘8 only focus editor
   groups (a browser takes them for its tabs in vscode.dev too).
 - **⌘W** closes the editor pane, as it closes vscode.dev's tab in a browser. Nothing is lost: the
-  server keeps running and VS Code keeps unsaved changes (hot exit). On the iPad the system's File ▸
-  Close Window was bound to ⌘W as well and won while a web view had the keyboard; `AppDelegate.buildMenu`
-  moves it to ⇧⌘W (as in Safari), so ⌘W is always Close Pane.
+  server keeps running and VS Code keeps unsaved changes (hot exit). The system's Close Window
+  moves to ⇧⌘W (`AppDelegate.buildMenu`), as in Safari.
 - **⌃⌘\` Return to Terminal** (Pane menu): the terminal beside the editor in its tab, else the tab the
   editor was opened from (`lastTerminalTab`). VS Code binds nothing to ⌃⌘\` (its ⌃\` toggles its own
   terminal). ⌘⎋ was tried first: on the iPad it never reaches the app while a web view has the keyboard.

@@ -203,15 +203,13 @@ final class KeyBar: UIInputView {
         configureBand()
         column.addArrangedSubview(band)
 
-        // GameController may post from its own queue; the bar is main-actor UI.
         keyboardObservers = [.GCKeyboardDidConnect, .GCKeyboardDidDisconnect].map { name in
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.keyboardsChanged() }
             }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        // UserDefaults posts on whichever thread wrote: on a device, PencilKit's Scribble
-        // registers its defaults from a background queue at launch. Hop to main.
+        // Posted on the writing thread, which need not be main.
         settingsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in

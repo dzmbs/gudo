@@ -308,9 +308,7 @@ impl Editors {
             if accepts_token(upstream, &info.token).await {
                 return Ok(info);
             }
-            // Still running but turning its own token away: `code serve-web` that idled out
-            // its server and started a newer one answered every request "Forbidden." from
-            // then on. Replace it.
+            // Alive but refusing its own token: replace it.
             tracing::warn!(folder = %folder.display(), pid = info.pid, "editor refuses its token; restarting it");
             let mut running = self.running.lock().await;
             if running
@@ -559,9 +557,8 @@ impl Editors {
     }
 }
 
-/// Whether the server on `port` still lets its own token in. False only when it plainly
-/// refuses (401/403, or nothing listens); a slow answer counts as alive, so a busy server is
-/// never restarted under its user.
+/// Whether the server on `port` still accepts its own token. A slow answer counts as yes, so a
+/// busy server is never restarted.
 async fn accepts_token(port: u16, token: &str) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -575,7 +572,6 @@ async fn accepts_token(port: u16, token: &str) -> bool {
         stream.write_all(request.as_bytes()).await.ok()?;
         let mut head = [0u8; 32];
         let n = stream.read(&mut head).await.ok()?;
-        // "HTTP/1.1 302 Found"
         std::str::from_utf8(&head[..n])
             .ok()?
             .split_whitespace()
