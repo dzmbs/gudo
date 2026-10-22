@@ -105,7 +105,7 @@ struct WorkspaceView: View {
                     .environment(model.app)
             }
             // The whole window follows the terminal theme: surfaces, text, accent and states
-            // (`ChromePalette`), light or dark by `window-theme` (Ghostty: Match Terminal).
+            // (`ChromePalette`), light or dark by `window-theme` (Ghostty `auto`: from the theme).
             .chromeTheme(theme, windowTheme: windowTheme)
             .modifier(ThemePairFollower())
             .focusedSceneValue(workspace)

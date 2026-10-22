@@ -78,6 +78,23 @@ struct ChromePaletteTests {
         #expect(darkChrome.base.luminance < 0.05)
     }
 
+    /// The window matches the theme by default; a stored `system` (the old default) goes back to
+    /// it once, a chosen Light or Dark stays.
+    @Test(arguments: [("system", nil), ("light", "light"), ("dark", "dark"), (nil, nil)] as [(String?, String?)])
+    @MainActor func windowThemeMigration(stored: String?, expected: String?) throws {
+        let suite = "window-theme-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(stored, forKey: TerminalPreferences.Key.windowTheme)
+        TerminalPreferences.WindowTheme.migrate(defaults)
+        #expect(defaults.string(forKey: TerminalPreferences.Key.windowTheme) == expected)
+        #expect(ChromePalette.fromPreferences(systemScheme: .light, defaults: defaults).scheme == (expected == "light" ? .light : .dark))
+        // Once: System chosen afterwards stays.
+        defaults.set("system", forKey: TerminalPreferences.Key.windowTheme)
+        TerminalPreferences.WindowTheme.migrate(defaults)
+        #expect(defaults.string(forKey: TerminalPreferences.Key.windowTheme) == "system")
+    }
+
     /// Text at the main level reads at 4.5:1 on every surface, on every bundled theme, in the
     /// theme's own scheme and forced to the other.
     @Test(arguments: [ColorScheme?.none, .light, .dark])

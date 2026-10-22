@@ -17,7 +17,7 @@ private struct ChromeThemeModifier: ViewModifier {
             .preferredColorScheme(preferredScheme(chrome))
     }
 
-    /// The scheme the user asked the window to take, nil for "Match Terminal".
+    /// The scheme the user asked the window to take, nil for Match Theme.
     private var requestedScheme: ColorScheme? {
         switch windowTheme {
         case .auto: nil

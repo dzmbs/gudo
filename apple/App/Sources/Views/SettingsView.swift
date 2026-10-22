@@ -231,12 +231,6 @@ private struct AppearanceSection: View {
                 .settingAnchor("theme")
             }
             ThemePairRows { ThemePicker(selection: $0) }
-            Picker(selection: $windowTheme) {
-                ForEach(TerminalPreferences.WindowTheme.allCases) { Text($0.title).tag($0) }
-            } label: {
-                ConfigLabel("Window", key: "window-theme")
-            }
-            .settingAnchor("window-theme")
             Picker(selection: $paneStyle) {
                 ForEach(TerminalPreferences.PaneStyle.allCases) { Text($0.title).tag($0) }
             } label: {
@@ -257,6 +251,35 @@ private struct AppearanceSection: View {
                     .settingAnchor("tab-bar")
             }
             #endif
+            windowRows
+        }
+    }
+
+    /// The window takes the theme's colours unless the user keeps it light, dark or with the
+    /// system. Turning matching off starts on the scheme opposite the theme's, so the change shows.
+    @ViewBuilder private var windowRows: some View {
+        let matches = Binding {
+            windowTheme == .auto
+        } set: { on in
+            windowTheme = on ? .auto : (ThemeCatalog.theme(named: theme).isLight ? .dark : .light)
+        }
+        Toggle(isOn: matches.animation(DS.Motion.quick)) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Window Matches Theme")
+                Text("Sidebar, toolbar and key bar in the theme's colours")
+                    .font(.caption)
+                    .foregroundStyle(DS.Palette.textTertiary)
+            }
+        }
+        .accessibilityIdentifier("settings-window-matches-theme")
+        .settingAnchor("window-theme")
+        if windowTheme != .auto {
+            Picker(selection: $windowTheme) {
+                ForEach(TerminalPreferences.WindowTheme.separate) { Text($0.title).tag($0) }
+            } label: {
+                ConfigLabel("Window Appearance", key: "window-theme")
+            }
+            .accessibilityIdentifier("settings-window-appearance")
         }
     }
 }
@@ -400,100 +423,6 @@ private struct AboutSection: View {
             NavigationLink("Acknowledgements") { AcknowledgementsView() }
                 .settingAnchor("acknowledgements")
         }
-    }
-}
-
-// MARK: - Theme picker
-
-/// Ghostty's bundled themes, searchable, each with its palette and a sample line.
-private struct ThemePicker: View {
-    @Binding var selection: String
-    @State private var query = ""
-    @State private var filter = Filter.all
-
-    enum Filter: String, CaseIterable, Identifiable {
-        case all = "All", dark = "Dark", light = "Light"
-        var id: String { rawValue }
-    }
-
-    private var themes: [TerminalTheme] {
-        let all = [TerminalTheme.ghosttyDefault] + ThemeCatalog.all
-        return all.filter { theme in
-            (query.isEmpty || theme.name.localizedCaseInsensitiveContains(query))
-                && (filter == .all || (filter == .light) == theme.isLight)
-        }
-    }
-
-    var body: some View {
-        List {
-            Picker("Appearance", selection: $filter) {
-                ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: DS.Space.s, leading: DS.Space.l, bottom: DS.Space.s, trailing: DS.Space.l))
-            .listRowSeparator(.hidden)
-
-            ForEach(themes) { theme in
-                Button {
-                    selection = theme.name
-                } label: {
-                    ThemeCard(theme: theme, isSelected: theme.name == selection)
-                }
-                .buttonStyle(.plain)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: DS.Space.xs, leading: DS.Space.l, bottom: DS.Space.xs, trailing: DS.Space.l))
-                .listRowSeparator(.hidden)
-                .accessibilityIdentifier("theme-\(theme.name)")
-            }
-        }
-        .listStyle(.plain)
-        .chromeGrouped()
-        .searchable(text: $query, prompt: "\(ThemeCatalog.all.count + 1) themes")
-        .navigationTitle("Theme")
-    }
-}
-
-/// foreground, a prompt in its colours, and four swatches (red, green, blue, yellow). The selected
-/// card has the window's accent ring.
-private struct ThemeCard: View {
-    let theme: TerminalTheme
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(spacing: DS.Space.m) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(theme.name)
-                    .font(.body)
-                    .foregroundStyle(theme.foreground)
-                    .lineLimit(1)
-                // A prompt line in the theme's own colours.
-                HStack(spacing: 0) {
-                    Text("~ ").foregroundStyle(theme.ansi(4))
-                    Text("❯ ").foregroundStyle(theme.ansi(2))
-                    Text("git ").foregroundStyle(theme.foreground)
-                    Text("status").foregroundStyle(theme.ansi(3))
-                }
-                .font(TerminalFont.font(size: 12, relativeTo: .caption))
-            }
-            Spacer(minLength: DS.Space.s)
-            ThemeSwatches(theme: theme)
-            Image(systemName: "checkmark.circle.fill")
-                .font(.body)
-                .foregroundStyle(DS.Palette.accent)
-                .opacity(isSelected ? 1 : 0)
-        }
-        .padding(.horizontal, DS.Space.m)
-        .padding(.vertical, DS.Space.gap10)
-        .background(theme.background, in: .rect(cornerRadius: DS.Radius.control))
-        .overlay {
-            RoundedRectangle(cornerRadius: DS.Radius.control)
-                .strokeBorder(isSelected ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isSelected ? 2 : 0.5)
-        }
-        .contentShape(.rect)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
