@@ -41,7 +41,7 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 
 | Token | Formula | Use |
 |---|---|---|
-| `base` | the theme background | window base, tab strip, toolbar band, iPhone top bar, Inbox/Hosts lists |
+| `base` | the theme background | window base, tab strip, toolbar band, iPhone top bar, Agents/Hosts lists |
 | `sidebar` / `raised` / `overlay` | background + foreground at 5 / 10 / 15 % | sidebar; cards, popovers, palette glass tint, command blocks, fields; menus |
 | `groupedPage` / `groupedRow` | dark: base / raised; light: sidebar / base (iOS convention) | Settings, sheets' forms |
 | `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
@@ -227,7 +227,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   drags to resize (200–360 pt, double-click restores 248).
 
 
-- Inbox (count badge, red only when something needs you) and Hosts at the top.
+- Agents (count badge, red only when something needs you) and Hosts at the top. Under a
+  host's tabs, its agents under a quiet "Agents" label with + New Agent on that host (hover on
+  the Mac, 0.6 on touch).
 - One group per host the window shows, all at once (owner, 2026-10-18: switching hosts never
   goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
   (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font
@@ -257,7 +259,10 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - iPhone: the bar shows the tab's title with the host's name as a second line (state glyph after
   it only when not live); the title menu lists every host as a section with its tabs and
   "New Terminal on …".
-- Inbox: + is a menu, New Terminal (default) then New Agent. Terminal toolbar: a pencil "Draw"
+- New things start from one +, a menu on tap (never a hidden long press): the sidebar's has New
+  Terminal ⌘T, New Agent… ⇧⌘N, New Terminal On ▸ (several hosts), Add Host…; a daemon host's
+  header + has New Terminal and New Agent… on that host; Agents' + leads with New Agent…. One
+  name everywhere (File menu, palette, welcome, sidebar): New Agent. Terminal toolbar: a pencil "Draw"
   button next to the pane menu (⌃⌘D), disabled where the focused pane cannot be drawn on.
 - Tab names: every new tab gets a short friendly adjective-noun name ("quiet-otter",
   `Workspace/FriendlyName.swift`, curated lists), stable, and sent to the daemon as a rename so
@@ -309,7 +314,7 @@ composer and snippets are main's (`App/Sources/KeyBar`), skinned through `KeyBar
 
 ### iPhone
 
-A Liquid Glass tab bar: Terminal · Inbox (badge) · Hosts; it minimizes on scroll. The terminal tab
+A Liquid Glass tab bar: Terminal · Agents (badge) · Hosts; it minimizes on scroll. The terminal tab
 is one pane full screen under a 36 pt bar on the terminal background: connection dot, tab title
 with ▾ (switcher menu with tab count), pane switcher when the tab is split, palette, new tab.
 Settings is in Hosts' toolbar.
@@ -317,7 +322,7 @@ Settings is in Hosts' toolbar.
 ### Welcome / empty
 
 No tabs: terminal glyph, "No Open Tabs", one sentence, then four rows with shortcuts: New Tab ⌘T,
-Connect to a Host…, Start an Agent…, Command Palette ⌘K.
+New Agent… ⇧⌘N, Connect to a Host…, Command Palette ⌘K.
 
 iPhone and iPad have no shell of their own: a fresh install opens here with "Connect a Host",
 one sentence, and Connect with SSH…, Paste a Pairing Ticket…, Scan a QR Code…, Command Palette.
@@ -345,7 +350,7 @@ takes `selected`/`total`.)
 
 ### Hosts (`Screens/HostsView.swift`)
 
-Same surface as the Inbox (plain list on the base, inline title, hairlines from the text
+Same surface as Agents (plain list on the base, inline title, hairlines from the text
 column). Quick connect is a drawn field (28 pt Mac, 36 pt touch in a 44 pt hit area, radius 6, on
 `raised` with a hairline, the accent edge while focused). Rows: kind glyph at 0.6 in a 16/18 pt slot,
 name subheadline semibold, address SF Mono footnote tertiary, status footnote with only the state
@@ -371,18 +376,24 @@ The pane keeps its last frame, desaturated to 25 % and dimmed to 55 %; a glass c
 you'll resume where you left off." with Disconnect and Retry Now (default). Unreachable: reason +
 hint (e.g. Tailscale). The sidebar footer and connection dots show the same state.
 
-### Agent Inbox (`Screens/InboxView.swift`)
+### Agents (`Screens/InboxView.swift`)
 
 one-pixel separators from the text column, an inline title with "2 need you · 3 new" as its
-subtitle; rows with a 16 pt glyph slot (glyphs at 0.6 unless something needs you), the agent in
-subheadline semibold, "host · session" footnote tertiary, the age right-aligned in monospaced
-digits; command blocks on `raised`, radius 6, hairline edge; Approve is the one `.primaryGlass`
-action (small on the Mac, full size on touch).
+subtitle, the cross-host feed of every agent (named Agents, not Inbox: it lists agents, not
+messages). Dense like a mail list. Filters All / Needs You / Running / Unread / Errors as a
+compact track as wide as its words, left-aligned under the bar, never stretched across the
+window. A row is two lines: a 16 pt glyph
+slot (glyphs at 0.6 unless something needs you), what the agent is on in subheadline (semibold
+while unread or waiting; a directory title such as "~" reads as the state instead), then the
+agent's 12 pt mark, "Claude Code · host · folder" footnote tertiary (a home directory is "~");
+right-aligned the unread dot, age (monospaced, ticking for running), a small Reply and the
+open-pane arrow. The last message (2 lines), the request block (SF Mono on `raised`, radius 6,
+hairline edge) and the verbs (small everywhere; Approve the one `.primaryGlass`) follow only
+when there is one.
 
-Needs you / Running / Finished. Row: status glyph, the agent's mark (14 pt) and name, host · session, an accent dot while
-unseen, age (ticking for running), an open-pane arrow, prompt. Permission requests show the tool
-and command in an SF Mono block with Deny (glass) and Approve (prominent); questions and finished
-turns offer Reply…, an inline composer that types into the agent. Finished turns carry the
+Needs you / Running / Finished. Permission requests show the tool and command with Edit, Deny
+(glass) and Approve (prominent); questions and finished turns offer Reply, an inline composer
+that types into the agent. Empty: "No Agents Yet" with New Agent. Finished turns carry the
 agent's last message; long commands appear with a check/cross glyph and "Exited 0 · 4m 12s".
 The subtitle says "3 new · studio 2, devbox 1"; after 1.5 s on screen the dots fade (seen on
 every device). Optimistic: an answered request moves to Running at once. Swipe Mark Done;
@@ -470,7 +481,7 @@ The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. V
 
 - **Sidebar**: inside each host group, tabs outside a repository first (as before), then one
   section per repository: the name in the section style, `.secondary`, sentence case, no icon,
-  + New Task (hover on the Mac, 0.6 on touch), padding top 12 / bottom 4. Under it one row per
+  + New Agent in that repository (hover on the Mac, 0.6 on touch), padding top 12 / bottom 4. Under it one row per
   worktree, main first: a 16 pt slot (18 on touch) with the branch glyph, or the pull request's
   glyph in its state colour (open green, merged purple from the palette's magenta, closed red,
   draft grey), at 0.6 with a 10 pt checks badge in the corner; the branch (body 13 on the Mac,
@@ -506,7 +517,7 @@ The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. V
   Open PR on GitHub ⌃⌘G, Create Pull Request, Check Out Pull Request… (into a new worktree),
   Run: <script> (badge "Script"), Archive Worktree, Delete Worktree…, Restore <branch>. A Git
   menu carries the same, with ⌘R and ⌃⌘G.
-- **New Task** (replaces New Agent): Run (Claude Code · Codex · Shell, segmented), host,
+- **New Agent** (⇧⌘N; one sheet for agents and worktree tasks): Run (Claude Code · Codex · Shell, segmented), host,
   repository, New Worktree, the name (a friendly generated one, shuffle) and the branch (its
   placeholder is the branch the host derives from the name), "Runs setup first: `pnpm i`", the
   prompt. Start makes the worktree and opens its tab at once; the prompt is typed when the agent

@@ -8,8 +8,10 @@ struct ShortcutsSheet: View {
     @State private var query = ""
 
     private var sections: [(String, [WorkspaceAction])] {
-        [
-            ("Window", WorkspaceAction.windowActions + [.newWindow]),
+        let agents: [WorkspaceAction] = [.newAgent, .inbox, .jumpToWaitingAgent]
+        return [
+            ("Agents", agents),
+            ("Window", WorkspaceAction.windowActions.filter { !agents.contains($0) } + [.newWindow]),
             ("Tabs", [.newTab, .newTabOnHost] + WorkspaceAction.tabActions),
             ("Panes", [.splitRight, .splitDown, .splitWithHost, .closePane] + WorkspaceAction.paneActions),
             ("Drawing", WorkspaceAction.drawActions),

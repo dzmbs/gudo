@@ -35,7 +35,7 @@ enum InboxFilter: String, CaseIterable, Identifiable {
     /// What the list says when nothing matches.
     var emptyTitle: String {
         switch self {
-        case .all: "Nothing Needs You"
+        case .all: "No Agents"
         case .needsYou: "No Agent Is Waiting"
         case .running: "No Agent Is Working"
         case .unread: "All Caught Up"
@@ -44,7 +44,7 @@ enum InboxFilter: String, CaseIterable, Identifiable {
     }
 }
 
-/// Agent Inbox: every agent across hosts, grouped "Needs you" / "Running" / "Finished", with
+/// Agents: every agent across hosts, grouped "Needs you" / "Running" / "Finished", with
 /// approve, deny and reply inline so most requests never need the terminal (04-mobile-ux C4).
 /// Finished turns, failures and long commands come from each host's attention feed; what the
 /// inbox shows counts as seen on every device.
@@ -78,15 +78,18 @@ struct InboxView: View {
         Group {
             if items.isEmpty && knocks.isEmpty {
                 EmptyState(
-                    "Nothing Needs You", systemImage: "tray",
-                    message: "Agents on your hosts report here when they need approval, ask a question, or finish."
+                    "No Agents Yet", systemImage: Destination.inbox.systemImage,
+                    message: "Start Claude Code or Codex on a host. Agents show here, and say when they need you or finish."
                 ) {
-                    Button("Start an Agent", action: onLaunch)
-                        .buttonStyle(.primaryGlass)
-                        .disabled(feed.launchHosts.isEmpty && !LaunchOptions.mock)
+                    Button(action: onLaunch) {
+                        Label("New Agent", systemImage: "sparkle")
+                    }
+                    .buttonStyle(.primaryGlass)
+                    .help("New Agent (⇧⌘N)")
+                    .accessibilityIdentifier("inbox-empty-new-agent")
                 }
             } else if shown.isEmpty && knocks.isEmpty {
-                EmptyState(filter.emptyTitle, systemImage: "line.3.horizontal.decrease.circle", message: "Nothing in the Inbox matches this filter.") {
+                EmptyState(filter.emptyTitle, systemImage: "line.3.horizontal.decrease.circle", message: "No agent matches this filter.") {
                     Button("Show All") { withAnimation(DS.Motion.snappy) { filter = .all } }
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("inbox-show-all")
@@ -97,41 +100,41 @@ struct InboxView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !items.isEmpty {
-                InboxFilterBar(selection: $filter, counts: counts(items))
-                    .padding(.horizontal, DS.Space.l)
-                    .padding(.vertical, DS.Space.s)
+                HStack {
+                    InboxFilterBar(selection: $filter, counts: counts(items))
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, DS.Space.l)
+                .padding(.top, DS.Space.xs)
+                .padding(.bottom, DS.Space.s)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { InboxUsageStrip() }
         .background { keys(order(shown)) }
         .chromeContent()
-        .navigationTitle("Inbox")
+        .navigationTitle(Destination.inbox.title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .navigationSubtitle(subtitle)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                if let onNewTerminal {
-                    // + is a terminal first (the plain shell), then an agent.
-                    Menu {
+                // The same + as the sidebar's, agent first here.
+                Menu {
+                    Button(WorkspaceAction.newAgent.title, systemImage: "sparkle", action: onLaunch)
+                        .accessibilityIdentifier("inbox-new-agent")
+                    if let onNewTerminal {
                         Button("New Terminal", systemImage: "terminal", action: onNewTerminal)
                             .accessibilityIdentifier("inbox-new-terminal")
-                        Button("New Agent", systemImage: "sparkle", action: onLaunch)
-                            .accessibilityIdentifier("inbox-new-agent")
-                    } label: {
-                        Label("New", systemImage: "plus")
-                    } primaryAction: {
-                        onNewTerminal()
                     }
-                    // Toolbar controls are monochrome (DESIGN.md), never the accent.
-                    .tint(.primary)
-                    .accessibilityIdentifier("inbox-new")
-                } else {
-                    Button("New Agent", systemImage: "plus", action: onLaunch)
-                        .help("New Agent")
-                        .accessibilityIdentifier("inbox-new-agent")
+                } label: {
+                    Label("New", systemImage: "plus")
                 }
+                .menuIndicator(.hidden)
+                // Toolbar controls are monochrome (DESIGN.md), never the accent.
+                .tint(.primary)
+                .help("New Agent (⇧⌘N) or New Terminal (⌘T)")
+                .accessibilityIdentifier("inbox-new")
             }
         }
         // On iPad the key catcher (`InboxKeyCatcher`) takes the keyboard from the hidden terminal
@@ -214,11 +217,12 @@ struct InboxView: View {
                         ForEach(section.items) { item in row(item) }
                     } header: {
                         SectionTitle(section.title, count: section.items.count)
-                            .padding(.top, DS.Space.s)
                     }
                 }
             }
             .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 0)
+            .environment(\.defaultMinListHeaderHeight, 0)
             .scrollContentBackground(.hidden)
             .background(DS.Palette.base)
             .animation(DS.Motion.snappy, value: items)
@@ -470,16 +474,16 @@ enum GCKeyboardProbe {
 }
 #endif
 
-/// All / Needs You / Running / Unread / Errors, each with its count: a segmented track, the
-/// selected segment a raised pill that slides (the system's segmented control, on the theme).
+/// All / Needs You / Running / Unread / Errors, each with its count: a compact segmented track
+/// as wide as its words, the selected segment a raised pill that slides.
 private struct InboxFilterBar: View {
     @Binding var selection: InboxFilter
     let counts: [InboxFilter: Int]
     @Namespace private var pill
 
     var body: some View {
-        // Equal segments when the words fit; at large text sizes or in a narrow window the
-        // track scrolls instead of cutting "Needs You" to "Ne…".
+        // In a narrow window or at large text sizes the track scrolls instead of cutting
+        // "Needs You" to "Ne…".
         ViewThatFits(in: .horizontal) {
             track
             ScrollView(.horizontal) {
@@ -492,7 +496,7 @@ private struct InboxFilterBar: View {
     }
 
     private var track: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 1) {
             ForEach(InboxFilter.allCases) { filter in
                 let count = counts[filter] ?? 0
                 let isSelected = filter == selection
@@ -501,21 +505,20 @@ private struct InboxFilterBar: View {
                 } label: {
                     HStack(spacing: DS.Space.xs) {
                         Text(filter.title)
-                            .font(.footnote.weight(isSelected ? .semibold : .regular))
+                            .font(.footnote.weight(.medium))
                             .lineLimit(1)
                             .fixedSize()
                         if filter != .all, count > 0 {
                             Text("\(count)")
                                 .font(DS.Font.meta)
                                 .foregroundStyle(filter == .needsYou ? AnyShapeStyle(DS.Palette.attention)
-                                    : filter == .errors ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
+                                    : filter == .errors ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textTertiary))
                                 .contentTransition(.numericText())
                         }
                     }
                     .foregroundStyle(isSelected ? DS.Palette.text : DS.Palette.textSecondary)
-                    .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, DS.Space.xs)
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, DS.Space.gap10)
+                    .padding(.vertical, 3)
                     .background {
                         if isSelected {
                             RoundedRectangle(cornerRadius: DS.Radius.field)
@@ -572,32 +575,28 @@ private struct InboxRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: DS.Space.m) {
             glyph
-                .frame(width: Self.glyphSlot, height: 20)
-            VStack(alignment: .leading, spacing: DS.Space.row) {
-                header
-                Text(verbatim: item.prompt)
-                    .font(item.isCommand ? DS.Font.literal : DS.Font.rowSubtitle)
-                    .foregroundStyle(item.request == nil ? DS.Palette.textSecondary : DS.Palette.text)
-                    .lineLimit(item.request == nil ? 1 : 2)
-                request
+                .frame(width: Self.glyphSlot, height: 18)
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                HStack(alignment: .center, spacing: DS.Space.s) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        title
+                        meta
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    trailing
+                }
                 if let summary = item.summary {
                     Text(verbatim: summary)
-                        .font(DS.Font.rowSubtitle)
+                        .font(.footnote)
                         .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
-                        .lineLimit(3)
+                        .lineLimit(2)
                 }
+                request
                 ForEach(rules) { rule in AutoApprovalChip(rule: rule) { revoke(rule) } }
-                if isReplying {
-                    composer
-                } else if item.canReply, item.request == nil, item.state != .working {
-                    HStack {
-                        Spacer()
-                        replyButton("Reply…")
-                    }
-                }
+                if isReplying { composer }
             }
         }
-        .padding(.vertical, DS.Space.row)
+        .padding(.vertical, DS.Space.gap10)
         .contentShape(.rect)
         .onTapGesture(count: 2) { if item.paneId != nil { open() } }
         .onChange(of: isReplying || isEditing) { _, typing in setTyping(typing) }
@@ -617,27 +616,36 @@ private struct InboxRow: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DS.Space.row) {
-            HStack(spacing: DS.Space.row) {
-                // The agent's mark before its name (the state glyph leads the row).
-                if !item.isCommand {
-                    ProgramMark(item.agent.identity)
-                        .foregroundStyle(.primary)
-                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
-                }
-                let title = item.isCommand ? "Command" : item.agent.title
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .shimmering(item.state == .working, text: title)
+    /// What the agent is on (its prompt or state, a command line), unread in the heavier weight.
+    private var title: some View {
+        Text(verbatim: item.prompt)
+            .font(item.isCommand ? DS.Font.literal : .subheadline.weight(item.unseen || item.state.needsYou ? .semibold : .medium))
+            .foregroundStyle(DS.Palette.text)
+            .lineLimit(1)
+            .truncationMode(item.isCommand ? .middle : .tail)
+            .shimmering(item.state == .working, text: item.prompt)
+    }
+
+    /// The agent's mark and name, then where it runs: "Claude Code · studio · proj".
+    private var meta: some View {
+        HStack(spacing: DS.Space.xs) {
+            if !item.isCommand {
+                ProgramMark(item.agent.identity, size: 12)
+                    .foregroundStyle(.primary)
+                    .opacity(DS.Opacity.mutedGlyph)
             }
-            .layoutPriority(1)
-            Text("\(item.hostName) · \(item.sessionTitle)")
-                .font(.footnote)
-                .foregroundStyle(DS.Palette.textTertiary)
+            Text([item.isCommand ? "Command" : item.agent.title, item.hostName, item.sessionTitle]
+                .filter { !$0.isEmpty }.joined(separator: " · "))
                 .lineLimit(1)
-            Spacer(minLength: DS.Space.s)
+                .truncationMode(.middle)
+        }
+        .font(.footnote)
+        .foregroundStyle(DS.Palette.textTertiary)
+    }
+
+    /// New dot, age, then the row's quick actions: Reply and Open.
+    private var trailing: some View {
+        HStack(spacing: DS.Space.s) {
             if item.unseen {
                 Circle()
                     .fill(DS.Palette.accent)
@@ -648,7 +656,17 @@ private struct InboxRow: View {
             TimelineView(.periodic(from: .now, by: item.state == .working ? 1 : 30)) { context in
                 Text(age(at: context.date))
                     .font(DS.Font.meta)
-                    .foregroundStyle(item.state == .working ? AnyShapeStyle(item.state.color) : AnyShapeStyle(DS.Palette.textSecondary))
+                    .foregroundStyle(item.state == .working ? AnyShapeStyle(item.state.color) : AnyShapeStyle(DS.Palette.textTertiary))
+            }
+            if canReply, !isReplying {
+                Button("Reply") {
+                    withAnimation(DS.Motion.snappy) { isReplying = true }
+                    isComposerFocused = true
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .help("Reply to \(item.agent.title)")
+                .accessibilityIdentifier("inbox-reply-\(item.id)")
             }
             if item.paneId != nil {
                 Button("Open Pane", systemImage: "arrow.up.right", action: open)
@@ -659,6 +677,14 @@ private struct InboxRow: View {
                     .accessibilityIdentifier("inbox-open-\(item.id)")
             }
         }
+        .fixedSize()
+    }
+
+    /// A live agent between turns or asking a question takes a typed reply.
+    private var canReply: Bool {
+        guard item.canReply, item.state != .working else { return false }
+        if case .permission? = item.request { return false }
+        return true
     }
 
     @ViewBuilder private var request: some View {
@@ -692,17 +718,10 @@ private struct InboxRow: View {
                 }
             }
         case .question(let question)?:
-            VStack(alignment: .leading, spacing: DS.Space.s) {
-                Text(verbatim: question)
-                    .font(DS.Font.rowTitle)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !isReplying {
-                    HStack {
-                        Spacer()
-                        replyButton("Reply…")
-                    }
-                }
-            }
+            Text(verbatim: question)
+                .font(DS.Font.rowSubtitle)
+                .foregroundStyle(DS.Palette.text)
+                .fixedSize(horizontal: false, vertical: true)
         case nil:
             EmptyView()
         }
@@ -754,9 +773,7 @@ private struct InboxRow: View {
                 }
             }
         }
-        #if os(macOS)
         .controlSize(.small)
-        #endif
     }
 
     /// A verb with its key beside it on the focused row (the keyboard's row).
@@ -825,9 +842,7 @@ private struct InboxRow: View {
                     .disabled(edited.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("inbox-edit-approve")
             }
-            #if os(macOS)
             .controlSize(.small)
-            #endif
         }
         .transition(.opacity)
     }
@@ -840,19 +855,6 @@ private struct InboxRow: View {
 
     private func cancelEdit() {
         withAnimation(DS.Motion.snappy) { isEditing = false }
-    }
-
-    private func replyButton(_ title: String) -> some View {
-        Button(title) {
-            withAnimation(DS.Motion.snappy) { isReplying = true }
-            isComposerFocused = true
-        }
-        .buttonStyle(.glass)
-        #if os(macOS)
-        .controlSize(.small)
-        #endif
-        .help("Reply to \(item.agent.title)")
-        .accessibilityIdentifier("inbox-reply-\(item.id)")
     }
 
     private var composer: some View {

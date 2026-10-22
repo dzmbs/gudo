@@ -22,10 +22,10 @@ struct WorkspaceSidebar: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
-                    destinationRow(.inbox, title: "Inbox", systemImage: "tray") {
+                    destinationRow(.inbox) {
                         CountBadge(model.needsYouCount)
                     }
-                    destinationRow(.hosts, title: "Hosts", systemImage: "server.rack") {
+                    destinationRow(.hosts) {
                         Text("\(model.hosts.hosts.count)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
                     }
                 }
@@ -60,13 +60,13 @@ struct WorkspaceSidebar: View {
         .overlay(alignment: .bottomLeading) { ConnectionProbe() }
     }
 
-    private func destinationRow(_ destination: Destination, title: String, systemImage: String, @ViewBuilder trailing: () -> some View) -> some View {
+    private func destinationRow(_ destination: Destination, @ViewBuilder trailing: () -> some View) -> some View {
         let selected = model.destination == destination
         return Button {
             withAnimation(DS.Motion.snappy) { model.destination = destination }
         } label: {
-            ListRow(Text(title)) {
-                Image(systemName: systemImage)
+            ListRow(Text(destination.title)) {
+                Image(systemName: destination.systemImage)
                     .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
             } trailing: {
                 trailing()
@@ -75,7 +75,7 @@ struct WorkspaceSidebar: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("sidebar-\(title.lowercased())")
+        .accessibilityIdentifier("sidebar-\(destination.rawValue)")
     }
 }
 
@@ -268,7 +268,7 @@ private struct HostGroupHeader: View {
                     .help("Agents on \(group.name)")
                     .accessibilityIdentifier("host-agents-\(group.name)")
                 }
-                Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
+                plus
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bar)
                     .font(.callout)
@@ -276,7 +276,6 @@ private struct HostGroupHeader: View {
                     // until hover on the Mac.
                     .opacity(canOpen ? (plusEmphasized ? 1 : 0.45) : 0)
                     .disabled(!canOpen)
-                    .help("New Terminal on \(group.name)")
                     .accessibilityIdentifier("new-tab-\(group.name)")
             }
         }
@@ -302,6 +301,22 @@ private struct HostGroupHeader: View {
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("host-group-\(group.name)")
         .accessibilityAction(named: "New Tab") { model.newTab(onGroup: group.id) }
+    }
+
+    /// New Terminal, and New Agent where the host runs agents (a daemon).
+    @ViewBuilder private var plus: some View {
+        if group.kind == .daemon {
+            Menu {
+                NewOnHostItems(group: group)
+            } label: {
+                Label("New on \(group.name)", systemImage: "plus")
+            }
+            .menuIndicator(.hidden)
+            .help("New Terminal or New Agent on \(group.name)")
+        } else {
+            Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
+                .help("New Terminal on \(group.name)")
+        }
     }
 
     private var canOpen: Bool { group.isLocal || group.isReady }
@@ -449,6 +464,21 @@ struct TabLeadingMark: View {
     }
 }
 
+/// New Terminal on a host, and New Agent where it runs agents (a daemon).
+private struct NewOnHostItems: View {
+    let group: HostGroup
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        Button("New Terminal", systemImage: "terminal") { model.newTab(onGroup: group.id) }
+            .accessibilityIdentifier("host-new-terminal-\(group.name)")
+        if group.kind == .daemon {
+            Button(WorkspaceAction.newAgent.title, systemImage: "sparkle") { model.newAgent(onGroup: group.id) }
+                .accessibilityIdentifier("host-new-agent-\(group.name)")
+        }
+    }
+}
+
 /// A group's context menu: New Tab, collapse, retry, and closing the host in this window.
 private struct GroupMenu: View {
     let group: HostGroup
@@ -457,7 +487,7 @@ private struct GroupMenu: View {
 
     var body: some View {
         if group.isLocal || group.isReady {
-            Button("New Terminal", systemImage: "plus") { model.newTab(onGroup: group.id) }
+            NewOnHostItems(group: group)
         }
         Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
             withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(group.id) }
@@ -633,6 +663,7 @@ private struct GroupAgents: View {
     let group: HostGroup
     let numbers: [TabRef: Int]
     @Environment(WindowModel.self) private var model
+    @State private var hovered = false
 
     private struct Row: Identifiable {
         var number: Int
@@ -649,6 +680,7 @@ private struct GroupAgents: View {
         }
         if !rows.isEmpty {
             VStack(spacing: 0) {
+                header
                 ForEach(rows) { row in
                     Button {
                         model.focus(pane: row.pane, onGroup: group.id)
@@ -688,8 +720,37 @@ private struct GroupAgents: View {
                     .accessibilityIdentifier("agent-\(group.name)-\(row.pane.rawValue)")
                 }
             }
-            .padding(.top, DS.Space.xs)
         }
+    }
+
+    /// "Agents" and + New Agent on this host (on hover on the Mac, muted on touch).
+    private var header: some View {
+        HStack(spacing: DS.Space.xs) {
+            Text("Agents")
+                .font(DS.Font.meta)
+                .foregroundStyle(DS.Palette.textTertiary)
+            Spacer(minLength: DS.Space.xs)
+            if group.kind == .daemon, group.isReady {
+                Button(WorkspaceAction.newAgent.title, systemImage: "plus") { model.newAgent(onGroup: group.id) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.subheadline)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    #if os(macOS)
+                    .opacity(hovered ? 1 : 0)
+                    #else
+                    .opacity(DS.Opacity.mutedGlyph)
+                    #endif
+                    .help("New Agent on \(group.name) (⇧⌘N)")
+                    .accessibilityIdentifier("agents-new-\(group.name)")
+            }
+        }
+        .padding(.leading, DS.Space.l + DS.Space.xs)
+        .padding(.trailing, DS.Space.l)
+        .padding(.top, DS.Space.s)
+        .padding(.bottom, 2)
+        .contentShape(.rect)
+        .onHover { hovered = $0 }
     }
 }
 

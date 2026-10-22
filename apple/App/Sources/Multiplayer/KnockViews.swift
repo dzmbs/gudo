@@ -166,7 +166,7 @@ struct KnockRow: View {
 
 /// The newest knock on the window's host, floating at the foot of the terminal (clear of the
 /// toolbar and the panes' control chips) so the owner sees it
-/// without opening anything. Other knocks wait in the Inbox.
+/// without opening anything. Other knocks wait in Agents.
 struct KnockBanner: View {
     let session: MultiplayerSession
 
@@ -178,7 +178,7 @@ struct KnockBanner: View {
                     Text("\(knock.name) is asking to join")
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
-                    Text(session.knocks.count > 1 ? "\(session.knocks.count - 1) more in the Inbox" : "Their link offers \(roleWords(knock.roles))")
+                    Text(session.knocks.count > 1 ? "\(session.knocks.count - 1) more in Agents" : "Their link offers \(roleWords(knock.roles))")
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)

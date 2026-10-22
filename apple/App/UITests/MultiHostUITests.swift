@@ -105,12 +105,15 @@ final class MultiHostUITests: XCTestCase {
         newTerminal.tap()
         XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 20), "a shell pane")
         XCTAssertTrue(element(app, "tab-row-1").waitForExistence(timeout: 10))
-        // From the Inbox, + opens a terminal first and goes back to it.
+        // From Agents, + ▸ New Terminal opens one and goes back to it.
         element(app, "sidebar-inbox").tap()
         let plus = element(app, "inbox-new")
-        XCTAssertTrue(plus.waitForExistence(timeout: 5), "+ on the Inbox")
+        XCTAssertTrue(plus.waitForExistence(timeout: 5), "+ on Agents")
         plus.tap()
-        XCTAssertTrue(element(app, "tab-row-2").waitForExistence(timeout: 10), "+ on the Inbox opened a terminal")
+        let terminalItem = element(app, "inbox-new-terminal")
+        XCTAssertTrue(terminalItem.waitForExistence(timeout: 5), "+ lists New Terminal")
+        terminalItem.tap()
+        XCTAssertTrue(element(app, "tab-row-2").waitForExistence(timeout: 10), "+ on Agents opened a terminal")
         XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 10), "back on the terminal")
     }
 

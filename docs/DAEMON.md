@@ -928,7 +928,7 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   Else in the vendors' installer directories (`~/.local/bin`, `~/.claude/local`): `NotOnPath{path}`
   (launching would fail with "command not found"). Else `Missing`. A shell that does not answer
   within 10 s falls back to the daemon's own `PATH`. Asked fresh on every request.
-- The app (New Task) shows a missing agent with its vendor's official installer for the host's
+- The app (New Agent) shows a missing agent with its vendor's official installer for the host's
   `DaemonInfo.os`, to copy or run in a new tab (`ScriptRun`), and the vendor's guide; Start is
   off until it is installed. Code: `crates/daemon/src/ws/installs.rs`,
   `apple/App/Sources/Git/AgentInstallGuide.swift`.

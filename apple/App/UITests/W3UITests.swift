@@ -176,7 +176,7 @@ final class W3UITests: XCTestCase {
     /// OpenAI's installer for macOS, and can't be started.
     func testAgentNotInstalledOffersTheOfficialInstaller() throws {
         try launch()
-        palette("New Task")
+        palette("New Agent")
         let runner = app.segmentedControls["task-runner"].firstMatch
         XCTAssertTrue(runner.waitForExistence(timeout: 5))
         runner.buttons.element(boundBy: 1).tap()
@@ -197,7 +197,7 @@ final class W3UITests: XCTestCase {
 
     func testZAgentLaunchApproveReplyAndTurnReview() throws {
         try launch()
-        palette("New Task")
+        palette("New Agent")
         let prompt = app.textViews.matching(identifier: "launch-prompt").firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
         prompt.tap()
