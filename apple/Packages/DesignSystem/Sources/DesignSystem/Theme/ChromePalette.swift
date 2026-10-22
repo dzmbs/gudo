@@ -18,7 +18,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// other scheme (a dark theme in a light window). The tab strip and toolbar band sit on it.
     public let background: ThemeColor
     /// The ink every surface, fill and text level is mixed from: the theme's foreground, pushed
-    /// toward white or black only as far as text needs to stay readable (≥ 4.5:1).
+    /// toward white or black only as far as text needs to stay readable (≥ 4.5:1, secondary text
+    /// included).
     public let foreground: ThemeColor
     /// Focus, selection and the one primary action.
     public let accent: ThemeColor
@@ -32,6 +33,10 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public let attention: ThemeColor
     public let working: ThemeColor
     public let info: ThemeColor
+    /// keeps them below the level above) where a mid-tone ink would leave them unreadable, as on
+    /// most light themes: secondary toward 4.5:1, tertiary toward 3:1.
+    public let secondaryLevel: Double
+    public let tertiaryLevel: Double
 
 
     /// Panels and surfaces: the foreground over the background at 5 / 10 / 15 %.
@@ -40,6 +45,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public static let overlayStrength = 0.15
     /// Text: main / secondary / tertiary / disabled.
     public static let textLevels = (primary: 0.90, secondary: 0.60, tertiary: 0.40, quaternary: 0.20)
+    /// The most secondary and tertiary text are raised to for contrast.
+    public static let levelCaps = (secondary: 0.78, tertiary: 0.60)
     /// Translucent fills: hover / selected / pressed.
     public static let fillLevels = (hover: 0.05, selected: 0.10, pressed: 0.15)
     /// Lines: hairline / separator / strong border.
@@ -93,8 +100,9 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
             background = ThemeColor.white.blended(with: bg, 0.03)
             ink = bg
         } else {
-            // A light theme in a dark window: near-black tinted with the theme's ink.
-            background = ThemeColor.black.blended(with: fg, 0.12)
+            // A light theme in a dark window: near-black tinted with the theme's paper (its ink is
+            // often black itself, which would leave a flat black window).
+            background = ThemeColor.black.blended(with: bg, 0.12)
             ink = bg
         }
         // A garish mid-tone background (Grass, Hot Dog Stand) cannot carry readable text even in
@@ -115,6 +123,10 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         let (selection, onSelection) = Self.selection(accent: accent, background: background, foreground: foreground)
         self.selection = selection
         self.onSelection = onSelection
+
+        let textSurfaces = [background, sidebar, background.blended(with: foreground, Self.raisedStrength), overlay]
+        secondaryLevel = Self.level(Self.textLevels.secondary, cap: Self.levelCaps.secondary, of: foreground, on: textSurfaces, minimum: Self.minimumTextContrast)
+        tertiaryLevel = Self.level(Self.textLevels.tertiary, cap: Self.levelCaps.tertiary, of: foreground, on: textSurfaces, minimum: Self.minimumGlyphContrast)
 
         func state(_ index: Int, reference: String) -> ThemeColor {
             var hue = theme.ansiRGB(index)
@@ -137,16 +149,16 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
 
     // MARK: Derivation steps
 
-    /// The ink pushed toward white (dark chrome) or black (light chrome) until its main text level
-    /// reads at 4.5:1 on every surface mixed from it; if even white or black cannot, the background
-    /// steps the other way until they do.
-    static func readable(ink: ThemeColor, background: ThemeColor) -> (background: ThemeColor, ink: ThemeColor) {
+    /// The ink pushed toward white (dark chrome) or black (light chrome) until text at `level` (by
+    /// default the strongest secondary text) reads at 4.5:1 on every surface mixed from it; if even
+    /// white or black cannot, the background steps the other way until they do.
+    static func readable(ink: ThemeColor, background: ThemeColor, level: Double = levelCaps.secondary) -> (background: ThemeColor, ink: ThemeColor) {
         let extreme: ThemeColor = background.contrast(with: .white) >= background.contrast(with: .black) ? .white : .black
         let opposite: ThemeColor = extreme == .white ? .black : .white
         func worst(_ ink: ThemeColor, _ background: ThemeColor) -> Double {
             [0, sidebarStrength, raisedStrength, overlayStrength, (sidebarStrength + raisedStrength) / 2].map { strength -> Double in
                 let surface = background.blended(with: ink, strength)
-                return surface.blended(with: ink, textLevels.primary).contrast(with: surface)
+                return surface.blended(with: ink, level).contrast(with: surface)
             }.min() ?? 0
         }
         var u = 0.0
@@ -161,6 +173,17 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
             u += 0.05
         }
         return (opposite, extreme)
+    }
+
+    /// The ink strength from `level` up to `cap` at which the ink reads at `minimum` on every
+    /// surface (the cap when none does).
+    static func level(_ level: Double, cap: Double, of ink: ThemeColor, on surfaces: [ThemeColor], minimum: Double) -> Double {
+        var alpha = level
+        while alpha < cap {
+            if surfaces.allSatisfy({ $0.blended(with: ink, alpha).contrast(with: $0) >= minimum }) { return alpha }
+            alpha += 0.02
+        }
+        return cap
     }
 
     /// The colour mixed toward `ink` until it reaches `minimum` against every surface.
@@ -230,6 +253,21 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     }
 }
 
+// MARK: - Cache
+
+@MainActor private var paletteCache: [TerminalTheme: [ColorScheme?: ChromePalette]] = [:]
+
+public extension ChromePalette {
+    /// The palette for `theme`, derived once: views that rebuild often (pane headers) skip the
+    /// contrast search.
+    @MainActor static func cached(theme: TerminalTheme, scheme: ColorScheme? = nil) -> ChromePalette {
+        if let palette = paletteCache[theme]?[scheme] { return palette }
+        let palette = ChromePalette(theme: theme, scheme: scheme)
+        paletteCache[theme, default: [:]][scheme] = palette
+        return palette
+    }
+}
+
 // MARK: - Colours
 
 nonisolated public extension ChromePalette {
@@ -243,8 +281,8 @@ nonisolated public extension ChromePalette {
 
     /// The four text levels.
     var text: Color { foreground.color.opacity(Self.textLevels.primary) }
-    var textSecondary: Color { foreground.color.opacity(Self.textLevels.secondary) }
-    var textTertiary: Color { foreground.color.opacity(Self.textLevels.tertiary) }
+    var textSecondary: Color { foreground.color.opacity(secondaryLevel) }
+    var textTertiary: Color { foreground.color.opacity(tertiaryLevel) }
     var textQuaternary: Color { foreground.color.opacity(Self.textLevels.quaternary) }
 
     var hoverFill: Color { foreground.color.opacity(Self.fillLevels.hover) }

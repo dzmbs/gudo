@@ -3,11 +3,14 @@ import SwiftUI
 
 /// Ghostty's bundled themes as a grid of small terminal windows, each in its own colours and
 /// framed on the chrome (the sheet itself wears the current theme, so a pick restyles it at once).
-/// Dark and light themes are sections of their own; the grid is lazy for the ~460 themes.
+/// Search and the Dark/Light filter stay pinned on an opaque bar; the current and recently used
+/// themes lead, then Dark and Light sections. The grid is lazy for the ~460 themes.
 struct ThemePicker: View {
     @Binding var selection: String
     @State private var query = ""
     @State private var filter = Filter.all
+    /// Recently picked theme names, newest first, newline-separated.
+    @AppStorage("recent-themes") private var recentNames = ""
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All", dark = "Dark", light = "Light"
@@ -15,6 +18,7 @@ struct ThemePicker: View {
     }
 
     private static let all = [TerminalTheme.ghosttyDefault] + ThemeCatalog.all
+    private static let recentLimit = 4
     private let columns = [GridItem(.adaptive(minimum: 156, maximum: 240), spacing: DS.Space.l, alignment: .top)]
 
     private var sections: [(title: String, themes: [TerminalTheme])] {
@@ -27,52 +31,80 @@ struct ThemePicker: View {
         }
     }
 
+    /// The current theme, then the last few picked.
+    private var recent: [TerminalTheme] {
+        let names = [selection] + recentNames.split(separator: "\n").map(String.init).filter { $0 != selection }
+        return names.prefix(Self.recentLimit).map(ThemeCatalog.theme(named:))
+    }
+
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.xl) {
-                    Picker("Appearance", selection: $filter) {
-                        ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    ForEach(sections, id: \.title) { section in
-                        VStack(alignment: .leading, spacing: DS.Space.m) {
-                            HStack(spacing: DS.Space.s) {
-                                Text(section.title).foregroundStyle(.secondary)
-                                Text("\(section.themes.count)").foregroundStyle(.tertiary).monospacedDigit()
-                            }
-                            .font(.footnote.weight(.semibold))
-                            LazyVGrid(columns: columns, spacing: DS.Space.xl) {
-                                ForEach(section.themes) { theme in
-                                    Button {
-                                        withAnimation(DS.Motion.quick) { selection = theme.name }
-                                    } label: {
-                                        ThemeTile(theme: theme, isSelected: theme.name == selection)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .id(theme.name)
-                                    .accessibilityIdentifier("theme-\(theme.name)")
-                                }
-                            }
-                        }
-                    }
-                    if sections.allSatisfy(\.themes.isEmpty) {
-                        Text("No themes match \u{201C}\(query)\u{201D}")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, DS.Space.xxxl)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: DS.Space.xl) {
+                if query.isEmpty {
+                    section(recent.count > 1 ? "Current & Recent" : "Current", recent, id: "recent-theme")
                 }
-                .padding(.horizontal, DS.Space.xl)
-                .padding(.vertical, DS.Space.m)
+                ForEach(sections, id: \.title) { section($0.title, $0.themes, id: "theme") }
+                if sections.allSatisfy(\.themes.isEmpty) {
+                    Text("No themes match \u{201C}\(query)\u{201D}")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, DS.Space.xxxl)
+                }
             }
-            .onAppear { proxy.scrollTo(selection, anchor: .center) }
+            .padding(.horizontal, DS.Space.xl)
+            .padding(.vertical, DS.Space.m)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Picker("Appearance", selection: $filter) {
+                ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, DS.Space.xl)
+            .padding(.vertical, DS.Space.s)
+            // Opaque, so tiles never show through as they scroll under it.
+            .background(DS.Palette.groupedPage)
+            .overlay(alignment: .bottom) { Rectangle().fill(DS.Palette.hairline).frame(height: 1) }
         }
         .chromeGrouped()
         .sensoryFeedback(.selection, trigger: selection)
+        #if os(iOS)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "\(Self.all.count) themes")
+        .chromeBarBackground(.groupedPage)
+        #else
         .searchable(text: $query, prompt: "\(Self.all.count) themes")
+        #endif
         .navigationTitle("Theme")
+        .onChange(of: selection) { old, _ in remember(old) }
+    }
+
+    private func section(_ title: String, _ themes: [TerminalTheme], id prefix: String) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.m) {
+            HStack(spacing: DS.Space.s) {
+                Text(title).foregroundStyle(.secondary)
+                if prefix == "theme" {
+                    Text("\(themes.count)").foregroundStyle(.tertiary).monospacedDigit()
+                }
+            }
+            .font(.footnote.weight(.semibold))
+            LazyVGrid(columns: columns, spacing: DS.Space.xl) {
+                ForEach(themes) { theme in
+                    Button {
+                        withAnimation(DS.Motion.quick) { selection = theme.name }
+                    } label: {
+                        ThemeTile(theme: theme, isSelected: theme.name == selection)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("\(prefix)-\(theme.name)")
+                }
+            }
+        }
+    }
+
+    /// The theme just left goes to the front of the recent list.
+    private func remember(_ name: String) {
+        let names = [name] + recentNames.split(separator: "\n").map(String.init).filter { $0 != name }
+        recentNames = names.prefix(Self.recentLimit).joined(separator: "\n")
     }
 }
 

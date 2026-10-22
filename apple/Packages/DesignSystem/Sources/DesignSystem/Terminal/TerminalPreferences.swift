@@ -70,15 +70,14 @@ nonisolated public enum TerminalPreferences {
         /// The appearances a window can keep apart from the theme.
         public static let separate: [WindowTheme] = [.light, .dark, .system]
 
-        /// `system` was the default before `auto`, and a stored `system` cannot tell a choice from
-        /// that default: it goes back to `auto` once. Light and Dark were always chosen; they stay.
+        /// A value stored before `auto` existed cannot tell "the window like the theme" from "the
+        /// window apart from it": Light, Dark and System were the only ways to get either. It goes
+        /// back to `auto` once; anything chosen after that stays.
         public static func migrate(_ defaults: UserDefaults = .standard) {
-            let done = "window-theme-auto-migrated"
+            let done = "window-theme-auto-migrated-2"
             guard !defaults.bool(forKey: done) else { return }
             defaults.set(true, forKey: done)
-            if defaults.string(forKey: Key.windowTheme) == WindowTheme.system.rawValue {
-                defaults.removeObject(forKey: Key.windowTheme)
-            }
+            defaults.removeObject(forKey: Key.windowTheme)
         }
     }
 
