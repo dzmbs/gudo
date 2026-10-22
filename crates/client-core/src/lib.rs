@@ -33,6 +33,7 @@ mod askpass;
 mod assist;
 mod conn;
 pub mod knock;
+mod listen;
 mod mirror;
 mod mp;
 pub mod push;
@@ -54,7 +55,7 @@ use proto::{
     Ticket,
 };
 use tokio::runtime::Runtime;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, watch};
 
 use crate::mirror::Mirror;
 
@@ -426,6 +427,8 @@ pub(crate) struct Inner {
     pub endpoint: Mutex<Option<iroh::Endpoint>>,
     pub reconnect: Notify,
     pub paused: Mutex<bool>,
+    /// Bumped on each resume from [`Client::suspend`]: forward listeners bind again.
+    pub resumed: watch::Sender<u64>,
     pub epoch: Mutex<Option<u64>>,
     pub resume_token: Mutex<Option<proto::ResumeToken>>,
     pub paired: Mutex<bool>,
@@ -612,6 +615,7 @@ impl Client {
             endpoint: Mutex::new(None),
             reconnect: Notify::new(),
             paused: Mutex::new(false),
+            resumed: watch::Sender::new(0),
             epoch: Mutex::new(None),
             resume_token: Mutex::new(None),
             paired: Mutex::new(false),
@@ -888,11 +892,33 @@ impl Client {
 
     /// Drops the connection and redials immediately (network change, app foregrounded).
     pub fn reconnect(&self) {
-        *lock(&self.inner.paused) = false;
+        if std::mem::replace(&mut *lock(&self.inner.paused), false) {
+            self.inner.resumed.send_modify(|n| *n += 1);
+        }
         if let Some(conn) = lock(&self.inner.connection).take() {
             conn.close(0u32.into(), b"reconnect");
         }
         self.inner.reconnect.notify_one();
+    }
+
+    /// The device's network changed. A live connection is kept: iroh moves it onto a path that
+    /// works (a new direct address, or the relay), so streams on it (forwarded websockets)
+    /// survive. Without one the client redials now; a suspended client stays suspended.
+    pub fn network_changed(&self) {
+        if *lock(&self.inner.paused) {
+            return;
+        }
+        let live = lock(&self.inner.connection)
+            .as_ref()
+            .is_some_and(|c| c.close_reason().is_none());
+        if !live {
+            self.inner.reconnect.notify_one();
+            return;
+        }
+        if let Some(endpoint) = lock(&self.inner.endpoint).clone() {
+            self.handle
+                .spawn(async move { endpoint.network_change().await });
+        }
     }
 
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect), keeping

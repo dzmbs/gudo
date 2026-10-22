@@ -29,6 +29,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
+use crate::listen::LocalListener;
 use crate::{Client, ClientError, Inner, lock};
 
 /// How long a request waits for its answer (a large diff or a first editor start can take a
@@ -270,7 +271,12 @@ impl Client {
     ) -> Result<(), WsError> {
         let inner = Arc::clone(&self.inner);
         self.handle
-            .spawn(async move { forward_stream(&inner, target, reader, writer).await })
+            .spawn(async move {
+                match forward_stream(&inner, target, reader, writer).await? {
+                    Ended::Clean => Ok(()),
+                    Ended::Broken => Err(WsError::Failed("the forward stream broke".into())),
+                }
+            })
             .await
             .unwrap_or(Err(WsError::Disconnected))
     }
@@ -782,7 +788,7 @@ async fn recv_frame<T: serde::de::DeserializeOwned>(
 
 /// Accepts local TCP connections and tunnels each over a forward stream.
 async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, target: ForwardTarget) {
-    let listener = match tokio::net::TcpListener::from_std(listener) {
+    let mut listener = match LocalListener::new(listener, inner.resumed.subscribe()) {
         Ok(l) => l,
         Err(e) => {
             tracing::warn!("port forward listener: {e}");
@@ -790,15 +796,7 @@ async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, target: Forw
         }
     };
     loop {
-        let tcp = match listener.accept().await {
-            Ok((tcp, _)) => tcp,
-            Err(e) => {
-                // Out of file descriptors and the like: back off instead of spinning.
-                tracing::debug!("forward accept: {e}");
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                continue;
-            }
-        };
+        let tcp = listener.accept().await;
         let inner = Arc::clone(&inner);
         let target = target.clone();
         tokio::spawn(async move {
@@ -815,8 +813,90 @@ async fn forward_one(
     target: ForwardTarget,
 ) -> Result<(), WsError> {
     let _ = tcp.set_nodelay(true);
-    let (tcp_r, tcp_w) = tcp.into_split();
-    forward_stream(inner, target, tcp_r, tcp_w).await
+    let (mut tcp_r, mut tcp_w) = tcp.into_split();
+    let end = forward_stream(inner, target, &mut tcp_r, &mut tcp_w).await;
+    if !matches!(end, Ok(Ended::Clean)) {
+        // A reset, not an orderly close: the local client (a browser's websocket) must see
+        // the link broke and reconnect, rather than take it for the server's own goodbye.
+        if let Ok(tcp) = tcp_r.reunite(tcp_w) {
+            let _ = tcp.set_zero_linger();
+        }
+    }
+    end.map(drop)
+}
+
+/// How a spliced forward ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    /// Both sides finished their halves.
+    Clean,
+    /// The link or a side failed midway.
+    Broken,
+}
+
+/// How long a new forward connection waits for the link to come back when the connection it
+/// found had already died: about VS Code's own wait before it calls a socket dead.
+const LINK_WAIT: Duration = Duration::from_secs(20);
+
+/// Opens a forward stream to `target`. A connection that died before the client noticed fails
+/// the first try; nothing has flowed yet, so the next live connection gets one more.
+async fn open_forward(
+    inner: &Inner,
+    target: &ForwardTarget,
+) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream), WsError> {
+    let conn = connection(inner).await;
+    let first = try_open_forward(&conn, target).await;
+    let Err(OpenError::Link(e)) = first else {
+        return first.map_err(OpenError::into_ws);
+    };
+    let dead = conn.stable_id();
+    let next = tokio::time::timeout(LINK_WAIT, async {
+        loop {
+            let c = connection(inner).await;
+            if c.stable_id() != dead && c.close_reason().is_none() {
+                return c;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| e)?;
+    try_open_forward(&next, target)
+        .await
+        .map_err(OpenError::into_ws)
+}
+
+enum OpenError {
+    /// The connection failed (worth one more try on the next).
+    Link(WsError),
+    /// The daemon answered: no.
+    Refused(WsError),
+}
+
+impl OpenError {
+    fn into_ws(self) -> WsError {
+        match self {
+            Self::Link(e) | Self::Refused(e) => e,
+        }
+    }
+}
+
+async fn try_open_forward(
+    conn: &iroh::endpoint::Connection,
+    target: &ForwardTarget,
+) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream), OpenError> {
+    let link = |e: WsError| OpenError::Link(e);
+    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| link(failed(e)))?;
+    let _ = send.set_priority(40);
+    let header = StreamHeader::Forward {
+        target: target.clone(),
+    };
+    send_frame(&mut send, &header).await.map_err(link)?;
+    match recv_frame::<ForwardReply>(&mut recv).await.map_err(link)? {
+        Some(ForwardReply::Connected) => Ok((send, recv)),
+        Some(ForwardReply::Refused { reason }) => Err(OpenError::Refused(WsError::Failed(reason))),
+        None => Err(link(WsError::Failed("forward stream closed".into()))),
+    }
 }
 
 /// Opens one forward stream to `target` and copies `tcp_r` into it and it into `tcp_w`
@@ -826,50 +906,75 @@ async fn forward_stream(
     target: ForwardTarget,
     mut tcp_r: impl tokio::io::AsyncRead + Unpin,
     mut tcp_w: impl tokio::io::AsyncWrite + Unpin,
-) -> Result<(), WsError> {
-    let conn = connection(inner).await;
-    let (mut send, mut recv) = conn.open_bi().await.map_err(failed)?;
-    let _ = send.set_priority(40);
-    send_frame(&mut send, &StreamHeader::Forward { target }).await?;
-    match recv_frame::<ForwardReply>(&mut recv).await? {
-        Some(ForwardReply::Connected) => {}
-        Some(ForwardReply::Refused { reason }) => return Err(WsError::Failed(reason)),
-        None => return Err(WsError::Failed("forward stream closed".into())),
-    }
+) -> Result<Ended, WsError> {
+    let (mut send, mut recv) = open_forward(inner, &target).await?;
     // Half-close both ways; each direction only reads after the previous write completed, so
-    // a slow side throttles the other (QUIC flow control / TCP window).
+    // a slow side throttles the other (QUIC flow control / TCP window). A failure resets the
+    // other side instead of finishing it.
     let up = async {
         let mut buf = vec![0; BUF];
         loop {
             match tcp_r.read(&mut buf).await {
                 Ok(0) => {
                     let _ = send.finish();
-                    break;
+                    return Ended::Clean;
                 }
                 Ok(n) => {
                     if send.write_all(&buf[..n]).await.is_err() {
-                        break;
+                        return Ended::Broken;
                     }
                 }
                 Err(_) => {
                     let _ = send.reset(1u32.into());
-                    break;
+                    return Ended::Broken;
                 }
             }
         }
     };
     let down = async {
         let mut buf = vec![0; BUF];
-        while let Ok(Some(n)) = recv.read(&mut buf).await {
-            if tcp_w.write_all(&buf[..n]).await.is_err() {
-                let _ = recv.stop(0u32.into());
-                break;
+        loop {
+            match recv.read(&mut buf).await {
+                Ok(Some(n)) => {
+                    if tcp_w.write_all(&buf[..n]).await.is_err() {
+                        let _ = recv.stop(0u32.into());
+                        return Ended::Broken;
+                    }
+                }
+                Ok(None) => {
+                    let _ = tcp_w.shutdown().await;
+                    return Ended::Clean;
+                }
+                Err(_) => return Ended::Broken,
             }
         }
-        let _ = tcp_w.shutdown().await;
     };
-    tokio::join!(up, down);
-    Ok(())
+    let ended = splice_ends(up, down).await;
+    if ended == Ended::Broken {
+        let _ = send.reset(1u32.into());
+        let _ = recv.stop(0u32.into());
+    }
+    Ok(ended)
+}
+
+/// Runs both directions of a splice: clean once both finished, broken as soon as either broke
+/// (the other would wait on its side forever).
+async fn splice_ends(
+    up: impl std::future::Future<Output = Ended>,
+    down: impl std::future::Future<Output = Ended>,
+) -> Ended {
+    tokio::pin!(up, down);
+    let (mut up_done, mut down_done) = (false, false);
+    while !(up_done && down_done) {
+        let ended = tokio::select! {
+            e = &mut up, if !up_done => { up_done = true; e }
+            e = &mut down, if !down_done => { down_done = true; e }
+        };
+        if ended == Ended::Broken {
+            return Ended::Broken;
+        }
+    }
+    Ended::Clean
 }
 
 async fn upload(

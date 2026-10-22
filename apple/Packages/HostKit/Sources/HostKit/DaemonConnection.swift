@@ -94,7 +94,7 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
     @ObservationIgnored private var pump: Task<Void, Never>?
     /// The daemon run (changes when the daemon restarts).
-    @ObservationIgnored public private(set) var epoch: UInt64?
+    public private(set) var epoch: UInt64?
     @ObservationIgnored private var attachSession: UInt64?
     @ObservationIgnored private var lastView: (UInt64?, [UInt64])?
     @ObservationIgnored private var attempt: UInt32 = 0
@@ -184,10 +184,16 @@ public final class DaemonConnection: HostConnection {
         }
     }
 
+    /// Back in the foreground: a connection that is not up (suspended, or lost meanwhile) is
+    /// redialled now; one up or already dialling is left alone.
     public func foreground() {
         guard let client else { return }
-        if case .connected = status { return }
+        switch status {
+        case .connected, .connecting: return
+        default: break
+        }
         Self.log.info("foreground: resuming host=\(self.hostId, privacy: .public)")
+        status = .connecting(.dialing)
         dials += 1
         timings.dialStarted = .now
         client.reconnect()
@@ -200,9 +206,16 @@ public final class DaemonConnection: HostConnection {
         status = .suspended
     }
 
+    /// A live connection moves to the new path by itself (its streams, forwarded editors
+    /// among them, survive); one that is down is redialled at once.
     public func networkChanged() {
         guard let client else { return }
         if case .suspended = status { return }
+        if case .connected = status, let roaming = client as? any NetworkChangeClient {
+            Self.log.info("network changed: keeping the connection host=\(self.hostId, privacy: .public)")
+            roaming.networkChanged()
+            return
+        }
         Self.log.info("network changed: redialing host=\(self.hostId, privacy: .public)")
         dials += 1
         timings.dialStarted = .now
