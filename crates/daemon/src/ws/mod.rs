@@ -17,6 +17,7 @@ mod repo_ops;
 mod review;
 pub(crate) mod tunnel;
 pub(crate) mod turns;
+mod vscode_server;
 mod watch;
 pub(crate) mod workflows;
 mod worktree;

@@ -132,6 +132,7 @@ async fn vscode_tunnel_signs_in_runs_restarts_and_opens() {
             c.pane_env.push(("HOME".into(), s(&home)));
             c.fs_allow.push(home);
             c.code_cli = Some(code);
+            c.vscode_serve_web = true;
         }
     };
     let daemon = start_with(&state, edit.clone()).await;
@@ -343,7 +344,10 @@ async fn vscode_tunnel_microsoft_device_code() {
     install_fake(&code);
     let daemon = start_with(&state, {
         let code = code.clone();
-        move |c| c.code_cli = Some(code)
+        move |c| {
+            c.code_cli = Some(code);
+            c.vscode_serve_web = true;
+        }
     })
     .await;
     let c = connected(&daemon).await;

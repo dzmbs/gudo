@@ -49,6 +49,9 @@ final class LiveEditorSource: EditorSource {
     /// Hosts the user chose the tunnel for (this run): reopening goes through it again.
     @ObservationIgnored private var tunnelHosts: [String: EditorTunnelAccount] = [:]
     @ObservationIgnored private var tunnel: TunnelLink?
+    @ObservationIgnored private var serverLost: ((String) -> Void)?
+    /// Bumped with each server opened: only the latest one's host is watched.
+    @ObservationIgnored private var watching = 0
 
     private enum Pending {
         case server(HostContext, folder: String, key: String)
@@ -204,6 +207,7 @@ final class LiveEditorSource: EditorSource {
             // The user accepted Microsoft's terms for this host in the first-use sheet.
             let session = try await api.openEditor(folder: folder, acceptVscodeLicense: licence.isAccepted(host: context.hostId))
             sessions[key] = (context.hub, session)
+            watchRestart(context.daemon)
             let elapsed = startedAt.map { (ContinuousClock.now - $0) / .milliseconds(1) } ?? 0
             log.info("editor ready host=\(context.hostId, privacy: .public) kind=\(String(describing: session.instance.kind), privacy: .public) installed=\(session.installedCli) in \(elapsed, format: .fixed(precision: 0)) ms")
             guard current == key else { return }
@@ -351,6 +355,38 @@ final class LiveEditorSource: EditorSource {
         } catch {
             log.error("editor open \(path, privacy: .public): \(String(describing: error), privacy: .public)")
         }
+    }
+
+    func onServerLost(_ handler: @escaping (String) -> Void) {
+        serverLost = handler
+    }
+
+    /// The host's helper restarting takes its editor servers with it: the workbench would
+    /// retry the old one for hours.
+    private func watchRestart(_ daemon: DaemonConnection) {
+        watching += 1
+        follow(daemon, epoch: daemon.epoch, watch: watching)
+    }
+
+    private func follow(_ daemon: DaemonConnection, epoch: UInt64?, watch: Int) {
+        withObservationTracking {
+            _ = daemon.epoch
+        } onChange: { [weak self, weak daemon] in
+            Task { @MainActor [weak self, weak daemon] in
+                guard let self, let daemon, self.watching == watch, self.mode == .server else { return }
+                if let now = daemon.epoch, let epoch, now != epoch {
+                    self.serverLost?("the host's helper restarted")
+                } else {
+                    self.follow(daemon, epoch: epoch ?? daemon.epoch, watch: watch)
+                }
+            }
+        }
+    }
+
+    func reopen() async {
+        guard mode == .server, let key = current else { return }
+        sessions[key] = nil
+        await open()
     }
 
     func close(stopServer: Bool) async {

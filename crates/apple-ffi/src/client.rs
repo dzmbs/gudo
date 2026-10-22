@@ -841,6 +841,12 @@ impl DaemonClient {
         self.inner.set_relays(relay.into(), &options.into());
     }
 
+    /// The device's network changed: a live connection moves to a working path (its streams
+    /// survive); without one the client redials now.
+    pub fn network_changed(&self) {
+        self.inner.network_changed();
+    }
+
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect),
     /// keeping all resume state (app suspended).
     pub fn suspend(&self) {

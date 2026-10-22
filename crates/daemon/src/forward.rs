@@ -6,7 +6,8 @@
 //! was written, so a slow reader on either side stops the other through QUIC flow control or
 //! the TCP window: nothing buffers without bound. When one side finishes its half (QUIC FIN or
 //! TCP EOF), the other side's write half is shut down and the opposite direction keeps
-//! running (half-close).
+//! running (half-close). When either side fails midway (the link died, a reset), both are
+//! reset at once: a local TCP peer sees a reset, not a clean end.
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -71,28 +72,50 @@ async fn splice_reply(conn: Result<Conn, String>, mut send: SendStream, recv: Re
     {
         return;
     }
-    let (up, down) = match conn {
+    let moved = match conn {
         Conn::Tcp(tcp) => {
             let _ = tcp.set_nodelay(true);
-            let (r, w) = tcp.into_split();
-            splice(recv, w, r, send).await
+            let (mut r, mut w) = tcp.into_split();
+            let moved = splice(recv, &mut w, &mut r, send).await;
+            if moved.broken {
+                // A reset, not an orderly close: the server must not take it for the client's
+                // goodbye.
+                if let Ok(tcp) = r.reunite(w) {
+                    let _ = tcp.set_zero_linger();
+                }
+            }
+            moved
         }
         Conn::Unix(unix) => {
             let (r, w) = unix.into_split();
             splice(recv, w, r, send).await
         }
     };
-    tracing::debug!(up, down, "forward closed");
+    tracing::debug!(moved.up, moved.down, moved.broken, "forward closed");
 }
 
-/// Copies `quic_rx → local_w` and `local_r → quic_tx` concurrently with half-close. Returns
-/// the bytes moved each way.
+/// What a splice moved, and how it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Moved {
+    /// Bytes from the peer to the local side.
+    pub up: u64,
+    /// Bytes from the local side to the peer.
+    pub down: u64,
+    /// The link or a side failed midway (the other side was reset, not finished).
+    pub broken: bool,
+}
+
+/// One direction's end: bytes moved, and whether it finished cleanly.
+type Half = (u64, bool);
+
+/// Copies `quic_rx → local_w` and `local_r → quic_tx` concurrently with half-close. A failure
+/// either way ends both at once and resets the stream.
 pub(crate) async fn splice<LR, LW>(
     mut quic_rx: RecvStream,
     mut local_w: LW,
     mut local_r: LR,
     mut quic_tx: SendStream,
-) -> (u64, u64)
+) -> Moved
 where
     LR: AsyncRead + Unpin,
     LW: AsyncWrite + Unpin,
@@ -104,18 +127,17 @@ where
             match quic_rx.read(&mut buf).await {
                 Ok(Some(n)) => {
                     if local_w.write_all(&buf[..n]).await.is_err() {
-                        // The local side is gone: tell the peer to stop sending.
-                        let _ = quic_rx.stop(0u32.into());
-                        break;
+                        return (total, false);
                     }
                     total += n as u64;
                 }
-                Ok(None) => break,
-                Err(_) => break,
+                Ok(None) => {
+                    let _ = local_w.shutdown().await;
+                    return (total, true);
+                }
+                Err(_) => return (total, false),
             }
         }
-        let _ = local_w.shutdown().await;
-        total
     };
     let down = async {
         let mut buf = vec![0; BUF];
@@ -124,25 +146,56 @@ where
             match local_r.read(&mut buf).await {
                 Ok(0) => {
                     let _ = quic_tx.finish();
-                    break;
+                    return (total, true);
                 }
                 Ok(n) => {
                     if quic_tx.write_all(&buf[..n]).await.is_err() {
-                        break;
+                        return (total, false);
                     }
                     total += n as u64;
                 }
-                Err(_) => {
-                    // A reset local connection: reset the stream so the peer sees an error,
-                    // not a clean end.
-                    let _ = quic_tx.reset(1u32.into());
-                    break;
-                }
+                Err(_) => return (total, false),
             }
         }
-        total
     };
-    tokio::join!(up, down)
+    let moved = both_or_first_failure(up, down).await;
+    if moved.broken {
+        let _ = quic_tx.reset(1u32.into());
+        let _ = quic_rx.stop(0u32.into());
+    }
+    moved
+}
+
+/// Both halves when they finish cleanly; as soon as one fails, what was moved so far.
+async fn both_or_first_failure(
+    up: impl Future<Output = Half>,
+    down: impl Future<Output = Half>,
+) -> Moved {
+    tokio::pin!(up, down);
+    let (mut up_end, mut down_end): (Option<u64>, Option<u64>) = (None, None);
+    loop {
+        tokio::select! {
+            (n, clean) = &mut up, if up_end.is_none() => {
+                if !clean {
+                    return Moved { up: n, down: down_end.unwrap_or(0), broken: true };
+                }
+                up_end = Some(n);
+            }
+            (n, clean) = &mut down, if down_end.is_none() => {
+                if !clean {
+                    return Moved { up: up_end.unwrap_or(0), down: n, broken: true };
+                }
+                down_end = Some(n);
+            }
+        }
+        if let (Some(up), Some(down)) = (up_end, down_end) {
+            return Moved {
+                up,
+                down,
+                broken: false,
+            };
+        }
+    }
 }
 
 async fn connect(port: u16) -> std::io::Result<TcpStream> {

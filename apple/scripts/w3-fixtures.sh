@@ -276,6 +276,7 @@ chmod +x "$bin/devserver"
 cat >"$dir/config.toml" <<EOF
 [editor]
 code = "$bin/code"
+serve_web = true
 EOF
 
 echo "$dir"

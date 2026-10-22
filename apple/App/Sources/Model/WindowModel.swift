@@ -186,6 +186,8 @@ final class WindowModel {
     let editors: EditorPanes
     /// The tab worked in before an editor tab came forward (⌃⌘` goes back to it).
     @ObservationIgnored var lastTerminalTab: TabRef?
+    /// The editor shown full screen while it has the focus (⌃⌘F, `isEditorFullScreen`).
+    var fullScreenEditor: UUID?
     let ports: any PortSource
     let links: any LinkSource
     /// Agent plan usage per host (sidebar host headers, Inbox).

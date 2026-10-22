@@ -33,6 +33,10 @@ struct EditorPaneView: View {
     var openDesktop: (() -> Void)?
     /// A shortcut that leads out of VS Code, pressed while the web view has the keyboard.
     var performShortcut: (WorkspaceAction) -> Void = { _ in }
+    /// Full screen: the workbench alone, without this bar.
+    var showsBar = true
+    /// Shows the editor full screen, or back (nil where it cannot be).
+    var toggleFullScreen: (() -> Void)?
 
     @Environment(\.terminalTheme) private var theme
     @Environment(\.openURL) private var openURL
@@ -43,7 +47,7 @@ struct EditorPaneView: View {
     var body: some View {
         @Bindable var pane = pane
         VStack(spacing: 0) {
-            bar
+            if showsBar { bar }
             ZStack {
                 if let browser = pane.browser {
                     EditorWebHost(webView: browser.webView, perform: performShortcut)
@@ -209,6 +213,11 @@ struct EditorPaneView: View {
             if pane.isWorkbenchVisible {
                 Button("Reload", systemImage: "arrow.clockwise") { pane.browser?.reload() }
                     .help("Reload the workbench")
+            }
+            if let toggleFullScreen {
+                Button("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right", action: toggleFullScreen)
+                    .help("Full Screen Editor (⌃⌘F)")
+                    .accessibilityIdentifier("editor-full-screen")
             }
             Menu("More", systemImage: "ellipsis") {
                 Button("Copy Folder Path", systemImage: "doc.on.doc") { EditorPasteboard.copy(pane.member.folder) }
@@ -432,6 +441,7 @@ struct EditorLeafView: View {
     let isSplit: Bool
     let isFocused: Bool
     let focus: () -> Void
+    var isFullScreen = false
     @Environment(WindowModel.self) private var model
 
     var body: some View {
@@ -441,7 +451,18 @@ struct EditorLeafView: View {
             onStop: { model.closeEditor(member.id, stopServer: true) },
             openDesktop: desktop,
             performShortcut: { action in
-                if let workspace = model.workspace { action.perform(on: workspace, window: model) } else if action == .returnToTerminal { model.returnToTerminal() }
+                if let workspace = model.workspace {
+                    action.perform(on: workspace, window: model)
+                } else if action == .returnToTerminal {
+                    model.returnToTerminal()
+                } else if action == .fullScreenEditor {
+                    model.toggleEditorFullScreen()
+                }
+            },
+            showsBar: !isFullScreen,
+            toggleFullScreen: {
+                focus()
+                model.toggleEditorFullScreen()
             })
             // One web view per editor: never reuse another editor's view.
             .id(member.id)

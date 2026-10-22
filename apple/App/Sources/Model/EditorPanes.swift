@@ -86,6 +86,7 @@ final class EditorPane: Identifiable {
     init(member: EditorMember, source: any EditorSource) {
         self.member = member
         self.source = source
+        source.onServerLost { [weak self] reason in self?.recover(reason) }
     }
 
     var webView: WKWebView? { browser?.webView }
@@ -99,9 +100,10 @@ final class EditorPane: Identifiable {
     /// The web view for `url`, made on first use.
     ///
     /// An editor server on the host (a loopback forward) keeps its own data store per host and
-    /// folder: each server's connection token lives in a `vscode-tkn` cookie, and cookies do not
-    /// tell ports apart, so in one shared store the last editor loaded overwrote the others' and
-    /// their servers answered "Forbidden". vscode.dev (the Remote Tunnel) uses the shared store,
+    /// folder (editors on one folder share it, as browser windows on one server): each server's
+    /// connection token lives in a `vscode-tkn` cookie, and cookies do not tell ports apart, so in
+    /// one shared store the last editor loaded overwrote the others' and their servers answered
+    /// "Forbidden". vscode.dev (the Remote Tunnel) uses the shared store,
     /// so one GitHub or Microsoft sign-in serves every tunnel editor.
     @discardableResult
     func makeBrowser(for url: URL) -> TunnelBrowser {
@@ -115,6 +117,7 @@ final class EditorPane: Identifiable {
         let browser = TunnelBrowser(dataStore: store)
         browser.onLoad = { [weak self] in self?.workbenchLoaded() }
         browser.onFail = { [weak self] reason in self?.pageFailed(reason) }
+        browser.onLost = { [weak self] reason in self?.recover(reason) }
         watchTouches(browser.webView)
         self.browser = browser
         return browser
@@ -209,6 +212,38 @@ final class EditorPane: Identifiable {
         isSuspended = true
         Self.log.info("editor \(self.member.description, privacy: .public) suspended")
     }
+
+    /// The page cannot go on (its web content process ended, or the workbench lost its session
+    /// on the server): the last picture stands in, as for a suspended editor, while the page
+    /// loads again, on a new session when the server's is gone.
+    func recover(_ reason: String) {
+        guard !isRecovering, loadedURL != nil else { return }
+        Self.log.error("editor \(self.member.description, privacy: .public) reloads: \(reason, privacy: .public)")
+        isRecovering = true
+        resumeURL = browser?.webView.url ?? loadedURL
+        snapshotTask?.cancel()
+        unwatchTouches()
+        browser?.webView.stopLoading()
+        browser = nil
+        isWorkbenchVisible = false
+        isSuspended = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.source.reopen()
+            self.isRecovering = false
+            // A new session's address: on screen it already loaded through `phaseChanged`.
+            if let url = self.source.phase.url, url != self.loadedURL {
+                self.loadedURL = url
+                self.resumeURL = url
+            }
+            // Else the page loads again here, or when the pane is shown.
+            if self.browser == nil, self.isOnScreen, let url = self.resumeURL ?? self.loadedURL {
+                self.makeBrowser(for: url).load(url)
+            }
+        }
+    }
+
+    @ObservationIgnored private var isRecovering = false
 
     /// The pane closed: its web view goes now.
     func tearDown() {
@@ -433,9 +468,10 @@ extension WindowModel {
         return editors.existing(editor.id)
     }
 
-    /// Open in VS Code: the focused pane's folder (its worktree's root) on its host, in a tab of
-    /// its own (`placement` nil: ⌥ held means beside the focused pane). An editor already open on
-    /// that folder comes forward instead. With a path, that file opens in it at the line.
+    /// Open in VS Code: the focused pane's folder (its worktree's root) on its host, in a new
+    /// editor in a tab of its own (`placement` nil: ⌥ held means beside the focused pane); several
+    /// may show one folder, as browser windows on one server. With a path, that file opens at the
+    /// line, in an editor already holding it when there is one.
     func openEditor(path: String? = nil, line: Int? = nil, column: Int? = nil, placement: EditorPlacement? = nil, tunnelOffer: Bool = false) {
         let placement = placement ?? EditorPlacement.fromModifiers
         sheet = nil
@@ -451,11 +487,12 @@ extension WindowModel {
         }
     }
 
-    /// The editor for the focused pane (or a path): one already open on its host whose folder
-    /// holds the path, else the folder's worktree root. Nil (said in a toast) without a host.
+    /// The editor for the focused pane (or a path): for a path, one already open on its host
+    /// whose folder holds it (the focused one first), else a new one on the folder's worktree
+    /// root. Nil (said in a toast) without a host.
     func editorTarget(path: String?) async -> EditorMember? {
         if LaunchOptions.mock {
-            return composites.editors.first ?? EditorMember(hostId: "studio", folder: "~/projects/unnamed")
+            return EditorMember(hostId: "studio", folder: "~/projects/unnamed")
         }
         var context = HostContext.resolve(app: app, window: self)
         // The window's host may still be connecting: wait a moment for it.
@@ -474,9 +511,11 @@ extension WindowModel {
             try? await Task.sleep(for: .milliseconds(100))
             if let again = HostContext.resolve(app: app, window: self), again.hostId == context.hostId { context = again }
         }
-        let open = composites.editors.filter { $0.hostId == context.hostId }
-        if let path, let holder = open.filter({ $0.contains(path: path) }).max(by: { $0.folder.count < $1.folder.count }) {
-            return holder
+        if let path {
+            let holders = composites.editors.filter { $0.hostId == context.hostId && $0.contains(path: path) }
+            let deepest = holders.map(\.folder.count).max()
+            let candidates = holders.filter { $0.folder.count == deepest }
+            if let holder = candidates.first(where: { $0.id == activeMixed?.focusedEditor?.id }) ?? candidates.last { return holder }
         }
         let directory: String
         if let path, path.hasPrefix("/") {
@@ -487,7 +526,6 @@ extension WindowModel {
         // The worktree's root when the directory is in one (VS Code shows the project).
         var folder = directory
         if let status = try? await context.api().gitStatus(path: directory) { folder = status.root }
-        if let existing = open.first(where: { $0.folder == folder }) { return existing }
         return EditorMember(hostId: context.hostId, folder: folder)
     }
 
@@ -531,6 +569,25 @@ extension WindowModel {
         }
         composites.close(leaf: leaf, in: tab.id)
         if activeMixedTab == tab.id { syncMixedFocus() }
+    }
+
+    /// The focused editor fills the window: no sidebar, tab strip, toolbar or editor bar. Ends
+    /// by itself when another tab or pane takes the focus.
+    var isEditorFullScreen: Bool {
+        guard let id = fullScreenEditor, destination == .terminal else { return false }
+        return activeMixed?.focusedEditor?.id == id
+    }
+
+    /// ⌃⌘F, the More menu, the palette: the focused editor full screen, or back.
+    func toggleEditorFullScreen() {
+        if isEditorFullScreen {
+            fullScreenEditor = nil
+        } else if destination == .terminal, let editor = activeMixed?.focusedEditor {
+            fullScreenEditor = editor.id
+        }
+        #if os(macOS)
+        NativeFullScreen.follow(isEditorFullScreen)
+        #endif
     }
 
     /// ⌃⌘` (Return to Terminal): from an editor, the terminal beside it in its tab, else the tab
@@ -582,6 +639,12 @@ extension WindowModel {
                 self?.openEditor(placement: .tab, tunnelOffer: true)
             }),
         ]
+        if destination == .terminal, activeMixed?.focusedEditor != nil {
+            extras.append(("editor-full-screen", isEditorFullScreen ? "Exit Full Screen Editor" : "Full Screen Editor",
+                           "arrow.up.left.and.arrow.down.right", WorkspaceAction.fullScreenEditor.shortcut.symbols, { [weak self] in
+                self?.toggleEditorFullScreen()
+            }))
+        }
         #if os(macOS)
         if DesktopVSCode.isInstalled {
             extras.append(("editor-desktop", "Open in Desktop VS Code", "macwindow", nil, { [weak self] in
@@ -593,6 +656,23 @@ extension WindowModel {
     }
 
     #if os(macOS)
+    /// The Mac's own full screen goes with the editor's: entered with it unless the window was
+    /// already full screen, and left with it only when it was entered so.
+    enum NativeFullScreen {
+        @MainActor private static weak var entered: NSWindow?
+
+        @MainActor static func follow(_ fullScreen: Bool) {
+            if fullScreen {
+                guard let window = NSApp.keyWindow, !window.styleMask.contains(.fullScreen) else { return }
+                entered = window
+                window.toggleFullScreen(nil)
+            } else if let window = entered {
+                entered = nil
+                if window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
+            }
+        }
+    }
+
     /// The user's own desktop VS Code (Remote - SSH over our forward) on an editor's folder, or
     /// the focused pane's. Says why in a toast when it cannot.
     func openInDesktopVSCode(_ member: EditorMember? = nil, path: String? = nil, line: Int? = nil, column: Int? = nil) {

@@ -24,6 +24,9 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     @ObservationIgnored var onLoad: (() -> Void)?
     /// The main page could not be loaded (the error, in words).
     @ObservationIgnored var onFail: ((String) -> Void)?
+    /// The page cannot go on and must be loaded again: its web content process ended, or the
+    /// workbench gave up reconnecting to its server (the reason, for the log).
+    @ObservationIgnored var onLost: ((String) -> Void)?
 
     struct Popup: Identifiable {
         let id = UUID()
@@ -38,8 +41,12 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        let relay = LostRelay()
+        configuration.userContentController.add(relay, name: LostRelay.name)
+        configuration.userContentController.addUserScript(LostRelay.script)
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
+        relay.browser = self
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = false
@@ -107,6 +114,12 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
         failed(error)
     }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        Self.log.error("editor web content process ended")
+        onLost?("its web content process ended")
+    }
+
     private func failed(_ error: any Error) {
         // A newer load replacing this one is not a failure.
         if (error as NSError).code == NSURLErrorCancelled { return }
@@ -120,6 +133,43 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
         #else
         NSWorkspace.shared.open(url)
         #endif
+    }
+}
+
+/// Hears the workbench give up on its server for good: VS Code's "Cannot reconnect" dialog
+/// (the server lost the session: its grace time ran out, or it was restarted). Weak, so the
+/// content controller does not keep the browser alive.
+@MainActor
+private final class LostRelay: NSObject, WKScriptMessageHandler {
+    static let name = "editorLost"
+    weak var browser: TunnelBrowser?
+
+    /// Looks at dialogs only (cheap; the workbench changes the page all the time), once a
+    /// second at most, and says so once per page.
+    static let script = WKUserScript(source: """
+        (() => {
+          let said = false, queued = false;
+          const look = () => {
+            queued = false;
+            if (said) return;
+            for (const el of document.querySelectorAll('.monaco-dialog-box .dialog-message-text')) {
+              if (/Cannot reconnect|reload the window/i.test(el.textContent || '')) {
+                said = true;
+                window.webkit.messageHandlers.\(name).postMessage('cannot reconnect');
+                return;
+              }
+            }
+          };
+          new MutationObserver(() => {
+            if (!queued) { queued = true; setTimeout(look, 1000); }
+          }).observe(document.documentElement, { childList: true, subtree: true });
+        })();
+        """, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        let reason = (message.body as? String) ?? "lost"
+        TunnelBrowser.log.error("editor workbench: \(reason, privacy: .public)")
+        browser?.onLost?("the workbench says: \(reason)")
     }
 }
 

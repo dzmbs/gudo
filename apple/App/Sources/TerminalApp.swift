@@ -40,15 +40,20 @@ struct TerminalApp: App {
         .commands { WorkspaceCommands() }
         .onChange(of: scenePhase) { _, phase in
             // 04-mobile-ux C3 "background and foreground contract": suspend with resume state
-            // kept, probe and resume at once on return (R1, R5, R10). macOS keeps connections
-            // up in the background. The app's phase, not a window's: one window in the
-            // background while another is on screen keeps every host live.
+            // kept once the background time iOS grants runs out (`BackgroundGrace`), probe and
+            // resume at once on return (R1, R5, R10). macOS keeps connections up in the
+            // background. The app's phase, not a window's: one window in the background while
+            // another is on screen keeps every host live.
             AppNotifications.shared.appIsActive = phase == .active
             switch phase {
-            case .active: app.hosts.foreground()
+            case .active:
+                #if os(iOS)
+                BackgroundGrace.shared.returned()
+                #endif
+                app.hosts.foreground()
             case .background:
                 #if os(iOS)
-                app.hosts.background()
+                BackgroundGrace.shared.enter()
                 #endif
             default: break
             }

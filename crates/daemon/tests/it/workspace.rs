@@ -82,6 +82,73 @@ async fn echo_server() -> u16 {
     port
 }
 
+/// A connection made while the link is down waits for it instead of failing (a browser's
+/// first reconnect attempt then works); a link that breaks under an open connection resets
+/// both ends, so neither takes it for an orderly close.
+#[tokio::test(flavor = "multi_thread")]
+async fn forwards_wait_out_a_reconnect_and_reset_on_a_broken_link() {
+    let (_state, state) = canonical_tempdir();
+    let (_home, home) = canonical_tempdir();
+    let daemon = start_home(&state, &home).await;
+    let mut c = connected(&daemon).await;
+    let echo = echo_server().await;
+    let local = c
+        .client
+        .forward(0, ForwardTarget::Tcp { port: echo })
+        .unwrap();
+
+    c.client.suspend();
+    let mut early = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+    early.write_all(b"before the link").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    c.client.reconnect();
+    let mut got = [0; 15];
+    tokio::time::timeout(Duration::from_secs(20), early.read_exact(&mut got))
+        .await
+        .expect("answered once the link is back")
+        .unwrap();
+    assert_eq!(&got, b"before the link");
+    c.until("connected again", |c| c.connected > 1).await;
+
+    // The host side sees how its connection ended.
+    let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = server.local_addr().unwrap().port();
+    let (ended_tx, ended_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut tcp, _) = server.accept().await.unwrap();
+        let mut buf = [0; 64];
+        let ended = loop {
+            match tcp.read(&mut buf).await {
+                Ok(0) => break Ok(()),
+                Ok(_) => tcp.write_all(b"pong").await.unwrap(),
+                Err(e) => break Err(e.kind()),
+            }
+        };
+        let _ = ended_tx.send(ended);
+    });
+    let local = c.client.forward(0, ForwardTarget::Tcp { port }).unwrap();
+    let mut tcp = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+    tcp.write_all(b"ping").await.unwrap();
+    let mut pong = [0; 4];
+    tcp.read_exact(&mut pong).await.unwrap();
+
+    c.client.reconnect();
+    let mut rest = Vec::new();
+    let here = tokio::time::timeout(Duration::from_secs(10), tcp.read_to_end(&mut rest))
+        .await
+        .expect("the local end learns the link broke");
+    assert_eq!(
+        here.map_err(|e| e.kind()),
+        Err(std::io::ErrorKind::ConnectionReset),
+        "reset, not a clean end"
+    );
+    let there = tokio::time::timeout(Duration::from_secs(10), ended_rx)
+        .await
+        .expect("the host end learns it too")
+        .unwrap();
+    assert_eq!(there, Err(std::io::ErrorKind::ConnectionReset));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn forwards_tcp_and_unix_with_half_close_and_backpressure() {
     let (_state, state) = canonical_tempdir();
@@ -1052,6 +1119,7 @@ async fn editor_servers_launch_per_folder_and_open_files() {
         c.pane_env.push(("HOME".into(), s(&home2)));
         c.fs_allow.push(home2);
         c.code_cli = Some(code2);
+        c.vscode_serve_web = true;
         c.openvscode_dir = Some(ovs2);
     })
     .await;

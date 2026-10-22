@@ -37,6 +37,15 @@ nonisolated public protocol RelaySettingsClient: AnyObject, Sendable {
 
 extension DaemonClient: RelaySettingsClient {}
 
+/// A client that keeps a live connection across a network change, letting it move to a path
+/// that works (`DaemonClient.networkChanged`). Not part of `DaemonClientAPI` so test fakes need
+/// not implement it; those redial instead.
+nonisolated public protocol NetworkChangeClient: AnyObject, Sendable {
+    func networkChanged()
+}
+
+extension DaemonClient: NetworkChangeClient {}
+
 /// Dials a daemon. The real one is `DaemonClient.connect`; tests pass a fake.
 public typealias DaemonDialer = @Sendable (_ ticket: String, _ listener: any ClientEventListener) throws -> any DaemonClientAPI
 

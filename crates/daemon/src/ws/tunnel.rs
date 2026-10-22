@@ -71,12 +71,13 @@ struct Installed {
 /// The update service's answer (`/api/update/<platform>/stable/latest`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Release {
-    url: String,
-    version: String,
-    product_version: Option<String>,
-    name: Option<String>,
-    sha256hash: String,
+pub(crate) struct Release {
+    pub url: String,
+    /// The commit.
+    pub version: String,
+    pub product_version: Option<String>,
+    pub name: Option<String>,
+    pub sha256hash: String,
 }
 
 struct St {
@@ -858,20 +859,22 @@ fn find_cli(cfg: &Config) -> Option<PathBuf> {
 
 // --- install ----------------------------------------------------------------------------------
 
+/// Whether this Linux host's libc is musl (Alpine and the like).
+pub(crate) fn is_musl() -> bool {
+    Path::new("/etc/alpine-release").exists()
+        || (!Path::new("/lib64/ld-linux-x86-64.so.2").exists()
+            && !Path::new("/lib/ld-linux-aarch64.so.1").exists()
+            && ["/lib/ld-musl-x86_64.so.1", "/lib/ld-musl-aarch64.so.1"]
+                .iter()
+                .any(|p| Path::new(p).exists()))
+}
+
 /// Microsoft's name for this host's CLI build.
 fn cli_platform() -> Option<&'static str> {
-    let musl = || {
-        Path::new("/etc/alpine-release").exists()
-            || (!Path::new("/lib64/ld-linux-x86-64.so.2").exists()
-                && !Path::new("/lib/ld-linux-aarch64.so.1").exists()
-                && ["/lib/ld-musl-x86_64.so.1", "/lib/ld-musl-aarch64.so.1"]
-                    .iter()
-                    .any(|p| Path::new(p).exists()))
-    };
     match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") if musl() => Some("cli-alpine-x64"),
+        ("linux", "x86_64") if is_musl() => Some("cli-alpine-x64"),
         ("linux", "x86_64") => Some("cli-linux-x64"),
-        ("linux", "aarch64") if musl() => Some("cli-alpine-arm64"),
+        ("linux", "aarch64") if is_musl() => Some("cli-alpine-arm64"),
         ("linux", "aarch64") => Some("cli-linux-arm64"),
         ("linux", "arm") => Some("cli-linux-armhf"),
         ("macos", "aarch64") => Some("cli-darwin-arm64"),
@@ -880,7 +883,7 @@ fn cli_platform() -> Option<&'static str> {
     }
 }
 
-fn fetch(url: &str, dest: &Path) -> Result<(), WsError> {
+pub(crate) fn fetch(url: &str, dest: &Path) -> Result<(), WsError> {
     let ok = std::process::Command::new("curl")
         .args(["-fsSL", "--retry", "3", "--max-time", "600", "-o"])
         .arg(dest)
