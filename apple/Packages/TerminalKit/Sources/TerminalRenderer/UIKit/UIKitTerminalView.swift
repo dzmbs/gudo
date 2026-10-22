@@ -69,6 +69,11 @@ public final class TerminalView: UIView {
     private var lastPointerLocation = CGPoint.zero
     private var pointerDragRectangle = false
     private var touchMouseDrag = false
+    /// A long-press began inside the selection: it stays as it is, for a drag out.
+    private var pressKeepsSelection = false
+    /// The edit menu is up only to offer Paste (the key bar's paste key).
+    private var menuOffersPaste = false
+    private let copiedToast = CopiedToast()
 
 
     /// IME composition in progress (marked text) and the selection inside it, in UTF-16 units.
@@ -110,6 +115,13 @@ public final class TerminalView: UIView {
         editMenu = menu
         // A text input gets Scribble by default, which turned Pencil strokes into shell input.
         addInteraction(UIScribbleInteraction(delegate: self))
+        // Selected text drags out to other apps; text and links dropped here paste.
+        let drag = UIDragInteraction(delegate: self)
+        drag.isEnabled = true
+        addInteraction(drag)
+        addInteraction(UIDropInteraction(delegate: self))
+        addSubview(copiedToast)
+        PasteboardOrigin.observe()
 
         surface.onFrameRendered = { [weak self] in self?.layoutSelectionHandles() }
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: TerminalView, _) in view.setNeedsLayout() }
@@ -126,6 +138,7 @@ public final class TerminalView: UIView {
         CATransaction.commit()
         surface.layout(size: bounds.size, scale: traitCollection.displayScale)
         layoutSelectionHandles()
+        copiedToast.center = CGPoint(x: bounds.midX, y: bounds.minY + 28)
     }
 
     override public func didMoveToWindow() {
@@ -293,6 +306,7 @@ public final class TerminalView: UIView {
         let selected = selectionGesture.press(cell: cell, x: px.x, y: px.y, time: CACurrentMediaTime())
         selectionGesture.release(cell: cell)
         if selected != nil {
+            if selectionGesture.clickCount == 2 { surface.terminal.selectLinkOrWord(atViewport: cell) }
             selectionChanged(showMenu: true)
             return
         }
@@ -310,12 +324,15 @@ public final class TerminalView: UIView {
         switch press.state {
         case .began:
             menuPoint = point
-            if surface.terminal.selectWord(atViewport: surface.cell(at: point)) != nil {
+            // Inside the selection: keep it (a drag carries it out).
+            pressKeepsSelection = isSelected(point)
+            if pressKeepsSelection { return }
+            if surface.terminal.selectLinkOrWord(atViewport: surface.cell(at: point)) != nil {
                 UISelectionFeedbackGenerator().selectionChanged()
                 selectionChanged(showMenu: false)
             }
         case .changed:
-            guard let selection = surface.terminal.selection,
+            guard !pressKeepsSelection, let selection = surface.terminal.selection,
                   let head = surface.terminal.screenPoint(fromViewport: surface.cell(at: point)) else { return }
             surface.terminal.setSelection(Selection(anchor: selection.start, head: head))
             selectionChanged(showMenu: false)
@@ -585,9 +602,8 @@ public final class TerminalView: UIView {
 
     private func showEditMenu() {
         guard let ends = surface.selectionEnds() else {
-            // Nothing selected (a long-press on blank cells): the menu still offers what the
-            // rows under the finger have, if anything.
-            if let menuPoint, contextActions?(menuPoint) != nil {
+            // Nothing selected (a long-press on blank cells): Paste, and what the rows offer.
+            if let menuPoint {
                 editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: menuPoint))
             }
             return
@@ -619,8 +635,34 @@ public final class TerminalView: UIView {
 
     /// Copies the selection as plain text, soft-wrapped lines joined.
     override public func copy(_ sender: Any?) {
-        guard let text = surface.terminal.selectionText() else { return }
+        guard let text = surface.terminal.selectionText(), !text.isEmpty else { return }
         UIPasteboard.general.string = text
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        copiedToast.show()
+    }
+
+    /// The key bar's paste key. A button's read of the pasteboard is programmatic: iOS answers it
+    /// for another app's text with a prompt or, on iOS 27, with nothing at all. So this app's own
+    /// copies paste at once, and another app's text gets the system's Paste at the cursor, which
+    /// is the user's own paste and reads without asking.
+    public func pasteFromKeyBar() {
+        let board = UIPasteboard.general
+        if board.changeCount == PasteboardOrigin.ownChangeCount, let text = board.string, !text.isEmpty {
+            return pasteText(text)
+        }
+        guard board.hasStrings || (onPasteAttachment != nil && board.hasImages) else { return }
+        if !isFirstResponder { becomeFirstResponder() }
+        menuOffersPaste = true
+        let cursor = surface.cursorRect ?? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+        let point = CGPoint(x: cursor.midX, y: cursor.minY)
+        menuPoint = point
+        editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+    }
+
+    private func isSelected(_ point: CGPoint) -> Bool {
+        guard let selection = surface.terminal.selection,
+              let cell = surface.terminal.screenPoint(fromViewport: surface.cell(at: point)) else { return false }
+        return selection.contains(cell)
     }
 
     override public func paste(_ sender: Any?) {
@@ -941,6 +983,8 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
     public func editMenuInteraction(
         _ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
+        let paste = Self.command(#selector(UIResponderStandardEditActions.paste(_:)), in: suggestedActions)
+        if menuOffersPaste { return paste.map { UIMenu(children: [$0]) } }
         var actions: [UIMenuElement] = []
         let selection = surface.selectionEnds()
         if surface.terminal.selection != nil {
@@ -959,9 +1003,7 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
         // gated by `canPerformAction`), so reading another app's text counts as the user's paste.
         // A custom action reading `UIPasteboard.general` is a programmatic read: iOS asks "Allow
         // Paste?" or, as on a fresh iOS 27 install, returns nil without asking, and nothing pastes.
-        if let paste = Self.command(#selector(UIResponderStandardEditActions.paste(_:)), in: suggestedActions) {
-            actions.append(paste)
-        }
+        if let paste { actions.append(paste) }
         actions.append(UIAction(title: "Select All") { [weak self] _ in self?.selectAll(nil) })
         return UIMenu(children: actions)
     }
@@ -986,7 +1028,10 @@ extension TerminalView: @MainActor UIEditMenuInteractionDelegate {
     public func editMenuInteraction(
         _ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration, animator: any UIEditMenuInteractionAnimating
     ) {
-        animator.addCompletion { [weak self] in self?.menuPoint = nil }
+        animator.addCompletion { [weak self] in
+            self?.menuPoint = nil
+            self?.menuOffersPaste = false
+        }
     }
 }
 
@@ -1078,6 +1123,109 @@ extension KeyModifiers {
 extension TerminalView: UIScribbleInteractionDelegate {
     public func scribbleInteraction(_ interaction: UIScribbleInteraction, shouldBeginAt location: CGPoint) -> Bool {
         allowsHandwriting
+    }
+}
+
+// MARK: - Drag and drop
+
+extension TerminalView: UIDragInteractionDelegate, UIDropInteractionDelegate {
+    /// A drag that starts on the selection carries its text; anywhere else it does not start, so
+    /// the terminal's own gestures keep the touch.
+    public func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: any UIDragSession) -> [UIDragItem] {
+        guard isSelected(session.location(in: self)), let text = surface.terminal.selectionText(), !text.isEmpty else { return [] }
+        editMenu?.dismissMenu()
+        let item = UIDragItem(itemProvider: NSItemProvider(object: text as NSString))
+        item.localObject = self
+        return [item]
+    }
+
+    /// Text and links. Images and files are the host's (a drawing placed in the pane), and a
+    /// selection dropped back on its own terminal is a slip, not a paste.
+    public func dropInteraction(_ interaction: UIDropInteraction, canHandle session: any UIDropSession) -> Bool {
+        if session.localDragSession?.items.contains(where: { $0.localObject as? TerminalView === self }) == true { return false }
+        return session.canLoadObjects(ofClass: String.self)
+            && !session.hasItemsConforming(toTypeIdentifiers: ["public.image", "public.file-url"])
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {
+        UIDropProposal(operation: .copy)
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, performDrop session: any UIDropSession) {
+        if !isFirstResponder { becomeFirstResponder() }
+        let providers = session.items.map(\.itemProvider).filter { $0.canLoadObject(ofClass: NSString.self) }
+        Task { @MainActor [weak self] in
+            var texts: [String] = []
+            for provider in providers {
+                let text: String? = await withCheckedContinuation { done in
+                    _ = provider.loadObject(ofClass: NSString.self) { object, _ in done.resume(returning: object as? String) }
+                }
+                if let text, !text.isEmpty { texts.append(text) }
+            }
+            if !texts.isEmpty { self?.pasteText(texts.joined(separator: " ")) }
+        }
+    }
+}
+
+/// The pasteboard's change count after this app last wrote it: its own text, which reads
+/// without a prompt. The notification reports only changes made in this process.
+@MainActor
+private enum PasteboardOrigin {
+    static var ownChangeCount = -1
+    private static var observer: (any NSObjectProtocol)?
+
+    static func observe() {
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(forName: UIPasteboard.changedNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { ownChangeCount = UIPasteboard.general.changeCount }
+        }
+    }
+}
+
+/// A brief "Copied" capsule at the top of the terminal.
+private final class CopiedToast: UIView {
+    private var hideTask: Task<Void, Never>?
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 108, height: 34))
+        let glass = UIVisualEffectView(effect: UIGlassEffect())
+        glass.frame = bounds
+        glass.layer.cornerRadius = bounds.height / 2
+        glass.layer.cornerCurve = .continuous
+        glass.clipsToBounds = true
+        addSubview(glass)
+        let label = UILabel(frame: bounds)
+        let symbol = UIImage(systemName: "checkmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+        let text = NSMutableAttributedString(attachment: NSTextAttachment(image: symbol ?? UIImage()))
+        text.append(NSAttributedString(string: " Copied"))
+        label.attributedText = text
+        label.font = .systemFont(ofSize: 15, weight: .medium)
+        label.textAlignment = .center
+        glass.contentView.addSubview(label)
+        isUserInteractionEnabled = false
+        isHidden = true
+        alpha = 0
+        isAccessibilityElement = true
+        accessibilityLabel = "Copied"
+        accessibilityIdentifier = "terminal-copied"
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func show() {
+        superview?.bringSubviewToFront(self)
+        isHidden = false
+        UIView.animate(withDuration: 0.15) { self.alpha = 1 }
+        UIAccessibility.post(notification: .announcement, argument: "Copied")
+        hideTask?.cancel()
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard let self, !Task.isCancelled else { return }
+            UIView.animate(withDuration: 0.3) { self.alpha = 0 } completion: { _ in
+                if self.alpha == 0 { self.isHidden = true }
+            }
+        }
     }
 }
 #endif

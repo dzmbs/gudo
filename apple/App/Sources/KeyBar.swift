@@ -648,7 +648,7 @@ final class KeyBar: UIInputView {
         guard let target else { return }
         let output = alternate ? (key.alternate ?? key.output) : key.output
         if case .paste = output {
-            target.paste(nil)
+            target.pasteFromKeyBar()
             return
         }
         if lineEditor.isActive {

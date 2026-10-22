@@ -21,6 +21,13 @@ public struct Selection: Sendable, Equatable {
     /// The ends in reading order.
     public var start: GridPoint { min(anchor, head) }
     public var end: GridPoint { max(anchor, head) }
+
+    /// Whether a screen cell is selected.
+    public func contains(_ point: GridPoint) -> Bool {
+        guard rectangle else { return start <= point && point <= end }
+        return (min(anchor.x, head.x)...max(anchor.x, head.x)).contains(point.x)
+            && (min(anchor.y, head.y)...max(anchor.y, head.y)).contains(point.y)
+    }
 }
 
 extension Terminal {
@@ -117,6 +124,19 @@ extension Terminal {
             ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_SELECTION, &s)
             return Self.selection(t, s)
         }
+    }
+
+    /// Selects the URL or path under a viewport cell whole (word boundaries stop at `:` and `/`),
+    /// else the word.
+    @discardableResult
+    public func selectLinkOrWord(atViewport point: GridPoint) -> Selection? {
+        guard let link = link(atViewport: point),
+              let start = screenPoint(fromViewport: GridPoint(x: link.columns.lowerBound, y: link.row)),
+              let end = screenPoint(fromViewport: GridPoint(x: link.columns.upperBound, y: link.row))
+        else { return selectWord(atViewport: point) }
+        let selection = Selection(anchor: start, head: end)
+        setSelection(selection)
+        return selection
     }
 
     /// Selects the (soft-wrapped) line under a viewport cell, trimmed, and installs it.

@@ -12,7 +12,7 @@ import TerminalCore
 ///   opens an OSC 8 link after confirmation; hovering underlines it.
 /// - The wheel scrolls scrollback, or becomes wheel reports / alt-screen arrow keys.
 /// - Copy (plain text, soft wraps joined) and bracketed paste through the Edit menu.
-public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActor NSMenuItemValidation {
+public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActor NSMenuItemValidation, @MainActor NSDraggingSource {
     public let surface: TerminalSurface
     /// Bytes to write to the PTY (encoded keys, mouse and focus reports).
     public var onInput: (([UInt8]) -> Void)?
@@ -40,6 +40,8 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     private var autoscrollTimer: Timer?
     private var lastDragPoint = CGPoint.zero
     private var dragRectangle = false
+    /// A press on the selection: dragging it carries the text out.
+    private var dragOutStart: NSEvent?
 
     // NSTextInputClient state.
     private var markedText = NSMutableAttributedString()
@@ -50,6 +52,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
+        registerForDraggedTypes([.string, .fileURL, .png, .tiff, NSPasteboard.PasteboardType("public.jpeg")])
     }
 
     @available(*, unavailable)
@@ -153,9 +156,18 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             surface.setNeedsRender()
             return
         }
+        if event.clickCount == 1, let selection = surface.terminal.selection,
+           let cell = surface.terminal.screenPoint(fromViewport: surface.cell(at: p)), selection.contains(cell)
+        {
+            dragOutStart = event
+            return
+        }
         surface.terminal.clearSelection()
         let px = surface.pixels(p)
-        selectionGesture.press(cell: surface.cell(at: p), x: px.x, y: px.y, time: event.timestamp)
+        let cell = surface.cell(at: p)
+        if selectionGesture.press(cell: cell, x: px.x, y: px.y, time: event.timestamp) != nil, selectionGesture.clickCount == 2 {
+            surface.terminal.selectLinkOrWord(atViewport: cell)
+        }
         surface.setNeedsRender()
     }
 
@@ -163,6 +175,15 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         let p = point(event)
         if mouseReporting {
             emit(surface.mouse(.motion, button: .left, at: p, mods: KeyModifiers(event.modifierFlags)))
+            return
+        }
+        if let start = dragOutStart {
+            let origin = point(start)
+            guard hypot(p.x - origin.x, p.y - origin.y) > 4, let text = surface.terminal.selectionText() else { return }
+            dragOutStart = nil
+            let item = NSDraggingItem(pasteboardWriter: text as NSString)
+            item.setDraggingFrame(CGRect(origin: origin, size: CGSize(width: 1, height: 1)), contents: nil)
+            beginDraggingSession(with: [item], event: start, source: self)
             return
         }
         lastDragPoint = p
@@ -178,6 +199,14 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         if mouseReporting {
             emit(surface.mouse(.release, button: .left, at: p, mods: KeyModifiers(event.modifierFlags)))
             mouseReporting = false
+            return
+        }
+        if dragOutStart != nil {
+            // A click on the selection without a drag: a plain click, which clears it.
+            dragOutStart = nil
+            surface.terminal.clearSelection()
+            selectionGesture.reset()
+            surface.setNeedsRender()
             return
         }
         selectionGesture.release(cell: surface.cell(at: p))
@@ -344,14 +373,11 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     /// Handles a paste whose pasteboard holds an image or a file and no text; returns whether it
     /// took it. Setting it also accepts drops of images and files onto the view
     /// (`onDropAttachment`).
-    public var onPasteAttachment: ((NSPasteboard) -> Bool)? {
-        didSet { updateDragTypes() }
-    }
+    public var onPasteAttachment: ((NSPasteboard) -> Bool)?
 
     /// Handles images and files dropped on the view at a point; returns whether it took them.
-    public var onDropAttachment: ((NSPasteboard, CGPoint) -> Bool)? {
-        didSet { updateDragTypes() }
-    }
+    /// What it leaves pastes: text as is, files as their shell-quoted paths.
+    public var onDropAttachment: ((NSPasteboard, CGPoint) -> Bool)?
 
     static func hasAttachment(_ pasteboard: NSPasteboard) -> Bool {
         // Files (the host decides which it takes), or an image with no text alongside.
@@ -359,21 +385,40 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         return pasteboard.string(forType: .string) == nil && pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
-    private func updateDragTypes() {
-        if onDropAttachment != nil {
-            registerForDraggedTypes([.fileURL, .png, .tiff, NSPasteboard.PasteboardType("public.jpeg")])
-        } else {
-            unregisterDraggedTypes()
-        }
-    }
-
     override public func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        onDropAttachment != nil && Self.hasAttachment(sender.draggingPasteboard) ? .copy : []
+        // Its own selection dropped back on it is a slip, not a paste.
+        if sender.draggingSource as? TerminalView === self { return [] }
+        let board = sender.draggingPasteboard
+        if onDropAttachment != nil, Self.hasAttachment(board) { return .copy }
+        return Self.droppedText(board) != nil ? .copy : []
     }
 
     override public func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        guard let onDropAttachment else { return false }
-        return onDropAttachment(sender.draggingPasteboard, convert(sender.draggingLocation, from: nil))
+        let board = sender.draggingPasteboard
+        if let onDropAttachment, Self.hasAttachment(board), onDropAttachment(board, convert(sender.draggingLocation, from: nil)) {
+            return true
+        }
+        guard let text = Self.droppedText(board) else { return false }
+        window?.makeFirstResponder(self)
+        pasteText(text)
+        return true
+    }
+
+    /// Files as shell-quoted paths separated by spaces (as Terminal and Ghostty do), else text.
+    static func droppedText(_ pasteboard: NSPasteboard) -> String? {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            return urls.map { shellQuoted($0.path) }.joined(separator: " ")
+        }
+        return pasteboard.string(forType: .string).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    static func shellQuoted(_ path: String) -> String {
+        let plain = path.allSatisfy { $0.isLetter || $0.isNumber || "/._-+,:@%".contains($0) }
+        return plain ? path : "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    public func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
     }
 
     @objc override public func selectAll(_ sender: Any?) {

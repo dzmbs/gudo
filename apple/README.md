@@ -96,11 +96,12 @@ split). Set `TEST_RUNNER_HOLD_SECONDS=30` to keep a UI test's final screen up fo
 `xcrun simctl io "$DEVICE" screenshot`.
 
 `TerminalInputUITests` (iPad) covers long-press/double-tap selection with handles and the edit menu,
-multi-line paste confirmation, IME marked text (`-demoPreedit`, debug builds) and echo prediction
-(`-echoLatencyMs`). Paste reads the pasteboard, so grant it once per simulator:
-`xcrun simctl privacy "$DEVICE" grant pasteboard dev.unnamed.app` (a denied prompt is remembered and
-paste then silently reads nothing). `MacPasteUITests` needs macOS UI-automation approval (Touch ID), so
-the Mac paste path is also covered in process by `AppKitPasteTests` in TerminalKit.
+copy and paste (⌘V, the edit menu, the key bar's paste key, after a sheet closes), multi-line paste
+confirmation, IME marked text (`-demoPreedit`, debug builds) and echo prediction (`-echoLatencyMs`).
+Text the test runner puts on the pasteboard is another app's, so every paste path must be one iOS
+trusts (the system Paste command or ⌘V): no simulator pasteboard grant is needed, and a test fails if
+iOS asks. `MacPasteUITests` needs macOS UI-automation approval (Touch ID), so the Mac paths (paste,
+copy, double-click on a URL, drops) are covered in process by `AppKitPasteTests` in TerminalKit.
 
 End-to-end on the Mac without any permission prompt: `scripts/dogfood.sh [scenario]` builds Debug and
 runs a scenario (`Dogfood/core.json`: the daily-driver checklist) inside the app, which synthesizes
