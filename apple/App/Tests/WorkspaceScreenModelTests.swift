@@ -74,6 +74,25 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertNil(items.first?.request)
     }
 
+    /// A pane titled with its directory and an agent in the home directory: the row says what
+    /// the agent waits for and "~", never a lone "~" and the user's name.
+    func testAgentInHomeDirectoryReadsAsAState() {
+        let metas: [PaneId: PaneMeta] = [
+            PaneId(1): meta(1, title: "~", cwd: "/home/me", agent: AgentStatus(kind: "claude", state: .idle)),
+            PaneId(2): meta(2, title: "/srv/app", cwd: "/srv/app", agent: AgentStatus(kind: "codex", state: .idle)),
+        ]
+        let items = LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: metas, attention: [])
+        let home = try! XCTUnwrap(items.first { $0.id == "h/1" })
+        XCTAssertEqual(home.prompt, "Waiting for your next prompt")
+        XCTAssertEqual(home.sessionTitle, "~")
+        let app = try! XCTUnwrap(items.first { $0.id == "h/2" })
+        XCTAssertEqual(app.prompt, "Waiting for your next prompt")
+        XCTAssertEqual(app.sessionTitle, "app")
+        XCTAssertEqual(LiveAgentFeed.folder("/Users/me"), "~")
+        XCTAssertEqual(LiveAgentFeed.folder("/root"), "~")
+        XCTAssertEqual(LiveAgentFeed.folder("/home/me/proj"), "proj")
+    }
+
     func testDecisionOptionsMatchWholeWords() {
         let options = [
             DecisionOption(id: 1, label: "Yes"),

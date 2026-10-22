@@ -103,7 +103,10 @@ final class FrameBuilder {
 
     private var cache: [RowID: CachedRow] = [:]
     private var infos: [CellInfo] = []
-    var style = FrameStyle()
+    var style = FrameStyle() {
+        // Cached rows carry the old selection and search colors.
+        didSet { cache.removeAll(keepingCapacity: true) }
+    }
     /// The last frame showed SGR 5 (blinking) text.
     private(set) var hasBlinkingText = false
 

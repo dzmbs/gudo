@@ -1,4 +1,5 @@
 #if os(iOS)
+import DesignSystem
 import GameController
 import HostKit
 import TerminalCore
@@ -203,42 +204,39 @@ final class KeyBar: UIInputView {
         configureBand()
         column.addArrangedSubview(band)
 
-        // GameController may post from its own queue; the bar is main-actor UI.
         keyboardObservers = [.GCKeyboardDidConnect, .GCKeyboardDidDisconnect].map { name in
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.keyboardsChanged() }
             }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        // UserDefaults posts on whichever thread wrote: on a device, PencilKit's Scribble
-        // registers its defaults from a background queue at launch. Hop to main.
+        // Posted on the writing thread, which need not be main.
         settingsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.themeMayHaveChanged() }
+            MainActor.assumeIsolated { self?.applyTheme() }
         }
         applyTheme()
         apply()
     }
 
     /// The terminal theme's scheme, ink and accent (`KeyBarTheme`): the bar floats over the
-    /// terminal, so it reads as part of it whatever the window's chrome does.
-    /// Applies the theme; true when it changed anything.
-    @discardableResult private func applyTheme() -> Bool {
-        let style = KeyBarTheme.style, accent = KeyBarTheme.accent
-        var changed = false
-        if overrideUserInterfaceStyle != style { overrideUserInterfaceStyle = style; changed = true }
-        if tintColor != accent { tintColor = accent; changed = true }
-        return changed
+    /// terminal, so it reads as part of it whatever the window's chrome does. The ink is baked
+    /// into the keys' configurations and the joystick, so a new theme redraws them.
+    private func applyTheme() {
+        let chrome = KeyBarTheme.chrome
+        guard chrome != appliedTheme else { return }
+        appliedTheme = chrome
+        overrideUserInterfaceStyle = KeyBarTheme.style
+        tintColor = KeyBarTheme.accent
+        for case let key as UIButton in allSubviews(of: self) { key.setNeedsUpdateConfiguration() }
+        configureCircles()
+        joystick.applyInk()
     }
 
+    private var appliedTheme: ChromePalette?
     private var settingsObserver: NSObjectProtocol?
     private var keyboardObservers: [NSObjectProtocol] = []
-
-    private func themeMayHaveChanged() {
-        guard applyTheme() else { return }
-        for case let key as UIButton in allSubviews(of: self) { key.setNeedsUpdateConfiguration() }
-    }
 
     private func allSubviews(of view: UIView) -> [UIView] {
         view.subviews + view.subviews.flatMap(allSubviews)
@@ -346,10 +344,14 @@ final class KeyBar: UIInputView {
         for key in [escKey, ctrlKey, altKey, tabKey, composerKey] + profileKeys.map(\.view) { key.metrics = metrics }
         for case let key as CapsuleKey in capsuleC.keys + arrowPad.keys { key.metrics = metrics }
         joystick.diameter = metrics.capsuleHeight
+        configureCircles()
+        apply()
+    }
+
+    private func configureCircles() {
         menuButton.configuration = circleConfiguration(symbol: "ellipsis")
         hideButton.configuration = circleConfiguration(symbol: "keyboard.chevron.compact.down")
         updateMic()
-        apply()
     }
 
     private func relayout() {
@@ -483,8 +485,6 @@ final class KeyBar: UIInputView {
         hideButton.accessibilityIdentifier = "keybar-hide-keyboard"
         hideButton.accessibilityLabel = "Hide keyboard"
         hideButton.addAction(UIAction { [weak self] _ in _ = self?.target?.resignFirstResponder() }, for: .touchUpInside)
-        menuButton.configuration = circleConfiguration(symbol: "ellipsis")
-        hideButton.configuration = circleConfiguration(symbol: "keyboard.chevron.compact.down")
 
         configureMic()
         for view in [capsuleA, capsuleB, capsuleC, micCircle, joystick, menuCircle, hideCircle] as [UIView] { band.addSubview(view) }
@@ -692,6 +692,7 @@ final class KeyBar: UIInputView {
         micButton.addAction(UIAction { _ in Task { _ = await voice.stop() } }, for: .touchUpInside)
         micButton.addAction(UIAction { _ in voice.cancel() }, for: [.touchUpOutside, .touchCancel])
         updateMic()
+        observeMic()
     }
 
     private func updateMic() {
@@ -700,10 +701,16 @@ final class KeyBar: UIInputView {
         if voice.isActive { configuration.baseForegroundColor = tintColor }
         micButton.configuration = configuration
         micButton.accessibilityValue = voice.isActive ? "Listening" : nil
+    }
+
+    private func observeMic() {
         withObservationTracking {
-            _ = voice.isActive
+            _ = VoiceDictation.shared.voice.isActive
         } onChange: { [weak self] in
-            Task { @MainActor [weak self] in self?.updateMic() }
+            Task { @MainActor [weak self] in
+                self?.updateMic()
+                self?.observeMic()
+            }
         }
     }
 
@@ -1004,13 +1011,11 @@ private final class JoystickView: UIView {
         addSubview(glass)
         icon.image = UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right",
                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
-        icon.tintColor = KeyBarTheme.ink.withAlphaComponent(0.9)
         icon.contentMode = .center
         addSubview(icon)
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textAlignment = .center
         addSubview(label)
-        dot.backgroundColor = KeyBarTheme.ink
         dot.layer.cornerRadius = 3
         dot.isHidden = true
         addSubview(dot)
@@ -1032,6 +1037,11 @@ private final class JoystickView: UIView {
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         bounds.insetBy(dx: -2, dy: -6).contains(point)
+    }
+
+    func applyInk() {
+        icon.tintColor = KeyBarTheme.ink.withAlphaComponent(0.9)
+        dot.backgroundColor = KeyBarTheme.ink
     }
 
     private func updateLook() {

@@ -130,9 +130,13 @@ document.getElementById('path').textContent = 'Location ' + decodeURIComponent(l
 localStorage.loads = (+localStorage.loads || 0) + 1;
 document.getElementById('loads').textContent = 'Page loads ' + localStorage.loads;
 // The workbench's own requests carry only the cookie: say when the server turns them away.
-setInterval(function () {
-  fetch('/ping').then(function (r) { if (r.status === 403) document.body.setAttribute('data-forbidden', '1'), document.getElementById('path').textContent = 'Forbidden'; });
-}, 1000);
+// Only on load and on focus (a timer would keep the page busy, and UI tests wait for idle).
+function ping() {
+  fetch('/ping').then(function (r) { if (r.status === 403) document.getElementById('path').textContent = 'Forbidden'; });
+}
+ping();
+window.addEventListener('focus', ping);
+document.addEventListener('focusin', ping);
 var keys = [];
 document.addEventListener('keydown', function (e) {
   keys.push((e.metaKey ? 'cmd+' : '') + (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase());

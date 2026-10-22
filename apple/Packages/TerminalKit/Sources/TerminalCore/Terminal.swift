@@ -41,7 +41,7 @@ public enum CursorShape: Sendable {
 /// snapshots the terminal into a `RenderState` (only `begin_update` runs under the lock, as Ghostty
 /// does). That invariant is what makes the `@unchecked Sendable` sound.
 public final class Terminal: @unchecked Sendable {
-    public struct Configuration: Sendable {
+    public struct Configuration: Sendable, Equatable {
         /// Ghostty's default theme (`background`/`foreground` in `src/config/Config.zig`).
         public var background = RGB(r: 0x28, g: 0x2C, b: 0x34)
         public var foreground = RGB(r: 0xFF, g: 0xFF, b: 0xFF)
@@ -105,7 +105,8 @@ public final class Terminal: @unchecked Sendable {
     /// The cell of the last reported motion, so motion within one cell is not re-sent.
     let lastMouseCell = Mutex<GridPoint?>(nil)
     let effects: Effects
-    let configuration: Configuration
+    /// Guarded by `lock` (a theme change replaces it while output arrives).
+    private(set) var configuration: Configuration
     /// The decoder of the last restored snapshot while its history is still arriving (guarded by
     /// `lock`); see `Terminal+Snapshot.swift`.
     var restoreState: SnapshotRestore?
@@ -154,28 +155,48 @@ public final class Terminal: @unchecked Sendable {
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(onWritePty, to: UnsafeRawPointer.self))
         Self.installEventCallbacks(terminal)
 
+        var scrollback = configuration.scrollbackBytes
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &scrollback)
+        applyDefaults(terminal, configuration)
+        // Ghostty's default `grapheme-width-method = unicode`: mode 2027 on, so emoji ZWJ
+        // sequences, flags and skin tones occupy one (wide) cell.
+        var graphemeClusters = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &graphemeClusters)
+    }
+
+    /// The colors and cursor that programs' OSC overrides and DECSCUSR 0 fall back to. A nil
+    /// palette or cursor color resets it to the built-in default.
+    private static func applyDefaults(_ terminal: GhosttyTerminal, _ configuration: Configuration) {
         var bg = configuration.background.ghostty
         var fg = configuration.foreground.ghostty
-        var scrollback = configuration.scrollbackBytes
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg)
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg)
-        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &scrollback)
         if let palette = configuration.palette, palette.count == 256 {
             var colors = palette.map(\.ghostty)
             ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, &colors)
+        } else {
+            ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, nil)
         }
-        if let cursor = configuration.cursorColor {
-            var c = cursor.ghostty
-            ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &c)
+        if var cursor = configuration.cursorColor?.ghostty {
+            ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursor)
+        } else {
+            ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, nil)
         }
         var cursorStyle = configuration.cursorStyle.ghostty
         var cursorBlink = configuration.cursorBlink
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &cursorStyle)
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &cursorBlink)
-        // Ghostty's default `grapheme-width-method = unicode`: mode 2027 on, so emoji ZWJ
-        // sequences, flags and skin tones occupy one (wide) cell.
-        var graphemeClusters = GhosttyTerminalModeConfig(mode: ghostty_mode_new(2027, false), value: true)
-        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &graphemeClusters)
+    }
+
+    /// Replaces the default colors and cursor of a running terminal (a theme change); the next
+    /// render redraws every row. The scrollback limit stays the one it was created with.
+    public func setDefaults(_ configuration: Configuration) {
+        lock.withLock { _ in
+            let scrollbackBytes = self.configuration.scrollbackBytes
+            self.configuration = configuration
+            self.configuration.scrollbackBytes = scrollbackBytes
+            Self.applyDefaults(terminal, configuration)
+        }
     }
 
     deinit {

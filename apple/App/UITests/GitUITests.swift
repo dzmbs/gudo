@@ -76,11 +76,11 @@ final class GitUITests: XCTestCase {
         XCTFail("gh was not asked to \(needle); log:\n\(ghLog())")
     }
 
-    /// New Task through the palette: a shell in a new worktree named `name`.
+    /// New Agent through the palette: a shell in a new worktree named `name`.
     private func newTask(_ name: String) {
-        palette("New Task")
+        palette("New Agent")
         let nameField = element("task-name")
-        XCTAssertTrue(nameField.waitForExistence(timeout: 10), "the New Task sheet opens with a name")
+        XCTAssertTrue(nameField.waitForExistence(timeout: 10), "the New Agent sheet opens with a name")
         // Replace the generated name by deleting it from the end, not with ⌘A: even with the
         // field focused, ⌘A sometimes left nothing selected and the typed name was appended to
         // the generated one. The tap at the field's trailing edge puts the caret at the end.
@@ -97,7 +97,7 @@ final class GitUITests: XCTestCase {
 
     // MARK: Tests
 
-    /// New Task makes a worktree on a branch named after the task, runs the repository's setup
+    /// New Agent makes a worktree on a branch named after the task, runs the repository's setup
     /// there, and opens a tab; the toolbar then shows its pull request (from `gh`), the popover
     /// lists the checks, and the palette re-runs failed checks and merges after a confirmation.
     func testNewTaskThenPullRequestPopoverAndMergeFromThePalette() throws {

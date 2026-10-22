@@ -61,9 +61,9 @@ final class AgentApprovalsUITests: XCTestCase {
         field.typeText(command + "\n")
     }
 
-    /// New Task with `prompt` beside the shell (no worktree); waits for the agent's pane.
+    /// New Agent with `prompt` beside the shell (no worktree); waits for the agent's pane.
     private func startAgent(_ prompt: String) {
-        palette("New Task")
+        palette("New Agent")
         let field = app.textViews.matching(identifier: "launch-prompt").firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
@@ -192,6 +192,61 @@ final class AgentApprovalsUITests: XCTestCase {
         XCTAssertTrue(agentScreen(containing: "decision: allowed (edited: echo edited)").exists)
         XCTAssertEqual(occurrences(of: "prompt: and again permission"), 1)
         shot("agent-decisions")
+        closeAgentPane()
+    }
+
+    /// New Agent from each entry point: ⇧⌘N, the sidebar's +, the host's +, Agents' +, then
+    /// Start from one; with an agent running, the host's Agents group has its own +.
+    func testNewAgentFromEveryEntryPoint() throws {
+        try launch()
+        let start = element("launch-start")
+        func opensSheet(_ what: String, cancel: Bool = true) {
+            XCTAssertTrue(start.waitForExistence(timeout: 5), "\(what) opens New Agent")
+            XCTAssertTrue(start.isEnabled, "\(what): Start is enabled")
+            if cancel {
+                app.buttons["Cancel"].firstMatch.tap()
+                XCTAssertTrue(start.waitForNonExistence(timeout: 5))
+            }
+        }
+        panes.firstMatch.tap()
+        // The first key after launch is dropped.
+        app.typeKey(XCUIKeyboardKey.shift.rawValue, modifierFlags: [])
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        opensSheet("⇧⌘N")
+
+        element("new-tab").tap()
+        let agentItem = element("new-tab-agent")
+        XCTAssertTrue(agentItem.waitForExistence(timeout: 5), "the sidebar's + lists New Agent")
+        shot("new-menu")
+        agentItem.tap()
+        opensSheet("the sidebar's +")
+
+        element("sidebar-inbox").tap()
+        element("inbox-new").tap()
+        element("inbox-new-agent").tap()
+        opensSheet("Agents' +")
+
+        // The host's +; Start from there.
+        element(prefix: "new-tab-").tap()
+        element(prefix: "host-new-agent-").tap()
+        opensSheet("the host's +", cancel: false)
+        shot("new-agent-sheet")
+        let prompt = app.textViews.matching(identifier: "launch-prompt").firstMatch
+        prompt.tap()
+        prompt.typeText("hello")
+        let worktree = app.switches["task-worktree"].firstMatch
+        if worktree.waitForExistence(timeout: 2), worktree.value as? String == "1" {
+            worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        }
+        start.tap()
+        XCTAssertTrue(start.waitForNonExistence(timeout: 20), "Start launched the agent")
+        XCTAssertTrue(agentScreen(containing: "prompt: hello").waitForExistence(timeout: 30), "the agent runs and got its prompt")
+
+        let groupPlus = element(prefix: "agents-new-")
+        XCTAssertTrue(groupPlus.waitForExistence(timeout: 30), "the host's Agents group has a +")
+        shot("sidebar-agents-group")
+        groupPlus.tap()
+        opensSheet("the Agents group's +")
         closeAgentPane()
     }
 }

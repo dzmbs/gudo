@@ -50,11 +50,11 @@ final class PaneDrawing: NSObject {
     private var flashPlacement: UInt64?
     #if os(iOS)
     private(set) var writer: WriteOverlay?
-    private var notice: UIHostingController<PlacedNotice>?
-    private var tray: UIHostingController<LooseTray>?
+    private var notice: UIHostingController<ThemedRoot<PlacedNotice>>?
+    private var tray: UIHostingController<ThemedRoot<LooseTray>>?
     #else
-    private var notice: NSHostingView<PlacedNotice>?
-    private var tray: NSHostingView<LooseTray>?
+    private var notice: NSHostingView<ThemedRoot<PlacedNotice>>?
+    private var tray: NSHostingView<ThemedRoot<LooseTray>>?
     #endif
     private var noticeDismiss: Task<Void, Never>?
     private let looseModel = LooseTrayModel()
@@ -307,7 +307,7 @@ final class PaneDrawing: NSObject {
         }
         #if os(iOS)
         let host = tray ?? {
-            let host = UIHostingController(rootView: LooseTray(model: looseModel))
+            let host = UIHostingController(rootView: ThemedRoot { LooseTray(model: looseModel) })
             host.view.backgroundColor = .clear
             host.sizingOptions = [.intrinsicContentSize]
             host.overrideUserInterfaceStyle = isDarkTheme ? .dark : .light
@@ -320,7 +320,7 @@ final class PaneDrawing: NSObject {
         host.view.frame = CGRect(x: view.bounds.width - size.width - 8, y: 8, width: size.width, height: size.height)
         #else
         let host = tray ?? {
-            let host = NSHostingView(rootView: LooseTray(model: looseModel))
+            let host = NSHostingView(rootView: ThemedRoot { LooseTray(model: looseModel) })
             host.appearance = NSAppearance(named: isDarkTheme ? .darkAqua : .aqua)
             host.autoresizingMask = [.minXMargin, .maxYMargin]
             view.addSubview(host)
@@ -635,7 +635,7 @@ final class PaneDrawing: NSObject {
                 }
                 let outcome = try await perform(action, artifactId: placement.artifactId, png: image, anchor: anchor)
                 if outcome == .shared { return dismissNotice() }
-                if notice?.rootView.model !== model { showNotice(model) }
+                if notice?.rootView.content.model !== model { showNotice(model) }
                 model.phase = .done(outcome)
                 layoutNotice()
                 scheduleNoticeDismiss(after: .seconds(3))
@@ -646,7 +646,7 @@ final class PaneDrawing: NSObject {
                 default: "Could not export the drawing: \(DrawOverlay.describe(error))"
                 }
                 CanvasWebView.log.error("done: \(what, privacy: .public)")
-                if notice?.rootView.model !== model { showNotice(model) }
+                if notice?.rootView.content.model !== model { showNotice(model) }
                 model.phase = .failed(what)
                 layoutNotice()
                 scheduleNoticeDismiss(after: .seconds(6))
@@ -658,7 +658,7 @@ final class PaneDrawing: NSObject {
         guard let view = pane?.view else { return }
         dismissNotice()
         #if os(iOS)
-        let host = UIHostingController(rootView: PlacedNotice(model: model))
+        let host = UIHostingController(rootView: ThemedRoot { PlacedNotice(model: model) })
         host.view.backgroundColor = .clear
         host.sizingOptions = [.intrinsicContentSize]
         host.overrideUserInterfaceStyle = isDarkTheme ? .dark : .light
@@ -669,7 +669,7 @@ final class PaneDrawing: NSObject {
         layoutNotice()
         UIView.animate(withDuration: 0.2) { host.view.alpha = 1 }
         #else
-        let host = NSHostingView(rootView: PlacedNotice(model: model))
+        let host = NSHostingView(rootView: ThemedRoot { PlacedNotice(model: model) })
         host.appearance = NSAppearance(named: isDarkTheme ? .darkAqua : .aqua)
         host.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
         view.addSubview(host)

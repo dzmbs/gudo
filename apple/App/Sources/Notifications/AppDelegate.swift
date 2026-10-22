@@ -26,9 +26,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         AppModel.log.error("remote notifications unavailable: \(error.localizedDescription, privacy: .public)")
     }
 
-    /// ⌘W is Close Pane (a terminal's or a VS Code pane's). iPadOS binds File ▸ Close Window to
-    /// ⌘W too, and while a web view has the keyboard the system's item won, closing the whole
-    /// window. Close Window moves to ⇧⌘W, as in Safari.
+    /// ⌘W is Close Pane; the system's Close Window moves to ⇧⌘W, as in Safari.
     override func buildMenu(with builder: any UIMenuBuilder) {
         super.buildMenu(with: builder)
         guard builder.system == .main else { return }

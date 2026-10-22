@@ -151,7 +151,7 @@ struct ExternalDisplayRoot: View {
         else { return }
         var appearance = source.appearance
         appearance.fontSize = fontSize
-        if workspace.appearance.fontSize != appearance.fontSize { workspace.appearance = appearance }
+        if workspace.appearance != appearance { workspace.appearance = appearance }
     }
 }
 

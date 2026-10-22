@@ -23,7 +23,7 @@ extension Terminal {
             restore.free()
             throw .invalid(Int32(result.code.rawValue))
         }
-        Self.configure(handle, effects: effects, configuration: configuration)
+        Self.configure(handle, effects: effects, configuration: lock.withLock { _ in configuration })
         lock.withLock { _ in
             restoreState?.free()
             let old = terminal

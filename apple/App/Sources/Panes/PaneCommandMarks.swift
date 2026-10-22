@@ -358,7 +358,7 @@ final class PaneCommandMarks: NSObject {
     }
 
     /// Hands the command and its output to an agent: typed into the agent running in this
-    /// window (not sent, so you add your question), else New Task with it as the prompt.
+    /// window (not sent, so you add your question), else New Agent with it as the prompt.
     func askAgent(_ block: CommandBlock) {
         let hub = daemon.workspace
         let pane = paneId
@@ -375,8 +375,8 @@ final class PaneCommandMarks: NSObject {
             }
             guard let window = self?.window else { return }
             guard let target else {
-                window.newTaskPrompt = text
-                window.sheet = .launchAgent
+                window.newAgentSeed.prompt = text
+                window.newAgent(onGroup: hostId)
                 return
             }
             do {

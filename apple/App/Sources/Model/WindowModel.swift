@@ -9,8 +9,25 @@ import UnnamedCore
 /// What the detail column (or the iPhone tab) shows.
 enum Destination: String, Hashable {
     case terminal
+    /// Every agent across hosts: what needs you, what runs, what finished.
     case inbox
     case hosts
+
+    var title: String {
+        switch self {
+        case .terminal: "Terminal"
+        case .inbox: "Agents"
+        case .hosts: "Hosts"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .terminal: "terminal"
+        case .inbox: "sparkles.rectangle.stack"
+        case .hosts: "server.rack"
+        }
+    }
 }
 
 /// What the command palette lists: everything, every tab on every host (Go to Tab… ⌘P), or the
@@ -49,8 +66,9 @@ final class WindowModel {
         didSet { if destination != oldValue { reportViews() } }
     }
     var sheet: SheetRoute?
-    /// The prompt New Task starts with, once (Ask Agent about a command with no agent open).
-    @ObservationIgnored var newTaskPrompt: String?
+    /// What the next New Agent sheet starts with, once: a prompt (Ask Agent about a command with
+    /// no agent open), the host and repository whose + opened it.
+    @ObservationIgnored var newAgentSeed = NewAgentSeed()
     var isPaletteShown = false {
         didSet {
             if !isPaletteShown { paletteMode = .commands }
@@ -447,6 +465,13 @@ final class WindowModel {
         activeMixedTab = nil
         if host != currentGroupId { show(host == HostGroups.localId ? .local : .host(host)) }
         workspace?.apply(.newTab)
+    }
+
+    /// ⇧⌘N or a +'s New Agent: the New Agent sheet, on `host` (and `repo`) when given.
+    func newAgent(onGroup host: String? = nil, repo: String? = nil) {
+        newAgentSeed.host = host
+        newAgentSeed.repo = repo
+        sheet = .launchAgent
     }
 
     /// ⌥⌘T: the host picker (the palette listing "New Tab on …" per host).
@@ -850,6 +875,13 @@ extension ConnectionState {
 /// Launch arguments for design review and screenshots:
 /// `-mock` fills the screens with sample hosts, agents and statuses; `-screen <name>` opens
 /// straight to one screen.
+/// See `WindowModel.newAgentSeed`.
+struct NewAgentSeed {
+    var prompt: String?
+    var host: String?
+    var repo: String?
+}
+
 enum LaunchOptions {
     static let mock = ProcessInfo.processInfo.arguments.contains("-mock")
     static let screen: String? = UserDefaults.standard.string(forKey: "screen")

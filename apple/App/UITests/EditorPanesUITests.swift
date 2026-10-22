@@ -231,9 +231,9 @@ final class EditorPanesUITests: XCTestCase {
         shot("editor-restored")
 
         // ⌘W in VS Code closes its pane, not the window (the system's Close Window is ⇧⌘W).
-        // Not a tap in the text field: the restored page focused it already, and a tap in a
-        // focused field brings up the edit menu (Paste, AutoFill), which takes the keys.
-        text(containing: "Fake VS Code workbench").tap()
+        webField.tap()
+        // The simulator drops the first hardware key after a launch (here the relaunch).
+        app.typeKey(XCUIKeyboardKey.shift, modifierFlags: [])
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(row("proj, VS Code on").waitForNonExistence(timeout: 10), "⌘W closed the editor pane")
         XCTAssertTrue(row("site, VS Code on").exists, "the window stayed open")

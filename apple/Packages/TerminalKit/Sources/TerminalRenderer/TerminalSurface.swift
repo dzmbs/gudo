@@ -52,6 +52,9 @@ public final class TerminalSurface {
     public var appearance: TerminalAppearance {
         didSet {
             builder.style = Self.frameStyle(appearance)
+            if appearance.terminalConfiguration != oldValue.terminalConfiguration {
+                terminal.setDefaults(appearance.terminalConfiguration)
+            }
             if appearance.fontFamily != oldValue.fontFamily || appearance.fontSize != oldValue.fontSize
                 || appearance.padding != oldValue.padding || appearance.paddingBalance != oldValue.paddingBalance
             {

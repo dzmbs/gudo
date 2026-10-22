@@ -56,8 +56,6 @@ struct WorkspaceCommands: Commands {
                 .disabled(workspace?.session.activeTab == nil)
         }
         CommandMenu("Git") {
-            Button("New Task…") { model?.sheet = .launchAgent }
-                .disabled(editorHasKeys)
             Button("Run Script") { model?.git.runDefault() }
                 .keyboardShortcut("r")
                 // Sheets with their own ⌘R (Diff, Browser reload) keep it.
