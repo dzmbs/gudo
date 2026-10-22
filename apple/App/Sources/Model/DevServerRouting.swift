@@ -73,6 +73,26 @@ final class DevServerRouting {
         return url
     }
 
+    /// Serves this device's `localhost:<port>` for the host while a sign-in waits for its
+    /// callback there (`HostSignIn`); `onRequest` hears each request's target. Returns the
+    /// claim's token for `releaseSignIn`. Throws when the port is taken here.
+    func claimSignIn(
+        port: UInt16, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI,
+        onRequest: @escaping @Sendable (String) -> Void
+    ) async throws -> String {
+        guard await route(hostId, client: client) != nil else { throw HostError.notConnected }
+        let token = "signin-" + UUID().uuidString.lowercased()
+        try await router.claim(port: port, token: token, forward: { [weak self] hostPort in
+            guard let self else { throw HostError.notConnected }
+            return try await self.forward(hostId, hostPort)
+        }, onRequest: onRequest)
+        return token
+    }
+
+    func releaseSignIn(port: UInt16, token: String) {
+        router.release(port: port, token: token)
+    }
+
     /// Loopback names WebKit sends through `proxyConfigurations` (checked 2026-10-21): on iOS 27
     /// `localhost` (not `127.0.0.1` or `[::1]`); on macOS 26 none. `*.localhost` always is.
     nonisolated static func webKitProxies(_ host: String) -> Bool {

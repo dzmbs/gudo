@@ -31,6 +31,7 @@ mod art_types;
 mod artifacts;
 mod askpass;
 mod assist;
+mod browser;
 mod bytes;
 mod client;
 mod editor;

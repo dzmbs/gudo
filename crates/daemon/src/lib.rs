@@ -30,6 +30,7 @@ mod approve;
 mod art;
 mod askpass;
 mod assist;
+mod browser;
 mod codex_session;
 mod commands;
 mod config;
@@ -75,6 +76,9 @@ pub use art::pull::{
 };
 pub use askpass::{ASKPASS_VERSION, AskpassCall, HelperQuery, HelperReply};
 pub use assist::HistoryConfig;
+pub use browser::{
+    BROWSER_VERSION, BrowserAsk, BrowserCall, BrowserReply, CALL_TIMEOUT as BROWSER_CALL_TIMEOUT,
+};
 pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir};
 pub use config::{CustomRelays, PushConfig, RepoConfig};
 pub use identity::{

@@ -7,7 +7,6 @@ import WebKit
 /// floating glass address capsule at the bottom on iPhone; a compact 36 pt top bar on iPad and Mac.
 /// The page itself stays edge to edge; glass is only on the controls.
 struct BrowserView: View {
-    var initialURL: URL
     /// The host a dev server page comes from (its data store routes to it, S-BR1): named next
     /// to the address.
     var routedHost: (id: String, name: String)?
@@ -16,25 +15,36 @@ struct BrowserView: View {
     var onDone: (() -> Void)?
     var doneTitle = "Done"
 
-    @State private var page: WebPage
+    @State private var pane: BrowserPane
+    private var page: WebPage { pane.page }
+    private var initialURL: URL { pane.initialURL }
     #if DEBUG
     /// UI tests: connections sent to `routedHost` (proof the page went through the host).
     @State private var routedCount = 0
     #endif
 
     /// `dataStore`: a host's own store for its dev servers (`DevServerRouting`), else the default.
+    /// `intercept` sees each navigation first; true stops it (a sign-in code taken from it).
     init(
         initialURL: URL, dataStore: WKWebsiteDataStore? = nil, routedHost: (id: String, name: String)? = nil,
+        intercept: ((URL) -> Bool)? = nil,
         onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done"
     ) {
-        self.initialURL = initialURL
+        let pane = BrowserPane(url: initialURL, hostId: routedHost?.id, dataStore: dataStore)
+        pane.intercept = intercept
+        self.init(pane: pane, routedHost: routedHost, onOpenExternally: onOpenExternally, onDone: onDone, doneTitle: doneTitle)
+    }
+
+    /// A page that outlives the view (a browser leaf's).
+    init(
+        pane: BrowserPane, routedHost: (id: String, name: String)? = nil,
+        onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done"
+    ) {
         self.routedHost = routedHost
         self.onOpenExternally = onOpenExternally
         self.onDone = onDone
         self.doneTitle = doneTitle
-        var configuration = WebPage.Configuration()
-        if let dataStore { configuration.websiteDataStore = dataStore }
-        _page = State(initialValue: WebPage(configuration: configuration))
+        _pane = State(initialValue: pane)
     }
     @Environment(\.terminalTheme) private var theme
     @State private var address = ""
@@ -72,9 +82,7 @@ struct BrowserView: View {
             .overlay(alignment: .top) {
                 if isCompact { progressLine }
             }
-        .onAppear {
-            if page.url == nil { page.load(URLRequest(url: initialURL)) }
-        }
+        .onAppear { pane.start() }
         .onChange(of: page.url) { _, url in
             if !isEditing { address = url?.absoluteString ?? "" }
         }

@@ -281,6 +281,14 @@ pub enum ClientCtl {
         /// The request.
         req: crate::approve::ApprovalRequest,
     },
+    /// Answers [`BrowserPush::Call`](crate::BrowserPush::Call): the tool's result (JSON) or
+    /// why it failed. Not answered.
+    BrowserResult {
+        /// The call's id.
+        id: u64,
+        /// The result.
+        result: Result<String, String>,
+    },
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -659,6 +667,9 @@ pub enum ServerCtl {
         /// The new [`WorkflowList::rev`](crate::WorkflowList::rev).
         rev: u64,
     },
+    /// A program in a pane asks for a URL, or an agent calls a browser tool. Sent to one
+    /// client with [`Caps::BROWSER`] that may drive the pane (see `proto::browser`).
+    Browser(crate::browser::BrowserPush),
 }
 
 /// A successful [`ClientCtl::Attach`].

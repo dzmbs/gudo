@@ -291,6 +291,10 @@ bitset! {
         /// Wants `ServerCtl::WorkflowsChanged` when a workflow file it has listed changes
         /// (see `proto::workflow`).
         WORKFLOWS = 12;
+        /// Opens URLs programs in a pane ask for and runs agents' browser tools: wants
+        /// `ServerCtl::Browser` pushes and answers calls with `ClientCtl::BrowserResult`
+        /// (see `proto::browser`).
+        BROWSER = 13;
     }
 }
 
@@ -315,5 +319,8 @@ bitset! {
         WORKFLOWS = 5;
         /// Answers `WorkspaceRequest::AgentInstalls`.
         AGENT_INSTALLS = 6;
+        /// Gives panes `BROWSER` (URLs reach clients with `Caps::BROWSER`) and serves agents'
+        /// browser tools through them.
+        BROWSER = 7;
     }
 }

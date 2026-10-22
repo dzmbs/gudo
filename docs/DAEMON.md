@@ -1878,6 +1878,33 @@ call `$SUDO_ASKPASS`/`$SSH_ASKPASS` get the app's answer (or fail on Cancel), th
 fallback reads with echo off, and interactive zsh's `sudo` becomes `sudo -A` only while an app
 can answer (`-S` left alone). Goldens: `proto/tests/golden_askpass.rs`.
 
+### 9.1 The app's browser (`proto::browser`)
+
+Panes get `BROWSER=<state>/browser/un-open`, a script running `un-hook open-url "$@"`. The shim
+sends a `BrowserCall` (`{"browser":{"open":{"url":…}}}`) on the hook socket; the daemon pushes
+`ServerCtl::Browser(Open)` to one connection with `Caps::BROWSER` that shows the pane's session
+and may drive it (the one that last sized the pane, else the newest) and answers `"opened"`
+(exit 0), or `"no_app"`: the shim then runs `open` / `xdg-open` (with `BROWSER` cleared) when
+there is a display, else exits 1 so the program prints its URL. Only `http(s)` URLs pass.
+
+This is how `claude /login` works from a phone: Claude Code hands `BROWSER` the URL whose
+`redirect_uri` is its callback server on the host's `127.0.0.1:<random>`. The app sees that
+redirect, serves this device's `localhost:<port>` through a forward to the host's for the
+sign-in's length (`LoopbackRouter.claim`), and opens the URL in the system sign-in sheet
+(`ASWebAuthenticationSession`, ephemeral: Google refuses embedded web views). The sheet closes
+once the callback passed, or once the program stops listening (probed through the forward).
+`codex login` prints a URL of the same kind (port 1455); tapping it does the same. Claude's
+printed URL (`redirect_uri=https://platform.claude.com/oauth/code/callback`) opens in the in-app
+browser, which types `code#state` into the pane when the provider's page is reached.
+
+Agent CLIs' own listeners (`claude`, `codex` by name) are left out of port detection: their
+`/` is an empty 404 and they are not dev servers.
+
+Browser tools: `{"browser":{"tool":{"name":…,"args":{…}}}}` is pushed as
+`ServerCtl::Browser(Call)` to the same connection and held until `ClientCtl::BrowserResult`,
+120 s, the caller hanging up (`CallClosed` pushed) or the connection leaving. Daemons offering
+this say `DaemonFeatures::BROWSER`.
+
 ## 10. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last

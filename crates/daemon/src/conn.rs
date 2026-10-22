@@ -157,6 +157,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     });
     core.client_connected(true);
     core.askpass.register(client.id, &client.authz, client.caps);
+    core.browser.register(client.id, &client.authz, client.caps);
     client.approvals_state();
     let repo_watch = client.caps.contains(Caps::REPO_STATUS);
     if repo_watch {
@@ -216,7 +217,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::ARTIFACT_HISTORY
         | DaemonFeatures::MP2
         | DaemonFeatures::WORKFLOWS
-        | DaemonFeatures::AGENT_INSTALLS;
+        | DaemonFeatures::AGENT_INSTALLS
+        | DaemonFeatures::BROWSER;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -933,6 +935,11 @@ impl Client {
             Event::Workflows(rev) => {
                 if self.caps.contains(Caps::WORKFLOWS) {
                     self.send(ServerCtl::WorkflowsChanged { rev });
+                }
+            }
+            Event::Browser { conn, push } => {
+                if conn == self.id {
+                    self.send(ServerCtl::Browser(push));
                 }
             }
         }
@@ -1899,6 +1906,9 @@ impl Client {
             ClientCtl::Approval { req_id, req } => {
                 let result = self.approval(req);
                 self.send(ServerCtl::ApprovalResult { req_id, result });
+            }
+            ClientCtl::BrowserResult { id, result } => {
+                self.core.browser.answer(self.id, id, result);
             }
             ClientCtl::Askpass { req_id, req } => {
                 let client = Arc::clone(self);

@@ -9,8 +9,8 @@ use client_core::proto::{
     TabLayout,
 };
 use client_core::{
-    AskpassEvent, AskpassEventQueue, Client, ClientConfig, ClientEvent, EventQueue,
-    MultiplayerEvent, MultiplayerEventQueue, RelayMode,
+    AskpassEvent, AskpassEventQueue, BrowserPushQueue, Client, ClientConfig, ClientEvent,
+    EventQueue, MultiplayerEvent, MultiplayerEventQueue, RelayMode,
 };
 use daemon::{Config, Daemon};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -89,6 +89,9 @@ pub struct TestClient {
     askpass_events: UnboundedReceiver<AskpassEvent>,
     /// Askpass pushes received so far (connections made with `askpass: true`).
     pub askpass: Vec<AskpassEvent>,
+    browser_events: UnboundedReceiver<client_core::proto::BrowserPush>,
+    /// Browser pushes received so far (connections made with `browser: true`).
+    pub browser: Vec<client_core::proto::BrowserPush>,
 }
 
 impl TestClient {
@@ -121,6 +124,17 @@ impl TestClient {
         Self::connect_with(ticket, config, options)
     }
 
+    /// A client that opens URLs and runs browser tools (`ConnectOptions::browser`).
+    pub fn connect_browser(ticket: &str, key: Vec<u8>) -> Self {
+        let mut config = ClientConfig::new(key);
+        config.relay = RelayMode::Disabled;
+        let options = client_core::ConnectOptions {
+            browser: true,
+            ..client_core::ConnectOptions::default()
+        };
+        Self::connect_with(ticket, config, options)
+    }
+
     /// A guest joining with an invite, showing native password prompts.
     pub fn join_askpass(invite: &str, key: Vec<u8>) -> Self {
         let (listener, events) = EventQueue::channel();
@@ -148,6 +162,8 @@ impl TestClient {
         client.set_multiplayer_listener(mp_listener);
         let (askpass_listener, askpass_events) = AskpassEventQueue::channel();
         client.set_askpass_listener(askpass_listener);
+        let (browser_listener, browser_events) = BrowserPushQueue::channel();
+        client.set_browser_listener(browser_listener);
         Self {
             client,
             events,
@@ -174,6 +190,8 @@ impl TestClient {
             mp: Vec::new(),
             askpass_events,
             askpass: Vec::new(),
+            browser_events,
+            browser: Vec::new(),
         }
     }
 
@@ -251,6 +269,11 @@ impl TestClient {
                 self.log
                     .push(format!("{event:?}").chars().take(120).collect());
                 self.askpass.push(event);
+            }
+            while let Ok(push) = self.browser_events.try_recv() {
+                self.log
+                    .push(format!("{push:?}").chars().take(120).collect());
+                self.browser.push(push);
             }
         }
     }

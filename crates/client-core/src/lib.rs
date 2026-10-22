@@ -31,6 +31,7 @@ mod approvals;
 mod artifacts;
 mod askpass;
 mod assist;
+mod browser;
 mod conn;
 pub mod knock;
 mod listen;
@@ -63,6 +64,7 @@ pub use approvals::{ApprovalEvent, ApprovalEventQueue, ApprovalListener};
 pub use artifacts::{ArtifactEventQueue, ArtifactListener, ArtifactUpdate};
 pub use askpass::{AskpassEvent, AskpassEventQueue, AskpassListener};
 pub use assist::{AssistEvent, AssistEventQueue, AssistListener};
+pub use browser::{BrowserListener, BrowserPushQueue};
 pub use drawing;
 pub use grants::{self, GrantSpec};
 pub use mp::{MultiplayerEvent, MultiplayerEventQueue, MultiplayerListener, now_millis};
@@ -135,6 +137,9 @@ pub struct ConnectOptions {
     /// connection the askpass prompts of panes it may drive (see [`AskpassListener`]).
     /// Leave it off in clients that cannot show them: the helper then asks on the terminal.
     pub askpass: bool,
+    /// Open URLs programs in a pane ask for and run agents' browser tools: announce
+    /// `Caps::BROWSER` (see [`BrowserListener`]).
+    pub browser: bool,
 }
 
 /// Errors from the client API.
@@ -444,6 +449,8 @@ pub(crate) struct Inner {
     pub assist: assist::AssistState,
     /// Askpass requests in flight, open and detected password prompts.
     pub askpass: askpass::AskpassState,
+    /// Where browser pushes go.
+    pub browser: browser::BrowserState,
     /// Approval extras in flight, open requests' extras, auto-approve rules.
     pub approvals: approvals::ApprovalState,
     /// What the daemon said about itself on the last connection.
@@ -626,6 +633,7 @@ impl Client {
             art: artifacts::ArtState::default(),
             assist: assist::AssistState::default(),
             askpass: askpass::AskpassState::default(),
+            browser: browser::BrowserState::default(),
             approvals: approvals::ApprovalState::default(),
             daemon_info: Mutex::new(None),
             incompatible: Mutex::new(false),
@@ -869,8 +877,8 @@ impl Client {
     }
 
     /// Changes how the daemon is reached (the app's relay settings): `relay` and the relay
-    /// parts of `options` (`relay_ca_der`, `relay_urls`, `relay_auth_token`; `askpass` stays
-    /// as connected). Drops the connection and redials on a new endpoint, keeping all resume
+    /// parts of `options` (`relay_ca_der`, `relay_urls`, `relay_auth_token`; `askpass` and
+    /// `browser` stay as connected). Drops the connection and redials on a new endpoint, keeping all resume
     /// state; a suspended client uses them when it resumes.
     pub fn set_relays(&self, relay: RelayMode, options: &ConnectOptions) {
         {

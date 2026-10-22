@@ -364,7 +364,7 @@ pub(crate) async fn serve(
 }
 
 /// Resolves once the helper's side of the connection closes.
-async fn gone(rest: &mut (impl AsyncRead + Unpin)) {
+pub(crate) async fn gone(rest: &mut (impl AsyncRead + Unpin)) {
     let mut buf = [0u8; 64];
     loop {
         match rest.read(&mut buf).await {
@@ -549,7 +549,7 @@ fn agents_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
+pub(crate) fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if std::fs::read(path).is_ok_and(|old| old == contents.as_bytes()) {
         return Ok(());

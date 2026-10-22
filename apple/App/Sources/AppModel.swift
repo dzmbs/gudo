@@ -65,6 +65,7 @@ final class AppModel {
         hosts.hostKeyPrompts.trustNewHostsAutomatically = defaults.bool(forKey: "testTrustHostKeys")
         // No local shell on iOS (only the echo stand-in for tests): an empty session.
         localLayout = LaunchOptions.hasLocalShell ? LocalLayoutStore() : LocalLayoutStore(session: Session(tabs: [], activeTabId: nil))
+        hosts.onBrowserPush = { [weak self] id, push in self?.browserPush(id, push) }
     }
 
     /// A window's workspace for a target: this window's view of the host (its own selection,

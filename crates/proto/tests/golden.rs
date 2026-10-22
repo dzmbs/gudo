@@ -527,6 +527,7 @@ fn every_message_matches_its_frozen_bytes() {
     artifact_messages_2(&mut c);
     artifact_history_messages(&mut c);
     live_activity_messages(&mut c);
+    browser_messages(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -3209,5 +3210,53 @@ fn live_activity_messages(c: &mut Checker) {
             req: WorkspaceRequest::PushActivity(PushActivityToken { cap: None }),
         },
         "050000000115092f00",
+    );
+}
+
+fn browser_messages(c: &mut Checker) {
+    c.check("Caps::BROWSER", Caps::BROWSER, "03000000018040");
+    c.check(
+        "DaemonFeatures::BROWSER",
+        DaemonFeatures::BROWSER,
+        "03000000018001",
+    );
+    c.check(
+        "ServerCtl::Browser(Open)",
+        ServerCtl::Browser(BrowserPush::Open {
+            pane_id: PANE,
+            url: "http://x".into(),
+        }),
+        "0d0000000133000308687474703a2f2f78",
+    );
+    c.check(
+        "ServerCtl::Browser(Call)",
+        ServerCtl::Browser(BrowserPush::Call {
+            id: 7,
+            pane_id: PANE,
+            tool: "browser_snapshot".into(),
+            args: "{}".into(),
+        }),
+        "1900000001330107031062726f777365725f736e617073686f74027b7d",
+    );
+    c.check(
+        "ServerCtl::Browser(CallClosed)",
+        ServerCtl::Browser(BrowserPush::CallClosed { id: 7 }),
+        "0400000001330207",
+    );
+    c.check(
+        "ClientCtl::BrowserResult(Ok)",
+        ClientCtl::BrowserResult {
+            id: 7,
+            result: Ok("{}".into()),
+        },
+        "07000000011c0700027b7d",
+    );
+    c.check(
+        "ClientCtl::BrowserResult(Err)",
+        ClientCtl::BrowserResult {
+            id: 7,
+            result: Err("no".into()),
+        },
+        "07000000011c0701026e6f",
     );
 }

@@ -52,7 +52,8 @@ nonisolated public struct RelaySettings: Codable, Equatable, Sendable {
     }
 
     /// `ConnectOptions` for every daemon connection: the private CAs, and the device's own
-    /// relay in place of the ticket's.
+    /// relay in place of the ticket's. The app shows password prompts and opens URLs for the
+    /// host (`askpass`, `browser`).
     public func connectOptions(askpass: Bool) -> ConnectOptions {
         let relay = customRelay
         let token = authToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -60,7 +61,8 @@ nonisolated public struct RelaySettings: Codable, Equatable, Sendable {
             relayCaDer: certificates,
             relayUrls: relay.map { [$0.absoluteString] } ?? [],
             relayAuthToken: relay != nil && !token.isEmpty ? token : nil,
-            askpass: askpass)
+            askpass: askpass,
+            browser: askpass)
     }
 
     /// Which relay a host whose ticket says `ticket` is reached through, in words (the pairing

@@ -50,6 +50,9 @@
 //!   [`WorkspaceRequest::WorkflowList`] / [`WorkspaceRequest::WorkflowSave`], with
 //!   [`ServerCtl::WorkflowsChanged`] pushed to clients with [`Caps::WORKFLOWS`]; see
 //!   [`workflow`].
+//! - The app's browser, used from the host (URLs programs open, agents' browser tools):
+//!   [`ServerCtl::Browser`] pushes to clients with [`Caps::BROWSER`], answered by
+//!   [`ClientCtl::BrowserResult`]; see [`browser`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -74,6 +77,7 @@ pub mod approve;
 pub mod artifact;
 pub mod askpass;
 pub mod assist;
+pub mod browser;
 pub mod frame;
 mod ids;
 pub mod info;
@@ -91,6 +95,7 @@ pub use approve::*;
 pub use artifact::*;
 pub use askpass::*;
 pub use assist::*;
+pub use browser::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
     Actor, Caps, DaemonFeatures, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId,

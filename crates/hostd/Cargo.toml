@@ -25,6 +25,7 @@ proto.workspace = true
 libc.workspace = true
 qrcode.workspace = true
 rustix.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 tracing.workspace = true

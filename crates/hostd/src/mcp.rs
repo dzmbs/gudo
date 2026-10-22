@@ -12,7 +12,12 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use daemon::{PULL_FORMATS, PULL_VERSION, PullCall, PullExport, PullOp, PullReply, PullSummary};
+use daemon::{
+    BROWSER_VERSION, BrowserAsk, BrowserCall, BrowserReply, PULL_FORMATS, PULL_VERSION, PullCall,
+    PullExport, PullOp, PullReply, PullSummary,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 /// MCP protocol revisions this server speaks; the last is the default.
@@ -30,6 +35,13 @@ pub trait Backend {
     /// Fails when the daemon cannot be reached or answers garbage; refusals arrive as
     /// [`PullReply::Error`].
     fn pull(&mut self, op: PullOp) -> io::Result<PullReply>;
+
+    /// Runs one browser call (a URL to open, a tool).
+    ///
+    /// # Errors
+    ///
+    /// As [`Backend::pull`]; refusals arrive as [`BrowserReply::Error`].
+    fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply>;
 }
 
 /// Runs the server with the arguments after `mcp`; returns the exit status.
@@ -372,6 +384,31 @@ impl SocketBackend {
     }
 }
 
+impl SocketBackend {
+    /// Sends one JSON line and reads the one-line answer.
+    fn exchange<R: DeserializeOwned>(
+        &self,
+        call: &impl Serialize,
+        timeout: Duration,
+    ) -> io::Result<R> {
+        let mut stream = UnixStream::connect(self.socket()?)?;
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+        let mut line = serde_json::to_vec(call)?;
+        line.push(b'\n');
+        stream.write_all(&line)?;
+        let mut answer = String::new();
+        BufReader::new(stream).read_line(&mut answer)?;
+        if answer.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the daemon closed the connection (too old for this call?)",
+            ));
+        }
+        Ok(serde_json::from_str(&answer)?)
+    }
+}
+
 impl Backend for SocketBackend {
     fn pull(&mut self, op: PullOp) -> io::Result<PullReply> {
         let call = PullCall {
@@ -380,21 +417,17 @@ impl Backend for SocketBackend {
             pane: self.pane.clone(),
             pull: op,
         };
-        let mut stream = UnixStream::connect(self.socket()?)?;
-        stream.set_read_timeout(Some(CALL_TIMEOUT))?;
-        stream.set_write_timeout(Some(CALL_TIMEOUT))?;
-        let mut line = serde_json::to_vec(&call)?;
-        line.push(b'\n');
-        stream.write_all(&line)?;
-        let mut answer = String::new();
-        BufReader::new(stream).read_line(&mut answer)?;
-        if answer.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "the daemon closed the connection (too old for the pull channel?)",
-            ));
-        }
-        Ok(serde_json::from_str(&answer)?)
+        self.exchange(&call, CALL_TIMEOUT)
+    }
+
+    fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply> {
+        let call = BrowserCall {
+            v: BROWSER_VERSION,
+            token: self.token()?,
+            pane: self.pane.clone(),
+            browser: ask,
+        };
+        self.exchange(&call, daemon::BROWSER_CALL_TIMEOUT + Duration::from_secs(5))
     }
 }
 
@@ -415,6 +448,10 @@ mod tests {
             self.reply
                 .clone()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no socket"))
+        }
+
+        fn browser(&mut self, _: BrowserAsk) -> io::Result<BrowserReply> {
+            Err(io::Error::new(io::ErrorKind::NotFound, "no socket"))
         }
     }
 

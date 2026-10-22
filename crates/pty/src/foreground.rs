@@ -49,6 +49,15 @@ impl ForegroundProcess {
             .filter(|base| !base.is_empty())
             .unwrap_or(&self.name)
     }
+
+    /// Reads any process's name and arguments; `None` when it is gone or not ours to inspect.
+    pub fn of(pid: u32) -> Option<Self> {
+        Some(Self {
+            pid,
+            name: imp::process_name(pid)?,
+            argv: imp::process_argv(pid).unwrap_or_default(),
+        })
+    }
 }
 
 /// Looks up the foreground process group of the terminal behind `master`, falling back to the
@@ -62,12 +71,7 @@ pub(crate) fn foreground_process(
         Ok(pid) => pid.as_raw_nonzero().get() as u32,
         Err(_) => imp::terminal_pgid_of(session_leader)?,
     };
-    let name = imp::process_name(pgid)?;
-    Some(ForegroundProcess {
-        pid: pgid,
-        name,
-        argv: imp::process_argv(pgid).unwrap_or_default(),
-    })
+    ForegroundProcess::of(pgid)
 }
 
 #[cfg(test)]

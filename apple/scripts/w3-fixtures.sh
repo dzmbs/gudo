@@ -273,6 +273,72 @@ server.serve_forever()
 EOF
 chmod +x "$bin/devserver"
 
+# `claude /login`'s stand-in: a callback server on 127.0.0.1, a sign-in page (the provider)
+# that sends the browser back to it with a code, and the URL handed to $BROWSER as Claude
+# Code does. Stops listening once signed in.
+cat >"$bin/fake-login" <<'EOF'
+#!/usr/bin/python3
+import http.server, json, os, subprocess, sys, threading, urllib.parse
+
+STATE = "st4te"
+done = threading.Event()
+
+class Callback(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        url = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(url.query)
+        if url.path != "/callback":
+            self.send_response(404)
+            self.end_headers()
+            return
+        ok = query.get("state") == [STATE] and query.get("code")
+        body = b"<!doctype html><title>Signed in</title><h1>You can close this window</h1>"
+        self.send_response(200 if ok else 400)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        if ok:
+            done.set()
+
+    def do_HEAD(self):
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+class Provider(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        target = query["redirect_uri"][0] + "?code=c0de&state=" + query["state"][0]
+        body = ("<!doctype html><title>Sign in</title><p>Signing in…</p><script>setTimeout(() => location.replace(%s), 3000)</script>"
+                % json.dumps(target)).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+callback = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Callback)
+provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+for server in (callback, provider):
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+url = "http://127.0.0.1:%d/oauth/authorize?" % provider.server_port + urllib.parse.urlencode(
+    {"code": "true", "redirect_uri": "http://localhost:%d/callback" % callback.server_port, "state": STATE})
+print("Opening the browser to sign in…", flush=True)
+opened = subprocess.run([os.environ["BROWSER"], url]).returncode if os.environ.get("BROWSER") else 127
+print("opener exit %d" % opened, flush=True)
+if done.wait(120):
+    print("Login successful.", flush=True)
+callback.shutdown()
+callback.server_close()
+EOF
+chmod +x "$bin/fake-login"
+
 cat >"$dir/config.toml" <<EOF
 [editor]
 code = "$bin/code"

@@ -10,6 +10,8 @@ import AppKit
 /// Links tapped (iPad, iPhone) or ⌘-clicked (Mac) in a pane: OSC 8 hyperlinks and URLs or paths
 /// printed as text.
 ///
+/// - A sign-in for a program on a remote host (`SignInLink`): the system's sign-in sheet with
+///   the callback forwarded to the host, or the in-app browser typing the code it shows.
 /// - A dev server's URL (`localhost`, `127.0.0.1`, `[::1]`, `*.localhost`, or the host's own
 ///   address on a port it listens on) opens in the in-app browser, through a forward when the
 ///   pane is on a remote host, so it shows what the host serves.
@@ -44,7 +46,10 @@ enum PaneLinks {
                 kind: .path, text: link.text, line: 0, target: path, targetLine: link.line, targetColumn: link.column))
         case .url:
             guard let url = URL(string: link.target) else { return }
-            if window.isDevServerURL(url) {
+            if workspace.isRemote, let hostId = workspace.hostId, let signIn = SignInLink(url) {
+                // A sign-in for a program on the host (`codex login`'s URL, Claude's printed one).
+                window.signIn(url, signIn, hostId: hostId, pane: pane.id.rawValue)
+            } else if window.isDevServerURL(url) {
                 Task { await window.openURL(link.target) }
             } else if url.scheme == "http" || url.scheme == "https" {
                 openWebLink(url, window: window, from: pane)
