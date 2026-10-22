@@ -486,7 +486,7 @@ impl Client {
     }
 
     /// Whether the daemon announced `feature` on this connection.
-    fn daemon_has(&self, feature: proto::DaemonFeatures) -> bool {
+    pub(crate) fn daemon_has(&self, feature: proto::DaemonFeatures) -> bool {
         lock(&self.inner.daemon_info)
             .as_ref()
             .is_some_and(|i| i.features.contains(feature))

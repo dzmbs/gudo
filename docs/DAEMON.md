@@ -890,6 +890,8 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   20 000 nodes, 4 documents), 32 arguments, 16 KiB commands, 200-character names. A bad file is
   reported in `problems` with a one-line message and no source snippet (a symlink to some other
   file does not leak it).
+- **Offered** as `DaemonFeatures::WORKFLOWS`; clients ask only daemons that offer it (an older
+  daemon drops a connection that sends an unknown request, so asking anyway reconnects forever).
 - **Requests** (`WorkspaceRequest`, `Caps::WORKFLOWS`): `WorkflowList{pane_id?}` →
   `Workflows(WorkflowList{rev, repo?, repo_name?, workflows, problems})`: the repository's (by
   name), then the global ones (by name); without a pane only the global ones. Drive on the pane

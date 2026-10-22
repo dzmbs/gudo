@@ -310,5 +310,8 @@ bitset! {
         /// Sends the agents Live Activity (start, update, end) through the push relay and
         /// answers `WorkspaceRequest::PushActivity`.
         LIVE_ACTIVITY = 4;
+        /// Answers `WorkspaceRequest::WorkflowList` / `WorkflowSave` and pushes
+        /// `ServerCtl::WorkflowsChanged`.
+        WORKFLOWS = 5;
     }
 }

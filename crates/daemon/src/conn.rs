@@ -212,8 +212,10 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
     if core.cfg.self_exe.is_some() {
         features |= DaemonFeatures::SELF_UPGRADE;
     }
-    features |=
-        DaemonFeatures::AGENT_USAGE | DaemonFeatures::ARTIFACT_HISTORY | DaemonFeatures::MP2;
+    features |= DaemonFeatures::AGENT_USAGE
+        | DaemonFeatures::ARTIFACT_HISTORY
+        | DaemonFeatures::MP2
+        | DaemonFeatures::WORKFLOWS;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }

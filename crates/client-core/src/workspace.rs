@@ -711,15 +711,37 @@ impl Client {
 
     /// The workflows `pane` can use: its repository's, then the global ones (only the global
     /// ones without a pane).
+    ///
+    /// # Errors
+    ///
+    /// [`WsError::Unavailable`] without asking when the daemon does not offer
+    /// [`DaemonFeatures::WORKFLOWS`](proto::DaemonFeatures::WORKFLOWS) (older daemons drop a
+    /// connection that sends the request); else the daemon's error.
     pub async fn workflow_list(&self, pane: Option<PaneId>) -> Result<WorkflowList, WsError> {
+        self.require_workflows()?;
         expect!(self.workspace(WorkspaceRequest::WorkflowList { pane_id: pane }).await?,
             WorkspaceResponse::Workflows(list) => list)
     }
 
     /// Writes a new workflow file on the host; the workflow as saved.
+    ///
+    /// # Errors
+    ///
+    /// As [`workflow_list`](Self::workflow_list).
     pub async fn workflow_save(&self, save: WorkflowSave) -> Result<Workflow, WsError> {
+        self.require_workflows()?;
         expect!(self.workspace(WorkspaceRequest::WorkflowSave(save)).await?,
             WorkspaceResponse::WorkflowSaved(w) => w)
+    }
+
+    fn require_workflows(&self) -> Result<(), WsError> {
+        if self.daemon_has(proto::DaemonFeatures::WORKFLOWS) {
+            Ok(())
+        } else {
+            Err(WsError::Unavailable(
+                "the host's helper predates workflows; update it".into(),
+            ))
+        }
     }
 }
 
