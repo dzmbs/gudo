@@ -8,6 +8,7 @@ mod assist;
 mod codex;
 mod e2e;
 mod history;
+mod installs;
 mod multiplayer;
 mod multiplayer_mp2;
 mod notify;

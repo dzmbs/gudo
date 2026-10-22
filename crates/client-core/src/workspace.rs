@@ -346,6 +346,23 @@ impl Client {
         expect!(self.workspace(WorkspaceRequest::UsageUnwatch).await?, WorkspaceResponse::Done => ())
     }
 
+    /// Whether each agent's command is installed on the host, as a pane would find it.
+    ///
+    /// # Errors
+    ///
+    /// [`WsError::Unavailable`] without asking when the daemon does not offer
+    /// [`DaemonFeatures::AGENT_INSTALLS`](proto::DaemonFeatures::AGENT_INSTALLS) (older
+    /// daemons drop a connection that sends the request); else the daemon's error.
+    pub async fn agent_installs(&self) -> Result<Vec<proto::AgentInstall>, WsError> {
+        if !self.daemon_has(proto::DaemonFeatures::AGENT_INSTALLS) {
+            return Err(WsError::Unavailable(
+                "the host's helper predates install checks; update it".into(),
+            ));
+        }
+        expect!(self.workspace(WorkspaceRequest::AgentInstalls).await?,
+            WorkspaceResponse::AgentInstalls(list) => list)
+    }
+
 
     /// The host's VS Code tunnel and `code` CLI.
     pub async fn vscode_tunnel_status(&self) -> Result<VsCodeTunnelStatus, WsError> {

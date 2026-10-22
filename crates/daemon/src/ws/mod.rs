@@ -9,6 +9,7 @@ mod editor_proxy;
 mod files;
 mod gh;
 pub(crate) mod git;
+pub(crate) mod installs;
 mod paths;
 pub(crate) mod ports;
 pub(crate) mod repo;
@@ -428,6 +429,7 @@ pub(crate) async fn handle(
                 .await
                 .map(A::WorkflowSaved)
         }
+        R::AgentInstalls => Ok(A::AgentInstalls(installs::check(&core.cfg).await)),
     }
 }
 

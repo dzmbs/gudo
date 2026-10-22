@@ -78,6 +78,14 @@ pub(crate) fn adapter(kind: AgentKind) -> Box<dyn AgentAdapter + Send + Sync> {
     }
 }
 
+/// The command that runs `kind`, looked up on `PATH`.
+pub(crate) fn program(kind: AgentKind) -> &'static str {
+    match kind {
+        AgentKind::Claude => "claude",
+        AgentKind::Codex => "codex",
+    }
+}
+
 fn agent_kind(name: &str) -> Option<AgentKind> {
     match name {
         "claude" | "claude-code" => Some(AgentKind::Claude),
@@ -189,11 +197,7 @@ impl AgentRuntime {
 
     /// The status for `PaneMeta`.
     pub fn wire_status(&mut self) -> AgentStatus {
-        let kind = match self.kind {
-            AgentKind::Claude => "claude",
-            AgentKind::Codex => "codex",
-        }
-        .to_owned();
+        let kind = program(self.kind).to_owned();
         let state = match self.arbiter.status().clone() {
             Status::Working => AgentState::Running,
             Status::Idle | Status::Unknown => AgentState::Idle,

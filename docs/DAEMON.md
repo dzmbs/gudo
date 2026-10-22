@@ -919,6 +919,24 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   directory created after the first list, saving twice → `-2`, global save, refusals). Goldens:
   `crates/proto/tests/golden_workflow.rs`. App: `apple/scripts/workflows-ui-test.sh`.
 
+### 5.14 Agent install checks
+
+- `WorkspaceRequest::AgentInstalls` → `AgentInstalls([AgentInstall{agent, program, state}])`,
+  offered as `DaemonFeatures::AGENT_INSTALLS` (clients ask only daemons that offer it). Drive on
+  the host.
+- Each agent's command is looked up on the `PATH` of the user's login shell (`$SHELL -l -c`,
+  with the panes' environment), which every agent pane is launched through: `Installed{path}`.
+  Else in the vendors' installer directories (`~/.local/bin`, `~/.claude/local`): `NotOnPath{path}`
+  (launching would fail with "command not found"). Else `Missing`. A shell that does not answer
+  within 10 s falls back to the daemon's own `PATH`. Asked fresh on every request.
+- The app (New Task) shows a missing agent with its vendor's official installer for the host's
+  `DaemonInfo.os`, to copy or run in a new tab (`ScriptRun`), and the vendor's guide; Start is
+  off until it is installed. Code: `crates/daemon/src/ws/installs.rs`,
+  `apple/App/Sources/Git/AgentInstallGuide.swift`.
+- Tests: `cargo test -p daemon --lib installs`, `cargo test -p daemon --test it installs`,
+  goldens in `crates/proto/tests/golden_installs.rs`; app: `AgentInstallGuideTests`,
+  `W3UITests.testAgentNotInstalledOffersTheOfficialInstaller` (`apple/scripts/w3-ui-test.sh`).
+
 
 Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
 hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, end to end

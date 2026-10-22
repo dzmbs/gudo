@@ -139,4 +139,60 @@ impl DaemonClient {
         self.ws_call(|c| async move { c.usage_unwatch().await })
             .await
     }
+
+    /// Whether each agent's command is installed on the host, as a pane would find it.
+    ///
+    /// # Errors
+    ///
+    /// `Unavailable` from a daemon too old to check (nothing is sent to it); else the
+    /// daemon's [`WorkspaceError`].
+    pub async fn agent_installs(&self) -> Result<Vec<AgentInstall>, WorkspaceError> {
+        let installs: Vec<proto::AgentInstall> = self
+            .ws_call(|c| async move { c.agent_installs().await })
+            .await?;
+        Ok(installs.into_iter().map(Into::into).collect())
+    }
+}
+
+/// Whether an agent's command is on the host.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AgentInstall {
+    /// The agent.
+    pub agent: AgentKind,
+    /// The command launching runs (`claude`, `codex`).
+    pub program: String,
+    /// What the host has.
+    pub state: InstallState,
+}
+
+/// Where an agent's command was found.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum InstallState {
+    /// On the login shell's `PATH`: launching works.
+    Installed {
+        /// The resolved executable.
+        path: String,
+    },
+    /// In an installer's directory the login shell's `PATH` lacks: launching fails until
+    /// `PATH` is fixed.
+    NotOnPath {
+        /// The executable found.
+        path: String,
+    },
+    /// Not found.
+    Missing,
+}
+
+impl From<proto::AgentInstall> for AgentInstall {
+    fn from(i: proto::AgentInstall) -> Self {
+        Self {
+            agent: i.agent.into(),
+            program: i.program,
+            state: match i.state {
+                proto::InstallState::Installed { path } => InstallState::Installed { path },
+                proto::InstallState::NotOnPath { path } => InstallState::NotOnPath { path },
+                proto::InstallState::Missing => InstallState::Missing,
+            },
+        }
+    }
 }

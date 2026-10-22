@@ -313,5 +313,7 @@ bitset! {
         /// Answers `WorkspaceRequest::WorkflowList` / `WorkflowSave` and pushes
         /// `ServerCtl::WorkflowsChanged`.
         WORKFLOWS = 5;
+        /// Answers `WorkspaceRequest::AgentInstalls`.
+        AGENT_INSTALLS = 6;
     }
 }
