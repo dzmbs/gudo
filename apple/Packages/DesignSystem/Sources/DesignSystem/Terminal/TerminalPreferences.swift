@@ -53,16 +53,31 @@ nonisolated public enum TerminalPreferences {
         }
     }
 
-    /// Ghostty `window-theme`; `system` is the default here (Ghostty's is `auto`).
+    /// Ghostty `window-theme`. `auto`, the default as in Ghostty, paints the window in the theme;
+    /// the others keep the window light, dark or with the system whatever the theme.
     public enum WindowTheme: String, CaseIterable, Identifiable, Sendable {
-        case system, auto, light, dark
+        case auto, light, dark, system
         public var id: String { rawValue }
         public var title: String {
             switch self {
-            case .system: "System"
-            case .auto: "Match Terminal"
+            case .auto: "Match Theme"
             case .light: "Light"
             case .dark: "Dark"
+            case .system: "System"
+            }
+        }
+
+        /// The appearances a window can keep apart from the theme.
+        public static let separate: [WindowTheme] = [.light, .dark, .system]
+
+        /// `system` was the default before `auto`, and a stored `system` cannot tell a choice from
+        /// that default: it goes back to `auto` once. Light and Dark were always chosen; they stay.
+        public static func migrate(_ defaults: UserDefaults = .standard) {
+            let done = "window-theme-auto-migrated"
+            guard !defaults.bool(forKey: done) else { return }
+            defaults.set(true, forKey: done)
+            if defaults.string(forKey: Key.windowTheme) == WindowTheme.system.rawValue {
+                defaults.removeObject(forKey: Key.windowTheme)
             }
         }
     }

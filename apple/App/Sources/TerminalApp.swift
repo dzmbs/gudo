@@ -17,6 +17,7 @@ struct TerminalApp: App {
     #endif
 
     init() {
+        TerminalPreferences.WindowTheme.migrate()
         #if os(macOS)
         // Tabs are ours (⌘T); AppKit's window tabbing would compete for the same shortcuts.
         NSWindow.allowsAutomaticWindowTabbing = false

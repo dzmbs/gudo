@@ -66,7 +66,7 @@ enum SettingsIndex {
     static let all: [SettingsEntry] = {
         var entries: [SettingsEntry] = [
             .init(id: "theme", title: "Theme", key: "theme", section: .appearance, synonyms: ["color", "colour", "scheme", "palette"]),
-            .init(id: "window-theme", title: "Window", key: "window-theme", section: .appearance, synonyms: ["light", "dark", "mode", "appearance", "system"]),
+            .init(id: "window-theme", title: "Window Matches Theme", key: "window-theme", section: .appearance, synonyms: ["window", "light", "dark", "mode", "appearance", "system", "sidebar", "chrome"]),
             .init(id: "theme-pair", title: "Follow Light and Dark Mode", key: "theme", section: .appearance, synonyms: ["light theme", "dark theme", "automatic", "system appearance", "pair"]),
             .init(id: "pane-style", title: "Panes", key: "pane-style", section: .appearance, synonyms: ["padding", "compact", "spacious"]),
             .init(id: "title-from-shell", title: "Tab Title from Shell", key: "title-from-shell", section: .appearance, synonyms: ["tab", "name", "osc"]),
