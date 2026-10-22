@@ -554,6 +554,17 @@ protocol EditorSource: AnyObject, Observable {
     func close(stopServer: Bool) async
     /// A URL the web view should load next (a file opened in a window not showing yet).
     var pendingURL: URL? { get }
+    /// The workbench lost its session on the server for good: open again, on a new server
+    /// when the old one is gone.
+    func reopen() async
+    /// Calls `handler` when the server the source opened is gone though the page cannot tell
+    /// (the host's helper restarted, and its servers with it).
+    func onServerLost(_ handler: @escaping (String) -> Void)
+}
+
+extension EditorSource {
+    func reopen() async {}
+    func onServerLost(_ handler: @escaping (String) -> Void) {}
 }
 
 // MARK: - Ports and the browser

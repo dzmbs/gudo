@@ -760,27 +760,31 @@ struct CompactTerminalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: DS.Space.xs) {
-                tabSwitcher
-                Spacer()
-                if let tab = workspace.session.activeTab, tab.root.panes.count > 1 {
-                    paneSwitcher(tab)
-                }
-                Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
-                    .help("Command Palette (⌘K)")
-                NewTabButton(workspace: workspace)
-            }
-            .buttonStyle(.bar)
-            .labelStyle(.iconOnly)
-            .padding(.horizontal, DS.Space.s)
-            // A 36 pt bar with a two-line title: grows with Dynamic Type only as far as it fits.
-            .dynamicTypeSize(...DynamicTypeSize.xLarge)
-            .frame(height: 36)
+            if !model.isEditorFullScreen { bar }
             TerminalArea(workspace: workspace, compact: true)
         }
         .chromeContent()
         // The bar is the window's base: the terminal's own background under Match Terminal.
         .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
+    }
+
+    private var bar: some View {
+        HStack(spacing: DS.Space.xs) {
+            tabSwitcher
+            Spacer()
+            if let tab = workspace.session.activeTab, tab.root.panes.count > 1 {
+                paneSwitcher(tab)
+            }
+            Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
+                .help("Command Palette (⌘K)")
+            NewTabButton(workspace: workspace)
+        }
+        .buttonStyle(.bar)
+        .labelStyle(.iconOnly)
+        .padding(.horizontal, DS.Space.s)
+        // A 36 pt bar with a two-line title: grows with Dynamic Type only as far as it fits.
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+        .frame(height: 36)
     }
 
     private var tabSwitcher: some View {

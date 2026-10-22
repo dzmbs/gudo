@@ -126,7 +126,7 @@ final class EditorPanesTests: XCTestCase {
 
     // MARK: The window
 
-    func testOpenInVSCodeMakesATabOrALeafBesideAndBringsAnOpenOneForward() throws {
+    func testOpenInVSCodeMakesATabOrALeafBesideSeveralPerFolder() throws {
         let model = WindowModel(app: .shared)
         model.startMixedTabs()
         // A tab of its own.
@@ -147,6 +147,15 @@ final class EditorPanesTests: XCTestCase {
         model.showEditor(proj, placement: .tab)
         XCTAssertEqual(model.composites.tabs.count, 2)
         XCTAssertEqual(model.activeMixedTab, tab.id)
+
+        // Another editor on the same folder: a tab of its own beside the first, with its own pane.
+        let second = EditorMember(hostId: "h1", folder: proj.folder)
+        model.showEditor(second, placement: .tab)
+        XCTAssertEqual(model.composites.tabs.count, 3)
+        XCTAssertEqual(model.activeMixed?.focusedEditor, second)
+        XCTAssertFalse(model.editors.pane(for: second) === model.editors.pane(for: proj))
+        model.closeEditor(second.id)
+        model.focus(WindowModel.mixedRef(tab.id))
 
         // Beside: in the tab on screen.
         let docs = EditorMember(hostId: "h2", folder: "/srv/docs")
@@ -208,9 +217,32 @@ final class EditorPanesTests: XCTestCase {
         XCTAssertEqual(model.activeMixedTab, mixed)
     }
 
+    func testFullScreenIsTheFocusedEditorsAndEndsWhenTheFocusMoves() throws {
+        let model = WindowModel(app: .shared)
+        model.startMixedTabs()
+        var session = Session()
+        session.apply(.split(PaneId(1), .horizontal))
+        let id = model.composites.make(fromHost: "h1", tab: session.tabs[0])
+        model.activeMixedTab = id
+        model.toggleEditorFullScreen()
+        XCTAssertFalse(model.isEditorFullScreen, "a terminal has the focus: nothing to show full screen")
+
+        model.showEditor(proj, placement: .split)
+        model.toggleEditorFullScreen()
+        XCTAssertTrue(model.isEditorFullScreen)
+        XCTAssertEqual(model.fullScreenEditor, proj.id)
+        model.toggleEditorFullScreen()
+        XCTAssertFalse(model.isEditorFullScreen, "⌃⌘F again: back")
+
+        model.toggleEditorFullScreen()
+        model.returnToTerminal()
+        XCTAssertFalse(model.isEditorFullScreen, "the terminal beside it took the focus")
+        model.editors.stop()
+    }
+
     func testOnlyTheWayOutLeavesVSCode() {
         let passing = WorkspaceAction.allShortcutActions.filter(\.passesEditor)
-        XCTAssertEqual(Set(passing), Set((1...8).map(WorkspaceAction.selectTab) + [.lastTab, .closePane, .returnToTerminal]))
+        XCTAssertEqual(Set(passing), Set((1...8).map(WorkspaceAction.selectTab) + [.lastTab, .closePane, .returnToTerminal, .fullScreenEditor]))
         XCTAssertFalse(WorkspaceAction.goToTab.passesEditor, "⌘P is VS Code's Quick Open")
         XCTAssertFalse(WorkspaceAction.commandPalette.passesEditor, "⌘K chords are VS Code's")
         XCTAssertFalse(WorkspaceAction.nextTab.passesEditor, "⇧⌘] is VS Code's next editor")

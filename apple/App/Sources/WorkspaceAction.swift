@@ -14,6 +14,8 @@ enum WorkspaceAction: Hashable {
     case previousPrompt, nextPrompt
     /// From a VS Code pane back to the terminal beside it, or the tab worked in before (⌃⌘`).
     case returnToTerminal
+    /// The focused VS Code pane alone in the window, without the window's chrome (⌃⌘F).
+    case fullScreenEditor
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
     case draw, newCanvas
     /// A new window with this window's hosts, on its tab (⌘N).
@@ -30,7 +32,7 @@ enum WorkspaceAction: Hashable {
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
-        + [.previousPrompt, .nextPrompt, .returnToTerminal]
+        + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
     static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
@@ -46,7 +48,7 @@ enum WorkspaceAction: Hashable {
     /// Code's: ⌃Tab, ⇧⌘[ ], ⌥⌘arrows, ⌘P, ⌘K, ⌘B, ⌘D, ⌘F …
     var passesEditor: Bool {
         switch self {
-        case .selectTab, .lastTab, .closePane, .returnToTerminal: true
+        case .selectTab, .lastTab, .closePane, .returnToTerminal, .fullScreenEditor: true
         default: false
         }
     }
@@ -65,6 +67,7 @@ enum WorkspaceAction: Hashable {
         case .previousPrompt: "Jump to Previous Prompt"
         case .nextPrompt: "Jump to Next Prompt"
         case .returnToTerminal: "Return to Terminal"
+        case .fullScreenEditor: "Full Screen Editor"
         case .previousTab: "Show Previous Tab"
         case .nextTab: "Show Next Tab"
         case .selectTab(let number): "Tab \(number)"
@@ -104,6 +107,8 @@ enum WorkspaceAction: Hashable {
         // VS Code's ⌃` toggles its own terminal; ⌃⌘` is bound by neither VS Code nor the systems.
         // (⌘⎋ was tried: on iPad it never reaches the app past a focused web view.)
         case .returnToTerminal: KeyboardShortcut("`", modifiers: [.command, .control])
+        // VS Code's own full-screen key on the Mac; the web workbench binds nothing to it.
+        case .fullScreenEditor: KeyboardShortcut("f", modifiers: [.command, .control])
         case .previousTab: KeyboardShortcut("[", modifiers: [.command, .shift])
         case .nextTab: KeyboardShortcut("]", modifiers: [.command, .shift])
         case .selectTab(let number): KeyboardShortcut(KeyEquivalent(Character("\(number)")))
@@ -160,6 +165,7 @@ enum WorkspaceAction: Hashable {
         case .toggleSidebar: perform(window: window)
         case .shortcuts: window.sheet = window.sheet == .shortcuts ? nil : .shortcuts
         case .returnToTerminal: window.returnToTerminal()
+        case .fullScreenEditor: window.toggleEditorFullScreen()
         default: perform(on: window.workspace ?? workspace)
         }
     }
@@ -180,7 +186,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab, .newWindow, .splitWithHost, .returnToTerminal: break
+        case .goToTab, .newWindow, .splitWithHost, .returnToTerminal, .fullScreenEditor: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.

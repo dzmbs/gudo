@@ -737,10 +737,13 @@ sidebar.
 
 **Opening.** Open in VS Code (palette, Open In menu, Files, Links, a path ⌘-clicked in a pane) resolves
 the focused pane's host and directory, takes its worktree root (`gitStatus.root`), and:
-- an editor already open on that host and folder (or, for a path, the one whose folder holds it)
+- for a path, an editor already open on that host whose folder holds it (the focused one first)
   comes forward and opens the file at the line;
-- else a new VS Code tab (default), or, with ⌥ held / "Open in VS Code Beside" / Open In ▸ VS Code
-  Beside, a leaf right of the focused pane in its tab;
+- else a new editor, every time (several on one folder are several windows on its one server, sharing
+  its data store as browser windows would): a new VS Code tab (default), or, with ⌥ held / "Open in
+  VS Code Beside" / Open In ▸ VS Code Beside, a leaf right of the focused pane in its tab. With
+  several windows on one folder, a file opened through the server's CLI (`EditorOpen`, below) lands
+  in the window the CLI picks, which may be another of them;
 - "Open VS Code Through a Remote Tunnel…" opens the pane on the tunnel's offer.
 On the Mac the in-app pane is the default too; desktop VS Code (Remote - SSH over our forward,
 `DesktopVSCode`) is "Open in Desktop VS Code" in the palette, Open In and the pane's More menu.
@@ -759,8 +762,37 @@ its web view and web content process are released; a JPEG snapshot (taken every 
 screen, at most 900 pt wide) stands in under "Resuming VS Code" when it is shown again, and the
 page it was on reloads (VS Code restores open files and unsaved changes from its own storage).
 
-**Daemon.** No change: `EditorLaunch` already runs one server per folder with its own random
-connection token, reused across opens, so N editor panes on N folders are N servers on the host.
+**Staying connected.** The workbench's websockets run through the local forward over the host's
+one QUIC connection; VS Code reconnects by itself as long as the forward answers and the server
+still holds its session. So:
+- Leaving the app: `BackgroundGrace` (iOS) keeps connections up for the background time iOS grants
+  and suspends them only when it runs out; a quick visit to another app comes back to a live
+  workbench. Coming back resumes on `willEnterForeground`, before the page's timers run again.
+- Network change: a live connection is kept (`DaemonClient.networkChanged`; iroh moves it to a
+  working path), only a dead one is redialled.
+- The forward: a connection made while the link is down waits for it, one that met a dead
+  connection gets one more try, a broken link resets the local socket (VS Code takes a reset for a
+  lost link and retries; an orderly close could pass for the server's goodbye), and the listener is
+  bound again after a suspension (iOS defuncts a suspended app's sockets). DAEMON.md §5.1.
+- The server: Microsoft's server is run directly with a 48 h reconnection grace and no idle stop
+  while a workbench may come back (DAEMON.md §5.3), where serve-web ended sessions after its own
+  hour-long idle stop or any VS Code update.
+- When the page cannot go on anyway — its web content process ended, or VS Code shows "Cannot
+  reconnect" (a user script watches its dialogs) — the pane recovers by itself: the last snapshot
+  under "Resuming VS Code", the source opened again (a new session when the server was replaced),
+  the page loaded again (`EditorPane.recover`).
+
+**Full screen.** ⌃⌘F (VS Code's own full-screen key on the Mac; the web workbench binds nothing to
+it, so it passes the editor like ⌘W), the editor bar's Full Screen button, or the palette show the
+focused editor alone: no sidebar, tab strip, toolbar, editor bar or status bar, the workbench edge
+to edge (`WindowModel.isEditorFullScreen`, `FullScreenEditorView`; on iPhone the tab bar goes too).
+The way back never takes a key from VS Code (Escape is its): ⌃⌘F again, or the top edge — a pointer
+resting there or a tap brings up a glass Exit Full Screen button for three seconds. Full screen
+belongs to that editor while it has the focus: ⌘1–⌘9 or Return to Terminal leave it. On the Mac the
+window enters native full screen with it (and leaves it, if it entered it).
+
+**Daemon.** `EditorLaunch` runs one server per folder with its own random connection token, reused
+across opens, so N folders are N servers on the host and several panes on one folder share one.
 One `serve-web` per host serving every folder through `?folder=` would save the per-server overhead,
 but `EditorOpen`'s in-window path (the remote CLI through a connected window's
 `VSCODE_IPC_HOOK_CLI`) finds the window by the server's process tree; with several windows on one
@@ -778,6 +810,7 @@ those. On the iPad the web view's container answers those keys itself from the r
   server keeps running and VS Code keeps unsaved changes (hot exit). On the iPad the system's File ▸
   Close Window was bound to ⌘W as well and won while a web view had the keyboard; `AppDelegate.buildMenu`
   moves it to ⇧⌘W (as in Safari), so ⌘W is always Close Pane.
+- **⌃⌘F** shows the editor full screen and back (below).
 - **⌃⌘\` Return to Terminal** (Pane menu): the terminal beside the editor in its tab, else the tab the
   editor was opened from (`lastTerminalTab`). VS Code binds nothing to ⌃⌘\` (its ⌃\` toggles its own
   terminal). ⌘⎋ was tried first: on the iPad it never reaches the app while a web view has the keyboard.
@@ -798,8 +831,7 @@ overlay, as for its terminals.
 Tests: `EditorLeafTests` (PaneLayout: editor tab, beside a host tab, closing back to the host tab,
 last editor, editors across hosts and ⌘D on an editor, dropping a host, order, round trip and old
 saves), `EditorPanesTests` (one pane per editor and pruning, the web view kept across hide/show,
-suspension only off screen and past the limit, reload on show; placement, bringing an open folder
-forward, ⌘W, `editorHasKeys`, Return to Terminal, the keys that pass), `EditorPanesUITests` (iPad,
+suspension only off screen and past the limit, reload on show; placement, several editors per folder, ⌘W, `editorHasKeys`, Return to Terminal, the keys that pass), `EditorPanesUITests` (iPad,
 `UI_TEST_CLASS=EditorPanesUITests apple/scripts/w3-ui-test.sh`: two folders in two tabs keeping what
 was typed and their load count, ⌘P reaching VS Code and ⌘2 the app, an editor beside the terminal,
 ⌃⌘\` then ⌘K reaching the app, relaunch restoring and lazily loading both tabs, closing; suspension after 3 s

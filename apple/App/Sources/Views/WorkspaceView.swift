@@ -166,7 +166,7 @@ struct WorkspaceView: View {
     /// the toolbar looks the same in either.
     private var regular: some View {
         HStack(spacing: 0) {
-            if model.isSidebarShown {
+            if model.isSidebarShown && !model.isEditorFullScreen {
                 SidebarColumn(workspace: workspace)
                     .frame(width: SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize))
                     .movingTransition(.leading)
@@ -177,6 +177,7 @@ struct WorkspaceView: View {
             }
         }
         .animation(DS.Motion.panel, value: model.isSidebarShown)
+        .animation(DS.Motion.panel, value: model.isEditorFullScreen)
         .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
         #if os(macOS)
         // Ghostty's window title: the directory, with its folder as the proxy icon.
@@ -336,7 +337,7 @@ private struct DetailColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !model.isSidebarShown && showsTabBar {
+            if !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen {
                 TabBar(workspace: workspace)
                     .chromeContent()
                     .movingTransition(.top)
@@ -370,6 +371,11 @@ private struct DetailColumn: View {
         #endif
         .navigationSubtitle(model.destination == .terminal ? subtitle : "")
         .toolbar { TerminalToolbar(workspace: workspace) }
+        #if os(iOS)
+        .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .navigationBar)
+        #else
+        .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .windowToolbar)
+        #endif
         .modifier(GitDialogs(git: model.git))
         .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
             if has { model.git.syncAutoDelete() }
@@ -614,6 +620,7 @@ private struct CompactRoot: View {
         TabView(selection: $model.destination) {
             SwiftUI.Tab("Terminal", systemImage: "terminal", value: Destination.terminal) {
                 CompactTerminalView(workspace: workspace)
+                    .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .tabBar)
             }
             SwiftUI.Tab("Inbox", systemImage: "tray", value: Destination.inbox) {
                 NavigationStack {

@@ -45,7 +45,9 @@ struct TerminalArea: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        if !compact, model.columns != nil {
+        if model.isEditorFullScreen, let editor = model.activeMixed?.focusedEditor {
+            FullScreenEditorView(member: editor)
+        } else if !compact, model.columns != nil {
             TwoColumnsView()
         } else if let mixed = model.activeMixed {
             MixedTabView(id: mixed.id, compact: compact)
@@ -55,6 +57,60 @@ struct TerminalArea: View {
             ActiveTabView(workspace: workspace, compact: compact)
                 // Pane ids are per host: never reuse one host's pane views for another's.
                 .id(ObjectIdentifier(workspace))
+        }
+    }
+}
+
+/// An editor alone in the window (⌃⌘F): the workbench edge to edge. The way back stays out of
+/// the workbench's way: ⌃⌘F again, or the top edge, where a pointer resting or a tap brings up
+/// Exit Full Screen for a few seconds (Escape is VS Code's).
+struct FullScreenEditorView: View {
+    let member: EditorMember
+    @Environment(WindowModel.self) private var model
+    @State private var isExitShown = false
+    @State private var hide: Task<Void, Never>?
+
+    var body: some View {
+        EditorLeafView(member: member, isSplit: false, isFocused: true, focus: {}, isFullScreen: true)
+            .overlay(alignment: .top) {
+                VStack(spacing: DS.Space.xs) {
+                    Color.clear
+                        .frame(height: 8)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(.rect)
+                        .onContinuousHover { phase in
+                            if case .active = phase { reveal() }
+                        }
+                        .onTapGesture { reveal() }
+                        .accessibilityHidden(true)
+                    if isExitShown {
+                        Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left") {
+                            model.toggleEditorFullScreen()
+                        }
+                        .buttonStyle(.glass)
+                        .help("Exit Full Screen (⌃⌘F)")
+                        .onHover { inside in if inside { reveal() } }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .accessibilityIdentifier("editor-exit-full-screen")
+                    }
+                }
+                .animation(DS.Motion.snappy, value: isExitShown)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("editor-full-screen-view")
+            #if os(iOS)
+            .statusBarHidden()
+            .persistentSystemOverlays(.hidden)
+            #endif
+    }
+
+    private func reveal() {
+        isExitShown = true
+        hide?.cancel()
+        hide = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            isExitShown = false
         }
     }
 }
