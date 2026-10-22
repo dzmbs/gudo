@@ -170,6 +170,29 @@ final class W3UITests: XCTestCase {
         shot("diff-note")
     }
 
+    // MARK: Agents the host lacks
+
+    /// The fixtures have a `claude` on PATH and no `codex`: Codex shows as not installed, with
+    /// OpenAI's installer for macOS, and can't be started.
+    func testAgentNotInstalledOffersTheOfficialInstaller() throws {
+        try launch()
+        palette("New Task")
+        let runner = app.segmentedControls["task-runner"].firstMatch
+        XCTAssertTrue(runner.waitForExistence(timeout: 5))
+        runner.buttons.element(boundBy: 1).tap()
+        let notice = element("task-agent-missing")
+        XCTAssertTrue(notice.waitForExistence(timeout: 15), "Codex shows as not installed")
+        XCTAssertEqual(element("task-install-command").label, "curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+        XCTAssertTrue(element("task-install-run").exists)
+        XCTAssertTrue(element("task-install-docs").exists)
+        XCTAssertFalse(element("launch-start").isEnabled, "a missing agent can't be started")
+        shot("task-agent-missing")
+
+        runner.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 5), "Claude Code is on the host")
+        XCTAssertTrue(element("launch-start").isEnabled)
+    }
+
     // MARK: Agents: launch, approve, reply, the turn's diff, review to the agent
 
     func testZAgentLaunchApproveReplyAndTurnReview() throws {

@@ -28,6 +28,13 @@ struct NewTaskSheet: View {
             case .shell: "terminal"
             }
         }
+        var agent: AgentKind? {
+            switch self {
+            case .claude: .claude
+            case .codex: .codex
+            case .shell: nil
+            }
+        }
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -41,10 +48,20 @@ struct NewTaskSheet: View {
     @State private var worktree = true
     @State private var isStarting = false
     @State private var failure: String?
+    /// The chosen host's agents, by what launching would find; empty until it answers.
+    @State private var installs: [AgentKind: InstallState] = [:]
     @FocusState private var isPromptFocused: Bool
 
     private var hosts: [LaunchHost] { feed.launchHosts }
     private var host: LaunchHost? { hosts.first { $0.id == hostID } }
+    private var daemon: DaemonConnection? { hostID.flatMap { model.app.hosts.connection($0) as? DaemonConnection } }
+
+    /// The chosen agent, when the host says it can't run it.
+    private var unavailable: (agent: AgentKind, state: InstallState)? {
+        guard let agent = runner.agent, let state = installs[agent] else { return nil }
+        if case .installed = state { return nil }
+        return (agent, state)
+    }
 
     /// The host's repositories (from its repository snapshot), main worktrees only.
     private var repos: [WorktreeState] {
@@ -98,6 +115,14 @@ struct NewTaskSheet: View {
                     .accessibilityIdentifier("task-runner")
                 }
                 .chromeRows()
+                if let unavailable, let host,
+                   let guide = AgentInstallGuide(agent: unavailable.agent, os: daemon?.daemonInfo?.os ?? "")
+                {
+                    AgentInstallSection(
+                        agent: unavailable.agent, state: unavailable.state, hostName: host.name, guide: guide,
+                        onInstall: install)
+                        .chromeRows()
+                }
                 Section {
                     Picker("Host", selection: $hostID) {
                         ForEach(hosts) { host in
@@ -241,6 +266,8 @@ struct NewTaskSheet: View {
                 repoPath = repos.first?.path
                 worktree = repo != nil
             }
+            // On every opening, so an install made since shows.
+            .task(id: hostID) { await checkInstalls() }
             // The host's repositories can arrive after the sheet opened.
             .onChange(of: repos.map(\.path)) { old, paths in
                 guard old.isEmpty, repoPath == nil, !paths.isEmpty else { return }
@@ -255,7 +282,32 @@ struct NewTaskSheet: View {
         #endif
     }
 
-    private var canStart: Bool { host != nil && !isStarting && (!worktree || !name.trimmingCharacters(in: .whitespaces).isEmpty) }
+    private var canStart: Bool {
+        host != nil && !isStarting && unavailable == nil && (!worktree || !name.trimmingCharacters(in: .whitespaces).isEmpty)
+    }
+
+    /// Asks the host which agents it has; a helper too old to say leaves every agent startable.
+    private func checkInstalls() async {
+        installs = [:]
+        guard let api = try? daemon?.workspace.client() as? DaemonAgentInstallAPI,
+              let list = try? await api.agentInstalls() else { return }
+        installs = Dictionary(list.map { (AgentKind($0.program), $0.state) }) { first, _ in first }
+    }
+
+    /// Runs the vendor's installer in a new tab on the host, the user's own act.
+    private func install(_ command: String) {
+        guard let host, let daemon, let session = daemon.layout.sessionId else { return }
+        let title = runner.title
+        Task {
+            do {
+                let pane = try await daemon.workspace.repoClient().scriptRun(
+                    cwd: "~", sessionId: session, name: "Install \(title)", command: command)
+                model.reveal(host: host.id, pane: pane)
+            } catch {
+                withAnimation(DS.Motion.snappy) { failure = ScreenError.describe(error) }
+            }
+        }
+    }
 
     private func start() {
         guard let host, canStart else { return }
@@ -285,6 +337,70 @@ struct NewTaskSheet: View {
                 isStarting = false
                 withAnimation(DS.Motion.snappy) { failure = ScreenError.describe(error) }
             }
+        }
+    }
+}
+
+/// An agent the host can't run yet: why, the vendor's installer to copy or to run in a new tab
+/// there, and the vendor's guide.
+private struct AgentInstallSection: View {
+    let agent: AgentKind
+    let state: InstallState
+    let hostName: String
+    let guide: AgentInstallGuide
+    let onInstall: (String) -> Void
+
+    private var offPath: String? {
+        if case .notOnPath(let path) = state { path } else { nil }
+    }
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Label(offPath == nil ? "\(agent.title) isn’t installed on \(hostName)" : "\(hostName) can’t find \(agent.title)",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(DS.Palette.attention)
+                Group {
+                    if let offPath {
+                        Text("It’s at \(Text(verbatim: offPath).font(DS.Font.literalSmall)), but the login shell’s PATH doesn’t include that folder.")
+                    } else if guide.command != nil {
+                        Text("Install it with the official installer, then start the task.")
+                    } else {
+                        Text("Follow the official guide to install it on this host.")
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(DS.Palette.textSecondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("task-agent-missing")
+            if offPath == nil, let command = guide.command {
+                HStack(spacing: DS.Space.s) {
+                    Text(verbatim: command)
+                        .font(DS.Font.literalSmall)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("task-install-command")
+                    Button("Copy", systemImage: "doc.on.doc") { copy(command) }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Copy the command")
+                        .accessibilityIdentifier("task-install-copy")
+                }
+                Button("Install in a New Tab", systemImage: "terminal") { onInstall(command) }
+                    .accessibilityIdentifier("task-install-run")
+            }
+            Link(destination: offPath == nil ? guide.docs : guide.pathHelp) {
+                HStack {
+                    Label(offPath == nil ? "Installation Guide" : "Fix PATH", systemImage: "book")
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(DS.Palette.textTertiary)
+                }
+                .contentShape(.rect)
+            }
+            .accessibilityIdentifier("task-install-docs")
         }
     }
 }

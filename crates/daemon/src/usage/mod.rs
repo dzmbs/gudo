@@ -29,6 +29,7 @@ use tokio::sync::mpsc;
 
 use crate::config::Config;
 use crate::core::lock;
+use crate::ws::installs::{self, INSTALLER_DIRS};
 
 /// Local data younger than this is used as is; older, the tool is asked.
 pub(crate) const LOCAL_FRESH: Duration = Duration::from_secs(10 * 60);
@@ -95,29 +96,15 @@ impl Paths {
     }
 
     fn which(&self, program: &str) -> Option<PathBuf> {
-        let mut dirs: Vec<PathBuf> = self
-            .path
-            .as_ref()
-            .map(|p| std::env::split_paths(p).collect())
-            .unwrap_or_default();
+        let path = self.path.iter().flat_map(std::env::split_paths);
         // Where the installers put them, for daemons started without a login PATH.
-        dirs.push(self.home.join(".local/bin"));
-        dirs.push(self.home.join(".claude/local"));
-        dirs.into_iter()
-            .map(|d| d.join(program))
-            .find(|p| p.is_file())
-    }
-
-    fn program(agent: AgentKind) -> &'static str {
-        match agent {
-            AgentKind::Claude => "claude",
-            AgentKind::Codex => "codex",
-        }
+        let installers = INSTALLER_DIRS.iter().map(|d| self.home.join(d));
+        installs::find(path.chain(installers), program)
     }
 
     fn cli_env(&self, agent: AgentKind) -> Option<cli::Env> {
         Some(cli::Env {
-            program: self.which(Self::program(agent))?,
+            program: self.which(crate::agent::program(agent))?,
             cwd: self.home.clone(),
             vars: self.vars.clone(),
         })
@@ -128,7 +115,7 @@ impl Paths {
             AgentKind::Claude => &self.claude_dir,
             AgentKind::Codex => &self.codex_home,
         };
-        dir.is_dir() || self.which(Self::program(agent)).is_some()
+        dir.is_dir() || self.which(crate::agent::program(agent)).is_some()
     }
 }
 
@@ -418,7 +405,10 @@ impl Usage {
     async fn ask(&self, tier: Tier, agent: AgentKind) {
         let result = match tier {
             Tier::Cli => match self.paths.cli_env(agent) {
-                None => Err(format!("{} is not on the PATH", Paths::program(agent))),
+                None => Err(format!(
+                    "{} is not on the PATH",
+                    crate::agent::program(agent)
+                )),
                 Some(env) => match agent {
                     AgentKind::Claude => cli::claude(&env).await,
                     AgentKind::Codex => cli::codex(&env).await,

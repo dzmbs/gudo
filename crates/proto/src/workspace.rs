@@ -287,6 +287,10 @@ pub enum WorkspaceRequest {
     },
     /// Writes a new workflow file (never replacing one) → [`WorkspaceResponse::WorkflowSaved`].
     WorkflowSave(crate::workflow::WorkflowSave),
+    /// Whether each agent's command is installed, found as a pane's login shell finds it →
+    /// [`WorkspaceResponse::AgentInstalls`]. Only daemons offering
+    /// [`DaemonFeatures::AGENT_INSTALLS`](crate::DaemonFeatures::AGENT_INSTALLS) understand it.
+    AgentInstalls,
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -359,6 +363,37 @@ pub enum WorkspaceResponse {
     Workflows(crate::workflow::WorkflowList),
     /// The workflow as written (its file in [`Workflow::path`](crate::workflow::Workflow::path)).
     WorkflowSaved(crate::workflow::Workflow),
+    /// One entry per agent the daemon can launch.
+    AgentInstalls(Vec<AgentInstall>),
+}
+
+/// Whether an agent's command is on the host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInstall {
+    /// The agent.
+    pub agent: AgentKind,
+    /// The command launching runs (`claude`, `codex`).
+    pub program: String,
+    /// What the host has.
+    pub state: InstallState,
+}
+
+/// Where an agent's command was found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InstallState {
+    /// On the login shell's `PATH`: launching it works.
+    Installed {
+        /// The resolved executable.
+        path: String,
+    },
+    /// In an installer's default directory that the login shell's `PATH` lacks: launching it
+    /// fails until `PATH` is fixed.
+    NotOnPath {
+        /// The executable found.
+        path: String,
+    },
+    /// Not found.
+    Missing,
 }
 
 /// Why a workspace request failed.

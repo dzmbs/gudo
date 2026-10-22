@@ -66,6 +66,14 @@ nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonUsageAPI {}
 
+/// Whether each agent's command is on the host (helpers too old to check answer
+/// `Unavailable` without being asked).
+nonisolated public protocol DaemonAgentInstallAPI: AnyObject, Sendable {
+    func agentInstalls() async throws -> [AgentInstall]
+}
+
+extension DaemonClient: DaemonAgentInstallAPI {}
+
 /// The VS Code Remote Tunnel: the opt-in fallback editor path (vscode.dev, signed in with the
 /// user's own GitHub or Microsoft account by device code). Kept out of `DaemonWorkspaceAPI`'s
 /// list so fakes that do not care need nothing; the state arrives as `vsCodeTunnel` pushes.
