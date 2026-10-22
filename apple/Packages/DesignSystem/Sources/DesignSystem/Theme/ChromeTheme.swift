@@ -59,9 +59,44 @@ public extension View {
         listRowBackground(Rectangle().fill(DS.Palette.groupedRow))
     }
 
+    /// A chrome surface behind the view out to the window's edges, under the software keyboard
+    /// and key bar too: they float over it, and a background that stops at the keyboard's safe
+    /// area leaves the window's own black or white there.
+    func chromeBackground(_ style: ChromeStyle) -> some View {
+        background { Rectangle().fill(style).ignoresSafeArea() }
+    }
+
     /// A sheet's own background on the chrome (iPad form sheets, iPhone page sheets).
     func chromeSheetBackground() -> some View {
-        presentationBackground(DS.Palette.groupedPage)
+        modifier(ResolvedChromeBackground(token: .groupedPage, place: .sheet))
+    }
+
+    #if os(iOS)
+    /// An opaque navigation bar on a chrome surface.
+    func chromeBarBackground(_ token: ChromeStyle.Token) -> some View {
+        modifier(ResolvedChromeBackground(token: token, place: .navigationBar))
+            .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+    }
+    #endif
+}
+
+/// Bar and sheet backgrounds are handed to UIKit only when their value changes, and a token is
+/// equal under every theme: these get the resolved colour so a theme change reaches them.
+private struct ResolvedChromeBackground: ViewModifier {
+    enum Place { case sheet, navigationBar }
+    let token: ChromeStyle.Token
+    let place: Place
+    @Environment(\.chrome) private var chrome
+
+    @ViewBuilder func body(content: Content) -> some View {
+        switch place {
+        case .sheet: content.presentationBackground(chrome.color(token))
+        #if os(iOS)
+        case .navigationBar: content.toolbarBackground(chrome.color(token), for: .navigationBar)
+        #else
+        case .navigationBar: content
+        #endif
+        }
     }
 }
 
@@ -97,7 +132,7 @@ public extension ChromePalette {
 public struct ThemedRoot<Content: View>: View {
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
-    let content: Content
+    public let content: Content
 
     public init(@ViewBuilder content: () -> Content) {
         self.content = content()

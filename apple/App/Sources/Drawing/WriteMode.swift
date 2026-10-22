@@ -113,8 +113,8 @@ final class WriteOverlay: UIView, UIIndirectScribbleInteractionDelegate, UITextV
     private weak var terminal: TerminalView?
     private(set) var controller: WriteController!
     private let field = HandwritingField()
-    private let model = WriteModel()
-    private let toolbar: UIHostingController<WriteToolbar>
+    private let model: WriteModel
+    private let toolbar: UIHostingController<ThemedRoot<WriteToolbar>>
     private let previewMarker = UIView()
     private var terminalHadKeyboard = false
     private var closed = false
@@ -123,7 +123,9 @@ final class WriteOverlay: UIView, UIIndirectScribbleInteractionDelegate, UITextV
     init(drawing: PaneDrawing, terminal: TerminalView) {
         self.drawing = drawing
         self.terminal = terminal
-        toolbar = UIHostingController(rootView: WriteToolbar(model: model))
+        let model = WriteModel()
+        self.model = model
+        toolbar = UIHostingController(rootView: ThemedRoot { WriteToolbar(model: model) })
         super.init(frame: terminal.bounds)
         controller = WriteController(
             preview: { [weak self] text in self?.showPreview(text) },

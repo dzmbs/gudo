@@ -51,7 +51,7 @@ struct WorkspaceSidebar: View {
         // Dense rows in a fixed column: they grow with Dynamic Type up to accessibility 1
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .chromeContent()
-        .background(DS.Palette.sidebar, ignoresSafeAreaEdges: .all)
+        .chromeBackground(DS.Palette.sidebar)
         #if os(macOS)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
@@ -780,7 +780,7 @@ struct CompactTerminalView: View {
         }
         .chromeContent()
         // The bar is the window's base: the terminal's own background under Match Terminal.
-        .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
+        .chromeBackground(DS.Palette.base)
     }
 
     private var tabSwitcher: some View {

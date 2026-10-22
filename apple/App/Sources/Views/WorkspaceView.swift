@@ -176,7 +176,7 @@ struct WorkspaceView: View {
             }
         }
         .animation(DS.Motion.panel, value: model.isSidebarShown)
-        .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
+        .chromeBackground(DS.Palette.base)
         #if os(macOS)
         // Ghostty's window title: the directory, with its folder as the proxy icon.
         .modifier(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
@@ -228,13 +228,12 @@ private struct SidebarColumn: View {
                         NewTabButton(workspace: workspace)
                     }
                 }
-                .toolbarBackground(DS.Palette.sidebar, for: .navigationBar)
-                .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+                .chromeBarBackground(.sidebar)
         }
-        .background(DS.Palette.sidebar, ignoresSafeAreaEdges: .all)
+        .chromeBackground(DS.Palette.sidebar)
         #else
         WorkspaceSidebar()
-            .background(DS.Palette.sidebar, ignoresSafeAreaEdges: .all)
+            .chromeBackground(DS.Palette.sidebar)
         #endif
     }
 }
@@ -364,8 +363,7 @@ private struct DetailColumn: View {
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(DS.Palette.base, for: .navigationBar)
-        .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+        .chromeBarBackground(.base)
         #endif
         .navigationSubtitle(model.destination == .terminal ? subtitle : "")
         .toolbar { TerminalToolbar(workspace: workspace) }
@@ -373,7 +371,7 @@ private struct DetailColumn: View {
         .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
             if has { model.git.syncAutoDelete() }
         }
-        .background(DS.Palette.base, ignoresSafeAreaEdges: .all)
+        .chromeBackground(DS.Palette.base)
     }
 
     private var title: String {
