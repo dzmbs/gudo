@@ -32,10 +32,11 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
 
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "editor")
 
-    override init() {
+    /// `dataStore`: where the workbench keeps its state (open editors, sign-ins) like a desktop
+    /// window; the shared store by default.
+    init(dataStore: WKWebsiteDataStore = .default()) {
         let configuration = WKWebViewConfiguration()
-        // The workbench keeps its state (open editors, sign-ins) like a desktop window.
-        configuration.websiteDataStore = .default()
+        configuration.websiteDataStore = dataStore
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()

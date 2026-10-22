@@ -88,7 +88,7 @@ chmod +x "$bin/claude"
 # check that ⌘ shortcuts reach the editor, not the app).
 cat >"$bin/code" <<'EOF'
 #!/usr/bin/env python3
-import http.server, sys
+import http.server, sys, urllib.parse
 args = sys.argv[1:]
 if "--version" in args:
     print("1.105.0\nfakecommit\narm64")
@@ -129,6 +129,10 @@ document.getElementById('path').textContent = 'Location ' + decodeURIComponent(l
 // reload it; a suspended editor coming back does.
 localStorage.loads = (+localStorage.loads || 0) + 1;
 document.getElementById('loads').textContent = 'Page loads ' + localStorage.loads;
+// The workbench's own requests carry only the cookie: say when the server turns them away.
+setInterval(function () {
+  fetch('/ping').then(function (r) { if (r.status === 403) document.body.setAttribute('data-forbidden', '1'), document.getElementById('path').textContent = 'Forbidden'; });
+}, 1000);
 var keys = [];
 document.addEventListener('keydown', function (e) {
   keys.push((e.metaKey ? 'cmd+' : '') + (e.shiftKey ? 'shift+' : '') + e.key.toLowerCase());
@@ -136,15 +140,28 @@ document.addEventListener('keydown', function (e) {
   if (e.metaKey) e.preventDefault();
 }, true);
 </script></body></html>"""
+# Like serve-web: a `tkn` in the address sets the `vscode-tkn` cookie and redirects to the address
+# without it; every other request (the page's own, a reload) is let in by that cookie alone.
+# Cookies do not tell ports apart, so two servers' tokens in one cookie jar lock one out.
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        ok = ("tkn=" + token) in self.path or ("vscode-tkn=" + token) in (self.headers.get("Cookie") or "")
+        url = urllib.parse.urlsplit(self.path)
+        query = urllib.parse.parse_qsl(url.query, keep_blank_values=True)
+        if ("tkn", token) in query:
+            rest = urllib.parse.urlencode([(k, v) for k, v in query if k != "tkn"], safe="/~")
+            self.send_response(302)
+            self.send_header("Set-Cookie", "vscode-tkn=" + token + "; Path=/")
+            self.send_header("Location", url.path + ("?" + rest if rest else ""))
+            self.end_headers()
+            return
+        ok = ("vscode-tkn=" + token) in (self.headers.get("Cookie") or "")
         self.send_response(200 if ok else 403)
-        self.send_header("Content-Type", "text/html")
-        if ok:
-            self.send_header("Set-Cookie", "vscode-tkn=" + token)
+        self.send_header("Content-Type", "text/html" if url.path != "/ping" else "text/plain")
         self.end_headers()
-        self.wfile.write(PAGE if ok else b"forbidden")
+        if url.path == "/ping":
+            self.wfile.write(b"ok" if ok else b"Forbidden")
+        else:
+            self.wfile.write(PAGE if ok else b"Forbidden")
     def log_message(self, *a):
         pass
 # Threaded: a real server takes many connections, and a stale keep-alive one (a killed app's, the

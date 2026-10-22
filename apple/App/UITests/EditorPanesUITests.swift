@@ -101,6 +101,10 @@ final class EditorPanesUITests: XCTestCase {
     private func waitForWorkbench(_ folder: String, timeout: TimeInterval = 40) {
         XCTAssertTrue(text(containing: "Fake VS Code workbench").waitForExistence(timeout: timeout), "the workbench loads")
         XCTAssertTrue(text(containing: "work/\(folder)").waitForExistence(timeout: 10), "on \(folder)")
+        // The page's own requests carry only the server's cookie (as the real workbench's do):
+        // another editor's token must not have replaced it.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertFalse(text(containing: "Forbidden").exists, "\(folder)'s server still lets the page in")
     }
 
     private func typeInWorkbench(_ text: String) {

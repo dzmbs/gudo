@@ -1,5 +1,6 @@
 import HostKit
 import PaneLayout
+import WebKit
 import XCTest
 @testable import App
 
@@ -94,6 +95,29 @@ final class EditorPanesTests: XCTestCase {
         XCTAssertFalse(again === webView)
         XCTAssertTrue(pane.isSuspended, "until the workbench has loaded again")
         editors.stop()
+    }
+
+    /// Each host editor keeps its own cookies (its server's `vscode-tkn`): two folders' tokens
+    /// in one store overwrote each other and the servers answered "Forbidden". The tunnel's
+    /// vscode.dev shares the app's store, so one sign-in serves every tunnel editor.
+    func testEachHostEditorHasItsOwnDataStoreAndTheTunnelSharesOne() {
+        let editors = EditorPanes(suspendAfter: .seconds(600)) { _ in FakeSource() }
+        defer { editors.stop() }
+        let local = URL(string: "http://localhost:51234/?tkn=a&folder=/home/me/proj")!
+        let projStore = editors.pane(for: proj).makeBrowser(for: local).webView.configuration.websiteDataStore
+        let siteStore = editors.pane(for: site).makeBrowser(for: URL(string: "http://127.0.0.1:51235/?tkn=b")!)
+            .webView.configuration.websiteDataStore
+        XCTAssertNotEqual(projStore.identifier, siteStore.identifier, "two folders, two cookie jars")
+        XCTAssertNotNil(projStore.identifier)
+
+        let again = EditorMember(hostId: "h1", folder: "/home/me/proj")
+        let reopened = EditorPanes(suspendAfter: .seconds(600)) { _ in FakeSource() }
+        defer { reopened.stop() }
+        XCTAssertEqual(reopened.pane(for: again).makeBrowser(for: local).webView.configuration.websiteDataStore.identifier,
+                       projStore.identifier, "the same folder finds its state again")
+
+        let tunnel = editors.pane(for: proj).makeBrowser(for: URL(string: "https://vscode.dev/tunnel/box/home/me/proj")!)
+        XCTAssertNil(tunnel.webView.configuration.websiteDataStore.identifier, "vscode.dev uses the shared store")
     }
 
     func testTheDefaultIsTenMinutes() {

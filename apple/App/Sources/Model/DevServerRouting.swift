@@ -154,7 +154,14 @@ final class DevServerRouting {
 
     /// The same store for a host across launches (its dev servers' cookies and storage).
     nonisolated static func storeIdentifier(_ hostId: String) -> UUID {
-        var bytes = Array(SHA256.hash(data: Data("unnamed-browser:\(hostId)".utf8)).prefix(16))
+        WKWebsiteDataStore.stableIdentifier("unnamed-browser:\(hostId)")
+    }
+}
+
+extension WKWebsiteDataStore {
+    /// A data store identifier that is the same for `key` on every launch (a name-based UUID).
+    nonisolated static func stableIdentifier(_ key: String) -> UUID {
+        var bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
         bytes[8] = (bytes[8] & 0x3F) | 0x80
         return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],

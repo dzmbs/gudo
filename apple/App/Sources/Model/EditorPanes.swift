@@ -89,13 +89,30 @@ final class EditorPane: Identifiable {
     }
 
     var webView: WKWebView? { browser?.webView }
+    @ObservationIgnored private var browserIsIsolated = false
+
+    nonisolated static func isLoopback(_ url: URL) -> Bool {
+        ["localhost", "127.0.0.1", "::1", "[::1]"].contains(url.host()?.lowercased() ?? "")
+    }
     var isOnScreen: Bool { onScreen > 0 }
 
-    /// The web view, made on first use.
+    /// The web view for `url`, made on first use.
+    ///
+    /// An editor server on the host (a loopback forward) keeps its own data store per host and
+    /// folder: each server's connection token lives in a `vscode-tkn` cookie, and cookies do not
+    /// tell ports apart, so in one shared store the last editor loaded overwrote the others' and
+    /// their servers answered "Forbidden". vscode.dev (the Remote Tunnel) uses the shared store,
+    /// so one GitHub or Microsoft sign-in serves every tunnel editor.
     @discardableResult
-    func makeBrowser() -> TunnelBrowser {
-        if let browser { return browser }
-        let browser = TunnelBrowser()
+    func makeBrowser(for url: URL) -> TunnelBrowser {
+        let isolated = Self.isLoopback(url)
+        if let browser, browserIsIsolated == isolated { return browser }
+        if browser != nil { tearDown() }
+        let store = isolated
+            ? WKWebsiteDataStore(forIdentifier: WKWebsiteDataStore.stableIdentifier("unnamed-editor:\(member.hostId):\(member.folder)"))
+            : .default()
+        browserIsIsolated = isolated
+        let browser = TunnelBrowser(dataStore: store)
         browser.onLoad = { [weak self] in self?.workbenchLoaded() }
         browser.onFail = { [weak self] reason in self?.pageFailed(reason) }
         watchTouches(browser.webView)
@@ -111,7 +128,7 @@ final class EditorPane: Identifiable {
         if phase == .installing { installedThisRun = true }
         if let url = phase.url, url != loadedURL {
             loadedURL = url
-            makeBrowser().load(url)
+            makeBrowser(for: url).load(url)
         }
         if phase.url == nil { isWorkbenchVisible = false }
     }
@@ -121,7 +138,7 @@ final class EditorPane: Identifiable {
     func load(pending url: URL) {
         guard url != loadedPending else { return }
         loadedPending = url
-        makeBrowser().load(url)
+        makeBrowser(for: url).load(url)
     }
 
     /// Starts over on another path (the Remote Tunnel): the next address loads afresh.
@@ -167,7 +184,7 @@ final class EditorPane: Identifiable {
         onScreen += 1
         hiddenSince = nil
         if isSuspended, browser == nil, let url = resumeURL ?? loadedURL {
-            makeBrowser().load(url)
+            makeBrowser(for: url).load(url)
         }
     }
 
