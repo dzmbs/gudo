@@ -396,6 +396,7 @@ private struct DetailColumn: View {
     private var subtitle: String {
         if let mixed = model.activeMixed {
             let hosts = mixed.hosts.map(model.groupName).joined(separator: " + ")
+            if mixed.isBrowserOnly { return hosts.isEmpty ? "Browser" : "Browser · \(hosts)" }
             return mixed.isEditorOnly ? "VS Code · \(hosts)" : hosts
         }
         guard let tab = workspace.session.activeTab else { return "" }

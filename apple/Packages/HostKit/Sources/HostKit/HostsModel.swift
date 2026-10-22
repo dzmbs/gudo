@@ -78,6 +78,8 @@ public final class HostsModel {
     @ObservationIgnored var joinDialer: DaemonDialer?
     /// Knocks with a knock invite (`knockInvite`); tests replace it.
     @ObservationIgnored var knocker: Knocker?
+    /// A URL a host's pane opened, or a browser tool its agent called (the host's id).
+    @ObservationIgnored public var onBrowserPush: ((String, BrowserPush) -> Void)?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
     public init(secrets: any SecretStore, repository: HostRepository, configuration: Configuration = .init()) {
@@ -182,6 +184,7 @@ public final class HostsModel {
             dialer: record.isGuest ? try guestDialer() : try daemonDialer())
         connection.onAttached = { [weak self] session in self?.update(record.id) { $0.sessionId = session } }
         connection.onDaemonInfo = { [weak self] info in self?.daemonReported(record.id, info) }
+        connection.browser.onPush = { [weak self] push in self?.onBrowserPush?(record.id, push) }
         connections[record.id] = connection
         do {
             try connection.connect()

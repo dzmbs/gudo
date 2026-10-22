@@ -96,6 +96,27 @@ nonisolated final class DevServerProxyTests: XCTestCase {
         XCTAssertTrue(still.contains("server=mine"), "the other listener keeps its port")
     }
 
+    /// A sign-in's callback port: served for the host while the sign-in lasts, its requests
+    /// heard (the callback arriving), then closed.
+    func testSignInPortIsObservedAndReleased() async throws {
+        let host = try await TestDevServer.start(name: "H")
+        defer { host.stop() }
+        let router = LoopbackRouter()
+        defer { router.stop() }
+        let port: UInt16 = 48_324
+        let heard = Locked<[String]>([])
+        try await router.claim(port: port, token: "signin", forward: { _ in host.port }) { target in
+            heard.mutate { $0.append(target) }
+        }
+        let reply = try await RawClient.get(port: port, path: "/whoami?code=abc&state=s", cookie: nil)
+        XCTAssertTrue(reply.hasPrefix("HTTP/1.1 200"), "the host answered: \(reply)")
+        XCTAssertEqual(heard.value, ["/whoami?code=abc&state=s"])
+        router.release(port: port, token: "signin")
+        XCTAssertEqual(router.ports, [])
+        XCTAssertEqual(LoopbackRouter.requestTarget(in: Data("GET /a?b=c HTTP/1.1\r\nHost: x\r\n\r\n".utf8)), "/a?b=c")
+        XCTAssertNil(LoopbackRouter.requestTarget(in: Data([0x16, 3, 1, 0, 1])))
+    }
+
     func testRouterHeadParsing() {
         XCTAssertFalse(LoopbackRouter.headIsComplete(Data("GET / HTTP/1.1\r\nHost: x\r\n".utf8)))
         XCTAssertTrue(LoopbackRouter.headIsComplete(Data("GET / HTTP/1.1\r\nHost: x\r\n\r\n".utf8)))

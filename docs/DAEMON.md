@@ -1883,6 +1883,48 @@ call `$SUDO_ASKPASS`/`$SSH_ASKPASS` get the app's answer (or fail on Cancel), th
 fallback reads with echo off, and interactive zsh's `sudo` becomes `sudo -A` only while an app
 can answer (`-S` left alone). Goldens: `proto/tests/golden_askpass.rs`.
 
+### 9.1 The app's browser (`proto::browser`)
+
+Panes get `BROWSER=<state>/browser/un-open`, a script running `un-hook open-url "$@"`. The shim
+sends a `BrowserCall` (`{"browser":{"open":{"url":…}}}`) on the hook socket; the daemon pushes
+`ServerCtl::Browser(Open)` to one connection with `Caps::BROWSER` that shows the pane's session
+and may drive it (the one that last sized the pane, else the newest) and answers `"opened"`
+(exit 0), or `"no_app"`: the shim then runs `open` / `xdg-open` (with `BROWSER` cleared) when
+there is a display, else exits 1 so the program prints its URL. Only `http(s)` URLs pass.
+
+This is how `claude /login` works from a phone: Claude Code hands `BROWSER` the URL whose
+`redirect_uri` is its callback server on the host's `127.0.0.1:<random>`. The app sees that
+redirect, serves this device's `localhost:<port>` through a forward to the host's for the
+sign-in's length (`LoopbackRouter.claim`), and opens the URL in the system sign-in sheet
+(`ASWebAuthenticationSession`, ephemeral: Google refuses embedded web views). The sheet closes
+once the callback passed, or once the program stops listening (probed through the forward).
+`codex login` prints a URL of the same kind (port 1455); tapping it does the same. Claude's
+printed URL (`redirect_uri=https://platform.claude.com/oauth/code/callback`) opens in the in-app
+browser, which types `code#state` into the pane when the provider's page is reached.
+
+Agent CLIs' own listeners (`claude`, `codex` by name) are left out of port detection: their
+`/` is an empty 404 and they are not dev servers.
+
+Browser tools: `{"browser":{"tool":{"name":…,"args":{…}}}}` is pushed as
+`ServerCtl::Browser(Call)` to the same connection and held until `ClientCtl::BrowserResult`,
+120 s, the caller hanging up (`CallClosed` pushed) or the connection leaving. Daemons offering
+this say `DaemonFeatures::BROWSER`.
+
+The callers are `un-hook mcp` (tools `browser_navigate`, `browser_snapshot`, `browser_find`,
+`browser_get_text`, `browser_click`, `browser_double_click`, `browser_hover`, `browser_type`,
+`browser_fill`, `browser_press`, `browser_scroll`, `browser_scroll_to`, `browser_wait`,
+`browser_screenshot`, `browser_zoom`, `browser_tabs`, `browser_console`, `browser_network`;
+read-only ones carry `readOnlyHint`) and `un-hook browser <verb> [json | key=value …]` for
+shells (Codex, scripts). Semantics follow Anthropic's browser toolset: `role "name" [ref_N]`
+snapshots, targets `{"type":"ref","ref":…}` or `{"type":"coordinate","x","y"}` in screenshot
+pixels, a stale ref is an error asking for a new snapshot, actions answer with what changed.
+The app answers JSON `{"text", "image"?: {"data", "mimeType"}}`; `save_to_file` writes a long
+snapshot to a file on the host. The app runs them on the browser leaf beside the agent's pane
+(opened by the first navigate): the user sees each step (cursor and highlight), can take over,
+and approves purchases and form submits on sign-in or payment pages, or types passwords
+themselves; the call waits meanwhile. `crates/agents/skills/browser/SKILL.md` teaches agents
+the tools.
+
 ## 10. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last

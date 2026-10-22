@@ -1,5 +1,6 @@
 //! The real MCP server (`un-hook mcp`) against a daemon in this process: an agent's MCP client
-//! initializes, lists the tools, and pulls the session's drawing as an image and as text.
+//! initializes, lists the tools, and pulls the session's drawing as an image and as text; a
+//! browser tool call reaches the app showing the pane and its answer comes back as content.
 
 #[allow(dead_code)]
 #[path = "../../daemon/tests/it/support.rs"]
@@ -10,8 +11,8 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use client_core::ClientConfig;
 use client_core::proto::{
-    ArtifactCreate, ArtifactKind, CoordSpace, DrawOp, Element, ElementId, ElementKind, Pt,
-    ShapeKind, Style,
+    ArtifactCreate, ArtifactKind, BrowserPush, CoordSpace, DrawOp, Element, ElementId, ElementKind,
+    Pt, ShapeKind, Style,
 };
 use serde_json::{Value, json};
 
@@ -120,7 +121,7 @@ async fn agents_read_the_sessions_drawings_over_mcp() {
     assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
     server.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
     let tools = server.request("tools/list", json!({}));
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 2);
+    assert!(tools["result"]["tools"].as_array().unwrap().len() > 2);
 
     let list = server.tool("list_drawings", json!({}));
     let text = list["content"][0]["text"].as_str().unwrap();
@@ -156,5 +157,48 @@ async fn agents_read_the_sessions_drawings_over_mcp() {
     drop((server.stdin, stray.stdin));
     assert!(server.child.wait().unwrap().success());
     assert!(stray.child.wait().unwrap().success());
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_tools_reach_the_app_showing_the_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut app = TestClient::connect_browser(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = app.attach_and_follow().await.0.to_string();
+    let state = dir.path().to_str().unwrap().to_owned();
+    let call = tokio::task::spawn_blocking(move || {
+        let mut server = Server::spawn(&["mcp", "--state", &state, "--pane", &pane]);
+        server.request(
+            "initialize",
+            json!({ "protocolVersion": "2025-11-25", "capabilities": {} }),
+        );
+        let snapshot = server.tool("browser_snapshot", json!({ "filter": "interactive" }));
+        let missing = server.tool("browser_click", json!({}));
+        drop(server.stdin);
+        (snapshot, missing)
+    });
+    app.until("the call", |c| !c.browser.is_empty()).await;
+    let BrowserPush::Call { id, tool, args, .. } = app.browser[0].clone() else {
+        panic!("not a call: {:?}", app.browser[0]);
+    };
+    assert_eq!(tool, "browser_snapshot");
+    assert_eq!(
+        serde_json::from_str::<Value>(&args).unwrap()["filter"],
+        "interactive"
+    );
+    app.client.answer_browser_call(
+        id,
+        Ok(json!({ "text": "button \"Sign in\" [ref_1]", "image": { "data": "AAAA", "mimeType": "image/jpeg" } }).to_string()),
+    );
+    let (snapshot, missing) = call.await.unwrap();
+    assert_eq!(
+        snapshot["content"][0]["text"], "button \"Sign in\" [ref_1]",
+        "{snapshot}"
+    );
+    assert_eq!(snapshot["content"][1]["type"], "image");
+    // Bad arguments never reach the app.
+    assert_eq!(missing["isError"], true);
+    assert_eq!(app.browser.len(), 1);
     daemon.shutdown().await;
 }

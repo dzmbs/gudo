@@ -73,6 +73,43 @@ final class DevServerRouting {
         return url
     }
 
+    /// The host's data store, its proxy running (a browser leaf on the host's dev servers).
+    func store(forHost id: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async -> WKWebsiteDataStore? {
+        guard isEnabled else { return nil }
+        return await route(id, client: client)?.store
+    }
+
+    /// Before a page on the host's `localhost:<port>` (or `127.0.0.1`) loads: this device's
+    /// port serves the host's, as for a dev server opened from the ports list.
+    func prepareLoopback(_ url: URL, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async {
+        guard let host = url.host(), DevServerNames.isLoopbackLiteral(host), let port = url.port.flatMap(UInt16.init(exactly:)),
+              !router.ports.contains(port)
+        else { return }
+        _ = await page(
+            for: DetectedPort(port: port, process: "", url: url.absoluteString, isHTTP: true, loopbackOnly: true, pane: nil),
+            hostId: hostId, client: client)
+    }
+
+    /// Serves this device's `localhost:<port>` for the host while a sign-in waits for its
+    /// callback there (`HostSignIn`); `onRequest` hears each request's target. Returns the
+    /// claim's token for `releaseSignIn`. Throws when the port is taken here.
+    func claimSignIn(
+        port: UInt16, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI,
+        onRequest: @escaping @Sendable (String) -> Void
+    ) async throws -> String {
+        guard await route(hostId, client: client) != nil else { throw HostError.notConnected }
+        let token = "signin-" + UUID().uuidString.lowercased()
+        try await router.claim(port: port, token: token, forward: { [weak self] hostPort in
+            guard let self else { throw HostError.notConnected }
+            return try await self.forward(hostId, hostPort)
+        }, onRequest: onRequest)
+        return token
+    }
+
+    func releaseSignIn(port: UInt16, token: String) {
+        router.release(port: port, token: token)
+    }
+
     /// Loopback names WebKit sends through `proxyConfigurations` (checked 2026-10-21): on iOS 27
     /// `localhost` (not `127.0.0.1` or `[::1]`); on macOS 26 none. `*.localhost` always is.
     nonisolated static func webKitProxies(_ host: String) -> Bool {

@@ -1808,6 +1808,7 @@ name = "hostd"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "brand",
  "clap",
  "client-core",
@@ -1816,6 +1817,7 @@ dependencies = [
  "proto",
  "qrcode",
  "rustix",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

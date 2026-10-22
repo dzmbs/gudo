@@ -437,6 +437,36 @@ async fn detects_listening_ports_and_printed_urls_per_pane() {
     );
     assert!(!info.process.is_empty());
 
+    // An agent CLI's own listener (its sign-in callback) is never offered. Perl renames
+    // itself as Node does for `process.title`.
+    let port3 = free_port();
+    c.op(LayoutOp::Split {
+        pane_id: pane,
+        axis: Axis::Vertical,
+        launch: PaneLaunch::Command {
+            argv: vec![
+                "perl".into(),
+                "-MIO::Socket::INET".into(),
+                "-e".into(),
+                "$0 = 'claude'; my $s = IO::Socket::INET->new(LocalAddr => '127.0.0.1', \
+                 LocalPort => shift, Listen => 5, ReuseAddr => 1) or die; \
+                 while (my $c = $s->accept) { print $c \"HTTP/1.1 404 Not Found\\r\\n\
+                 Content-Length: 0\\r\\n\\r\\n\"; close $c }"
+                    .into(),
+                port3.to_string(),
+            ],
+            cwd: None,
+        },
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while std::net::TcpStream::connect(("127.0.0.1", port3)).is_err() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the agent's listener is up");
+
     // A server nobody printed a URL for is probed.
     let port2 = free_port();
     let OpOutcome::PaneCreated { pane_id: pane2 } = c
@@ -473,6 +503,7 @@ async fn detects_listening_ports_and_printed_urls_per_pane() {
     assert!(!info.loopback_only, "bound to all interfaces");
     assert_eq!(info.kind, PortKind::Http);
     assert_eq!(info.url, None);
+    assert!(!ports.iter().any(|p| p.port == port3), "{ports:?}");
 
     // Closing the pane removes its port.
     c.op(LayoutOp::ClosePane { pane_id: pane2 }).await;

@@ -21,10 +21,13 @@ protocol PaneTree {
     var namesHosts: Bool { get }
     /// The VS Code editor a leaf shows, when it is an editor leaf (§20).
     func editor(_ leaf: PaneId) -> EditorMember?
+    /// The page a leaf shows, when it is a browser leaf.
+    func browser(_ leaf: PaneId) -> BrowserMember?
 }
 
 extension PaneTree {
     func editor(_ leaf: PaneId) -> EditorMember? { nil }
+    func browser(_ leaf: PaneId) -> BrowserMember? { nil }
 }
 
 /// A host's tab: the window's active one, or (Two Columns) another tab of the same window.
@@ -210,6 +213,8 @@ private struct PaneLeaf: View {
     var body: some View {
         if let editor = tree.editor(leaf) {
             EditorLeafView(member: editor, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
+        } else if let browser = tree.browser(leaf) {
+            BrowserLeafView(member: browser, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
         } else if let (workspace, pane) = tree.resolve(leaf) {
             PaneSlot(
                 id: pane, workspace: workspace, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf,

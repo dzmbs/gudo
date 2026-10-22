@@ -835,3 +835,32 @@ suspension only off screen and past the limit, reload on show; placement, severa
 was typed and their load count, ⌘P reaching VS Code and ⌘2 the app, an editor beside the terminal,
 ⌃⌘\` then ⌘K reaching the app, relaunch restoring and lazily loading both tabs, closing; suspension after 3 s
 reloading the page), and the existing `W3UITests` editor tests.
+
+## 21. Browser panes and the agents' browser (DAEMON.md §9.1)
+
+A browser page is a leaf of a window-owned tab, as an editor is (§20): `CompositeTab.browsers`
+(`BrowserMember`: id, the host whose `localhost` it reaches, the URL it is on, kept as it
+navigates and restored after a relaunch), a tab of its own (sidebar "Browser") or beside a
+terminal. `BrowserPanes` keeps one `BrowserPane` (a `WebPage`) per leaf across tab switches; a
+host's page uses that host's data store and claims this device's loopback port before a
+`localhost:<port>` navigation (`DevServerRouting.prepareLoopback`). Opened from the palette (New
+Browser Tab, Open Browser Beside), from the browser sheet (Open as Tab), and by the host: a URL a
+pane opens through `BROWSER` comes up beside that pane (`openFromHost`), a sign-in in the system
+sign-in sheet instead (`HostSignIn`).
+
+Agents' browser tools (`BrowserAgent`) act on the page beside the agent's pane, the first
+`browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`): one in an
+isolated content world (snapshots with `ref_N` refs, actions as pointer and key events and
+form values, the agent's cursor and a highlight shown before each action, labels for annotated
+screenshots, picking an element for Point Out to Agent), one in the page's world recording
+console messages and fetch/XHR requests. Clicks that buy, pay or send, and submits of sign-in or
+payment forms, wait for Allow on the page (or in the agent's own client when it supports MCP
+elicitation); typing into password or card fields is left to the user (Done). Take Over stops
+the agent's calls until Hand Back. Screenshots are the visible page at most 1280 px wide; their
+pixels are the coordinates targets use.
+
+Tests: `BrowserLeafTests` (PaneLayout), `BrowserTests` (sign-in URLs), `BrowserAgentScriptTests`
+(the page script on a fixture page: refs, deltas, stale refs, secrets, what waits for the user),
+`BrowserUITests` (iPad, `UI_TEST_CLASS=BrowserUITests apple/scripts/w3-ui-test.sh`: a sign-in
+through `BROWSER`, a host page in a pane beside its terminal surviving a relaunch, an agent
+driving a page with an approval on the device).

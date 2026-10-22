@@ -1,5 +1,6 @@
 //! `un-hook mcp`: a stdio MCP server through which an agent reads the drawings of its terminal
-//! session (docs/DAEMON.md §7.12).
+//! session (docs/DAEMON.md §7.12) and uses the browser pane beside its terminal in the app
+//! (`browser_tools`).
 //!
 //! JSON-RPC 2.0, one message per line. Each tool call becomes one [`PullCall`] on the daemon's
 //! hook socket. The socket comes from `<state>/hook.endpoint` and the token from
@@ -7,16 +8,36 @@
 //! environment (`UN_ENDPOINT_FILE` / `UN_SOCK`, `UN_TOKEN`) is used, then the default state
 //! directory. The pane is `--pane`, else `UN_PANE_ID`.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use daemon::{PULL_FORMATS, PULL_VERSION, PullCall, PullExport, PullOp, PullReply, PullSummary};
+use daemon::{
+    BROWSER_VERSION, BrowserAsk, BrowserCall, BrowserReply, PULL_FORMATS, PULL_VERSION, PullCall,
+    PullExport, PullOp, PullReply, PullSummary,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+/// What the server offers. The first paragraph stands on its own (clients may cut the rest).
+const INSTRUCTIONS: &str =
+    "This terminal runs inside an app the user watches on their iPad, iPhone or Mac. \
+browser_* tools drive a real browser pane shown beside this terminal there: the user sees every \
+step and can take over. Pages reach this host's localhost as the host does. Read pages with \
+browser_snapshot (refs like ref_3) rather than screenshots; act with targets \
+{\"type\":\"ref\",\"ref\":\"ref_3\"}.
+
+After each action the answer says what changed on the page. A stale ref means the page moved \
+on: snapshot again. Sign-ins, passwords, payments and purchases are left to the user on the \
+device: the tool waits while they act, then answers. list_drawings and get_drawing read the \
+drawings, sketches and images the user made in this terminal session; with no id, get_drawing \
+returns the most recent.";
+
 /// MCP protocol revisions this server speaks; the last is the default.
-const PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
+const PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
 /// How long one daemon call may take (a PNG may need rasterising).
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -30,6 +51,83 @@ pub trait Backend {
     /// Fails when the daemon cannot be reached or answers garbage; refusals arrive as
     /// [`PullReply::Error`].
     fn pull(&mut self, op: PullOp) -> io::Result<PullReply>;
+
+    /// Runs one browser call (a URL to open, a tool).
+    ///
+    /// # Errors
+    ///
+    /// As [`Backend::pull`]; refusals arrive as [`BrowserReply::Error`].
+    fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply>;
+}
+
+/// What the server remembers of its client: whether it takes `elicitation/create` requests
+/// (2025-06-18 to 2025-11-25), and the tool calls waiting for an answer to an
+/// `input_required` result (later revisions), by `requestState`.
+#[derive(Default)]
+pub struct Session {
+    elicits: bool,
+    waiting: HashMap<String, (String, Value)>,
+    next: u64,
+}
+
+/// The client end of the connection, for requests to it in the middle of a call.
+pub trait Peer {
+    /// Sends a request and waits for its answer (`None`: no answer).
+    fn request(&mut self, method: &str, params: Value) -> Option<Value>;
+}
+
+/// No client to ask.
+#[cfg(test)]
+pub struct NoPeer;
+
+#[cfg(test)]
+impl Peer for NoPeer {
+    fn request(&mut self, _: &str, _: Value) -> Option<Value> {
+        None
+    }
+}
+
+/// stdin and stdout.
+struct Stdio<'a> {
+    lines: io::Lines<io::StdinLock<'a>>,
+    stdout: io::StdoutLock<'a>,
+    next: u64,
+}
+
+impl Stdio<'_> {
+    fn write(&mut self, msg: &Value) -> io::Result<()> {
+        let mut out = msg.to_string();
+        out.push('\n');
+        self.stdout.write_all(out.as_bytes())?;
+        self.stdout.flush()
+    }
+}
+
+impl Peer for Stdio<'_> {
+    fn request(&mut self, method: &str, params: Value) -> Option<Value> {
+        self.next += 1;
+        let id = format!("{}-{}", brand::CLI_BIN, self.next);
+        self.write(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .ok()?;
+        // Pings are answered meanwhile; anything else waits its turn as busy.
+        while let Some(Ok(line)) = self.lines.next() {
+            let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if msg.get("id") == Some(&json!(id)) {
+                return msg.get("result").cloned();
+            }
+            if let (Some(method), Some(other)) = (msg["method"].as_str(), msg.get("id")) {
+                let reply = if method == "ping" {
+                    json!({ "jsonrpc": "2.0", "id": other, "result": {} })
+                } else {
+                    error(other.clone(), -32000, "busy: waiting for the user")
+                };
+                self.write(&reply).ok()?;
+            }
+        }
+        None
+    }
 }
 
 /// Runs the server with the arguments after `mcp`; returns the exit status.
@@ -45,31 +143,31 @@ pub fn main(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let stdin = io::stdin().lock();
-    let mut stdout = io::stdout().lock();
-    for line in stdin.lines() {
-        let Ok(line) = line else {
-            break;
-        };
+    let mut io = Stdio {
+        lines: io::stdin().lock().lines(),
+        stdout: io::stdout().lock(),
+        next: 0,
+    };
+    let mut session = Session::default();
+    while let Some(Ok(line)) = io.lines.next() {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = handle_line(&line, &mut backend) {
-            let mut out = reply.to_string();
-            out.push('\n');
-            if stdout
-                .write_all(out.as_bytes())
-                .and_then(|()| stdout.flush())
-                .is_err()
-            {
-                break;
-            }
+        let reply = match serde_json::from_str::<Value>(&line) {
+            Ok(msg) => handle_in(&msg, &mut backend, &mut session, &mut io),
+            Err(_) => Some(error(Value::Null, -32700, "Parse error")),
+        };
+        if let Some(reply) = reply
+            && io.write(&reply).is_err()
+        {
+            break;
         }
     }
     0
 }
 
 /// Answers one line of input; `None` for notifications and responses.
+#[cfg(test)]
 pub fn handle_line(line: &str, backend: &mut dyn Backend) -> Option<Value> {
     match serde_json::from_str::<Value>(line) {
         Ok(msg) => handle(&msg, backend),
@@ -77,8 +175,20 @@ pub fn handle_line(line: &str, backend: &mut dyn Backend) -> Option<Value> {
     }
 }
 
-/// Answers one JSON-RPC message; `None` for notifications and responses.
+/// Answers one JSON-RPC message without a client to ask; `None` for notifications and
+/// responses.
+#[cfg(test)]
 pub fn handle(msg: &Value, backend: &mut dyn Backend) -> Option<Value> {
+    handle_in(msg, backend, &mut Session::default(), &mut NoPeer)
+}
+
+/// Answers one JSON-RPC message of `session`'s client.
+pub fn handle_in(
+    msg: &Value,
+    backend: &mut dyn Backend,
+    session: &mut Session,
+    peer: &mut dyn Peer,
+) -> Option<Value> {
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
         // A response to us (we send no requests) is dropped; anything else is malformed.
         let is_response = msg.get("result").is_some() || msg.get("error").is_some();
@@ -90,20 +200,97 @@ pub fn handle(msg: &Value, backend: &mut dyn Backend) -> Option<Value> {
     let id = msg.get("id")?.clone();
     let params = msg.get("params").unwrap_or(&Value::Null);
     let result = match method {
-        "initialize" => initialize(params),
+        "initialize" => {
+            session.elicits = params.pointer("/capabilities/elicitation").is_some();
+            initialize(params)
+        }
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tools() }),
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").unwrap_or(&Value::Null);
-            match call_tool(name, args, backend) {
-                Some(result) => result,
-                None => return Some(error(id, -32602, &format!("Unknown tool: {name}"))),
+            if crate::browser_tools::is_tool(name) {
+                browser_call(name, args, params, backend, session, peer)
+            } else {
+                match call_tool(name, args, backend) {
+                    Some(result) => result,
+                    None => return Some(error(id, -32602, &format!("Unknown tool: {name}"))),
+                }
             }
         }
         _ => return Some(error(id, -32601, "Method not found")),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// A browser tool call. A step that needs approval is asked in the agent's client when it
+/// can: an `input_required` result for clients that send their capabilities per request
+/// (answered by retrying with `inputResponses` and the `requestState`), an
+/// `elicitation/create` request otherwise; else on the device.
+fn browser_call(
+    name: &str,
+    args: &Value,
+    params: &Value,
+    backend: &mut dyn Backend,
+    session: &mut Session,
+    peer: &mut dyn Peer,
+) -> Value {
+    use crate::browser_tools::{Approval, call_with};
+    if let Some(state) = params.get("requestState").and_then(Value::as_str) {
+        let Some((tool, mut args)) = session.waiting.remove(state) else {
+            return tool_error("That approval expired: call the tool again.");
+        };
+        let allowed = params.pointer("/inputResponses/approve/action") == Some(&json!("accept"))
+            && params.pointer("/inputResponses/approve/content/allow") == Some(&json!(true));
+        if !allowed {
+            return tool_error("The user declined.");
+        }
+        args["approved"] = json!(true);
+        return call_with(&tool, &args, backend, None);
+    }
+    let per_request = params
+        .pointer("/_meta/io.modelcontextprotocol~1clientCapabilities/elicitation")
+        .is_some();
+    let form = |message: &str| {
+        json!({
+            "mode": "form",
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": { "allow": { "type": "boolean", "title": "Allow", "default": false } },
+                "required": ["allow"],
+            },
+        })
+    };
+    let mut ask = |message: &str, args: &Value| {
+        if per_request {
+            session.next += 1;
+            let state = format!("approval-{}-{}", std::process::id(), session.next);
+            session
+                .waiting
+                .insert(state.clone(), (name.to_owned(), args.clone()));
+            return Approval::Pending(json!({
+                "resultType": "input_required",
+                "inputRequests": { "approve": { "method": "elicitation/create", "params": form(message) } },
+                "requestState": state,
+            }));
+        }
+        match peer.request("elicitation/create", form(message)) {
+            Some(answer)
+                if answer["action"] == "accept" && answer["content"]["allow"] == json!(true) =>
+            {
+                Approval::Allow
+            }
+            Some(_) => Approval::Deny,
+            None => Approval::Deny,
+        }
+    };
+    let args = crate::browser_tools::own(args);
+    if per_request || session.elicits {
+        call_with(name, &args, backend, Some(&mut ask))
+    } else {
+        call_with(name, &args, backend, None)
+    }
 }
 
 fn error(id: Value, code: i32, message: &str) -> Value {
@@ -122,16 +309,14 @@ fn initialize(params: &Value) -> Value {
             "name": format!("{}-drawings", brand::PRODUCT_NAME),
             "version": env!("CARGO_PKG_VERSION"),
         },
-        "instructions": "Drawings, sketches and images the user made in this terminal session. \
-            Call list_drawings to see them and get_drawing to look at one; with no id, \
-            get_drawing returns the most recent drawing.",
+        "instructions": INSTRUCTIONS,
     })
 }
 
 fn tools() -> Value {
     let formats: Vec<&str> = PULL_FORMATS.iter().map(|f| f.name).collect();
     let read_only = json!({ "readOnlyHint": true, "openWorldHint": false });
-    json!([
+    let mut tools = json!([
         {
             "name": "list_drawings",
             "description": "List the drawings, sketches and images the user made in this \
@@ -155,7 +340,11 @@ fn tools() -> Value {
             },
             "annotations": read_only,
         },
-    ])
+    ]);
+    if let Some(list) = tools.as_array_mut() {
+        list.extend(crate::browser_tools::tools());
+    }
+    tools
 }
 
 /// Runs tool `name`; `None` if there is no such tool.
@@ -163,6 +352,9 @@ fn call_tool(name: &str, args: &Value, backend: &mut dyn Backend) -> Option<Valu
     let op = match name {
         "list_drawings" => Ok(PullOp::List),
         "get_drawing" => get_op(args),
+        _ if crate::browser_tools::is_tool(name) => {
+            return Some(crate::browser_tools::call(name, args, backend));
+        }
         _ => return None,
     };
     let result = op.and_then(|op| {
@@ -372,6 +564,31 @@ impl SocketBackend {
     }
 }
 
+impl SocketBackend {
+    /// Sends one JSON line and reads the one-line answer.
+    fn exchange<R: DeserializeOwned>(
+        &self,
+        call: &impl Serialize,
+        timeout: Duration,
+    ) -> io::Result<R> {
+        let mut stream = UnixStream::connect(self.socket()?)?;
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+        let mut line = serde_json::to_vec(call)?;
+        line.push(b'\n');
+        stream.write_all(&line)?;
+        let mut answer = String::new();
+        BufReader::new(stream).read_line(&mut answer)?;
+        if answer.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the daemon closed the connection (too old for this call?)",
+            ));
+        }
+        Ok(serde_json::from_str(&answer)?)
+    }
+}
+
 impl Backend for SocketBackend {
     fn pull(&mut self, op: PullOp) -> io::Result<PullReply> {
         let call = PullCall {
@@ -380,21 +597,17 @@ impl Backend for SocketBackend {
             pane: self.pane.clone(),
             pull: op,
         };
-        let mut stream = UnixStream::connect(self.socket()?)?;
-        stream.set_read_timeout(Some(CALL_TIMEOUT))?;
-        stream.set_write_timeout(Some(CALL_TIMEOUT))?;
-        let mut line = serde_json::to_vec(&call)?;
-        line.push(b'\n');
-        stream.write_all(&line)?;
-        let mut answer = String::new();
-        BufReader::new(stream).read_line(&mut answer)?;
-        if answer.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "the daemon closed the connection (too old for the pull channel?)",
-            ));
-        }
-        Ok(serde_json::from_str(&answer)?)
+        self.exchange(&call, CALL_TIMEOUT)
+    }
+
+    fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply> {
+        let call = BrowserCall {
+            v: BROWSER_VERSION,
+            token: self.token()?,
+            pane: self.pane.clone(),
+            browser: ask,
+        };
+        self.exchange(&call, daemon::BROWSER_CALL_TIMEOUT + Duration::from_secs(5))
     }
 }
 
@@ -407,6 +620,8 @@ mod tests {
     struct Fake {
         asked: Vec<PullOp>,
         reply: Option<PullReply>,
+        browser_asked: Vec<Value>,
+        browser_replies: Vec<BrowserReply>,
     }
 
     impl Backend for Fake {
@@ -416,6 +631,92 @@ mod tests {
                 .clone()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no socket"))
         }
+
+        fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply> {
+            if let BrowserAsk::Tool { args, .. } = ask {
+                self.browser_asked.push(args);
+            }
+            if self.browser_replies.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "no socket"));
+            }
+            Ok(self.browser_replies.remove(0))
+        }
+    }
+
+    /// A client that answers elicitations with `allow`.
+    struct Asks(Option<bool>, Vec<Value>);
+
+    impl Peer for Asks {
+        fn request(&mut self, method: &str, params: Value) -> Option<Value> {
+            assert_eq!(method, "elicitation/create");
+            self.1.push(params);
+            self.0
+                .map(|allow| json!({ "action": "accept", "content": { "allow": allow } }))
+        }
+    }
+
+    fn approval_then_done() -> Vec<BrowserReply> {
+        vec![
+            BrowserReply::Result(
+                json!({ "text": "", "approval": { "message": "Press “Pay now”?" } }).to_string(),
+            ),
+            BrowserReply::Result(json!({ "text": "Done." }).to_string()),
+        ]
+    }
+
+    #[test]
+    fn approvals_go_to_a_client_that_elicits() {
+        let mut fake = Fake {
+            browser_replies: approval_then_done(),
+            ..Fake::default()
+        };
+        let mut session = Session::default();
+        let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-11-25", "capabilities": { "elicitation": {} } } });
+        handle_in(&init, &mut fake, &mut session, &mut NoPeer);
+        let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "browser_click", "arguments": { "target": { "type": "ref", "ref": "ref_2" } } } });
+        let mut client = Asks(Some(true), vec![]);
+        let r = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
+        assert_eq!(r["result"]["content"][0]["text"], "Done.");
+        assert_eq!(client.1[0]["message"], "Press “Pay now”?");
+        assert_eq!(fake.browser_asked[0]["approval_by"], "client");
+        assert_eq!(fake.browser_asked[1]["approved"], true);
+
+        // Declined: the step does not run.
+        fake.browser_replies = approval_then_done();
+        let mut client = Asks(Some(false), vec![]);
+        let r = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert_eq!(fake.browser_asked.len(), 3);
+    }
+
+    #[test]
+    fn approvals_come_back_as_input_required_for_per_request_clients() {
+        let mut fake = Fake {
+            browser_replies: approval_then_done(),
+            ..Fake::default()
+        };
+        let mut session = Session::default();
+        let meta = json!({ "io.modelcontextprotocol/clientCapabilities": { "elicitation": { "form": {} } } });
+        let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "browser_click", "arguments": { "target": { "type": "ref", "ref": "ref_2" } }, "_meta": meta } });
+        let r = handle_in(&call, &mut fake, &mut session, &mut NoPeer).unwrap();
+        assert_eq!(r["result"]["resultType"], "input_required");
+        assert_eq!(
+            r["result"]["inputRequests"]["approve"]["method"],
+            "elicitation/create"
+        );
+        let state = r["result"]["requestState"].clone();
+        let retry = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "browser_click", "arguments": { "target": { "type": "ref", "ref": "ref_2" } }, "_meta": meta,
+                "requestState": state, "inputResponses": { "approve": { "action": "accept", "content": { "allow": true } } } } });
+        let r = handle_in(&retry, &mut fake, &mut session, &mut NoPeer).unwrap();
+        assert_eq!(r["result"]["content"][0]["text"], "Done.");
+        assert_eq!(fake.browser_asked[1]["approved"], true);
+        // A state is used once.
+        let r = handle_in(&retry, &mut fake, &mut session, &mut NoPeer).unwrap();
+        assert_eq!(r["result"]["isError"], true);
     }
 
     fn rpc(fake: &mut Fake, method: &str, params: Value) -> Value {
@@ -456,7 +757,7 @@ mod tests {
             "initialize",
             json!({ "protocolVersion": "2099-01-01" }),
         );
-        assert_eq!(r["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(r["result"]["protocolVersion"], "2025-11-25");
     }
 
     #[test]
@@ -484,7 +785,8 @@ mod tests {
         let r = rpc(&mut Fake::default(), "tools/list", Value::Null);
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_drawings", "get_drawing"]);
+        assert_eq!(names[..2], ["list_drawings", "get_drawing"]);
+        assert!(names.contains(&"browser_snapshot"));
         let format = &tools[1]["inputSchema"]["properties"]["format"];
         assert_eq!(format["enum"], json!(["png", "svg", "ascii", "excalidraw"]));
         assert_eq!(format["default"], "png");

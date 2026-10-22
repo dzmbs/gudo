@@ -301,6 +301,8 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
     private var routes: [UInt16: [String: DevServerForward]] = [:]
     private var latest: [UInt16: String] = [:]
     private var routedBy: [String: Int] = [:]
+    /// Per port: told each HTTP request's target (a sign-in waiting for its callback).
+    private var observers: [UInt16: @Sendable (String) -> Void] = [:]
 
     public init() {}
 
@@ -313,7 +315,11 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
     /// Serves `port` on this device's loopback for the host with `token`. Throws
     /// `portInUse` when something else listens on it here (the caller falls back to a forward
     /// on another port).
-    public func claim(port: UInt16, token: String, forward: @escaping DevServerForward) async throws {
+    /// `onRequest` hears the target (`/callback?code=…`) of every HTTP request on the port.
+    public func claim(
+        port: UInt16, token: String, forward: @escaping DevServerForward,
+        onRequest: (@Sendable (String) -> Void)? = nil
+    ) async throws {
         let listening = queue.sync { listeners[port] != nil }
         if !listening {
             let listener = try await listen(port)
@@ -322,6 +328,21 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
         queue.sync {
             routes[port, default: [:]][token] = forward
             latest[port] = token
+            if let onRequest { observers[port] = onRequest }
+        }
+    }
+
+    /// Stops serving `port` for `token`'s host (a sign-in is over); closed once no host uses it.
+    public func release(port: UInt16, token: String) {
+        queue.sync {
+            routes[port]?[token] = nil
+            if latest[port] == token { latest[port] = routes[port]?.keys.sorted().first }
+            if routes[port]?.isEmpty == true {
+                routes[port] = nil
+                latest[port] = nil
+                observers[port] = nil
+                listeners.removeValue(forKey: port)?.forEach { $0.cancel() }
+            }
         }
     }
 
@@ -334,6 +355,7 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
                 if routes[port]?.isEmpty == true {
                     routes[port] = nil
                     latest[port] = nil
+                    observers[port] = nil
                     listeners.removeValue(forKey: port)?.forEach { $0.cancel() }
                 }
             }
@@ -373,6 +395,7 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
         readPrefix(client, limit: 64 * 1024, enough: Self.headIsComplete) { [self] head, ended in
             let token = Self.routeToken(in: head)
             // On `queue` already (the connection's queue).
+            if let observe = observers[port], let target = Self.requestTarget(in: head) { observe(target) }
             let forward: DevServerForward? = {
                 let routes = routes[port] ?? [:]
                 if let token, let forward = routes[token] {
@@ -404,6 +427,14 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
         guard let first = data.first else { return false }
         guard (65...90).contains(first) else { return true }  // not an HTTP method: TLS etc.
         return data.range(of: Data("\r\n\r\n".utf8)) != nil
+    }
+
+    /// The target of an HTTP request head (`/callback?code=…`).
+    static func requestTarget(in head: Data) -> String? {
+        guard let end = head.range(of: Data("\r\n".utf8)) else { return nil }
+        let words = String(decoding: head[..<end.lowerBound], as: UTF8.self).split(separator: " ")
+        guard words.count == 3, words[2].hasPrefix("HTTP/") else { return nil }
+        return String(words[1])
     }
 
     /// The route cookie's value in an HTTP request head.

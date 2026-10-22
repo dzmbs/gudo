@@ -138,6 +138,12 @@ extension WindowModel {
     /// Brings the target and the host's own focus in line with the mixed tab's focused pane. An
     /// editor's host becomes the target (⌘T, Files and the toolbar act there).
     func syncMixedFocus() {
+        if let browser = activeMixed?.focusedBrowser {
+            if let host = browser.hostId, currentGroupId != host, groups.group(host) != nil {
+                show(.host(host), keepingMixedTab: true)
+            }
+            return
+        }
         if let editor = activeMixed?.focusedEditor {
             if currentGroupId != editor.hostId, groups.group(editor.hostId) != nil {
                 show(.host(editor.hostId), keepingMixedTab: true)
@@ -279,6 +285,9 @@ extension WindowModel {
     /// focused pane's title.
     func title(ofMixedTab tab: CompositeTab) -> String {
         if let title = tab.title, !title.isEmpty { return title }
+        if let browser = tab.focusedBrowser ?? (tab.isBrowserOnly ? tab.leaves.compactMap({ tab.browsers[$0] }).first : nil) {
+            return title(ofBrowser: browser)
+        }
         if let editor = tab.focusedEditor ?? (tab.isEditorOnly ? tab.leaves.compactMap({ tab.editors[$0] }).first : nil) {
             return editor.folderName
         }
@@ -294,6 +303,7 @@ extension WindowModel {
     /// The mark a window-owned tab shows: VS Code while an editor has its focus, else the
     /// focused pane's program.
     func programIdentity(ofMixedTab tab: CompositeTab) -> ProgramIdentity {
+        if tab.focusedBrowser != nil || tab.isBrowserOnly { return .browser }
         if tab.focusedEditor != nil || tab.isEditorOnly { return .vscode }
         return tab.focusedMember.map { programIdentity(ofPane: $0.pane, onGroup: $0.hostId) } ?? .shell
     }

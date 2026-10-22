@@ -5,7 +5,7 @@
 //! connected, and at once when a pane prints a new URL or a command starts or ends; nothing
 //! is scanned while no client is connected. The kind of a port is guessed from the printed
 //! URL, else from one `HEAD /` probe per (process, port) (`HTTP/` → HTTP, a TLS record →
-//! HTTPS), skipping well-known database and mail ports.
+//! HTTPS), skipping well-known database and mail ports. Agent CLIs' own listeners are left out.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -195,12 +195,24 @@ fn listeners_by_pane(panes: &[(PaneId, u32)]) -> Vec<(PaneId, procinfo::Listener
                 continue;
             }
             seen.push(listener.port);
+            if is_agent_cli(listener.pid) {
+                continue;
+            }
             let name = procinfo::process_name(listener.pid).unwrap_or_default();
             out.push((pane, listener, name));
         }
     }
     out
 }
+
+/// An agent CLI's own sockets (its sign-in callback, editor bridges) are not dev servers:
+/// their `/` is an empty 404, and a sign-in callback only works at the URL the CLI built.
+fn is_agent_cli(pid: u32) -> bool {
+    pty::ForegroundProcess::of(pid)
+        .is_some_and(|p| AGENT_CLIS.contains(&p.program()) || AGENT_CLIS.contains(&p.name.as_str()))
+}
+
+const AGENT_CLIS: &[&str] = &["claude", "codex"];
 
 /// Sends `HEAD /` and classifies the first bytes of the answer.
 async fn probe(port: u16) -> PortKind {

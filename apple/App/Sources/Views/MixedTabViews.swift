@@ -24,6 +24,8 @@ struct MixedTabTree: PaneTree {
 
     func editor(_ leaf: PaneId) -> EditorMember? { tab?.editors[leaf] }
 
+    func browser(_ leaf: PaneId) -> BrowserMember? { tab?.browsers[leaf] }
+
     func focus(leaf: PaneId) {
         model.focusLeaf(leaf, inMixedTab: id)
     }
@@ -222,8 +224,8 @@ struct MixedHostsLine: View {
 
 // MARK: - Sidebar and strip
 
-/// The window's own tabs at the top of the sidebar: VS Code tabs under "VS Code", then mixed
-/// tabs under "Mixed". Each row names its hosts.
+/// The window's own tabs at the top of the sidebar: VS Code tabs under "VS Code", browser tabs
+/// under "Browser", then mixed tabs under "Mixed". Each row names its hosts.
 struct MixedSidebarSection: View {
     let numbers: [TabRef: Int]
     @Environment(WindowModel.self) private var model
@@ -231,7 +233,8 @@ struct MixedSidebarSection: View {
     var body: some View {
         let ordered = model.composites.ordered
         section(ordered.filter(\.isEditorOnly), title: "VS Code", systemImage: "chevron.left.forwardslash.chevron.right", id: "host-group-editors")
-        section(ordered.filter { !$0.isEditorOnly }, title: "Mixed", systemImage: "rectangle.split.2x1", id: "host-group-mixed")
+        section(ordered.filter(\.isBrowserOnly), title: "Browser", systemImage: "globe", id: "host-group-browsers")
+        section(ordered.filter { !$0.isEditorOnly && !$0.isBrowserOnly }, title: "Mixed", systemImage: "rectangle.split.2x1", id: "host-group-mixed")
     }
 
     @ViewBuilder private func section(_ tabs: [CompositeTab], title: String, systemImage: String, id: String) -> some View {
@@ -330,6 +333,7 @@ private struct MixedTabRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(tab.isEditorOnly
             ? "\(title), VS Code on \(tab.hosts.map(model.groupName).joined(separator: " and "))"
+            : tab.isBrowserOnly ? "\(title), browser"
             : "\(title), mixed: \(tab.hosts.map(model.groupName).joined(separator: " and "))")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
@@ -360,6 +364,8 @@ struct MixedTabChip: View {
                 HStack(spacing: DS.Space.xs) {
                     if tab.isEditorOnly {
                         ProgramMark(.vscode, size: 12)
+                    } else if tab.isBrowserOnly {
+                        ProgramMark(.browser, size: 12)
                     }
                     Text(model.title(ofMixedTab: tab))
                         .lineLimit(1)

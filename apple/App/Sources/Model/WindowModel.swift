@@ -186,6 +186,8 @@ final class WindowModel {
     let diffs: any DiffSource
     /// The window's VS Code editors (`Model/EditorPanes.swift`): one per editor leaf.
     let editors: EditorPanes
+    /// The window's browser pages (`Model/BrowserLeaves.swift`): one per browser leaf.
+    let browsers = BrowserPanes()
     /// The tab worked in before an editor tab came forward (⌃⌘` goes back to it).
     @ObservationIgnored var lastTerminalTab: TabRef?
     /// The editor shown full screen while it has the focus (⌃⌘F, `isEditorFullScreen`).
@@ -198,8 +200,15 @@ final class WindowModel {
     var usageDetailHost: String?
     /// The page the in-app browser opens (a forwarded port, a link).
     var browserURL: URL? {
-        didSet { browserHost = nil }
+        didSet {
+            browserHost = nil
+            browserSignInPane = nil
+        }
     }
+    /// The pane whose sign-in `browserURL` is (its code is typed there; `pastedSignInCode`).
+    @ObservationIgnored var browserSignInPane: (hostId: String, pane: UInt64)?
+    /// Callback ports of the sign-ins this window shows (`HostSignIn`).
+    var signInPorts: Set<UInt16> = []
     /// The host whose dev server `browserURL` is (its web data store routes to it); set after
     /// `browserURL`, nil for other pages.
     var browserHost: String?

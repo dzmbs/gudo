@@ -622,6 +622,7 @@ extension WindowModel {
     func followEditors() {
         guard !isClosed else { return }
         editors.prune(keeping: Set(composites.editors.map(\.id)))
+        browsers.prune(keeping: Set(composites.browsers.map(\.id)))
         withObservationTracking {
             _ = composites.tabs
         } onChange: { [weak self] in

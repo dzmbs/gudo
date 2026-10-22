@@ -539,6 +539,10 @@ pub struct ConnectOptions {
     /// the askpass prompts of panes it may drive. Off for clients that cannot show them.
     #[uniffi(default = false)]
     pub askpass: bool,
+    /// Open URLs programs in a pane ask for and run agents' browser tools
+    /// (`BrowserListener`).
+    #[uniffi(default = false)]
+    pub browser: bool,
 }
 
 impl From<ConnectOptions> for client_core::ConnectOptions {
@@ -548,6 +552,7 @@ impl From<ConnectOptions> for client_core::ConnectOptions {
             relay_urls: o.relay_urls,
             relay_auth_token: o.relay_auth_token.filter(|t| !t.is_empty()),
             askpass: o.askpass,
+            browser: o.browser,
         }
     }
 }
@@ -835,7 +840,7 @@ impl DaemonClient {
     }
 
     /// Changes how the daemon is reached (the app's relay settings changed): `relay` and the
-    /// relay parts of `options` (`askpass` stays as connected). Redials on a new endpoint;
+    /// relay parts of `options` (`askpass` and `browser` stay as connected). Redials on a new endpoint;
     /// followed panes resume as after any reconnect.
     pub fn set_relays(&self, relay: RelayMode, options: ConnectOptions) {
         self.inner.set_relays(relay.into(), &options.into());
@@ -974,12 +979,13 @@ mod tests {
             relay_urls: vec!["https://relay.example.com".into()],
             relay_auth_token: Some("secret".into()),
             askpass: true,
+            browser: true,
         };
         let core = client_core::ConnectOptions::from(options);
         assert_eq!(core.relay_ca_der, vec![vec![0x30, 0x82]]);
         assert_eq!(core.relay_urls, vec!["https://relay.example.com"]);
         assert_eq!(core.relay_auth_token.as_deref(), Some("secret"));
-        assert!(core.askpass);
+        assert!(core.askpass && core.browser);
         // An empty token field means no token.
         let core = client_core::ConnectOptions::from(ConnectOptions {
             relay_auth_token: Some(String::new()),

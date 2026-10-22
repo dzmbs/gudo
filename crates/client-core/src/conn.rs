@@ -349,6 +349,11 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             } else {
                 Caps::EMPTY
             }
+            | if inner.options.browser {
+                Caps::BROWSER
+            } else {
+                Caps::EMPTY
+            }
             | if inner.config.repo_status {
                 Caps::REPO_STATUS
             } else {
@@ -605,6 +610,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             continue;
         };
         let Some(msg) = inner.askpass.dispatch(msg) else {
+            continue;
+        };
+        let Some(msg) = inner.browser.dispatch(msg) else {
             continue;
         };
         let Some(msg) = inner.approvals.dispatch(msg) else {

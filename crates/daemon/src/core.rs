@@ -83,6 +83,11 @@ pub(crate) enum Event {
     Approval(proto::ApprovalPush),
     /// A watched workflow directory changed (the new revision).
     Workflows(u64),
+    /// For connection `conn` only: open a URL or run a browser tool (`browser`).
+    Browser {
+        conn: ConnId,
+        push: proto::BrowserPush,
+    },
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -176,6 +181,8 @@ pub(crate) struct Core {
     pub upgrade: crate::upgrade::Upgrade,
     /// Native password prompts: the helper, open prompts, connections that may answer.
     pub askpass: crate::askpass::Askpass,
+    /// URLs and browser tools for the app (`browser`).
+    pub browser: crate::browser::Browser,
     /// Auto-approve rules and the open requests' extras (`approve`).
     pub approvals: crate::approve::Approvals,
     connected: AtomicUsize,
@@ -217,6 +224,7 @@ impl Core {
                 &cfg.hook_bin(),
             ),
             approvals: crate::approve::Approvals::default(),
+            browser: crate::browser::Browser::install(&cfg.state_dir, &cfg.hook_bin()),
             cfg,
             connected: AtomicUsize::new(0),
         })
@@ -322,6 +330,7 @@ impl Core {
         lock(&self.views).remove(&conn);
         self.assist.forget_conn(conn);
         self.askpass.forget_conn(conn);
+        self.browser.forget_conn(conn);
         if lock(&self.attached).remove(&conn).is_some() {
             self.emit(Event::Sessions);
         }
@@ -925,7 +934,12 @@ impl Core {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env(brand::env_var("PANE_ID"), id.0.to_string());
-        for (k, v) in self.askpass.pane_env(self) {
+        for (k, v) in self
+            .askpass
+            .pane_env(self)
+            .into_iter()
+            .chain(self.browser.pane_env(self))
+        {
             cmd.env(k, v);
         }
         for (k, v) in &self.cfg.pane_env {

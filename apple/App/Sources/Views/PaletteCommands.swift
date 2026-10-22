@@ -79,7 +79,7 @@ enum PaletteCommands {
             ("tab-bar", TabPlacement.showsTabBar ? "Hide Tab Bar When the Sidebar Is Hidden" : "Show Tab Bar When the Sidebar Is Hidden",
              "rectangle.topthird.inset.filled", nil, { TabPlacement.showsTabBar.toggle() }),
         ]
-        for (id, title, image, keys, run) in tools + model.editorPaletteExtras {
+        for (id, title, image, keys, run) in tools + model.editorPaletteExtras + model.browserPaletteExtras {
             commands.append(PaletteCommand(id: id, title: title, section: "Go", systemImage: image, shortcut: keys, action: run))
         }
 
@@ -109,7 +109,7 @@ enum PaletteCommands {
             commands.append(PaletteCommand(
                 id: "tab-\(ref)", title: model.title(ofMixedTab: mixed),
                 subtitle: mixed.hosts.map(model.groupName).joined(separator: " + "), section: section,
-                systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : "rectangle.split.2x1",
+                systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : mixed.isBrowserOnly ? "globe" : "rectangle.split.2x1",
                 shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
             ) { model.focus(ref) })
         }

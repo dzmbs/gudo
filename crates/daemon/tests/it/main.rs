@@ -5,6 +5,7 @@ mod approvals;
 mod artifacts;
 mod askpass;
 mod assist;
+mod browser;
 mod codex;
 mod e2e;
 mod history;

@@ -62,6 +62,8 @@ public final class DaemonConnection: HostConnection {
     public let askpass = AskpassSession()
     /// Approve with an edited command, auto-approve rules (docs/DAEMON.md §6.9).
     public let approvals = ApprovalSession()
+    /// URLs this host's panes open and browser tools its agents call.
+    public let browser = BrowserSession()
     /// The daemon's workspace pushes (attention feed, ports, files), fanned out to observers.
     @ObservationIgnored public let workspaceEvents = WorkspaceEventHub()
     /// What the daemon said about itself on the latest connection (build, protocol level,
@@ -159,6 +161,7 @@ public final class DaemonConnection: HostConnection {
         if let mp = client as? any MultiplayerClientAPI { multiplayer.attach(mp) }
         if let ap = client as? any AskpassClientAPI { askpass.attach(ap) }
         if let ac = client as? any ApprovalClientAPI { approvals.attach(ac) }
+        if let bc = client as? any BrowserClientAPI { browser.attach(bc) }
         if let source = client as? any WorkspaceEventSource { workspaceEvents.attach(source) }
         pushClient = client as? any PushClientAPI
         pump = Task { [weak self] in
@@ -166,6 +169,17 @@ public final class DaemonConnection: HostConnection {
                 self?.handle(event)
             }
         }
+    }
+
+    /// Types `text` into a pane as a paste, then Return (a code a program waits for).
+    public func type(_ text: String, into pane: UInt64) {
+        paste(text, into: pane)
+        client?.sendInput(paneId: pane, data: Data("\r".utf8))
+    }
+
+    /// Pastes `text` into a pane, for the user to send.
+    public func paste(_ text: String, into pane: UInt64) {
+        client?.sendPaste(paneId: pane, text: text)
     }
 
     public func makeBackend(for pane: PaneId) throws -> any PaneBackend {
@@ -239,6 +253,7 @@ public final class DaemonConnection: HostConnection {
         multiplayer.detach()
         askpass.detach()
         approvals.detach()
+        browser.detach()
         pump?.cancel()
         events?.finish()
         client = nil
