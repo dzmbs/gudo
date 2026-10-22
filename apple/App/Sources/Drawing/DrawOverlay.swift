@@ -54,9 +54,9 @@ final class DrawOverlay: NSObject {
     private var destinationsTimer: Timer?
     #if os(iOS)
     private(set) var ink: InkCanvasController?
-    private var toolbar: UIHostingController<OverlayToolbar>?
+    private var toolbar: UIHostingController<ThemedRoot<OverlayToolbar>>?
     #else
-    private var toolbar: NSHostingView<OverlayToolbar>?
+    private var toolbar: NSHostingView<ThemedRoot<OverlayToolbar>>?
     #endif
 
     /// The tool the last overlay closed with (a keyboard-opened overlay starts with it).
@@ -115,14 +115,14 @@ final class DrawOverlay: NSObject {
             let pencil = UIPencilInteraction(delegate: self)
             view.addInteraction(pencil)
         }
-        let host = UIHostingController(rootView: OverlayToolbar(model: model))
+        let host = UIHostingController(rootView: ThemedRoot { OverlayToolbar(model: model) })
         host.view.backgroundColor = .clear
         host.sizingOptions = [.intrinsicContentSize]
         host.overrideUserInterfaceStyle = drawing.isDarkTheme ? .dark : .light
         view.addSubview(host.view)
         toolbar = host
         #else
-        let host = NSHostingView(rootView: OverlayToolbar(model: model))
+        let host = NSHostingView(rootView: ThemedRoot { OverlayToolbar(model: model) })
         host.appearance = NSAppearance(named: drawing.isDarkTheme ? .darkAqua : .aqua)
         view.addSubview(host)
         toolbar = host

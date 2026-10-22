@@ -38,7 +38,6 @@ final class CapsuleKey: UIButton {
     init(metrics: CapsuleMetrics) {
         self.metrics = metrics
         super.init(frame: .zero)
-        underline.backgroundColor = KeyBarTheme.ink
         underline.isUserInteractionEnabled = false
         underline.layer.cornerRadius = 1
         addSubview(underline)
@@ -83,6 +82,7 @@ final class CapsuleKey: UIButton {
         background.backgroundInsets = NSDirectionalEdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 2)
         configuration.background = background
         self.configuration = configuration
+        underline.backgroundColor = KeyBarTheme.ink
         underline.isHidden = latch != .locked
         accessibilityTraits = active ? [.button, .selected] : .button
         switch latch {

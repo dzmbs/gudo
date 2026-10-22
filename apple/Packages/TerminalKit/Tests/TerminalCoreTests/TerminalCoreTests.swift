@@ -130,3 +130,27 @@ private func text(_ state: RenderState, row y: Int) -> String {
     terminal.write(Array("你好 😀🚀 ok".utf8))
     #expect(terminal.visibleText() == "你好 😀🚀 ok")
 }
+
+/// A theme change reaches a running terminal: new default colors and a full redraw; a nil
+/// palette goes back to the built-in one.
+@Test func setDefaultsRecolorsARunningTerminal() {
+    var themed = Terminal.Configuration()
+    themed.palette = (0..<256).map { RGB(r: UInt8($0), g: 0, b: 0) }
+    let terminal = Terminal(cols: 20, rows: 3, configuration: themed) { _ in }
+    let state = RenderState()
+    terminal.write(Array("text".utf8))
+    state.update(from: terminal)
+    state.markClean()
+    let builtIn = RenderState()
+    builtIn.update(from: Terminal(cols: 20, rows: 3) { _ in })
+
+    var light = Terminal.Configuration()
+    light.background = RGB(r: 0xFF, g: 0xFF, b: 0xFF)
+    light.foreground = RGB(r: 0, g: 0, b: 0)
+    terminal.setDefaults(light)
+    state.update(from: terminal)
+    #expect(state.dirty == .full)
+    #expect(state.colors.background == light.background)
+    #expect(state.colors.foreground == light.foreground)
+    #expect(state.colors.palette == builtIn.colors.palette)
+}

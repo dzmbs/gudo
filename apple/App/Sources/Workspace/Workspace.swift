@@ -62,7 +62,6 @@ final class Workspace {
     @ObservationIgnored private var keyboardFrameChangeUntil = ContinuousClock.now
     /// Terminal appearance for every pane (the design layer may replace it).
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
-        // Font, padding and cursor apply to open panes at once; colors to panes opened after.
         didSet { for pane in panes.values { pane.view.surface.appearance = appearance } }
     }
     /// One terminal cell in points, once a pane has laid out: split sizes snap to whole cells so
