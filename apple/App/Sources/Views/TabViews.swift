@@ -862,7 +862,7 @@ struct CompactTerminalView: View {
                             if model.currentTab == WindowModel.mixedRef(mixed.id) {
                                 Label(title, systemImage: "checkmark")
                             } else {
-                                Label(title, systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : "rectangle.split.2x1")
+                                Label(title, systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : mixed.isBrowserOnly ? "globe" : "rectangle.split.2x1")
                             }
                         }
                     }

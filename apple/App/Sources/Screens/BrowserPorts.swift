@@ -15,6 +15,7 @@ struct BrowserSheet: View {
                     routedHost: model.browserHost.map { (id: $0, name: model.ports.hostName) },
                     intercept: model.browserSignInPane == nil ? nil : { [model] in model.pastedSignInCode($0) },
                     onDone: { withAnimation(DS.Motion.snappy) { model.browserURL = nil } }, doneTitle: "Ports")
+                    .onOpenAsTab { [model] url in model.openBrowser(url, hostId: model.browserHost, placement: .tab) }
                     .id("\(model.browserHost ?? "")|\(url)")
             } else {
                 NavigationStack {

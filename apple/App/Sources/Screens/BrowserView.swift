@@ -1,5 +1,6 @@
 import DesignSystem
 import HostKit
+import PaneLayout
 import SwiftUI
 import WebKit
 
@@ -14,6 +15,15 @@ struct BrowserView: View {
     /// Shows a leading "Done" / back control (the browser sheet, the ports list).
     var onDone: (() -> Void)?
     var doneTitle = "Done"
+    /// A browser leaf: its shortcuts only while it has the focus, a close button, and where it
+    /// navigated reported.
+    var isFocused = true
+    var onClose: (() -> Void)?
+    var onNavigate: ((URL) -> Void)?
+    /// The sheet's page moves into a browser tab.
+    var onOpenAsTab: ((URL) -> Void)?
+    /// The user points at an element for the agent beside the page.
+    var onPointOut: (() -> Void)?
 
     @State private var pane: BrowserPane
     private var page: WebPage { pane.page }
@@ -38,8 +48,14 @@ struct BrowserView: View {
     /// A page that outlives the view (a browser leaf's).
     init(
         pane: BrowserPane, routedHost: (id: String, name: String)? = nil,
-        onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done"
+        onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done",
+        isFocused: Bool = true, onClose: (() -> Void)? = nil, onNavigate: ((URL) -> Void)? = nil,
+        onPointOut: (() -> Void)? = nil
     ) {
+        self.isFocused = isFocused
+        self.onPointOut = onPointOut
+        self.onClose = onClose
+        self.onNavigate = onNavigate
         self.routedHost = routedHost
         self.onOpenExternally = onOpenExternally
         self.onDone = onDone
@@ -66,25 +82,26 @@ struct BrowserView: View {
         // One WebView whatever the size class: a page may be shown by one WebView only, and a
         // size class that flips while the sheet comes up (presented right after a popover)
         // would otherwise make a second one before the first is gone (a WebKit trap).
-        WebView(page)
-            .ignoresSafeArea(edges: isCompact ? .bottom : [])
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if isCompact { compactBar }
+        // The regular bar sits above the page, not over it: the page then has no top inset, so
+        // its pictures (`BrowserAgent`) start at the document's top.
+        VStack(spacing: 0) {
+            if !isCompact {
+                regularBar
+                progressLine
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if !isCompact {
-                    VStack(spacing: 0) {
-                        regularBar
-                        progressLine
-                    }
+            WebView(page)
+                .ignoresSafeArea(edges: isCompact ? .bottom : [])
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if isCompact { compactBar }
                 }
-            }
+        }
             .overlay(alignment: .top) {
                 if isCompact { progressLine }
             }
         .onAppear { pane.start() }
         .onChange(of: page.url) { _, url in
             if !isEditing { address = url?.absoluteString ?? "" }
+            if let url { onNavigate?(url) }
         }
         #if DEBUG
         .overlay(alignment: .bottomTrailing) {
@@ -104,6 +121,13 @@ struct BrowserView: View {
         #endif
     }
 
+    /// Offers moving the page into a browser tab.
+    func onOpenAsTab(_ action: @escaping (URL) -> Void) -> BrowserView {
+        var view = self
+        view.onOpenAsTab = action
+        return view
+    }
+
     // MARK: Bars
 
     /// iPad and Mac: back, forward, reload, address field, open externally.
@@ -116,12 +140,27 @@ struct BrowserView: View {
                     .padding(.trailing, DS.Space.s)
                     .accessibilityIdentifier("browser-done")
             }
+            if let onClose {
+                Button("Close Page", systemImage: "xmark", action: onClose)
+                    .help("Close Page")
+                    .accessibilityIdentifier("browser-close")
+            }
             navigationButtons
             reloadButton
             addressField
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
             shareButton
+            if let onPointOut {
+                Button("Point Out to Agent", systemImage: "hand.point.up.left", action: onPointOut)
+                    .help("Point Out to Agent")
+                    .accessibilityIdentifier("browser-point-out")
+            }
+            if let onOpenAsTab {
+                Button("Open as Tab", systemImage: "plus.square.on.square") { onOpenAsTab(page.url ?? initialURL) }
+                    .help("Open as Tab")
+                    .accessibilityIdentifier("browser-open-tab")
+            }
             Button("Open in Safari", systemImage: "safari", action: openExternally)
                 .help("Open in Safari")
         }
@@ -156,7 +195,16 @@ struct BrowserView: View {
                         if let url = page.url {
                             ShareLink(item: url)
                         }
+                        if let onPointOut {
+                            Button("Point Out to Agent", systemImage: "hand.point.up.left", action: onPointOut)
+                        }
+                        if let onOpenAsTab {
+                            Button("Open as Tab", systemImage: "plus.square.on.square") { onOpenAsTab(page.url ?? initialURL) }
+                        }
                         Button("Open in Safari", systemImage: "safari", action: openExternally)
+                        if let onClose {
+                            Button("Close Page", systemImage: "xmark", action: onClose)
+                        }
                     }
                     .labelStyle(.iconOnly)
                     .frame(width: 44, height: 44)
@@ -175,19 +223,19 @@ struct BrowserView: View {
             if let item = page.backForwardList.backList.last { page.load(item) }
         }
         .disabled(page.backForwardList.backList.isEmpty)
-        .keyboardShortcut("[", modifiers: .command)
+        .keyboardShortcut(isFocused ? KeyboardShortcut("[", modifiers: .command) : nil)
         Button("Forward", systemImage: "chevron.forward") {
             if let item = page.backForwardList.forwardList.first { page.load(item) }
         }
         .disabled(page.backForwardList.forwardList.isEmpty)
-        .keyboardShortcut("]", modifiers: .command)
+        .keyboardShortcut(isFocused ? KeyboardShortcut("]", modifiers: .command) : nil)
     }
 
     private var reloadButton: some View {
         Button(page.isLoading ? "Stop" : "Reload", systemImage: page.isLoading ? "xmark" : "arrow.clockwise") {
             if page.isLoading { page.stopLoading() } else { page.reload() }
         }
-        .keyboardShortcut("r", modifiers: .command)
+        .keyboardShortcut(isFocused ? KeyboardShortcut("r", modifiers: .command) : nil)
         .contentTransition(.symbolEffect(.replace))
     }
 
@@ -252,7 +300,7 @@ struct BrowserView: View {
         }
         .frame(minHeight: 28)
         .floatingCapsule(interactive: true)
-        .keyboardShortcut("l", modifiers: .command)
+        .keyboardShortcut(isFocused ? KeyboardShortcut("l", modifiers: .command) : nil)
         .accessibilityIdentifier("browser-address")
     }
 
@@ -310,5 +358,130 @@ struct BrowserView: View {
         let url = page.url ?? initialURL
         onOpenExternally(url)
         openURL(url)
+    }
+}
+
+/// A browser leaf of a split tree: the window's page for it (made once, kept across tab
+/// switches), closed and focused through the window.
+struct BrowserLeafView: View {
+    let member: BrowserMember
+    let isFocused: Bool
+    let focus: () -> Void
+    @Environment(WindowModel.self) private var model
+    @Environment(\.terminalTheme) private var theme
+    @State private var pane: BrowserPane?
+
+    var body: some View {
+        Group {
+            if let pane {
+                BrowserView(
+                    pane: pane, routedHost: member.hostId.map { (id: $0, name: model.groupName($0)) },
+                    isFocused: isFocused, onClose: { model.closeBrowser(member.id) },
+                    onNavigate: { model.browserNavigated(member.id, to: $0) },
+                    onPointOut: terminal == nil ? nil : { pointOut(pane) })
+                    .simultaneousGesture(TapGesture().onEnded { if !isFocused { focus() } })
+                    .overlay(alignment: .bottom) { AgentBar(pane: pane) }
+            } else {
+                theme.background
+            }
+        }
+        .task(id: member.id) { pane = await model.browsers.pane(for: member, app: model.app) }
+        .overlay(alignment: .topLeading) {
+            // A marker: an identifier on the container would replace its controls' own.
+            Color.clear.frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel("Browser page")
+                .accessibilityIdentifier("browser-leaf")
+        }
+        // One page per leaf: never reuse another leaf's view.
+        .id(member.id)
+    }
+}
+
+extension BrowserLeafView {
+    /// The terminal in the page's tab (the agent's), if any.
+    private var terminal: HostPane? {
+        guard let tab = model.composites.tab(containingBrowser: member.id) else { return nil }
+        return tab.leaves.lazy.compactMap { tab.members[$0] }.first { $0.hostId != HostGroups.localId }
+    }
+
+    /// The next tap on the page picks an element, which goes to the terminal as text for the
+    /// agent (pasted, not sent).
+    private func pointOut(_ pane: BrowserPane) {
+        guard let terminal, let daemon = model.app.hosts.connection(terminal.hostId) as? DaemonConnection else { return }
+        model.toasts.show(Toast("Tap what to point out", systemImage: "hand.point.up.left"))
+        Task {
+            _ = try? await pane.page.callJavaScript("return window.__un.pick()", contentWorld: BrowserAgentScript.world)
+            var picked = ""
+            for _ in 0..<600 where picked.isEmpty {
+                try? await Task.sleep(for: .milliseconds(100))
+                picked = (try? await pane.page.callJavaScript("return window.__un.picked()", contentWorld: BrowserAgentScript.world) as? String) ?? ""
+            }
+            guard !picked.isEmpty else { return }
+            daemon.paste("In the browser beside you: " + picked.replacingOccurrences(of: "\n", with: " ") + " ", into: terminal.pane.rawValue)
+            model.toasts.show(Toast("Pointed out to the terminal", systemImage: "checkmark.circle.fill", style: .success))
+        }
+    }
+}
+
+/// What an agent is doing on a page, and what it needs from the user: approve a step, or do it
+/// themselves (sign-in, payment). Take Over stops the agent until the page is handed back.
+private struct AgentBar: View {
+    let pane: BrowserPane
+
+    var body: some View {
+        Group {
+            if let request = pane.agentRequest {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    Label(request.kind == .approve ? "The agent asks" : "Your turn", systemImage: request.kind == .approve ? "hand.raised" : "person.fill.checkmark")
+                        .font(.callout.weight(.semibold))
+                    Text(request.message)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Spacer()
+                        Button(request.kind == .approve ? "Deny" : "Cancel") { request.answer(false) }
+                            .buttonStyle(.glass)
+                            .accessibilityIdentifier("agent-deny")
+                        Button(request.kind == .approve ? "Allow" : "Done") { request.answer(true) }
+                            .buttonStyle(.primaryGlass)
+                            .accessibilityIdentifier("agent-allow")
+                    }
+                }
+                .padding(DS.Space.l)
+                .frame(maxWidth: 440)
+                .floatingCapsule(interactive: true)
+            } else if pane.userHasControl {
+                capsule(dot: DS.Palette.done, text: "You have control") {
+                    Button("Hand Back") { pane.userHasControl = false }
+                        .accessibilityIdentifier("agent-hand-back")
+                }
+            } else if let activity = pane.agentActivity {
+                capsule(dot: DS.Palette.accent, text: "Agent · \(activity)") {
+                    Button("Take Over") { pane.userHasControl = true; pane.agentActivity = nil }
+                        .accessibilityIdentifier("agent-take-over")
+                }
+            }
+        }
+        .padding(.bottom, DS.Space.l)
+        .padding(.horizontal, DS.Space.l)
+        .animation(DS.Motion.snappy, value: pane.agentActivity)
+        .animation(DS.Motion.snappy, value: pane.userHasControl)
+    }
+
+    private func capsule(dot: ChromeStyle, text: String, @ViewBuilder action: () -> some View) -> some View {
+        HStack(spacing: DS.Space.m) {
+            Circle().fill(dot).frame(width: 8, height: 8)
+            Text(text)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+            action()
+                .buttonStyle(.glass)
+                .controlSize(.small)
+        }
+        .padding(.leading, DS.Space.l)
+        .padding(.trailing, DS.Space.s)
+        .padding(.vertical, DS.Space.s)
+        .floatingCapsule(interactive: true)
     }
 }

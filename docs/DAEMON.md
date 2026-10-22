@@ -1905,6 +1905,21 @@ Browser tools: `{"browser":{"tool":{"name":…,"args":{…}}}}` is pushed as
 120 s, the caller hanging up (`CallClosed` pushed) or the connection leaving. Daemons offering
 this say `DaemonFeatures::BROWSER`.
 
+The callers are `un-hook mcp` (tools `browser_navigate`, `browser_snapshot`, `browser_find`,
+`browser_get_text`, `browser_click`, `browser_double_click`, `browser_hover`, `browser_type`,
+`browser_fill`, `browser_press`, `browser_scroll`, `browser_scroll_to`, `browser_wait`,
+`browser_screenshot`, `browser_zoom`, `browser_tabs`, `browser_console`, `browser_network`;
+read-only ones carry `readOnlyHint`) and `un-hook browser <verb> [json | key=value …]` for
+shells (Codex, scripts). Semantics follow Anthropic's browser toolset: `role "name" [ref_N]`
+snapshots, targets `{"type":"ref","ref":…}` or `{"type":"coordinate","x","y"}` in screenshot
+pixels, a stale ref is an error asking for a new snapshot, actions answer with what changed.
+The app answers JSON `{"text", "image"?: {"data", "mimeType"}}`; `save_to_file` writes a long
+snapshot to a file on the host. The app runs them on the browser leaf beside the agent's pane
+(opened by the first navigate): the user sees each step (cursor and highlight), can take over,
+and approves purchases and form submits on sign-in or payment pages, or types passwords
+themselves; the call waits meanwhile. `crates/agents/skills/browser/SKILL.md` teaches agents
+the tools.
+
 ## 10. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last

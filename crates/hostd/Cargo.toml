@@ -18,6 +18,7 @@ path = "src/hook.rs"
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 brand.workspace = true
 clap.workspace = true
 daemon.workspace = true

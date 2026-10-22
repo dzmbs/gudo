@@ -9,6 +9,17 @@ use daemon::{BrowserAsk, BrowserReply};
 
 use crate::mcp::{Backend, SocketBackend};
 
+/// `un-hook browser <verb> …` in a pane (its `UN_PANE_ID`); returns the exit status.
+pub fn cli(args: &[String]) -> i32 {
+    match SocketBackend::from_args(&[]) {
+        Ok(mut backend) => crate::browser_tools::cli(args, &mut backend),
+        Err(e) => {
+            eprintln!("{}: {e}", brand::HOOK_BIN);
+            2
+        }
+    }
+}
+
 /// Opens every URL in `args`; returns the exit status.
 pub fn open_url(args: &[String]) -> i32 {
     let urls: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();

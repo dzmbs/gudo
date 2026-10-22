@@ -73,6 +73,23 @@ final class DevServerRouting {
         return url
     }
 
+    /// The host's data store, its proxy running (a browser leaf on the host's dev servers).
+    func store(forHost id: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async -> WKWebsiteDataStore? {
+        guard isEnabled else { return nil }
+        return await route(id, client: client)?.store
+    }
+
+    /// Before a page on the host's `localhost:<port>` (or `127.0.0.1`) loads: this device's
+    /// port serves the host's, as for a dev server opened from the ports list.
+    func prepareLoopback(_ url: URL, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async {
+        guard let host = url.host(), DevServerNames.isLoopbackLiteral(host), let port = url.port.flatMap(UInt16.init(exactly:)),
+              !router.ports.contains(port)
+        else { return }
+        _ = await page(
+            for: DetectedPort(port: port, process: "", url: url.absoluteString, isHTTP: true, loopbackOnly: true, pane: nil),
+            hostId: hostId, client: client)
+    }
+
     /// Serves this device's `localhost:<port>` for the host while a sign-in waits for its
     /// callback there (`HostSignIn`); `onRequest` hears each request's target. Returns the
     /// claim's token for `releaseSignIn`. Throws when the port is taken here.

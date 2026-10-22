@@ -173,8 +173,13 @@ public final class DaemonConnection: HostConnection {
 
     /// Types `text` into a pane as a paste, then Return (a code a program waits for).
     public func type(_ text: String, into pane: UInt64) {
-        client?.sendPaste(paneId: pane, text: text)
+        paste(text, into: pane)
         client?.sendInput(paneId: pane, data: Data("\r".utf8))
+    }
+
+    /// Pastes `text` into a pane, for the user to send.
+    public func paste(_ text: String, into pane: UInt64) {
+        client?.sendPaste(paneId: pane, text: text)
     }
 
     public func makeBackend(for pane: PaneId) throws -> any PaneBackend {

@@ -1,6 +1,7 @@
 import DesignSystem
 import Foundation
 import HostKit
+import PaneLayout
 import UnnamedCore
 
 // What a host asks of the app's browser (`proto::browser`): URLs its panes open through
@@ -13,11 +14,13 @@ extension AppModel {
             guard let url = URL(string: text), let window = window(forHost: hostId) else { return }
             Self.log.info("host \(hostId, privacy: .public) pane \(paneId) opens a URL")
             window.openFromHost(url, hostId: hostId, pane: paneId)
-        case .call(let id, _, let tool, _):
-            (hosts.connection(hostId) as? DaemonConnection)?.browser
-                .answer(id, .failure(BrowserCallError("\(tool) is not available in this version of the app")))
-        case .callClosed:
-            break
+        case .call(let id, let paneId, let tool, let args):
+            let session = (hosts.connection(hostId) as? DaemonConnection)?.browser
+            BrowserAgent.shared.run(id, tool: tool, args: args, pane: HostPane(hostId: hostId, pane: PaneId(paneId)), app: self) { result in
+                session?.answer(id, result)
+            }
+        case .callClosed(let id):
+            BrowserAgent.shared.cancel(id)
         }
     }
 
@@ -32,14 +35,13 @@ extension AppModel {
 
 extension WindowModel {
     /// A URL a program on a host opened: a sign-in in the system's sign-in sheet (its callback
-    /// forwarded to the host), a dev server through a forward, anything else in the browser.
+    /// forwarded to the host), anything else in a browser leaf beside the program's pane, where
+    /// the host's `localhost` is the host's own.
     func openFromHost(_ url: URL, hostId: String, pane: UInt64) {
         if let link = SignInLink(url) {
             signIn(url, link, hostId: hostId, pane: pane)
-        } else if hostId == currentGroupId, isDevServerURL(url) {
-            Task { await openURL(url.absoluteString) }
         } else {
-            showInBrowser(url)
+            openBrowser(url, beside: HostPane(hostId: hostId, pane: PaneId(pane)))
         }
     }
 

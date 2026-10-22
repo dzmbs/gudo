@@ -13,10 +13,12 @@
 //! `un-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`), and
 //! `un-hook mcp [--state <dir>] [--pane <id>]` the MCP server through which agents read the
 //! session's drawings and use the app's browser (see `mcp.rs`), and `un-hook open-url <url>…`
-//! the panes' `BROWSER` (see `browser.rs`).
+//! the panes' `BROWSER` (see `browser.rs`), and `un-hook browser <verb> …` the browser tools
+//! from a shell (see `browser_tools.rs`).
 
 mod askpass;
 mod browser;
+mod browser_tools;
 mod mcp;
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -38,6 +40,9 @@ fn main() {
     }
     if args.first().is_some_and(|a| a == "open-url") {
         std::process::exit(browser::open_url(&args[1..]));
+    }
+    if args.first().is_some_and(|a| a == "browser") {
+        std::process::exit(browser::cli(&args[1..]));
     }
     let mut payload = Vec::new();
     let _ = std::io::stdin().take(4 << 20).read_to_end(&mut payload);

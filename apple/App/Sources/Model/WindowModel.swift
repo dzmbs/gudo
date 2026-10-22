@@ -184,6 +184,8 @@ final class WindowModel {
     let diffs: any DiffSource
     /// The window's VS Code editors (`Model/EditorPanes.swift`): one per editor leaf.
     let editors: EditorPanes
+    /// The window's browser pages (`Model/BrowserLeaves.swift`): one per browser leaf.
+    let browsers = BrowserPanes()
     /// The tab worked in before an editor tab came forward (⌃⌘` goes back to it).
     @ObservationIgnored var lastTerminalTab: TabRef?
     /// The editor shown full screen while it has the focus (⌃⌘F, `isEditorFullScreen`).
