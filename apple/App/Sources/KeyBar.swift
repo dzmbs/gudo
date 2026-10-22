@@ -203,10 +203,20 @@ final class KeyBar: UIInputView {
         configureBand()
         column.addArrangedSubview(band)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardsChanged), name: .GCKeyboardDidConnect, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardsChanged), name: .GCKeyboardDidDisconnect, object: nil)
+        // GameController may post from its own queue; the bar is main-actor UI.
+        keyboardObservers = [.GCKeyboardDidConnect, .GCKeyboardDidDisconnect].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.keyboardsChanged() }
+            }
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(themeMayHaveChanged), name: UserDefaults.didChangeNotification, object: nil)
+        // UserDefaults posts on whichever thread wrote: on a device, PencilKit's Scribble
+        // registers its defaults from a background queue at launch. Hop to main.
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.themeMayHaveChanged() }
+        }
         applyTheme()
         apply()
     }
@@ -222,7 +232,10 @@ final class KeyBar: UIInputView {
         return changed
     }
 
-    @objc private func themeMayHaveChanged() {
+    private var settingsObserver: NSObjectProtocol?
+    private var keyboardObservers: [NSObjectProtocol] = []
+
+    private func themeMayHaveChanged() {
         guard applyTheme() else { return }
         for case let key as UIButton in allSubviews(of: self) { key.setNeedsUpdateConfiguration() }
     }

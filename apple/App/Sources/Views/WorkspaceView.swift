@@ -112,7 +112,8 @@ struct WorkspaceView: View {
             .focusedSceneValue(model)
             .renameTabPrompt(workspace)
             .modifier(MultiplayerWindowHooks(workspace: workspace))
-            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).receive(on: RunLoop.main)) { _ in
+                // Posted on the writer's thread (PencilKit writes defaults off main at launch).
                 // Settings write UserDefaults; the terminals follow through `TerminalAppearance`.
                 let appearance = TerminalAppearance.fromPreferences()
                 for open in model.workspaces.values where appearance != open.appearance { open.appearance = appearance }
