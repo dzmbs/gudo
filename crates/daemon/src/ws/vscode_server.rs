@@ -22,7 +22,7 @@ use super::tunnel::{self, Release};
 use crate::config::Config;
 use crate::fsutil;
 
-/// How long a workbench that lost its connection (a sleeping iPad) can come back to its
+/// How long a workbench that lost its connection (a sleeping device) can come back to its
 /// session; an idle server is stopped after as long.
 pub(crate) const RECONNECTION_GRACE: Duration = Duration::from_secs(48 * 3600);
 /// How often the update service is asked for a newer server.
