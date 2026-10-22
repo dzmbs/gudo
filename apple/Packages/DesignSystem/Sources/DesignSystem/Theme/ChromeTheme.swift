@@ -10,7 +10,7 @@ private struct ChromeThemeModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
-        let chrome = ChromePalette(theme: theme, scheme: requestedScheme)
+        let chrome = ChromePalette.cached(theme: theme, scheme: requestedScheme)
         content
             .environment(\.terminalTheme, theme)
             .environment(\.chrome, chrome)
@@ -37,6 +37,13 @@ public extension View {
     /// and Settings root.
     func chromeTheme(_ theme: TerminalTheme, windowTheme: TerminalPreferences.WindowTheme = .auto) -> some View {
         modifier(ChromeThemeModifier(theme: theme, windowTheme: windowTheme))
+    }
+
+    /// Views drawn on the terminal itself (pane headers, banners over the grid): the theme's own
+    /// chrome and scheme, whatever the window's, so they read on the terminal's background. The
+    /// scheme goes into the environment only: a preferred scheme would restyle the whole window.
+    func terminalSurfaceChrome() -> some View {
+        modifier(TerminalSurfaceChrome())
     }
 
     /// Content on the chrome: the theme's three text levels as the hierarchical foreground styles
@@ -97,6 +104,16 @@ private struct ResolvedChromeBackground: ViewModifier {
         case .navigationBar: content
         #endif
         }
+    }
+}
+
+private struct TerminalSurfaceChrome: ViewModifier {
+    @Environment(\.terminalTheme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.chrome, ChromePalette.cached(theme: theme))
+            .environment(\.colorScheme, theme.colorScheme)
     }
 }
 

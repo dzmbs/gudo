@@ -78,25 +78,62 @@ struct ChromePaletteTests {
         #expect(darkChrome.base.luminance < 0.05)
     }
 
-    /// The window matches the theme by default; a stored `system` (the old default) goes back to
-    /// it once, a chosen Light or Dark stays.
-    @Test(arguments: [("system", nil), ("light", "light"), ("dark", "dark"), (nil, nil)] as [(String?, String?)])
-    @MainActor func windowThemeMigration(stored: String?, expected: String?) throws {
+    /// The window matches the theme by default; any value stored before that existed goes back to
+    /// it once, and a choice made afterwards stays.
+    @Test(arguments: ["system", "light", "dark", nil] as [String?])
+    @MainActor func windowThemeMigration(stored: String?) throws {
         let suite = "window-theme-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(stored, forKey: TerminalPreferences.Key.windowTheme)
+        defaults.set(ThemeCatalog.theme(named: "Alabaster").name, forKey: TerminalPreferences.Key.theme)
         TerminalPreferences.WindowTheme.migrate(defaults)
-        #expect(defaults.string(forKey: TerminalPreferences.Key.windowTheme) == expected)
-        #expect(ChromePalette.fromPreferences(systemScheme: .light, defaults: defaults).scheme == (expected == "light" ? .light : .dark))
-        // Once: System chosen afterwards stays.
-        defaults.set("system", forKey: TerminalPreferences.Key.windowTheme)
+        #expect(defaults.string(forKey: TerminalPreferences.Key.windowTheme) == nil)
+        #expect(ChromePalette.fromPreferences(systemScheme: .dark, defaults: defaults).scheme == .light)
+        // Once: Dark chosen afterwards stays.
+        defaults.set("dark", forKey: TerminalPreferences.Key.windowTheme)
         TerminalPreferences.WindowTheme.migrate(defaults)
-        #expect(defaults.string(forKey: TerminalPreferences.Key.windowTheme) == "system")
+        #expect(defaults.string(forKey: TerminalPreferences.Key.windowTheme) == "dark")
     }
 
-    /// Text at the main level reads at 4.5:1 on every surface, on every bundled theme, in the
-    /// theme's own scheme and forced to the other.
+    /// Match Theme decides from the theme alone: a light theme under a dark system gives light
+    /// chrome (light surfaces, dark ink), and a dark theme under a light system dark chrome.
+    @Test(arguments: ["Alabaster", "iTerm2 Solarized Light", "3024 Day", "Atom One Light", "Belafonte Day"])
+    @MainActor func lightThemeUnderDarkSystemIsLight(name: String) throws {
+        let suite = "light-under-dark-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(name, forKey: TerminalPreferences.Key.theme)
+        let chrome = ChromePalette.fromPreferences(systemScheme: .dark, defaults: defaults)
+        #expect(chrome.scheme == .light)
+        #expect(chrome.base == ThemeCatalog.theme(named: name).bgRGB)
+        #expect(chrome.surfaces.allSatisfy { $0.luminance > chrome.foreground.luminance })
+        let dark = try #require(UserDefaults(suiteName: suite))
+        dark.set("Ghostty Default", forKey: TerminalPreferences.Key.theme)
+        #expect(ChromePalette.fromPreferences(systemScheme: .light, defaults: dark).scheme == .dark)
+    }
+
+    /// A light theme kept in a dark window is a tinted near-black, never flat black, even when its
+    /// ink is black.
+    @Test func lightThemeInDarkWindowIsNotFlatBlack() {
+        let chrome = ChromePalette(theme: ThemeCatalog.theme(named: "Alabaster"), scheme: .dark)
+        #expect(chrome.base.luminance > 0.005)
+        #expect(chrome.base.luminance < 0.05)
+    }
+
+    /// Secondary text is raised where the ink is mid-tone, so it reads on light themes too, and
+    /// stays below the main level.
+    @Test(arguments: ["iTerm2 Solarized Light", "3024 Day", "Atom One Light", "Belafonte Day"])
+    func secondaryTextReadsOnLightThemes(name: String) {
+        let chrome = ChromePalette(theme: ThemeCatalog.theme(named: name))
+        let worst = chrome.surfaces.map { $0.blended(with: chrome.foreground, chrome.secondaryLevel).contrast(with: $0) }.min() ?? 0
+        #expect(worst >= ChromePalette.minimumTextContrast)
+        #expect(chrome.secondaryLevel < ChromePalette.textLevels.primary)
+        #expect(chrome.tertiaryLevel < chrome.secondaryLevel)
+    }
+
+    /// Text at the main and secondary levels reads at 4.5:1 on every surface, on every bundled
+    /// theme, in the theme's own scheme and forced to the other.
     @Test(arguments: [ColorScheme?.none, .light, .dark])
     func textContrastOnEveryTheme(scheme: ColorScheme?) {
         var failures: [String] = []
@@ -104,7 +141,8 @@ struct ChromePaletteTests {
             let chrome = ChromePalette(theme: theme, scheme: scheme)
             for surface in chrome.surfaces {
                 let ratio = chrome.text(on: surface).contrast(with: surface)
-                if ratio < 4.5 { failures.append("\(theme.name) \(surface): \(ratio)") }
+                let secondary = surface.blended(with: chrome.foreground, chrome.secondaryLevel).contrast(with: surface)
+                if min(ratio, secondary) < 4.5 { failures.append("\(theme.name) \(surface): \(ratio) / \(secondary)") }
             }
         }
         #expect(failures.isEmpty, "\(failures.prefix(10))")
