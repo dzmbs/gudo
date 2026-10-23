@@ -143,7 +143,10 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `bell` | easeInOut 0.3 s | bell border | Ghostty |
 | `panel` | smooth 0.35 s | panels, tab style switch | — |
 | resize overlay | visible 750 ms after the last change | cols × rows | Ghostty `resize-overlay-duration` |
-| toast | 2.4 s | | — |
+| `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from the top, grown from 0.9, a 4 pt blur | iOS system banners |
+| `menu` | spring 0.3 / 0.86 | menus, popovers, the host switcher's highlight | — |
+| `swipe` | spring 0.32 / 0.86 | a row settling open or shut after a swipe | iOS Mail |
+| `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
 
 Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
 "working"), and the secure-input gradient stops. Anything that slides or grows in (sidebar, tab strip, toasts,
@@ -159,6 +162,12 @@ Motion it only fades.
 | `success` | success | approve, pair, toast success |
 | `attention` | warning | deny; an agent becomes blocked while visible |
 | `failure` | error | connection failed, toast failure |
+| `armed` | rigid impact 0.6 | a full swipe armed (letting go runs it) | iOS Mail |
+
+### Shadows and edges
+
+Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.panel`: r 28, y 12,
+`floatingCapsule`) carries `glassEdge`: 0.5 pt, white 16 % plus-lighter on dark, black 8 % on light
 
 ## Components (DesignSystem)
 
@@ -166,9 +175,11 @@ Motion it only fades.
 |---|---|---|
 | `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the ink at 20 % behind the glyph (T4) |
 | `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | Ghostty `SearchButtonStyle` hover/press fills; iPad pointer highlight |
+| `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
+| `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28–48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
-| `Toast`, `ToastCenter`, `toastHost` | `Components/Toast.swift` | one at a time, glass capsule, top |
+| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a glass capsule under the toolbar with edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick up dismisses |
 | `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N |
 | `KeyBarLook` | `Components/KeyBarLook.swift` | the key bar's look (app passes it as `KeyBarStyle.designSystem`) |
 | `ResizeOverlay`, `ProcessExitedBar`, `BellBorder`, `UnfocusedDim`, `SecureInputBadge`, `URLHoverBanner` | `Overlays/TerminalOverlays.swift` | Ghostty `SurfaceView.swift` 1:1 |
@@ -218,9 +229,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   own. Never accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
   buttons' frames in both placements and attaches screenshots.
 - The title's subtitle is the tab's context (agent task, program, `repo:branch` or directory)
-  20 % while the search bar is open (T4). The host button opens its details on hover: the state
-  word and name, "address · 3 tabs · 12 ms", one row per tab with its state, All Hosts and
-  Disconnect (O1). Every icon control has a tooltip with its shortcut.
+  with its device symbol, ✓ on the window's and ⌃⌘1…⌃⌘9 (⌘1…⌘9 stay the tabs'), a word only
+  when the link is not fine or agents wait, then New Tab, New Agent…, All Hosts and Add Remote
+  Host…; typing an address no host matches offers Connect to it. Every icon control has a tooltip with its shortcut.
 - The toolbar background is hidden: the sidebar color runs up behind the traffic lights and the
   terminal background behind the rest. The window title's folder is the proxy icon
   (`navigationDocument`) for local tabs.
@@ -391,17 +402,16 @@ one-pixel separators from the text column, an inline title with "2 need you · 3
 subtitle, the cross-host feed of every agent (named Agents, not Inbox: it lists agents, not
 messages). Dense like a mail list. Filters All / Needs You / Running / Unread / Errors as a
 compact track as wide as its words, left-aligned under the bar, never stretched across the
-window. A row is two lines: a 16 pt glyph
-slot (glyphs at 0.6 unless something needs you), what the agent is on in subheadline (semibold
-while unread or waiting; a directory title such as "~" reads as the state instead), then the
-agent's 12 pt mark, "Claude Code · host · folder" footnote tertiary (a home directory is "~");
-right-aligned the unread dot, age (monospaced, ticking for running), a small Reply and the
-open-pane arrow. The last message (2 lines), the request block (SF Mono on `raised`, radius 6,
-hairline edge) and the verbs (small everywhere; Approve the one `.primaryGlass`) follow only
-when there is one.
+a 16 pt glyph slot on the title's line (glyphs at 0.6 unless something needs you), what the
+agent is on in subheadline (semibold while unread or waiting), a Failed pill for a failure,
+right-aligned the unread dot, the age (monospaced, ticking for running) and Reply and Open as
+quiet icons on the same line; under it the agent's 12 pt mark and "Claude Code · host · folder"
+footnote tertiary. The last message is one more footnote line. Only a request grows the row: the
+request block (SF Mono on `raised`, radius 6, hairline edge) and the verbs (Edit and Deny quiet,
+Approve the one `.primaryGlass`). Section headers are footnote semibold with their count.
 
 Needs you / Running / Finished. Permission requests show the tool and command with Edit, Deny
-(glass) and Approve (prominent); questions and finished turns offer Reply, an inline composer
+(quiet) and Approve (prominent); questions and finished turns offer Reply, an inline composer
 that types into the agent. Empty: "No Agents Yet" with New Agent. Finished turns carry the
 agent's last message; long commands appear with a check/cross glyph and "Exited 0 · 4m 12s".
 The subtitle says "3 new · studio 2, devbox 1"; after 1.5 s on screen the dots fade (seen on

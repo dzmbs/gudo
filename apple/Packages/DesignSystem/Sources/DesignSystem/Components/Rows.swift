@@ -56,10 +56,13 @@ public extension ListRow where Trailing == EmptyView {
 public struct SectionTitle: View {
     let title: String
     let count: Int?
+    let small: Bool
 
-    public init(_ title: String, count: Int? = nil) {
+    /// `small` for dense lists (the Agents screen), one step under the sidebar's.
+    public init(_ title: String, count: Int? = nil, small: Bool = false) {
         self.title = title
         self.count = count
+        self.small = small
     }
 
     public var body: some View {
@@ -69,7 +72,7 @@ public struct SectionTitle: View {
                 Text("\(count)").foregroundStyle(DS.Palette.textTertiary).monospacedDigit()
             }
         }
-        .font(DS.Font.section)
+        .font(small ? DS.Font.sectionSmall : DS.Font.section)
         .foregroundStyle(DS.Palette.textSecondary)
         .textCase(nil)
     }

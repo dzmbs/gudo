@@ -40,6 +40,16 @@ public extension DS {
         public static let paletteQuery = SwiftUI.Font.title3.weight(.light)
         /// Key caps (Ghostty SurfaceView.swift `KeyCap`: 12 pt medium rounded).
         public static let keyCap = SwiftUI.Font.system(size: 12, weight: .medium, design: .rounded)
+        /// A row's third line (an agent's summary): quieter than its subtitle.
+        public static let rowDetail = SwiftUI.Font.footnote
+        /// Section headers in dense lists (the Agents screen): one step under `section`.
+        public static let sectionSmall = SwiftUI.Font.footnote.weight(.semibold)
+        /// Text buttons inside rows and banners (`.quiet`).
+        public static let button = SwiftUI.Font.subheadline.weight(.medium)
+        /// A banner's one line.
+        public static let banner = SwiftUI.Font.subheadline.weight(.medium)
+        /// Shortcuts at the trailing edge of menu rows (⌃⌘1): plain glyphs, never key caps.
+        public static let menuShortcut = SwiftUI.Font.subheadline.monospacedDigit()
         /// Terminal overlays drawn over the grid: the cols × rows readout and the exit bar.
         public static let overlay = SwiftUI.Font.system(.callout).monospacedDigit()
     }
