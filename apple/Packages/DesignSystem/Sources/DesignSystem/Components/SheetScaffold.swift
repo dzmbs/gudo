@@ -72,6 +72,15 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
                         }
                     }
                 }
+                .background {
+                    // A sheet with only Done still closes on Esc.
+                    if cancel == nil, let primary, !primary.isBusy {
+                        Button("", action: primary.action)
+                            .keyboardShortcut(.cancelAction)
+                            .hidden()
+                            .accessibilityHidden(true)
+                    }
+                }
                 .controlSize(.large)
                 .padding(.horizontal, DS.Space.xl)
                 .padding(.top, DS.Space.s)
