@@ -78,7 +78,8 @@ struct PRPopover: View {
                 }
             }
             .padding()
-            .frame(minWidth: DS.Git.popoverMinWidth, maxWidth: DS.Git.popoverMaxWidth, alignment: .leading)
+            // One width: checks, the port and gh hints change while open and must not widen it.
+            .frame(width: DS.Size.popoverWidth, alignment: .leading)
         }
         .frame(maxHeight: DS.Git.popoverMaxHeight)
         .fixedSize(horizontal: false, vertical: true)

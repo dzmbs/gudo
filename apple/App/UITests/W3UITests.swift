@@ -186,16 +186,19 @@ final class W3UITests: XCTestCase {
         let runner = element("task-runner")
         XCTAssertTrue(runner.waitForExistence(timeout: 5))
         runner.buttons.element(boundBy: 1).tap()
-        let notice = element("task-agent-missing")
-        XCTAssertTrue(notice.waitForExistence(timeout: 15), "Codex shows as not installed")
-        XCTAssertEqual(element("task-install-command").label, "curl -fsSL https://chatgpt.com/codex/install.sh | sh")
-        XCTAssertTrue(element("task-install-run").exists)
-        XCTAssertTrue(element("task-install-docs").exists)
+        let status = element("task-agent-status")
+        XCTAssertTrue(status.waitForExistence(timeout: 5), "the status row is there from the first frame")
+        let missing = NSPredicate(format: "label CONTAINS 'isn’t installed'")
+        XCTAssertTrue(missing.evaluate(with: status) || XCTWaiter.wait(
+            for: [expectation(for: missing, evaluatedWith: status)], timeout: 15) == .completed, "Codex shows as not installed")
+        XCTAssertTrue(status.label.contains("curl -fsSL https://chatgpt.com/codex/install.sh | sh"))
+        XCTAssertTrue(element("task-install-menu").exists)
         XCTAssertFalse(element("launch-start").isEnabled, "a missing agent can't be started")
         shot("task-agent-missing")
 
         runner.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(notice.waitForNonExistence(timeout: 5), "Claude Code is on the host")
+        let ready = NSPredicate(format: "label CONTAINS 'is ready'")
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: ready, evaluatedWith: status)], timeout: 15), .completed, "Claude Code is on the host")
         XCTAssertTrue(element("launch-start").isEnabled)
     }
 

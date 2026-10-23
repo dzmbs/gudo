@@ -48,19 +48,25 @@ struct NewTaskSheet: View {
     @State private var worktree = true
     @State private var isStarting = false
     @State private var failure: String?
-    /// The chosen host's agents, by what launching would find; empty until it answers.
-    @State private var installs: [AgentKind: InstallState] = [:]
+    /// The chosen host's agents, by what launching would find; nil until it answers.
+    @State private var installs: [AgentKind: InstallState]?
     @FocusState private var isPromptFocused: Bool
 
     private var hosts: [LaunchHost] { feed.launchHosts }
     private var host: LaunchHost? { hosts.first { $0.id == hostID } }
     private var daemon: DaemonConnection? { hostID.flatMap { model.app.hosts.connection($0) as? DaemonConnection } }
 
-    /// The chosen agent, when the host says it can't run it.
-    private var unavailable: (agent: AgentKind, state: InstallState)? {
-        guard let agent = runner.agent, let state = installs[agent] else { return nil }
-        if case .installed = state { return nil }
-        return (agent, state)
+    private var status: LaunchStatus {
+        guard host != nil else { return .noHost }
+        guard let agent = runner.agent else { return .shell }
+        guard let installs else { return .checking(agent) }
+        return switch installs[agent] {
+        case .installed(let path): .ready(agent, path: path)
+        case .notOnPath(let path): .offPath(agent, path: path)
+        case .missing: .missing(agent)
+        // A helper too old to say: every agent is startable.
+        case nil: .ready(agent, path: nil)
+        }
     }
 
     /// The host's repositories (from its repository snapshot), main worktrees only.
@@ -119,14 +125,15 @@ struct NewTaskSheet: View {
                         .listRowInsets(EdgeInsets())
                 }
                 #endif
-                if let unavailable, let host,
-                   let guide = AgentInstallGuide(agent: unavailable.agent, os: daemon?.daemonInfo?.os ?? "")
-                {
-                    AgentInstallSection(
-                        agent: unavailable.agent, state: unavailable.state, hostName: host.name, guide: guide,
+                // Always present and one size in every state: the check's answer changes the
+                // row, never the sheet.
+                Section {
+                    LaunchStatusRow(
+                        status: status, hostName: host?.name ?? "",
+                        guide: runner.agent.flatMap { AgentInstallGuide(agent: $0, os: daemon?.daemonInfo?.os ?? "") },
                         onInstall: install)
-                        .chromeRows()
                 }
+                .chromeRows()
                 Section {
                     Picker("Host", selection: $hostID) {
                         ForEach(hosts) { host in
@@ -160,11 +167,6 @@ struct NewTaskSheet: View {
                     }
                     .disabled(repo == nil && host?.directory == nil)
                     .accessibilityIdentifier("task-worktree")
-                } footer: {
-                    if hosts.isEmpty {
-                        Text("No host with the helper is connected. Connect one in Hosts first.")
-                            .foregroundStyle(DS.Palette.textSecondary)
-                    }
                 }
                 .chromeRows()
                 if worktree {
@@ -252,37 +254,37 @@ struct NewTaskSheet: View {
             .onChange(of: hostID) { old, _ in
                 // The first pick (on appearing) keeps the seeded repository.
                 guard old != nil else { return }
-                installs = [:]
+                installs = nil
                 repoPath = repos.first?.path
                 worktree = repo != nil
             }
             // On every opening, so an install made since shows.
             .task(id: hostID) { await checkInstalls() }
-            // The host's repositories can arrive after the sheet opened.
+            // The host's repositories can arrive after the sheet opened: one is picked, but
+            // New Worktree stays as it opened rather than adding a section under the pointer.
             .onChange(of: repos.map(\.path)) { old, paths in
                 guard old.isEmpty, repoPath == nil, !paths.isEmpty else { return }
                 repoPath = model.git.worktree?.repo ?? paths.first
-                worktree = true
             }
         }
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        .frame(width: 520)
+        // One size whatever the host answers or the form shows; the form scrolls inside it.
+        .frame(width: 520, height: 600)
         #endif
     }
 
     private var canStart: Bool {
-        host != nil && !isStarting && unavailable == nil && (!worktree || !name.trimmingCharacters(in: .whitespaces).isEmpty)
+        host != nil && !isStarting && status.canStart && (!worktree || !name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     /// Asks the host which agents it has; a helper too old to say leaves every agent startable.
     private func checkInstalls() async {
-        guard let api = try? daemon?.workspace.client() as? DaemonAgentInstallAPI,
-              let list = try? await api.agentInstalls() else { return }
-        let answer = Dictionary(list.map { (AgentKind($0.program), $0.state) }) { first, _ in first }
-        // The notice slides in under the picker rather than pushing the form at once.
-        if answer != installs { withAnimation(DS.Motion.snappy) { installs = answer } }
+        guard let hostID else { return }
+        let answer = await feed.installs(on: hostID) ?? [:]
+        guard !Task.isCancelled else { return }
+        withAnimation(DS.Motion.snappy) { installs = answer }
     }
 
     /// Runs the vendor's installer in a new tab on the host, the user's own act.
@@ -386,66 +388,144 @@ private struct RunnerPicker: View {
     }
 }
 
-/// An agent the host can't run yet: why, the vendor's installer to copy or to run in a new tab
-/// there, and the vendor's guide.
-private struct AgentInstallSection: View {
-    let agent: AgentKind
-    let state: InstallState
+/// What Start would do on the chosen host, as the host's own check says.
+private enum LaunchStatus: Equatable {
+    case noHost
+    case shell
+    case checking(AgentKind)
+    /// `path` is nil when the host's helper is too old to say.
+    case ready(AgentKind, path: String?)
+    case offPath(AgentKind, path: String)
+    case missing(AgentKind)
+
+    var canStart: Bool {
+        switch self {
+        case .noHost, .offPath, .missing: false
+        case .shell, .checking, .ready: true
+        }
+    }
+}
+
+/// One row, the same height in every state (a title line and two reserved detail lines), so
+/// the check's answer never moves the form: checking, ready, or why the agent can't start
+/// with the vendor's fix beside it.
+private struct LaunchStatusRow: View {
+    let status: LaunchStatus
     let hostName: String
-    let guide: AgentInstallGuide
+    let guide: AgentInstallGuide?
     let onInstall: (String) -> Void
 
-    private var offPath: String? {
-        if case .notOnPath(let path) = state { path } else { nil }
+    var body: some View {
+        HStack(spacing: DS.Space.m) {
+            icon
+                .frame(width: 20, height: 20)
+            ZStack(alignment: .topLeading) {
+                // The tallest the text gets (two detail lines, each in both fonts), so a path or a
+                // shorter state never changes the height.
+                lines(Text(verbatim: " ") + Text(verbatim: " ").font(DS.Font.literalSmall) + Text(verbatim: "\n ") + Text(verbatim: " ").font(DS.Font.literalSmall))
+                    .hidden()
+                    .accessibilityHidden(true)
+                lines(detail)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("task-agent-status")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            action
+                .controlSize(.small)
+                .fixedSize()
+        }
     }
 
-    var body: some View {
-        Section {
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                Label(offPath == nil ? "\(agent.title) isn’t installed on \(hostName)" : "\(hostName) can’t find \(agent.title)",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(DS.Palette.attention)
-                Group {
-                    if let offPath {
-                        Text("It’s at \(Text(verbatim: offPath).font(DS.Font.literalSmall)), but the login shell’s PATH doesn’t include that folder.")
-                    } else if guide.command != nil {
-                        Text("Install it with the official installer, then start the agent.")
-                    } else {
-                        Text("Follow the official guide to install it on this host.")
-                    }
-                }
+    private func lines(_ detail: some View) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            detail
                 .font(.footnote)
                 .foregroundStyle(DS.Palette.textSecondary)
+                .lineLimit(2, reservesSpace: true)
+        }
+    }
+
+    @ViewBuilder private var icon: some View {
+        switch status {
+        case .checking:
+            ProgressView().controlSize(.small)
+        case .ready(let agent, _):
+            ProgramMark(agent.identity, size: 18)
+        case .offPath, .missing:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DS.Palette.attention)
+        case .shell:
+            Image(systemName: "terminal").foregroundStyle(DS.Palette.textSecondary)
+        case .noHost:
+            Image(systemName: "server.rack").foregroundStyle(DS.Palette.textSecondary)
+        }
+    }
+
+    private var title: String {
+        switch status {
+        case .noHost: "No host connected"
+        case .shell: "A shell on \(hostName)"
+        case .checking(let agent): "Checking \(agent.title) on \(hostName)…"
+        case .ready(let agent, _): "\(agent.title) is ready on \(hostName)"
+        case .offPath(let agent, _): "\(hostName) can’t find \(agent.title)"
+        case .missing(let agent): "\(agent.title) isn’t installed on \(hostName)"
+        }
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch status {
+        case .noHost:
+            Text("Connect a host with the helper in Hosts first.")
+        case .shell:
+            Text("Your login shell, in a tab of its own.")
+        case .checking:
+            Text("Looking where the host’s terminal looks.")
+        case .ready(_, let path?):
+            Text(verbatim: path).font(DS.Font.literalSmall).truncationMode(.middle)
+        case .ready:
+            Text("Starts in a tab of its own.")
+        case .offPath(_, let path):
+            Text("It’s at \(Text(verbatim: path).font(DS.Font.literalSmall)), but the shell’s PATH doesn’t include that folder.")
+        case .missing:
+            if let command = guide?.command {
+                Text(verbatim: command)
+                    .font(DS.Font.literalSmall)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("task-install-command")
+            } else {
+                Text("Follow the official guide to install it on this host.")
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("task-agent-missing")
-            if offPath == nil, let command = guide.command {
-                HStack(spacing: DS.Space.s) {
-                    Text(verbatim: command)
-                        .font(DS.Font.literalSmall)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("task-install-command")
-                    Button("Copy", systemImage: "doc.on.doc") { copy(command) }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("Copy the command")
-                        .accessibilityIdentifier("task-install-copy")
+        }
+    }
+
+    @ViewBuilder private var action: some View {
+        switch status {
+        case .offPath:
+            if let guide {
+                Link("Fix PATH", destination: guide.pathHelp)
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("task-install-docs")
+            }
+        case .missing:
+            if let guide {
+                Menu("Install") {
+                    if let command = guide.command {
+                        Button("Install in a New Tab", systemImage: "terminal") { onInstall(command) }
+                            .accessibilityIdentifier("task-install-run")
+                        Button("Copy Command", systemImage: "doc.on.doc") { copy(command) }
+                            .accessibilityIdentifier("task-install-copy")
+                    }
+                    Link(destination: guide.docs) { Label("Installation Guide", systemImage: "book") }
+                        .accessibilityIdentifier("task-install-docs")
                 }
-                Button("Install in a New Tab", systemImage: "terminal") { onInstall(command) }
-                    .accessibilityIdentifier("task-install-run")
+                .menuStyle(.button)
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("task-install-menu")
             }
-            Link(destination: offPath == nil ? guide.docs : guide.pathHelp) {
-                HStack {
-                    Label(offPath == nil ? "Installation Guide" : "Fix PATH", systemImage: "book")
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(DS.Palette.textTertiary)
-                }
-                .contentShape(.rect)
-            }
-            .accessibilityIdentifier("task-install-docs")
+        default:
+            EmptyView()
         }
     }
 }

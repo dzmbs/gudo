@@ -73,7 +73,8 @@ public extension View {
         background { Rectangle().fill(style).ignoresSafeArea() }
     }
 
-    /// A sheet's own background on the chrome (iPad form sheets, iPhone page sheets).
+    /// A sheet's own opaque background on the chrome (Mac sheets, iPad form sheets, iPhone page
+    /// sheets).
     func chromeSheetBackground() -> some View {
         modifier(ResolvedChromeBackground(token: .groupedPage, place: .sheet))
     }
@@ -97,7 +98,12 @@ private struct ResolvedChromeBackground: ViewModifier {
 
     @ViewBuilder func body(content: Content) -> some View {
         switch place {
-        case .sheet: content.presentationBackground(chrome.color(token))
+        // Painted by the content too: opaque from the first frame of the presentation, before
+        // (and wherever) the system's glass would show what is behind.
+        case .sheet:
+            content
+                .background(chrome.color(token), ignoresSafeAreaEdges: .all)
+                .presentationBackground(chrome.color(token))
         #if os(iOS)
         case .navigationBar: content.toolbarBackground(chrome.color(token), for: .navigationBar)
         #else

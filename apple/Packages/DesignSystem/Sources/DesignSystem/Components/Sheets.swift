@@ -19,10 +19,11 @@ private struct PhoneDetents: ViewModifier {
 }
 
 public extension View {
-    /// A minimum sheet size on the Mac; iOS sheets size to the device.
+    /// A Mac sheet's size from its first frame (resizable larger), so content that loads later
+    /// scrolls inside it rather than growing it; iOS sheets size to the device.
     @ViewBuilder func macMinimumSize(width: CGFloat, height: CGFloat) -> some View {
         #if os(macOS)
-        frame(minWidth: width, minHeight: height)
+        frame(minWidth: width, idealWidth: width, minHeight: height, idealHeight: height)
         #else
         self
         #endif

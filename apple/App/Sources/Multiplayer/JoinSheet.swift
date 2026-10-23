@@ -114,7 +114,8 @@ struct JoinSheet: View {
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        .frame(width: 500)
+        // Fixed: the invite card and knock status arrive after the link; the form scrolls.
+        .frame(width: 500, height: 620)
         #endif
     }
 

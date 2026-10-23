@@ -1,5 +1,6 @@
 import DesignSystem
 import Foundation
+import enum UnnamedCore.InstallState
 
 // Data the upcoming screens show, behind protocols. The views only read these types; the wiring
 // (daemon, SSH, agent hooks) replaces the mocks in MockData.swift without touching a view.
@@ -214,6 +215,8 @@ protocol AgentFeed: AnyObject, Observable {
     /// Starts Claude Code or Codex in a new pane; returns a note when the first prompt could not
     /// be typed (the pane runs either way).
     func launch(_ request: AgentLaunchRequest) async throws -> String?
+    /// Which agents the host can launch, as its terminal finds them; nil when it can't say.
+    func installs(on host: LaunchHost.ID) async -> [AgentKind: InstallState]?
     /// People asking to join hosts this device owns (multiplayer knocks).
     var knocks: [KnockItem] { get }
     /// What the session's approval rules say about answering this request here.
@@ -247,6 +250,7 @@ nonisolated struct ApprovalUnavailable: LocalizedError {
 
 extension AgentFeed {
     var knocks: [KnockItem] { [] }
+    func installs(on host: LaunchHost.ID) async -> [AgentKind: InstallState]? { nil }
     func approval(_ id: AgentItem.ID) -> ApprovalContext? { nil }
     func claim(_ id: AgentItem.ID, _ claim: Bool) {}
 }

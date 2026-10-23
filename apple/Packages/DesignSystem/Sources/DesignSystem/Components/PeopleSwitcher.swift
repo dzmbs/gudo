@@ -87,6 +87,7 @@ public struct PeopleSwitcher: View {
                             .lineLimit(1)
                     }
                 }
+                .reservesSubtitleLine()
                 Spacer(minLength: DS.Space.s)
                 if !person.isMe {
                     Text(person.isFollowed ? "Following" : "Follow")

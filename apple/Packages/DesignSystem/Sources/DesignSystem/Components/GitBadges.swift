@@ -10,8 +10,6 @@ public extension DS.Palette {
 
 public extension DS {
     nonisolated enum Git {
-        public static let popoverMinWidth: CGFloat = 260
-        public static let popoverMaxWidth: CGFloat = 480
         public static let popoverMaxHeight: CGFloat = 400
     }
 }
