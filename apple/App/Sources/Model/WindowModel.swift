@@ -215,6 +215,8 @@ final class WindowModel {
     /// `browserURL`, nil for other pages.
     var browserHost: String?
     let toasts = ToastCenter()
+    /// Full screen's hint, shown under VS Code's title bar rather than over its controls.
+    let fullScreenHints = ToastCenter()
     /// Agents on other tabs and hosts that need you or finished (`AgentToasts`).
     let agentToasts = AgentToasts()
     /// The git-native workspace of this window (worktree, pull request, scripts).
@@ -336,6 +338,7 @@ final class WindowModel {
         followGroups()
         startMixedTabs()
         followEditors()
+        followFullScreen()
         followAgentToasts()
     }
 
