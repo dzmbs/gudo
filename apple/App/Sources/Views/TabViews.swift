@@ -457,11 +457,16 @@ struct TabLeadingMark: View {
     let program: ProgramIdentity
     /// The agent state to show instead, nil on the focused tab (§3.4) or when nothing reports.
     let state: AgentState?
+    /// A browser tab's page icon, shown instead of the program's mark.
+    var favicon: Image?
 
     var body: some View {
         ZStack {
             if let state, state != .idle, state != .unknown {
                 AgentGlyph(state: state)
+                    .transition(.opacity)
+            } else if let favicon {
+                Favicon(image: favicon, size: ProgramMark.rowSlot - 2)
                     .transition(.opacity)
             } else {
                 ProgramMark(program)

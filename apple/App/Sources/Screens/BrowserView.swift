@@ -5,8 +5,8 @@ import SwiftUI
 import WebKit
 
 /// In-app browser for localhost previews and links printed in a pane. Safari 26's layout: a
-/// floating glass address capsule at the bottom on iPhone; a compact 36 pt top bar on iPad and Mac.
-/// The page itself stays edge to edge; glass is only on the controls.
+/// floating glass address capsule at the bottom on iPhone; a compact top bar with Chrome's
+/// omnibox on iPad and Mac. The page itself stays edge to edge; glass is only on the controls.
 struct BrowserView: View {
     /// The host a dev server page comes from (its data store routes to it, S-BR1): named next
     /// to the address.
@@ -20,6 +20,8 @@ struct BrowserView: View {
     var isFocused = true
     var onClose: (() -> Void)?
     var onNavigate: ((URL) -> Void)?
+    /// A new browser tab beside this one (the bar's +).
+    var onNewTab: (() -> Void)?
     /// The sheet's page moves into a browser tab.
     var onOpenAsTab: ((URL) -> Void)?
     /// The user points at an element for the agent beside the page.
@@ -52,27 +54,32 @@ struct BrowserView: View {
         pane: BrowserPane, routedHost: (id: String, name: String)? = nil,
         onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done",
         isFocused: Bool = true, onClose: (() -> Void)? = nil, onNavigate: ((URL) -> Void)? = nil,
-        onPointOut: (() -> Void)? = nil, onReplays: (() -> Void)? = nil
+        onNewTab: (() -> Void)? = nil, onPointOut: (() -> Void)? = nil, onReplays: (() -> Void)? = nil
     ) {
         self.isFocused = isFocused
         self.onPointOut = onPointOut
         self.onReplays = onReplays
         self.onClose = onClose
         self.onNavigate = onNavigate
+        self.onNewTab = onNewTab
         self.routedHost = routedHost
         self.onOpenExternally = onOpenExternally
         self.onDone = onDone
         self.doneTitle = doneTitle
         _pane = State(initialValue: pane)
     }
-    @Environment(\.terminalTheme) private var theme
     @Environment(WindowModel.self) private var model: WindowModel?
+    @Environment(\.colorScheme) private var chromeScheme
     @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
+    @AppStorage(WebsiteAppearance.key) private var followsTheme = true
+    /// What the field holds: the page's address (Chrome's short form) until it is edited.
     @State private var address = ""
+    @State private var addressSelection: TextSelection?
     /// The suggestion arrow keys picked under the address field (-1: none).
     @State private var selection = -1
     /// A page asked for from the start page, which stays until it is gone or failed.
     @State private var leavingStart = false
+    @State private var isFieldHovered = false
     @FocusState private var isEditing: Bool
     @Environment(\.openURL) private var openURL
     #if os(iOS)
@@ -96,10 +103,13 @@ struct BrowserView: View {
         VStack(spacing: 0) {
             if !isCompact {
                 regularBar
-                progressLine
+                    .overlay(alignment: .bottom) { progressLine }
             }
             ZStack {
                 WebView(page)
+                    .webViewBackForwardNavigationGestures(.enabled)
+                    // `prefers-color-scheme` on the page: the theme's, or the device's.
+                    .environment(\.colorScheme, followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
                     .ignoresSafeArea(edges: isCompact ? .bottom : [])
                 if showsStart { startPage }
             }
@@ -107,21 +117,27 @@ struct BrowserView: View {
                 if isEditing, !suggestions.isEmpty {
                     AddressSuggestionList(suggestions: suggestions, selection: selection) { pick($0.url) }
                         .padding(DS.Space.xs)
-                        .frame(maxWidth: 560)
+                        .frame(maxWidth: 640)
                         .floatingPanel()
                         .padding(DS.Space.s)
+                        .transition(.opacity.combined(with: .scale(0.98, anchor: isCompact ? .bottom : .top)))
                 }
             }
+            .animation(DS.Motion.menu, value: isEditing && !suggestions.isEmpty)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if isCompact { compactBar }
             }
         }
-            .overlay(alignment: .top) {
-                if isCompact { progressLine }
-            }
-        .onAppear { pane.start() }
+        .overlay(alignment: .top) {
+            if isCompact { progressLine }
+        }
+        .background { shortcuts }
+        .onAppear {
+            pane.start()
+            showCurrentAddress()
+        }
         .onChange(of: page.url) { _, url in
-            if !isEditing { address = isBlank ? "" : url?.absoluteString ?? "" }
+            if !isEditing { showCurrentAddress() }
             guard let url else { return }
             if !isBlank { leavingStart = false }
             onNavigate?(url)
@@ -132,6 +148,10 @@ struct BrowserView: View {
         }
         .onChange(of: page.isLoading) { _, loading in
             if !loading, isBlank { leavingStart = false }
+            if !loading { Task { await pane.refreshFavicon() } }
+        }
+        .onChange(of: isEditing) { _, editing in
+            if editing { beginEditing() } else { showCurrentAddress() }
         }
         .onChange(of: address) { selection = -1 }
         #if DEBUG
@@ -167,21 +187,24 @@ struct BrowserView: View {
     private var startPage: some View {
         let servers = model?.devServers(onHost: pane.hostId)
         return BrowserStartPage(
-            hostName: servers?.hostName ?? "", devServers: servers?.ports ?? [], focusOnAppear: isFocused,
+            hostName: servers?.hostName ?? "", devServers: servers?.ports ?? [],
+            // The bar's field has the keyboard when it was reached for (⌘L) first.
+            focusOnAppear: isFocused && !isEditing,
             open: pick, openDevServer: openDevServer)
     }
 
     private var suggestions: [AddressSuggestion] {
-        guard address != (page.url?.absoluteString ?? "") else { return [] }
+        guard address != (page.url?.absoluteString ?? ""), address != shortAddress else { return [] }
         return AddressSuggestion.make(
             for: address, history: BrowserHistory.shared.entries,
-            devServers: model?.devServers(onHost: pane.hostId).ports ?? [], engine: engine)
+            devServers: model?.devServers(onHost: pane.hostId).ports ?? [], engine: engine, locale: .current)
     }
 
     private func pick(_ url: URL) {
         isEditing = false
         if isBlank { leavingStart = true }
-        page.load(URLRequest(url: url))
+        pane.load(url)
+        address = BrowserAddress.display(url)
     }
 
     /// On a page that reaches its host's `localhost` (a browser leaf), here; else through a
@@ -196,7 +219,7 @@ struct BrowserView: View {
 
     // MARK: Bars
 
-    /// iPad and Mac: back, forward, reload, address field, open externally.
+    /// iPad and Mac: Chrome's bar. History and reload, the omnibox, then the page's actions.
     private var regularBar: some View {
         HStack(spacing: DS.Space.xs) {
             if let onDone {
@@ -206,17 +229,12 @@ struct BrowserView: View {
                     .padding(.trailing, DS.Space.s)
                     .accessibilityIdentifier("browser-done")
             }
-            if let onClose {
-                Button("Close Page", systemImage: "xmark", action: onClose)
-                    .help("Close Page")
-                    .accessibilityIdentifier("browser-close")
-            }
             navigationButtons
             reloadButton
             addressField
-                .frame(maxWidth: 560)
+                .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
-            shareButton
+                .padding(.horizontal, DS.Space.xs)
             if let onPointOut {
                 Button("Point Out to Agent", systemImage: "hand.point.up.left", action: onPointOut)
                     .help("Point Out to Agent")
@@ -227,19 +245,43 @@ struct BrowserView: View {
                     .help("Replays")
                     .accessibilityIdentifier("browser-replays")
             }
+            if let onNewTab {
+                Button("New Browser Tab", systemImage: "plus", action: onNewTab)
+                    .help("New Browser Tab")
+                    .accessibilityIdentifier("browser-new-tab")
+            }
+            moreMenu
+            if let onClose {
+                Button("Close Page", systemImage: "xmark", action: onClose)
+                    .help("Close Page")
+                    .accessibilityIdentifier("browser-close")
+            }
+        }
+        .buttonStyle(.quiet)
+        .labelStyle(.iconOnly)
+        .padding(.horizontal, DS.Space.s)
+        .frame(height: DS.Size.tabBar)
+        .background(DS.Palette.base)
+        .overlay(alignment: .bottom) { Hairline() }
+    }
+
+    /// Chrome's ⋮: what is done with the page elsewhere.
+    private var moreMenu: some View {
+        Menu("More", systemImage: "ellipsis") {
+            if let url = page.url, !isBlank {
+                ShareLink(item: url)
+                Button("Copy Address", systemImage: "doc.on.doc") { FilesPasteboard.copy(url.absoluteString) }
+            }
             if let onOpenAsTab {
                 Button("Open as Tab", systemImage: "plus.square.on.square") { onOpenAsTab(page.url ?? initialURL) }
-                    .help("Open as Tab")
                     .accessibilityIdentifier("browser-open-tab")
             }
             Button("Open in Safari", systemImage: "safari", action: openExternally)
-                .help("Open in Safari")
+                .disabled(isBlank)
         }
-        .buttonStyle(.bar)
-        .padding(.horizontal, DS.Space.s)
-        .frame(height: DS.Size.tabBar)
-        .background(theme.background)
-        .overlay(alignment: .bottom) { theme.splitDivider.frame(height: 1) }
+        .menuIndicator(.hidden)
+        .help("More")
+        .accessibilityIdentifier("browser-more")
     }
 
     /// iPhone: one floating glass capsule with the controls around the address.
@@ -260,11 +302,15 @@ struct BrowserView: View {
                 }
                 addressField
                     .frame(height: 44)
+                    .floatingCapsule(interactive: true)
                 if !isEditing {
                     Menu("More", systemImage: "ellipsis") {
                         Button("Reload", systemImage: "arrow.clockwise") { page.reload() }
                         if let url = page.url {
                             ShareLink(item: url)
+                        }
+                        if let onNewTab {
+                            Button("New Browser Tab", systemImage: "plus", action: onNewTab)
                         }
                         if let onPointOut {
                             Button("Point Out to Agent", systemImage: "hand.point.up.left", action: onPointOut)
@@ -293,93 +339,175 @@ struct BrowserView: View {
         .animation(DS.Motion.snappy, value: isEditing)
     }
 
+    /// Back and forward; a long press (or a held click) lists the history, as in Safari.
     @ViewBuilder private var navigationButtons: some View {
-        Button("Back", systemImage: "chevron.backward") {
-            if let item = page.backForwardList.backList.last { page.load(item) }
+        let list = page.backForwardList
+        Menu {
+            ForEach(list.backList.reversed()) { item in
+                Button(Self.title(of: item)) { page.load(item) }
+            }
+        } label: {
+            Label("Back", systemImage: "chevron.backward")
+        } primaryAction: {
+            if let item = list.backList.last { page.load(item) }
         }
-        .disabled(page.backForwardList.backList.isEmpty)
-        .keyboardShortcut(isFocused ? KeyboardShortcut("[", modifiers: .command) : nil)
-        Button("Forward", systemImage: "chevron.forward") {
-            if let item = page.backForwardList.forwardList.first { page.load(item) }
+        .menuIndicator(.hidden)
+        .disabled(list.backList.isEmpty)
+        .help("Back")
+        .accessibilityIdentifier("browser-back")
+        Menu {
+            ForEach(list.forwardList) { item in
+                Button(Self.title(of: item)) { page.load(item) }
+            }
+        } label: {
+            Label("Forward", systemImage: "chevron.forward")
+        } primaryAction: {
+            if let item = list.forwardList.first { page.load(item) }
         }
-        .disabled(page.backForwardList.forwardList.isEmpty)
-        .keyboardShortcut(isFocused ? KeyboardShortcut("]", modifiers: .command) : nil)
+        .menuIndicator(.hidden)
+        .disabled(list.forwardList.isEmpty)
+        .help("Forward")
+        .accessibilityIdentifier("browser-forward")
+    }
+
+    private static func title(of item: WebPage.BackForwardList.Item) -> String {
+        if let title = item.title, !title.isEmpty { return title }
+        return BrowserAddress.display(item.url)
     }
 
     private var reloadButton: some View {
         Button(page.isLoading ? "Stop" : "Reload", systemImage: page.isLoading ? "xmark" : "arrow.clockwise") {
             if page.isLoading { page.stopLoading() } else { page.reload() }
         }
-        .keyboardShortcut(isFocused ? KeyboardShortcut("r", modifiers: .command) : nil)
+        .help(page.isLoading ? "Stop" : "Reload")
         .contentTransition(.symbolEffect(.replace))
+        .accessibilityIdentifier("browser-reload")
     }
 
-    @ViewBuilder private var shareButton: some View {
-        if let url = page.url {
-            ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+    /// Chrome's keys while the page's pane has the focus: ⌘L the address, ⌘R reload, ⌘[ ⌘] history,
+    /// ⌘. or Esc gives up an edit.
+    @ViewBuilder private var shortcuts: some View {
+        if isFocused {
+            Group {
+                Button("Open Location") { isEditing = true }
+                    .keyboardShortcut("l")
+                Button("Reload") { page.reload() }
+                    .keyboardShortcut("r")
+                Button("Back") { if let item = page.backForwardList.backList.last { page.load(item) } }
+                    .keyboardShortcut("[")
+                Button("Forward") { if let item = page.backForwardList.forwardList.first { page.load(item) } }
+                    .keyboardShortcut("]")
+                if isEditing {
+                    Button("Cancel Edit") { cancelEditing() }
+                        .keyboardShortcut(".")
+                }
+            }
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
         }
     }
 
     // MARK: Address
 
+    /// Chrome's omnibox: always a field. A click or tap takes the keyboard and selects the whole
+    /// address; Return goes, Esc gives the page's address back.
     private var addressField: some View {
-        ZStack {
-            if isEditing {
-                TextField("Search or enter address", text: $address)
-                    .font(DS.Font.literal)
-                    .textFieldStyle(.plain)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    .submitLabel(.go)
-                    #endif
-                    .focused($isEditing)
-                    .onSubmit(go)
-                    .onKeyPress(.downArrow) { moveSelection(1) }
-                    .onKeyPress(.upArrow) { moveSelection(-1) }
-                    .onKeyPress(.escape) {
-                        isEditing = false
-                        return .handled
-                    }
-                    .padding(.horizontal, DS.Space.m)
-            } else {
-                Button {
-                    address = isBlank ? "" : page.url?.absoluteString ?? initialURL.absoluteString
-                    isEditing = true
-                } label: {
-                    HStack(spacing: DS.Space.xs) {
-                        if (page.url ?? initialURL).scheme == "https" {
-                            Image(systemName: "lock.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Text(isBlank ? "Search or enter address" : displayHost)
-                            .font(.callout)
-                            .foregroundStyle(isBlank ? AnyShapeStyle(DS.Palette.textTertiary) : AnyShapeStyle(.primary))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if let servingHost {
-                            Text(servingHost)
-                                .font(DS.Font.literalSmall)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .layoutPriority(-1)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, DS.Space.m)
-                    .frame(maxHeight: .infinity)
-                    .contentShape(.capsule)
+        HStack(spacing: DS.Space.s) {
+            securityMark
+            TextField("Search \(engine.title) or enter address", text: $address, selection: $addressSelection)
+                .font(.callout)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.webSearch)
+                .submitLabel(.go)
+                #endif
+                .focused($isEditing)
+                .onSubmit(go)
+                .onKeyPress(.downArrow) { moveSelection(1) }
+                .onKeyPress(.upArrow) { moveSelection(-1) }
+                .onKeyPress(.escape) {
+                    cancelEditing()
+                    return .handled
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Address, \(displayHost)" + (servingHost.map { ", on \($0)" } ?? ""))
+                .foregroundStyle(isEditing ? DS.Palette.text : DS.Palette.textSecondary)
+                .help(page.title.isEmpty ? (page.url?.absoluteString ?? "") : page.title)
+                .accessibilityLabel("Address" + (isBlank ? "" : ", \(displayHost)") + (servingHost.map { ", on \($0)" } ?? ""))
+                .accessibilityIdentifier("browser-address")
+            if isEditing, !address.isEmpty {
+                Button("Clear", systemImage: "xmark.circle.fill") { address = "" }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(DS.Palette.textTertiary)
+            } else if !isEditing, let servingHost {
+                Text(servingHost)
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .lineLimit(1)
+                    .layoutPriority(-1)
             }
         }
+        .padding(.horizontal, DS.Space.m)
         .frame(minHeight: 28)
-        .floatingCapsule(interactive: true)
-        .keyboardShortcut(isFocused ? KeyboardShortcut("l", modifiers: .command) : nil)
-        .accessibilityIdentifier("browser-address")
+        .background {
+            if !isCompact {
+                Capsule().fill(isFieldHovered && !isEditing ? DS.Palette.selectedFill : DS.Palette.hoverFill)
+            }
+        }
+        .overlay {
+            if !isCompact, isEditing { Capsule().strokeBorder(DS.Palette.accent, lineWidth: 1.5) }
+        }
+        .contentShape(.capsule)
+        .onHover { isFieldHovered = $0 }
+        .onTapGesture { isEditing = true }
+        #if os(iOS)
+        .hoverEffect(.highlight)
+        #endif
+        .animation(.easeOut(duration: 0.15), value: isEditing)
+    }
+
+    /// Chrome's site mark: a lock on a secure page, a warning on a plain one out on the
+    /// network, a server on a dev server; a magnifier while typing.
+    private var securityMark: some View {
+        let url = page.url ?? initialURL
+        let (symbol, help, style): (String, String, ChromeStyle) =
+            if isEditing || isBlank { ("magnifyingglass", "Search or enter address", DS.Palette.textTertiary) }
+            else if url.scheme == "https" { (page.hasOnlySecureContent ? "lock.fill" : "lock.open.fill", page.hasOnlySecureContent ? "Connection Is Secure" : "Parts of This Page Are Not Secure", DS.Palette.textSecondary) }
+            else if let host = url.host(), DevServerNames.isRouted(host) || WindowModel.isLoopback(host) { ("server.rack", "Dev Server", DS.Palette.textSecondary) }
+            else { ("exclamationmark.triangle.fill", "Not Secure", DS.Palette.attention) }
+        return Image(systemName: symbol)
+            .font(.subheadline.weight(.medium))
+            .imageScale(.small)
+            .foregroundStyle(style)
+            .frame(width: 14)
+            .contentTransition(.symbolEffect(.replace))
+            .help(help)
+            .accessibilityLabel(help)
+            .accessibilityIdentifier("browser-security")
+    }
+
+    /// The page's address as the field shows it when not editing.
+    private var shortAddress: String { isBlank ? "" : BrowserAddress.display(page.url ?? initialURL) }
+
+    private func showCurrentAddress() {
+        address = shortAddress
+        addressSelection = nil
+    }
+
+    /// The full address, all of it selected, so typing replaces it.
+    private func beginEditing() {
+        address = isBlank ? "" : (page.url ?? initialURL).absoluteString
+        // After the field has placed its caret where it was tapped.
+        Task { @MainActor in
+            addressSelection = TextSelection(range: address.startIndex..<address.endIndex)
+        }
+    }
+
+    private func cancelEditing() {
+        isEditing = false
+        showCurrentAddress()
     }
 
     /// `github.com`, or `localhost:5173` for local servers (the port matters there).
@@ -398,7 +526,7 @@ struct BrowserView: View {
         return routedHost.name
     }
 
-    /// A 2 pt accent line that fills while loading and fades when done.
+    /// A 2 pt accent line along the bar's bottom edge that fills while loading and fades when done.
     private var progressLine: some View {
         GeometryReader { geo in
             Rectangle()
@@ -417,8 +545,11 @@ struct BrowserView: View {
 
     private func go() {
         let picked = suggestions.indices.contains(selection) ? suggestions[selection].url : nil
-        isEditing = false
-        if let url = picked ?? BrowserAddress.url(for: address, engine: engine) { pick(url) }
+        if let url = picked ?? BrowserAddress.url(for: address, engine: engine, locale: .current) {
+            pick(url)
+        } else {
+            cancelEditing()
+        }
     }
 
     private func moveSelection(_ step: Int) -> KeyPress.Result {
@@ -451,6 +582,7 @@ struct BrowserLeafView: View {
                     pane: pane, routedHost: member.hostId.map { (id: $0, name: model.groupName($0)) },
                     isFocused: isFocused, onClose: { model.closeBrowser(member.id) },
                     onNavigate: { model.browserNavigated(member.id, to: $0) },
+                    onNewTab: { model.openBrowser(URL(string: "about:blank")!, hostId: member.hostId, placement: .tab) },
                     onPointOut: terminal == nil ? nil : { pointOut(pane) },
                     onReplays: ReplayStore.shared.sessions.contains { $0.page == member.id } ? { model.showReplays(.page(member.id)) } : nil)
                     .simultaneousGesture(TapGesture().onEnded { if !isFocused { focus() } })

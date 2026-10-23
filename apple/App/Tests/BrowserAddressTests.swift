@@ -81,4 +81,46 @@ final class BrowserAddressTests: XCTestCase {
         XCTAssertEqual(history.frequent.first?.title, "Example")
         XCTAssertEqual(BrowserHistory(defaults: defaults).entries.count, 1, "kept across launches")
     }
+
+    func testTheFieldShowsChromesShortAddress() {
+        XCTAssertEqual(BrowserAddress.display(URL(string: "https://www.example.com/")!), "example.com")
+        XCTAssertEqual(BrowserAddress.display(URL(string: "https://github.com/a/b?tab=1")!), "github.com/a/b?tab=1")
+        XCTAssertEqual(BrowserAddress.display(URL(string: "http://localhost:3000/")!), "localhost:3000")
+        XCTAssertEqual(BrowserAddress.display(URL(string: "http://localhost:3000/app/")!), "localhost:3000/app/")
+        XCTAssertEqual(BrowserAddress.display(URL(string: "about:blank")!), "about:blank")
+    }
+
+    func testPagesAreAskedForInTheChosenLanguage() {
+        XCTAssertEqual(WebsiteLanguage.acceptLanguage("en-US"), "en-US,en;q=0.9")
+        XCTAssertEqual(WebsiteLanguage.acceptLanguage("de-DE"), "de-DE,de;q=0.9,en;q=0.8")
+        XCTAssertNil(WebsiteLanguage.acceptLanguage(""), "System: WebKit's own")
+        let request = BrowserPane.request(URL(string: "https://example.com")!, language: "en-US")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Language"), "en-US,en;q=0.9")
+        XCTAssertNil(BrowserPane.request(URL(string: "about:blank")!, language: "en-US").value(forHTTPHeaderField: "Accept-Language"))
+        XCTAssertEqual(WebsiteLanguage.name("en-US"), "English (United States)")
+    }
+
+    func testOnlyPlainNavigationsAreReissuedWithTheLanguage() {
+        let page = URL(string: "https://example.com/a")!
+        let link = URLRequest(url: URL(string: "https://example.com/b")!)
+        XCTAssertTrue(BrowserPane.needsLanguage(link, type: .linkActivated, from: page, language: "en-US"))
+        XCTAssertFalse(BrowserPane.needsLanguage(link, type: .backForward, from: page, language: "en-US"))
+        XCTAssertFalse(BrowserPane.needsLanguage(link, type: .reload, from: page, language: "en-US"))
+        XCTAssertFalse(BrowserPane.needsLanguage(link, type: .linkActivated, from: page, language: ""))
+        XCTAssertFalse(BrowserPane.needsLanguage(BrowserPane.request(link.url!, language: "en-US"), type: .other, from: page, language: "en-US"))
+        var post = link
+        post.httpMethod = "POST"
+        XCTAssertFalse(BrowserPane.needsLanguage(post, type: .formSubmitted, from: page, language: "en-US"))
+        let anchor = URLRequest(url: URL(string: "https://example.com/a#part")!)
+        XCTAssertFalse(BrowserPane.needsLanguage(anchor, type: .linkActivated, from: page, language: "en-US"), "a jump within the page")
+    }
+
+    func testSearchesCarryTheLanguageAndRegion() {
+        let locale = SearchLocale(language: "en-US", region: "US")
+        XCTAssertEqual(SearchEngine.google.url(searching: "x", locale: locale).absoluteString, "https://www.google.com/search?q=x&hl=en-US&gl=us")
+        XCTAssertEqual(SearchEngine.google.url(searching: "x", locale: SearchLocale(language: "de-DE")).absoluteString, "https://www.google.com/search?q=x&hl=de")
+        XCTAssertEqual(SearchEngine.bing.url(searching: "x", locale: locale).absoluteString, "https://www.bing.com/search?q=x&setlang=en-US&cc=US")
+        XCTAssertEqual(SearchEngine.duckDuckGo.url(searching: "x", locale: locale).absoluteString, "https://duckduckgo.com/?q=x")
+        XCTAssertEqual(SearchEngine.google.url(searching: "x").absoluteString, "https://www.google.com/search?q=x")
+    }
 }

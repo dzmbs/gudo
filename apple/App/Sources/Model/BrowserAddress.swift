@@ -33,9 +33,26 @@ nonisolated enum SearchEngine: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    func url(searching query: String) -> URL {
+    /// `locale`: Google and Bing take the interface language and result region as parameters
+    /// (the language header alone loses to the network's country there).
+    func url(searching query: String, locale: SearchLocale = SearchLocale()) -> URL {
         var components = URLComponents(string: base)!
-        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        var items = [URLQueryItem(name: "q", value: query)]
+        let language = String(locale.language.prefix { $0 != "-" })
+        switch self {
+        case .google:
+            // Google knows regional variants for a few languages only.
+            if !language.isEmpty {
+                items.append(URLQueryItem(name: "hl", value: ["en", "es", "pt", "zh"].contains(language) ? locale.language : language))
+            }
+            if !locale.region.isEmpty { items.append(URLQueryItem(name: "gl", value: locale.region.lowercased())) }
+        case .bing:
+            if !locale.language.isEmpty { items.append(URLQueryItem(name: "setlang", value: locale.language)) }
+            if !locale.region.isEmpty { items.append(URLQueryItem(name: "cc", value: locale.region)) }
+        case .duckDuckGo, .kagi, .brave:
+            break
+        }
+        components.queryItems = items
         return components.url!
     }
 }
@@ -44,10 +61,22 @@ nonisolated enum SearchEngine: String, CaseIterable, Identifiable, Sendable {
 /// server (`localhost:3000`, `127.0.0.1:8080`, `:5173`, `app.localhost`), a bare host
 /// (`example.com`, `example.com/docs`, `devbox:8080`), else a search.
 nonisolated enum BrowserAddress {
-    static func url(for input: String, engine: SearchEngine = .current) -> URL? {
+    static func url(for input: String, engine: SearchEngine = .current, locale: SearchLocale = SearchLocale()) -> URL? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        return address(text) ?? engine.url(searching: text)
+        return address(text) ?? engine.url(searching: text, locale: locale)
+    }
+
+    /// Chrome's short form of an address: no scheme, no `www.`, no lone trailing slash
+    /// (`https://www.example.com/` as `example.com`, `http://localhost:3000/app` as
+    /// `localhost:3000/app`). Other schemes stay whole.
+    static func display(_ url: URL) -> String {
+        var text = url.absoluteString
+        guard let scheme = url.scheme, scheme == "http" || scheme == "https" else { return text }
+        text.removeFirst(scheme.count + 3)
+        if text.hasPrefix("www.") { text.removeFirst(4) }
+        if url.path() == "/", url.query() == nil, url.fragment() == nil, text.hasSuffix("/") { text.removeLast() }
+        return text
     }
 
     /// The URL `text` names, nil when it reads as a search.
@@ -184,7 +213,7 @@ nonisolated struct AddressSuggestion: Identifiable, Hashable, Sendable {
     /// address or title does (address prefixes first, then by visits), then the search.
     static func make(
         for input: String, history: [BrowserHistory.Entry], devServers: [DetectedPort], engine: SearchEngine,
-        limit: Int = 6
+        locale: SearchLocale = SearchLocale(), limit: Int = 6
     ) -> [AddressSuggestion] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty else { return [] }
@@ -211,7 +240,7 @@ nonisolated struct AddressSuggestion: Identifiable, Hashable, Sendable {
         if BrowserAddress.address(query) == nil {
             out.append(AddressSuggestion(
                 kind: .search, title: input.trimmingCharacters(in: .whitespaces), detail: "\(engine.title) Search",
-                url: engine.url(searching: input.trimmingCharacters(in: .whitespaces))))
+                url: engine.url(searching: input.trimmingCharacters(in: .whitespaces), locale: locale)))
         }
         return out
     }
