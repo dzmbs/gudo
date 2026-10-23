@@ -452,7 +452,8 @@ final class BrowserAgent {
     private func answerDialog(_ args: [String: Any], page: BrowserPane) async throws -> Answer {
         guard let dialog = page.dialog else { throw BrowserCallError("No dialog is open on the page.") }
         let accept = args["accept"] as? Bool ?? true
-        let before = await page.activity()
+        // The dialog holds the page's scripts, so what came before is read from the view alone.
+        let before = BrowserPane.Activity(url: page.page.url, started: .max)
         dialog.answer(accept, args["text"] as? String)
         await page.settle(after: before)
         if let next = page.dialog { return Answer(text: "Answered. " + Self.dialogNote(next)) }
