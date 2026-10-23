@@ -401,13 +401,13 @@ final class BrowserAgent {
     static func dialogNote(_ dialog: BrowserPane.PageDialog) -> String {
         "The page shows a\(dialog.kind == .alert ? "n" : "") \(dialog.kind.rawValue) dialog: “\(dialog.message)”"
             + (dialog.defaultText.map { " (default “\($0)”)" } ?? "")
-            + ". It waits until it is answered: call browser_dialog with action accept or dismiss"
+            + ". It waits until it is answered: call browser_dialog with accept true or false"
             + (dialog.kind == .prompt ? " (and text to answer)." : ".")
     }
 
     private func answerDialog(_ args: [String: Any], page: BrowserPane) async throws -> Answer {
         guard let dialog = page.dialog else { throw BrowserCallError("No dialog is open on the page.") }
-        let accept = (args["action"] as? String ?? "accept") != "dismiss"
+        let accept = args["accept"] as? Bool ?? true
         let before = await page.activity()
         dialog.answer(accept, args["text"] as? String)
         await page.settle(after: before)
