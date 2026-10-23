@@ -112,6 +112,11 @@ enum DesignFixtures {
         case "toast":
             try? await Task.sleep(for: .seconds(1))
             model.toasts.show(Toast("Closed “cargo test”", systemImage: "xmark.circle.fill", action: Toast.Action("Undo") {}))
+        case "browser-page":
+            // The in-app browser on a page (a local one: no network), its chrome in view.
+            let page = "<html><body style='font:17px -apple-system;margin:40px'><h1>Dev server</h1><p>localhost:5173 · pnpm dev</p></body></html>"
+            model.browserURL = URL(string: "data:text/html;charset=utf-8," + (page.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))
+            model.sheet = .browser
         case "presence-notice":
             // Someone arrives in a shared session (`-mockPresence YES`).
             try? await Task.sleep(for: .seconds(1))
