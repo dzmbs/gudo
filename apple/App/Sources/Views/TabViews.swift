@@ -612,6 +612,8 @@ private struct TabRow: View {
                     // Two digits fit (⌘-numbers run past 9 across hosts), so titles stay aligned.
                     .frame(width: numberWidth, alignment: .trailing)
                     .lineLimit(1)
+                    // A renumbered row swaps its digit in place, never a cross-fade.
+                    .contentTransition(.identity)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: DS.Space.row) {
                         TabLeadingMark(program: program, state: isActive ? nil : state)
@@ -630,11 +632,10 @@ private struct TabRow: View {
                     // Only a line that says something: not "~", not empty, not the title again;
                     // a shell command running a while shows with its run time.
                     let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
-                    if informative != nil || running != nil {
-                        TabSubtitle(context: informative, running: running)
-                            // Under the title, past the mark slot and its spacing.
-                            .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
-                    }
+                    // Always there (blank when it has nothing to say): rows keep one height.
+                    TabSubtitle(context: informative, running: running)
+                        // Under the title, past the mark slot and its spacing.
+                        .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
                 }
                 Spacer(minLength: DS.Space.xs)
                 TabPresence(workspace: workspace, panes: tab.root.panes)

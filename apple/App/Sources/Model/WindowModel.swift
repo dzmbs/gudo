@@ -95,7 +95,16 @@ final class WindowModel {
     /// top (unless `TabPlacement.showsTabBarKey` is off). Per window; the last choice is the next
     /// window's start.
     var isSidebarShown = TabPlacement.sidebarShown {
-        didSet { TabPlacement.sidebarShown = isSidebarShown }
+        didSet {
+            TabPlacement.sidebarShown = isSidebarShown
+            quietLayoutResizes()
+        }
+    }
+
+    /// The grids about to change follow an animated layout change, not a resize the user is
+    /// making: no cols × rows overlay counting through every frame of it.
+    func quietLayoutResizes() {
+        for workspace in workspaces.values { workspace.layoutChangeUntil = .now + .milliseconds(700) }
     }
     var isSearchShown = false
     var searchNeedle = "" {
