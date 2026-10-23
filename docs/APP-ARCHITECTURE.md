@@ -864,3 +864,44 @@ Tests: `BrowserLeafTests` (PaneLayout), `BrowserTests` (sign-in URLs), `BrowserA
 `BrowserUITests` (iPad, `UI_TEST_CLASS=BrowserUITests apple/scripts/w3-ui-test.sh`: a sign-in
 through `BROWSER`, a host page in a pane beside its terminal surviving a relaunch, an agent
 driving a page with an approval on the device).
+
+## 22. Files app locations (File Provider)
+
+Each paired host (owner hosts only; guests and plain SSH hosts are not offered) is a location in
+the Files app: one `NSFileProviderDomain` per host, named after it, its home directory as the
+root. The extension (`apple/FilesProvider`, an `NSFileProviderReplicatedExtension`) runs without
+the app, so the app shares what dialling takes (`FilesShare`): `hosts.json` and the relay
+settings in a folder of the App Group container, the tickets, this device's key and the relay
+token in the shared Keychain group. `FilesLocations` publishes them whenever the hosts or the
+relay settings change and adds, renames and removes the domains to match (`DomainPlan`).
+
+Everything else is `FilesProviderKit` over the daemon's file RPCs (DAEMON.md §5.6–5.7):
+- **Identity.** The daemon has no file ids that survive its own writes (an upload is a new
+  inode), and Files wants an item to keep its identifier through renames, so identifiers are
+  minted per path and saved (`ItemIdentifiers`): a rename or move made in Files keeps them, for
+  the item and everything under it; a change made on the host reads as a delete and a create.
+- **Items.** Files and folders (links to folders open as folders); sockets, FIFOs, devices and
+  dangling links are left out; dot files are flagged hidden. The content version is the daemon's
+  `inode-size-mtime_ns`, the metadata version adds the name.
+- **Changes.** Folders from `FsMkdir`, new files uploaded with `create_new` (a name taken is a
+  collision; with `mayAlreadyExist` the existing item is the answer), renames and moves with
+  `FsRename` (never replacing), new contents uploaded with `if_match` on the version they were
+  based on. If the host's file changed meanwhile both are kept: the host's under the name, these
+  beside it as "name 2". Deletes go to the host's trash (Files' own delete is final, the host's
+  trash is not); the home itself is refused.
+- **Staying current.** No change journal: the working set is the folders listed lately (at most
+  64) and what is in them, those folders are watched (`FsWatch`), and a watch event or a
+  reconnect moves the sync anchor and signals the working set. Asked for changes since an older
+  anchor, the enumerators answer `syncAnchorExpired` and the system lists again and works out
+  what changed (`HostFilesSession`).
+
+Builds: the extension is always built (and its kit tested) but only runs where the app adds
+domains, which needs the shared groups: `FILES_PROVIDER = YES` and the groups in
+`Brand.xcconfig` (a paid team). Free builds never add a location.
+
+Tests: `FilesProviderKitTests` (`swift test` in `Packages/FilesProviderKit`, needs `cargo build
+-p hostd`): items and hidden/link handling, identifiers through renames and moves and across
+restarts, create without replacing, contents only over the version they came from (keep both),
+fetch, delete into the host's trash, the working set, error mapping, what the app shares and the
+domain plan, and the whole path against a real daemon (`DaemonFilesTests`: pair, share, dial as
+the extension, browse, create, edit, rename, fetch, delete).
