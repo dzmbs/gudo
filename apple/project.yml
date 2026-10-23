@@ -39,6 +39,8 @@ packages:
     path: Packages/DrawingKit
   VoiceKit:
     path: Packages/VoiceKit
+  FilesProviderKit:
+    path: Packages/FilesProviderKit
 targets:
   App:
     type: application
@@ -96,6 +98,10 @@ targets:
         # Shared with the Notification Service Extension in push builds (Brand.xcconfig).
         PushKeychainGroup: $(PUSH_KEYCHAIN_GROUP)
         PushAppGroup: $(PUSH_APP_GROUP)
+        # Shared with the File Provider extension when FILES_PROVIDER = YES (Brand.xcconfig).
+        FilesKeychainGroup: $(FILES_KEYCHAIN_GROUP)
+        FilesAppGroup: $(FILES_APP_GROUP)
+        FilesSecretsService: $(BRAND_BUNDLE_ID_PREFIX).files
         # `.excalidraw` scenes: drawings dragged, copied and exported out of the app (with a
         # PNG alongside), and dropped or pasted in. Excalidraw declares no UTI; imported, not
         # owned.
@@ -156,7 +162,8 @@ targets:
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: NO
         # Push only with a team (Brand.xcconfig): `#if PUSH_YES` registers with APNs.
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PUSH_$(PUSH_ENTITLEMENT)"
+        # Files locations only with the shared groups: `#if FILES_PROVIDER_YES`.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PUSH_$(PUSH_ENTITLEMENT) FILES_PROVIDER_$(FILES_PROVIDER)"
         CODE_SIGN_ENTITLEMENTS: $(PUSH_ENTITLEMENTS_FILE)
     dependencies:
       - package: TerminalKit
@@ -182,7 +189,12 @@ targets:
         product: NotifyKit
       - package: PushCrypto
         product: PushCrypto
+      - package: FilesProviderKit
+        product: FilesProviderKit
+        destinationFilters: [iOS]
       - target: NotificationService
+        destinationFilters: [iOS]
+      - target: FilesProvider
         destinationFilters: [iOS]
       - target: AgentActivityWidget
         destinationFilters: [iOS]
@@ -216,6 +228,40 @@ targets:
     dependencies:
       - package: NotifyKit
         product: NotifyKit
+  # Paired hosts in the Files app (FilesProviderKit). Built always so it stays compiled and
+  # tested; it only runs where the app adds its domains, which needs the shared groups
+  # (FILES_PROVIDER = YES with a paid team, Brand.xcconfig).
+  FilesProvider:
+    type: app-extension
+    platform: iOS
+    sources: [FilesProvider]
+    info:
+      path: FilesProvider/Info.plist
+      properties:
+        CFBundleDisplayName: $(BRAND_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        FilesKeychainGroup: $(FILES_KEYCHAIN_GROUP)
+        FilesAppGroup: $(FILES_APP_GROUP)
+        FilesSecretsService: $(BRAND_BUNDLE_ID_PREFIX).files
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
+          NSExtensionFileProviderDocumentGroup: $(FILES_APP_GROUP)
+          NSExtensionFileProviderSupportsEnumeration: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BRAND_BUNDLE_ID_PREFIX).app.files
+        PRODUCT_NAME: FilesProvider
+        CODE_SIGN_IDENTITY: "-"
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGN_ENTITLEMENTS: $(FILES_PROVIDER_ENTITLEMENTS_FILE)
+    dependencies:
+      - package: FilesProviderKit
+        product: FilesProviderKit
   # The agent-run Live Activity (Lock Screen, Dynamic Island); updated locally by the app.
   AgentActivityWidget:
     type: app-extension
@@ -287,6 +333,7 @@ schemes:
         - package: DesignSystem/DesignSystemTests
         - package: DrawingKit/DrawingKitTests
         - package: NotifyKit/NotifyKitTests
+        - package: FilesProviderKit/FilesProviderKitTests
         - AppTests
         - AppUITests
     run:

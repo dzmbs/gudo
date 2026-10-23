@@ -15,6 +15,7 @@ One multiplatform SwiftUI app (iPhone, iPad, Mac; iOS/iPadOS/macOS 26+) over thr
 | `App/Sources/Screens` | Hosts, pairing, Inbox, share, links, diff, files, browser, editor: views over the protocols in `App/Sources/Model/ScreenModels.swift` (mock data in `MockData.swift`) |
 | `Packages/NotifyKit` | Notification categories and actions, per-kind preferences, local notifications from the attention feed, the action handler, the Notification Service Extension's work (over `PushCrypto`) and the Live Activity attributes; no core, so the extensions stay small |
 | `Packages/PushCrypto` | Opens the daemons' sealed pushes (CryptoKit; shared vectors with `crates/push`) |
+| `Packages/FilesProviderKit`, `FilesProvider` | Paired hosts as Files app locations (File Provider extension over the daemon's file RPCs); adds locations only with `FILES_PROVIDER = YES` and the shared groups (`Brand.xcconfig`, docs/APP-ARCHITECTURE.md §22) |
 | `NotificationService`, `AgentActivityWidget` | iOS app extensions: decrypts pushes; draws the agent-run Live Activity. Push registration needs a team: `PUSH_ENTITLEMENT` in `Brand.xcconfig` (docs/PUSH.md step 9) |
 | `Packages/TerminalKit` | libghostty-vt wrapper (`TerminalCore`), Metal renderer + AppKit/UIKit `TerminalView` (`TerminalRenderer`), `LocalPTY` (macOS) |
 | `Brand.xcconfig` | Product name and bundle id prefix; nothing else hard-codes them |
@@ -83,6 +84,10 @@ against a fake daemon client; `-only-testing:AppTests`), `DaemonWorkspaceTests` 
 repository, a `claude` stand-in that drives the daemon's hooks, a `code serve-web` stand-in).
 `scripts/w3-daemon.sh start <dir>` starts that daemon by itself; `scripts/w3-screenshots.sh
 <udid> <prefix> <dir>` captures the screens on its data.
+
+Files app locations: `(cd Packages/FilesProviderKit && swift test)` (needs `cargo build -p hostd`).
+Echo prediction on a daemon pane over a slow link: `scripts/prediction-ui-test.sh <udid>`. A canvas pane
+live with a second device: `scripts/canvas-peers-ui-test.sh <udid>`.
 
 Remote hosts: `(cd Packages/HostKit && swift test)` (needs `cargo build -p hostd`),
 `scripts/daemon-ui-test.sh <udid>` (iPad UI test against a local daemon that is killed and restarted

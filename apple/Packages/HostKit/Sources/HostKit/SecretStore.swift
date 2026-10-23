@@ -32,21 +32,26 @@ nonisolated public struct SecretStoreError: Error, Equatable, CustomStringConver
 
 /// The Keychain (data-protection keychain), generic passwords under one service, readable
 /// after the first unlock and never migrated to another device
-/// (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`).
+/// (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`). With an access group the items are
+/// shared with the app's extensions that hold the same group.
 nonisolated public final class KeychainStore: SecretStore {
     public let service: String
+    public let accessGroup: String?
 
-    public init(service: String) {
+    public init(service: String, accessGroup: String? = nil) {
         self.service = service
+        self.accessGroup = accessGroup
     }
 
     private func query(_ key: String) -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecUseDataProtectionKeychain as String: true,
         ]
+        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        return query
     }
 
     public func data(for key: String) throws -> Data? {

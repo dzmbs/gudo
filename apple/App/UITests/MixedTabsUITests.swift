@@ -161,6 +161,42 @@ final class MixedTabsUITests: XCTestCase {
         shot(app, "mixed-alpha-down")
     }
 
+    /// An image shown in alpha's pane, dragged onto beta's pane in the same mixed tab, is
+    /// uploaded to beta and placed there (`DrawingTransfer`: another host gets the content, not
+    /// a reference).
+    func testDragAnImageToAnotherHostsPane() throws {
+        let app = try launch(tickets: true, directory: NSTemporaryDirectory() + "mixed-drag-\(UUID().uuidString)")
+        XCTAssertTrue(element(app, "host-group-beta").waitForExistence(timeout: 40))
+        waitFor(NSPredicate(format: "value == 'Connected'"), element(app, "host-group-alpha"), timeout: 40, "alpha connected")
+        waitFor(NSPredicate(format: "value == 'Connected'"), element(app, "host-group-beta"), timeout: 40, "beta connected")
+        XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 30), "alpha's pane")
+        app.typeKey(XCUIKeyboardKey.shift.rawValue, modifierFlags: [])
+        palette(app, "split with host")
+        let field = app.textFields.matching(identifier: "command-palette").firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the host picker")
+        field.typeText("beta")
+        app.typeKey("1", modifierFlags: .command)
+        waitFor(NSPredicate(format: "count == 2"), panes(app), timeout: 20, "alpha and beta side by side")
+        let sides = panesByPosition(app)
+        type(in: sides[1], app, "clear; echo beta-$((7*6))", expect: "beta-42")
+
+        // A kitty graphics PNG printed in alpha's pane: alpha's daemon keeps it as a placement.
+        let png = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAYCAIAAAAzn+mLAAAALElEQVR42u3OAQkAAAgDsMcxk/0xhzUEBwuwTNcpERISEhISEhISEhIS+hVa2hBUW4vlBT8AAAAASUVORK5CYII="
+        type(in: sides[0], app, "clear; printf '\\033_Gf=100,a=T,c=24,r=5;\(png)\\033\\\\\\n\\n\\n\\n\\n\\n'; echo sho''wn", expect: "shown")
+        let placements = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'placement-'"))
+        waitFor(NSPredicate(format: "count == 1"), placements, timeout: 20, "the image is placed in alpha's pane")
+        let image = placements.firstMatch
+        XCTAssertTrue(sides[0].frame.contains(image.frame), "in alpha's pane")
+        shot(app, "mixed-drag-before")
+
+        image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 1.2, thenDragTo: sides[1].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+        waitFor(NSPredicate(format: "count == 2"), placements, timeout: 30, "placed on beta too")
+        let onBeta = placements.allElementsBoundByIndex.filter { sides[1].frame.insetBy(dx: -2, dy: -2).contains($0.frame) }
+        XCTAssertEqual(onBeta.count, 1, "the copy is in beta's pane")
+        shot(app, "mixed-drag-after")
+    }
+
     /// View ▸ Two Columns: two tabs side by side, each taking typing; focus moves between the
     /// columns without moving them; off again, one tab. This iPad's own shell (no daemon).
     func testTwoColumnsShowTwoTabsSideBySide() throws {

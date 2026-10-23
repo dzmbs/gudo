@@ -19,3 +19,18 @@ PUSH_ENTITLEMENT = NO
 PUSH_ENTITLEMENTS_FILE =
 PUSH_KEYCHAIN_GROUP =
 PUSH_APP_GROUP =
+
+// Paired hosts in the Files app (the FilesProvider extension, docs/APP-ARCHITECTURE.md §22).
+// The extension runs without the app, so it reads the hosts, tickets and this device's key
+// from an App Group and a Keychain group shared with the app: a paid team again. Without one
+// keep FILES_PROVIDER = NO: the extension is built but no Files location is ever added. With a
+// team (the push groups can be reused):
+//   FILES_PROVIDER = YES
+//   FILES_PROVIDER_ENTITLEMENTS_FILE = FilesProvider/FilesProvider.entitlements
+//   FILES_KEYCHAIN_GROUP = <TEAMID>.dev.unnamed.shared
+//   FILES_APP_GROUP = group.dev.unnamed.app
+// and give the app the same groups (App/Push.entitlements has them when they match).
+FILES_PROVIDER = NO
+FILES_PROVIDER_ENTITLEMENTS_FILE =
+FILES_KEYCHAIN_GROUP =
+FILES_APP_GROUP =

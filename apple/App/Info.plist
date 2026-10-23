@@ -44,6 +44,12 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>FilesAppGroup</key>
+	<string>$(FILES_APP_GROUP)</string>
+	<key>FilesKeychainGroup</key>
+	<string>$(FILES_KEYCHAIN_GROUP)</string>
+	<key>FilesSecretsService</key>
+	<string>$(BRAND_BUNDLE_ID_PREFIX).files</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>tailscale</string>
