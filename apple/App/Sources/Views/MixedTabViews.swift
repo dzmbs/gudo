@@ -118,10 +118,10 @@ private struct ExitFullScreenButton: View {
 
     static var hint: String {
         #if os(iOS)
-        if GCKeyboard.coalesced == nil { return "Tap ⤡ at the top to exit full screen" }
-        return "Press ⌃⌘F or tap ⤡ to exit full screen"
+        if GCKeyboard.coalesced == nil { return "Tap Exit Full Screen at the top to leave" }
+        return "Press ⌃⌘F, or tap Exit Full Screen at the top"
         #else
-        return "Press ⌃⌘F or click ⤡ to exit full screen"
+        return "Press ⌃⌘F, or click Exit Full Screen at the top"
         #endif
     }
 
