@@ -279,6 +279,7 @@ final class WindowModel {
             links.window = self
         }
         git.window = self
+        browsers.onPopup = { [weak self] opener, url in self?.openPopup(url, from: opener) }
         #if os(iOS)
         // A first guess from the screen until the window is measured (`WindowRoot`), so an
         // iPhone never draws the regular layout for a frame.
