@@ -65,7 +65,19 @@ final class WindowModel {
     var destination = Destination.terminal {
         didSet { if destination != oldValue { reportViews() } }
     }
-    var sheet: SheetRoute?
+    var sheet: SheetRoute? {
+        didSet {
+            #if os(macOS)
+            // Browsing tools open in a window of their own (`ToolWindows.swift`).
+            if let route = sheet, route.opensInWindow, let openTool {
+                sheet = nil
+                openTool(ToolWindowRequest(route: route.rawValue, window: serial))
+            }
+            #endif
+        }
+    }
+    /// Opens a tool window (macOS), set by the window's view.
+    @ObservationIgnored var openTool: ((ToolWindowRequest) -> Void)?
     /// The toolbar's host switcher is open.
     var isHostSwitcherShown = false
     /// What the Replays sheet shows.

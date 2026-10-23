@@ -77,6 +77,8 @@ private struct DirectoryListing: View {
     @State private var trashing: FileEntry?
     @State private var transfer: Transfer?
     @State private var shared: SharedFile?
+    /// `-screen file-preview`: Cargo.toml opened once the root is listed (design review).
+    @State private var fixtureFile: FileEntry?
 
     enum Naming: Identifiable {
         case newFolder
@@ -106,7 +108,7 @@ private struct DirectoryListing: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .navigationSubtitle(source.display(directory))
+            .navigationSubtitle("\(source.display(directory)) · \(source.hostName)")
             .searchable(text: $filter, prompt: "Filter")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -157,6 +159,13 @@ private struct DirectoryListing: View {
             }
             .sheet(item: $shared) { file in
                 ShareFileSheet(url: file.url)
+            }
+            .navigationDestination(item: $fixtureFile) { entry in
+                FilePreviewScreen(source: source, entry: entry, actions: actions)
+            }
+            .onChange(of: entries) { _, entries in
+                guard LaunchOptions.screen == "file-preview", directory == source.root, fixtureFile == nil else { return }
+                fixtureFile = entries?.first { $0.name == "Cargo.toml" }
             }
     }
 
@@ -446,7 +455,7 @@ struct SharedFile: Identifiable {
 
 /// A file's preview: text in the terminal's monospace with line numbers, images fit to the
 /// width, anything else as a card with its size. Share / download, open in VS Code.
-private struct FilePreviewScreen: View {
+struct FilePreviewScreen: View {
     let source: any FileSource
     let entry: FileEntry
     let actions: FileActions
@@ -457,36 +466,103 @@ private struct FilePreviewScreen: View {
     @State private var failure: String?
     @State private var shared: SharedFile?
     @State private var downloading: Double?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         content
+            #if os(iOS)
+            // Touch: the strip is the whole header (the way back, the file, its folder and its
+            // actions) instead of a tall bar with a second row under it.
+            .safeAreaInset(edge: .top, spacing: 0) { header }
+            #endif
             .chromeContent()
             .navigationTitle(entry.name)
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .navigationSubtitle(source.display((entry.path as NSString).deletingLastPathComponent))
-            .background(theme.background.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            #else
+            // The Mac: the window's own titlebar is the header (Xcode's editor title).
+            .navigationSubtitle([folder, meta].compactMap(\.self).joined(separator: " · "))
             .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if let open = actions.openInEditor {
-                        Button("Open in VS Code", systemImage: "chevron.left.forwardslash.chevron.right") { open(entry.path) }
-                            .accessibilityIdentifier("file-open-editor")
-                    }
-                    Button(downloading == nil ? "Download" : "Downloading", systemImage: "square.and.arrow.down", action: download)
-                        .disabled(downloading != nil)
-                        .accessibilityIdentifier("file-download")
-                    Menu("More", systemImage: "ellipsis") {
-                        Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
-                        Button("Insert Path in Terminal", systemImage: "text.insert") { actions.insertPath(entry.path) }
-                        if case .text(let text, _)? = preview {
-                            Button("Copy Contents", systemImage: "doc.on.clipboard") { FilesPasteboard.copy(text) }
-                        }
-                    }
-                }
+                ToolbarItemGroup(placement: .primaryAction) { actionButtons }
             }
+            #endif
+            .background(theme.background.ignoresSafeArea())
             .task(id: entry.path) { await load() }
             .sheet(item: $shared) { file in ShareFileSheet(url: file.url) }
+    }
+
+    private var folder: String { source.display((entry.path as NSString).deletingLastPathComponent) }
+
+    @ViewBuilder private var actionButtons: some View {
+        if let open = actions.openInEditor {
+            Button("Open in VS Code", systemImage: "chevron.left.forwardslash.chevron.right") { open(entry.path) }
+                .help("Open in VS Code")
+                .accessibilityIdentifier("file-open-editor")
+        }
+        Button(downloading == nil ? "Download" : "Downloading", systemImage: "square.and.arrow.down", action: download)
+            .help("Download")
+            .disabled(downloading != nil)
+            .accessibilityIdentifier("file-download")
+        Menu("More", systemImage: "ellipsis") {
+            Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
+            Button("Insert Path in Terminal", systemImage: "text.insert") { actions.insertPath(entry.path) }
+            if case .text(let text, _)? = preview {
+                Button("Copy Contents", systemImage: "doc.on.clipboard") { FilesPasteboard.copy(text) }
+            }
+        }
+        .menuIndicator(.hidden)
+        .help("More")
+        .accessibilityIdentifier("file-more")
+    }
+
+    /// The editor pane's strip, for a file: its kind, name, folder and what is shown of it,
+    /// then quiet icon actions.
+    private var header: some View {
+        HStack(spacing: DS.Space.s) {
+            Button("Back", systemImage: "chevron.left") { dismiss() }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bar)
+                .accessibilityIdentifier("file-back")
+            Image(systemName: FileIcon.symbol(for: entry))
+                .font(.callout)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(verbatim: entry.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DS.Palette.text)
+                Text(verbatim: [folder, meta].compactMap(\.self).joined(separator: " · "))
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .truncationMode(.middle)
+            }
+            .lineLimit(1)
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: DS.Space.s)
+            HStack(spacing: DS.Space.xs) { actionButtons }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bar)
+        }
+        .padding(.leading, DS.Space.s)
+        .padding(.trailing, DS.Space.l)
+        .frame(height: Self.headerHeight)
+        .background(theme.background)
+        .overlay(alignment: .bottom) { theme.splitDivider.frame(height: 1) }
+        .accessibilityIdentifier("file-header")
+    }
+
+    private static let headerHeight: CGFloat = 52
+
+    /// "2 KB · 48 lines", and when only the start is shown, says so.
+    private var meta: String? {
+        var parts: [String] = []
+        if let size = entry.size { parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
+        if case .text(let text, let truncated)? = preview {
+            let lines = text.reduce(into: 1) { count, character in if character == "\n" { count += 1 } }
+            parts.append(truncated ? "first MiB" : "\(lines) line\(lines == 1 ? "" : "s")")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     @ViewBuilder private var content: some View {
@@ -583,6 +659,9 @@ private struct TextPreview: View {
             }
             .padding(.vertical, DS.Space.s)
         }
+        // A short file starts at the top left, not centred in the view.
+        .defaultScrollAnchor(.topLeading)
+        .defaultScrollAnchor(.topLeading, for: .alignment)
         .background(theme.background)
         .accessibilityIdentifier("file-text-preview")
     }

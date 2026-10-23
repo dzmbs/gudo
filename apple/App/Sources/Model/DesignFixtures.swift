@@ -139,6 +139,7 @@ enum DesignFixtures {
                 workspace.notices[panes[2]] = PaneNotice(bell: true, hoveredURL: "https://github.com/ghostty-org/ghostty/pull/8497")
                 workspace.notices[panes[0]] = PaneNotice(secureInput: true)
             }
+        case "file-preview": model.sheet = .files
         default:
             if screen == "ticket" { model.addHost(mode: .ticket) } else if screen == "themes" { model.sheet = .settings } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }
         }
