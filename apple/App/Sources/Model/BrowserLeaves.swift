@@ -2,6 +2,7 @@ import DesignSystem
 import Foundation
 import HostKit
 import PaneLayout
+import SwiftUI
 
 // Browser pages as panes of a window's split tree, as VS Code editors are (§20): a leaf of a
 // window-owned tab (`CompositeTab.browsers`), a tab of its own or beside a terminal. Each has
@@ -112,6 +113,13 @@ extension WindowModel {
         return URL(string: member.url)?.host() ?? "Browser"
     }
 
+    /// The icon of a window tab's page (its focused one, or a browser tab's first).
+    func favicon(ofMixedTab tab: CompositeTab) -> Image? {
+        guard let browser = tab.focusedBrowser ?? (tab.isBrowserOnly ? tab.leaves.lazy.compactMap({ tab.browsers[$0] }).first : nil)
+        else { return nil }
+        return browsers.existing(browser.id)?.favicon
+    }
+
     /// Palette commands for browser leaves.
     var browserPaletteExtras: [(String, String, String, [String]?, () -> Void)] {
         let start = URL(string: "about:blank")!
@@ -123,5 +131,21 @@ extension WindowModel {
                 self?.openBrowser(start, hostId: self?.workspace?.hostId, placement: .split)
             }),
         ]
+    }
+}
+
+/// A page's icon in a tab row, on the row's mark slot.
+struct Favicon: View {
+    let image: Image
+    let size: CGFloat
+
+    var body: some View {
+        image
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: size, height: size)
+            .clipShape(.rect(cornerRadius: 3))
+            .accessibilityHidden(true)
     }
 }

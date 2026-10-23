@@ -333,7 +333,7 @@ private struct MixedTabRow: View {
                     .lineLimit(1)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.row) {
-                        TabLeadingMark(program: program, state: isActive ? nil : state)
+                        TabLeadingMark(program: program, state: isActive ? nil : state, favicon: model.favicon(ofMixedTab: tab))
                         Text(title)
                             .font(DS.Font.sidebarTitle)
                             .foregroundStyle(.primary)
@@ -415,7 +415,11 @@ struct MixedTabChip: View {
                     if tab.isEditorOnly {
                         ProgramMark(.vscode, size: 12)
                     } else if tab.isBrowserOnly {
-                        ProgramMark(.browser, size: 12)
+                        if let favicon = model.favicon(ofMixedTab: tab) {
+                            Favicon(image: favicon, size: 12)
+                        } else {
+                            ProgramMark(.browser, size: 12)
+                        }
                     }
                     Text(model.title(ofMixedTab: tab))
                         .lineLimit(1)

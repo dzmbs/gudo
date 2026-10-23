@@ -256,6 +256,11 @@ class H(http.server.BaseHTTPRequestHandler):
             cookies = "; ".join(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip().startswith("dev="))
             body = ("cookie=%s" % (cookies or "none")).encode()
             kind = "text/plain"
+        elif self.path == "/lang":
+            body = ("<!doctype html><title>lang</title><p>lang=%s</p><p id=s></p><script>"
+                    "s.textContent = 'scheme=' + (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')</script>"
+                    % self.headers.get("Accept-Language", "none")).encode()
+            kind = "text/html"
         else:
             body, kind = PAGE, "text/html"
         self.send_response(200)

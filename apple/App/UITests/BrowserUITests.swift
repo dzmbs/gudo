@@ -148,6 +148,66 @@ final class BrowserUITests: XCTestCase {
         shot("start-page-opened")
     }
 
+    /// Its trailing end: the dev server toast can sit over the leading part.
+    private func tapAddress(_ field: XCUIElement) {
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+    }
+
+    /// The address bar as in Chrome: after a page loads, a tap on the bar takes typing again,
+    /// shows the full address selected, and Return goes to what was typed; back and forward
+    /// walk between the sites; pages are asked for in English.
+    func testAddressBarGoesFromSiteToSite() throws {
+        try launch()
+        panes.firstMatch.tap()
+        app.typeText("devserver 48321 localhost & devserver 48322 localhost &\n")
+        waitFor(screen, contains: "48322", timeout: 20)
+        app.buttons["open-palette"].firstMatch.tap()
+        let palette = app.textFields.matching(identifier: "command-palette").firstMatch
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        palette.typeText("New Browser Tab\n")
+        let start = app.textFields["start-address"].firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 20))
+        start.tap()
+        start.typeText("localhost:48321\n")
+        let checked = { (port: Int) in
+            self.app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "localhost:\(port) cookie", "localhost:\(port) cookie")).firstMatch
+        }
+        XCTAssertTrue(checked(48321).waitForExistence(timeout: 30), "the first site loads")
+
+        let address = app.textFields["browser-address"].firstMatch
+        XCTAssertTrue(address.waitForExistence(timeout: 5), "the address bar is a field")
+        tapAddress(address)
+        waitFor(address, contains: "http://localhost:48321/", timeout: 5)
+        shot("address-focused")
+        address.typeText("localhost:48322\n")
+        XCTAssertTrue(checked(48322).waitForExistence(timeout: 30), "typing over the selected address goes to the second site")
+
+        tapAddress(address)
+        address.typeText("localhost:48321/lang\n")
+        let lang = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'lang=' OR value BEGINSWITH 'lang='")).firstMatch
+        XCTAssertTrue(lang.waitForExistence(timeout: 30))
+        let sent = lang.label.isEmpty ? (lang.value as? String ?? "") : lang.label
+        XCTAssertEqual(sent, "lang=en-US,en;q=0.9", "pages are asked for in English")
+        let scheme = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'scheme=' OR value BEGINSWITH 'scheme='")).firstMatch
+        XCTAssertTrue(scheme.waitForExistence(timeout: 10))
+        XCTAssertTrue(scheme.label.contains("dark") || (scheme.value as? String ?? "").contains("dark"), "the page takes the dark theme's appearance")
+        shot("language")
+
+        app.buttons["browser-back"].firstMatch.tap()
+        XCTAssertTrue(checked(48322).waitForExistence(timeout: 30), "back goes to the second site")
+        app.buttons["browser-back"].firstMatch.tap()
+        XCTAssertTrue(checked(48321).waitForExistence(timeout: 30), "and back again to the first")
+        app.buttons["browser-forward"].firstMatch.tap()
+        XCTAssertTrue(checked(48322).waitForExistence(timeout: 30), "forward returns")
+
+        // The address bar keeps taking typing after the page itself was tapped.
+        checked(48322).tap()
+        tapAddress(address)
+        address.typeText("localhost:48321\n")
+        XCTAssertTrue(checked(48321).waitForExistence(timeout: 30), "the bar still takes typing after a tap on the page")
+        shot("back-forward")
+    }
+
     /// An agent's browser tools from its terminal (`un-hook browser`, as Codex would use them):
     /// navigate opens a page beside the pane and answers with a snapshot, refs act on it, a
     /// purchase waits for the user's Allow on the device, and a screenshot comes back.

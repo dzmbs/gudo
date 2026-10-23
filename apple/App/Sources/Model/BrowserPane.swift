@@ -1,6 +1,7 @@
 import Foundation
 import HostKit
 import Observation
+import SwiftUI
 import PaneLayout
 import WebKit
 
@@ -128,13 +129,89 @@ final class BrowserPane: Identifiable {
         guard page.url == nil else { return }
         Task {
             await prepare?(initialURL)
-            page.load(URLRequest(url: initialURL))
+            page.load(Self.request(initialURL))
         }
     }
 
     func load(_ url: URL) {
         started = true
-        page.load(URLRequest(url: url))
+        page.load(Self.request(url))
+    }
+
+    /// A request in the language chosen for websites (`WebsiteLanguage`).
+    nonisolated static func request(_ url: URL, language: String = WebsiteLanguage.current) -> URLRequest {
+        var request = URLRequest(url: url)
+        if let accept = WebsiteLanguage.acceptLanguage(language), url.scheme == "http" || url.scheme == "https" {
+            request.setValue(accept, forHTTPHeaderField: "Accept-Language")
+        }
+        return request
+    }
+
+    /// Whether a main-frame navigation should be loaded again with the language header: WebKit
+    /// has no setting for it, so a page's own links and redirects are reissued. Never a form
+    /// post, a history step, a reload, a jump within the page, or what an agent's action set off.
+    nonisolated static func needsLanguage(
+        _ request: URLRequest, type: WKNavigationType, from current: URL?, language: String = WebsiteLanguage.current
+    ) -> Bool {
+        guard let accept = WebsiteLanguage.acceptLanguage(language), let url = request.url,
+              url.scheme == "http" || url.scheme == "https",
+              request.value(forHTTPHeaderField: "Accept-Language") != accept,
+              (request.httpMethod ?? "GET") == "GET", request.httpBody == nil,
+              type != .backForward, type != .reload, type != .formResubmitted
+        else { return false }
+        if let current, url.fragment != nil, url.absoluteString.prefix { $0 != "#" } == current.absoluteString.prefix(while: { $0 != "#" }) {
+            return false
+        }
+        return true
+    }
+
+    // MARK: Favicon
+
+    /// The page's icon, for its tab.
+    var favicon: Image?
+    @ObservationIgnored private var faviconPage: URL?
+
+    /// Reads the page's icon (its `link rel=icon`, else `/favicon.ico`) through the page itself,
+    /// so it comes from the page's own data store and reaches a host's dev servers.
+    func refreshFavicon() async {
+        guard let url = page.url, url.scheme == "http" || url.scheme == "https" else {
+            favicon = nil
+            faviconPage = nil
+            return
+        }
+        guard faviconPage != url else { return }
+        faviconPage = url
+        let script = """
+            const links = [...document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]')]
+              .filter(l => l.href && !/svg/.test(l.type) && !/\\.svg($|\\?)/.test(l.href));
+            const href = links.length ? links[0].href : new URL('/favicon.ico', location.href).href;
+            try {
+              const r = await fetch(href, { credentials: 'include' });
+              if (!r.ok) return null;
+              const blob = await r.blob();
+              return await new Promise(done => {
+                const reader = new FileReader();
+                reader.onload = () => done(reader.result);
+                reader.onerror = () => done(null);
+                reader.readAsDataURL(blob);
+              });
+            } catch { return null; }
+            """
+        let data = (try? await page.callJavaScript(script, contentWorld: Self.faviconWorld) as? String)
+            .flatMap { $0.split(separator: ",", maxSplits: 1).last }
+            .flatMap { Data(base64Encoded: String($0)) }
+        guard page.url == url else { return }
+        favicon = data.flatMap(Self.image)
+    }
+
+    private static let faviconWorld = WKContentWorld.world(name: "unnamed-favicon")
+
+    private static func image(_ data: Data) -> Image? {
+        #if os(iOS)
+        UIImage(data: data).map { Image(uiImage: $0) }
+        #else
+        NSImage(data: data).map { Image(nsImage: $0) }
+        #endif
     }
 
     /// The page's URL, or where it is going.
@@ -158,6 +235,15 @@ final class BrowserPane: Identifiable {
             }
             guard action.target?.isMainFrame != false else { return .allow }
             if let intercept = pane.intercept, intercept(url) { return .cancel }
+            if !pane.agentActing, pane.agentActivity == nil, !action.shouldPerformDownload,
+               BrowserPane.needsLanguage(action.request, type: action.navigationType, from: pane.page.url)
+            {
+                var request = action.request
+                request.setValue(WebsiteLanguage.acceptLanguage(WebsiteLanguage.current), forHTTPHeaderField: "Accept-Language")
+                // After this one is cancelled, or the cancel would take the new one too.
+                Task { @MainActor in _ = pane.page.load(request) }
+                return .cancel
+            }
             await pane.prepare?(url)
             return .allow
         }

@@ -20,7 +20,7 @@ struct BrowserStartPage: View {
     private var history: BrowserHistory { .shared }
 
     private var suggestions: [AddressSuggestion] {
-        AddressSuggestion.make(for: text, history: history.entries, devServers: devServers, engine: engine)
+        AddressSuggestion.make(for: text, history: history.entries, devServers: devServers, engine: engine, locale: .current)
     }
 
     var body: some View {
@@ -105,7 +105,7 @@ struct BrowserStartPage: View {
     private func submit() {
         if suggestions.indices.contains(selection) {
             open(suggestions[selection].url)
-        } else if let url = BrowserAddress.url(for: text, engine: engine) {
+        } else if let url = BrowserAddress.url(for: text, engine: engine, locale: .current) {
             open(url)
         }
     }
@@ -230,9 +230,13 @@ private struct Monogram: View {
     }
 }
 
-/// Settings ▸ Browser: what the address field searches with, and the pages it remembers.
+/// Settings ▸ Browser: what the address field searches with, the language and appearance pages
+/// are asked for, and the pages it remembers.
 struct BrowserSettingsSection: View {
     @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
+    @AppStorage(WebsiteLanguage.key) private var language = WebsiteLanguage.defaultTag
+    @AppStorage(SearchRegion.key) private var region = ""
+    @AppStorage(WebsiteAppearance.key) private var followsTheme = true
 
     var body: some View {
         Section {
@@ -241,13 +245,26 @@ struct BrowserSettingsSection: View {
             }
             .settingAnchor("search-engine")
             .accessibilityIdentifier("settings-search-engine")
+            Picker("Language for Websites", selection: $language) {
+                Text("System").tag("")
+                ForEach(WebsiteLanguage.tags, id: \.self) { Text(WebsiteLanguage.name($0)).tag($0) }
+            }
+            .settingAnchor("website-language")
+            .accessibilityIdentifier("settings-website-language")
+            Picker("Search Region", selection: $region) {
+                Text("Automatic").tag("")
+                ForEach(SearchRegion.codes, id: \.self) { Text(SearchRegion.name($0)).tag($0) }
+            }
+            .settingAnchor("search-region")
+            Toggle("Websites Follow Theme Appearance", isOn: $followsTheme)
+                .settingAnchor("website-appearance")
             Button("Clear Browsing History", role: .destructive) { BrowserHistory.shared.clear() }
                 .disabled(BrowserHistory.shared.entries.isEmpty)
                 .settingAnchor("browser-history")
         } header: {
             Text("Browser")
         } footer: {
-            Text("What you type in a browser tab's address field that isn't an address searches here. Visited pages stay on this device.")
+            Text("What you type in a browser tab's address field that isn't an address searches here. Websites are asked for pages in the language chosen; the region sets where Google and Bing results are for, which they otherwise guess from your network. Visited pages stay on this device.")
         }
     }
 }
@@ -275,7 +292,8 @@ struct AddressSuggestionList: View {
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, DS.Space.m)
-                    .frame(height: 34)
+                    .padding(.vertical, DS.Space.row)
+                    .frame(minHeight: 32)
                 }
                 .buttonStyle(.row(selected: index == selection))
                 .accessibilityIdentifier("address-suggestion-\(index)")
