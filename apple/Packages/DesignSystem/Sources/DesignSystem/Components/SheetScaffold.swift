@@ -49,6 +49,11 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
     }
 
     public var body: some View {
+        // Opaque from the first frame, whoever presents it.
+        layout.chromeSheetBackground()
+    }
+
+    @ViewBuilder private var layout: some View {
         #if os(macOS)
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(title, subtitle: subtitle)
