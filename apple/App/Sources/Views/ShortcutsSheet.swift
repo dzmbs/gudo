@@ -13,6 +13,7 @@ struct ShortcutsSheet: View {
             ("Agents", agents),
             ("Window", WorkspaceAction.windowActions.filter { !agents.contains($0) } + [.newWindow]),
             ("Tabs", [.newTab, .newTabOnHost] + WorkspaceAction.tabActions),
+            ("Hosts", WorkspaceAction.hostActions),
             ("Panes", [.splitRight, .splitDown, .splitWithHost, .closePane] + WorkspaceAction.paneActions),
             ("Drawing", WorkspaceAction.drawActions),
         ]

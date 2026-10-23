@@ -2,7 +2,7 @@ import DesignSystem
 import SwiftUI
 
 // Swipe, long-press and right-click actions for rows outside a system `List` (the sidebar is
-// drawn by hand): Mail's swipe on touch, the same actions in the context
+// drawn by hand): the system's swipe on touch, the same actions in the context
 // menu and to VoiceOver, and a confirmation before what cannot be undone.
 
 /// The one row of a list whose actions are showing: opening another closes it.
@@ -107,19 +107,27 @@ private struct RowActionsModifier<Menu: View>: ViewModifier {
 }
 
 extension RowTint {
+    /// The system colours, so a swipe looks like every other app's.
     var color: Color {
         switch self {
         case .red: .red
-        case .gray: .gray
         case .orange: .orange
+        case .yellow: .yellow
+        case .green: .green
         case .blue: .blue
         case .indigo: .indigo
         }
     }
 }
 
+extension RowAction {
+    var swipe: SwipeAction {
+        SwipeAction(id: identifier, title: shortTitle, label: title, systemImage: systemImage, tint: tint.color)
+    }
+}
+
 #if os(iOS)
-/// Mail's swipe: the row slides to show its actions behind it; past most of its width the
+/// The system's swipe: the row slides to show its actions beside it; past most of its width the
 /// outermost one takes the whole row and runs on release. A tap anywhere on an open row closes it.
 private struct SwipeContainer: ViewModifier {
     let actions: RowActions
@@ -129,10 +137,10 @@ private struct SwipeContainer: ViewModifier {
     @State private var offset: CGFloat = 0
     @State private var start: CGFloat?
     @State private var width: CGFloat = 0
+    @State private var height: CGFloat = 0
     @State private var armed = false
     @State private var isHorizontal: Bool?
 
-    private static let buttonWidth: CGFloat = 68
     /// The share of the row's width past which a swipe runs its outermost action.
     private static let fullSwipe: CGFloat = 0.6
 
@@ -157,7 +165,10 @@ private struct SwipeContainer: ViewModifier {
                     if offset > 0 { buttons(actions.leading, trailing: false, revealed: offset) }
                 }
                 .clipped()
-                .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
+                .onGeometryChange(for: CGSize.self, of: \.size) { size in
+                    width = size.width
+                    height = size.height
+                }
                 // Beside the row's own tap, long press and drag; a swipe that starts mostly
                 // vertical is the list's scroll and is left alone.
                 .simultaneousGesture(
@@ -170,49 +181,27 @@ private struct SwipeContainer: ViewModifier {
                             if isHorizontal == true { ended(value.translation.width, value.velocity.width) }
                             isHorizontal = nil
                         })
-                .sensoryFeedback(DS.Haptic.structure, trigger: armed) { _, now in now }
+                .sensoryFeedback(DS.Haptic.armed, trigger: armed) { _, now in now }
                 .onChange(of: shared?.open) { _, open in
-                    if open != id, offset != 0, start == nil { withAnimation(DS.Motion.snappy) { offset = 0 } }
+                    if open != id, offset != 0, start == nil { withAnimation(DS.Motion.swipe) { offset = 0 } }
                 }
         }
     }
 
-    /// The edge's buttons, the outermost at the edge; armed, it alone fills what is revealed.
+    /// The edge's tray; `edge` lists the outermost first, the tray wants it last.
     private func buttons(_ edge: [RowAction], trailing: Bool, revealed: CGFloat) -> some View {
-        let shown = armed ? Array(edge.prefix(1)) : edge
-        let ordered = trailing ? Array(shown.reversed()) : shown
-        return HStack(spacing: DS.Space.xs) {
-            ForEach(ordered, id: \.self) { action in
-                Button {
-                    close()
-                    request(action)
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: action.systemImage)
-                            .font(.callout.weight(.semibold))
-                        Text(action.shortTitle)
-                            .font(.caption2.weight(.medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(action.tint.color, in: RoundedRectangle(cornerRadius: DS.Radius.control))
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(action.title)
-                .accessibilityIdentifier(action.identifier)
-            }
+        SwipeActionTray(
+            edge.reversed().map(\.swipe), edge: trailing ? .trailing : .leading, revealed: revealed,
+            rowHeight: height, armed: armed
+        ) { swipe in
+            guard let action = edge.first(where: { $0.identifier == swipe.id }) else { return }
+            close()
+            request(action)
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, DS.Space.s)
-        .frame(width: max(0, revealed))
-        .animation(DS.Motion.snappy, value: armed)
     }
 
     private func reveal(_ edge: [RowAction]) -> CGFloat {
-        CGFloat(edge.count) * Self.buttonWidth + DS.Space.s * 2
+        SwipeActionTray.width(for: edge.count, rowHeight: height)
     }
 
     private func changed(_ x: CGFloat) {
@@ -234,7 +223,7 @@ private struct SwipeContainer: ViewModifier {
         if armed, let action = edge.first {
             armed = false
             let sign: CGFloat = offset < 0 ? -1 : 1
-            withAnimation(DS.Motion.snappy) { offset = sign * width }
+            withAnimation(DS.Motion.swipe) { offset = sign * width }
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(180))
                 close(animated: false)
@@ -247,7 +236,7 @@ private struct SwipeContainer: ViewModifier {
         let opens = offset < 0
             ? (velocity < -300 || (velocity < 300 && -offset > reveal / 2))
             : (velocity > 300 || (velocity > -300 && offset > reveal / 2))
-        withAnimation(DS.Motion.snappy) {
+        withAnimation(DS.Motion.swipe) {
             offset = opens && !edge.isEmpty ? (offset < 0 ? -reveal : reveal) : 0
         }
         if offset == 0, shared?.open == id { shared?.open = nil }
@@ -256,7 +245,7 @@ private struct SwipeContainer: ViewModifier {
     private func close(animated: Bool = true) {
         armed = false
         if animated {
-            withAnimation(DS.Motion.snappy) { offset = 0 }
+            withAnimation(DS.Motion.swipe) { offset = 0 }
         } else {
             offset = 0
         }

@@ -66,6 +66,8 @@ final class WindowModel {
         didSet { if destination != oldValue { reportViews() } }
     }
     var sheet: SheetRoute?
+    /// The toolbar's host switcher is open.
+    var isHostSwitcherShown = false
     /// What the Replays sheet shows.
     var replayRequest = ReplayRequest.all
     /// What the next New Agent sheet starts with, once: a prompt (Ask Agent about a command with

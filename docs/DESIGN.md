@@ -143,7 +143,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `bell` | easeInOut 0.3 s | bell border | Ghostty |
 | `panel` | smooth 0.35 s | panels, tab style switch | — |
 | resize overlay | visible 750 ms after the last change | cols × rows | Ghostty `resize-overlay-duration` |
-| `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from the top, grown from 0.9, a 4 pt blur | iOS system banners |
+| `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from below, grown from 0.9, a 4 pt blur | — |
 | `menu` | spring 0.3 / 0.86 | menus, popovers, the host switcher's highlight | — |
 | `swipe` | spring 0.32 / 0.86 | a row settling open or shut after a swipe | iOS Mail |
 | `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
@@ -179,7 +179,7 @@ Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.pa
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28–48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
-| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a glass capsule under the toolbar with edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick up dismisses |
+| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a glass capsule at the bottom (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer and the iPhone tab bar), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
 | `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N |
 | `KeyBarLook` | `Components/KeyBarLook.swift` | the key bar's look (app passes it as `KeyBarStyle.designSystem`) |
 | `ResizeOverlay`, `ProcessExitedBar`, `BellBorder`, `UnfocusedDim`, `SecureInputBadge`, `URLHoverBanner` | `Overlays/TerminalOverlays.swift` | Ghostty `SurfaceView.swift` 1:1 |

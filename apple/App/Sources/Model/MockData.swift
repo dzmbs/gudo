@@ -292,8 +292,8 @@ final class MockPortSource: PortSource {
     ]
     var hostName: String { "studio" }
     var hostId: String? { nil }
-    var offer: DetectedPort? { nil }
-    func dismissOffer() {}
+    var offer: DetectedPort?
+    func dismissOffer() { offer = nil }
     func open(_ port: DetectedPort) async throws -> URL { URL(string: "https://ghostty.org/docs")! }
 }
 

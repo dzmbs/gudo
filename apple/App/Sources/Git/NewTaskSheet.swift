@@ -105,10 +105,12 @@ struct NewTaskSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                // On the page, not in a card: a segmented control is a control, not a row.
                 Section {
                     RunnerPicker(selection: $runner)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                 }
-                .chromeRows()
                 if let unavailable, let host,
                    let guide = AgentInstallGuide(agent: unavailable.agent, os: daemon?.daemonInfo?.os ?? "")
                 {
@@ -237,6 +239,7 @@ struct NewTaskSheet: View {
                         }
                     } else {
                         Button("Start", action: start)
+                            .buttonStyle(.primaryGlass)
                             .disabled(!canStart)
                             .keyboardShortcut(.return, modifiers: .command)
                             .accessibilityIdentifier("launch-start")
@@ -353,16 +356,29 @@ private struct RunnerPicker: View {
                 Button {
                     withAnimation(DS.Motion.snappy) { selection = runner }
                 } label: {
-                    Label(runner.title, systemImage: runner.systemImage)
-                        .font(.subheadline.weight(selected ? .semibold : .regular))
+                    HStack(spacing: DS.Space.row) {
+                        // The agent's own mark (Claude's, Codex's), as in the Agents screen.
+                        if let agent = runner.agent {
+                            ProgramMark(agent.identity, size: 14)
+                        } else {
+                            Image(systemName: runner.systemImage).imageScale(.small)
+                        }
+                        Text(runner.title)
+                    }
+                        // One weight: the raised pill shows the choice; a weight change would
+                        // make the words jump.
+                        .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                         .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
-                        .frame(maxWidth: .infinity, minHeight: 30)
+                        .frame(maxWidth: .infinity, minHeight: 32)
                         .background {
                             if selected {
+                                // The system segmented control's thumb: the raised surface, an
+                                // edge and a contact shadow.
                                 Capsule()
-                                    .fill(DS.Palette.selectedFill)
+                                    .fill(DS.Palette.overlay)
                                     .overlay(Capsule().strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                                    .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
                                     .matchedGeometryEffect(id: "pill", in: pill)
                             }
                         }

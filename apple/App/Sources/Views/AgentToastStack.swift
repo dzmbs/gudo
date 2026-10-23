@@ -21,9 +21,8 @@ struct AgentToastStack: View {
         }
         .frame(maxWidth: compact ? .infinity : 380)
         .padding(.horizontal, compact ? DS.Space.s : DS.Space.m)
-        // Under the toolbar's band (its trailing controls stay reachable); on iPhone clear of
-        // the generic toast's capsule when both show.
-        .padding(.top, compact ? DS.Space.s + (model.toasts.current != nil ? 52 : 0) : 58)
+        // Under the toolbar's band (its trailing controls stay reachable).
+        .padding(.top, compact ? DS.Space.s : 58)
         .onHover { toasts.hold($0) }
         // A finger on a card holds the stack too.
         .simultaneousGesture(
