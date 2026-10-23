@@ -101,6 +101,7 @@ struct SettingsView: View {
             CursorSection().chromeRows()
             SplitsSection().chromeRows()
             LinksSettingsSection().chromeRows()
+            BrowserSettingsSection().chromeRows()
             KeyboardSection().chromeRows()
             PasswordsSection().chromeRows()
             VoiceSettingsSection().chromeRows()
@@ -135,6 +136,7 @@ struct SettingsView: View {
         case .appearance: AppearanceSection()
         case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection(); PasswordsSection()
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
+        case .browser: BrowserSettingsSection()
         case .notifications: NotificationsSection()
         case .agents: AgentsSettingsSection()
         case .git: GitSettingsSection()
@@ -155,7 +157,7 @@ private enum SettingsPage: Hashable {
 #if os(macOS)
 /// The Mac Settings window's panes, in its sidebar.
 nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case appearance, terminal, keyboard, notifications, agents, git, network, about
+    case appearance, terminal, keyboard, browser, notifications, agents, git, network, about
     var id: String { rawValue }
 
     var title: String {
@@ -163,6 +165,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .appearance: "Appearance"
         case .terminal: "Terminal"
         case .keyboard: "Keyboard"
+        case .browser: "Browser"
         case .notifications: "Notifications"
         case .agents: "Agents"
         case .git: "Git"
@@ -176,6 +179,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .appearance: "paintpalette"
         case .terminal: "terminal"
         case .keyboard: "keyboard"
+        case .browser: "globe"
         case .notifications: "bell.badge"
         case .agents: "sparkle"
         case .git: "arrow.triangle.branch"

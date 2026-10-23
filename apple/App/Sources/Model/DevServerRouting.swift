@@ -205,3 +205,17 @@ extension WKWebsiteDataStore {
                            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
     }
 }
+
+extension DetectedPort {
+    /// A coding agent's own listener, never a dev server: Claude Code's and Codex's sign-in
+    /// callbacks and editor bridges answer only at the URL the agent built, and opening their
+    /// `/` breaks a sign-in in progress. By process (`claude`, `codex`, or the version-named
+    /// binary Claude's native install runs as, `2.1.307`), or, in a pane running an agent, any
+    /// port in the ephemeral range: servers an agent starts take a chosen port.
+    nonisolated static func isAgentListener(process: String, port: UInt16, inAgentPane: Bool) -> Bool {
+        let name = process.lowercased()
+        if ["claude", "codex", "claude-code", "codex-cli"].contains(name) { return true }
+        if name.range(of: #"^\d+\.\d+\.\d+"#, options: .regularExpression) != nil { return true }
+        return inAgentPane && port >= 32768
+    }
+}
