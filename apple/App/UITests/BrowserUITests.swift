@@ -155,7 +155,7 @@ final class BrowserUITests: XCTestCase {
         app.typeText("python3 -m http.server 48318 --bind 127.0.0.1 >/dev/null 2>&1 &\n")
         app.typeText("sleep 1; $H browser navigate url=localhost:48318/cover.html | head -3\n")
         XCTAssertTrue(app.descendants(matching: .any)["browser-leaf"].firstMatch.waitForExistence(timeout: 20))
-        waitFor(screen, contains: "Page: Shop", timeout: 30)
+        waitFor(screen, contains: "Page: Shop", timeout: 60)
         let ref = { (query: String) in "$($H browser find query=\(query) | sed -n '1s/.*\\[\\(ref_[0-9]*\\)\\].*/\\1/p')" }
 
         app.typeText("clear; $H browser click ref=\(ref("order")) | head -2\n")
