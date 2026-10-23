@@ -74,6 +74,16 @@ enum DesignFixtures {
         case "hosts": model.destination = .hosts
         case "inbox": model.destination = .inbox
         case "palette": model.isPaletteShown = true
+        case "palette-search":
+            model.isSearchShown = true
+            model.searchNeedle = "error"
+            model.isPaletteShown = true
+        case "goto":
+            model.paletteMode = .goToTab
+            model.isPaletteShown = true
+        case "palette-workflows":
+            model.paletteMode = .workflows
+            model.isPaletteShown = true
         case "search":
             model.isSearchShown = true
             model.searchNeedle = "error"

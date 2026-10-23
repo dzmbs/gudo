@@ -31,7 +31,7 @@ enum PaletteCommands {
         for item in model.agents.items where item.state.needsYou {
             commands.append(PaletteCommand(
                 id: "agent-\(item.id)", title: needsYouTitle(item), subtitle: "\(item.agent.title) · \(item.hostName) · \(item.sessionTitle)",
-                section: "Needs You", state: item.state) { model.destination = .inbox })
+                section: "Needs You", program: item.agent.identity, state: item.state) { model.destination = .inbox })
         }
 
         commands += tabs(model: model, section: "Tabs")
@@ -60,7 +60,7 @@ enum PaletteCommands {
             ("diff", "Review Changes", "plusminus", nil, { model.sheet = .diff }),
             ("editor", "Open in VS Code", "chevron.left.forwardslash.chevron.right", nil, { model.openEditor() }),
             ("files", "Browse Files", "folder", nil, { model.sheet = .files }),
-            ("browser", "Dev Servers & Ports", "network", nil, {
+            ("browser", "Dev Servers & Ports", "globe", nil, {
                 model.browserURL = nil
                 model.sheet = .browser
             }),
@@ -109,7 +109,8 @@ enum PaletteCommands {
             commands.append(PaletteCommand(
                 id: "tab-\(ref)", title: model.title(ofMixedTab: mixed),
                 subtitle: mixed.hosts.map(model.groupName).joined(separator: " + "), section: section,
-                systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : mixed.isBrowserOnly ? "globe" : "rectangle.split.2x1",
+                systemImage: "rectangle.split.2x1",
+                program: mixed.isEditorOnly ? .vscode : mixed.isBrowserOnly ? .browser : nil,
                 shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
             ) { model.focus(ref) })
         }
@@ -123,7 +124,7 @@ enum PaletteCommands {
                 let subtitle = [showsHost || section == nil ? group.name : nil, context].compactMap(\.self).joined(separator: " · ")
                 commands.append(PaletteCommand(
                     id: "tab-\(ref)", title: title, subtitle: subtitle.isEmpty ? nil : subtitle,
-                    section: section, systemImage: group.isLocal ? "laptopcomputer" : group.kind == .ssh ? "terminal" : "server.rack",
+                    section: section, program: model.programIdentity(of: tab, onGroup: group.id),
                     state: states.min { $0.urgency < $1.urgency },
                     shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
                 ) { model.focus(ref) })

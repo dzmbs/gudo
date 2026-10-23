@@ -45,7 +45,8 @@ public extension DS {
     nonisolated enum Radius {
         /// Key caps, badges, the resize overlay (Ghostty `SurfaceResizeOverlay`: 4).
         public static let chip: CGFloat = 4
-        public static let paletteRow: CGFloat = 5
+        /// Command palette rows: concentric with the panel's corners at an 8 pt inset.
+        public static let paletteRow: CGFloat = 8
         /// Text fields inside overlays (Ghostty search field: 6).
         public static let field: CGFloat = 6
         /// Buttons and hover fills inside bars (Ghostty `SearchButtonStyle`: 6, rows: 8).
@@ -86,10 +87,12 @@ public extension DS {
         public static let tabStrip: CGFloat = 34
         /// Presence avatar diameter.
         public static let avatar: CGFloat = 22
+        /// Command palette width (Spotlight, Raycast): room for a title and its context on one
+        /// line, wider for touch.
         #if os(macOS)
-        public static let paletteWidth: CGFloat = 500
+        public static let paletteWidth: CGFloat = 580
         #else
-        public static let paletteWidth: CGFloat = 560
+        public static let paletteWidth: CGFloat = 640
         #endif
         /// A hairline: one physical pixel (separators, the tab strip's rule).
         public static func hairline(scale: CGFloat) -> CGFloat { 1 / max(scale, 1) }
