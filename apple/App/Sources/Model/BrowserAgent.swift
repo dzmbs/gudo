@@ -5,6 +5,38 @@ import ImageIO
 import PaneLayout
 import WebKit
 
+/// One action an agent took on a page, reported after it ran (`BrowserAgent.onAction`);
+/// recordings build on these.
+struct BrowserActionEntry {
+    /// The tool (`browser_click`, …).
+    var tool: String
+    /// The element acted on: its ref, role, accessible name and index among the elements with
+    /// both, as the agent's last snapshot showed it.
+    var ref: String?
+    var role: String?
+    var name: String?
+    var nth: Int?
+    /// The tool's arguments, as JSON.
+    var args: String
+    var urlBefore: URL?
+    var urlAfter: URL?
+    var time: Date
+    /// What came of it: "done", what changed, or why nothing did.
+    var verdict: String
+    /// Playwright's selector for the element (`internal:role=button[name="Go"i]`), taken
+    /// before the action, and the locator it makes (`getByRole('button', { name: 'Go' })`).
+    var selector: String?
+    var locator: String?
+    /// The page (`BrowserPane.id`) and the agent's pane.
+    var page: UUID
+    var pane: HostPane
+
+    static func json(_ object: [String: Any]) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 /// Runs agents' browser tools (`browser_*`, `crates/hostd/src/browser_tools.rs`) on the page
 /// beside the agent's pane, the one the user sees: a browser leaf in the pane's tab, opened by
 /// the first `browser_navigate`. Steps that are the user's (sign-ins, payments, purchases) wait
@@ -18,30 +50,8 @@ final class BrowserAgent {
     /// The page each agent's pane acts on, once it switched tabs.
     private var active: [HostPane: UUID] = [:]
 
-    /// One action an agent took on a page, reported after it ran (recordings build on these).
-    struct ActionRecord {
-        /// The tool (`browser_click`, …) and its arguments.
-        var tool: String
-        var args: [String: Any]
-        /// The element acted on: its ref, role, accessible name and index among elements with
-        /// both, and a Playwright locator for it (`getByRole('button', { name: 'Go' })`).
-        var ref: String?
-        var role: String?
-        var name: String?
-        var nth: Int?
-        var locator: String?
-        var urlBefore: URL?
-        var urlAfter: URL?
-        var at: Date
-        /// What came of it: "done", what changed, or why nothing did.
-        var verdict: String
-        /// The agent's pane and the page (`BrowserMember.id`).
-        var pane: HostPane
-        var page: UUID
-    }
-
-    /// Called after each action on a page, on the main actor.
-    var onAction: ((ActionRecord, BrowserPane) -> Void)?
+    /// Called after each action an agent takes on a page, on the main actor.
+    var onAction: ((BrowserActionEntry) -> Void)?
 
     /// One answer: text, and an image for screenshots.
     struct Answer {
@@ -186,9 +196,9 @@ final class BrowserAgent {
     }
 
     private func reportNavigation(_ url: String, from before: URL?, page: BrowserPane, member: BrowserMember, pane: HostPane) {
-        onAction?(ActionRecord(
-            tool: "browser_navigate", args: ["url": url], urlBefore: before, urlAfter: page.page.url, at: .now,
-            verdict: page.page.url == nil ? "did not load" : "done", pane: pane, page: member.id), page)
+        onAction?(BrowserActionEntry(
+            tool: "browser_navigate", args: BrowserActionEntry.json(["url": url]), urlBefore: before, urlAfter: page.page.url,
+            time: .now, verdict: page.page.url == nil ? "did not load" : "done", page: page.id, pane: pane))
     }
 
     /// An http(s) URL from what an agent wrote (`example.com`, `localhost:3000`).
@@ -283,11 +293,12 @@ final class BrowserAgent {
         }
         await settle(page, navigating: kind == "click" || kind == "press" || kind == "type")
         let target = result["target"] as? [String: Any]
-        onAction?(ActionRecord(
-            tool: tool, args: args, ref: (args["target"] as? [String: Any])?["ref"] as? String,
+        onAction?(BrowserActionEntry(
+            tool: tool, ref: (args["target"] as? [String: Any])?["ref"] as? String,
             role: target?["role"] as? String, name: target?["name"] as? String, nth: (target?["nth"] as? NSNumber)?.intValue,
-            locator: target?["locator"] as? String, urlBefore: before, urlAfter: page.page.url, at: .now,
-            verdict: result["verdict"] as? String ?? "done", pane: pane, page: member.id), page)
+            args: BrowserActionEntry.json(args), urlBefore: before, urlAfter: page.page.url, time: .now,
+            verdict: result["verdict"] as? String ?? "done", selector: target?["selector"] as? String,
+            locator: target?["locator"] as? String, page: page.id, pane: pane))
         let snapshot = try await js(page, "return window.__un.snapshot(args)", ["filter": "interactive"])
         return Answer(text: note + "Done.\n" + snapshot)
     }
