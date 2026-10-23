@@ -71,6 +71,10 @@ struct TerminalHost {
     }
 
     private func update(_ coordinator: Coordinator) {
+        #if os(iOS)
+        // The cursor follows the focused pane even while the software keyboard is down.
+        pane.view.isSelected = isFocused
+        #endif
         let claimsFocus = isFocused && !coordinator.wasFocused && workspace.claimsKeyboardFocus
         coordinator.wasFocused = isFocused
         guard claimsFocus else { return }

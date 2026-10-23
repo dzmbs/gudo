@@ -140,6 +140,9 @@ public extension DS {
 
         // to wobble, quick enough to feel attached to the finger.
 
+        /// Panes splitting, closing and zooming: critically damped, since a terminal overshooting
+        /// its size would reflow twice.
+        public static let split = Animation.smooth(duration: 0.28)
         /// Banners dropping in and lifting out.
         public static let banner = Animation.spring(response: 0.42, dampingFraction: 0.82)
         /// Menus, popovers and the highlight moving between their rows.

@@ -152,13 +152,22 @@ struct WorkspaceView: View {
     /// beside the detail column. Both tab placements share the detail column and its toolbar, so
     /// the toolbar looks the same in either.
     private var regular: some View {
-        HStack(spacing: 0) {
-            if model.isSidebarShown && !model.isEditorFullScreen {
-                SidebarColumn(workspace: workspace)
-                    .frame(width: SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize))
-                    .movingTransition(.leading)
-                SidebarDivider(width: $sidebarWidth)
-            }
+        let shown = model.isSidebarShown && !model.isEditorFullScreen
+        let width = SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
+        return HStack(spacing: 0) {
+            // Always mounted, laid out at its full width and revealed by one animated width
+            // (Finder, Xcode): inserting it with a transition rebuilt its navigation stack and
+            // toolbar mid-animation, so it slid in, paused, then finished.
+            SidebarColumn(workspace: workspace)
+                .frame(width: width)
+                .frame(width: shown ? width : 0, alignment: .trailing)
+                .clipped()
+                .overlay(alignment: .trailing) {
+                    SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0)
+                }
+                .allowsHitTesting(shown)
+                .disabled(!shown)
+                .accessibilityHidden(!shown)
             NavigationStack {
                 DetailColumn(workspace: workspace)
             }
@@ -559,7 +568,9 @@ struct ActiveTabView: View {
             if let tab = workspace.session.activeTab {
                 let single = compact ? tab.focused : tab.zoomed
                 let isSplit = single == nil && tab.root.panes.count > 1
-                SplitTreeView(node: single.map(Node.leaf) ?? tab.root, workspace: workspace, isSplit: isSplit)
+                SplitTreeView(node: single.map(Node.leaf) ?? tab.root, workspace: workspace, isSplit: isSplit, animated: !compact)
+                    // Another tab replaces the panes at once; only this tab's own changes animate.
+                    .id(tab.id)
                     .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
                     .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
                     // Lost link: the last frame stays, dimmed and desaturated, under the card.

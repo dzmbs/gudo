@@ -62,40 +62,139 @@ struct HostTabTree: PaneTree {
     var namesHosts: Bool { false }
 }
 
-/// Renders a split tree recursively: leaves are panes, splits are two subtrees around a draggable
-/// divider. Compact (default) is Ghostty's look: flush panes, a 1 pt divider in the background
+/// Renders a split tree as one flat stack of panes keyed by pane id, each placed at the frame the
+/// tree gives it, with the dividers on top. Flat, so a pane keeps its view (terminal, header,
+/// program mark) when the tree changes shape around it: a split, a close or a zoom only moves and
+/// resizes it, with one spring, while the new pane fades in where it lands. Compact (default) is
+/// Ghostty's look: flush panes, a 1 pt divider in the background darkened 40 %, unfocused panes
 struct SplitTreeView: View {
     let node: Node
     let tree: any PaneTree
     /// More than one pane is visible: dim unfocused panes and show pane headers.
     let isSplit: Bool
+    /// Animate changes of shape (off where the tree swaps to another pane, the iPhone's one pane).
+    var animated = true
 
-    init(node: Node, tree: any PaneTree, isSplit: Bool) {
+    @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+
+    init(node: Node, tree: any PaneTree, isSplit: Bool, animated: Bool = true) {
         self.node = node
         self.tree = tree
         self.isSplit = isSplit
+        self.animated = animated
     }
 
     /// A host's active tab.
-    init(node: Node, workspace: Workspace, isSplit: Bool) {
-        self.init(node: node, tree: HostTabTree(workspace: workspace), isSplit: isSplit)
+    init(node: Node, workspace: Workspace, isSplit: Bool, animated: Bool = true) {
+        self.init(node: node, tree: HostTabTree(workspace: workspace), isSplit: isSplit, animated: animated)
     }
 
     var body: some View {
+        GeometryReader { geometry in
+            let layout = SplitLayout(
+                node: node, size: geometry.size,
+                gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
+                header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding)
+            ZStack(alignment: .topLeading) {
+                ForEach(layout.leaves, id: \.pane) { leaf in
+                    PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit)
+                        .frame(width: leaf.frame.width, height: leaf.frame.height)
+                        .offset(x: leaf.frame.minX, y: leaf.frame.minY)
+                        .transition(.opacity)
+                }
+                ForEach(layout.dividers, id: \.id) { divider in
+                    SplitDivider(divider: divider, tree: tree)
+                        .frame(width: divider.frame.width, height: divider.frame.height)
+                        .offset(x: divider.frame.minX, y: divider.frame.minY)
+                        // A new divider lands where the panes are heading: it shows as they arrive.
+                        .transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.16)), removal: .opacity))
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
+        // Only shape changes animate: a divider drag must track the pointer frame for frame.
+        .animation(animated ? DS.Motion.split : nil, value: SplitShape(node))
+    }
+}
+
+/// A tree without its ratios: what changes when panes split, close, move or zoom.
+private struct SplitShape: Hashable {
+    let node: Node
+
+    init(_ node: Node) {
+        self.node = Self.strip(node)
+    }
+
+    private static func strip(_ node: Node) -> Node {
         switch node {
-        case .leaf(let leaf):
-            PaneLeaf(leaf: leaf, tree: tree, isSplit: isSplit)
-        case .split(let axis, let ratio, let first, let second):
-            SplitContainer(axis: axis, ratio: ratio, first: first, second: second, tree: tree)
+        case .leaf: node
+        case .split(let axis, _, let first, let second): .split(axis: axis, ratio: 0, first: strip(first), second: strip(second))
         }
     }
 }
 
-private struct SplitContainer: View {
-    let axis: Axis
-    let ratio: Double
-    let first: Node
-    let second: Node
+/// Where each pane and divider of a tree goes in a given size.
+struct SplitLayout {
+    struct Leaf {
+        let pane: PaneId
+        let frame: CGRect
+    }
+
+    struct Divider {
+        /// The split's leading pane along its axis: each pane edge borders at most one divider,
+        /// so this stays the same while the tree changes elsewhere.
+        let id: String
+        let axis: PaneLayout.Axis
+        let ratio: Double
+        let first: Node
+        /// The visible line.
+        let frame: CGRect
+        /// The split's length along its axis, for turning drags into ratios.
+        let extent: CGFloat
+    }
+
+    private(set) var leaves: [Leaf] = []
+    private(set) var dividers: [Divider] = []
+
+    init(node: Node, size: CGSize, gap: CGFloat, header: CGFloat, cell: CGSize?, padding: CGFloat) {
+        place(node, in: CGRect(origin: .zero, size: size), gap: gap, header: header, cell: cell, padding: padding)
+    }
+
+    private mutating func place(_ node: Node, in rect: CGRect, gap: CGFloat, header: CGFloat, cell: CGSize?, padding: CGFloat) {
+        switch node {
+        case .leaf(let pane):
+            leaves.append(Leaf(pane: pane, frame: rect))
+        case .split(let axis, let ratio, let first, let second):
+            let horizontal = axis == .horizontal
+            let extent = horizontal ? rect.width : rect.height
+            // Whole cells per pane; in a vertical split each side also carries its pane header.
+            let headers: CGFloat = horizontal ? 0 : header
+            let firstLength = headers + SplitSnapping.firstLength(
+                available: extent - gap - 2 * headers, ratio: ratio,
+                cell: cell.map { horizontal ? $0.width : $0.height }, padding: padding)
+            let firstRect, line, secondRect: CGRect
+            if horizontal {
+                firstRect = CGRect(x: rect.minX, y: rect.minY, width: firstLength, height: rect.height)
+                line = CGRect(x: firstRect.maxX, y: rect.minY, width: gap, height: rect.height)
+                secondRect = CGRect(x: line.maxX, y: rect.minY, width: max(0, rect.maxX - line.maxX), height: rect.height)
+            } else {
+                firstRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: firstLength)
+                line = CGRect(x: rect.minX, y: firstRect.maxY, width: rect.width, height: gap)
+                secondRect = CGRect(x: rect.minX, y: line.maxY, width: rect.width, height: max(0, rect.maxY - line.maxY))
+            }
+            place(first, in: firstRect, gap: gap, header: header, cell: cell, padding: padding)
+            place(second, in: secondRect, gap: gap, header: header, cell: cell, padding: padding)
+            dividers.append(Divider(
+                id: "\(axis.rawValue)-\(first.trailingPane(along: axis))", axis: axis, ratio: ratio,
+                first: first, frame: line, extent: extent))
+        }
+    }
+}
+
+/// Ghostty SplitView.Divider: a visible line plus an invisible hit area, the resize pointer,
+/// double-click to equalize, and an adjustable accessibility element.
+private struct SplitDivider: View {
+    let divider: SplitLayout.Divider
     let tree: any PaneTree
 
     @Environment(\.terminalTheme) private var theme
@@ -104,45 +203,15 @@ private struct SplitContainer: View {
     /// Drag translation already applied, so each change sends only the new delta.
     @State private var appliedTranslation: CGFloat?
 
-    private var gap: CGFloat { paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible }
-
     var body: some View {
-        GeometryReader { geometry in
-            let extent = axis == .horizontal ? geometry.size.width : geometry.size.height
-            // Whole cells per pane; in a vertical split each side also carries its pane header.
-            let header: CGFloat = axis == .vertical ? PaneHeader.height : 0
-            let firstLength = header + SplitSnapping.firstLength(
-                available: extent - gap - 2 * header, ratio: ratio,
-                cell: tree.cellSize.map { axis == .horizontal ? $0.width : $0.height },
-                padding: tree.padding)
-            if axis == .horizontal {
-                HStack(spacing: 0) {
-                    SplitTreeView(node: first, tree: tree, isSplit: true).frame(width: firstLength)
-                    divider(extent: extent)
-                    SplitTreeView(node: second, tree: tree, isSplit: true)
-                }
-            } else {
-                VStack(spacing: 0) {
-                    SplitTreeView(node: first, tree: tree, isSplit: true).frame(height: firstLength)
-                    divider(extent: extent)
-                    SplitTreeView(node: second, tree: tree, isSplit: true)
-                }
-            }
-        }
-    }
-
-    /// Ghostty SplitView.Divider: a visible line plus an invisible hit area, the resize pointer,
-    /// double-click to equalize, and an adjustable accessibility element.
-    private func divider(extent: CGFloat) -> some View {
-        let horizontal = axis == .horizontal
+        let horizontal = divider.axis == .horizontal
         #if os(macOS)
         let hit = DS.Size.dividerVisible + DS.Size.dividerHitPointer
         #else
         let hit = DS.Size.dividerHitTouch
         #endif
-        return Rectangle()
+        Rectangle()
             .fill(paneStyle == .comfortable ? Color.clear : theme.splitDivider)
-            .frame(width: horizontal ? gap : nil, height: horizontal ? nil : gap)
             .overlay {
                 Color.clear
                     .frame(width: horizontal ? hit : nil, height: horizontal ? nil : hit)
@@ -152,14 +221,13 @@ private struct SplitContainer: View {
                     #else
                     .hoverEffect(.highlight)
                     #endif
-                    .gesture(drag(extent: extent))
+                    .gesture(drag)
                     .onTapGesture(count: 2) { equalize() }
             }
-            .zIndex(1)
             .accessibilityElement()
             .accessibilityLabel(horizontal ? "Horizontal split divider" : "Vertical split divider")
             .accessibilityHint(horizontal ? "Drag to resize the left and right panes" : "Drag to resize the top and bottom panes")
-            .accessibilityValue("\(Int((ratio * 100).rounded())) percent")
+            .accessibilityValue("\(Int((divider.ratio * 100).rounded())) percent")
             .accessibilityAdjustableAction { direction in
                 move(by: direction == .increment ? 0.025 : -0.025)
             }
@@ -167,25 +235,25 @@ private struct SplitContainer: View {
 
     /// Moves the divider by resizing the pane on its leading side towards it, which `resize`
     /// resolves to exactly this split.
-    private func drag(extent: CGFloat) -> some Gesture {
+    private var drag: some Gesture {
         // Global space: the divider moves under the finger, so local translations would undercount.
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .onChanged { value in
-                let translation = axis == .horizontal ? value.translation.width : value.translation.height
+                let translation = divider.axis == .horizontal ? value.translation.width : value.translation.height
                 let delta = translation - (appliedTranslation ?? 0)
                 appliedTranslation = translation
-                move(by: delta / max(extent, 1))
+                move(by: delta / max(divider.extent, 1))
             }
             .onEnded { _ in appliedTranslation = nil }
     }
 
     private func move(by amount: Double) {
-        let pane = first.trailingPane(along: axis)
-        tree.resize(leaf: pane, axis == .horizontal ? .right : .down, amount: amount)
+        let pane = divider.first.trailingPane(along: divider.axis)
+        tree.resize(leaf: pane, divider.axis == .horizontal ? .right : .down, amount: amount)
     }
 
     private func equalize() {
-        withAnimation(DS.Motion.snappy) { move(by: 0.5 - ratio) }
+        withAnimation(DS.Motion.snappy) { move(by: 0.5 - divider.ratio) }
     }
 }
 
