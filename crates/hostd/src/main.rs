@@ -18,7 +18,7 @@ mod askpass;
 mod service;
 
 use std::fs::OpenOptions;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -65,6 +65,10 @@ enum Command {
         /// its home relay) before minting, e.g. right after `service install`.
         #[arg(long, default_value_t = 0)]
         wait: u64,
+        /// Also list loopback addresses, for an app on this machine: it reaches the daemon
+        /// even with no network.
+        #[arg(long)]
+        local: bool,
     },
     /// Show whether the daemon is running.
     Status,
@@ -111,11 +115,13 @@ fn main() -> Result<()> {
             minutes,
             json,
             wait,
+            local,
         } => pair(
             &state_dir,
             Duration::from_secs(minutes * 60),
             json,
             Duration::from_secs(wait),
+            local,
         ),
         Command::Status => status(&state_dir),
         Command::BuildInfo { json } => build_info(json),
@@ -199,13 +205,25 @@ fn run(
     })
 }
 
-/// The executable, if the daemon may replace it: it exists and its directory is writable
-/// (the new build is written next to it and renamed over it).
+/// The executable, if the daemon may replace it: it exists, its directory is writable (the new
+/// build is written next to it and renamed over it), and it is not inside an app bundle, whose
+/// signature a swapped binary would break (the app updates its own helper).
 fn upgradable_exe() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    if in_app_bundle(&exe) {
+        return None;
+    }
     let dir = exe.parent()?;
     rustix::fs::access(dir, rustix::fs::Access::WRITE_OK).ok()?;
     Some(exe)
+}
+
+/// Whether `exe` lives in a macOS app bundle (`….app/Contents/…`).
+fn in_app_bundle(exe: &Path) -> bool {
+    let parts: Vec<_> = exe.components().map(|c| c.as_os_str()).collect();
+    parts
+        .windows(2)
+        .any(|pair| pair[0].to_string_lossy().ends_with(".app") && pair[1] == "Contents")
 }
 
 /// Replaces this process with `exe` and the same arguments (same PID, so systemd or launchd
@@ -291,13 +309,24 @@ fn login_shell() -> Option<PathBuf> {
     }
 }
 
-fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration) -> Result<()> {
+fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration, local: bool) -> Result<()> {
     if !wait.is_zero() {
         wait_for_endpoint(state_dir, wait)?;
     }
-    let text = daemon::mint_ticket_text(state_dir, ttl)
+    let mut text = daemon::mint_ticket_text(state_dir, ttl)
         .with_context(|| format!("minting a ticket in {}", state_dir.display()))?;
-    let (ticket, extras) = proto::Ticket::parse_with_extras(&text)?;
+    let (mut ticket, extras) = proto::Ticket::parse_with_extras(&text)?;
+    if local {
+        let bound = daemon::endpoint_info(state_dir)?
+            .map(|info| info.bound)
+            .unwrap_or_default();
+        let loopback: Vec<_> = loopback_addrs(&bound)
+            .into_iter()
+            .filter(|addr| !ticket.addrs.contains(addr))
+            .collect();
+        ticket.addrs.splice(0..0, loopback);
+        text = ticket.to_string_with(&extras);
+    }
     if json {
         let info = daemon::endpoint_info(state_dir)?;
         let out = serde_json::json!({
@@ -322,6 +351,22 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration) -> Result<(
     print_ticket(&text);
     eprintln!("Valid for {} minutes, for one device.", ttl.as_secs() / 60);
     Ok(())
+}
+
+/// Loopback addresses on the ports of the sockets bound on every interface (or on loopback).
+fn loopback_addrs(bound: &[SocketAddr]) -> Vec<SocketAddr> {
+    bound
+        .iter()
+        .filter(|addr| addr.ip().is_unspecified() || addr.ip().is_loopback())
+        .map(|addr| {
+            let ip: IpAddr = if addr.is_ipv4() {
+                Ipv4Addr::LOCALHOST.into()
+            } else {
+                Ipv6Addr::LOCALHOST.into()
+            };
+            SocketAddr::new(ip, addr.port())
+        })
+        .collect()
 }
 
 /// Waits until a live daemon has recorded its endpoint, then (up to `RELAY_GRACE` longer)
@@ -413,4 +458,36 @@ fn pid_alive(pid: u32) -> bool {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_bundles_are_not_upgraded_in_place() {
+        assert!(in_app_bundle(Path::new(
+            "/Applications/X.app/Contents/MacOS/unnamed-hostd"
+        )));
+        assert!(!in_app_bundle(Path::new(
+            "/home/u/.local/bin/unnamed-hostd"
+        )));
+        assert!(!in_app_bundle(Path::new("/opt/Contents/X.app/hostd")));
+    }
+
+    #[test]
+    fn loopback_addresses_follow_the_bound_ports() {
+        let bound = [
+            "0.0.0.0:4100".parse().unwrap(),
+            "[::]:4101".parse().unwrap(),
+            "192.168.1.2:4102".parse().unwrap(),
+        ];
+        assert_eq!(
+            loopback_addrs(&bound),
+            [
+                "127.0.0.1:4100".parse::<SocketAddr>().unwrap(),
+                "[::1]:4101".parse().unwrap()
+            ]
+        );
+    }
 }
