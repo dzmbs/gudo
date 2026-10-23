@@ -78,6 +78,7 @@ extension WindowModel {
         guard let tab = composites.tab(containingBrowser: opener), let from = tab.browsers.values.first(where: { $0.id == opener })
         else { return nil }
         let member = BrowserMember(hostId: from.hostId, url: url.absoluteString)
+        browsers.popups.insert(member.id)
         composites.addBrowser(member, to: tab.id)
         if activeMixedTab == tab.id { syncMixedFocus() }
         return member

@@ -38,8 +38,14 @@ final class BrowserPane: Identifiable {
     @ObservationIgnored let frames = BrowserFrames()
     /// A page this page opened (`window.open`, `target=_blank`), to show as a new leaf.
     @ObservationIgnored var onPopup: ((URL) -> Void)?
-    /// An agent's action is running on the page (a file picker it opens is the agent's).
-    @ObservationIgnored var agentActing = false
+    /// The page closed itself (`window.close()` in a page another opened).
+    @ObservationIgnored var onClose: (() -> Void)?
+    @ObservationIgnored private let windows = BrowserWindows()
+    /// An agent's action is running on the page (a file picker it opens is the agent's, and
+    /// so are new windows: its input carries no user gesture for WebKit's popup blocker).
+    @ObservationIgnored var agentActing = false {
+        didSet { windows.allowPopups(agentActing) }
+    }
     /// An `alert`, `confirm` or `prompt` the page waits on; the user or the agent answers it.
     var dialog: PageDialog?
     /// A file picker an agent's action opened; `browser_upload` answers it.
@@ -54,7 +60,7 @@ final class BrowserPane: Identifiable {
     }
 
     struct PageDialog: Identifiable {
-        enum Kind: String { case alert, confirm, prompt }
+        enum Kind: String { case alert, confirm, prompt, beforeunload }
         let id = UUID()
         let kind: Kind
         let message: String
@@ -68,7 +74,8 @@ final class BrowserPane: Identifiable {
         let answer: ([URL]?) -> Void
     }
 
-    init(id: UUID = UUID(), url: URL, hostId: String? = nil, dataStore: WKWebsiteDataStore? = nil) {
+    /// `popup`: another page opened this one, so it may close itself.
+    init(id: UUID = UUID(), url: URL, hostId: String? = nil, dataStore: WKWebsiteDataStore? = nil, popup: Bool = false) {
         self.id = id
         self.hostId = hostId
         initialURL = url
@@ -76,10 +83,17 @@ final class BrowserPane: Identifiable {
         if let dataStore { configuration.websiteDataStore = dataStore }
         BrowserAgentScript.install(in: configuration.userContentController, frames: frames)
         BrowserRecorder.install(in: configuration.userContentController, page: id)
+        if popup {
+            configuration.userContentController.addUserScript(BrowserWindows.closeScript)
+            configuration.userContentController.add(windows, contentWorld: .page, name: BrowserWindows.closeHandler)
+        }
         let box = DeciderBox()
         page = WebPage(configuration: configuration, navigationDecider: Decider(box: box), dialogPresenter: Dialogs(box: box))
         box.pane = self
         BrowserRecorder.shared.attach(page, id: id)
+        frames.onWebView = { [windows] in windows.adopt($0) }
+        windows.onOpen = { [weak self] in self?.onPopup?($0) }
+        windows.onClose = { [weak self] in self?.onClose?() }
     }
 
     /// Shows a page's dialog until it is answered.
@@ -94,6 +108,17 @@ final class BrowserPane: Identifiable {
                 continuation.resume(returning: (accept, text))
             }
         }
+    }
+
+    /// Whether the page lets itself be left: a `beforeunload` handler that objects (unsaved
+    /// changes) asks first, as browsers do. WebKit leaves without asking, so the handlers are
+    /// run here before a navigation the app starts.
+    func leavingAllowed() async -> Bool {
+        let objects = try? await page.callJavaScript(
+            "const e = new Event('beforeunload', { cancelable: true }); dispatchEvent(e); return e.defaultPrevented",
+            contentWorld: .page) as? Bool
+        guard objects == true else { return true }
+        return await present(.beforeunload, "Leave site? Changes you made may not be saved.").0
     }
 
     /// Loads the first page once (a view showing it again keeps where it is).
@@ -175,6 +200,10 @@ final class BrowserPanes {
     private(set) var panes: [UUID: BrowserPane] = [:]
     /// A page opened another (its leaf's id, the URL).
     var onPopup: ((UUID, URL) -> Void)?
+    /// A page closed itself (its leaf's id).
+    var onClose: ((UUID) -> Void)?
+    /// Leaves whose pages another page opened.
+    var popups: Set<UUID> = []
 
     func existing(_ id: UUID) -> BrowserPane? { panes[id] }
 
@@ -190,8 +219,9 @@ final class BrowserPanes {
             store = await DevServerRouting.shared.store(forHost: hostId, client: { try hub.client() })
         }
         if let pane = panes[member.id] { return pane }
-        let pane = BrowserPane(id: member.id, url: url, hostId: member.hostId, dataStore: store)
+        let pane = BrowserPane(id: member.id, url: url, hostId: member.hostId, dataStore: store, popup: popups.contains(member.id))
         pane.onPopup = { [weak self] url in self?.onPopup?(member.id, url) }
+        pane.onClose = { [weak self] in self?.onClose?(member.id) }
         if let hostId = member.hostId, let client {
             pane.prepare = { url in await DevServerRouting.shared.prepareLoopback(url, hostId: hostId, client: client) }
         }
@@ -205,6 +235,7 @@ final class BrowserPanes {
             panes[id] = nil
             pane.page.stopLoading()
             BrowserRecorder.shared.finish(id)
+            popups.remove(id)
         }
     }
 }

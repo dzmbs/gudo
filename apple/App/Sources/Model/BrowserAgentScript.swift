@@ -80,6 +80,8 @@ enum BrowserAgentScript {
 @MainActor
 final class BrowserFrames: NSObject, WKScriptMessageHandler {
     private(set) weak var webView: WKWebView?
+    /// The page's web view, once a frame first speaks from it.
+    var onWebView: ((WKWebView) -> Void)?
     private(set) var main: String?
     private var frames: [String: WKFrameInfo] = [:]
     private var numbers: [String: Int] = [:]
@@ -87,6 +89,7 @@ final class BrowserFrames: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let token = body["token"] as? String else { return }
+        if let web = message.webView, web !== webView { onWebView?(web) }
         webView = message.webView
         if body["main"] as? Bool == true, message.frameInfo.isMainFrame {
             main = token

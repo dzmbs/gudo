@@ -32,7 +32,8 @@ verbs work from the shell: `un-hook browser <verb> [json | key=value …]`.
    - `force: true` skips the checks.
 5. A ref whose element was re-rendered is found again by its role and name; a stale ref means
    the page moved on: snapshot again. Don't guess refs.
-6. Dialogs (alert, confirm, prompt) hold the page until `browser_dialog` answers them. Pages
+6. Dialogs (alert, confirm, prompt, and "Leave site?" when navigating away from unsaved changes)
+   hold the page until `browser_dialog` answers them. Pages
    opened in a new window become tabs: `browser_tabs` lists, opens, switches and closes them
    (ids `t1`, `t2`, …). `browser_upload` chooses files on this host for a file field, or for
    the file picker an action opened.
