@@ -122,15 +122,20 @@ final class FontGrid {
         metrics = Self.computeMetrics(faces[FontStyle.regular.rawValue])
     }
 
+    /// The bundled faces' descriptors, read from disk once: every new pane (a split) creates
+    /// its own grid, and reading and parsing four font files each time stalled it.
+    /// Immutable once made; CoreText descriptors are thread-safe.
+    nonisolated(unsafe) private static let bundledDescriptors: [CTFontDescriptor] = FontStyle.allCases.map { style in
+        guard let url = Bundle.module.url(forResource: fontFiles[style], withExtension: "ttf", subdirectory: "Fonts"),
+              let data = try? Data(contentsOf: url),
+              let descriptors = CTFontManagerCreateFontDescriptorsFromData(data as CFData) as? [CTFontDescriptor],
+              let descriptor = descriptors.first
+        else { fatalError("missing bundled font \(style)") }
+        return descriptor
+    }
+
     private static func bundledFaces(pixelSize: CGFloat) -> [CTFont] {
-        FontStyle.allCases.map { style in
-            guard let url = Bundle.module.url(forResource: fontFiles[style], withExtension: "ttf", subdirectory: "Fonts"),
-                  let data = try? Data(contentsOf: url),
-                  let descriptors = CTFontManagerCreateFontDescriptorsFromData(data as CFData) as? [CTFontDescriptor],
-                  let descriptor = descriptors.first
-            else { fatalError("missing bundled font \(style)") }
-            return CTFontCreateWithFontDescriptor(descriptor, pixelSize, nil)
-        }
+        bundledDescriptors.map { CTFontCreateWithFontDescriptor($0, pixelSize, nil) }
     }
 
     /// The four styles of an installed family, or nil if CoreText does not know it (it would

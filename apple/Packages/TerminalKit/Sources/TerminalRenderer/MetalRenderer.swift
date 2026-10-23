@@ -195,8 +195,20 @@ final class MetalRenderer {
             onGPUComplete(buffer.gpuEndTime - buffer.gpuStartTime)
             semaphore.signal()
         }
-        if let drawable { commands.present(drawable) }
-        commands.commit()
+        guard let drawable else {
+            commands.commit()
+            return
+        }
+        if drawable.layer.presentsWithTransaction {
+            // In step with the Core Animation transaction that resizes the layer: the new size
+            // never shows the previous frame stretched, or nothing.
+            commands.commit()
+            commands.waitUntilScheduled()
+            drawable.present()
+        } else {
+            commands.present(drawable)
+            commands.commit()
+        }
     }
 
     private func upload<T>(_ items: [T], into slot: inout MTLBuffer?) -> MTLBuffer? {
