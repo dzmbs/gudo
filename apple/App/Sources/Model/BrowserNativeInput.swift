@@ -6,7 +6,8 @@ import AppKit
 
 /// Real input for a page on the Mac: AppKit mouse and key events handed to the page's
 /// `WKWebView`, which WebKit treats as the user's own — `isTrusted` events, `:hover`, menus that
-/// open on hover, and native drag and drop. The pointer on screen does not move.
+/// open on hover, and pointer drags. The pointer on screen does not move. HTML drag and drop
+/// is left to the page script: its drag session follows the real pointer.
 ///
 /// The agent's tools ask for it per page and fall back to the page script when it is nil (iOS,
 /// which has no public way to do this; a page that is not on screen):
@@ -27,8 +28,11 @@ struct BrowserNativeInput {
     /// The input of the view showing `page`, if it is in a window.
     static func `for`(_ page: WebPage) async -> BrowserNativeInput? {
         let token = UUID().uuidString
-        guard (try? await page.callJavaScript("window.__unInputToken = token", arguments: ["token": token], contentWorld: world)) != nil
-        else { return nil }
+        do {
+            _ = try await page.callJavaScript("window.__unInputToken = token", arguments: ["token": token], contentWorld: world)
+        } catch {
+            return nil
+        }
         for window in NSApp.windows {
             guard let content = window.contentView else { continue }
             for view in webViews(in: content) {
@@ -48,6 +52,7 @@ struct BrowserNativeInput {
 
     // MARK: Pointer
 
+    /// Hover needs the page's window to be key (WebKit ignores moves in other windows).
     func move(to point: CGPoint) async {
         send(.mouseMoved, at: point)
         await pause()
@@ -62,8 +67,15 @@ struct BrowserNativeInput {
         await pause()
     }
 
-    /// Presses at `from`, moves to `to` in steps (drag thresholds, `dragover`), releases.
-    func drag(from: CGPoint, to: CGPoint, steps: Int = 12) async {
+    /// Presses at `from`, moves to `to` in steps, releases: pointer drags (sliders, sortable
+    /// lists, canvases). False, doing nothing, when `from` is an HTML drag source: that starts a
+    /// system drag session, which follows the real pointer rather than these events.
+    @discardableResult
+    func drag(from: CGPoint, to: CGPoint, steps: Int = 12) async -> Bool {
+        let source = try? await view.evaluateJavaScript(
+            "(() => { const e = document.elementFromPoint(\(from.x), \(from.y)); return !!(e && e.closest('[draggable=true], a[href], img')); })()",
+            in: nil, contentWorld: Self.world) as? Bool
+        if source != false { return false }
         await move(to: from)
         send(.leftMouseDown, at: from)
         await pause()
@@ -74,6 +86,7 @@ struct BrowserNativeInput {
         }
         send(.leftMouseUp, at: to)
         await pause()
+        return true
     }
 
     func scroll(at point: CGPoint, dx: Double, dy: Double) async {

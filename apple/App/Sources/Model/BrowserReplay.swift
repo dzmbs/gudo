@@ -101,7 +101,8 @@ nonisolated struct ReplayAction: Codable, Identifiable, Hashable, Sendable {
     /// Whether the action did what it meant to.
     var succeeded: Bool {
         let v = verdict.lowercased()
-        return !(v.hasPrefix("fail") || v.contains("no effect") || v.contains("did not") || v.contains("declined") || v.contains("error"))
+        return !(v.hasPrefix("fail") || v.hasPrefix("nothing") || v.contains("no observable effect") || v.contains("no effect")
+            || v.contains("did not") || v.contains("declined") || v.contains("error"))
     }
 }
 

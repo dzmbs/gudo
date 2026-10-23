@@ -912,3 +912,19 @@ TypeScript test: `page.goto`, then each step on its recorded locator (`getByRole
 falls back to role and name, then the screenshot coordinates, and says so in a comment. Replay
 in Browser (`BrowserReplayRunner`) runs the steps again in a new tab by selector, healing by
 role, name and index; steps that wait for the user are skipped, never approved.
+
+Mac input (`BrowserNativeInput`): AppKit mouse, drag, wheel and key events handed straight to
+the page's `WKWebView` (found by a token its content world carries), so the page gets trusted
+events, `:hover` and menus that open on hover (WebKit takes buttonless moves only in the key
+window), and pointer drags; the pointer on screen stays put. HTML drag and drop stays with the
+page script: its system drag session follows the real pointer, so `drag` refuses a drag source.
+Keys make the page first responder for the call and give the focus back. Agents' tools use
+it when it is there and fall back to the page script (iOS has no public equivalent).
+
+Tests: `BrowserReplayTests` (store cap and age, `.unreplay` round trip and unsafe names,
+Playwright export with and without locators), `BrowserRecorderTests` (a `WebPage` fixture with
+a frame from another origin: rrweb's snapshot, mutations, masked input, nothing visible to the
+page, playback in rrweb-player), `BrowserNativeInputTests` (Mac, a page in a window: hover,
+clicks, drag, keys), `SessionReplayUITests` (iPad, `UI_TEST_CLASS=SessionReplayUITests
+apple/scripts/w3-ui-test.sh`: `un-hook browser` drives a page, its Replays step through the
+session and export the test).

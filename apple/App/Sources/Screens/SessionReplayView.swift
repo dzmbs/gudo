@@ -187,6 +187,7 @@ struct SessionReplayView: View {
                     GeometryReader { geo in
                         WebView(player.page)
                             .webViewBackForwardNavigationGestures(.disabled)
+                            .webViewContentBackground(.hidden)
                             .allowsHitTesting(false)
                             .onChange(of: geo.size, initial: true) { _, size in player.resize(size) }
                     }
@@ -449,24 +450,25 @@ struct ReplayThumbnail: View {
     @State private var image: Image?
 
     var body: some View {
-        ZStack {
-            if let image {
-                image.resizable().aspectRatio(contentMode: contentMode)
-            } else {
-                Rectangle().fill(DS.Palette.raised)
-                Image(systemName: "photo").foregroundStyle(DS.Palette.textTertiary)
+        Rectangle()
+            .fill(DS.Palette.raised)
+            .overlay {
+                if let image {
+                    image.resizable().aspectRatio(contentMode: contentMode)
+                } else {
+                    Image(systemName: "photo").foregroundStyle(DS.Palette.textTertiary)
+                }
             }
-        }
-        .clipShape(.rect(cornerRadius: DS.Radius.field))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
-        .task(id: name) {
-            guard let name, let data = ReplayStore.shared.keyframe(name, session: session) else { image = nil; return }
-            #if os(iOS)
-            image = UIImage(data: data).map(Image.init(uiImage:))
-            #else
-            image = NSImage(data: data).map(Image.init(nsImage:))
-            #endif
-        }
+            .clipShape(.rect(cornerRadius: DS.Radius.field))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+            .task(id: name) {
+                guard let name, let data = ReplayStore.shared.keyframe(name, session: session) else { image = nil; return }
+                #if os(iOS)
+                image = UIImage(data: data).map(Image.init(uiImage:))
+                #else
+                image = NSImage(data: data).map(Image.init(nsImage:))
+                #endif
+            }
     }
 }
 
