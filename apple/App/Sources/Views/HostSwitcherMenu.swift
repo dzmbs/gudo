@@ -11,6 +11,9 @@ import UIKit
 struct HostToolbarButton: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
+    /// A command chosen in the popover, run once it has closed: a sheet presented while a
+    /// popover is still dismissing is dropped.
+    @State private var afterClose: (() -> Void)?
 
     var body: some View {
         @Bindable var model = model
@@ -28,11 +31,19 @@ struct HostToolbarButton: View {
                 hosts: model.switcherHosts,
                 commands: commands,
                 onSelect: { model.selectHost(id: $0.id) },
-                onCreate: { model.addHost(mode: .ssh, destination: $0) },
+                onCreate: { destination in
+                    afterClose = { model.addHost(mode: .ssh, destination: destination) }
+                    model.isHostSwitcherShown = false
+                },
                 focusesFilter: InboxView.hasKeyboard,
                 onDismiss: { model.isHostSwitcherShown = false })
                 .presentationCompactAdaptation(.popover)
                 .environment(\.chrome, chrome)
+        }
+        .onChange(of: model.isHostSwitcherShown) { _, shown in
+            guard !shown, let next = afterClose else { return }
+            afterClose = nil
+            Task { @MainActor in next() }
         }
         .help(model.connection.isQuiet ? "\(model.hostName) · Switch Host" : "\(model.hostName) · \(model.connection.title)")
         .accessibilityLabel("\(model.hostName), \(model.connection.title)")
@@ -43,7 +54,7 @@ struct HostToolbarButton: View {
     @Environment(\.chrome) private var chrome
 
     private var commands: [HostSwitcherCommand] {
-        [
+        let rawCommands: [HostSwitcherCommand] = [
             HostSwitcherCommand(id: "new-tab", title: "New Tab", systemImage: "plus", shortcut: ["⌘", "T"]) {
                 model.newTab()
             },
@@ -57,6 +68,12 @@ struct HostToolbarButton: View {
                 model.addHost()
             },
         ]
+        return rawCommands.map { command in
+            HostSwitcherCommand(id: command.id, title: command.title, systemImage: command.systemImage, shortcut: command.shortcut) {
+                afterClose = command.perform
+                model.isHostSwitcherShown = false
+            }
+        }
     }
 }
 

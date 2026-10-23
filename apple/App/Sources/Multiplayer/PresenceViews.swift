@@ -20,6 +20,9 @@ struct PresenceToolbarButton: View {
     var place: (UInt64) -> String? = { _ in nil }
     let action: () -> Void
     @State private var showsPeople = false
+    /// A command chosen in the popover, run once it has closed: a sheet presented while a
+    /// popover is still dismissing is dropped.
+    @State private var afterClose: (() -> Void)?
 
     var body: some View {
         let others = session.others
@@ -38,11 +41,19 @@ struct PresenceToolbarButton: View {
             PeopleSwitcher(
                 people: people,
                 commands: [
-                    HostSwitcherCommand(id: "share-session", title: "Share Session…", systemImage: "person.crop.circle.badge.plus", perform: action),
+                    HostSwitcherCommand(id: "share-session", title: "Share Session…", systemImage: "person.crop.circle.badge.plus") {
+                        afterClose = action
+                        showsPeople = false
+                    },
                 ],
                 onFollow: { session.follow($0) },
                 onDismiss: { showsPeople = false })
                 .presentationCompactAdaptation(.popover)
+        }
+        .onChange(of: showsPeople) { _, shown in
+            guard !shown, let next = afterClose else { return }
+            afterClose = nil
+            Task { @MainActor in next() }
         }
         .contextMenu {
             FollowMenuItems(session: session)
