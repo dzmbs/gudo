@@ -128,6 +128,26 @@
       ]
     },
     {
+      "name": "split-signals-once",
+      "fresh": true,
+      "steps": [
+        { "do": "type", "text": "winches=0; TRAPWINCH() { winches=$((winches+1)) }\n" },
+        { "do": "waitIdle" },
+        { "do": "shortcut", "keys": "cmd+d" },
+        { "do": "assert", "panes": 2 },
+        { "do": "sleep", "seconds": 1 },
+        { "do": "shortcut", "keys": "cmd+opt+left" },
+        { "do": "type", "text": "echo winch-$winches\n" },
+        { "do": "waitText", "regex": "^winch-1$", "name": "one SIGWINCH for a split" },
+        { "do": "shortcut", "keys": "cmd+opt+right" },
+        { "do": "shortcut", "keys": "cmd+w" },
+        { "do": "assert", "panes": 1 },
+        { "do": "sleep", "seconds": 1 },
+        { "do": "type", "text": "echo winch-$winches\n" },
+        { "do": "waitText", "regex": "^winch-2$", "name": "one SIGWINCH for a close" }
+      ]
+    },
+    {
       "name": "splits-focus-typing",
       "steps": [
         { "do": "remember", "focus": "first" },
