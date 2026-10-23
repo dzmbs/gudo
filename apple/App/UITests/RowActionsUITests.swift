@@ -152,7 +152,7 @@ final class RowActionsUITests: XCTestCase {
         XCTAssertTrue(view.waitForExistence(timeout: 5), "full screen")
         let exit = element("editor-exit-full-screen")
         XCTAssertTrue(exit.exists, "the way out shows without hovering")
-        XCTAssertTrue(text(containing: "to exit full screen").exists, "the hint")
+        XCTAssertTrue(text(containing: "Exit Full Screen at the top").exists, "the hint")
         shot("editor-full-screen")
         exit.tap()
         XCTAssertTrue(view.waitForNonExistence(timeout: 5), "back to the window")
