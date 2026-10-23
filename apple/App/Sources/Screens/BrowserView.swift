@@ -63,7 +63,13 @@ struct BrowserView: View {
         _pane = State(initialValue: pane)
     }
     @Environment(\.terminalTheme) private var theme
+    @Environment(WindowModel.self) private var model: WindowModel?
+    @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
     @State private var address = ""
+    /// The suggestion arrow keys picked under the address field (-1: none).
+    @State private var selection = -1
+    /// A page asked for from the start page, which stays until it is gone or failed.
+    @State private var leavingStart = false
     @FocusState private var isEditing: Bool
     @Environment(\.openURL) private var openURL
     #if os(iOS)
@@ -89,20 +95,42 @@ struct BrowserView: View {
                 regularBar
                 progressLine
             }
-            WebView(page)
-                .ignoresSafeArea(edges: isCompact ? .bottom : [])
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if isCompact { compactBar }
+            ZStack {
+                WebView(page)
+                    .ignoresSafeArea(edges: isCompact ? .bottom : [])
+                if showsStart { startPage }
+            }
+            .overlay(alignment: isCompact ? .bottom : .top) {
+                if isEditing, !suggestions.isEmpty {
+                    AddressSuggestionList(suggestions: suggestions, selection: selection) { pick($0.url) }
+                        .padding(DS.Space.xs)
+                        .frame(maxWidth: 560)
+                        .floatingPanel()
+                        .padding(DS.Space.s)
                 }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isCompact { compactBar }
+            }
         }
             .overlay(alignment: .top) {
                 if isCompact { progressLine }
             }
         .onAppear { pane.start() }
         .onChange(of: page.url) { _, url in
-            if !isEditing { address = url?.absoluteString ?? "" }
-            if let url { onNavigate?(url) }
+            if !isEditing { address = isBlank ? "" : url?.absoluteString ?? "" }
+            guard let url else { return }
+            if !isBlank { leavingStart = false }
+            onNavigate?(url)
+            BrowserHistory.shared.record(url, title: page.title)
         }
+        .onChange(of: page.title) { _, title in
+            if let url = page.url { BrowserHistory.shared.retitle(url, title) }
+        }
+        .onChange(of: page.isLoading) { _, loading in
+            if !loading, isBlank { leavingStart = false }
+        }
+        .onChange(of: address) { selection = -1 }
         #if DEBUG
         .overlay(alignment: .bottomTrailing) {
             if let routedHost {
@@ -126,6 +154,41 @@ struct BrowserView: View {
         var view = self
         view.onOpenAsTab = action
         return view
+    }
+
+    // MARK: Start page
+
+    private var isBlank: Bool { (page.url ?? initialURL).absoluteString == "about:blank" }
+    private var showsStart: Bool { isBlank && !leavingStart }
+
+    private var startPage: some View {
+        let servers = model?.devServers(onHost: pane.hostId)
+        return BrowserStartPage(
+            hostName: servers?.hostName ?? "", devServers: servers?.ports ?? [], focusOnAppear: isFocused,
+            open: pick, openDevServer: openDevServer)
+    }
+
+    private var suggestions: [AddressSuggestion] {
+        guard address != (page.url?.absoluteString ?? "") else { return [] }
+        return AddressSuggestion.make(
+            for: address, history: BrowserHistory.shared.entries,
+            devServers: model?.devServers(onHost: pane.hostId).ports ?? [], engine: engine)
+    }
+
+    private func pick(_ url: URL) {
+        isEditing = false
+        if isBlank { leavingStart = true }
+        page.load(URLRequest(url: url))
+    }
+
+    /// On a page that reaches its host's `localhost` (a browser leaf), here; else through a
+    /// forward, as from the ports list.
+    private func openDevServer(_ port: DetectedPort) {
+        if pane.prepare != nil || pane.hostId == nil {
+            pick(DevServerRouting.pageURL(for: port))
+        } else if let model {
+            Task { await model.openPort(port) }
+        }
     }
 
     // MARK: Bars
@@ -261,6 +324,8 @@ struct BrowserView: View {
                     #endif
                     .focused($isEditing)
                     .onSubmit(go)
+                    .onKeyPress(.downArrow) { moveSelection(1) }
+                    .onKeyPress(.upArrow) { moveSelection(-1) }
                     .onKeyPress(.escape) {
                         isEditing = false
                         return .handled
@@ -268,7 +333,7 @@ struct BrowserView: View {
                     .padding(.horizontal, DS.Space.m)
             } else {
                 Button {
-                    address = page.url?.absoluteString ?? initialURL.absoluteString
+                    address = isBlank ? "" : page.url?.absoluteString ?? initialURL.absoluteString
                     isEditing = true
                 } label: {
                     HStack(spacing: DS.Space.xs) {
@@ -277,8 +342,9 @@ struct BrowserView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        Text(displayHost)
+                        Text(isBlank ? "Search or enter address" : displayHost)
                             .font(.callout)
+                            .foregroundStyle(isBlank ? AnyShapeStyle(DS.Palette.textTertiary) : AnyShapeStyle(.primary))
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if let servingHost {
@@ -338,20 +404,15 @@ struct BrowserView: View {
     // MARK: Actions
 
     private func go() {
-        let input = address.trimmingCharacters(in: .whitespaces)
+        let picked = suggestions.indices.contains(selection) ? suggestions[selection].url : nil
         isEditing = false
-        guard !input.isEmpty else { return }
-        let url: URL?
-        if input.contains("://") {
-            url = URL(string: input)
-        } else if input.contains(".") || input.hasPrefix("localhost") || input.contains(":") {
-            url = URL(string: (input.hasPrefix("localhost") || input.hasPrefix("127.") ? "http://" : "https://") + input)
-        } else {
-            var components = URLComponents(string: "https://duckduckgo.com/")
-            components?.queryItems = [URLQueryItem(name: "q", value: input)]
-            url = components?.url
-        }
-        if let url { page.load(URLRequest(url: url)) }
+        if let url = picked ?? BrowserAddress.url(for: address, engine: engine) { pick(url) }
+    }
+
+    private func moveSelection(_ step: Int) -> KeyPress.Result {
+        guard !suggestions.isEmpty else { return .ignored }
+        selection = AddressSuggestion.step(selection, by: step, count: suggestions.count)
+        return .handled
     }
 
     private func openExternally() {

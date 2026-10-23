@@ -208,6 +208,13 @@ extension View {
 }
 
 extension WindowModel {
+    /// The dev servers a page on `hostId` offers (the start page, address suggestions): the
+    /// window's host's HTTP ports when the page is on it.
+    func devServers(onHost hostId: String?) -> (hostName: String, ports: [DetectedPort]) {
+        guard let hostId, ports.hostId == hostId else { return ("", []) }
+        return (ports.hostName, ports.ports.filter(\.isHTTP))
+    }
+
     /// Forwards a host port and shows it in the in-app browser.
     func openPort(_ port: DetectedPort) async {
         do {
