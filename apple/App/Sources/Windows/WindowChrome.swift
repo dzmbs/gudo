@@ -78,6 +78,8 @@ struct SceneReader: UIViewRepresentable {
     func updateUIView(_ probe: Probe, context: Context) {}
 }
 
+#endif
+
 /// A tab row or chip as a drag: its reference as text (reordering within the host) and, on
 /// iPad, the window activity, so dropping it outside the window opens it in a new window.
 enum TabDrag {
@@ -91,6 +93,7 @@ enum TabDrag {
             done(Data(ref.description.utf8), nil)
             return nil
         }
+        #if os(iOS)
         if let workspace = model.workspace(ofGroup: ref.hostId), let tab = workspace.session.tabs.first(where: { $0.id == ref.tab }) {
             let record = ref.hostId == HostGroups.localId ? nil : model.app.hosts.record(ref.hostId)
             let payload = HandoffPayload(
@@ -104,10 +107,10 @@ enum TabDrag {
             activity.addUserInfoEntries(from: payload.userInfo())
             provider.registerObject(activity, visibility: .all)
         }
+        #endif
         return provider
     }
 }
-#endif
 
 extension View {
     /// Drag a tab: reorder within its host, onto a pane's edge to merge it there; on iPad, drop
@@ -116,11 +119,7 @@ extension View {
     func tabDrag(_ ref: TabRef, model: WindowModel) -> some View {
         onDrag {
             model.draggedTab = ref
-            #if os(iOS)
             return TabDrag.provider(for: ref, in: model)
-            #else
-            return NSItemProvider(object: ref.description as NSString)
-            #endif
         }
     }
 }

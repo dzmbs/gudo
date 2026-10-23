@@ -385,7 +385,23 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         return pasteboard.string(forType: .string) == nil && pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
+    /// Type identifiers of the app's own drags that carry text without being text to paste (a
+    /// tab dragged onto a pane's edge): over the view, they go to the nearest view around it
+    /// that takes drops.
+    public var unpastedDragTypes: [String] = []
+
+    private func isUnpasted(_ sender: any NSDraggingInfo) -> Bool {
+        let types = unpastedDragTypes.map { NSPasteboard.PasteboardType($0) }
+        return !types.isEmpty && sender.draggingPasteboard.availableType(from: types) != nil
+    }
+
+    /// The nearest view around this one that takes drops: where unpasted drags go.
+    private var dropTargetAround: NSView? {
+        superview.flatMap { sequence(first: $0) { $0.superview }.first { !$0.registeredDraggedTypes.isEmpty } }
+    }
+
     override public func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if isUnpasted(sender) { return dropTargetAround?.draggingEntered(sender) ?? [] }
         // Its own selection dropped back on it is a slip, not a paste.
         if sender.draggingSource as? TerminalView === self { return [] }
         let board = sender.draggingPasteboard
@@ -393,7 +409,17 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         return Self.droppedText(board) != nil ? .copy : []
     }
 
+    override public func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if isUnpasted(sender) { return dropTargetAround?.draggingUpdated(sender) ?? [] }
+        return draggingEntered(sender)
+    }
+
+    override public func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        if let sender, isUnpasted(sender) { dropTargetAround?.draggingExited(sender) }
+    }
+
     override public func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if isUnpasted(sender) { return dropTargetAround?.performDragOperation(sender) ?? false }
         let board = sender.draggingPasteboard
         if let onDropAttachment, Self.hasAttachment(board), onDropAttachment(board, convert(sender.draggingLocation, from: nil)) {
             return true

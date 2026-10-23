@@ -88,6 +88,71 @@ import Testing
         #expect(TerminalView.droppedText(board) == "'/tmp/a b/it'\\''s.txt' /tmp/plain.txt")
         board.releaseGlobally()
     }
+
+    /// Dropped text pastes; a drag of an unpasted type (a tab carries its reference as text too)
+    /// goes to the view around the terminal instead.
+    @Test func unpastedDragsGoToTheViewAround() throws {
+        let (view, window, written) = try makeView()
+        let around = DropRecorder(frame: view.frame)
+        around.registerForDraggedTypes([NSPasteboard.PasteboardType("dev.unnamed.tab")])
+        window.contentView = around
+        around.addSubview(view)
+        view.unpastedDragTypes = ["dev.unnamed.tab"]
+        let board = NSPasteboard(name: NSPasteboard.Name("terminal-unpasted-drop-test"))
+        defer { board.releaseGlobally() }
+
+        board.clearContents()
+        board.setString("ls", forType: .string)
+        let text = FakeDrag(board)
+        #expect(view.draggingEntered(text) == .copy)
+        #expect(view.performDragOperation(text))
+        #expect(String(decoding: written.bytes.withLock { $0 }, as: UTF8.self) == "ls")
+        #expect(around.events.isEmpty)
+
+        board.clearContents()
+        board.setString("host/1", forType: .string)
+        board.setData(Data("host/1".utf8), forType: NSPasteboard.PasteboardType("dev.unnamed.tab"))
+        let tab = FakeDrag(board)
+        #expect(view.draggingEntered(tab) == .move)
+        #expect(view.draggingUpdated(tab) == .move)
+        view.draggingExited(tab)
+        #expect(view.performDragOperation(tab))
+        #expect(around.events == ["entered", "updated", "exited", "perform"])
+        #expect(String(decoding: written.bytes.withLock { $0 }, as: UTF8.self) == "ls", "the tab was not pasted")
+    }
+}
+
+/// A view that takes drops and records what reached it.
+private final class DropRecorder: NSView {
+    var events: [String] = []
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation { events.append("entered"); return .move }
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation { events.append("updated"); return .move }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) { events.append("exited") }
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool { events.append("perform"); return true }
+}
+
+/// A drag over a pasteboard, for driving a view's drop methods in process.
+@MainActor
+private final class FakeDrag: NSObject, @MainActor NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    init(_ board: NSPasteboard) { draggingPasteboard = board }
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { .every }
+    var draggingLocation: NSPoint { .zero }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    func enumerateDraggingItems(
+        options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass],
+        searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
+    ) {}
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func resetSpringLoading() {}
 }
 #endif
 
