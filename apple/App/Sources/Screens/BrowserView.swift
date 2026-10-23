@@ -449,11 +449,11 @@ private struct DialogCard: View {
             HStack {
                 Spacer()
                 if dialog.kind != .alert {
-                    Button("Cancel") { dialog.answer(false, nil) }
+                    Button(dialog.kind == .beforeunload ? "Stay" : "Cancel") { dialog.answer(false, nil) }
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("page-dialog-dismiss")
                 }
-                Button("OK") { dialog.answer(true, text) }
+                Button(dialog.kind == .beforeunload ? "Leave" : "OK") { dialog.answer(true, text) }
                     .buttonStyle(.primaryGlass)
                     .accessibilityIdentifier("page-dialog-accept")
             }

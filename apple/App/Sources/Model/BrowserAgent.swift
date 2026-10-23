@@ -188,12 +188,17 @@ final class BrowserAgent {
             page.dialog?.answer(false, nil)
             page.start()
             let before = page.page.url
-            switch text.lowercased() {
-            case "back": if let item = page.page.backForwardList.backList.last { _ = page.page.load(item) }
-            case "forward": if let item = page.page.backForwardList.forwardList.first { _ = page.page.load(item) }
-            case "reload": _ = page.page.reload()
-            default: page.load(try Self.url(text))
+            let url = ["back", "forward", "reload"].contains(text.lowercased()) ? nil : try Self.url(text)
+            let go: @MainActor @Sendable () -> Void = { [weak page] in
+                guard let page else { return }
+                switch text.lowercased() {
+                case "back": if let item = page.page.backForwardList.backList.last { _ = page.page.load(item) }
+                case "forward": if let item = page.page.backForwardList.forwardList.first { _ = page.page.load(item) }
+                case "reload": _ = page.page.reload()
+                default: if let url { page.load(url) }
+                }
             }
+            if let note = await leave(page, then: go) { return Answer(text: note) }
             page.agentActivity = "Opening \(text)"
             defer { done(page) }
             await page.settleNavigation()
@@ -261,7 +266,12 @@ final class BrowserAgent {
             return Answer(text: "Switched to tab \(tabId(target)).")
         case "close":
             guard let target else { throw BrowserCallError("No tab \(wanted ?? "?"). Call browser_tabs with action list.") }
-            window.closeBrowser(target.id)
+            let id = target.id
+            let close: @MainActor @Sendable () -> Void = { [weak window] in window?.closeBrowser(id) }
+            if let page = window.browsers.existing(target.id), let note = await leave(page, then: close) {
+                return Answer(text: note)
+            }
+            close()
             return Answer(text: "Closed tab \(tabId(target)).")
         default:
             if members.isEmpty { return Answer(text: "No pages are open beside this terminal.") }
@@ -398,8 +408,23 @@ final class BrowserAgent {
         }
     }
 
+    /// Runs `go` (leaving the page) once the page lets it, now or after its leave check is
+    /// answered: then the note saying the check waits.
+    private func leave(_ page: BrowserPane, then go: @escaping @MainActor @Sendable () -> Void) async -> String? {
+        let allowed = Task { await page.leavingAllowed() }
+        guard let now = try? await page.untilBlocked({ await allowed.value }) else {
+            Task { if await allowed.value { go() } }
+            return page.dialog.map(Self.dialogNote) ?? "The page asks before it is left."
+        }
+        if now { go() }
+        return nil
+    }
+
     static func dialogNote(_ dialog: BrowserPane.PageDialog) -> String {
-        "The page shows a\(dialog.kind == .alert ? "n" : "") \(dialog.kind.rawValue) dialog: “\(dialog.message)”"
+        if dialog.kind == .beforeunload {
+            return "The page asks before it is left (unsaved changes): “\(dialog.message)”. Call browser_dialog with accept true to leave, or false to stay."
+        }
+        return "The page shows a\(dialog.kind == .alert ? "n" : "") \(dialog.kind.rawValue) dialog: “\(dialog.message)”"
             + (dialog.defaultText.map { " (default “\($0)”)" } ?? "")
             + ". It waits until it is answered: call browser_dialog with accept true or false"
             + (dialog.kind == .prompt ? " (and text to answer)." : ".")

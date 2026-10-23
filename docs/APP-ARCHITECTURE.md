@@ -868,10 +868,28 @@ elicitation); typing into password or card fields is left to the user (Done). Ta
 the agent's calls until Hand Back. Screenshots are the visible page at most 1280 px wide; their
 pixels are the coordinates targets use.
 
+Frames, windows, dialogs and files. Each frame, cross-origin ones too, announces itself to
+`BrowserFrames` with its `WKFrameInfo`; snapshots inline a child frame under its iframe with
+refs `ref_f<n>_<m>`, actions go to the ref's frame (`callAsyncJavaScript(in:)`), a screenshot
+point over an iframe is moved into it, and labels draw in each frame. `WebPage` has no API for
+new windows, so `BrowserWindows` stands in front of its web view's UI delegate: `window.open`
+and `target=_blank` open a leaf beside the page (`openPopup`; popups are allowed only while an
+agent acts, as its input carries no user gesture), and such a page's `window.close()` closes
+its leaf. `alert`, `confirm`, `prompt` and file pickers hold the page as `BrowserPane.dialog` /
+`fileChooser`: a card on the page lets the user answer, and tool results name it until
+`browser_dialog` or `browser_upload` does. WebKit leaves pages without asking, so before a
+navigation or tab close the app starts, `leavingAllowed` runs the page's `beforeunload`
+handlers and asks the same way when one objects. Uploads set files as Playwright does
+(`DataTransfer`, then `input` and `change`); a picker an action opened gets them as files.
+A popup has no `window.opener` (it is a page of its own).
+
 Tests: `BrowserLeafTests` (PaneLayout), `BrowserTests` (sign-in URLs), `BrowserAgentScriptTests`
 (the page script on a fixture page: refs, deltas, refs found again, covered and disabled
 targets, effects, typing and filling, secrets, what waits for the user),
+`BrowserPageEventsTests` (pages served from two local origins: frames of both in snapshots,
+actions, coordinates and labels; popups and `window.close`; each dialog; the leave check;
+uploads into a field, a frame and a file picker),
 `BrowserUITests` (iPad, `UI_TEST_CLASS=BrowserUITests apple/scripts/w3-ui-test.sh`: a sign-in
 through `BROWSER`, a host page in a pane beside its terminal surviving a relaunch, an agent
-driving a page with an approval on the device, and learning what covers a button and what had
-no effect).
+driving a page with an approval on the device, learning what covers a button and what had
+no effect, and an upload into a frame and a confirm answered by the agent and by the user).

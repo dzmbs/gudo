@@ -169,4 +169,44 @@ final class BrowserUITests: XCTestCase {
         waitFor(screen, contains: "No observable effect", timeout: 30)
         shot("agent-no-effect")
     }
+
+    /// A page with a frame, a file field and dialogs, driven from the terminal: the frame's
+    /// controls show in the snapshot under their frame and take actions, an upload sends a file
+    /// from the host, and a confirm waits for an answer, from the agent or from the user.
+    func testAgentUploadsIntoAFrameAndAnswersDialogs() throws {
+        try launch()
+        panes.firstMatch.tap()
+        app.typeText("H=$(sed -n 's/^exec \\(.*\\) open-url.*/\\1/p' \"$BROWSER\"); mkdir -p fr && cd fr; clear\n")
+        app.typeText("printf '<title>Outer</title><button onclick=\"document.title=\\x27c \\x27+confirm(\\x27Leave site?\\x27)\">Ask</button><iframe src=\"inner.html\"></iframe>' > outer.html\n")
+        app.typeText("printf '<input type=file onchange=\"parent.document.title=\\x27got \\x27+this.files[0].name\">' > inner.html\n")
+        app.typeText("python3 -m http.server 48319 --bind 127.0.0.1 >/dev/null 2>&1 &\n")
+        app.typeText("sleep 1; clear; $H browser navigate url=localhost:48319/outer.html | grep -c frame\n")
+        XCTAssertTrue(app.descendants(matching: .any)["browser-leaf"].firstMatch.waitForExistence(timeout: 20))
+        app.typeText("clear; $H browser snapshot full=true filter=all | grep -A3 'frame f'\n")
+        waitFor(screen, contains: "[ref_f1_", timeout: 30)
+        shot("frame-snapshot")
+
+        app.typeText("clear; R=$($H browser snapshot full=true filter=all | sed -n 's/.*\\[\\(ref_f[0-9_]*\\)\\].*/\\1/p' | head -1); $H browser upload ref=$R path=inner.html | head -2; $H browser get_text | head -1\n")
+        waitFor(screen, contains: "Page: got inner.html", timeout: 30)
+        shot("uploaded")
+
+        // The agent answers a confirm.
+        app.typeText("clear; A=$($H browser find query=ask | sed -n 's/.*\\[\\(ref_[0-9]*\\)\\].*/\\1/p'); $H browser click ref=$A | tail -1\n")
+        waitFor(screen, contains: "Leave site?", timeout: 30)
+        XCTAssertTrue(app.buttons["page-dialog-accept"].waitForExistence(timeout: 10), "the user sees it too")
+        shot("dialog")
+        app.typeText("clear; $H browser dialog accept=false | head -1; $H browser get_text | head -1\n")
+        waitFor(screen, contains: "Page: c false", timeout: 30)
+
+        // The user answers the next one on the device.
+        app.typeText("clear; $H browser click ref=$A | tail -1\n")
+        let accept = app.buttons["page-dialog-accept"]
+        XCTAssertTrue(accept.waitForExistence(timeout: 30))
+        accept.tap()
+        XCTAssertTrue(accept.waitForNonExistence(timeout: 10))
+        panes.firstMatch.tap()
+        app.typeText("clear; $H browser get_text | head -1\n")
+        waitFor(screen, contains: "Page: c true", timeout: 30)
+        shot("answered-by-user")
+    }
 }
