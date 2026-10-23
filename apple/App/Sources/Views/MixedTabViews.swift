@@ -79,7 +79,7 @@ struct FullScreenEditorView: View {
             .overlay {
                 ExitFullScreenControl(spot: $spot, pointer: pointer) { model.toggleEditorFullScreen() }
             }
-            .toastHost(model.fullScreenHints, topInset: ExitFullScreenControl.topInset)
+            .toastHost(model.fullScreenHints, bottomInset: ExitFullScreenControl.bottomInset)
             .onContinuousHover { phase in
                 if case .active(let point) = phase { pointer = point } else { pointer = nil }
             }
