@@ -86,7 +86,8 @@ private struct ToastHost: ViewModifier {
                 .padding(.horizontal, DS.Space.l)
                 .padding(.vertical, DS.Space.gap10)
                 .floatingCapsule(interactive: true)
-                .onTapGesture { center.dismiss() }
+                // A tap dismisses; with a button only the button takes taps.
+                .gesture(TapGesture().onEnded { center.dismiss() }, including: toast.action == nil ? .all : .subviews)
                 .padding(.top, DS.Space.s)
                 .movingTransition(.top)
                 .id(toast.id)

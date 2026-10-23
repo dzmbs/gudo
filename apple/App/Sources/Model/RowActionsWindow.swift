@@ -18,6 +18,7 @@ extension WindowModel {
         workspace.apply(.closeTab(tab.id))
         guard undoable else { return }
         offerUndo("Closed “\(title)”") { [weak self] in
+            AppModel.log.info("undo: reopening a tab on \(ref.hostId, privacy: .public) in \(folder ?? "-", privacy: .public)")
             self?.reopenTab(onGroup: ref.hostId, in: folder, title: named)
         }
     }
@@ -39,6 +40,7 @@ extension WindowModel {
         guard undoable, tab.members.isEmpty else { return }
         offerUndo("Closed “\(title)”") { [weak self] in
             guard let self, let reopened = composites.reopen(tab) else { return }
+            AppModel.log.info("undo: reopened \(title, privacy: .public)")
             noteLeavingTab()
             focus(Self.mixedRef(reopened))
         }

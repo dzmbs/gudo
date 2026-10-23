@@ -1,11 +1,8 @@
 import DesignSystem
 import SwiftUI
-#if canImport(UIKit)
-import UIKit
-#endif
 
 // Swipe, long-press and right-click actions for rows outside a system `List` (the sidebar is
-// drawn by hand): Mail's swipe on touch and the iPad trackpad, the same actions in the context
+// drawn by hand): Mail's swipe on touch, the same actions in the context
 // menu and to VoiceOver, and a confirmation before what cannot be undone.
 
 /// The one row of a list whose actions are showing: opening another closes it.
@@ -133,6 +130,7 @@ private struct SwipeContainer: ViewModifier {
     @State private var start: CGFloat?
     @State private var width: CGFloat = 0
     @State private var armed = false
+    @State private var isHorizontal: Bool?
 
     private static let buttonWidth: CGFloat = 68
     /// The share of the row's width past which a swipe runs its outermost action.
@@ -160,7 +158,18 @@ private struct SwipeContainer: ViewModifier {
                 }
                 .clipped()
                 .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
-                .gesture(HorizontalPan(changed: changed, ended: ended))
+                // Beside the row's own tap, long press and drag; a swipe that starts mostly
+                // vertical is the list's scroll and is left alone.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 12)
+                        .onChanged { value in
+                            if isHorizontal == nil { isHorizontal = abs(value.translation.width) > abs(value.translation.height) }
+                            if isHorizontal == true { changed(value.translation.width) }
+                        }
+                        .onEnded { value in
+                            if isHorizontal == true { ended(value.translation.width, value.velocity.width) }
+                            isHorizontal = nil
+                        })
                 .sensoryFeedback(DS.Haptic.structure, trigger: armed) { _, now in now }
                 .onChange(of: shared?.open) { _, open in
                     if open != id, offset != 0, start == nil { withAnimation(DS.Motion.snappy) { offset = 0 } }
@@ -255,42 +264,4 @@ private struct SwipeContainer: ViewModifier {
     }
 }
 
-/// A pan that begins only when it is mostly horizontal, so the list still scrolls, taps still
-/// select and a long press still lifts the row; two-finger trackpad swipes count too.
-private struct HorizontalPan: UIGestureRecognizerRepresentable {
-    let changed: (CGFloat) -> Void
-    let ended: (CGFloat, CGFloat) -> Void
-
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
-
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let pan = UIPanGestureRecognizer()
-        pan.allowedScrollTypesMask = .continuous
-        pan.delegate = context.coordinator
-        return pan
-    }
-
-    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
-        let x = pan.translation(in: pan.view).x
-        switch pan.state {
-        case .began, .changed: changed(x)
-        case .ended: ended(x, pan.velocity(in: pan.view).x)
-        case .cancelled, .failed: ended(x, 0)
-        default: break
-        }
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
-            let velocity = pan.velocity(in: pan.view)
-            return abs(velocity.x) > abs(velocity.y) * 1.2
-        }
-
-        /// The scroll view waits for a horizontal swipe to fail before it scrolls.
-        func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-            other is UIPanGestureRecognizer && other.view is UIScrollView
-        }
-    }
-}
 #endif
