@@ -76,14 +76,17 @@ nonisolated enum RowAction: String, Hashable, CaseIterable, Sendable {
         }
     }
 
-    /// The swipe button's fill.
+    /// The swipe button's fill, in Mail's vocabulary: red ends something, orange stops or puts
+    /// away, blue goes somewhere, indigo edits, yellow pins. Never grey: a grey button reads as
+    /// disabled.
     var tint: RowTint {
         switch self {
         case .closeTab, .closeEditor, .stopAgent, .deleteWorktree, .removeHost: .red
-        case .stopServer, .disconnect, .openInNewWindow: .gray
-        case .archiveWorktree: .orange
-        case .markRead, .markDone, .open, .pin, .unpin: .blue
+        case .stopServer, .disconnect, .archiveWorktree: .orange
+        case .markRead, .open, .openInNewWindow: .blue
+        case .markDone: .green
         case .rename: .indigo
+        case .pin, .unpin: .yellow
         }
     }
 
@@ -91,7 +94,7 @@ nonisolated enum RowAction: String, Hashable, CaseIterable, Sendable {
     var identifier: String { "row-action-\(rawValue)" }
 }
 
-nonisolated enum RowTint: Sendable { case red, gray, orange, blue, indigo }
+nonisolated enum RowTint: Sendable { case red, orange, yellow, green, blue, indigo }
 
 /// A row's actions: what each swipe edge shows (outermost first) and what a full swipe does.
 nonisolated struct RowActions: Equatable, Sendable {

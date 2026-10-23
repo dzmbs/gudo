@@ -154,12 +154,15 @@ struct PortsList: View {
     }
 }
 
-/// "localhost:5173 is up · Open": offered once when a pane starts a server on the window's host.
+/// "localhost:5173 is up · Open": offered once when a pane starts a server on the window's host,
+/// at the bottom like the banners, never over a pane's top bar (the browser's address bar).
 struct PortOfferBanner: ViewModifier {
     let model: WindowModel
+    /// Its height, so a banner can sit above it.
+    static let height: CGFloat = 52
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .top) {
+        content.overlay(alignment: .bottom) {
             if let port = model.ports.offer, !model.editorHasKeys {
                 HStack(spacing: DS.Space.m) {
                     Circle()
@@ -184,10 +187,13 @@ struct PortOfferBanner: ViewModifier {
                 .padding(.leading, DS.Space.l)
                 .padding(.trailing, DS.Space.s)
                 .padding(.vertical, DS.Space.s)
-                .frame(maxWidth: 520)
+                .frame(minHeight: Self.height)
+                .chromeContent()
                 .floatingCapsule()
-                .padding(.top, 60)
-                .movingTransition(.top)
+                .frame(maxWidth: 520)
+                .padding(.horizontal, DS.Space.l)
+                .padding(.bottom, model.widthBucket == .compact ? 64 : DS.Space.l)
+                .movingTransition(.bottom)
                 .task(id: port.port) {
                     try? await Task.sleep(for: .seconds(15))
                     withAnimation(DS.Motion.overlay) { model.ports.dismissOffer() }

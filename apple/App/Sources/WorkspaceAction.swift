@@ -21,6 +21,8 @@ enum WorkspaceAction: Hashable {
     /// The focused VS Code pane alone in the window, without the window's chrome (⌃⌘F).
     case fullScreenEditor
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
+    /// The host switcher's ⌃⌘1…⌃⌘9 (⌘1…⌘9 are the tabs', as in Ghostty).
+    case selectHost(Int)
     case draw, newCanvas
     /// A new window with this window's hosts, on its tab (⌘N).
     case newWindow
@@ -39,11 +41,12 @@ enum WorkspaceAction: Hashable {
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
+    static let hostActions: [Self] = (1...9).map(Self.selectHost)
     static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
-    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + windowActions + [.newWindow]
+    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + hostActions + windowActions + [.newWindow]
 
     /// Whether the shortcut stays the app's while a VS Code pane has the keyboard
     /// (docs/APP-ARCHITECTURE.md §20): ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
@@ -77,6 +80,7 @@ enum WorkspaceAction: Hashable {
         case .previousTab: "Show Previous Tab"
         case .nextTab: "Show Next Tab"
         case .selectTab(let number): "Tab \(number)"
+        case .selectHost(let number): "Host \(number)"
         case .lastTab: "Last Tab"
         case .goToTab: "Go to Tab…"
         case .draw: "Draw on Pane"
@@ -122,6 +126,7 @@ enum WorkspaceAction: Hashable {
         case .previousTab: KeyboardShortcut("[", modifiers: [.command, .shift])
         case .nextTab: KeyboardShortcut("]", modifiers: [.command, .shift])
         case .selectTab(let number): KeyboardShortcut(KeyEquivalent(Character("\(number)")))
+        case .selectHost(let number): KeyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: [.command, .control])
         case .lastTab: KeyboardShortcut("9")
         case .goToTab: KeyboardShortcut("p")
         // ⇧⌘D is Ghostty's Split Down.
@@ -162,6 +167,7 @@ enum WorkspaceAction: Hashable {
         case .previousTab: window.selectTab(offset: -1)
         case .nextTab: window.selectTab(offset: 1)
         case .selectTab(let number): window.selectTab(shortcut: number)
+        case .selectHost(let number): window.selectHost(number: number)
         case .lastTab: window.selectTab(shortcut: 9)
         case .goToTab: window.showTabFinder()
         case .newWindow: window.newWindow()
@@ -199,7 +205,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab, .newWindow, .newAgent, .splitWithHost, .returnToTerminal, .fullScreenEditor: break
+        case .goToTab, .newWindow, .newAgent, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.

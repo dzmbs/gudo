@@ -98,6 +98,9 @@ struct WorkspaceCommands: Commands {
                 .disabled(editorHasKeys || model == nil)
             Divider()
             buttons([.commandPalette, .commandPaletteGhostty, .inbox, .jumpToWaitingAgent, .hosts, .shortcuts])
+            Menu("Switch to Host") {
+                buttons(WorkspaceAction.hostActions)
+            }
             Button("Add Host…") { model?.addHost() }
             Divider()
         }
