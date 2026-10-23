@@ -50,9 +50,13 @@ struct EditorPaneView: View {
             if showsBar { bar }
             ZStack {
                 if let browser = pane.browser {
-                    EditorWebHost(webView: browser.webView, perform: performShortcut)
-                        .opacity(pane.isWorkbenchVisible ? 1 : 0)
-                        .accessibilityIdentifier("editor-web")
+                    EditorWebHost(webView: browser.webView, perform: performShortcut) { shown in
+                        if pane.isWebViewShown != shown { pane.isWebViewShown = shown }
+                        if shown, isFocused { pane.takeKeyboard() }
+                    }
+                    .opacity(pane.isWorkbenchVisible ? 1 : 0)
+                    .accessibilityIdentifier("editor-web")
+                    .accessibilityValue(pane.isWebViewShown ? "showing" : "empty")
                 }
                 if !pane.isWorkbenchVisible {
                     if pane.isSuspended {
@@ -497,44 +501,134 @@ private enum EditorPasteboard {
 struct EditorWebHost: View {
     let webView: WKWebView
     var perform: (WorkspaceAction) -> Void
+    /// Whether the web view is on screen (in this or a newer view of the same editor).
+    var onShown: (Bool) -> Void = { _ in }
 
-    var body: some View {
-        #if canImport(UIKit)
-        Representable(webView: webView, perform: perform)
-        #else
-        WebViewHost(webView: webView)
-        #endif
-    }
+    var body: some View { Representable(webView: webView, perform: perform, onShown: onShown) }
 
     #if canImport(UIKit)
     private struct Representable: UIViewRepresentable {
         let webView: WKWebView
         let perform: (WorkspaceAction) -> Void
+        let onShown: (Bool) -> Void
 
         func makeUIView(context: Context) -> Container {
             let container = Container()
             container.perform = perform
-            container.host(webView)
+            container.onShown = onShown
+            container.claim(webView)
             return container
         }
 
         func updateUIView(_ container: Container, context: Context) {
             container.perform = perform
-            container.host(webView)
+            container.onShown = onShown
+            container.show(webView)
         }
     }
+    #else
+    private struct Representable: NSViewRepresentable {
+        let webView: WKWebView
+        let perform: (WorkspaceAction) -> Void
+        let onShown: (Bool) -> Void
 
-    final class Container: UIView {
-        static let actions = WorkspaceAction.allShortcutActions.filter(\.passesEditor)
-        var perform: ((WorkspaceAction) -> Void)?
+        func makeNSView(context: Context) -> Container {
+            let container = Container()
+            container.onShown = onShown
+            container.claim(webView)
+            return container
+        }
 
-        func host(_ webView: WKWebView) {
+        func updateNSView(_ container: Container, context: Context) {
+            container.onShown = onShown
+            container.show(webView)
+        }
+    }
+    #endif
+
+    /// Holds the editor's one web view. Several containers can exist for it at once (full
+    /// screen and back, a tab switch mid-transition): the newest one shows it, and one on its way
+    /// out never takes it back, or the editor would show nothing. A container leaving the window
+    /// hands it to one still there.
+    final class Container: PlatformView {
+        private static let owners = NSMapTable<WKWebView, Container>.weakToWeakObjects()
+        private static let holders = NSMapTable<WKWebView, NSHashTable<Container>>.weakToStrongObjects()
+        private weak var webView: WKWebView?
+
+        static func owner(of webView: WKWebView) -> Container? { owners.object(forKey: webView) }
+
+        /// Becomes the one that shows `webView`.
+        func claim(_ webView: WKWebView) {
+            if self.webView !== webView {
+                self.webView = webView
+                let set = Self.holders.object(forKey: webView) ?? .weakObjects()
+                set.add(self)
+                Self.holders.setObject(set, forKey: webView)
+            }
+            Self.owners.setObject(self, forKey: webView)
+            attach(webView)
+        }
+
+        /// Shows `webView` if this container is its owner (else it is another's now).
+        func show(_ webView: WKWebView) {
+            if self.webView !== webView || Self.owner(of: webView) == nil {
+                claim(webView)
+            } else if Self.owner(of: webView) === self {
+                attach(webView)
+            }
+        }
+
+        private func attach(_ webView: WKWebView) {
             guard webView.superview !== self else { return }
             webView.removeFromSuperview()
             webView.frame = bounds
+            #if canImport(UIKit)
             webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            #else
+            webView.autoresizingMask = [.width, .height]
+            #endif
             addSubview(webView)
+            report()
         }
+
+        /// Tells the pane whether its web view is on screen, in whichever container holds it
+        /// (a move resigns the keyboard: a focused pane takes it back then).
+        var onShown: ((Bool) -> Void)?
+
+        private func report() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let webView = self.webView else { return }
+                self.onShown?((webView.superview as? Container)?.window != nil)
+            }
+        }
+
+        #if canImport(UIKit)
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            windowChanged()
+        }
+        #else
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            windowChanged()
+        }
+        #endif
+
+        private func windowChanged() {
+            guard let webView else { return }
+            defer { report() }
+            if window != nil {
+                // Back on screen with no owner on screen: show it here.
+                if Self.owner(of: webView)?.window == nil { claim(webView) }
+            } else if Self.owner(of: webView) === self,
+                      let other = Self.holders.object(forKey: webView)?.allObjects.first(where: { $0 !== self && $0.window != nil }) {
+                other.claim(webView)
+            }
+        }
+
+        #if canImport(UIKit)
+        static let actions = WorkspaceAction.allShortcutActions.filter(\.passesEditor)
+        var perform: ((WorkspaceAction) -> Void)?
 
         override var keyCommands: [UIKeyCommand]? {
             Self.actions.map { action in
@@ -553,6 +647,6 @@ struct EditorWebHost: View {
             EditorPane.log.info("editor key passes to the app: \(action.title, privacy: .public)")
             perform?(action)
         }
+        #endif
     }
-    #endif
 }

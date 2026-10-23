@@ -52,6 +52,7 @@ public final class TerminalSurface {
     public var appearance: TerminalAppearance {
         didSet {
             builder.style = Self.frameStyle(appearance)
+            if appearance.background != oldValue.background { applyBackground() }
             if appearance.terminalConfiguration != oldValue.terminalConfiguration {
                 terminal.setDefaults(appearance.terminalConfiguration)
             }
@@ -141,7 +142,19 @@ public final class TerminalSurface {
         layer.framebufferOnly = true
         layer.maximumDrawableCount = 3
         layer.isOpaque = true
+        applyBackground()
     }
+
+    /// The layer shows the terminal background until its first frame and wherever a resize
+    /// outruns a frame, never black.
+    private func applyBackground() {
+        let bg = appearance.background
+        layer.backgroundColor = CGColor(
+            srgbRed: CGFloat(bg.r) / 255, green: CGFloat(bg.g) / 255, blue: CGFloat(bg.b) / 255, alpha: 1)
+    }
+
+    /// The background as a color, for the host view behind the layer.
+    public var backgroundColor: CGColor? { layer.backgroundColor }
 
     public convenience init(terminal: Terminal, fontSize: CGFloat) throws {
         var appearance = TerminalAppearance()
@@ -239,7 +252,18 @@ public final class TerminalSurface {
             onGridChange?(newGrid)
         }
         invalidate()
+        // On screen: draw at the new size now, presented with the transaction that resizes the
+        // layer, rather than on the next display-link tick a frame later (a split's new pane,
+        // or a pane resizing under an animation, would show a blank or stretched frame).
+        if displayLink != nil, layer.drawableSize != previousDrawableSize {
+            previousDrawableSize = layer.drawableSize
+            layer.presentsWithTransaction = true
+            _ = renderIfDirty()
+            layer.presentsWithTransaction = false
+        }
     }
+
+    private var previousDrawableSize = CGSize.zero
 
     /// One cell in points (nil before the first layout).
     public var cellSize: CGSize? {

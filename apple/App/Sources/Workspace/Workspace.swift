@@ -1,6 +1,7 @@
 import DesignSystem
 import Foundation
 import Observation
+import os
 import PaneLayout
 import TerminalCore
 import TerminalRenderer
@@ -208,9 +209,17 @@ final class Workspace {
             onLayoutUnavailable?()
             return
         }
+        // Splits, closes and zooms animate the panes' sizes (`SplitTreeView`): no cols × rows
+        // overlay through them. Divider moves keep it.
+        if case .resize = op {} else { layoutChangeUntil = .now + .milliseconds(700) }
+        let signpost = Self.signposter.beginInterval("Layout op")
         layout.apply(op)
         reconcilePanes()
+        Self.signposter.endInterval("Layout op", signpost)
     }
+
+    /// Instruments' Points of Interest: layout ops and pane creation (what a split waits on).
+    static let signposter = OSSignposter(subsystem: Bundle.main.bundleIdentifier ?? "app", category: .pointsOfInterest)
 
     /// The tab's name: the user's rename, else the friendly name it got when it was created
     /// ("quiet-otter"). With Settings ▸ "Title from shell", a program's OSC 0/2 title replaces a
@@ -431,7 +440,11 @@ final class Workspace {
         failures = failures.filter { live.contains($0.key) }
         for id in live where panes[id] == nil && failures[id] == nil {
             do {
+                let signpost = Self.signposter.beginInterval("Make pane")
+                let start = ContinuousClock.now
                 panes[id] = try makePane(id)
+                Self.signposter.endInterval("Make pane", signpost)
+                Pane.log.info("pane \(id.description, privacy: .public) made in \((ContinuousClock.now - start).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
             } catch {
                 failures[id] = String(describing: error)
             }

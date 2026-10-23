@@ -58,6 +58,8 @@ import AppKit
 /// macOS: the same notification wiring (no Live Activities).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Hosting unit tests: no Dock icon and never active, so a test run leaves the screen alone.
+        if LaunchOptions.isTesting { NSApp.setActivationPolicy(.accessory) }
         #if DEBUG
         // `-dogfoodBackground YES` (scripts/dogfood.sh's default): a test run never takes the
         // screen from whoever is working. No Dock icon, never active, its window kept behind.
@@ -76,6 +78,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         AppNotifications.shared.didRegister(apnsToken: deviceToken)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        AppModel.shared.localHelper?.appWillTerminate()
     }
 }
 #endif

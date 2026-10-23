@@ -56,7 +56,11 @@ private struct AgentToolsSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            register ? "Add Agent Tools" : "Remove Agent Tools",
+            cancel: SheetAction("Cancel") { dismiss() },
+            primary: SheetAction("Run", isEnabled: plans?.contains { $0.command != nil } == true, identifier: "agent-tools-run") { run() }
+        ) {
             Form {
                 Section {
                     if let plans {
@@ -89,6 +93,7 @@ private struct AgentToolsSheet: View {
                     Text(register
                         ? "Each runs in a new terminal tab on its host. Turning this off removes them the same way."
                         : "Each runs in a new terminal tab on its host.")
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
                 if let failure {
                     Text(failure).foregroundStyle(DS.Palette.error)
@@ -96,22 +101,10 @@ private struct AgentToolsSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .navigationTitle(register ? "Add Agent Tools" : "Remove Agent Tools")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Run") { run() }
-                        .disabled(plans?.contains { $0.command != nil } != true)
-                        .accessibilityIdentifier("agent-tools-run")
-                }
-            }
         }
-        .macMinimumSize(width: 560, height: 360)
+        #if os(macOS)
+        .frame(width: 540)
+        #endif
         .task { plans = await Self.plans(register: register) }
     }
 

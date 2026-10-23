@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, font, cursor, splits, links, browser, keyboard, passwords, voice, notifications, bell, agents, agentTools, git, network, about
+    case appearance, font, cursor, splits, links, browser, keyboard, passwords, voice, notifications, bell, agents, agentTools, git, network, thisMac, about
 
     var title: String {
         switch self {
@@ -44,6 +44,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .agentTools: "Agent Tools"
         case .git: "Git"
         case .network: "Network"
+        case .thisMac: "This Mac"
         case .about: "About"
         }
     }
@@ -59,6 +60,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .agents, .agentTools: .agents
         case .git: .git
         case .network: .network
+        case .thisMac: .thisMac
         case .about: .about
         }
     }
@@ -116,6 +118,10 @@ enum SettingsIndex {
         ]
         #else
         entries.append(.init(id: "tab-bar", title: "Tab Bar When the Sidebar Is Hidden", section: .appearance, synonyms: ["tabs", "strip"]))
+        entries += [
+            .init(id: "this-mac-keep-running", title: "Keep Sessions Running in the Background", section: .thisMac, synonyms: ["helper", "daemon", "login item", "background", "quit"]),
+            .init(id: "this-mac-helper", title: "Stop Helper", section: .thisMac, synonyms: ["helper", "daemon", "start", "local"]),
+        ]
         #endif
         return entries
     }()

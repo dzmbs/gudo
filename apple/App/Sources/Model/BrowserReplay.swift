@@ -122,7 +122,7 @@ extension ReplayAction {
 @MainActor
 @Observable
 final class ReplayStore {
-    static let shared = ReplayStore(root: URL.applicationSupportDirectory.appending(path: "Replays", directoryHint: .isDirectory))
+    static let shared = ReplayStore(root: AppData.replays)
 
     /// Settings ▸ Browser ▸ Record Agent Sessions (on by default).
     static let enabledKey = "recordAgentBrowserSessions"

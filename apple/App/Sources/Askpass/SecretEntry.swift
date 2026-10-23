@@ -10,7 +10,8 @@ enum AskpassVaultStore {
         if LaunchOptions.mock || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             return MemoryAskpassVault()
         }
-        return AskpassVaults.appDefault(bundleId: Bundle.main.bundleIdentifier ?? "app")
+        let bundleId = Bundle.main.bundleIdentifier ?? "app"
+        return AskpassVaults.appDefault(bundleId: AppData.isIsolated ? bundleId + ".test" : bundleId)
     }()
 
     /// Whether this build can remember passwords, probed once.

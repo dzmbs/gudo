@@ -59,14 +59,28 @@ struct TerminalApp: App {
             }
         }
         #if os(macOS)
+        // Unit tests render their own offscreen windows; the app opens none.
+        .defaultLaunchBehavior(LaunchOptions.isTesting ? .suppressed : .automatic)
         .defaultSize(width: 1180, height: 760)
         .windowToolbarStyle(.unified(showsTitle: true))
         #endif
 
         #if os(macOS)
+        WindowGroup(id: ToolWindowRequest.sceneId, for: ToolWindowRequest.self) { $request in
+            if let request { ToolWindowRoot(request: request) }
+        }
+        .defaultSize(width: 960, height: 680)
+        .windowToolbarStyle(.unified(showsTitle: true))
+        .restorationBehavior(.disabled)
+        .handlesExternalEvents(matching: [])
+        .defaultLaunchBehavior(.suppressed)
+
         Settings {
             SettingsView()
         }
+        // A titlebar as tall as the main window's, so the traffic lights keep the system's
+        // margin inside the sidebar's rounded corner.
+        .windowToolbarStyle(.unified)
         #endif
     }
 }
@@ -107,7 +121,7 @@ struct WindowRoot: View {
 }
 
 /// A window's content around its model (see `WindowRoot`).
-private struct WindowContent: View {
+struct WindowContent: View {
     var request: WindowRequest?
     let model: WindowModel
     @Environment(AppModel.self) private var app
@@ -163,6 +177,12 @@ private struct WindowContent: View {
                 guard !restored else { return }
                 restored = true
                 model.openWindow = { request in openWindow(value: request) }
+                #if os(macOS)
+                // Unit tests draw tool windows offscreen themselves; never a real one.
+                if !LaunchOptions.isTesting {
+                    model.openTool = { request in openWindow(id: ToolWindowRequest.sceneId, value: request) }
+                }
+                #endif
                 #if DEBUG && os(iOS)
                 // `-resetWindows YES` (UI tests): start from one window, whatever iPadOS restored.
                 if UserDefaults.standard.bool(forKey: "resetWindows") { WindowContent.closeOtherWindows(keeping: model) }

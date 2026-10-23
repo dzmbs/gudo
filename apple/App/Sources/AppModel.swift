@@ -21,8 +21,13 @@ final class AppModel {
     /// Shown by the window when a pairing / connection started outside it fails (deep link).
     var lastError: String?
     /// This device's tabs (the Mac's shells; empty on iPhone and iPad unless a test or fixture
-    /// asks for the echo stand-in), shared by every window like a host's layout.
+    /// asks for the echo stand-in), shared by every window like a host's layout. Empty at launch
+    /// when This Mac's helper serves the Mac instead.
     let localLayout: LocalLayoutStore
+    #if os(macOS)
+    /// This Mac's own helper (nil for design fixtures and `-mock`).
+    let localHelper: LocalHelper?
+    #endif
 
     /// Pane streams shared by windows, for backends that are one process or channel per pane
     /// (local PTYs, plain SSH, the echo stand-in). Daemon panes share their connection's router.
@@ -42,9 +47,9 @@ final class AppModel {
     private init() {
         CoreLog.install()
         let defaults = UserDefaults.standard
-        // `-hostsDirectory <path>`: saved hosts and secrets in that folder only (UI tests and
-        // screenshots against throwaway daemons never touch the user's own hosts or Keychain).
-        let isolated = defaults.string(forKey: "hostsDirectory").map { URL(fileURLWithPath: $0, isDirectory: true) }
+        // Tests and tooling keep hosts and secrets in a folder of their own (`AppData`): they
+        // never touch the user's hosts or Keychain.
+        let isolated = AppData.isolatedDirectory
         let repository = isolated.map { HostRepository(directory: $0) } ?? HostRepository.appDefault()
         let secrets: any SecretStore = isolated.map { FileSecretStore(directory: $0.appending(path: "secrets")) }
             ?? SecretStores.appDefault(
@@ -66,9 +71,23 @@ final class AppModel {
         configuration.bundledDaemons = { bundled }
         hosts = HostsModel(secrets: secrets, repository: repository, configuration: configuration)
         hosts.hostKeyPrompts.trustNewHostsAutomatically = defaults.bool(forKey: "testTrustHostKeys")
-        // No local shell on iOS (only the echo stand-in for tests): an empty session.
-        localLayout = LaunchOptions.hasLocalShell ? LocalLayoutStore() : LocalLayoutStore(session: Session(tabs: [], activeTabId: nil))
+        #if os(macOS)
+        let helper = LaunchOptions.mock || LaunchOptions.screen != nil ? nil : LocalHelper.app(hosts: hosts)
+        localHelper = helper
+        let helperServesMac = helper?.isEnabled == true
+        #else
+        let helperServesMac = false
+        #endif
+        // No local shell on iOS (only the echo stand-in for tests): an empty session. Nor on a
+        // Mac whose helper serves it (a plain shell comes back if the helper can't).
+        localLayout = LaunchOptions.hasLocalShell && !helperServesMac
+            ? LocalLayoutStore() : LocalLayoutStore(session: Session(tabs: [], activeTabId: nil))
         hosts.onBrowserPush = { [weak self] id, push in self?.browserPush(id, push) }
+        #if os(macOS)
+        helper?.onReady = { [weak self] id in self?.thisDeviceReady(id) }
+        helper?.onUnavailable = { [weak self] in self?.thisDeviceUnavailable() }
+        helper?.start()
+        #endif
         #if os(iOS) && FILES_PROVIDER_YES
         if isolated == nil { FilesLocations.start(hosts) }
         #endif
@@ -156,6 +175,30 @@ final class AppModel {
             return Bundle.main.url(forResource: name, withExtension: "gz").map { .file(path: $0.path) }
         }
         return HostdBinaries(linuxAarch64: file("aarch64"), linuxX8664: file("x86_64"), macosAarch64: nil, macosX8664: nil)
+    }
+
+    // MARK: This Mac's helper
+
+    #if os(macOS)
+    /// Every window shows This Mac's helper in place of an empty local workspace.
+    private func thisDeviceReady(_ id: String) {
+        for window in openWindows { window.openThisDevice(id) }
+    }
+
+    /// The helper stopped or could not start: This Mac falls back to a plain shell.
+    private func thisDeviceUnavailable() {
+        if localLayout.session.tabs.isEmpty { localLayout.apply(.newTab) }
+        for window in openWindows where window.currentGroupId == hosts.thisDeviceId { window.show(.local) }
+    }
+    #endif
+
+    /// The host of this device's helper while it serves This Mac.
+    var thisDeviceHostId: String? {
+        #if os(macOS)
+        localHelper?.isActive == true ? hosts.thisDeviceId : nil
+        #else
+        nil
+        #endif
     }
 
     // MARK: Pairing entry points

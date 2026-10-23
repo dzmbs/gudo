@@ -65,7 +65,19 @@ final class WindowModel {
     var destination = Destination.terminal {
         didSet { if destination != oldValue { reportViews() } }
     }
-    var sheet: SheetRoute?
+    var sheet: SheetRoute? {
+        didSet {
+            #if os(macOS)
+            // Browsing tools open in a window of their own (`ToolWindows.swift`).
+            if let route = sheet, route.opensInWindow, let openTool {
+                sheet = nil
+                openTool(ToolWindowRequest(route: route.rawValue, window: serial))
+            }
+            #endif
+        }
+    }
+    /// Opens a tool window (macOS), set by the window's view.
+    @ObservationIgnored var openTool: ((ToolWindowRequest) -> Void)?
     /// The toolbar's host switcher is open.
     var isHostSwitcherShown = false
     /// What the Replays sheet shows.
@@ -95,7 +107,16 @@ final class WindowModel {
     /// top (unless `TabPlacement.showsTabBarKey` is off). Per window; the last choice is the next
     /// window's start.
     var isSidebarShown = TabPlacement.sidebarShown {
-        didSet { TabPlacement.sidebarShown = isSidebarShown }
+        didSet {
+            TabPlacement.sidebarShown = isSidebarShown
+            quietLayoutResizes()
+        }
+    }
+
+    /// The grids about to change follow an animated layout change, not a resize the user is
+    /// making: no cols × rows overlay counting through every frame of it.
+    func quietLayoutResizes() {
+        for workspace in workspaces.values { workspace.layoutChangeUntil = .now + .milliseconds(700) }
     }
     var isSearchShown = false
     var searchNeedle = "" {
@@ -217,6 +238,8 @@ final class WindowModel {
     /// `browserURL`, nil for other pages.
     var browserHost: String?
     let toasts = ToastCenter()
+    /// Full screen's hint, shown under VS Code's title bar rather than over its controls.
+    let fullScreenHints = ToastCenter()
     /// Agents on other tabs and hosts that need you or finished (`AgentToasts`).
     let agentToasts = AgentToasts()
     /// The git-native workspace of this window (worktree, pull request, scripts).
@@ -240,6 +263,7 @@ final class WindowModel {
         groups = HostGroups(
             hosts: app.hosts,
             local: LaunchOptions.hasLocalShell ? HostGroups.Local(name: Self.deviceName, layout: app.localLayout) : nil)
+        groups.helperServesLocal = { [weak app] in app?.thisDeviceHostId != nil }
         if LaunchOptions.mock || LaunchOptions.fakeUsage {
             let groups = groups
             usage = FakeUsageFeed { groups.groups.map { UsageHost(id: $0.id, name: $0.name) } }
@@ -335,9 +359,11 @@ final class WindowModel {
         let local = app.makeWorkspace(for: .local)
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
+        if let id = app.thisDeviceHostId { openThisDevice(id) }
         followGroups()
         startMixedTabs()
         followEditors()
+        followFullScreen()
         followAgentToasts()
     }
 
@@ -530,7 +556,20 @@ final class WindowModel {
         workspaces[id] = nil
         workspaceConnections[id] = nil
         guard wasShown else { return }
-        if let next = others.first { focus(next) } else { show(.local) }
+        if let next = others.first { focus(next) } else { show(home(leaving: id)) }
+    }
+
+    /// Where a window goes when nothing else is left: This Mac's helper while it serves the
+    /// Mac and no plain shell is open, else this device's own workspace.
+    func home(leaving id: String? = nil) -> WorkspaceTarget {
+        guard let helper = app.thisDeviceHostId, helper != id, app.localLayout.session.tabs.isEmpty else { return .local }
+        return .host(helper)
+    }
+
+    /// Opens This Mac's helper in this window, and shows it if the window shows nothing else.
+    func openThisDevice(_ id: String) {
+        _ = try? groups.open(id)
+        if currentGroupId == HostGroups.localId, app.localLayout.session.tabs.isEmpty { show(.host(id)) }
     }
 
     /// A host was forgotten (Hosts ▸ Forget): it leaves the window too.
@@ -540,7 +579,7 @@ final class WindowModel {
         workspaces[id]?.close(ending: true)
         workspaces[id] = nil
         workspaceConnections[id] = nil
-        if wasShown { show(.local) }
+        if wasShown { show(home(leaving: id)) }
     }
 
     /// The host on screen has no tabs left (its last one closed): go to the nearest tab on
@@ -900,7 +939,10 @@ struct NewAgentSeed {
 }
 
 enum LaunchOptions {
-    static let mock = ProcessInfo.processInfo.arguments.contains("-mock")
+    /// `-mock`, or `UNNAMED_MOCK` in the environment (in-process snapshot tests).
+    static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["UNNAMED_MOCK"] != nil
+    /// Hosting unit tests: no windows of its own, never active.
+    static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     static let screen: String? = UserDefaults.standard.string(forKey: "screen")
     /// Every host header and the Inbox show a fixed usage report (`FakeUsageFeed`): UI tests.
     static let fakeUsage = UserDefaults.standard.bool(forKey: "fakeUsage")

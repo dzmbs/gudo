@@ -51,13 +51,14 @@ struct TabSubtitle: View {
         }
     }
 
-    @ViewBuilder private var contextLine: some View {
-        if let context {
-            Text(context)
-                .font(DS.Font.sidebarSubtitle)
-                .foregroundStyle(DS.Palette.textTertiary)
-                .lineLimit(1)
-                .truncationMode(.head)
-        }
+    /// Always one line, empty when there is nothing to say: a row keeps its height while its
+    /// context comes and goes (a prompt's brief `git`), so the rows under it never jump.
+    private var contextLine: some View {
+        Text(context ?? " ")
+            .font(DS.Font.sidebarSubtitle)
+            .foregroundStyle(DS.Palette.textTertiary)
+            .lineLimit(1)
+            .truncationMode(.head)
+            .accessibilityHidden(context == nil)
     }
 }

@@ -27,7 +27,9 @@ goes through `LayoutStore`: `DaemonLayoutStore` for paired daemons, `LocalLayout
 Hosts button (⇧⌘H) opens the hosts list: just ssh, pairing, ssh_config import.
 
 Before building the app: `cargo xtask build-xcframework` (the core) and `cargo xtask build-hostd-linux`
-(the daemons "Install helper" uploads, bundled from `build/hostd/`).
+(the daemons "Install helper" uploads, bundled from `build/hostd/`). For the Mac's own helper
+("This Mac" with files, changes, ports, the editor and agents): `cargo xtask build-hostd-macos`; a
+build without it gives This Mac plain shells only.
 
 ## Setup
 

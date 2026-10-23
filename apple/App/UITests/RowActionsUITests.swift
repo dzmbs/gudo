@@ -10,11 +10,11 @@ final class RowActionsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch() throws {
+    private func launch(_ arguments: [String] = []) throws {
         let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
         try XCTSkipIf(ticket.isEmpty, "no daemon ticket (run apple/scripts/w3-ui-test.sh)")
         app = XCUIApplication()
-        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-noAutoFocus", "YES"]
+        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-noAutoFocus", "YES"] + arguments
         app.launch()
         let pane = panes.firstMatch
         if !pane.waitForExistence(timeout: 30) {
@@ -143,18 +143,88 @@ final class RowActionsUITests: XCTestCase {
         XCTAssertTrue(row.exists)
     }
 
-    func testFullScreenEditorShowsItsWayOut() throws {
-        try launch()
-        openEditor()
+    /// ⌃⌘F on the editor; the workbench shows full screen.
+    private func enterFullScreen() -> XCUIElement {
         app.webViews.firstMatch.tap()
         app.typeKey("f", modifierFlags: [.command, .control])
         let view = element("editor-full-screen-view")
         XCTAssertTrue(view.waitForExistence(timeout: 5), "full screen")
+        assertWorkbenchShows("the workbench shows, not a blank window")
+        return view
+    }
+
+    /// The editor's web view is in its pane on screen, not left behind in a view that went away.
+    private func assertWorkbenchShows(_ message: String) {
+        let web = element("editor-web").firstMatch
+        XCTAssertTrue(web.waitForExistence(timeout: 5), message)
+        expectation(for: NSPredicate(format: "value == 'showing'"), evaluatedWith: web)
+        waitForExpectations(timeout: 5)
+    }
+
+    /// Full screen ended and the window's own chrome is back.
+    private func assertWindowIsBack(_ what: String) {
+        XCTAssertTrue(element("editor-full-screen-view").waitForNonExistence(timeout: 5), "\(what): full screen ended")
+        XCTAssertTrue(element("new-tab").firstMatch.waitForExistence(timeout: 5), "\(what): the sidebar shows")
+    }
+
+    func testFullScreenEditorShowsItsWayOut() throws {
+        try launch(["-editorFullScreen.hintsShown", "0"])
+        openEditor()
+        let view = enterFullScreen()
         let exit = element("editor-exit-full-screen")
         XCTAssertTrue(exit.exists, "the way out shows without hovering")
-        XCTAssertTrue(text(containing: "Exit Full Screen at the top").exists, "the hint")
+        XCTAssertTrue(text(containing: "to exit").waitForExistence(timeout: 3), "the hint")
         shot("editor-full-screen")
+
+        // Collapsed to the glyph, then dragged to the opposite corner, where it stays.
+        // Collapses 2.5 s on (its frame in the accessibility snapshot can lag, so by time).
+        _ = view.waitForNonExistence(timeout: 3.5)
+        shot("editor-full-screen-collapsed")
+        let toTopLeading = (exit.value as? String)?.hasPrefix("top") != true
+        let target = app.coordinate(withNormalizedOffset: toTopLeading ? CGVector(dx: 0.04, dy: 0.08) : CGVector(dx: 0.96, dy: 0.93))
+        exit.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.2, thenDragTo: target)
+        expectation(for: NSPredicate(format: "value == %@", toTopLeading ? "topLeading" : "bottomTrailing"), evaluatedWith: exit)
+        waitForExpectations(timeout: 3)
+        shot("editor-full-screen-moved")
+
         exit.tap()
         XCTAssertTrue(view.waitForNonExistence(timeout: 5), "back to the window")
+        assertWorkbenchShows("the workbench shows in the window again")
+
+        // In and out again: the web view follows each time.
+        for _ in 0..<2 {
+            _ = enterFullScreen()
+            app.typeKey("f", modifierFlags: [.command, .control])
+            XCTAssertTrue(view.waitForNonExistence(timeout: 5))
+            assertWorkbenchShows("the workbench shows after full screen")
+        }
+    }
+
+    /// Another tab while full screen: the window comes back, and the editor's tab shows in it.
+    func testFullScreenEndsWhenItsTabIsLeft() throws {
+        try launch()
+        openEditor()
+        _ = enterFullScreen()
+        // ⌃⌘`: back to the terminal tab.
+        app.typeKey("`", modifierFlags: [.command, .control])
+        assertWindowIsBack("another tab")
+        XCTAssertTrue(panes.firstMatch.waitForExistence(timeout: 5), "the terminal tab")
+        let row = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'tab-row-' AND label CONTAINS 'VS Code on'")).firstMatch
+        row.tap()
+        assertWorkbenchShows("the editor's tab")
+        XCTAssertFalse(element("editor-full-screen-view").exists, "not full screen again")
+        XCTAssertTrue(element("new-tab").firstMatch.exists, "the sidebar still shows")
+        shot("editor-after-full-screen")
+    }
+
+    /// The editor closed while full screen (⌘W): the window comes back.
+    func testFullScreenEndsWhenItsEditorCloses() throws {
+        try launch()
+        openEditor()
+        _ = enterFullScreen()
+        app.typeKey("w", modifierFlags: .command)
+        assertWindowIsBack("the editor closed")
+        XCTAssertTrue(panes.firstMatch.waitForExistence(timeout: 5), "a terminal is in front")
     }
 }

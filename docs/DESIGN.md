@@ -175,6 +175,7 @@ Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.pa
 |---|---|---|
 | `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the ink at 20 % behind the glyph (T4) |
 | `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | Ghostty `SearchButtonStyle` hover/press fills; iPad pointer highlight |
+| `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and a soft 25 % halo while focused; typed literals in SF Mono, the prompt in prose |
 | `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28–48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
@@ -225,15 +226,18 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 ### Window and title bar (Mac)
 
 - One layout for both tab placements: the integrated sidebar (vertical tabs only) beside a
-  detail column whose toolbar is the same in both: the sidebar toggle leading; the tab's name
+  detail column whose toolbar is the same in both: the sidebar toggle leading (Xcode's: over the
+  sidebar a bare glyph beside the traffic lights with the title starting at the detail column;
+  with the sidebar hidden a toolbar button before the title); the tab's name
   with a subtitle ("Local · 3 panes", or the host's name); presence avatars; one monochrome glass
   group with Hosts, Find, the pane menu and the command palette; the tab-placement toggle on its
   own. Never accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
   buttons' frames in both placements and attaches screenshots.
 - The title's subtitle is the tab's context (agent task, program, `repo:branch` or directory)
   with its device symbol, ✓ on the window's and ⌃⌘1…⌃⌘9 (⌘1…⌘9 stay the tabs'), a word only
-  when the link is not fine or agents wait, then New Tab, New Agent…, All Hosts and Add Remote
-  Host…; typing an address no host matches offers Connect to it. Every icon control has a tooltip with its shortcut.
+  when the link is not fine or agents wait (else the address, SF Mono), then New Tab, New Agent…,
+  Connect via SSH…, Pair with a Ticket…, Join a Session… and All Hosts; only the hosts scroll.
+  Typing an address no host matches offers Connect to it. Every icon control has a tooltip with its shortcut.
 - The toolbar background is hidden: the sidebar color runs up behind the traffic lights and the
   terminal background behind the rest. The window title's folder is the proxy icon
   (`navigationDocument`) for local tabs.
@@ -587,16 +591,28 @@ address, more). iPad/Mac: 36 pt bar on the terminal background with Ports, back,
 reload, glass address field (lock for https, `localhost:5173` for local), share, Open in Safari;
 2 pt accent progress line.
 
+### Sheets and tool windows (Mac)
+
+Form sheets use `SheetScaffold` (DesignSystem): on the Mac no bar, the title leading over the
+content, which sizes the sheet, and Cancel plus the one default button bottom-right (Esc, Return;
+a lone Done also closes on Esc); on iOS a nav stack with the inline title and the bar's
+cancellation and confirmation slots. Fields are prompt-only and leading (no label-left,
+value-right split), multi-line ones are `TextField(axis: .vertical)`. Files, Changes, Ports and
+Session Replays are tools you keep beside the terminal, so on the Mac they open as windows of
+their own (`Windows/ToolWindows.swift`, ⌘W closes) with the title and actions in the titlebar;
+iPad and iPhone keep them as sheets.
+
 ### Settings (`Views/SettingsView.swift`)
 
-Ghostty's config as native settings; each control shows its Ghostty key in SF Mono under the
+Ghostty's config as native settings; each control's Ghostty key is in its tooltip, in search
 card in its own background with its name in its foreground, a prompt in its colours and four 12 pt
 swatches (red, green, blue, yellow), the selected card ringed in the accent; the setting row
 shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Panes (compact/comfortable).
 theme, each from the same picker; the system's appearance writes `theme` (`Views/ThemePair.swift`).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
-from the real profiles). Notifications. About and Acknowledgements. Mac: a split view (200 pt list of
+from the real profiles). Notifications. About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
+top, the pane's title once in the titlebar, a grouped form beside it, min 720 × 480); iOS: one grouped form. Both on the
 theme's chrome. Values reach the renderer through `TerminalAppearance`
 (`TerminalAppearance.fromPreferences()`).
 
@@ -646,6 +662,15 @@ Return. Canvas panes show the same editor full size on the terminal background. 
 
 ## Screenshots
 
+Mac, without touching the screen: `AppTests/MacSnapshotTests` draws each fixture in-process into
+an offscreen window and captures it with the window server's picture of the app's own window
+(glass included, no recording permission). The test host opens no window of its own and never
+activates. `xcodebuild test -scheme App -destination platform=macOS
+-only-testing:AppTests/MacSnapshotTests` with `TEST_RUNNER_SNAPSHOT_DIR=<dir>`,
+`TEST_RUNNER_UNNAMED_MOCK=1`, optionally `TEST_RUNNER_SNAPSHOT_MODE=light` and
+`TEST_RUNNER_SNAPSHOT_ONLY=splits,join,…`. The offscreen window is never key, so default buttons
+draw inactive.
+
 `apple/scripts/screenshots.sh <udid> <prefix> <dir> [screens]` (simulator) and
 `apple/scripts/mac-screenshots.sh <app> <dir> [screens]` (Mac; the Debug app draws its own window
 with `-snapshot`, so it works on a locked Mac — glass and the sidebar list are not captured by
@@ -693,3 +718,14 @@ side bar. "Kim is typing" and tab avatars use the cut-out `PresenceStack`. "Foll
 one glass capsule: their avatar, the words, a hairline, Stop in the accent; no second coloured
 edge. The shared approval reuses the Agents request block. Arrivals and departures are banners
 with the person's avatar. With people here the toolbar's avatars open `PeopleSwitcher`; alone
+
+
+The browser bar's way back names where it goes ("‹ Ports") in the ink, never the accent; Done
+stays a word. Page dialogs and agent requests over a page are panels, not capsules (three lines
+in a capsule read as a pill-shaped block), with the secondary verb `.quiet` beside the one
+`.primaryGlass` (never glass on glass); "Agent · …  Take Over" is one capsule with a hairline
+and an accent verb. Text prompts are prose even where the typed value is a literal (Hosts quick
+connect, the Ports address). Reviewed without changes: Share Session, Join, Links, Diff, Files,
+Add Host, Settings and Theme, the key bar, pane headers, the welcome state and the iPhone tab
+layout (they already follow the system's components). Screenshots:
+`before-{invite,join,links,diff,files,pairing,settings,keybar,welcome,iphone-*}-*.png`.

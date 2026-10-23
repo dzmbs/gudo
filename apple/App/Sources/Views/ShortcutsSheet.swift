@@ -24,42 +24,55 @@ struct ShortcutsSheet: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        SheetScaffold("Keyboard Shortcuts", cancel: SheetAction("Done") { dismiss() }) {
+            VStack(spacing: DS.Space.s) {
+                FilterField(text: $query, prompt: "Search Shortcuts")
+                    .padding(.horizontal, DS.Space.xl)
+                    .padding(.top, DS.Space.s)
+                list
+            }
+        }
+        .frame(width: 520, height: 600)
+        .accessibilityIdentifier("shortcuts-sheet")
+        #else
         NavigationStack {
-            List {
-                ForEach(sections, id: \.0) { title, actions in
-                    let shown = actions.filter(matches)
-                    if !shown.isEmpty {
-                        Section(title) {
-                            ForEach(shown, id: \.self) { action in
-                                HStack {
-                                    Text(action.title)
-                                    Spacer()
-                                    ShortcutLabel(action.shortcut.symbols)
-                                        .foregroundStyle(DS.Palette.textSecondary)
-                                }
-                                .accessibilityElement(children: .combine)
-                            }
-                        }
-                        .chromeRows()
+            list
+                .searchable(text: $query, prompt: "Search Shortcuts")
+                .navigationTitle("Keyboard Shortcuts")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                            .keyboardShortcut(.cancelAction)
                     }
                 }
-            }
-            .chromeGrouped()
-            .searchable(text: $query, prompt: "Search Shortcuts")
-            .navigationTitle("Keyboard Shortcuts")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
+        }
+        .accessibilityIdentifier("shortcuts-sheet")
+        #endif
+    }
+
+    private var list: some View {
+        GroupedList {
+            ForEach(sections, id: \.0) { title, actions in
+                let shown = actions.filter(matches)
+                if !shown.isEmpty {
+                    Section {
+                        ForEach(shown, id: \.self) { action in
+                            HStack {
+                                Text(action.title)
+                                Spacer()
+                                ShortcutLabel(action.shortcut.symbols)
+                                    .foregroundStyle(DS.Palette.textSecondary)
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+                    } header: {
+                        SectionTitle(title)
+                    }
+                    .chromeRows()
                 }
             }
         }
-        #if os(macOS)
-        .frame(minWidth: 460, idealWidth: 520, minHeight: 520)
-        #endif
-        .accessibilityIdentifier("shortcuts-sheet")
     }
 }

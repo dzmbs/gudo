@@ -47,11 +47,18 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     private var markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
 
+    /// First responder of its window (AppKit sets `firstResponder` only after
+    /// `becomeFirstResponder` returns, so the view tracks it itself).
+    private var hasKeyboard = false
+    private var keyObservers: [NSObjectProtocol] = []
+
     public init(surface: TerminalSurface) {
         self.surface = surface
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
+        // Off screen until it is first responder of a key window: a hollow, steady cursor.
+        surface.isFocused = false
         registerForDraggedTypes([.string, .fileURL, .png, .tiff, NSPasteboard.PasteboardType("public.jpeg")])
     }
 
@@ -64,21 +71,43 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public var acceptsFirstResponder: Bool { true }
 
     override public func becomeFirstResponder() -> Bool {
-        surface.isFocused = true
+        hasKeyboard = true
+        updateFocus()
         emit(surface.terminal.encodeFocus(true))
         onFocus?()
         return true
     }
 
     override public func resignFirstResponder() -> Bool {
-        surface.isFocused = false
+        hasKeyboard = false
+        updateFocus()
         emit(surface.terminal.encodeFocus(false))
         unmarkText()
         return true
     }
 
+    /// Ghostty's focus: a solid, blinking cursor only as first responder of the key window;
+    /// otherwise (another split, another window or app in front) a hollow, steady one.
+    private func updateFocus() {
+        surface.isFocused = hasKeyboard && window?.isKeyWindow == true
+    }
+
+    override public func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        keyObservers.forEach(NotificationCenter.default.removeObserver)
+        keyObservers = []
+        guard let newWindow else { return }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            keyObservers.append(NotificationCenter.default.addObserver(forName: name, object: newWindow, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateFocus() }
+            })
+        }
+    }
+
     override public func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        hasKeyboard = window?.firstResponder === self
+        updateFocus()
         guard window != nil else {
             surface.stopDisplayLink()
             return

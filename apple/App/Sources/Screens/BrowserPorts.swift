@@ -6,6 +6,7 @@ import SwiftUI
 struct BrowserSheet: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.isToolWindow) private var isToolWindow
 
     var body: some View {
         Group {
@@ -21,8 +22,10 @@ struct BrowserSheet: View {
                 NavigationStack {
                     PortsList()
                         .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { dismiss() }
+                            if !isToolWindow {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("Done") { dismiss() }
+                                }
                             }
                         }
                 }
@@ -68,7 +71,8 @@ struct PortsList: View {
                     Image(systemName: "globe")
                         .foregroundStyle(.secondary)
                         .frame(width: 22)
-                    TextField("Address or localhost port", text: $address)
+                    // A literal once typed; the prompt is prose.
+                    TextField("Address", text: $address, prompt: Text("Address or localhost port").font(.body))
                         .font(DS.Font.literal)
                         .autocorrectionDisabled()
                         #if os(iOS)

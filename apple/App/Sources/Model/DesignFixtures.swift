@@ -112,6 +112,11 @@ enum DesignFixtures {
         case "toast":
             try? await Task.sleep(for: .seconds(1))
             model.toasts.show(Toast("Closed “cargo test”", systemImage: "xmark.circle.fill", action: Toast.Action("Undo") {}))
+        case "browser-page":
+            // The in-app browser on a page (a local one: no network), its chrome in view.
+            let page = "<html><body style='font:17px -apple-system;margin:40px'><h1>Dev server</h1><p>localhost:5173 · pnpm dev</p></body></html>"
+            model.browserURL = URL(string: "data:text/html;charset=utf-8," + (page.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))
+            model.sheet = .browser
         case "presence-notice":
             // Someone arrives in a shared session (`-mockPresence YES`).
             try? await Task.sleep(for: .seconds(1))
@@ -134,6 +139,7 @@ enum DesignFixtures {
                 workspace.notices[panes[2]] = PaneNotice(bell: true, hoveredURL: "https://github.com/ghostty-org/ghostty/pull/8497")
                 workspace.notices[panes[0]] = PaneNotice(secureInput: true)
             }
+        case "file-preview": model.sheet = .files
         default:
             if screen == "ticket" { model.addHost(mode: .ticket) } else if screen == "themes" { model.sheet = .settings } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }
         }

@@ -68,17 +68,27 @@ struct PairingSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Method", selection: $mode) {
-                        ForEach(Mode.available) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+        SheetScaffold(
+            "Add Host",
+            cancel: SheetAction("Cancel") { dismiss() },
+            primary: mode == .scan ? nil : SheetAction(confirmTitle, isEnabled: canConfirm, identifier: "pairing-confirm", action: confirm),
+            // On the Mac, Paste sits on the buttons' line, as in the system's own sheets.
+            accessory: {
+                #if os(macOS)
+                if mode == .ticket {
+                    Button("Paste", systemImage: "doc.on.clipboard", action: paste)
                 }
+                #endif
+            }
+        ) {
+            Form {
+                #if os(iOS)
+                Section {
+                    methodPicker
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                }
+                #endif
                 switch mode {
                 case .ssh:
                     sshSection.chromeRows()
@@ -89,20 +99,15 @@ struct PairingSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .navigationTitle("Add Host")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(confirmTitle, action: confirm)
-                        .disabled(!canConfirm)
-                        .accessibilityIdentifier("pairing-confirm")
-                }
+            #if os(macOS)
+            // On the page above the form's cards, centred like a window's tab control.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                methodPicker
+                    .fixedSize()
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, DS.Space.m)
             }
+            #endif
             .onAppear { focusField() }
             .onChange(of: mode) {
                 error = nil
@@ -120,8 +125,16 @@ struct PairingSheet: View {
         #if os(iOS)
         .phoneDetents([.medium, .large])
         #else
-        .frame(minWidth: 460, idealWidth: 500, minHeight: 420)
+        .frame(width: 500)
         #endif
+    }
+
+    private var methodPicker: some View {
+        Picker("Method", selection: $mode) {
+            ForEach(Mode.available) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
     // MARK: SSH
@@ -130,7 +143,10 @@ struct PairingSheet: View {
 
     @ViewBuilder private var sshSection: some View {
         Section {
-            TextField("user@host:port", text: $destination)
+            // Prompt only: the address reads from the leading edge, as typed.
+            TextField("Address", text: $destination, prompt: Text("user@host:port"))
+                .labelsHidden()
+                .textFieldStyle(.plain)
                 .font(DS.Font.literal)
                 .autocorrectionDisabled()
                 #if os(iOS)
@@ -196,27 +212,21 @@ struct PairingSheet: View {
 
     @ViewBuilder private var ticketSection: some View {
         Section {
-            TextEditor(text: $ticket)
+            // The field's own placeholder, so it and the caret share one inset.
+            TextField("Ticket", text: $ticket, prompt: Text("Pairing ticket"), axis: .vertical)
+                .labelsHidden()
+                .lineLimit(4...8)
+                .textFieldStyle(.plain)
                 .font(DS.Font.literalSmall)
                 .autocorrectionDisabled()
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 96)
                 .focused($focus, equals: .ticket)
-                .overlay(alignment: .topLeading) {
-                    if ticket.isEmpty {
-                        Text("Pairing ticket")
-                            .font(DS.Font.literalSmall)
-                            .foregroundStyle(DS.Palette.textTertiary)
-                            .padding(.top, 8)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
-                    }
-                }
                 .accessibilityIdentifier("pairing-ticket")
+            #if os(iOS)
             Button("Paste", systemImage: "doc.on.clipboard", action: paste)
+            #endif
             if let parsed = try? PairingTicket(ticket) {
                 ticketRelay(parsed)
             }
@@ -290,8 +300,9 @@ struct PairingSheet: View {
                 ProgressView().controlSize(.small)
                 Text(mode == .ssh ? "Connecting to \(parsed?.host ?? "host")…" : "Pairing…")
             }
+            .foregroundStyle(DS.Palette.textSecondary)
         } else {
-            text
+            text.foregroundStyle(DS.Palette.textSecondary)
         }
     }
 
@@ -409,13 +420,22 @@ private struct SSHAuthSections: View {
                     .accessibilityIdentifier("ssh-password")
                 Toggle("Remember Password", isOn: $flow.rememberPassword)
             }
-            Menu {
-                Button("Generate Key (ed25519)", systemImage: "key") { run { try flow.generateKey() } }
-                Button("Generate Secure Enclave Key", systemImage: "lock.shield") { run { try flow.generateSecureEnclaveKey() } }
-                Button("Import Key File…", systemImage: "doc.badge.plus") { importingKey = true }
-            } label: {
+            #if os(macOS)
+            // A labelled pop-down, as System Settings draws one: the form's own control, legible
+            // in either scheme (a bare menu in a grouped row draws dark text on its bezel).
+            LabeledContent("New Key") {
+                newKeyMenu {
+                    Text("Create or Import…")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.bordered)
+                .fixedSize()
+            }
+            #else
+            newKeyMenu {
                 Label("New Key", systemImage: "key.badge.plus")
             }
+            #endif
         } header: {
             SectionTitle("Authentication")
         }
@@ -435,7 +455,18 @@ private struct SSHAuthSections: View {
                 SectionTitle("Public key")
             } footer: {
                 Text("Add it to ~/.ssh/authorized_keys on the host, or connect once with a password and install it from there.")
+                .foregroundStyle(DS.Palette.textSecondary)
             }
+        }
+    }
+
+    private func newKeyMenu(@ViewBuilder label: () -> some View) -> some View {
+        Menu {
+            Button("Generate Key (ed25519)", systemImage: "key") { run { try flow.generateKey() } }
+            Button("Generate Secure Enclave Key", systemImage: "lock.shield") { run { try flow.generateSecureEnclaveKey() } }
+            Button("Import Key File…", systemImage: "doc.badge.plus") { importingKey = true }
+        } label: {
+            label()
         }
     }
 
@@ -557,7 +588,14 @@ struct SSHConfigImportSheet: View {
     @State private var selected: Set<String> = []
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            "Import Hosts", subtitle: "From your ssh_config. Choose the ones to add.",
+            cancel: SheetAction("Cancel") { hosts.clearSSHConfigAliases() },
+            primary: SheetAction("Import \(selected.count)", isEnabled: !selected.isEmpty) {
+                hosts.importSSHHosts(Array(selected))
+                hosts.clearSSHConfigAliases()
+            }
+        ) {
             List(hosts.sshConfigAliases, id: \.alias, selection: $selected) { host in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: DS.Space.s) {
@@ -574,23 +612,10 @@ struct SSHConfigImportSheet: View {
             #if os(iOS)
             .environment(\.editMode, .constant(.active))
             #endif
-            .navigationTitle("Import Hosts")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Import \(selected.count)") {
-                        hosts.importSSHHosts(Array(selected))
-                        hosts.clearSSHConfigAliases()
-                    }
-                    .disabled(selected.isEmpty)
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { hosts.clearSSHConfigAliases() }
-                }
-            }
         }
         .onAppear { selected = Set(hosts.sshConfigAliases.map(\.alias)) }
         #if os(macOS)
-        .frame(minWidth: 440, minHeight: 360)
+        .frame(width: 460, height: 420)
         #endif
     }
 }

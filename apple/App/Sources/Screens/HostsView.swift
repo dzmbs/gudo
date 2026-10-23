@@ -146,7 +146,7 @@ struct HostsView: View {
                     .alignmentGuide(.listRowSeparatorLeading) { _ in HostRow.textColumn }
                 }
             } header: {
-                SectionTitle(title, count: hosts.count)
+                SectionTitle(title, count: hosts.count, small: true)
                     .padding(.top, DS.Space.s)
             }
         }
@@ -192,7 +192,8 @@ struct HostsView: View {
                 .font(.subheadline)
                 .foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: 16)
-            TextField("user@host", text: $destination)
+            // What is typed is a literal (SF Mono); the prompt is prose.
+            TextField("Connect", text: $destination, prompt: Text("Connect to user@host or an ssh alias").font(.body))
                 .font(DS.Font.literal)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()
@@ -213,8 +214,7 @@ struct HostsView: View {
         }
         .padding(.horizontal, DS.Space.gap10)
         .frame(height: Self.fieldHeight)
-        .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(isQuickConnectFocused ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isQuickConnectFocused ? 1 : 0.5))
+        .fieldSurface(isFocused: isQuickConnectFocused)
         .contentShape(.rect)
         .onTapGesture { isQuickConnectFocused = true }
         #if os(iOS)
