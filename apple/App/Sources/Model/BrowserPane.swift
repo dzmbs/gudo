@@ -34,6 +34,17 @@ final class BrowserPane: Identifiable {
     /// Screenshot pixels per CSS pixel of the last screenshot (coordinates scale back by it).
     @ObservationIgnored var shotScale = 1.0
 
+    /// The frames running the agent's script, to call into them.
+    @ObservationIgnored let frames = BrowserFrames()
+    /// A page this page opened (`window.open`, `target=_blank`), to show as a new leaf.
+    @ObservationIgnored var onPopup: ((URL) -> Void)?
+    /// An agent's action is running on the page (a file picker it opens is the agent's).
+    @ObservationIgnored var agentActing = false
+    /// An `alert`, `confirm` or `prompt` the page waits on; the user or the agent answers it.
+    var dialog: PageDialog?
+    /// A file picker an agent's action opened; `browser_upload` answers it.
+    @ObservationIgnored var fileChooser: FileChooser?
+
     struct AgentRequest: Identifiable {
         enum Kind { case approve, handoff }
         let id = UUID()
@@ -42,18 +53,47 @@ final class BrowserPane: Identifiable {
         let answer: (Bool) -> Void
     }
 
+    struct PageDialog: Identifiable {
+        enum Kind: String { case alert, confirm, prompt }
+        let id = UUID()
+        let kind: Kind
+        let message: String
+        let defaultText: String?
+        /// Accept (with the prompt's text) or dismiss.
+        let answer: (_ accept: Bool, _ text: String?) -> Void
+    }
+
+    struct FileChooser {
+        let multiple: Bool
+        let answer: ([URL]?) -> Void
+    }
+
     init(id: UUID = UUID(), url: URL, hostId: String? = nil, dataStore: WKWebsiteDataStore? = nil) {
         self.id = id
         self.hostId = hostId
         initialURL = url
         var configuration = WebPage.Configuration()
         if let dataStore { configuration.websiteDataStore = dataStore }
-        BrowserAgentScript.install(in: configuration.userContentController)
+        BrowserAgentScript.install(in: configuration.userContentController, frames: frames)
         BrowserRecorder.install(in: configuration.userContentController, page: id)
         let box = DeciderBox()
-        page = WebPage(configuration: configuration, navigationDecider: Decider(box: box))
+        page = WebPage(configuration: configuration, navigationDecider: Decider(box: box), dialogPresenter: Dialogs(box: box))
         box.pane = self
         BrowserRecorder.shared.attach(page, id: id)
+    }
+
+    /// Shows a page's dialog until it is answered.
+    func present(_ kind: PageDialog.Kind, _ message: String, defaultText: String? = nil) async -> (Bool, String?) {
+        dialog?.answer(false, nil)
+        return await withCheckedContinuation { continuation in
+            var answered = false
+            dialog = PageDialog(kind: kind, message: message, defaultText: defaultText) { [weak self] accept, text in
+                guard !answered else { return }
+                answered = true
+                self?.dialog = nil
+                continuation.resume(returning: (accept, text))
+            }
+        }
     }
 
     /// Loads the first page once (a view showing it again keeps where it is).
@@ -75,7 +115,7 @@ final class BrowserPane: Identifiable {
     /// The page's URL, or where it is going.
     var url: URL { page.url ?? initialURL }
 
-    private final class DeciderBox {
+    fileprivate final class DeciderBox {
         weak var pane: BrowserPane?
     }
 
@@ -85,11 +125,46 @@ final class BrowserPane: Identifiable {
         mutating func decidePolicy(
             for action: WebPage.NavigationAction, preferences: inout WebPage.NavigationPreferences
         ) async -> WKNavigationActionPolicy {
-            guard action.target?.isMainFrame != false, let url = action.request.url, let pane = box.pane else { return .allow }
+            guard let url = action.request.url, let pane = box.pane else { return .allow }
+            // A new window: a leaf beside this one (pages have no windows of their own).
+            if action.target == nil {
+                if url.scheme == "http" || url.scheme == "https" { pane.onPopup?(url) }
+                return .cancel
+            }
+            guard action.target?.isMainFrame != false else { return .allow }
             if let intercept = pane.intercept, intercept(url) { return .cancel }
             await pane.prepare?(url)
             return .allow
         }
+    }
+}
+
+private struct Dialogs: WebPage.DialogPresenting {
+    let box: BrowserPane.DeciderBox
+
+    func handleJavaScriptAlert(message: String, initiatedBy frame: WebPage.FrameInfo) async {
+        _ = await box.pane?.present(.alert, message)
+    }
+
+    func handleJavaScriptConfirm(message: String, initiatedBy frame: WebPage.FrameInfo) async -> WebPage.JavaScriptConfirmResult {
+        await box.pane?.present(.confirm, message).0 == true ? .ok : .cancel
+    }
+
+    func handleJavaScriptPrompt(message: String, defaultText: String?, initiatedBy frame: WebPage.FrameInfo) async -> WebPage.JavaScriptPromptResult {
+        guard let (accept, text) = await box.pane?.present(.prompt, message, defaultText: defaultText), accept else { return .cancel }
+        return .ok(text ?? defaultText ?? "")
+    }
+
+    /// While an agent acts, its upload answers the picker; else as WebKit's default.
+    func handleFileInputPrompt(parameters: WKOpenPanelParameters, initiatedBy frame: WebPage.FrameInfo) async -> WebPage.FileInputPromptResult {
+        guard let pane = box.pane, pane.agentActing else { return .cancel }
+        let urls: [URL]? = await withCheckedContinuation { continuation in
+            pane.fileChooser = BrowserPane.FileChooser(multiple: parameters.allowsMultipleSelection) { [weak pane] urls in
+                pane?.fileChooser = nil
+                continuation.resume(returning: urls)
+            }
+        }
+        return urls.map { .selected($0) } ?? .cancel
     }
 }
 
@@ -98,6 +173,8 @@ final class BrowserPane: Identifiable {
 @MainActor
 final class BrowserPanes {
     private(set) var panes: [UUID: BrowserPane] = [:]
+    /// A page opened another (its leaf's id, the URL).
+    var onPopup: ((UUID, URL) -> Void)?
 
     func existing(_ id: UUID) -> BrowserPane? { panes[id] }
 
@@ -114,6 +191,7 @@ final class BrowserPanes {
         }
         if let pane = panes[member.id] { return pane }
         let pane = BrowserPane(id: member.id, url: url, hostId: member.hostId, dataStore: store)
+        pane.onPopup = { [weak self] url in self?.onPopup?(member.id, url) }
         if let hostId = member.hostId, let client {
             pane.prepare = { url in await DevServerRouting.shared.prepareLoopback(url, hostId: hostId, client: client) }
         }

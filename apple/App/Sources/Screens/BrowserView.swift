@@ -437,6 +437,46 @@ extension BrowserLeafView {
     }
 }
 
+/// The page's `alert`, `confirm` or `prompt`, answered here or by the agent (`browser_dialog`).
+private struct DialogCard: View {
+    let dialog: BrowserPane.PageDialog
+    @State private var text: String
+
+    init(dialog: BrowserPane.PageDialog) {
+        self.dialog = dialog
+        _text = State(initialValue: dialog.defaultText ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            Label("The page asks", systemImage: "exclamationmark.bubble")
+                .font(.callout.weight(.semibold))
+            Text(dialog.message)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            if dialog.kind == .prompt {
+                TextField("Answer", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("page-dialog-text")
+            }
+            HStack {
+                Spacer()
+                if dialog.kind != .alert {
+                    Button("Cancel") { dialog.answer(false, nil) }
+                        .buttonStyle(.glass)
+                        .accessibilityIdentifier("page-dialog-dismiss")
+                }
+                Button("OK") { dialog.answer(true, text) }
+                    .buttonStyle(.primaryGlass)
+                    .accessibilityIdentifier("page-dialog-accept")
+            }
+        }
+        .padding(DS.Space.l)
+        .frame(maxWidth: 440)
+        .floatingCapsule(interactive: true)
+    }
+}
+
 /// What an agent is doing on a page, and what it needs from the user: approve a step, or do it
 /// themselves (sign-in, payment). Take Over stops the agent until the page is handed back.
 private struct AgentBar: View {
@@ -444,7 +484,9 @@ private struct AgentBar: View {
 
     var body: some View {
         Group {
-            if let request = pane.agentRequest {
+            if let dialog = pane.dialog {
+                DialogCard(dialog: dialog)
+            } else if let request = pane.agentRequest {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     Label(request.kind == .approve ? "The agent asks" : "Your turn", systemImage: request.kind == .approve ? "hand.raised" : "person.fill.checkmark")
                         .font(.callout.weight(.semibold))

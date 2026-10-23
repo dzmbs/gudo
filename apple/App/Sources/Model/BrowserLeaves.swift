@@ -72,6 +72,17 @@ extension WindowModel {
         return member
     }
 
+    /// A page a page opened (`window.open`, `target=_blank`): a new leaf beside its opener.
+    @discardableResult
+    func openPopup(_ url: URL, from opener: UUID) -> BrowserMember? {
+        guard let tab = composites.tab(containingBrowser: opener), let from = tab.browsers.values.first(where: { $0.id == opener })
+        else { return nil }
+        let member = BrowserMember(hostId: from.hostId, url: url.absoluteString)
+        composites.addBrowser(member, to: tab.id)
+        if activeMixedTab == tab.id { syncMixedFocus() }
+        return member
+    }
+
     /// The page shown beside a host's pane, if any (its tab's first).
     func browser(beside pane: HostPane) -> BrowserMember? {
         guard let tab = composites.tab(containing: pane) else { return nil }

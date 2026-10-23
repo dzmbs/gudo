@@ -141,4 +141,34 @@ final class BrowserUITests: XCTestCase {
         waitFor(screen, contains: "Image saved to", timeout: 20)
         shot("agent-done")
     }
+
+    /// What an agent learns from its actions: a button under a cookie banner is not clicked and
+    /// the banner is named; once it is gone the click goes through and says what changed; a
+    /// button that does nothing says so, with what to try instead.
+    func testAgentLearnsWhatCoversAButtonAndWhatHadNoEffect() throws {
+        try launch()
+        panes.firstMatch.tap()
+        app.typeText("H=$(sed -n 's/^exec \\(.*\\) open-url.*/\\1/p' \"$BROWSER\"); clear\n")
+        app.typeText("printf '<title>Shop</title><div style=\"position:relative\"><button onclick=\"document.title=\\x27ordered\\x27\">Order</button>"
+            + "<div id=\"consent\" style=\"position:absolute;inset:0;background:#fff\" onclick=\"this.remove()\">Accept cookies</div></div>"
+            + "<button>Nothing</button>' > cover.html\n")
+        app.typeText("python3 -m http.server 48318 --bind 127.0.0.1 >/dev/null 2>&1 &\n")
+        app.typeText("sleep 1; $H browser navigate url=localhost:48318/cover.html | head -3\n")
+        XCTAssertTrue(app.descendants(matching: .any)["browser-leaf"].firstMatch.waitForExistence(timeout: 20))
+        waitFor(screen, contains: "Page: Shop", timeout: 30)
+        let ref = { (query: String) in "$($H browser find query=\(query) | sed -n '1s/.*\\[\\(ref_[0-9]*\\)\\].*/\\1/p')" }
+
+        app.typeText("clear; $H browser click ref=\(ref("order")) | head -2\n")
+        waitFor(screen, contains: "is covered by", timeout: 20)
+        waitFor(screen, contains: "consent", timeout: 5)
+        shot("agent-covered")
+
+        app.typeText("clear; $H browser click ref=\(ref("cookies")) | head -1; $H browser click ref=\(ref("order")) | head -1\n")
+        waitFor(screen, contains: "title changed", timeout: 30)
+        shot("agent-clicked")
+
+        app.typeText("clear; $H browser click ref=\(ref("nothing")) | head -1\n")
+        waitFor(screen, contains: "No observable effect", timeout: 30)
+        shot("agent-no-effect")
+    }
 }

@@ -43,8 +43,8 @@ pub const PERMISSION_WAIT: Duration = Duration::from_secs(585);
 /// The event name the shim sends for Claude Code's status-line input (`un-hook claude
 /// StatusLine`, the `statusLine` command in the settings the daemon launches Claude with).
 pub const STATUS_LINE_EVENT: &str = "StatusLine";
-/// Longest hook request line accepted.
-const MAX_REQUEST: usize = 1024 * 1024;
+/// Longest hook request line accepted: a browser upload's files fill most of a frame to the app.
+const MAX_REQUEST: usize = proto::MAX_FRAME_LEN;
 
 /// One hook invocation, as sent by the shim.
 #[derive(Debug, Clone, Serialize, Deserialize)]
