@@ -369,6 +369,26 @@ impl Client {
             WorkspaceResponse::AgentInstalls(list) => list)
     }
 
+    /// The commands that add the daemon's MCP server to each installed agent's user-wide
+    /// configuration (`register`), or remove it. Nothing runs on the host.
+    ///
+    /// # Errors
+    ///
+    /// [`WsError::Unavailable`] without asking when the daemon does not offer
+    /// [`DaemonFeatures::AGENT_MCP`](proto::DaemonFeatures::AGENT_MCP); else the daemon's error.
+    pub async fn agent_mcp_commands(
+        &self,
+        register: bool,
+    ) -> Result<Vec<proto::AgentMcpCommand>, WsError> {
+        if !self.daemon_has(proto::DaemonFeatures::AGENT_MCP) {
+            return Err(WsError::Unavailable(
+                "the host's helper predates agent tool registration; update it".into(),
+            ));
+        }
+        expect!(self.workspace(WorkspaceRequest::AgentMcpCommands { register }).await?,
+            WorkspaceResponse::AgentMcpCommands(list) => list)
+    }
+
 
     /// The host's VS Code tunnel and `code` CLI.
     pub async fn vscode_tunnel_status(&self) -> Result<VsCodeTunnelStatus, WsError> {

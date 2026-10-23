@@ -21,11 +21,18 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// toward white or black only as far as text needs to stay readable (≥ 4.5:1, secondary text
     /// included).
     public let foreground: ThemeColor
-    /// Focus, selection and the one primary action.
+    /// Focus, selection and the one primary action: the theme's hue, its chroma and lightness
+    /// tamed (`refined`) so a raw ANSI blue never lands in the chrome.
     public let accent: ThemeColor
-    /// A solid selection (the palette's selected row) and the text on it, ≥ 4.5:1.
+    /// The selected row in lists and the palette: the accent as a soft tint (`selectionLevel`)
+    /// under normal text. `selection` is that tint composited on the raised surface, for
+    /// contrast checks; `onSelection` is the text on it, ≥ 4.5:1.
     public let selection: ThemeColor
     public let onSelection: ThemeColor
+    public let selectionLevel: Double
+    /// A solid fill for the one primary action and the label on it, ≥ 4.5:1.
+    public let prominent: ThemeColor
+    public let onProminent: ThemeColor
     /// State hues: the theme's ANSI green, red, yellow, magenta and blue, mixed toward the
     /// foreground so they sit in the chrome, each ≥ 3:1 on every surface.
     public let done: ThemeColor
@@ -55,6 +62,12 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// #F0C674 becomes #F8E3BA), so states keep two thirds of their hue: softened into the chrome,
     /// still a colour at a glance.
     public static let stateMix = 0.35
+    /// The soft selection's accent strength (light / dark chrome): a tint, never a block of colour.
+    public static let selectionLevels = (light: 0.14, dark: 0.24)
+    /// The accent's OKLCH chroma ceiling and lightness band (light / dark chrome): saturated
+    /// terminal blues (#0000FF, #2F5AF3) come down to a calm, still clearly blue tone.
+    public static let accentChroma = 0.13
+    public static let accentLightness = (light: 0.48...0.62, dark: 0.68...0.86)
     /// Minimum contrasts: text (WCAG AA), glyphs and the accent (WCAG non-text).
     public static let minimumTextContrast = 4.5
     public static let minimumGlyphContrast = 3.0
@@ -118,11 +131,19 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         let overlay = background.blended(with: foreground, Self.overlayStrength)
         let surfaces = [background, sidebar, overlay]
 
-        let accent = Self.legible(Self.accent(of: theme), on: surfaces, toward: foreground, minimum: Self.minimumGlyphContrast)
+        let refined = Self.refined(Self.accent(of: theme), scheme: scheme)
+        let accent = Self.legible(refined, on: surfaces, toward: foreground, minimum: Self.minimumGlyphContrast)
         self.accent = accent
-        let (selection, onSelection) = Self.selection(accent: accent, background: background, foreground: foreground)
+        let (prominent, onProminent) = Self.prominent(accent: accent, background: background, foreground: foreground)
+        self.prominent = prominent
+        self.onProminent = onProminent
+        let raised = background.blended(with: foreground, Self.raisedStrength)
+        let (selectionLevel, selection) = Self.selection(
+            accent: accent, on: raised, text: foreground,
+            level: scheme == .light ? Self.selectionLevels.light : Self.selectionLevels.dark)
+        self.selectionLevel = selectionLevel
         self.selection = selection
-        self.onSelection = onSelection
+        self.onSelection = selection.blended(with: foreground, Self.textLevels.primary)
 
         let textSurfaces = [background, sidebar, background.blended(with: foreground, Self.raisedStrength), overlay]
         secondaryLevel = Self.level(Self.textLevels.secondary, cap: Self.levelCaps.secondary, of: foreground, on: textSurfaces, minimum: Self.minimumTextContrast)
@@ -233,9 +254,35 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         }
     }
 
-    /// A solid selection: the accent deepened toward the darker ink until the lighter ink reads on
-    /// it at 4.5:1 (white-on-blue, the platform's selected row, in both schemes).
-    static func selection(accent: ThemeColor, background: ThemeColor, foreground: ThemeColor) -> (fill: ThemeColor, text: ThemeColor) {
+    /// The accent with its chroma capped and its lightness kept in the scheme's band, hue intact.
+    static func refined(_ color: ThemeColor, scheme: ColorScheme) -> ThemeColor {
+        var (l, a, b) = color.oklab
+        let chroma = (a * a + b * b).squareRoot()
+        let band = scheme == .light ? accentLightness.light : accentLightness.dark
+        guard chroma > accentChroma || !band.contains(l) else { return color }
+        if chroma > accentChroma {
+            a *= accentChroma / chroma
+            b *= accentChroma / chroma
+        }
+        l = min(max(l, band.lowerBound), band.upperBound)
+        return ThemeColor(oklab: (l, a, b))
+    }
+
+    /// The soft selection: the accent at `level` over `surface`, lowered until text reads on it at
+    /// 4.5:1. Returns the level and the composited fill.
+    static func selection(accent: ThemeColor, on surface: ThemeColor, text: ThemeColor, level: Double) -> (Double, ThemeColor) {
+        var level = level
+        while level > 0.04 {
+            let fill = surface.blended(with: accent, level)
+            if fill.blended(with: text, textLevels.primary).contrast(with: fill) >= minimumTextContrast { return (level, fill) }
+            level -= 0.02
+        }
+        return (level, surface.blended(with: accent, level))
+    }
+
+    /// A solid fill: the accent deepened toward the darker ink until the lighter ink reads on it
+    /// at 4.5:1 (white-on-blue, the platform's prominent button, in both schemes).
+    static func prominent(accent: ThemeColor, background: ThemeColor, foreground: ThemeColor) -> (fill: ThemeColor, text: ThemeColor) {
         let light = background.luminance >= foreground.luminance ? background : foreground
         let dark = background.luminance >= foreground.luminance ? foreground : background
         var t = 0.0
@@ -294,8 +341,11 @@ nonisolated public extension ChromePalette {
     var border: Color { foreground.color.opacity(Self.lineLevels.border) }
 
     var accentColor: Color { accent.color }
-    var selectionColor: Color { selection.color }
-    var onSelectionColor: Color { onSelection.color }
+    /// Translucent, so it tints glass and any surface alike.
+    var selectionColor: Color { accent.color.opacity(selectionLevel) }
+    var onSelectionColor: Color { text }
+    var prominentColor: Color { prominent.color }
+    var onProminentColor: Color { onProminent.color }
 }
 
 // MARK: - Environment

@@ -291,6 +291,15 @@ pub enum WorkspaceRequest {
     /// [`WorkspaceResponse::AgentInstalls`]. Only daemons offering
     /// [`DaemonFeatures::AGENT_INSTALLS`](crate::DaemonFeatures::AGENT_INSTALLS) understand it.
     AgentInstalls,
+    /// The vendors' own commands that add the daemon's MCP server to each installed agent's
+    /// user-wide configuration (`register`), or remove it, for agents the user starts by hand
+    /// in a pane → [`WorkspaceResponse::AgentMcpCommands`]. Nothing runs: the client shows
+    /// them and runs them where the user sees them. Only daemons offering
+    /// [`DaemonFeatures::AGENT_MCP`](crate::DaemonFeatures::AGENT_MCP) understand it.
+    AgentMcpCommands {
+        /// Add (else remove).
+        register: bool,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -365,6 +374,17 @@ pub enum WorkspaceResponse {
     WorkflowSaved(crate::workflow::Workflow),
     /// One entry per agent the daemon can launch.
     AgentInstalls(Vec<AgentInstall>),
+    /// One command per installed agent.
+    AgentMcpCommands(Vec<AgentMcpCommand>),
+}
+
+/// A command that registers or removes the daemon's MCP server with an agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentMcpCommand {
+    /// The agent.
+    pub agent: AgentKind,
+    /// The program and its arguments.
+    pub argv: Vec<String>,
 }
 
 /// Whether an agent's command is on the host.

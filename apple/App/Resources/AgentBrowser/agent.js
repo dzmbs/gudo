@@ -306,10 +306,15 @@
     const a = deepActive();
     if (a && a !== document.body && a.blur) a.blur();
   }
+  // With the app's own input (the Mac's, `BrowserNativeInput`), the checks run here and the
+  // events are the app's: each one is listed for it instead of dispatched.
+  let native = null;
   async function move(p, m) {
+    if (native) { native.push({ op: "move", x: p.x, y: p.y }); return; }
     await keyboardless.mouseMove({ x: p.x, y: p.y, button: 0, buttons: 0, ...m });
   }
   async function click(p, m, count) {
+    if (native) { native.push({ op: "click", x: p.x, y: p.y, count, modifiers: Object.keys(m).filter(k => m[k]) }); return; }
     await move(p, m);
     for (let i = 1; i <= count; i++) {
       await pointer("pointerdown", p, m, 1);
@@ -352,6 +357,7 @@
   // One key: keydown, keypress and textInput (whose default inserts the text and fires
   // beforeinput/input), keyup; then what the key does when the page lets it.
   async function key(chord) {
+    if (native) { native.push({ op: "key", chord }); return; }
     const parts = chord.split("+").filter(Boolean), m = mods(parts.slice(0, -1).join("+"));
     const k = keyOf(parts[parts.length - 1] || "+", m);
     const init = { bubbles: true, cancelable: true, composed: true, view: window, key: k.key, code: k.code, keyCode: k.keyCode, which: k.keyCode, ...m };
@@ -410,6 +416,10 @@
   }
   // Text, a key per character; a long rest goes in at once.
   async function type(text) {
+    if (native) {
+      String(text).split("\n").forEach((line, i) => { if (i) native.push({ op: "key", chord: "Enter" }); if (line) native.push({ op: "text", text: line }); });
+      return;
+    }
     const chars = [...text];
     for (const c of chars.slice(0, 200)) await key(c === "\n" ? "Enter" : c);
     if (chars.length > 200) { const el = deepActive() || document.body; await task(() => textInput(el, chars.slice(200).join(""))); }
@@ -450,6 +460,33 @@
     if (pw.fill(el, String(raw)) === "needsinput") await task(() => insert(deepActive() || el, String(raw)));
   }
 
+  // A drag as script events: pointer and mouse moves with the button down, and HTML drag and
+  // drop (one DataTransfer from dragstart to drop) when the source is draggable.
+  async function drag(from, to, source) {
+    const steps = 8, at = t => ({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t });
+    await move(from, {});
+    await pointer("pointerdown", from, {}, 1);
+    await mouse("mousedown", from, {}, 1, 1);
+    if (source) {
+      const data = new DataTransfer();
+      const fire = (type, p, target) => task(() => (target || deepFromPoint(p.x, p.y) || document.documentElement)
+        .dispatchEvent(mark(new DragEvent(type, { ...mouseInit(p, {}, 1, 0), dataTransfer: data }))));
+      await fire("dragstart", from, source);
+      let over = null;
+      for (let i = 1; i <= steps; i++) {
+        const p = at(i / steps), el = deepFromPoint(p.x, p.y);
+        if (el !== over) { if (over) await fire("dragleave", p, over); await fire("dragenter", p, el); over = el; }
+        await fire("dragover", p, el);
+      }
+      await fire("drop", to);
+      await fire("dragend", to, source);
+    } else {
+      for (let i = 1; i <= steps; i++) { await pointer("pointermove", at(i / steps), {}, 1); await mouse("mousemove", at(i / steps), {}, 1, 0); }
+    }
+    await pointer("pointerup", to, {}, 0);
+    await mouse("mouseup", to, {}, 0, 1);
+  }
+
   // MARK: Acting
 
   let intercepted = null;
@@ -460,7 +497,7 @@
       const cover = await hitTarget(el, p);
       if (cover) { intercepted = cover; throw new Error(label + " is covered by " + cover + " at (" + p.x + ", " + p.y + "): close or scroll it away first (it is in the snapshot), or pass force: true."); }
     }
-    const watch = force ? null : pw.setupHitTargetInterceptor(el, "mouse", p, false);
+    const watch = force || native ? null : pw.setupHitTargetInterceptor(el, "mouse", p, false);
     await click(p, m, count);
     const r = watch && typeof watch === "object" ? watch.stop() : "done";
     if (r !== "done") intercepted = r.hitTargetDescription;
@@ -525,6 +562,8 @@
     const id = args.id || String(Date.now());
     probes.set(id, { el: new WeakRef(kind === "type" && !target ? deepActive() || el : el), before: state(kind === "type" && !target ? deepActive() : el) });
     const m = mods(args.modifiers), coord = target && target.type === "coordinate";
+    native = args.native ? [] : null;
+    try {
     switch (kind) {
       case "click": case "double_click": {
         const count = kind === "click" ? 1 : 2;
@@ -539,7 +578,7 @@
       case "type":
         if (target) {
           if (coord) await click(target, m, 1); else await clickElement(el, {}, 1, label, args.force);
-          if (!coord && !args.force) await actionable(deepActive() || el, "type", label);
+          if (!coord && !args.force) await actionable(native ? el : deepActive() || el, "type", label);
         }
         await type(String(args.text ?? ""));
         if (args.submit) await key("Enter");
@@ -552,6 +591,7 @@
       case "scroll": {
         const d = (args.amount || 3) * 120, dx = args.direction === "left" ? -d : args.direction === "right" ? d : 0, dy = args.direction === "up" ? -d : args.direction === "down" ? d : 0;
         const p = coord ? target : target ? pointFor(el) : { x: innerWidth / 2, y: innerHeight / 2 };
+        if (native) { native.push({ op: "wheel", x: p.x, y: p.y, dx, dy }); break; }
         await task(() => (deepFromPoint(p.x, p.y) || document.documentElement).dispatchEvent(mark(new WheelEvent("wheel", { bubbles: true, cancelable: true, composed: true, clientX: p.x, clientY: p.y, deltaX: dx, deltaY: dy, deltaMode: 0 }))));
         let s = target ? el : document.scrollingElement;
         while (s && s !== document.scrollingElement && !(s.scrollHeight > s.clientHeight || s.scrollWidth > s.clientWidth)) s = s.parentElement;
@@ -559,6 +599,16 @@
         break;
       }
       case "scroll_to": el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); break;
+      case "drag": {
+        if (!args.force) await actionable(el, "click", label);
+        const from = coord ? target : pointFor(el);
+        const goal = args.to && args.to.type === "coordinate" ? args.to : pointFor(resolve(args.to));
+        // An HTML drag source starts a system drag the app's events cannot steer.
+        const source = el.closest?.("[draggable=true], a[href], img");
+        if (native && !source) native.push({ op: "drag", x: from.x, y: from.y, toX: goal.x, toY: goal.y });
+        else { native = native && null; await drag(from, goal, source); }
+        break;
+      }
       case "upload": {
         const input = el.tagName === "INPUT" && el.type === "file" ? el
           : pw.retarget(el, "follow-label")?.type === "file" ? pw.retarget(el, "follow-label")
@@ -570,8 +620,12 @@
       }
       default: throw new Error("Unknown action " + kind);
     }
+    } finally {
+      var ops = native;
+      native = null;
+    }
     probes.get(id) && (probes.get(id).intercepted = intercepted);
-    return { done: true, target: info, note };
+    return ops && ops.length ? { done: true, target: info, note, native: ops } : { done: true, target: info, note };
   }
 
   // MARK: The overlay: the agent's cursor and a highlight on what it is about to act on.

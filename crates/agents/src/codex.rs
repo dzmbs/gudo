@@ -4,6 +4,7 @@
 //! flags turn on. Hook payloads are still parsed for users who opt into the marker-block install.
 
 use std::ffi::OsString;
+use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -16,6 +17,7 @@ use crate::event::{
 use crate::hook::{self, Common};
 use crate::launch::{
     LaunchContext, LaunchMode, LaunchSpec, mcp_args, mcp_server_name, pane_env, toml_quote,
+    user_mcp_server,
 };
 use crate::manifest::Manifest;
 use crate::signal::{Claim, Signal};
@@ -61,6 +63,36 @@ impl Codex {
     /// Creates the adapter with a hot-updated manifest.
     pub fn with_manifest(manifest: Manifest) -> Self {
         Self { manifest }
+    }
+
+    /// Returns Codex's own command that adds the daemon's MCP server to the user's
+    /// `~/.codex/config.toml` (`codex mcp add …`), or with `register` false removes it, so
+    /// sessions the user starts by hand in a pane get it too.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// let remove = agents::Codex::user_mcp_command("codex", Path::new("/b/un-hook"), Path::new("/s"), false);
+    /// assert_eq!(remove.join(" "), "codex mcp remove unnamed_drawings");
+    /// ```
+    pub fn user_mcp_command(
+        program: &str,
+        hook_bin: &Path,
+        state_dir: &Path,
+        register: bool,
+    ) -> Vec<String> {
+        let mut argv = vec![
+            program.to_owned(),
+            "mcp".into(),
+            if register { "add" } else { "remove" }.into(),
+            mcp_server_name(),
+        ];
+        if register {
+            argv.push("--".into());
+            argv.extend(user_mcp_server(hook_bin, state_dir));
+        }
+        argv
     }
 }
 

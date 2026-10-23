@@ -150,6 +150,13 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         return result
     }
 
+    /// The same tab under another id (reopened after it closed).
+    func renumbered(_ id: TabId) -> CompositeTab {
+        var copy = self
+        copy.layout = Tab(id: id, title: layout.title, root: layout.root, focused: layout.focused, zoomed: layout.zoomed)
+        return copy
+    }
+
     /// A tab of one editor (Open in VS Code in a new tab).
     public init(id: TabId, editor: EditorMember) {
         let leaf = PaneId(1)
@@ -550,6 +557,16 @@ public final class CompositeTabs {
     }
 
     /// Closes the whole tab: each host closes its carrier.
+    /// Undo of closing a window-owned tab: editors and pages only (host panes end with their
+    /// tab). It comes back as it was, under a new id.
+    @discardableResult
+    public func reopen(_ tab: CompositeTab) -> TabId? {
+        guard tab.members.isEmpty, !tab.leaves.isEmpty else { return nil }
+        let id = nextId()
+        tabs.append(tab.renumbered(id))
+        return id
+    }
+
     public func closeTab(_ id: TabId) {
         guard let tab = tab(id) else { return }
         for (host, carrier) in tab.carriers { _ = send(host, .closeTab(carrier)) }

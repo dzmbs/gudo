@@ -1,6 +1,6 @@
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ use crate::event::{
 use crate::hook::{self, Common};
 use crate::launch::{
     LaunchContext, LaunchMode, LaunchSpec, SupportFile, mcp_args, mcp_server_name, pane_env,
-    shell_quote,
+    shell_quote, user_mcp_server,
 };
 use crate::manifest::Manifest;
 use crate::signal::{Claim, Signal};
@@ -45,6 +45,40 @@ impl ClaudeCode {
     /// Creates the adapter with a hot-updated manifest.
     pub fn with_manifest(manifest: Manifest) -> Self {
         Self { manifest }
+    }
+
+    /// Returns Claude Code's own command that adds the daemon's MCP server to the user's
+    /// configuration (`claude mcp add --scope user …`), or with `register` false removes it,
+    /// so sessions the user starts by hand in a pane get it too.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// let add = agents::ClaudeCode::user_mcp_command("claude", Path::new("/b/un-hook"), Path::new("/s"), true);
+    /// assert_eq!(add.join(" "), "claude mcp add --scope user unnamed_drawings -- /b/un-hook mcp --state /s");
+    /// ```
+    pub fn user_mcp_command(
+        program: &str,
+        hook_bin: &Path,
+        state_dir: &Path,
+        register: bool,
+    ) -> Vec<String> {
+        let mut argv: Vec<String> = [
+            program,
+            "mcp",
+            if register { "add" } else { "remove" },
+            "--scope",
+            "user",
+        ]
+        .map(String::from)
+        .into();
+        argv.push(mcp_server_name());
+        if register {
+            argv.push("--".into());
+            argv.extend(user_mcp_server(hook_bin, state_dir));
+        }
+        argv
     }
 
     /// Returns where the hook settings file for this context lives.

@@ -52,43 +52,28 @@ struct WorkspaceView: View {
     var body: some View {
         @Bindable var model = model
         content
-            .overlay(alignment: .top) {
-                if model.isPaletteShown {
-                    ZStack(alignment: .top) {
-                        Color.black.opacity(0.0001)
-                            .ignoresSafeArea()
-                            .onTapGesture { model.isPaletteShown = false }
-                        CommandPalette(
-                            isPresented: $model.isPaletteShown, commands: PaletteCommands.all(workspace: workspace, model: model),
-                            placeholder: PaletteCommands.placeholder(model.paletteMode),
-                            // goes back to every command.
-                            onScope: model.paletteMode == .commands ? { query in
-                                guard query == "/" else { return false }
-                                model.paletteMode = .workflows
-                                return true
-                            } : nil,
-                            onDeleteEmpty: model.paletteMode == .workflows ? { model.paletteMode = .commands } : nil)
-                            // A fresh query and selection per mode (⌘K, ⌘P, ⌥⌘T).
-                            .id(model.paletteMode)
-                            .padding(.top, 44)
-                            // animation); a 0.15 s fade on iPad, where the glass needs a frame.
-                            .transition(.opacity)
-                    }
-                }
+            // Spotlight's placement: centred on the window, a sixth of the way down, above the
+            // find bar and every other overlay.
+            .spotlightOverlay(isPresented: model.isPaletteShown, onDismiss: { model.isPaletteShown = false }) {
+                CommandPalette(
+                    isPresented: $model.isPaletteShown, commands: PaletteCommands.all(workspace: workspace, model: model),
+                    placeholder: PaletteCommands.placeholder(model.paletteMode),
+                    // goes back to every command.
+                    onScope: model.paletteMode == .commands ? { query in
+                        guard query == "/" else { return false }
+                        model.paletteMode = .workflows
+                        return true
+                    } : nil,
+                    onDeleteEmpty: model.paletteMode == .workflows ? { model.paletteMode = .commands } : nil)
+                    // A fresh query and selection per mode (⌘K, ⌘P, ⌥⌘T).
+                    .id(model.paletteMode)
             }
-            .overlay(alignment: .top) {
+            .spotlightOverlay(isPresented: model.workflowPanel != nil, onDismiss: { model.workflowPanel = nil }) {
                 if let panel = model.workflowPanel {
-                    ZStack(alignment: .top) {
-                        Color.black.opacity(0.0001)
-                            .ignoresSafeArea()
-                            .onTapGesture { model.workflowPanel = nil }
-                        WorkflowPanelHost(panel: panel)
-                            .id(panel.id)
-                            .padding(.top, 44)
-                            .transition(.opacity)
-                    }
+                    WorkflowPanelHost(panel: panel).id(panel.id)
                 }
             }
+            // fade on iPad, where the glass needs a frame.
             .animation(DS.Motion.palette, value: model.isPaletteShown)
             .animation(DS.Motion.palette, value: model.workflowPanel?.id)
             // The host's workflow files changed while the palette lists them: read them again.
@@ -887,6 +872,8 @@ private struct SheetContent: View {
             SettingsView()
         case .shortcuts:
             ShortcutsSheet()
+        case .replays:
+            SessionReplaysSheet(request: model.replayRequest)
         }
     }
 

@@ -1,6 +1,6 @@
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::event::{NativeSessionId, PaneId};
 
@@ -126,6 +126,18 @@ pub fn mcp_args(ctx: &LaunchContext) -> Vec<String> {
         ctx.state_dir.to_string_lossy().into_owned(),
         "--pane".into(),
         ctx.pane_id.as_str().into(),
+    ]
+}
+
+/// Returns the server command an agent's user-wide configuration names, for agents the user
+/// starts by hand in a pane: `<hook_bin> mcp --state <state_dir>`. The pane comes from the
+/// pane's `UN_PANE_ID`, which every pane has.
+pub(crate) fn user_mcp_server(hook_bin: &Path, state_dir: &Path) -> Vec<String> {
+    vec![
+        hook_bin.to_string_lossy().into_owned(),
+        "mcp".into(),
+        "--state".into(),
+        state_dir.to_string_lossy().into_owned(),
     ]
 }
 

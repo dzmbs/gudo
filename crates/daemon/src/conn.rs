@@ -219,7 +219,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::WORKFLOWS
         | DaemonFeatures::AGENT_INSTALLS
         | DaemonFeatures::PANE_MOVES
-        | DaemonFeatures::BROWSER;
+        | DaemonFeatures::BROWSER
+        | DaemonFeatures::AGENT_MCP;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }

@@ -28,6 +28,28 @@ import Testing
         #expect(hosts.dissolved.isEmpty)
     }
 
+    @Test func aClosedEditorTabReopensAsItWasUnderANewId() {
+        let hosts = Hosts()
+        let first = hosts.store.openEditor(proj)
+        hosts.store.addEditor(other, to: first)
+        let closed = hosts.tab(first)
+        hosts.store.closeTab(first)
+        let later = hosts.store.openEditor(EditorMember(hostId: "alpha", folder: "/tmp"))
+        let reopened = hosts.store.reopen(closed)
+        #expect(reopened != nil && reopened != later)
+        let tab = hosts.tab(reopened!)
+        #expect(tab.leaves.compactMap { tab.editors[$0] } == [proj, other], "the same editors, in place")
+        #expect(tab.focusedEditor == closed.focusedEditor)
+    }
+
+    @Test func aTabWithHostPanesDoesNotReopen() {
+        let hosts = Hosts()
+        let id = hosts.store.addEditor(proj, besideHost: "alpha", tab: hosts.sessions["alpha"]!.tabs[0])
+        let closed = hosts.tab(id)
+        hosts.store.closeTab(id)
+        #expect(hosts.store.reopen(closed) == nil, "its host panes ended with it")
+    }
+
     @Test func besideATerminalTheHostTabBecomesAComposite() {
         let hosts = Hosts()
         let id = hosts.store.addEditor(proj, besideHost: "alpha", tab: hosts.sessions["alpha"]!.tabs[0])

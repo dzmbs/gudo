@@ -96,7 +96,9 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(panes.firstMatch.exists, "the terminal stays beside it")
         shot("browser-pane")
 
+        #if os(iOS)
         XCUIDevice.shared.press(.home)
+        #endif
         RunLoop.current.run(until: Date().addingTimeInterval(3))
         app.terminate()
         try launch(relaunch: true)
@@ -109,6 +111,41 @@ final class BrowserUITests: XCTestCase {
         app.descendants(matching: .any)["browser-close"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["browser-leaf"].firstMatch.waitForNonExistence(timeout: 10))
         XCTAssertTrue(panes.firstMatch.waitForExistence(timeout: 10), "the terminal tab is back")
+    }
+
+    /// A new browser tab starts on the start page: its field is focused, the host's dev server
+    /// is a tile, typing suggests it, and a tap opens it through the host.
+    func testNewBrowserTabShowsTheStartPage() throws {
+        try launch()
+        panes.firstMatch.tap()
+        app.typeText("devserver 48316 localhost &\n")
+        waitFor(screen, contains: "Local:", timeout: 20)
+        app.buttons["open-palette"].firstMatch.tap()
+        let palette = app.textFields.matching(identifier: "command-palette").firstMatch
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        palette.typeText("New Browser Tab\n")
+
+        let start = app.descendants(matching: .any)["start-page"].firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 20), "a new tab shows the start page")
+        let tile = app.buttons["start-dev-48316"].firstMatch
+        XCTAssertTrue(tile.waitForExistence(timeout: 20), "the host's dev server is a tile")
+        let field = app.textFields["start-address"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        shot("start-page")
+        field.tap()
+        field.typeText("4831")
+        let suggestion = app.buttons["address-suggestion-0"].firstMatch
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 5), "typing suggests the dev server")
+        XCTAssertTrue(suggestion.label.contains("localhost:48316"), suggestion.label)
+        shot("start-page-suggestions")
+        suggestion.tap()
+
+        let result = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'ws=' OR value CONTAINS 'ws='")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 30), "the dev server's page loads")
+        let shown = result.label.isEmpty ? (result.value as? String ?? "") : result.label
+        XCTAssertTrue(shown.contains("origin=http://localhost:48316 "), shown)
+        XCTAssertTrue(start.waitForNonExistence(timeout: 5), "the start page gives way to the page")
+        shot("start-page-opened")
     }
 
     /// An agent's browser tools from its terminal (`un-hook browser`, as Codex would use them):

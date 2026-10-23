@@ -43,10 +43,13 @@ public extension DS {
         /// (or the bright magenta or cyan farthest from background and foreground). Ghostty's
         /// default theme gives #7AA6DA. Focus, selection and the single primary action only.
         public static let accent = ChromeStyle(.accent)
-        /// A solid selection (the palette's selected row): the accent deepened until
-        /// `onSelection` text reads on it at 4.5:1.
+        /// The selected row (palette, lists): the accent as a soft tint under normal text
+        /// (`onSelection`, ≥ 4.5:1), Spotlight's and Raycast's selection.
         public static let selection = ChromeStyle(.selection)
         public static let onSelection = ChromeStyle(.onSelection)
+        /// The one primary action: the accent deepened until `onProminent` reads on it at 4.5:1.
+        public static let prominent = ChromeStyle(.prominent)
+        public static let onProminent = ChromeStyle(.onProminent)
 
         /// Your turn: an agent waiting for input, a slow or reconnecting link (the theme's
         public static let attention = ChromeStyle(.attention)
@@ -104,7 +107,7 @@ public extension DS {
 /// no `@Environment` at the call site.
 nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
     public enum Token: Hashable, Sendable {
-        case accent, selection, onSelection
+        case accent, selection, onSelection, prominent, onProminent
         case done, error, attention, working, info
         case text, textSecondary, textTertiary, textQuaternary
         case hoverFill, selectedFill, pressedFill
@@ -135,6 +138,8 @@ nonisolated public extension ChromePalette {
         case .accent: accentColor
         case .selection: selectionColor
         case .onSelection: onSelectionColor
+        case .prominent: prominentColor
+        case .onProminent: onProminentColor
         case .done: done.color
         case .error: error.color
         case .attention: attention.color

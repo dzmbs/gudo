@@ -152,6 +152,37 @@ impl DaemonClient {
             .await?;
         Ok(installs.into_iter().map(Into::into).collect())
     }
+
+    /// The commands that add the daemon's MCP server to each installed agent's user-wide
+    /// configuration (`register`), or remove it, for the client to show and run.
+    ///
+    /// # Errors
+    ///
+    /// `Unavailable` from a daemon too old to build them; else the daemon's [`WorkspaceError`].
+    pub async fn agent_mcp_commands(
+        &self,
+        register: bool,
+    ) -> Result<Vec<AgentMcpCommand>, WorkspaceError> {
+        let commands: Vec<proto::AgentMcpCommand> = self
+            .ws_call(move |c| async move { c.agent_mcp_commands(register).await })
+            .await?;
+        Ok(commands
+            .into_iter()
+            .map(|c| AgentMcpCommand {
+                agent: c.agent.into(),
+                argv: c.argv,
+            })
+            .collect())
+    }
+}
+
+/// A command that registers or removes the daemon's MCP server with an agent.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AgentMcpCommand {
+    /// The agent.
+    pub agent: AgentKind,
+    /// The program and its arguments.
+    pub argv: Vec<String>,
 }
 
 /// Whether an agent's command is on the host.

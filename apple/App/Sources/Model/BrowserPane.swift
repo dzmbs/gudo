@@ -82,6 +82,7 @@ final class BrowserPane: Identifiable {
         var configuration = WebPage.Configuration()
         if let dataStore { configuration.websiteDataStore = dataStore }
         BrowserAgentScript.install(in: configuration.userContentController, frames: frames)
+        BrowserRecorder.install(in: configuration.userContentController, page: id)
         if popup {
             configuration.userContentController.addUserScript(BrowserWindows.closeScript)
             configuration.userContentController.add(windows, contentWorld: .page, name: BrowserWindows.closeHandler)
@@ -89,6 +90,7 @@ final class BrowserPane: Identifiable {
         let box = DeciderBox()
         page = WebPage(configuration: configuration, navigationDecider: Decider(box: box), dialogPresenter: Dialogs(box: box))
         box.pane = self
+        BrowserRecorder.shared.attach(page, id: id)
         frames.onWebView = { [windows] in windows.adopt($0) }
         windows.onOpen = { [weak self] in self?.onPopup?($0) }
         windows.onClose = { [weak self] in self?.onClose?() }
@@ -232,6 +234,7 @@ final class BrowserPanes {
         for (id, pane) in panes where !ids.contains(id) {
             panes[id] = nil
             pane.page.stopLoading()
+            BrowserRecorder.shared.finish(id)
         }
     }
 }

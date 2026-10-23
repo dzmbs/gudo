@@ -529,6 +529,8 @@ impl SocketBackend {
         let env = |name: &str| std::env::var(brand::env_var(name)).ok();
         let pane = pane
             .or_else(|| env("PANE_ID"))
+            // Under Codex, which starts servers with a short environment allowlist.
+            .or_else(|| daemon::inherited_env_var(&brand::env_var("PANE_ID")))
             .ok_or("no pane: pass --pane <id> (the pane's UN_PANE_ID)")?;
         let from_state = |dir: PathBuf| Self {
             endpoint: Endpoint::File(dir.join("hook.endpoint")),

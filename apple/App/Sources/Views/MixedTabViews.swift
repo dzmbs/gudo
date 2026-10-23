@@ -2,6 +2,9 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+#if os(iOS)
+import GameController
+#endif
 
 // Mixed tabs (panes from several hosts in one tab) and Two Columns in the window
 // (docs/APP-ARCHITECTURE.md §19; the model side is Model/MixedTabs.swift).
@@ -63,40 +66,31 @@ struct TerminalArea: View {
     }
 }
 
-/// An editor alone in the window (⌃⌘F): the workbench edge to edge. The way back stays out of
-/// the workbench's way: ⌃⌘F again, or the top edge, where a pointer resting or a tap brings up
-/// Exit Full Screen for a few seconds (Escape is VS Code's).
+/// An editor alone in the window (⌃⌘F): the workbench edge to edge. The way back always shows:
+/// a glass ⤡ in the workbench title bar's empty stretch (between the command center and the
+/// layout controls), spelled out as "Exit Full Screen ⌃⌘F" on entering and whenever the pointer
+/// nears the top, then fading to a quiet glyph. Escape stays VS Code's.
 struct FullScreenEditorView: View {
     let member: EditorMember
     @Environment(WindowModel.self) private var model
-    @State private var isExitShown = false
-    @State private var hide: Task<Void, Never>?
+    @State private var isProminent = true
+    @State private var settle: Task<Void, Never>?
 
     var body: some View {
         EditorLeafView(member: member, isSplit: false, isFocused: true, focus: {}, isFullScreen: true)
-            .overlay(alignment: .top) {
-                VStack(spacing: DS.Space.xs) {
-                    Color.clear
-                        .frame(height: 8)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(.rect)
-                        .onContinuousHover { phase in
-                            if case .active = phase { reveal() }
-                        }
-                        .onTapGesture { reveal() }
-                        .accessibilityHidden(true)
-                    if isExitShown {
-                        Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left") {
-                            model.toggleEditorFullScreen()
-                        }
-                        .buttonStyle(.glass)
-                        .help("Exit Full Screen (⌃⌘F)")
-                        .onHover { inside in if inside { reveal() } }
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .accessibilityIdentifier("editor-exit-full-screen")
-                    }
-                }
-                .animation(DS.Motion.snappy, value: isExitShown)
+            .overlay(alignment: .topTrailing) {
+                ExitFullScreenButton(isProminent: isProminent) { model.toggleEditorFullScreen() }
+                    .onHover { inside in if inside { reveal() } }
+                    .padding(.top, 3)
+                    // Clear of VS Code's layout controls at the title bar's trailing end.
+                    .padding(.trailing, model.widthBucket == .compact ? 96 : 150)
+            }
+            .onContinuousHover { phase in
+                if case .active(let point) = phase, point.y < 56 { reveal() }
+            }
+            .onAppear {
+                reveal()
+                model.toasts.show(Toast(ExitFullScreenButton.hint, systemImage: "arrow.down.right.and.arrow.up.left"))
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("editor-full-screen-view")
@@ -107,13 +101,55 @@ struct FullScreenEditorView: View {
     }
 
     private func reveal() {
-        isExitShown = true
-        hide?.cancel()
-        hide = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
+        if !isProminent { withAnimation(DS.Motion.snappy) { isProminent = true } }
+        settle?.cancel()
+        settle = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
-            isExitShown = false
+            withAnimation(.easeOut(duration: 0.6)) { isProminent = false }
         }
+    }
+}
+
+/// Exit Full Screen: the label and ⌃⌘F while prominent, the ⤡ glyph alone and faint at rest.
+private struct ExitFullScreenButton: View {
+    let isProminent: Bool
+    let action: () -> Void
+
+    static var hint: String {
+        #if os(iOS)
+        if GCKeyboard.coalesced == nil { return "Tap Exit Full Screen at the top to leave" }
+        return "Press ⌃⌘F, or tap Exit Full Screen at the top"
+        #else
+        return "Press ⌃⌘F, or click Exit Full Screen at the top"
+        #endif
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: DS.Space.xs) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.footnote.weight(.semibold))
+                if isProminent {
+                    Text("Exit Full Screen")
+                        .font(.footnote.weight(.medium))
+                        .fixedSize()
+                    Text("⌃⌘F")
+                        .font(.footnote)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize()
+                }
+            }
+            .padding(.horizontal, isProminent ? DS.Space.m : DS.Space.s)
+            .frame(minWidth: 30, minHeight: 30)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .opacity(isProminent ? 1 : 0.4)
+        .help("Exit Full Screen (⌃⌘F)")
+        .accessibilityLabel("Exit Full Screen")
+        .accessibilityIdentifier("editor-exit-full-screen")
     }
 }
 
@@ -318,13 +354,6 @@ private struct MixedTabRow: View {
             .sidebarRow(selected: isActive)
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            Button("Rename…", systemImage: "pencil") {
-                draft = tab.title ?? ""
-                renaming = true
-            }
-            Button("Close Tab", systemImage: "xmark", role: .destructive) { model.closeMixedTab(tab.id) }
-        }
         .alert("Rename Tab", isPresented: $renaming) {
             TextField("Title", text: $draft)
             Button("Rename") { model.composites.apply(.rename(tab.id, draft), to: tab.id) }
@@ -337,6 +366,27 @@ private struct MixedTabRow: View {
             : "\(title), mixed: \(tab.hosts.map(model.groupName).joined(separator: " and "))")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
+        .rowActions(actions(busy: state == .working || state == .blocked), id: ref.description, name: title) { action in
+            perform(action, busy: state == .working || state == .blocked)
+        }
+    }
+
+    private func actions(busy: Bool) -> RowActions {
+        RowActions(tab.isEditorOnly ? .editorTab : tab.isBrowserOnly ? .browserTab : .mixedTab(isBusy: busy))
+    }
+
+    private func perform(_ action: RowAction, busy: Bool) {
+        switch action {
+        case .rename:
+            draft = tab.title ?? ""
+            renaming = true
+        case .closeTab, .closeEditor:
+            model.closeWindowTab(tab.id, undoable: actions(busy: busy).undoable.contains(action))
+        case .stopServer:
+            model.stopEditorServers(inTab: tab.id)
+        default:
+            break
+        }
     }
 }
 
@@ -401,7 +451,9 @@ struct MixedTabChip: View {
         .onTapGesture { model.focus(ref) }
         .onHover { isHovered = $0 }
         .contextMenu {
-            Button("Close Tab", systemImage: "xmark", role: .destructive) { model.closeMixedTab(tab.id) }
+            Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage, role: .destructive) {
+                model.closeWindowTab(tab.id, undoable: true)
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)

@@ -39,6 +39,10 @@ pub struct DaemonInfo {
     /// It moves panes between tabs and merges tabs (`LayoutOp::BreakPane` …).
     #[uniffi(default = false)]
     pub pane_moves: bool,
+    /// It names the commands that register its MCP server with the agents
+    /// (`agent_mcp_commands`).
+    #[uniffi(default = false)]
+    pub agent_mcp: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -57,6 +61,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             agent_usage: i.features.contains(proto::DaemonFeatures::AGENT_USAGE),
             multiplayer2: i.features.contains(proto::DaemonFeatures::MP2),
             pane_moves: i.features.contains(proto::DaemonFeatures::PANE_MOVES),
+            agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
         }
     }
 }

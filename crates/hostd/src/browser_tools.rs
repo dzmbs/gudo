@@ -161,6 +161,13 @@ const TOOLS: &[Tool] = &[
         read_only: false,
     },
     Tool {
+        name: "browser_drag",
+        description: "Drag from target to `to` (sliders, sortable lists, HTML drag and drop). Returns what changed.",
+        properties: || json!({ "target": target(), "to": target() }),
+        required: &["target", "to"],
+        read_only: false,
+    },
+    Tool {
         name: "browser_wait",
         description: "Wait until text appears, a CSS selector matches, the page loaded (until: load) or the network is idle (until: network_idle), or for seconds; at most 30 s.",
         properties: || {

@@ -324,5 +324,7 @@ bitset! {
         /// Gives panes `BROWSER` (URLs reach clients with `Caps::BROWSER`) and serves agents'
         /// browser tools through them.
         BROWSER = 8;
+        /// Answers `WorkspaceRequest::AgentMcpCommands`.
+        AGENT_MCP = 9;
     }
 }

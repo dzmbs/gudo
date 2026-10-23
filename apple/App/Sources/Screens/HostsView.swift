@@ -33,7 +33,6 @@ struct HostsView: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.chrome) private var chrome
     @State private var destination = ""
-    @State private var forgetting: HostSummary?
     @State private var renaming: HostSummary?
     @State private var newName = ""
     @State private var importingFile = false
@@ -78,18 +77,6 @@ struct HostsView: View {
                     .help("Add Host")
                     .accessibilityIdentifier("hosts-add")
             }
-        }
-        .confirmationDialog(
-            "Forget \(forgetting?.name ?? "")?",
-            isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
-            titleVisibility: .visible,
-            presenting: forgetting
-        ) { host in
-            Button("Forget Host", role: .destructive) {
-                withAnimation(DS.Motion.snappy) { directory.forget(host.id) }
-            }
-        } message: { host in
-            Text("Sessions on \(host.name) keep running. You can add it again later.")
         }
         .alert("Rename Host", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -145,20 +132,14 @@ struct HostsView: View {
                         HostRow(host: host, emphasizeNeedsYou: title == "Needs you")
                     }
                     .buttonStyle(.plain)
-                    .swipeActions(edge: .leading) {
-                        if !host.isLocal {
-                            Button(host.isPinned ? "Unpin" : "Pin", systemImage: host.isPinned ? "pin.slash" : "pin") {
-                                withAnimation(DS.Motion.snappy) { directory.togglePin(host.id) }
-                            }
-                            .tint(DS.Palette.accent)
-                        }
+                    .listRowActions(
+                        RowActions(.host(isLocal: host.isLocal, isOpen: host.connection != .disconnected, isPinned: host.isPinned)),
+                        name: host.name
+                    ) { action in
+                        perform(action, on: host)
+                    } menu: {
+                        menu(host)
                     }
-                    .swipeActions(edge: .trailing) {
-                        if !host.isLocal {
-                            Button("Forget", systemImage: "trash", role: .destructive) { forgetting = host }
-                        }
-                    }
-                    .contextMenu { menu(host) }
                     .accessibilityIdentifier("host-\(host.name)")
                     .listRowBackground(Color.clear)
                     .listRowSeparatorTint(chrome.hairline)
@@ -184,9 +165,6 @@ struct HostsView: View {
             if let helper = host.helper, helper.canUpdate, host.progress == nil {
                 Button("Update Helper", systemImage: "arrow.down.circle") { updateHelper(host) }
             }
-            Button(host.isPinned ? "Unpin" : "Pin", systemImage: host.isPinned ? "pin.slash" : "pin") {
-                withAnimation(DS.Motion.snappy) { directory.togglePin(host.id) }
-            }
             Button("Rename…", systemImage: "pencil") {
                 newName = host.name
                 renaming = host
@@ -196,12 +174,14 @@ struct HostsView: View {
             Button("Open Tailscale", systemImage: "arrow.up.forward.app", action: TailscaleApp.open)
         }
         Button("Copy Address", systemImage: "doc.on.doc") { copy(host.address) }
-        if !host.isLocal {
-            if host.connection != .disconnected {
-                Button("Disconnect", systemImage: "bolt.slash") { directory.disconnect(host.id) }
-            }
-            Divider()
-            Button("Forget…", systemImage: "trash", role: .destructive) { forgetting = host }
+    }
+
+    private func perform(_ action: RowAction, on host: HostSummary) {
+        switch action {
+        case .pin, .unpin: withAnimation(DS.Motion.snappy) { directory.togglePin(host.id) }
+        case .disconnect: directory.disconnect(host.id)
+        case .removeHost: withAnimation(DS.Motion.snappy) { directory.forget(host.id) }
+        default: break
         }
     }
 

@@ -58,6 +58,27 @@ struct ChromePaletteTests {
         #expect(stateAccents.count <= Self.themes.count / 20, "\(stateAccents.map(\.name))")
     }
 
+    /// A saturated terminal blue never reaches the chrome raw: the accent keeps its hue with the
+    /// chroma capped, and the selection is a soft tint under the normal text, not a solid block.
+    @Test(arguments: ["Alabaster", "Atom One Light", "3024 Day", "iTerm2 Solarized Light", "Dracula", "Nord", "Gruvbox Dark"])
+    func accentIsRefinedAndSelectionIsSoft(name: String) {
+        let theme = ThemeCatalog.theme(named: name)
+        let chrome = ChromePalette(theme: theme)
+        let lab = chrome.accent.oklab
+        #expect((lab.a * lab.a + lab.b * lab.b).squareRoot() <= ChromePalette.accentChroma + 0.01)
+        #expect(ChromePalette.hueDistance(chrome.accent.hue, ChromePalette.accent(of: theme).hue) < 12)
+        #expect(chrome.selectionLevel <= 0.25)
+        #expect(chrome.selection.contrast(with: chrome.raised) < 2)
+        #expect(chrome.onSelection.contrast(with: chrome.selection) >= 4.5)
+    }
+
+    @Test func oklabRoundTrips() {
+        for hex in ["#0078c8", "#2f5af3", "#d6acff", "#808080"] {
+            let color = ThemeColor(hex: hex)!
+            #expect(ThemeColor(oklab: color.oklab).hex == hex)
+        }
+    }
+
     @Test func statesComeFromTheThemesAnsiColours() {
         let solarized = ThemeCatalog.theme(named: "iTerm2 Solarized Dark")
         let chrome = ChromePalette(theme: solarized)
@@ -165,13 +186,16 @@ struct ChromePaletteTests {
             if chrome.onSelection.contrast(with: chrome.selection) < 4.5 {
                 failures.append("\(theme.name) selection")
             }
+            if chrome.onProminent.contrast(with: chrome.prominent) < 4.5 {
+                failures.append("\(theme.name) prominent")
+            }
         }
         #expect(failures.isEmpty, "\(failures.prefix(10))")
     }
 
     /// The four themes the screenshots use, printed for review.
     @Test func reviewThemes() {
-        for name in ["Ghostty Default", "iTerm2 Solarized Light", "Gruvbox Dark", "Dracula", "Catppuccin Mocha", "iTerm2 Solarized Dark", "TokyoNight", "Nord"] {
+        for name in ["Ghostty Default", "Alabaster", "iTerm2 Solarized Light", "3024 Day", "Atom One Light", "Gruvbox Dark", "Dracula", "Nord"] {
             let theme = name == "Ghostty Default" ? TerminalTheme.ghosttyDefault : ThemeCatalog.theme(named: name)
             let c = ChromePalette(theme: theme)
             print("\(name): bg \(c.base) fg \(c.foreground) sidebar \(c.sidebar) accent \(c.accent) sel \(c.selection)/\(c.onSelection) done \(c.done) error \(c.error) attn \(c.attention) working \(c.working) info \(c.info)")

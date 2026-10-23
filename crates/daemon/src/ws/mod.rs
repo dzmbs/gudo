@@ -431,6 +431,9 @@ pub(crate) async fn handle(
                 .map(A::WorkflowSaved)
         }
         R::AgentInstalls => Ok(A::AgentInstalls(installs::check(&core.cfg).await)),
+        R::AgentMcpCommands { register } => Ok(A::AgentMcpCommands(
+            installs::mcp_commands(&core.cfg, register).await,
+        )),
     }
 }
 

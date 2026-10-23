@@ -936,7 +936,21 @@ final class LivePortSource: PortSource {
 
     var ports: [DetectedPort] {
         guard let context else { return [] }
-        return Self.ports(context.hub.ports, meta: context.daemon.meta)
+        return Self.ports(servers(context.hub.ports, on: context), meta: context.daemon.meta)
+    }
+
+    /// The host's ports but its agents' own (`DetectedPort.isAgentListener`): a helper that
+    /// predates filtering them reports them too.
+    private func servers(_ ports: [PortInfo], on context: HostContext) -> [PortInfo] {
+        ports.filter { !isAgentListener($0, on: context) }
+    }
+
+    private func isAgentListener(_ info: PortInfo, on context: HostContext) -> Bool {
+        let inAgentPane = info.paneId.map { id in
+            context.daemon.meta[PaneId(id)]?.agent != nil
+                || window?.programIdentity(ofPane: PaneId(id), onGroup: context.hostId).kind == .agent
+        } ?? false
+        return DetectedPort.isAgentListener(process: info.process, port: info.port, inAgentPane: inAgentPane)
     }
 
     static func ports(_ ports: [PortInfo], meta: [PaneId: PaneMeta]) -> [DetectedPort] {
@@ -971,6 +985,7 @@ final class LivePortSource: PortSource {
         known[hostId] = Set(ports.map(\.port))
         guard context?.hostId == hostId else { return }
         let fresh = ports.filter { !before.contains($0.port) && ($0.kind == .http || $0.kind == .https) }
+            .filter { info in context.map { !isAgentListener(info, on: $0) } ?? true }
         if let new = fresh.first, let port = Self.ports([new], meta: context?.daemon.meta ?? [:]).first {
             offer = port
         } else if let offer, !ports.contains(where: { $0.port == offer.port }) {
@@ -984,6 +999,12 @@ final class LivePortSource: PortSource {
 
     func open(_ port: DetectedPort) async throws -> URL {
         guard let context else { throw HostError.notConnected }
+        // An agent's listener answers only at the URL the agent built: never its `/`.
+        if let info = context.hub.ports.first(where: { $0.port == port.port }), isAgentListener(info, on: context),
+           URL(string: port.url ?? "").map({ $0.path.isEmpty || $0.path == "/" }) ?? true
+        {
+            throw AgentPortError(port: port.port, process: info.process)
+        }
         // S-BR1: at the URL the server printed, through the host's proxy and data store.
         let hub = context.hub
         if let url = await DevServerRouting.shared.page(for: port, hostId: context.hostId, client: { try hub.client() }) {
@@ -1022,6 +1043,13 @@ final class LivePortSource: PortSource {
         if components.path.isEmpty { components.path = "/" }
         return components.url ?? URL(string: "http://localhost:\(localPort)/")!
     }
+}
+
+/// A port that belongs to a coding agent, not a dev server.
+struct AgentPortError: LocalizedError {
+    let port: UInt16
+    let process: String
+    var errorDescription: String? { "it belongs to a coding agent (\(process)), not a dev server" }
 }
 
 // MARK: - Links, command output, search

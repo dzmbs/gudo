@@ -126,7 +126,7 @@ final class BrowserAgent {
         case "browser_get_text":
             return Answer(text: try await page.js("return window.__un.text()", [:]))
         case "browser_click", "browser_double_click", "browser_hover", "browser_type", "browser_fill",
-             "browser_press", "browser_scroll", "browser_scroll_to", "browser_upload":
+             "browser_press", "browser_scroll", "browser_scroll_to", "browser_upload", "browser_drag":
             return try await act(tool, args, page: page, member: member, pane: pane, window: window)
         case "browser_dialog":
             return try await answerDialog(args, page: page)
@@ -298,6 +298,11 @@ final class BrowserAgent {
         if kind == "upload" { input["files"] = Self.payloads(args) }
         let target = try await page.locate(args["target"] as? [String: Any])
         input["target"] = target.target
+        if kind == "drag" {
+            let to = try await page.locate(args["to"] as? [String: Any])
+            guard to.target != nil, to.frame == target.frame else { throw BrowserCallError("Drag needs a to target in the same frame as target.") }
+            input["to"] = to.target
+        }
         page.agentActivity = Self.activity(kind, args)
         defer { done(page) }
 
@@ -378,6 +383,10 @@ final class BrowserAgent {
         input["phase"] = "do"
         let id = UUID().uuidString
         input["id"] = id
+        // The Mac's own input when the page is on screen; the page script checks and lists the
+        // events, the app sends them.
+        let native = frame == nil && Self.nativeKinds.contains(input["kind"] as? String ?? "") ? await BrowserNativeInput.for(page.page) : nil
+        if native != nil { input["native"] = true }
         let before = await page.activity()
         page.agentActing = true
         defer { page.agentActing = false }
@@ -386,6 +395,9 @@ final class BrowserAgent {
             try await page.js("return window.__un.act(args)", input, frame: frame, as: [String: Any].self)
         }
         guard let done else { return ActResult(done: [:], changes: []) }
+        #if os(macOS)
+        if let native, let ops = done["native"] as? [[String: Any]] { await native.perform(ops) }
+        #endif
         if wait { await page.settle(after: before) }
         guard page.dialog == nil, page.fileChooser == nil else { return ActResult(done: done, changes: []) }
         let effect = (try? await page.js("return window.__un.effect(args.id)", ["id": id], frame: frame, as: [String: Any].self)) ?? [:]
@@ -394,11 +406,18 @@ final class BrowserAgent {
         return ActResult(done: done, changes: changes, intercepted: effect["intercepted"] as? String)
     }
 
+    /// What goes through the Mac's own input (`BrowserNativeInput`) when it is there.
+    static let nativeKinds: Set<String> = ["click", "double_click", "hover", "type", "press", "scroll", "drag", "fill"]
+
     /// Why an action may have done nothing, and what to try instead.
     static func noEffect(_ kind: String, intercepted: String?) -> String {
         switch kind {
         case "hover":
+            #if os(macOS)
+            return "Nothing changed on the page: nothing reacts to the pointer there, or the page's window is not in front. A click may open the menu."
+            #else
             return "Nothing changed on the page. Hover effects made in CSS alone do not show for a script's pointer; a click may open the menu."
+            #endif
         case "scroll", "scroll_to":
             return "Nothing scrolled: the page or element may be at its end, or not scrollable."
         default:
@@ -481,6 +500,7 @@ final class BrowserAgent {
         case "scroll", "scroll_to": "Scrolling"
         case "hover": "Pointing"
         case "upload": "Choosing files"
+        case "drag": "Dragging"
         default: "Clicking"
         }
     }

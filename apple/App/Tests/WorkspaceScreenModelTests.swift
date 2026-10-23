@@ -558,6 +558,26 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertNil(ports.offer, "known ports and non-HTTP ones are not offered")
     }
 
+    func testAgentListenersAreNeitherListedNorOffered() throws {
+        let client = FakeWorkspaceClient()
+        let ports = LivePortSource(app: .shared)
+        let context = try fakeContext(client)
+        ports.contextOverride = { context }
+        ports.portsChanged("h1", [])
+        // Claude Code's sign-in callback, as an older helper reports it.
+        let callback = PortInfo(port: 39563, loopbackOnly: true, paneId: nil, pid: 7, process: "claude", kind: .http, url: nil)
+        ports.portsChanged("h1", [callback])
+        XCTAssertNil(ports.offer, "an agent's listener is never offered")
+
+        XCTAssertTrue(DetectedPort.isAgentListener(process: "claude", port: 3000, inAgentPane: false))
+        XCTAssertTrue(DetectedPort.isAgentListener(process: "codex", port: 1455, inAgentPane: false))
+        XCTAssertTrue(DetectedPort.isAgentListener(process: "2.1.307", port: 40_000, inAgentPane: false), "Claude's native binary")
+        XCTAssertTrue(DetectedPort.isAgentListener(process: "node", port: 45_101, inAgentPane: true), "an agent pane's ephemeral port")
+        XCTAssertFalse(DetectedPort.isAgentListener(process: "node", port: 3000, inAgentPane: true), "a server an agent started")
+        XCTAssertFalse(DetectedPort.isAgentListener(process: "node", port: 45_101, inAgentPane: false))
+        XCTAssertFalse(DetectedPort.isAgentListener(process: "python3", port: 8000, inAgentPane: false))
+    }
+
     // MARK: Links
 
     func testDaemonLinksMapAndDeduplicate() {
