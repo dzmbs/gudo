@@ -96,11 +96,23 @@ import Testing
         #expect(surface.grid == final)
     }
 
-    @Test func aOneOffResizeAppliesAtOnce() throws {
+    @Test func aOneOffResizeAppliesAlmostAtOnce() async throws {
         let terminal = Terminal(cols: 20, rows: 6) { _ in }
         let (surface, changes) = try surface(terminal, width: 800)
         surface.layout(size: CGSize(width: 400, height: 200), scale: 2)
+        try await Task.sleep(for: .milliseconds(80))
         #expect(changes().count == 1)
         #expect(terminal.size.cols == surface.grid.map { Int($0.cols) })
+    }
+
+    /// Keyboard avoidance can lay a view out tiny for one pass: shrinking the grid to it would
+    /// push the screen into scrollback for good.
+    @Test func aSizeThatLastsOnePassNeverApplies() async throws {
+        let terminal = Terminal(cols: 20, rows: 6) { _ in }
+        let (surface, changes) = try surface(terminal, width: 800)
+        surface.layout(size: CGSize(width: 800, height: 40), scale: 2)
+        surface.layout(size: CGSize(width: 800, height: 200), scale: 2)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(changes().isEmpty)
     }
 }

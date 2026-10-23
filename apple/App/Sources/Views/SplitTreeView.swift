@@ -98,7 +98,14 @@ struct SplitTreeView: View {
         let shape = SplitShape(node)
         // Here rather than in `onChange`: the hold must start before the animation's first
         // frame resizes a terminal.
-        if lastShape.update(shape), animated { TerminalSurface.holdGrids(for: .seconds(DS.Motion.splitDuration)) }
+        if lastShape.update(shape) {
+            if animated { TerminalSurface.holdGrids(for: .seconds(DS.Motion.splitDuration)) }
+            // The grids change with the layout, not by a resize the user makes: no cols × rows
+            // overlay (a window tab's tree changes without `Workspace.apply`).
+            for leaf in node.panes {
+                tree.resolve(leaf)?.workspace.layoutChangeUntil = .now + .milliseconds(700)
+            }
+        }
         return GeometryReader { geometry in
             let layout = SplitLayout(
                 node: node, size: geometry.size,
@@ -130,10 +137,11 @@ struct SplitTreeView: View {
 private final class ShapeMemo {
     private var shape: SplitShape?
 
-    /// Records `shape`; true when it replaced a different one.
+    /// Records `shape`; true when it is new: a change, or a tree just shown (a tab turning
+    /// into a window tab swaps the whole view, and its panes move with it).
     func update(_ shape: SplitShape) -> Bool {
         defer { self.shape = shape }
-        return self.shape.map { $0 != shape } ?? false
+        return self.shape != shape
     }
 }
 

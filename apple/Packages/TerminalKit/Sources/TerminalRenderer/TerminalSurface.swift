@@ -219,8 +219,10 @@ public final class TerminalSurface {
     /// and sends the program SIGWINCH (a shell redraws its prompt), so it is coalesced the way
     /// Ghostty's IO thread coalesces resizes: during an animated layout change
     /// (`holdGrids(for:)`) the grid waits until the view settles and changes once; otherwise it
-    /// changes at once and then at most every `gridInterval` while the size keeps changing (a
-    /// divider drag, a live window resize), always ending at the final size. Meanwhile the
+    /// changes once the size has held for `steadyInterval` (a size that lasts a single layout
+    /// pass, as keyboard avoidance produces, never reaches the program), and at most every
+    /// `gridInterval` while the size keeps changing (a divider drag, a live window resize),
+    /// always ending at the final size. Meanwhile the
     /// current grid stays drawn where it was, anchored top-left: clipped by a shrinking view,
     /// on background in a growing one, never reflowed.
     public func layout(size: CGSize, scale: CGFloat) {
@@ -250,9 +252,10 @@ public final class TerminalSurface {
         } else if let grid, pixelSize.width > 0, pixelSize.height > 0,
                   target.cellWidth == grid.cellWidth, target.cellHeight == grid.cellHeight
         {
+            if pendingGrid == nil { pendingSince = .now }
             pendingGrid = target
             if ContinuousClock.now < Self.gridHoldUntil { pendingIsHeld = true }
-            if commitDue() != nil { scheduleGridCommit() } else { commitGrid(target) }
+            scheduleGridCommit()
         } else if pixelSize.width > 0, pixelSize.height > 0 {
             // The first real size, or new cells (font, scale): at once.
             commitGrid(target)
@@ -278,6 +281,8 @@ public final class TerminalSurface {
     /// How long a held view's size must stay put before its grid changes: a spring's tail
     /// still moves it after the animation's nominal duration.
     static let settleInterval = Duration.milliseconds(50)
+    /// How long a size must hold before its grid applies (Ghostty coalesces for 25 ms).
+    static let steadyInterval = Duration.milliseconds(25)
     static var gridHoldUntil = ContinuousClock.now
 
     /// An animated layout change starts (a split, a close, a zoom, a sidebar): every surface
@@ -291,6 +296,7 @@ public final class TerminalSurface {
     private var pendingGrid: Grid?
     /// The pending grid came from a held layout: it waits for the view to settle.
     private var pendingIsHeld = false
+    private var pendingSince = ContinuousClock.now
     private var lastGridCommit: ContinuousClock.Instant?
     private var lastSizeChange = ContinuousClock.now
     private var gridCommitTask: Task<Void, Never>?
@@ -302,7 +308,9 @@ public final class TerminalSurface {
         let now = ContinuousClock.now
         let due = pendingIsHeld
             ? max(Self.gridHoldUntil, lastSizeChange + Self.settleInterval)
-            : (lastGridCommit.map { $0 + Self.gridInterval } ?? now)
+            : max(
+                lastGridCommit.map { $0 + Self.gridInterval } ?? now,
+                min(lastSizeChange + Self.steadyInterval, pendingSince + Self.gridInterval))
         return due > now ? due : nil
     }
 
@@ -312,7 +320,7 @@ public final class TerminalSurface {
             while let self, self.pendingGrid != nil, !Task.isCancelled {
                 guard let due = self.commitDue() else { break }
                 // In steps: the hold can end early.
-                try? await Task.sleep(until: min(due, .now + Self.settleInterval), clock: .continuous)
+                try? await Task.sleep(until: min(due, .now + Self.steadyInterval), clock: .continuous)
             }
             guard let self else { return }
             self.gridCommitTask = nil

@@ -26,6 +26,10 @@ final class ToolLeavesUITests: XCTestCase {
         // The pane stays on screen beside the tool's leaf.
         XCTAssertTrue(app.staticTexts["Changes"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(pane.isHittable, "the terminal is not covered")
+        // The keyboard going down with the palette must not cost the terminal its screen.
+        Thread.sleep(forTimeInterval: 1)
+        let screen = app.descendants(matching: .any)["pane-1-screen"].firstMatch
+        XCTAssertTrue((screen.value as? String ?? "").contains("local echo"), "screen: \(String(describing: screen.value))")
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "tool-leaf-changes"
         shot.lifetime = .keepAlways
