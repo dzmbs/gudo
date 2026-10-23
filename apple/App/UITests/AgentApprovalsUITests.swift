@@ -64,7 +64,7 @@ final class AgentApprovalsUITests: XCTestCase {
     /// New Agent with `prompt` (no worktree); waits for the agent's own tab.
     private func startAgent(_ prompt: String) {
         palette("New Agent")
-        let field = app.textViews.matching(identifier: "launch-prompt").firstMatch
+        let field = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         field.typeText(prompt)
@@ -212,7 +212,7 @@ final class AgentApprovalsUITests: XCTestCase {
             XCTAssertTrue(web.exists, "the editor is in front")
         }
         func start(_ prompt: String) {
-            let field = app.textViews.matching(identifier: "launch-prompt").firstMatch
+            let field = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
             XCTAssertTrue(field.waitForExistence(timeout: 5))
             field.tap()
             field.typeText(prompt)
@@ -276,7 +276,7 @@ final class AgentApprovalsUITests: XCTestCase {
         element(prefix: "host-new-agent-").tap()
         opensSheet("the host's +", cancel: false)
         shot("new-agent-sheet")
-        let prompt = app.textViews.matching(identifier: "launch-prompt").firstMatch
+        let prompt = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
         prompt.tap()
         prompt.typeText("hello")
         let worktree = app.switches["task-worktree"].firstMatch

@@ -84,7 +84,7 @@ final class PaneMoveUITests: XCTestCase {
         if worktree.value as? String == "1" {
             worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         }
-        let prompt = app.textViews.matching(identifier: "launch-prompt").firstMatch
+        let prompt = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
         prompt.tap()
         prompt.typeText("hello")
         element("launch-start").tap()

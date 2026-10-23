@@ -198,7 +198,7 @@ final class W3UITests: XCTestCase {
     func testZAgentLaunchApproveReplyAndTurnReview() throws {
         try launch()
         palette("New Agent")
-        let prompt = app.textViews.matching(identifier: "launch-prompt").firstMatch
+        let prompt = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
         prompt.tap()
         prompt.typeText("please ask permission")
