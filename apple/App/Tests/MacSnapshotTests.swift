@@ -38,7 +38,11 @@ final class MacSnapshotTests: XCTestCase {
 
     private func makeWindow(_ root: some View, size: CGSize) -> NSWindow {
         let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
-        UserDefaults.standard.set(theme, forKey: TerminalPreferences.Key.theme)
+        // The argument domain: it wins over the app's saved settings and is never written to
+        // disk, so a snapshot run leaves the real app's theme alone.
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = theme
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
         let window = OffscreenWindow(
             contentRect: NSRect(x: -30000, y: -30000, width: size.width, height: size.height),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

@@ -19,15 +19,22 @@ struct SettingsView: View {
     @State private var query = ""
     @State private var highlight: String?
     @State private var jump: SettingsEntry?
+    #if os(macOS)
+    private static let sidebarWidth: CGFloat = 220
+    #endif
 
     var body: some View {
         #if os(macOS)
         // The window follows the terminal theme, like the workspace (Ghostty `window-theme`).
         ThemedRoot {
-            // System Settings' shape: the sidebar always shown (no toggle), the pane's title in
-            // the detail's titlebar.
-            NavigationSplitView(columnVisibility: .constant(.all)) {
-                Group {
+            // System Settings' shape: a full-height sidebar under the traffic lights (search,
+            // then the panes), no toggle; the pane's title in the titlebar over the form.
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    SettingsSearchField(query: $query)
+                        .padding(.horizontal, DS.Space.m)
+                        .padding(.top, DS.Space.xs)
+                        .padding(.bottom, DS.Space.s)
                     if query.isEmpty {
                         List(SettingsPane.allCases, selection: $pane) { pane in
                             Label(pane.title, systemImage: pane.systemImage)
@@ -45,27 +52,38 @@ struct SettingsView: View {
                         .overlay { if results.isEmpty { SettingsNoResults(query: query) } }
                     }
                 }
+                .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
-                .background(DS.Palette.sidebar)
+                .frame(width: Self.sidebarWidth)
+                .background { Rectangle().fill(DS.Palette.sidebar).ignoresSafeArea() }
                 .chromeContent()
-                .searchable(text: $query, placement: .sidebar, prompt: "Search")
-                .navigationSplitViewColumnWidth(220)
-                .toolbar(removing: .sidebarToggle)
-            } detail: {
-                ScrollViewReader { proxy in
-                    Form { detail(pane).chromeRows() }
-                        .formStyle(.grouped)
-                        .chromeGrouped()
-                        .navigationTitle(pane.title)
-                        .environment(\.settingsHighlight, highlight)
+                Hairline(.vertical, style: DS.Palette.separator)
+                    .ignoresSafeArea()
+                // A stack, so the theme picker pushes with a way back.
+                NavigationStack {
+                    ScrollViewReader { proxy in
+                        Form { detail(pane).chromeRows() }
+                            .formStyle(.grouped)
+                            .chromeGrouped()
+                            .navigationTitle(pane.title)
+                            .environment(\.settingsHighlight, highlight)
                         .onChange(of: jump) { _, entry in
                             guard let entry else { return }
                             pane = entry.section.pane
                             reveal(entry, proxy: proxy)
                         }
+                    }
                 }
             }
-            .navigationSplitViewStyle(.balanced)
+            .toolbar {
+                // The title starts over the form, not over the sidebar: the traffic lights take
+                // the sidebar's first 78 pt.
+                ToolbarItem(placement: .navigation) {
+                    Color.clear.frame(width: Self.sidebarWidth - 78, height: 1).accessibilityHidden(true)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .frame(minWidth: 720, minHeight: 480)
         }
         #else
@@ -202,6 +220,9 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
 private struct ConfigLabel: View {
     let title: String
     let key: String
+    #if os(macOS)
+    @State private var showsKey = false
+    #endif
 
     init(_ title: String, key: String) {
         self.title = title
@@ -209,12 +230,22 @@ private struct ConfigLabel: View {
     }
 
     var body: some View {
+        // The key is reference, not a label: in search results and the tooltip, and under the
+        // title while ⌥ is held on the Mac.
         VStack(alignment: .leading, spacing: 1) {
             Text(title)
-            Text(key)
-                .font(DS.Font.literalSmall)
-                .foregroundStyle(DS.Palette.textTertiary)
+            #if os(macOS)
+            if showsKey {
+                Text(key)
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(DS.Palette.textTertiary)
+            }
+            #endif
         }
+        .help("Ghostty: \(key)")
+        #if os(macOS)
+        .onModifierKeysChanged(mask: .option, initial: true) { _, keys in showsKey = keys.contains(.option) }
+        #endif
     }
 }
 
@@ -441,6 +472,37 @@ private struct AboutSection: View {
         }
     }
 }
+
+#if os(macOS)
+/// The sidebar's search (System Settings': above the panes, under the traffic lights).
+private struct SettingsSearchField: View {
+    @Binding var query: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: DS.Space.row) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(DS.Palette.textTertiary)
+            TextField("Search", text: $query)
+                .textFieldStyle(.plain)
+                .focused($focused)
+                .onKeyPress(.escape) {
+                    query = ""
+                    return .handled
+                }
+            if !query.isEmpty {
+                Button("Clear", systemImage: "xmark.circle.fill") { query = "" }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(DS.Palette.textTertiary)
+            }
+        }
+        .padding(.horizontal, DS.Space.s)
+        .frame(height: 28)
+        .fieldSurface(isFocused: focused)
+    }
+}
+#endif
 
 /// A section named like its pane: the Mac's titlebar already says it, iOS's one form needs it.
 private struct PaneSectionTitle: View {
