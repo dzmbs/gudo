@@ -632,6 +632,7 @@ private struct TabRow: View {
                     }
                 }
                 Spacer(minLength: DS.Space.xs)
+                TabPresence(workspace: workspace, panes: tab.root.panes)
                 if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(shortcut)")
                         .font(DS.Font.meta)
@@ -656,7 +657,8 @@ private struct TabRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
-        .accessibilityValue(running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "")
+        .accessibilityValue([running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "", TabPresence.value(workspace, tab.root.panes)]
+            .filter { !$0.isEmpty }.joined(separator: "; "))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
         .rowActions(actions, id: ref.description, name: title, perform: perform) {

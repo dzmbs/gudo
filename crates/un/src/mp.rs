@@ -473,6 +473,18 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                                 presence.actor.principal, presence.focus
                             );
                         }
+                        MultiplayerEvent::Decided { decided } => {
+                            let by = conn
+                                .client
+                                .participant_list()
+                                .into_iter()
+                                .find(|p| p.actor == decided.decided_by)
+                                .map_or_else(|| hex(&decided.decided_by.device.0[..4]), |p| p.name);
+                            println!(
+                                "request {} in pane {} decided by {by}",
+                                decided.request_id, decided.pane_id
+                            );
+                        }
                         MultiplayerEvent::Lease { lease } => println!(
                             "pane {}: {}",
                             lease.pane_id,
@@ -542,45 +554,56 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                 bail!("the host's helper is too old for live drafts; update it");
             }
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
-            let (listener, mut events) = MultiplayerEventQueue::channel();
-            conn.client.set_multiplayer_listener(listener);
             conn.client.set_device_class(DeviceClass::Terminal);
             conn.client.set_view(Some(pane_id), vec![pane_id]);
             let pause = Duration::from_secs_f64(1.0 / cps.max(1.0));
-            let mut typed = String::new();
-            for c in text.chars() {
-                typed.push(c);
-                conn.client.set_draft(Some(Draft {
-                    pane_id,
-                    source: DraftSource::Composer,
-                    text: typed.clone(),
-                    caret: typed.chars().count() as u32,
-                }));
-                tokio::time::sleep(pause).await;
-            }
-            println!(
-                "drafted {} characters in pane {pane_id}",
-                typed.chars().count()
-            );
-            if let Some(next) = then_focus {
-                let me = conn.client.me().map(|m| m.actor.principal);
-                let followed = |p: &Peer| me.is_some() && p.following == me;
-                let mut by = conn.client.peers().1.into_iter().find(followed);
-                while by.is_none() {
-                    by = match events.recv().await {
-                        Some(MultiplayerEvent::PeerChanged { peer }) => {
-                            followed(&peer).then_some(peer)
-                        }
-                        Some(MultiplayerEvent::Peers { peers, .. }) => {
-                            peers.into_iter().find(followed)
-                        }
-                        Some(_) => None,
-                        None => bail!("disconnected"),
-                    };
+            let me = conn.client.me().map(|m| m.actor.principal);
+            let follower = || -> Option<Peer> {
+                conn.client
+                    .peers()
+                    .1
+                    .into_iter()
+                    .find(|p| me.is_some() && p.following == me)
+            };
+            // With --then-focus, type it again and again until someone follows.
+            'typing: loop {
+                let mut typed = String::new();
+                for c in text.chars() {
+                    typed.push(c);
+                    conn.client.set_draft(Some(Draft {
+                        pane_id,
+                        source: DraftSource::Composer,
+                        text: typed.clone(),
+                        caret: typed.chars().count() as u32,
+                    }));
+                    tokio::time::sleep(pause).await;
                 }
-                println!("followed by {}", by.map(|p| p.name).unwrap_or_default());
-                conn.client.set_view(Some(PaneId(next)), vec![PaneId(next)]);
+                println!(
+                    "drafted {} characters in pane {pane_id}",
+                    typed.chars().count()
+                );
+                if then_focus.is_none() {
+                    break;
+                }
+                for _ in 0..40 {
+                    if follower().is_some() {
+                        break 'typing;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+            if let Some(next) = then_focus.map(PaneId) {
+                let name = follower().map(|p| p.name).unwrap_or_default();
+                println!("followed by {name}");
+                conn.client.set_view(Some(next), vec![next]);
                 println!("moved to pane {next}");
+                for _ in 0..300 {
+                    if follower().is_some_and(|p| p.focus == Some(next)) {
+                        println!("{name} came along to pane {next}");
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             }
             tokio::time::sleep(Duration::from_secs(hold)).await;
             conn.client.set_draft(None);

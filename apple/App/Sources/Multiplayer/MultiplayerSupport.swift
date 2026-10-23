@@ -66,6 +66,30 @@ extension UnnamedCore.Participant {
     }
 }
 
+extension UnnamedCore.Peer {
+    /// The same avatar and color as the person's participant entry.
+    var avatar: DesignSystem.Participant {
+        DesignSystem.Participant(
+            id: "\(peer)", name: name.isEmpty ? "Guest" : name, role: UnnamedCore.Participant.avatarRole(roles),
+            isActive: typing != nil, hue: UnnamedCore.Participant.hue(for: actor.principal))
+    }
+
+    var firstName: String {
+        name.split(separator: " ").first.map(String.init) ?? (name.isEmpty ? "Guest" : name)
+    }
+
+    /// "iPad", "Mac", … or nil when the device did not say.
+    var deviceName: String? {
+        switch device {
+        case .phone: "iPhone"
+        case .tablet: "iPad"
+        case .desktop: "Mac"
+        case .terminal: "Terminal"
+        case .unknown: nil
+        }
+    }
+}
+
 extension MultiplayerSession.Notice {
     var toast: Toast {
         let image: String = switch kind {
@@ -75,6 +99,8 @@ extension MultiplayerSession.Notice {
         case .revoked: "person.crop.circle.badge.xmark"
         case .alreadyDecided: "checkmark.seal"
         case .forbidden, .failed: "exclamationmark.triangle.fill"
+        case .arrived: "person.crop.circle.badge.plus"
+        case .left: "person.crop.circle.badge.minus"
         }
         let granted: Bool = if case .controlGranted = kind { true } else { false }
         return Toast(message, systemImage: image, style: isFailure ? .failure : granted ? .success : .neutral)
@@ -137,6 +163,7 @@ nonisolated enum MockMultiplayer {
         let session = MultiplayerSession.preview(
             me: me, participants: people,
             leases: [Lease(paneId: 3, holder: holder, sinceMs: now - 120_000, mode: .leased)],
+            peers: people.enumerated().map { index, person in peer(person, id: UInt64(index + 1)) },
             client: MockMultiplayerClient())
         session.seed(grants: grants, devices: devices, audit: audit,
                      leaseRequests: UserDefaults.standard.bool(forKey: "mockLeaseRequest")
@@ -145,6 +172,18 @@ nonisolated enum MockMultiplayer {
                      approvalPolicy: ApprovalPolicy(mode: .twoPerson, maxRisk: .edits))
         return session
     }()
+
+    /// A participant's live presence; Mira is writing a prompt for Claude Code.
+    static func peer(_ person: UnnamedCore.Participant, id: UInt64) -> Peer {
+        let drafting = person.actor == mira
+        return Peer(
+            peer: id, rev: id, actor: person.actor, name: person.name, roles: person.roles,
+            device: drafting ? .tablet : .desktop, sinceMs: person.sinceMs, state: person.state, focus: person.focus,
+            viewport: person.focus.map { PeerViewport(paneId: $0, fromBottom: person.actor == jon ? 120 : 0, rows: 40) },
+            typing: drafting ? 3 : nil,
+            draft: drafting ? Draft(paneId: 3, source: .composer, text: "Split the parser into a lexer and a recursive-descent pass, keep the error spans", caret: 82) : nil,
+            following: person.actor == sam ? mira.principal : nil)
+    }
 
     /// `-mockKnock YES`: someone at the door.
     static let knock = Knock(knockId: 1, actor: Actor(principal: "e5".padding(toLength: 32, withPad: "0", startingAt: 0), device: "e5".padding(toLength: 64, withPad: "5", startingAt: 0)),

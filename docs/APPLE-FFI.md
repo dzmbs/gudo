@@ -215,7 +215,7 @@ Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerE
 | `DaemonClient.join(invite:config:listener:)`, `joinWith(…options:…)` | join as a guest by link or QR text (any case, `#` fragment form too) |
 | `inspectInvite(invite:) -> InviteInfo` | join card without dialling: inviter, label, roles, scope, expiry, uses |
 | `createInvite(options: InviteOptions) -> CreatedInvite` | `roles: [Role]` (`.viewer / .prompter / .driver / .approver / .owner`), `scope` (`.daemon / .session / .tab / .pane`), `ttlSecs`, `maxUses`, `delegate`, `label`, `inviter`; returns `link`, `qrPayload` (upper-cased link → QR alphanumeric mode), `grantId`, `expiresMs`. A guest with `delegate` signs a narrower child |
-| `setMultiplayerListener(listener:)` | `MultiplayerEvent.joined / participants / presence / lease / leaseRequested / inputRejected / forbidden / decided / alreadyDecided / revoked` |
+| `setMultiplayerListener(listener:)` | `MultiplayerEvent.joined / participants / presence / lease / leaseRequested / inputRejected / forbidden / decided / alreadyDecided / revoked / peers / peerChanged` |
 | `me()`, `participantList()`, `lease(paneId:)` | last pushed state, no round trip |
 | `whoAmI()`, `participants()`, `setName(name:)`, `leases()` | |
 | `takeControl(paneId:force:)`, `giveControl(paneId:to:)`, `answerControl(paneId:give:)`, `releaseControl(paneId:)` | `LeaseOutcome.granted / .pending(holder:) / .kept` |
@@ -454,7 +454,7 @@ source ../../../target/ssh-test/env && swift test --filter SshTests
   only the refusal path is tested here (the daemon's `tests/it/vscode.rs` covers the install
   with a fake update service). The serve-web page in a real `WKWebView` is not tested.
 - `launchAgentPane`'s prompt-after-idle is not tested against a real Claude/Codex.
-- Full `Presence` (cursor, viewport) is not sent from Swift yet; only `setTyping`.
+- Selections are not shared (live presence carries focus, viewport, drafts and following).
 - `HostdBinary` data is inflated and re-gzipped for upload (≈0.3 s for 19 MB); the `ssh` crate
   could take pre-gzipped bytes directly.
 - macOS daemon builds for bootstrapping Mac hosts are not produced by `xtask` (the `ssh` crate

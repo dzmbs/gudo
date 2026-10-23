@@ -95,6 +95,11 @@ private func person(_ actor: Actor, _ name: String, _ roles: [Role], focus: UInt
     UnnamedCore.Participant(actor: actor, name: name, roles: roles, scope: .daemon, grantId: nil, sinceMs: 1, state: .active, focus: focus, typing: typing, cursor: nil)
 }
 
+private func peer(_ id: UInt64, rev: UInt64, _ actor: Actor, _ name: String, focus: UInt64? = nil, typing: UInt64? = nil, draft: Draft? = nil) -> Peer {
+    Peer(peer: id, rev: rev, actor: actor, name: name, roles: [.driver], device: .tablet, sinceMs: 1, state: .active,
+         focus: focus, viewport: nil, typing: typing, draft: draft, following: nil)
+}
+
 /// Waits for the session's event pump (events hop to the main actor in order).
 @MainActor
 private func settle(_ condition: () -> Bool) async throws {
@@ -154,6 +159,46 @@ private func settle(_ condition: () -> Bool) async throws {
         #expect(session.others.first?.typing == true)
         #expect(session.people(in: 2).count == 1)
         #expect(session.people(in: 1).isEmpty)
+    }
+
+    @Test func livePresenceShowsDraftsTypingAndTheLeader() {
+        let session = MultiplayerSession()
+        session.apply(.joined(info: info(ownerActor, "Alex", [.owner])))
+        session.apply(.participants(participants: [person(ownerActor, "Alex", [.owner]), person(guestActor, "Mira", [.driver])]))
+        let draft = Draft(paneId: 3, source: .composer, text: "fix it", caret: 6)
+        session.apply(.peers(you: 1, peers: [peer(1, rev: 1, ownerActor, "Alex"), peer(2, rev: 2, guestActor, "Mira", focus: 3)]))
+        session.apply(.peerChanged(peer: peer(2, rev: 5, guestActor, "Mira", focus: 3, typing: 3, draft: draft)))
+        #expect(session.drafts(in: 3).map(\.name) == ["Mira"])
+        #expect(session.typists(in: 3).count == 1)
+        #expect(session.others.first?.typing == true, "the participant list follows")
+        // An older revision never wins.
+        session.apply(.peerChanged(peer: peer(2, rev: 4, guestActor, "Mira")))
+        #expect(session.drafts(in: 3).count == 1)
+        // Mira on two devices: the one active last leads.
+        let ipad = Actor(principal: "bb", device: String(repeating: "c", count: 64))
+        session.apply(.peerChanged(peer: peer(3, rev: 9, ipad, "Mira", focus: 7)))
+        session.follow("bb")
+        #expect(session.leaderPeer?.peer == 3 && session.leaderPeer?.focus == 7)
+        session.follow(nil)
+        #expect(session.leaderPeer == nil)
+    }
+
+    @Test func peopleComingAndGoingAreAnnouncedOncePerPerson() {
+        let session = MultiplayerSession()
+        session.apply(.joined(info: info(ownerActor, "Alex", [.owner])))
+        session.apply(.participants(participants: [person(ownerActor, "Alex", [.owner])]))
+        #expect(session.notice == nil, "the first list is not news")
+        let mira = person(guestActor, "Mira", [.driver])
+        session.apply(.participants(participants: [person(ownerActor, "Alex", [.owner]), mira]))
+        #expect(session.notice?.message == "Mira joined")
+        let notice = session.notice
+        // Her second device is not news.
+        var ipad = mira
+        ipad.actor = Actor(principal: "bb", device: String(repeating: "c", count: 64))
+        session.apply(.participants(participants: [person(ownerActor, "Alex", [.owner]), mira, ipad]))
+        #expect(session.notice == notice)
+        session.apply(.participants(participants: [person(ownerActor, "Alex", [.owner])]))
+        #expect(session.notice?.message == "Mira left")
     }
 
     @Test func takeControlPendingThenGrantedPostsANotice() async throws {
