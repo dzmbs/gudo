@@ -30,7 +30,10 @@ nonisolated public struct Toast: Identifiable, Equatable, Sendable {
 
     public static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }
 
-    var duration: Duration { action == nil ? DS.Motion.toastDuration : .seconds(5) }
+    var duration: Duration {
+        if action != nil { return .seconds(5) }
+        return style == .failure ? DS.Motion.bannerErrorDuration : DS.Motion.toastDuration
+    }
 }
 
 /// Shows one toast at a time; a new toast replaces the current one.
@@ -42,64 +45,92 @@ public final class ToastCenter {
     public init() {}
 
     public func show(_ toast: Toast) {
-        withAnimation(DS.Motion.indicator) { current = toast }
+        withAnimation(DS.Motion.banner) { current = toast }
         dismissTask?.cancel()
         dismissTask = Task { [weak self] in
             guard (try? await Task.sleep(for: toast.duration)) != nil else { return }
-            withAnimation(DS.Motion.overlay) { self?.current = nil }
+            withAnimation(DS.Motion.banner) { self?.current = nil }
         }
     }
 
     public func dismiss() {
         dismissTask?.cancel()
-        withAnimation(DS.Motion.overlay) { current = nil }
+        withAnimation(DS.Motion.banner) { current = nil }
     }
 }
 
-private struct ToastHost: ViewModifier {
-    let center: ToastCenter
+/// The banner: one line in a glass capsule that drops from the top (iOS's own system banners,
+/// it reads on any background; the action is the accent's word after a hairline. A tap, or a
+/// flick up, dismisses it.
+public struct Banner: View {
+    let toast: Toast
+    let dismiss: () -> Void
+    @State private var drag: CGFloat = 0
 
-    func body(content: Content) -> some View {
-        content.overlay(alignment: .top) {
-            if let toast = center.current {
-                HStack(spacing: DS.Space.s) {
-                    if let image = toast.systemImage {
-                        Image(systemName: image)
-                            .foregroundStyle(color(toast.style))
-                    }
-                    Text(toast.message)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(2)
-                    if let action = toast.action {
-                        Button(action.title) {
-                            center.dismiss()
-                            action.perform()
-                        }
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(DS.Palette.accent)
-                        .buttonStyle(.plain)
-                        .padding(.leading, DS.Space.xs)
-                        .accessibilityIdentifier("toast-action")
-                    }
-                }
-                .chromeContent()
-                .padding(.horizontal, DS.Space.l)
-                .padding(.vertical, DS.Space.gap10)
-                .floatingCapsule(interactive: true)
-                // A tap dismisses; with a button only the button takes taps.
-                .gesture(TapGesture().onEnded { center.dismiss() }, including: toast.action == nil ? .all : .subviews)
-                .padding(.top, DS.Space.s)
-                .movingTransition(.top)
-                .id(toast.id)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("toast")
-                .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
-            }
-        }
+    public init(_ toast: Toast, dismiss: @escaping () -> Void) {
+        self.toast = toast
+        self.dismiss = dismiss
     }
 
-    private func color(_ style: Toast.Style) -> ChromeStyle {
-        switch style {
+    public var body: some View {
+        HStack(spacing: DS.Space.gap10) {
+            if let image = toast.systemImage {
+                // The disc is the circle: a circled symbol inside it would be a ring in a ring.
+                Image(systemName: image.replacingOccurrences(of: ".circle.fill", with: "").replacingOccurrences(of: ".circle", with: ""))
+                    .font(.footnote.weight(.bold))
+                    .imageScale(.small)
+                    .foregroundStyle(tint)
+                    .frame(width: 24, height: 24)
+                    .background(tint.opacity(0.16), in: .circle)
+                    .accessibilityHidden(true)
+            }
+            Text(toast.message)
+                .font(DS.Font.banner)
+                .foregroundStyle(DS.Palette.text)
+                // One line; a failure may take a second, since its reason is the point.
+                .lineLimit(toast.style == .failure ? 2 : 1)
+                .truncationMode(.middle)
+            if let action = toast.action {
+                Hairline(.vertical)
+                    .frame(height: 16)
+                Button(action.title) {
+                    dismiss()
+                    action.perform()
+                }
+                .font(DS.Font.banner.weight(.semibold))
+                .foregroundStyle(DS.Palette.accent)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("toast-action")
+            }
+        }
+        .padding(.leading, toast.systemImage == nil ? DS.Space.l : DS.Space.s)
+        .padding(.trailing, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
+        .frame(minHeight: 40)
+        .chromeContent()
+        .floatingCapsule(interactive: true)
+        // As wide as its words, up to a line a glance takes in.
+        .frame(maxWidth: 560)
+        .offset(y: min(0, drag))
+        // A tap dismisses; with a button only the button takes taps.
+        .gesture(TapGesture().onEnded { dismiss() }, including: toast.action == nil ? .all : .subviews)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { drag = $0.translation.height }
+                .onEnded { value in
+                    if value.translation.height < -16 || value.velocity.height < -300 {
+                        dismiss()
+                    } else {
+                        withAnimation(DS.Motion.banner) { drag = 0 }
+                    }
+                })
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(toast.message)
+        .accessibilityIdentifier("toast")
+    }
+
+    private var tint: ChromeStyle {
+        switch toast.style {
         case .neutral: DS.Palette.textSecondary
         case .success: DS.Palette.done
         case .failure: DS.Palette.error
@@ -107,8 +138,46 @@ private struct ToastHost: ViewModifier {
     }
 }
 
+private struct ToastHost: ViewModifier {
+    let center: ToastCenter
+    let topInset: CGFloat
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .top) {
+            if let toast = center.current {
+                Banner(toast) { center.dismiss() }
+                    .padding(.horizontal, DS.Space.l)
+                    .padding(.top, topInset)
+                    .transition(BannerTransition.value)
+                    .id(toast.id)
+                    .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
+            }
+        }
+    }
+}
+
+/// From above with a slight grow, as the system's own banners arrive; a fade under Reduce
+/// Motion.
+private struct BannerTransition: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let active: Bool
+
+    static var value: AnyTransition {
+        .modifier(active: BannerTransition(active: true), identity: BannerTransition(active: false))
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(active ? 0 : 1)
+            .scaleEffect(active && !reduceMotion ? 0.9 : 1, anchor: .top)
+            .offset(y: active && !reduceMotion ? -24 : 0)
+            .blur(radius: active && !reduceMotion ? 4 : 0)
+    }
+}
+
 public extension View {
-    func toastHost(_ center: ToastCenter) -> some View {
-        modifier(ToastHost(center: center))
+    /// Banners for `center`, `topInset` under the top safe area (clear of a toolbar's band).
+    func toastHost(_ center: ToastCenter, topInset: CGFloat = DS.Space.s) -> some View {
+        modifier(ToastHost(center: center, topInset: topInset))
     }
 }
