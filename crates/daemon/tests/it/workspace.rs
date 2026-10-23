@@ -467,7 +467,8 @@ async fn detects_listening_ports_and_printed_urls_per_pane() {
     .await
     .expect("the agent's listener is up");
 
-    // A server nobody printed a URL for is probed.
+    // A server nobody printed a URL for is probed. Python prints `http://[::]:port/`, which
+    // would race the probe, so its output is discarded.
     let port2 = free_port();
     let OpOutcome::PaneCreated { pane_id: pane2 } = c
         .op(LayoutOp::Split {
@@ -475,10 +476,9 @@ async fn detects_listening_ports_and_printed_urls_per_pane() {
             axis: Axis::Horizontal,
             launch: PaneLaunch::Command {
                 argv: vec![
-                    "python3".into(),
-                    "-m".into(),
-                    "http.server".into(),
-                    port2.to_string(),
+                    "sh".into(),
+                    "-c".into(),
+                    format!("exec python3 -m http.server {port2} >/dev/null 2>&1"),
                 ],
                 cwd: None,
             },
