@@ -1913,13 +1913,15 @@ this say `DaemonFeatures::BROWSER`.
 The callers are `un-hook mcp` (tools `browser_navigate`, `browser_snapshot`, `browser_find`,
 `browser_get_text`, `browser_click`, `browser_double_click`, `browser_hover`, `browser_type`,
 `browser_fill`, `browser_press`, `browser_scroll`, `browser_scroll_to`, `browser_wait`,
-`browser_screenshot`, `browser_zoom`, `browser_tabs`, `browser_console`, `browser_network`;
-read-only ones carry `readOnlyHint`) and `un-hook browser <verb> [json | key=value …]` for
+`browser_screenshot`, `browser_zoom`, `browser_tabs`, `browser_dialog`, `browser_upload`,
+`browser_console`, `browser_network`; read-only ones carry `readOnlyHint`) and `un-hook browser <verb> [json | key=value …]` for
 shells (Codex, scripts). Semantics follow Anthropic's browser toolset: `role "name" [ref_N]`
 snapshots, targets `{"type":"ref","ref":…}` or `{"type":"coordinate","x","y"}` in screenshot
 pixels, a stale ref is an error asking for a new snapshot, actions answer with what changed.
 The app answers JSON `{"text", "image"?: {"data", "mimeType"}}`; `save_to_file` writes a long
-snapshot to a file on the host. The app runs them on the browser leaf beside the agent's pane
+snapshot to a file on the host. `browser_upload` reads its `paths` on the host and sends
+`files: [{name, mime_type, data}]` (base64), at most 3 MB in all so the call fits one frame
+(hook lines may be `MAX_FRAME_LEN` long). The app runs them on the browser leaf beside the agent's pane
 (opened by the first navigate): the user sees each step (cursor and highlight), can take over,
 and approves purchases and form submits on sign-in or payment pages, or types passwords
 themselves; the call waits meanwhile. `crates/agents/skills/browser/SKILL.md` teaches agents
