@@ -566,8 +566,32 @@ private struct PersonRow: View {
 
     var body: some View {
         let isMe = person.actor.principal == session.myPrincipal
+        HStack(spacing: DS.Space.s) {
+            info(isMe: isMe)
+            if !isMe, session.hasLivePresence {
+                let following = session.following == person.actor.principal
+                Button(following ? "Following" : "Follow") {
+                    session.follow(following ? nil : person.actor.principal)
+                }
+                .buttonStyle(QuietButtonStyle(prominent: following))
+                .accessibilityIdentifier("follow-\(person.name)")
+                .accessibilityValue(following ? "on" : "off")
+            }
+        }
+    }
+
+    /// "following you", "on iPad": what live presence adds to the row.
+    private var liveDetail: String? {
+        let theirs = session.peers.values.filter { $0.actor.device == person.actor.device }
+        var parts: [String] = []
+        if let device = theirs.compactMap(\.deviceName).first { parts.append(device) }
+        if let me = session.myPrincipal, theirs.contains(where: { $0.following == me }) { parts.append("following you") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func info(isMe: Bool) -> some View {
         let driving = session.leases.values.filter { $0.holder == person.actor.principal && $0.mode == .leased }
-        HStack(spacing: DS.Space.m) {
+        return HStack(spacing: DS.Space.m) {
             PresenceAvatar(person.avatar, size: 30)
                 .opacity(person.state == .away ? 0.45 : 1)
             VStack(alignment: .leading, spacing: 2) {
@@ -586,7 +610,7 @@ private struct PersonRow: View {
                             .fixedSize()
                     }
                 }
-                Text(person.whereabouts(paneTitle: workspace.paneTitle))
+                Text([person.whereabouts(paneTitle: workspace.paneTitle), liveDetail].compactMap(\.self).joined(separator: " · "))
                     .font(DS.Font.rowSubtitle)
                     .foregroundStyle(person.typing ? AnyShapeStyle(person.avatar.color) : AnyShapeStyle(DS.Palette.textSecondary))
                     .lineLimit(1)

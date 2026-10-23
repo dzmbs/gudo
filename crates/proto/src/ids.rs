@@ -295,6 +295,10 @@ bitset! {
         /// `ServerCtl::Browser` pushes and answers calls with `ClientCtl::BrowserResult`
         /// (see `proto::browser`).
         BROWSER = 13;
+        /// Wants live presence (`ServerCtl::Peers`) and may send `ClientCtl::Peer`: drafts,
+        /// viewports, following, heartbeats (see `proto::peer`). Silent such clients are
+        /// marked away, then disconnected.
+        PRESENCE = 14;
     }
 }
 
@@ -326,5 +330,8 @@ bitset! {
         BROWSER = 8;
         /// Answers `WorkspaceRequest::AgentMcpCommands`.
         AGENT_MCP = 9;
+        /// Live presence: answers `ClientCtl::Peer` and pushes `ServerCtl::Peers` to clients
+        /// with `Caps::PRESENCE` (see `proto::peer`).
+        PRESENCE = 10;
     }
 }

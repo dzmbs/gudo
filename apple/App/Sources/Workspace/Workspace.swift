@@ -492,6 +492,11 @@ final class Workspace {
         }
         pane.view.onFocus = { [weak self, weak pane] in
             guard let self, let pane else { return }
+            // A draft belongs to one pane: the old pane's goes when focus moves.
+            if keyBar.target !== pane.view { multiplayer?.clearDraft() }
+            keyBar.onDraft = { [weak self] text, caret, source in
+                self?.multiplayer?.setDraft(id.rawValue, source: source, text: text, caret: caret)
+            }
             keyBar.target = pane.view
             keyBar.assist = pane.backend as? any LineAssist
             keyBar.update(context: keyBarContext(of: pane))

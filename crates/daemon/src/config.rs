@@ -164,6 +164,7 @@ pub struct Config {
     pub push: PushConfig,
     /// A pane's control lease moves to someone who asked for it once the holder has not typed
     pub lease_idle: Duration,
+    pub presence: PresenceTimes,
     /// Command history for completion and the line editor (`[history]` in `config.toml`).
     pub history: crate::assist::HistoryConfig,
     pub artifacts: ArtifactLimits,
@@ -301,6 +302,7 @@ impl Config {
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
+            presence: PresenceTimes::default(),
             artifacts: ArtifactLimits::default(),
             askpass: AskpassConfig::default(),
             history: crate::assist::HistoryConfig::default(),
@@ -590,6 +592,29 @@ struct PushSection {
     delay_ms: Option<u64>,
     live_activity: Option<bool>,
     activity_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PresenceTimes {
+    /// "Typing" lasts this long after the last keystroke or draft change.
+    pub typing: Duration,
+    /// No input, focus or draft change for this long: idle.
+    pub idle: Duration,
+    /// A presence client silent this long (no heartbeat, no message): away.
+    pub away: Duration,
+    /// Silent this long: the connection is dropped, so no ghost lingers.
+    pub gone: Duration,
+}
+
+impl Default for PresenceTimes {
+    fn default() -> Self {
+        Self {
+            typing: Duration::from_secs(3),
+            idle: Duration::from_secs(120),
+            away: Duration::from_secs(25),
+            gone: Duration::from_secs(60),
+        }
+    }
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

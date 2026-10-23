@@ -24,6 +24,7 @@
 //! un daemon upgrade <file>    send a new build (raw or .gz) to the daemon, which restarts
 //! un who [--watch]            un take-control [--force] [--wait]   un release-control
 //! un prompt <text>            un grants [--devices]   un revoke <grant>|--device K   un audit
+//! un draft <text> [--cps N] [--then-focus PANE] [--hold S]   a live draft others watch
 //! ```
 
 use std::io::Write;

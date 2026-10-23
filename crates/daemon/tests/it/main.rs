@@ -13,6 +13,7 @@ mod installs;
 mod multiplayer;
 mod multiplayer_mp2;
 mod notify;
+mod presence;
 mod pull;
 mod relays;
 mod repos;

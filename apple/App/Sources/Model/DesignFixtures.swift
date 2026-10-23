@@ -74,6 +74,10 @@ enum DesignFixtures {
         case "hosts": model.destination = .hosts
         case "inbox": model.destination = .inbox
         case "palette": model.isPaletteShown = true
+        case "host-switcher":
+            // Once the toolbar's button exists to anchor it.
+            try? await Task.sleep(for: .seconds(1))
+            model.isHostSwitcherShown = true
         case "palette-search":
             model.isSearchShown = true
             model.searchNeedle = "error"
@@ -105,6 +109,23 @@ enum DesignFixtures {
             }
             try? await Task.sleep(for: .seconds(0.6))
             withAnimation(DS.Motion.snappy) { feed.simulate("a4", state: .done, summary: "The reconnect test waited on a stale timer; fixed.") }
+        case "toast":
+            try? await Task.sleep(for: .seconds(1))
+            model.toasts.show(Toast("Closed “cargo test”", systemImage: "xmark.circle.fill", action: Toast.Action("Undo") {}))
+        case "presence-notice":
+            // Someone arrives in a shared session (`-mockPresence YES`).
+            try? await Task.sleep(for: .seconds(1))
+            if let session = workspace.multiplayer {
+                model.toasts.show(PresenceNotices.toast(arrived: ["Mira Holt"], in: session))
+            }
+        case "port-offer":
+            // The dev-server offer with a banner over it: both clear of the panes' top bars.
+            try? await Task.sleep(for: .seconds(1))
+            if let ports = model.ports as? MockPortSource { ports.offer = ports.ports.first }
+            model.toasts.show(Toast("Copied localhost:5173", systemImage: "doc.on.doc"))
+        case "toast-error":
+            try? await Task.sleep(for: .seconds(1))
+            model.toasts.show(Toast("Couldn't reach devbox: connection refused", systemImage: "exclamationmark.triangle.fill", style: .failure))
         case "reconnect": model.connectionOverride = .reconnecting(attempt: 3, since: Date(timeIntervalSinceNow: -14))
         case "overlays":
             let panes = workspace.session.activeTab?.root.panes ?? []

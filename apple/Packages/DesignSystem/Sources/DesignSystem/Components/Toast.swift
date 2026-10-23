@@ -20,6 +20,8 @@ nonisolated public struct Toast: Identifiable, Equatable, Sendable {
     public var systemImage: String?
     public var style: Style
     public var action: Action?
+    /// Someone the banner is about (joined, left): their avatar leads instead of the symbol.
+    public var person: Participant?
 
     public init(_ message: String, systemImage: String? = nil, style: Style = .neutral, action: Action? = nil) {
         self.message = message
@@ -59,9 +61,9 @@ public final class ToastCenter {
     }
 }
 
-/// The banner: one line in a glass capsule that drops from the top (iOS's own system banners,
-/// it reads on any background; the action is the accent's word after a hairline. A tap, or a
-/// flick up, dismisses it.
+/// address bar, an editor's bar, pane headers). The style's symbol sits in a small tinted disc
+/// so it reads on any background; the action is the accent's word after a hairline. A tap, or a
+/// flick down, dismisses it; taps beside it reach what is under it.
 public struct Banner: View {
     let toast: Toast
     let dismiss: () -> Void
@@ -74,7 +76,10 @@ public struct Banner: View {
 
     public var body: some View {
         HStack(spacing: DS.Space.gap10) {
-            if let image = toast.systemImage {
+            if let person = toast.person {
+                PresenceAvatar(person, size: 24)
+                    .accessibilityHidden(true)
+            } else if let image = toast.systemImage {
                 // The disc is the circle: a circled symbol inside it would be a ring in a ring.
                 Image(systemName: image.replacingOccurrences(of: ".circle.fill", with: "").replacingOccurrences(of: ".circle", with: ""))
                     .font(.footnote.weight(.bold))
@@ -103,7 +108,7 @@ public struct Banner: View {
                 .accessibilityIdentifier("toast-action")
             }
         }
-        .padding(.leading, toast.systemImage == nil ? DS.Space.l : DS.Space.s)
+        .padding(.leading, toast.systemImage == nil && toast.person == nil ? DS.Space.l : DS.Space.s)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.s)
         .frame(minHeight: 40)
@@ -111,14 +116,14 @@ public struct Banner: View {
         .floatingCapsule(interactive: true)
         // As wide as its words, up to a line a glance takes in.
         .frame(maxWidth: 560)
-        .offset(y: min(0, drag))
+        .offset(y: max(0, drag))
         // A tap dismisses; with a button only the button takes taps.
         .gesture(TapGesture().onEnded { dismiss() }, including: toast.action == nil ? .all : .subviews)
         .simultaneousGesture(
             DragGesture(minimumDistance: 8)
                 .onChanged { drag = $0.translation.height }
                 .onEnded { value in
-                    if value.translation.height < -16 || value.velocity.height < -300 {
+                    if value.translation.height > 16 || value.velocity.height > 300 {
                         dismiss()
                     } else {
                         withAnimation(DS.Motion.banner) { drag = 0 }
@@ -140,14 +145,14 @@ public struct Banner: View {
 
 private struct ToastHost: ViewModifier {
     let center: ToastCenter
-    let topInset: CGFloat
+    let bottomInset: CGFloat
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .top) {
+        content.overlay(alignment: .bottom) {
             if let toast = center.current {
                 Banner(toast) { center.dismiss() }
                     .padding(.horizontal, DS.Space.l)
-                    .padding(.top, topInset)
+                    .padding(.bottom, bottomInset)
                     .transition(BannerTransition.value)
                     .id(toast.id)
                     .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
@@ -156,8 +161,7 @@ private struct ToastHost: ViewModifier {
     }
 }
 
-/// From above with a slight grow, as the system's own banners arrive; a fade under Reduce
-/// Motion.
+/// From below with a slight grow; a fade under Reduce Motion.
 private struct BannerTransition: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let active: Bool
@@ -169,15 +173,15 @@ private struct BannerTransition: ViewModifier {
     func body(content: Content) -> some View {
         content
             .opacity(active ? 0 : 1)
-            .scaleEffect(active && !reduceMotion ? 0.9 : 1, anchor: .top)
-            .offset(y: active && !reduceMotion ? -24 : 0)
+            .scaleEffect(active && !reduceMotion ? 0.9 : 1, anchor: .bottom)
+            .offset(y: active && !reduceMotion ? 24 : 0)
             .blur(radius: active && !reduceMotion ? 4 : 0)
     }
 }
 
 public extension View {
-    /// Banners for `center`, `topInset` under the top safe area (clear of a toolbar's band).
-    func toastHost(_ center: ToastCenter, topInset: CGFloat = DS.Space.s) -> some View {
-        modifier(ToastHost(center: center, topInset: topInset))
+    /// Banners for `center`, `bottomInset` over the bottom safe area (and the keyboard).
+    func toastHost(_ center: ToastCenter, bottomInset: CGFloat = DS.Space.l) -> some View {
+        modifier(ToastHost(center: center, bottomInset: bottomInset))
     }
 }

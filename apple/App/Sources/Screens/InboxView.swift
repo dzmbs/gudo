@@ -210,18 +210,25 @@ struct InboxView: View {
                                 .chromeRows()
                         }
                     } header: {
-                        SectionTitle("Asking to join", count: knocks.count)
+                        SectionTitle("Asking to join", count: knocks.count, small: true)
                     }
                 }
                 ForEach(sections(items), id: \.title) { section in
                     Section {
                         ForEach(section.items) { item in row(item) }
                     } header: {
-                        SectionTitle(section.title, count: section.items.count)
+                        SectionTitle(section.title, count: section.items.count, small: true)
+                            .padding(.top, DS.Space.m)
+                            .padding(.bottom, DS.Space.xxs)
                     }
                 }
             }
             .listStyle(.plain)
+            #if os(iOS)
+            .listSectionSpacing(0)
+            #endif
+            // The filters above already set the list off from the bar.
+            .contentMargins(.top, 0, for: .scrollContent)
             .environment(\.defaultMinListRowHeight, 0)
             .environment(\.defaultMinListHeaderHeight, 0)
             .scrollContentBackground(.hidden)
@@ -285,6 +292,7 @@ struct InboxView: View {
                 RoundedRectangle(cornerRadius: DS.Radius.pane)
                     .fill(isFocused ? AnyShapeStyle(DS.Palette.selectedFill) : AnyShapeStyle(Color.clear))
                     .padding(.horizontal, DS.Space.xs))
+            .listRowInsets(EdgeInsets(top: 0, leading: DS.Space.l, bottom: 0, trailing: DS.Space.m))
             .listRowSeparatorTint(chrome.hairline)
             .alignmentGuide(.listRowSeparatorLeading) { _ in InboxRow.textColumn }
     }
@@ -583,30 +591,36 @@ private struct InboxRow: View {
     static let textColumn: CGFloat = glyphSlot + DS.Space.m
 
     var body: some View {
-        HStack(alignment: .top, spacing: DS.Space.m) {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.m) {
             glyph
-                .frame(width: Self.glyphSlot, height: 18)
-            VStack(alignment: .leading, spacing: DS.Space.s) {
-                HStack(alignment: .center, spacing: DS.Space.s) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        title
-                        meta
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(width: Self.glyphSlot)
+                // On the title's line, centred on its x-height rather than sitting on its baseline.
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+                    title
+                    if item.state == .error, !item.isCommand { StatusPill(.error) }
+                    Spacer(minLength: DS.Space.s)
                     trailing
                 }
+                meta
                 if let summary = item.summary {
                     Text(verbatim: summary)
-                        .font(.footnote)
+                        .font(DS.Font.rowDetail)
                         .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
-                        .lineLimit(2)
+                        .lineLimit(1)
                 }
-                request
-                ForEach(rules) { rule in AutoApprovalChip(rule: rule) { revoke(rule) } }
-                if isReplying { composer }
+                if item.request != nil || !rules.isEmpty || isReplying {
+                    VStack(alignment: .leading, spacing: DS.Space.s) {
+                        request
+                        ForEach(rules) { rule in AutoApprovalChip(rule: rule) { revoke(rule) } }
+                        if isReplying { composer }
+                    }
+                    .padding(.top, DS.Space.row)
+                }
             }
         }
-        .padding(.vertical, DS.Space.gap10)
+        .padding(.vertical, DS.Space.s)
         .contentShape(.rect)
         .onTapGesture(count: 2) { if item.paneId != nil { open() } }
         .onChange(of: isReplying || isEditing) { _, typing in setTyping(typing) }
@@ -621,7 +635,7 @@ private struct InboxRow: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(item.state == .error ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textSecondary))
         } else {
-            StatusIndicator(item.state, size: 14)
+            StatusIndicator(item.state, size: 13)
                 .opacity(item.state.needsYou ? 1 : DS.Opacity.mutedGlyph)
         }
     }
@@ -629,7 +643,7 @@ private struct InboxRow: View {
     /// What the agent is on (its prompt or state, a command line), unread in the heavier weight.
     private var title: some View {
         Text(verbatim: item.prompt)
-            .font(item.isCommand ? DS.Font.literal : .subheadline.weight(item.unseen || item.state.needsYou ? .semibold : .medium))
+            .font(item.isCommand ? DS.Font.literalSmall : .subheadline.weight(item.unseen || item.state.needsYou ? .semibold : .regular))
             .foregroundStyle(DS.Palette.text)
             .lineLimit(1)
             .truncationMode(item.isCommand ? .middle : .tail)
@@ -653,15 +667,17 @@ private struct InboxRow: View {
         .foregroundStyle(DS.Palette.textTertiary)
     }
 
-    /// New dot, age, then the row's quick actions: Reply and Open.
+    /// New dot, age, then the row's quick verbs, Reply and Open, as quiet icons (a capsule of
+    /// glass in every row would be a column of stickers).
     private var trailing: some View {
-        HStack(spacing: DS.Space.s) {
+        HStack(spacing: DS.Space.xs) {
             if item.unseen {
                 Circle()
                     .fill(DS.Palette.accent)
                     .frame(width: 7, height: 7)
                     .transition(.opacity)
                     .accessibilityLabel("New")
+                    .padding(.trailing, DS.Space.xxs)
             }
             TimelineView(.periodic(from: .now, by: item.state == .working ? 1 : 30)) { context in
                 Text(age(at: context.date))
@@ -669,25 +685,26 @@ private struct InboxRow: View {
                     .foregroundStyle(item.state == .working ? AnyShapeStyle(item.state.color) : AnyShapeStyle(DS.Palette.textTertiary))
             }
             if canReply, !isReplying {
-                Button("Reply") {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") {
                     withAnimation(DS.Motion.snappy) { isReplying = true }
                     isComposerFocused = true
                 }
-                .buttonStyle(.glass)
-                .controlSize(.small)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.quiet)
                 .help("Reply to \(item.agent.title)")
                 .accessibilityIdentifier("inbox-reply-\(item.id)")
             }
             if item.paneId != nil {
-                Button("Open Pane", systemImage: "arrow.up.right", action: open)
+                Button("Open Pane", systemImage: "arrow.up.forward.square", action: open)
                     .labelStyle(.iconOnly)
-                    .buttonStyle(.bar)
-                    .controlSize(.small)
+                    .buttonStyle(.quiet)
                     .help("Open the pane")
                     .accessibilityIdentifier("inbox-open-\(item.id)")
             }
         }
         .fixedSize()
+        // The verbs sit on the title's line without making it taller.
+        .frame(height: 18)
     }
 
     /// A live agent between turns or asking a question takes a typed reply.
@@ -744,17 +761,17 @@ private struct InboxRow: View {
             Spacer()
             if let approval, approval.claimMode, approval.block == nil || approval.claimedByMe {
                 Button(approval.claimedByMe ? "Release" : "Claim") { claim(!approval.claimedByMe) }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.quiet)
                     .accessibilityIdentifier("inbox-claim-\(item.id)")
             }
             if options?.editableInput != nil, mayApprove {
                 Button { isEditing = true } label: { verb("Edit", key: "E") }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.quiet)
                     .help("Edit the command, then approve (E)")
                     .accessibilityIdentifier("inbox-edit-\(item.id)")
             }
             Button(action: deny) { verb("Deny", key: "esc") }
-                .buttonStyle(.glass)
+                .buttonStyle(.quiet)
                 .help("Deny (Esc)")
                 .accessibilityIdentifier("inbox-deny-\(item.id)")
             HStack(spacing: 1) {
@@ -844,7 +861,7 @@ private struct InboxRow: View {
             HStack(spacing: DS.Space.s) {
                 Spacer()
                 Button(action: cancelEdit) { verb("Cancel", key: "esc") }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.quiet)
                     .keyboardShortcut(".", modifiers: .command)
                     .accessibilityIdentifier("inbox-edit-cancel")
                 Button(action: submitEdit) { verb("Approve Edited", key: "↩") }
@@ -955,7 +972,7 @@ private struct AutoApprovalChip: View {
             Spacer(minLength: DS.Space.xs)
             Button("Revoke", action: revoke)
                 .font(DS.Font.meta.weight(.medium))
-                .buttonStyle(.bar)
+                .buttonStyle(.quiet)
                 .controlSize(.small)
                 .help("Stop approving these for this task (granted by \(rule.grantedBy))")
                 .accessibilityIdentifier("inbox-revoke-\(rule.id)")

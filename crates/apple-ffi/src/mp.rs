@@ -889,6 +889,18 @@ pub enum MultiplayerEvent {
         /// Where it stands.
         status: crate::mp2::ApprovalStatus,
     },
+    /// Everyone's live presence, whole (after joining, when someone joins or leaves).
+    Peers {
+        /// This connection.
+        you: u64,
+        /// Every connection, oldest first.
+        peers: Vec<crate::peer::Peer>,
+    },
+    /// One connection's live presence changed: replace it when `rev` is newer.
+    PeerChanged {
+        /// Its new state.
+        peer: crate::peer::Peer,
+    },
 }
 
 impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
@@ -896,6 +908,11 @@ impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
         use client_core::MultiplayerEvent as E;
         match e {
             E::Joined { info } => Self::Joined { info: info.into() },
+            E::Peers { you, peers } => Self::Peers {
+                you: you.0,
+                peers: peers.into_iter().map(Into::into).collect(),
+            },
+            E::PeerChanged { peer } => Self::PeerChanged { peer: peer.into() },
             E::Participants { participants } => Self::Participants {
                 participants: participants.into_iter().map(Into::into).collect(),
             },

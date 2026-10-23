@@ -58,32 +58,53 @@ public struct PresenceAvatar: View {
     }
 }
 
-/// Overlapping avatars, at most `limit`, then "+N" (Figma/Linear presence stacks).
+/// Overlapping avatars, at most `limit`, then "+N" (Figma/Linear presence stacks). Each avatar
+/// cuts a thin gap out of the one under it, so the stack reads on any background (a selected
+/// sidebar row, glass, the terminal) without a ring in a guessed colour.
 public struct PresenceStack: View {
     let participants: [Participant]
     var limit: Int
+    var size: CGFloat
 
-    public init(_ participants: [Participant], limit: Int = 3) {
+    public init(_ participants: [Participant], limit: Int = 3, size: CGFloat = DS.Size.avatar) {
         self.participants = participants
         self.limit = limit
+        self.size = size
     }
 
     public var body: some View {
-        HStack(spacing: -4) {
-            // Later avatars sit under earlier ones so every set of initials stays readable.
-            ForEach(Array(participants.prefix(limit).enumerated()), id: \.element.id) { index, participant in
-                PresenceAvatar(participant)
-                    .background(Circle().fill(DS.Palette.base).padding(-1.5))
+        let shown = Array(participants.prefix(limit))
+        HStack(spacing: -overlap) {
+            ForEach(Array(shown.enumerated()), id: \.element.id) { index, participant in
+                PresenceAvatar(participant, size: size)
+                    .mask { cutout(index > 0) }
                     .zIndex(Double(limit - index))
             }
             if participants.count > limit {
                 Text("+\(participants.count - limit)")
-                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .font(.system(size: size * 0.42, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(DS.Palette.textSecondary)
-                    .frame(width: DS.Size.avatar, height: DS.Size.avatar)
+                    .frame(width: size, height: size)
                     .background(DS.Palette.selectedFill, in: .circle)
+                    .mask { cutout(true) }
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var overlap: CGFloat { size * 0.28 }
+
+    /// Everything but a ring around the avatar to the left, which overlaps this one.
+    private func cutout(_ hasLeft: Bool) -> some View {
+        Rectangle()
+            .overlay {
+                if hasLeft {
+                    Circle()
+                        .frame(width: size + 3, height: size + 3)
+                        .offset(x: -(size - overlap))
+                        .blendMode(.destinationOut)
+                }
+            }
+            .compositingGroup()
     }
 }
