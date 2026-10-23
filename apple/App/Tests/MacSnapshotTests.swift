@@ -139,6 +139,24 @@ final class MacSnapshotTests: XCTestCase {
         try await window("host-switcher", screen: "host-switcher")
     }
 
+    func testEmptyStates() async throws {
+        guard wanted("empty") else { return }
+        let window = makeWindow(ThemedRoot {
+            HStack(spacing: 0) {
+                EmptyState("No Agents Yet", systemImage: "tray", message: "Start Claude Code or Codex on a host. Agents show here, and say when they need you or finish.") {
+                    Button("New Agent", systemImage: "sparkle") {}.buttonStyle(.primaryGlass)
+                }
+                Divider()
+                EmptyState("No Host", systemImage: "server.rack", message: "Connect a host to browse its files.") {}
+            }
+            .chromeBackground(DS.Palette.base)
+            .chromeContent()
+        }, size: CGSize(width: 1000, height: 640))
+        await pump(1.5)
+        try capture(window, "empty")
+        window.close()
+    }
+
     func testSettings() async throws {
         guard wanted("settings") else { return }
         let window = makeWindow(ThemedRoot { SettingsView() }, size: CGSize(width: 820, height: 560))

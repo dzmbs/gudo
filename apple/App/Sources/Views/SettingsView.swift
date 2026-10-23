@@ -24,7 +24,9 @@ struct SettingsView: View {
         #if os(macOS)
         // The window follows the terminal theme, like the workspace (Ghostty `window-theme`).
         ThemedRoot {
-            NavigationSplitView {
+            // System Settings' shape: the sidebar always shown (no toggle), the pane's title in
+            // the detail's titlebar.
+            NavigationSplitView(columnVisibility: .constant(.all)) {
                 Group {
                     if query.isEmpty {
                         List(SettingsPane.allCases, selection: $pane) { pane in
@@ -48,6 +50,7 @@ struct SettingsView: View {
                 .chromeContent()
                 .searchable(text: $query, placement: .sidebar, prompt: "Search")
                 .navigationSplitViewColumnWidth(220)
+                .toolbar(removing: .sidebarToggle)
             } detail: {
                 ScrollViewReader { proxy in
                     Form { detail(pane).chromeRows() }
@@ -62,6 +65,7 @@ struct SettingsView: View {
                         }
                 }
             }
+            .navigationSplitViewStyle(.balanced)
             .frame(minWidth: 720, minHeight: 480)
         }
         #else
@@ -223,7 +227,7 @@ private struct AppearanceSection: View {
     @AppStorage(ThemePair.enabledKey) private var themePair = false
 
     var body: some View {
-        Section("Appearance") {
+        Section {
             if !themePair {
                 NavigationLink {
                     ThemePicker(selection: $theme)
@@ -260,6 +264,8 @@ private struct AppearanceSection: View {
             }
             #endif
             windowRows
+        } header: {
+            PaneSectionTitle("Appearance")
         }
     }
 
@@ -425,12 +431,29 @@ private struct NotificationsSection: View {
 
 private struct AboutSection: View {
     var body: some View {
-        Section("About") {
+        Section {
             LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                 .settingAnchor("version")
             NavigationLink("Acknowledgements") { AcknowledgementsView() }
                 .settingAnchor("acknowledgements")
+        } header: {
+            PaneSectionTitle("About")
         }
+    }
+}
+
+/// A section named like its pane: the Mac's titlebar already says it, iOS's one form needs it.
+private struct PaneSectionTitle: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        #if os(iOS)
+        Text(title)
+        #endif
     }
 }
 

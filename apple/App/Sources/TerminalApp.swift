@@ -69,6 +69,9 @@ struct TerminalApp: App {
         Settings {
             SettingsView()
         }
+        // A titlebar as tall as the main window's, so the traffic lights keep the system's
+        // margin inside the sidebar's rounded corner.
+        .windowToolbarStyle(.unified)
         #endif
     }
 }

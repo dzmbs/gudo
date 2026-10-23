@@ -78,10 +78,12 @@ public struct SectionTitle: View {
     }
 }
 
-/// welcome view: the glyph in `title` at the large scale, 12, then the title (`title3`
-/// semibold) and one line (`subheadline`) 4 apart, then the actions. Greys are the theme's
-/// (`DS.Palette`), never a fixed opacity of the foreground. Copy names the next step, not the
-/// absence; give it an action whenever there is one.
+/// An empty or zero-data state, compact like the system's `ContentUnavailableView` on the Mac
+/// and Xcode's empty editors: a 28 pt glyph (34 on touch) in the tertiary grey, the title
+/// (`headline`), one line (`subheadline`), then the actions at the regular control size. It sits
+/// at the optical centre, two fifths of the way down, never sinking to the middle of a tall
+/// pane. Greys are the theme's (`DS.Palette`). Copy names the next step, not the absence; give
+/// it an action whenever there is one.
 public struct EmptyState<Actions: View>: View {
     let title: String
     let systemImage: String
@@ -96,16 +98,18 @@ public struct EmptyState<Actions: View>: View {
     }
 
     public var body: some View {
-        VStack(spacing: DS.Space.m) {
-            Image(systemName: systemImage)
-                .symbolRenderingMode(.hierarchical)
-                .font(.title)
-                .imageScale(.large)
-                .foregroundStyle(DS.Palette.textSecondary)
-                .accessibilityHidden(true)
-            VStack(spacing: DS.Space.xs) {
+        VStack(spacing: 0) {
+            Spacer(minLength: DS.Space.l)
+            Spacer(minLength: 0)
+            VStack(spacing: DS.Space.s) {
+                Image(systemName: systemImage)
+                    .symbolRenderingMode(.hierarchical)
+                    .font(.system(size: Self.glyphSize, weight: .regular))
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .padding(.bottom, DS.Space.xxs)
+                    .accessibilityHidden(true)
                 Text(title)
-                    .font(DS.Font.title)
+                    .font(.headline)
                     .foregroundStyle(DS.Palette.text)
                     .multilineTextAlignment(.center)
                 Text(message)
@@ -113,16 +117,31 @@ public struct EmptyState<Actions: View>: View {
                     .foregroundStyle(DS.Palette.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                if Actions.self != EmptyView.self {
+                    HStack(spacing: DS.Space.s) {
+                        actions
+                    }
+                    .controlSize(.regular)
+                    .padding(.top, DS.Space.s)
+                }
             }
-            .frame(maxWidth: 360)
-            HStack(spacing: DS.Space.s) {
-                actions
-            }
-            .padding(.top, DS.Space.xs)
+            .frame(maxWidth: 320)
+            .padding(.horizontal, DS.Space.xl)
+            Spacer(minLength: DS.Space.l)
+            Spacer(minLength: 0)
+            Spacer(minLength: 0)
         }
-        .padding(DS.Space.xxxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
+    }
+
+    /// Mac 28 pt, touch 34 pt: about twice the title's cap height, as the system's empty views.
+    private static var glyphSize: CGFloat {
+        #if os(macOS)
+        28
+        #else
+        34
+        #endif
     }
 }
 
