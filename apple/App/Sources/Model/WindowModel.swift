@@ -903,7 +903,10 @@ struct NewAgentSeed {
 }
 
 enum LaunchOptions {
-    static let mock = ProcessInfo.processInfo.arguments.contains("-mock")
+    /// `-mock`, or `UNNAMED_MOCK` in the environment (in-process snapshot tests).
+    static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["UNNAMED_MOCK"] != nil
+    /// Hosting unit tests: no windows of its own, never active.
+    static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     static let screen: String? = UserDefaults.standard.string(forKey: "screen")
     /// Every host header and the Inbox show a fixed usage report (`FakeUsageFeed`): UI tests.
     static let fakeUsage = UserDefaults.standard.bool(forKey: "fakeUsage")

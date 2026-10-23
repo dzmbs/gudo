@@ -59,6 +59,8 @@ struct TerminalApp: App {
             }
         }
         #if os(macOS)
+        // Unit tests render their own offscreen windows; the app opens none.
+        .defaultLaunchBehavior(LaunchOptions.isTesting ? .suppressed : .automatic)
         .defaultSize(width: 1180, height: 760)
         .windowToolbarStyle(.unified(showsTitle: true))
         #endif
@@ -107,7 +109,7 @@ struct WindowRoot: View {
 }
 
 /// A window's content around its model (see `WindowRoot`).
-private struct WindowContent: View {
+struct WindowContent: View {
     var request: WindowRequest?
     let model: WindowModel
     @Environment(AppModel.self) private var app
