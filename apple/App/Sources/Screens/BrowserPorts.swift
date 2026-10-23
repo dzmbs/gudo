@@ -6,6 +6,7 @@ import SwiftUI
 struct BrowserSheet: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.isToolWindow) private var isToolWindow
 
     var body: some View {
         Group {
@@ -21,8 +22,10 @@ struct BrowserSheet: View {
                 NavigationStack {
                     PortsList()
                         .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { dismiss() }
+                            if !isToolWindow {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("Done") { dismiss() }
+                                }
                             }
                         }
                 }

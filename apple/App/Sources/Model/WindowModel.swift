@@ -65,7 +65,19 @@ final class WindowModel {
     var destination = Destination.terminal {
         didSet { if destination != oldValue { reportViews() } }
     }
-    var sheet: SheetRoute?
+    var sheet: SheetRoute? {
+        didSet {
+            #if os(macOS)
+            // Browsing tools open in a window of their own (`ToolWindows.swift`).
+            if let route = sheet, route.opensInWindow, let openTool {
+                sheet = nil
+                openTool(ToolWindowRequest(route: route.rawValue, window: serial))
+            }
+            #endif
+        }
+    }
+    /// Opens a tool window (macOS), set by the window's view.
+    @ObservationIgnored var openTool: ((ToolWindowRequest) -> Void)?
     /// The toolbar's host switcher is open.
     var isHostSwitcherShown = false
     /// What the Replays sheet shows.
@@ -903,7 +915,10 @@ struct NewAgentSeed {
 }
 
 enum LaunchOptions {
-    static let mock = ProcessInfo.processInfo.arguments.contains("-mock")
+    /// `-mock`, or `UNNAMED_MOCK` in the environment (in-process snapshot tests).
+    static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["UNNAMED_MOCK"] != nil
+    /// Hosting unit tests: no windows of its own, never active.
+    static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     static let screen: String? = UserDefaults.standard.string(forKey: "screen")
     /// Every host header and the Inbox show a fixed usage report (`FakeUsageFeed`): UI tests.
     static let fakeUsage = UserDefaults.standard.bool(forKey: "fakeUsage")

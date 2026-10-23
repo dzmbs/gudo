@@ -10,6 +10,8 @@ public struct HostSwitcherHost: Identifiable, Hashable, Sendable {
     public var systemImage: String
     /// "Reconnecting", "Offline", "2 need you": only what is worth a glance.
     public var detail: String?
+    /// `user@box`, shown quietly under the name when there is no news.
+    public var address: String?
     public var link: Link
     public var needsYou: Bool
     public var isCurrent: Bool
@@ -17,13 +19,14 @@ public struct HostSwitcherHost: Identifiable, Hashable, Sendable {
     public var shortcut: Int?
 
     public init(
-        id: String, name: String, systemImage: String, detail: String? = nil, link: Link = .live,
-        needsYou: Bool = false, isCurrent: Bool = false, shortcut: Int? = nil
+        id: String, name: String, systemImage: String, detail: String? = nil, address: String? = nil,
+        link: Link = .live, needsYou: Bool = false, isCurrent: Bool = false, shortcut: Int? = nil
     ) {
         self.id = id
         self.name = name
         self.systemImage = systemImage
         self.detail = detail
+        self.address = address
         self.link = link
         self.needsYou = needsYou
         self.isCurrent = isCurrent
@@ -31,17 +34,23 @@ public struct HostSwitcherHost: Identifiable, Hashable, Sendable {
     }
 }
 
-/// A fixed row under the hosts: New Tab, New Agent, Add Remote Host….
+/// A fixed row under the hosts: New Tab, New Agent, Connect via SSH…. Rows of one `group`
+/// sit together; a hairline separates groups.
 public struct HostSwitcherCommand: Identifiable {
     public var id: String
+    public var group: Int
     public var title: String
     public var systemImage: String
     /// The shortcut as glyphs, e.g. ["⇧", "⌘", "N"].
     public var shortcut: [String]
     public var perform: () -> Void
 
-    public init(id: String, title: String, systemImage: String, shortcut: [String] = [], perform: @escaping () -> Void) {
+    public init(
+        id: String, group: Int = 0, title: String, systemImage: String, shortcut: [String] = [],
+        perform: @escaping () -> Void
+    ) {
         self.id = id
+        self.group = group
         self.title = title
         self.systemImage = systemImage
         self.shortcut = shortcut
@@ -115,23 +124,43 @@ public struct HostSwitcher: View {
         VStack(spacing: 0) {
             field
             Hairline()
-            ScrollView {
-                VStack(spacing: 1) {
-                    let hostRows = rows.filter { if case .command = $0 { false } else { true } }
-                    let commandRows = rows.filter { if case .command = $0 { true } else { false } }
-                    ForEach(hostRows) { rowView($0) }
-                    if !hostRows.isEmpty, !commandRows.isEmpty {
-                        Hairline()
-                            .padding(.vertical, DS.Space.xs)
+            let hostRows = rows.filter { if case .command = $0 { false } else { true } }
+            let commandGroups = Dictionary(grouping: shownCommands, by: \.group).sorted { $0.key < $1.key }
+            // Only the hosts scroll: the ways in below stay in reach however many hosts there are.
+            if !hostRows.isEmpty {
+                ScrollView {
+                    VStack(spacing: 1) {
+                        Text(trimmed.isEmpty ? "Hosts" : "Matching Hosts")
+                            .font(DS.Font.sectionSmall)
+                            .foregroundStyle(DS.Palette.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, DS.Space.s)
+                            .padding(.top, DS.Space.xs)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(hostRows) { rowView($0) }
                     }
-                    ForEach(commandRows) { rowView($0) }
+                    .padding([.horizontal, .top], DS.Space.row)
+                    .padding(.bottom, commandGroups.isEmpty ? DS.Space.row : 0)
                 }
-                .padding(DS.Space.row)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: 340)
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(maxHeight: 420)
-            .fixedSize(horizontal: false, vertical: true)
+            if !commandGroups.isEmpty {
+                VStack(spacing: 1) {
+                    ForEach(Array(commandGroups.enumerated()), id: \.element.key) { index, group in
+                        if index > 0 || !hostRows.isEmpty {
+                            Hairline()
+                                .padding(.vertical, DS.Space.xs)
+                                .padding(.horizontal, DS.Space.s)
+                        }
+                        ForEach(group.value.map(Row.command)) { rowView($0) }
+                    }
+                }
+                .padding([.horizontal, .bottom], DS.Space.row)
+                .padding(.top, hostRows.isEmpty ? DS.Space.row : 0)
+            }
         }
         .frame(width: DS.Size.switcherWidth)
         .chromeContent()
@@ -196,6 +225,12 @@ public struct HostSwitcher: View {
                                 .font(.caption)
                                 .foregroundStyle(host.link == .down ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textTertiary))
                                 .lineLimit(1)
+                        } else if let address = host.address, !address.isEmpty, address != host.name {
+                            Text(verbatim: address)
+                                .font(DS.Font.literalSmall)
+                                .foregroundStyle(DS.Palette.textTertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                     }
                     Spacer(minLength: DS.Space.s)

@@ -18,8 +18,19 @@ struct EditorLicenceSheet: View {
 
     private var host: String { hostName.nonEmpty ?? "this host" }
 
+    /// The whole decision on the Mac's button; one word in an iOS bar.
+    #if os(macOS)
+    private static let acceptTitle = "Accept and Open VS Code"
+    #else
+    private static let acceptTitle = "Accept"
+    #endif
+
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            "VS Code on \(host)",
+            cancel: SheetAction("Cancel", identifier: "editor-licence-cancel", action: cancel),
+            primary: SheetAction(Self.acceptTitle, identifier: "editor-licence-accept", action: accept)
+        ) {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -46,43 +57,19 @@ struct EditorLicenceSheet: View {
                     SectionTitle("Microsoft’s Terms")
                 } footer: {
                     Text("You’re asked once for \(host). No account or sign-in is needed. Not affiliated with or endorsed by Microsoft.")
+                    .foregroundStyle(DS.Palette.textSecondary)
                 }
                 .chromeRows()
 
-                Section {
-                    Button(action: accept) {
-                        HStack {
-                            Spacer()
-                            Text("Accept and Open VS Code")
-                                .font(.body.weight(.semibold))
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.primaryGlass)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                    .accessibilityIdentifier("editor-licence-accept")
-                }
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .navigationTitle("VS Code on \(host)")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: cancel)
-                        .accessibilityIdentifier("editor-licence-cancel")
-                }
-            }
         }
         .interactiveDismissDisabled()
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        .frame(minWidth: 460, idealWidth: 500, minHeight: 500)
+        .frame(width: 500)
         #endif
         .accessibilityIdentifier("editor-licence")
     }
@@ -112,7 +99,7 @@ struct EditorTunnelOfferSheet: View {
     private var host: String { hostName.nonEmpty ?? "this host" }
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold("Open Through a Remote Tunnel", cancel: SheetAction("Cancel", action: cancel)) {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -149,25 +136,17 @@ struct EditorTunnelOfferSheet: View {
                     SectionTitle("Sign In With")
                 } footer: {
                     Text("Microsoft limits tunnels per account and the data they carry each month.")
+                    .foregroundStyle(DS.Palette.textSecondary)
                 }
                 .chromeRows()
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .navigationTitle("Open Through a Remote Tunnel")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: cancel)
-                }
-            }
         }
         #if os(iOS)
         .phoneDetents([.medium, .large])
         #else
-        .frame(minWidth: 460, idealWidth: 500, minHeight: 420)
+        .frame(width: 500)
         #endif
     }
 }
@@ -188,7 +167,15 @@ struct EditorDeviceCodeSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            "Sign In to \(login.account.title)",
+            cancel: SheetAction("Cancel", identifier: "editor-device-cancel", action: cancel),
+            primary: SheetAction("Copy and Open \(page)", identifier: "editor-device-open") {
+                Self.copy(login.code)
+                copied = true
+                openURL(login.verificationURL)
+            }
+        ) {
             Form {
                 Section {
                     VStack(spacing: DS.Space.m) {
@@ -212,27 +199,11 @@ struct EditorDeviceCodeSheet: View {
                     SectionTitle("Your Code")
                 } footer: {
                     Text("Enter it at \(page) and sign in with your \(login.account.title) account to let \(hostName.nonEmpty ?? "the host") open a VS Code tunnel.")
+                    .foregroundStyle(DS.Palette.textSecondary)
                 }
                 .chromeRows()
 
                 Section {
-                    Button {
-                        Self.copy(login.code)
-                        copied = true
-                        openURL(login.verificationURL)
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Text("Copy and Open \(page)")
-                                .font(.body.weight(.semibold))
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.primaryGlass)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                    .accessibilityIdentifier("editor-device-open")
                     HStack(spacing: DS.Space.s) {
                         Spinner(color: DS.Palette.accent, lineWidth: 2)
                             .frame(width: 14, height: 14)
@@ -245,22 +216,12 @@ struct EditorDeviceCodeSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .navigationTitle("Sign In to \(login.account.title)")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: cancel)
-                        .accessibilityIdentifier("editor-device-cancel")
-                }
-            }
         }
         .interactiveDismissDisabled()
         #if os(iOS)
         .phoneDetents([.medium, .large])
         #else
-        .frame(minWidth: 440, idealWidth: 480, minHeight: 440)
+        .frame(width: 480)
         #endif
         .accessibilityIdentifier("editor-device-sheet")
     }

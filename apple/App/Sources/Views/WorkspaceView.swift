@@ -408,11 +408,33 @@ private struct DetailColumn: View {
 private struct TerminalToolbar: ToolbarContent {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
+    #if os(macOS)
+    @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #endif
 
     var body: some ToolbarContent {
+        #if os(macOS)
+        // Xcode's titlebar: over the sidebar the toggle is a bare glyph beside the traffic
+        // lights and the title starts where the detail column does; with the sidebar hidden
+        // the toggle is a toolbar button like any other, right before the title.
         ToolbarItem(placement: .navigation) {
             SidebarToggle()
         }
+        .sharedBackgroundVisibility(overSidebar ? .hidden : .visible)
+        if overSidebar {
+            ToolbarItem(placement: .navigation) {
+                Color.clear
+                    .frame(width: titleInset, height: 1)
+                    .accessibilityHidden(true)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
+        #else
+        ToolbarItem(placement: .navigation) {
+            SidebarToggle()
+        }
+        #endif
         if let session = workspace.multiplayer {
             ToolbarItem(placement: .primaryAction) {
                 PresenceToolbarButton(session: session, place: { pane in
@@ -473,6 +495,16 @@ private struct TerminalToolbar: ToolbarContent {
                 .accessibilityIdentifier("open-palette")
         }
     }
+
+    #if os(macOS)
+    private var overSidebar: Bool { model.isSidebarShown && !model.isEditorFullScreen }
+
+    /// From the toggle to the detail column's text margin: the traffic lights, the toggle and
+    /// the items' spacing take the sidebar's first 148 pt.
+    private var titleInset: CGFloat {
+        max(0, SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize) - 148 + DS.Space.m)
+    }
+    #endif
 }
 
 

@@ -37,26 +37,42 @@ struct JoinSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            "Join a Session",
+            cancel: SheetAction("Cancel") {
+                stopKnocking()
+                dismiss()
+            },
+            primary: primary,
+            // On the Mac, Paste sits on the buttons' line, as in the system's own sheets.
+            accessory: {
+                #if os(macOS)
+                pasteButton
+                #endif
+            }
+        ) {
             Form {
                 Section {
-                    TextField("unnamed://join/…", text: $text, axis: .vertical)
-                        .font(DS.Font.literalSmall)
-                        .lineLimit(2...3)
+                    // Prompt only: a titled field in a Mac form puts its title on the left and
+                    // the link on the right.
+                    TextField("Invite Link", text: $text, prompt: Text(verbatim: "\(WindowContent.urlScheme)://join/…"), axis: .vertical)
+                        .labelsHidden()
+                        .textFieldStyle(.plain)
+                        .font(DS.Font.literal)
+                        .lineLimit(2...4)
                         .autocorrectionDisabled()
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
                         #endif
                         .accessibilityIdentifier("join-field")
-                    PasteButton(payloadType: String.self) { strings in
-                        if let first = strings.first { text = first }
-                    }
-                    .buttonBorderShape(.capsule)
-                    .labelStyle(.titleAndIcon)
+                    #if os(iOS)
+                    pasteButton
+                    #endif
                 } header: {
                     SectionTitle("Invite Link")
                 } footer: {
                     Text("Paste the link someone shared, or open it from Messages or Mail. Scanning their QR code opens it too.")
+                    .foregroundStyle(DS.Palette.textSecondary)
                 }
                 .chromeRows()
 
@@ -65,14 +81,21 @@ struct JoinSheet: View {
                     JoinCard(info: info)
                         .chromeRows()
                     Section {
-                        TextField(info.label.isEmpty ? "Your name" : info.label, text: $name)
+                        TextField("Name", text: $name, prompt: Text(info.label.isEmpty ? "Your name" : info.label))
+                            .labelsHidden()
+                            .textFieldStyle(.plain)
                             .textContentType(.name)
                     } header: {
                         SectionTitle("Show Me As")
                     } footer: {
                         Text("Everyone in the session sees this name next to your avatar.")
+                        .foregroundStyle(DS.Palette.textSecondary)
                     }
                     .chromeRows()
+                    if phase == .knocking || isFailed {
+                        Section { status(info) }
+                            .chromeRows()
+                    }
                 case .failure:
                     Section {
                         Label("That isn't an invite link. Pairing tickets go in Add Host.", systemImage: "questionmark.circle")
@@ -85,59 +108,46 @@ struct JoinSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            // The action stays in view under the card (a short form sheet scrolled it off).
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if case .success(let info) = card {
-                    action(info)
-                        .padding(.horizontal, DS.Space.l)
-                        .padding(.vertical, DS.Space.m)
-                        .background(DS.Palette.groupedPage)
-                }
-            }
-            .navigationTitle("Join a Session")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        stopKnocking()
-                        dismiss()
-                    }
-                }
-            }
             .onDisappear { knocking?.cancel() }
             .animation(DS.Motion.snappy, value: trimmed)
         }
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        .frame(minWidth: 460, idealWidth: 500, minHeight: 520)
+        .frame(width: 500)
         #endif
     }
 
-    @ViewBuilder private func action(_ info: InviteInfo) -> some View {
-        VStack(spacing: DS.Space.s) {
-            if phase == .knocking {
-                KnockWaiting(owner: info.inviter, asked: progress.asked, cancel: stopKnocking)
-            } else {
-                Button(action: { info.knock ? knock(info) : join(info) }) {
-                    Text(buttonTitle(info))
-                        .font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                }
-                .buttonStyle(.primaryGlass)
-                .disabled(phase == .joining || isExpired(info))
-                .accessibilityIdentifier("join-button")
-            }
-            if case .failed(let reason) = phase {
-                Label(reason, systemImage: "exclamationmark.triangle.fill")
-                    .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(DS.Palette.error)
-            }
+    /// Join (or Ask to Join) as the sheet's one action, once the link reads as an invite.
+    private var primary: SheetAction? {
+        guard case .success(let info) = card, phase != .knocking else { return nil }
+        return SheetAction(
+            buttonTitle(info), isEnabled: !isExpired(info), isBusy: phase == .joining,
+            busyTitle: buttonTitle(info), identifier: "join-button"
+        ) { info.knock ? knock(info) : join(info) }
+    }
+
+    private var pasteButton: some View {
+        PasteButton(payloadType: String.self) { strings in
+            if let first = strings.first { text = first }
+        }
+        .buttonBorderShape(.capsule)
+        .labelStyle(.titleAndIcon)
+    }
+
+    private var isFailed: Bool {
+        if case .failed = phase { true } else { false }
+    }
+
+    @ViewBuilder private func status(_ info: InviteInfo) -> some View {
+        if phase == .knocking {
+            KnockWaiting(owner: info.inviter, asked: progress.asked, cancel: stopKnocking)
+        } else if case .failed(let reason) = phase {
+            Label(reason, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(DS.Palette.error)
         }
     }
+
 
     private func buttonTitle(_ info: InviteInfo) -> String {
         let host = info.inviter.isEmpty ? "host" : info.inviter + "’s host"
@@ -275,6 +285,7 @@ private struct JoinCard: View {
             SectionTitle("Invitation")
         } footer: {
             Text("End-to-end encrypted, straight to their machine. They can see who is connected and revoke access at any time.")
+            .foregroundStyle(DS.Palette.textSecondary)
         }
     }
 }
