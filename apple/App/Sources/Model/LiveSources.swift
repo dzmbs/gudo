@@ -27,7 +27,11 @@ final class LiveHostDirectory: HostDirectory {
     }
 
     var hosts: [HostSummary] {
-        (LaunchOptions.hasLocalShell ? [local] : []) + app.hosts.entries.map(summary)
+        // This Mac's helper stands in for the plain login shell while no such shell is open.
+        let helperServes = app.thisDeviceHostId != nil && app.localLayout.session.tabs.isEmpty
+        let entries = app.hosts.entries
+        return (LaunchOptions.hasLocalShell && !helperServes ? [local] : [])
+            + entries.filter(\.isThisDevice).map(summary) + entries.filter { !$0.isThisDevice }.map(summary)
     }
 
     var isOffline: Bool { app.hosts.network.isOffline }

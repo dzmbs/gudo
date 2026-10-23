@@ -77,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         AppNotifications.shared.didRegister(apnsToken: deviceToken)
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        AppModel.shared.localHelper?.appWillTerminate()
+    }
 }
 #endif
 

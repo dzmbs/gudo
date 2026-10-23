@@ -242,6 +242,7 @@ final class WindowModel {
         groups = HostGroups(
             hosts: app.hosts,
             local: LaunchOptions.hasLocalShell ? HostGroups.Local(name: Self.deviceName, layout: app.localLayout) : nil)
+        groups.helperServesLocal = { [weak app] in app?.thisDeviceHostId != nil }
         if LaunchOptions.mock || LaunchOptions.fakeUsage {
             let groups = groups
             usage = FakeUsageFeed { groups.groups.map { UsageHost(id: $0.id, name: $0.name) } }
@@ -337,6 +338,7 @@ final class WindowModel {
         let local = app.makeWorkspace(for: .local)
         if let local { workspaces[HostGroups.localId] = local }
         workspace = local
+        if let id = app.thisDeviceHostId { openThisDevice(id) }
         followGroups()
         startMixedTabs()
         followEditors()
@@ -533,7 +535,20 @@ final class WindowModel {
         workspaces[id] = nil
         workspaceConnections[id] = nil
         guard wasShown else { return }
-        if let next = others.first { focus(next) } else { show(.local) }
+        if let next = others.first { focus(next) } else { show(home(leaving: id)) }
+    }
+
+    /// Where a window goes when nothing else is left: This Mac's helper while it serves the
+    /// Mac and no plain shell is open, else this device's own workspace.
+    func home(leaving id: String? = nil) -> WorkspaceTarget {
+        guard let helper = app.thisDeviceHostId, helper != id, app.localLayout.session.tabs.isEmpty else { return .local }
+        return .host(helper)
+    }
+
+    /// Opens This Mac's helper in this window, and shows it if the window shows nothing else.
+    func openThisDevice(_ id: String) {
+        _ = try? groups.open(id)
+        if currentGroupId == HostGroups.localId, app.localLayout.session.tabs.isEmpty { show(.host(id)) }
     }
 
     /// A host was forgotten (Hosts ▸ Forget): it leaves the window too.
@@ -543,7 +558,7 @@ final class WindowModel {
         workspaces[id]?.close(ending: true)
         workspaces[id] = nil
         workspaceConnections[id] = nil
-        if wasShown { show(.local) }
+        if wasShown { show(home(leaving: id)) }
     }
 
     /// The host on screen has no tabs left (its last one closed): go to the nearest tab on

@@ -163,8 +163,58 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         # Push only with a team (Brand.xcconfig): `#if PUSH_YES` registers with APNs.
         # Files locations only with the shared groups: `#if FILES_PROVIDER_YES`.
+        # The helper's LaunchAgent (the "This Mac Helper" phase); iOS bundles none, and Xcode
+        # makes every output's folder, so its output there stays out of the bundle.
+        HELPER_LAUNCH_AGENT: $(DERIVED_FILE_DIR)/unused-launch-agent.plist
+        "HELPER_LAUNCH_AGENT[sdk=macosx*]": $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/$(PRODUCT_BUNDLE_IDENTIFIER).hostd.plist
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PUSH_$(PUSH_ENTITLEMENT) FILES_PROVIDER_$(FILES_PROVIDER)"
         CODE_SIGN_ENTITLEMENTS: $(PUSH_ENTITLEMENTS_FILE)
+    # This Mac's own helper (`cargo xtask build-hostd-macos`; a build without it has plain
+    # local shells only), signed like the app, and the LaunchAgent SMAppService registers for
+    # it: the bundled daemon runs for this user and keeps running after the app quits.
+    postBuildScripts:
+      - name: This Mac Helper
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/build/hostd/macos/$(BRAND_NAME)-hostd
+        outputFiles:
+          - $(DERIVED_FILE_DIR)/$(BRAND_NAME)-hostd
+          - $(DERIVED_FILE_DIR)/$(BRAND_NAME)-hostd.cstemp
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/$(BRAND_NAME)-hostd
+          - $(HELPER_LAUNCH_AGENT)
+        script: |
+          [ "$PLATFORM_NAME" = macosx ] || exit 0
+          set -e
+          src="$SRCROOT/build/hostd/macos/$BRAND_NAME-hostd"
+          dst="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/$BRAND_NAME-hostd"
+          if [ -f "$src" ]; then
+            # Signed outside the bundle (the script sandbox lets codesign write only there).
+            signed="$DERIVED_FILE_DIR/$BRAND_NAME-hostd"
+            mkdir -p "$DERIVED_FILE_DIR"
+            cp -f "$src" "$signed"
+            runtime=""
+            [ "$ENABLE_HARDENED_RUNTIME" = YES ] && runtime="--options runtime"
+            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --identifier "$PRODUCT_BUNDLE_IDENTIFIER.hostd" $runtime "$signed"
+            cp -f "$signed" "$dst"
+          else
+            rm -f "$dst"
+          fi
+          mkdir -p "$(dirname "$HELPER_LAUNCH_AGENT")"
+          cat > "$HELPER_LAUNCH_AGENT" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key><string>$PRODUCT_BUNDLE_IDENTIFIER.hostd</string>
+            <key>BundleProgram</key><string>Contents/MacOS/$BRAND_NAME-hostd</string>
+            <key>ProgramArguments</key><array><string>$BRAND_NAME-hostd</string><string>run</string></array>
+            <key>AssociatedBundleIdentifiers</key><array><string>$PRODUCT_BUNDLE_IDENTIFIER</string></array>
+            <key>RunAtLoad</key><true/>
+            <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+            <key>ProcessType</key><string>Interactive</string>
+          </dict>
+          </plist>
+          EOF
     dependencies:
       - package: TerminalKit
         product: TerminalCore

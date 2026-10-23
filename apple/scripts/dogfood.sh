@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds the macOS app (Debug) and runs a dogfood scenario in it: apple/Dogfood/README.md.
 #
-#   apple/scripts/dogfood.sh [scenario] [--no-build] [--case <name>] [--out <dir>] [--real-history]
+#   apple/scripts/dogfood.sh [scenario] [--no-build] [--case <name>] [--out <dir>] [--real-history] [-- <app args>]
 #
 # scenario: a path, or a name in apple/Dogfood (default: core). Exit status is the app's:
 # 0 passed, 1 a case failed, 2 bad scenario, 3 hang / time limit.
@@ -17,8 +17,10 @@ build=1
 only_case=""
 out=""
 real_history=0
+app_args=()
 while (( $# )); do
   case $1 in
+    --) shift; app_args=("$@"); break ;;
     --no-build) build=0 ;;
     --case) only_case=$2; shift ;;
     --out) out=$2; shift ;;
@@ -62,6 +64,7 @@ args=(-ApplePersistenceIgnoreState YES -dogfood $scenario -dogfoodOut $out)
 # DOGFOOD_FOREGROUND=1 runs it as a normal, active window.
 [[ -n ${DOGFOOD_FOREGROUND:-} ]] || args+=(-dogfoodBackground YES)
 [[ -n $only_case ]] && args+=(-dogfoodCase $only_case)
+args+=($app_args)
 print "running ${scenario:t} → $out"
 set +e
 # The app's stderr (progress lines start with "dogfood:") goes to app.log; follow it meanwhile.
