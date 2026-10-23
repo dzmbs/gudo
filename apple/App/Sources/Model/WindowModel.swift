@@ -4,6 +4,7 @@ import HostKit
 import Observation
 import PaneLayout
 import TerminalCore
+import TerminalRenderer
 import UnnamedCore
 
 /// What the detail column (or the iPhone tab) shows.
@@ -117,6 +118,8 @@ final class WindowModel {
     /// making: no cols × rows overlay counting through every frame of it.
     func quietLayoutResizes() {
         for workspace in workspaces.values { workspace.layoutChangeUntil = .now + .milliseconds(700) }
+        // The terminals resize through the animation: their grids change once, as it settles.
+        TerminalSurface.holdGrids(for: .seconds(DS.Motion.panelDuration))
     }
     var isSearchShown = false
     var searchNeedle = "" {

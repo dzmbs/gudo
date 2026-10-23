@@ -2,6 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+import TerminalRenderer
 
 /// What a split tree's leaves show and how the tree changes: one host's tab (`HostTabTree`), or
 /// a mixed tab whose leaves are panes on several hosts (`MixedTabTree`). A leaf resolves to the
@@ -76,6 +77,7 @@ struct SplitTreeView: View {
     var animated = true
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @State private var lastShape = ShapeMemo()
 
     init(node: Node, tree: any PaneTree, isSplit: Bool, animated: Bool = true) {
         self.node = node
@@ -90,7 +92,11 @@ struct SplitTreeView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
+        let shape = SplitShape(node)
+        // Here rather than in `onChange`: the hold must start before the animation's first
+        // frame resizes a terminal.
+        if lastShape.update(shape), animated { TerminalSurface.holdGrids(for: .seconds(DS.Motion.splitDuration)) }
+        return GeometryReader { geometry in
             let layout = SplitLayout(
                 node: node, size: geometry.size,
                 gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
@@ -113,7 +119,18 @@ struct SplitTreeView: View {
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         // Only shape changes animate: a divider drag must track the pointer frame for frame.
-        .animation(animated ? DS.Motion.split : nil, value: SplitShape(node))
+        .animation(animated ? DS.Motion.split : nil, value: shape)
+    }
+}
+
+/// The shape a tree view last showed (not state SwiftUI observes).
+private final class ShapeMemo {
+    private var shape: SplitShape?
+
+    /// Records `shape`; true when it replaced a different one.
+    func update(_ shape: SplitShape) -> Bool {
+        defer { self.shape = shape }
+        return self.shape.map { $0 != shape } ?? false
     }
 }
 

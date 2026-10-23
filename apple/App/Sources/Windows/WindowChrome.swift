@@ -120,7 +120,8 @@ extension View {
 
 /// UI tests only (`-windowProbe YES`): what the window shows and advertises, as JSON in an
 /// accessibility value: its width bucket, host, tab and focused pane, the Handoff payload, the
-/// last continued payload, and how many cols × rows overlays a layout change showed.
+/// last continued payload, how many cols × rows overlays a layout change showed, and how many
+/// resizes each pane sent.
 struct WindowProbe: View {
     @Environment(WindowModel.self) private var model
 
@@ -165,6 +166,9 @@ struct WindowProbe: View {
             "overlays": String(model.resizeOverlayShows),
             "windows": String(model.app.openWindows.count),
             "models": String(WindowModel.made),
+            // Backend resizes per pane ("1:2 3:1"): one per layout change.
+            "resizes": (workspace?.panes ?? [:]).sorted { $0.key.rawValue < $1.key.rawValue }
+                .map { "\($0.key.rawValue):\($0.value.resizesSent)" }.joined(separator: " "),
         ]
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
