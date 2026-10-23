@@ -40,7 +40,7 @@ cd "$work"
 if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
 node build.mjs
 
-rm -rf "$out"
+# agent.js beside them is ours, not built.
 mkdir -p "$out"
 {
   echo "// Playwright injected script and WebView input, microsoft/playwright@$PW_COMMIT."

@@ -18,6 +18,31 @@ final class BrowserAgent {
     /// The page each agent's pane acts on, once it switched tabs.
     private var active: [HostPane: UUID] = [:]
 
+    /// One action an agent took on a page, reported after it ran (recordings build on these).
+    struct ActionRecord {
+        /// The tool (`browser_click`, …) and its arguments.
+        var tool: String
+        var args: [String: Any]
+        /// The element acted on: its ref, role, accessible name and index among elements with
+        /// both, and a Playwright locator for it (`getByRole('button', { name: 'Go' })`).
+        var ref: String?
+        var role: String?
+        var name: String?
+        var nth: Int?
+        var locator: String?
+        var urlBefore: URL?
+        var urlAfter: URL?
+        var at: Date
+        /// What came of it: "done", what changed, or why nothing did.
+        var verdict: String
+        /// The agent's pane and the page (`BrowserMember.id`).
+        var pane: HostPane
+        var page: UUID
+    }
+
+    /// Called after each action on a page, on the main actor.
+    var onAction: ((ActionRecord, BrowserPane) -> Void)?
+
     /// One answer: text, and an image for screenshots.
     struct Answer {
         var text: String
@@ -82,7 +107,7 @@ final class BrowserAgent {
             return Answer(text: try await js(page, "return window.__un.text()", args))
         case "browser_click", "browser_double_click", "browser_hover", "browser_type", "browser_fill",
              "browser_press", "browser_scroll", "browser_scroll_to":
-            return try await act(String(tool.dropFirst("browser_".count)), args, page: page, member: member, window: window)
+            return try await act(tool, args, page: page, member: member, pane: pane, window: window)
         case "browser_wait":
             return try await wait(args, page: page)
         case "browser_screenshot":
@@ -140,8 +165,10 @@ final class BrowserAgent {
             default: page.load(try Self.url(text))
             }
             page.agentActivity = "Opening \(text)"
+            let before = page.page.url
             await settle(page, navigating: true)
             defer { done(page) }
+            reportNavigation(text, from: before, page: page, member: existing, pane: pane)
             return Answer(text: try await js(page, "return window.__un.snapshot(args)", ["full": true]))
         }
         let url = try Self.url(text)
@@ -154,7 +181,14 @@ final class BrowserAgent {
         page.start()
         await settle(page, navigating: true)
         defer { done(page) }
+        reportNavigation(text, from: nil, page: page, member: member, pane: pane)
         return Answer(text: try await js(page, "return window.__un.snapshot(args)", ["full": true]))
+    }
+
+    private func reportNavigation(_ url: String, from before: URL?, page: BrowserPane, member: BrowserMember, pane: HostPane) {
+        onAction?(ActionRecord(
+            tool: "browser_navigate", args: ["url": url], urlBefore: before, urlAfter: page.page.url, at: .now,
+            verdict: page.page.url == nil ? "did not load" : "done", pane: pane, page: member.id), page)
     }
 
     /// An http(s) URL from what an agent wrote (`example.com`, `localhost:3000`).
@@ -214,7 +248,11 @@ final class BrowserAgent {
 
     // MARK: Acting
 
-    private func act(_ kind: String, _ args: [String: Any], page: BrowserPane, member: BrowserMember, window: WindowModel) async throws -> Answer {
+    private func act(
+        _ tool: String, _ args: [String: Any], page: BrowserPane, member: BrowserMember, pane: HostPane, window: WindowModel
+    ) async throws -> Answer {
+        let kind = String(tool.dropFirst("browser_".count))
+        let before = page.page.url
         var input = args
         input["kind"] = kind
         if var target = args["target"] as? [String: Any], target["type"] as? String == "coordinate" {
@@ -244,6 +282,12 @@ final class BrowserAgent {
             }
         }
         await settle(page, navigating: kind == "click" || kind == "press" || kind == "type")
+        let target = result["target"] as? [String: Any]
+        onAction?(ActionRecord(
+            tool: tool, args: args, ref: (args["target"] as? [String: Any])?["ref"] as? String,
+            role: target?["role"] as? String, name: target?["name"] as? String, nth: (target?["nth"] as? NSNumber)?.intValue,
+            locator: target?["locator"] as? String, urlBefore: before, urlAfter: page.page.url, at: .now,
+            verdict: result["verdict"] as? String ?? "done", pane: pane, page: member.id), page)
         let snapshot = try await js(page, "return window.__un.snapshot(args)", ["filter": "interactive"])
         return Answer(text: note + "Done.\n" + snapshot)
     }
