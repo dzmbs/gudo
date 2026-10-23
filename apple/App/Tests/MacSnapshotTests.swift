@@ -146,6 +146,22 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    /// Changes on a folder outside any repository: a calm state, not git's words.
+    func testToolProblems() async throws {
+        final class NotARepository: DiffSource {
+            var title: String { "Changes" }
+            var unavailableReason: String? { nil }
+            func repository() async throws -> DiffRepository { throw ToolProblem.notARepository(folder: "/Users/me/notes") }
+            func files(_ scope: DiffScope) async throws -> [DiffFile] { [] }
+            func turns() async throws -> [DiffTurn] { [] }
+            func reviewer(for scope: DiffScope) -> String? { nil }
+            func sendReview(_ notes: [ReviewNote], scope: DiffScope, preamble: String?) async throws {}
+        }
+        try await tool("diff-not-a-repository", size: CGSize(width: 720, height: 480)) {
+            NavigationStack { DiffReviewView(source: NotARepository()) }
+        }
+    }
+
     /// Files, Changes, Ports and Replays: windows of their own on the Mac (⌥).
     func testToolWindows() async throws {
         for route in [SheetRoute.files, .diff, .browser, .replays] {

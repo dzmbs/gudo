@@ -589,6 +589,8 @@ protocol PortSource: AnyObject, Observable {
     var hostName: String { get }
     /// The host whose ports these are (its web data store shows them; nil: none).
     var hostId: String? { get }
+    /// Nil when a host's ports are known; else why not, in words.
+    var unavailableReason: String? { get }
     /// A port that appeared since the user last looked (the "open it?" offer).
     var offer: DetectedPort? { get }
     func dismissOffer()

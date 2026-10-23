@@ -26,7 +26,7 @@ struct DiffReviewView: View {
     @State private var scope = DiffScope.workingTree
     @State private var turns: [DiffTurn] = []
     @State private var files: [DiffFile]?
-    @State private var failure: String?
+    @State private var problem: ToolProblem?
     @State private var showsProgress = false
     @State private var collapsed: Set<String> = []
     @State private var notes: [ReviewNote] = []
@@ -78,7 +78,10 @@ struct DiffReviewView: View {
 
     @ViewBuilder private var content: some View {
         if let reason = source.unavailableReason {
-            EmptyState("No Host", systemImage: "server.rack", message: reason) {}
+            EmptyState("No Host", systemImage: "server.rack", message: reason) {
+                Button("Show Hosts") { model.showHosts() }
+                    .buttonStyle(.glass)
+            }
         } else if let files {
             if files.isEmpty {
                 EmptyState("No Changes", systemImage: "checkmark.circle", message: emptyMessage) {
@@ -89,8 +92,13 @@ struct DiffReviewView: View {
             } else {
                 review(files)
             }
-        } else if let failure {
-            EmptyState("Couldn't Load Changes", systemImage: "exclamationmark.triangle", message: failure) {
+        } else if let problem {
+            EmptyState(problem.title ?? "Couldn't Load Changes", systemImage: problem.systemImage, message: problem.message, detail: problem.detail) {
+                if case .notARepository = problem {
+                    // Changes follow the focused pane's folder: pick one, or cd into a repository.
+                    Button("Browse Files") { model.sheet = .files }
+                        .buttonStyle(.glass)
+                }
                 Button("Try Again") { Task { await load() } }
                     .buttonStyle(.glass)
             }
@@ -329,13 +337,13 @@ struct DiffReviewView: View {
     // MARK: Loading
 
     private func load() async {
-        failure = nil
+        problem = nil
         do {
             repository = try await source.repository()
             turns = (try? await source.turns()) ?? []
             await loadFiles()
         } catch {
-            failure = ScreenError.describe(error)
+            problem = ToolProblem(error)
         }
     }
 
@@ -345,7 +353,7 @@ struct DiffReviewView: View {
             withAnimation(DS.Motion.snappy) { files = loaded }
         } catch {
             files = nil
-            failure = ScreenError.describe(error)
+            problem = ToolProblem(error)
         }
     }
 }

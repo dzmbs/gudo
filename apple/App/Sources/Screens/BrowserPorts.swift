@@ -46,6 +46,24 @@ struct PortsList: View {
     private var ports: [DetectedPort] { model.ports.ports }
 
     var body: some View {
+        Group {
+            if let reason = model.ports.unavailableReason {
+                // Ports are read by a host's helper: none is running or connected.
+                EmptyState("No Helper Running", systemImage: "point.3.connected.trianglepath.dotted", message: reason) {
+                    Button("Show Hosts") { model.showHosts() }
+                        .buttonStyle(.glass)
+                }
+                .chromeContent()
+            } else {
+                list
+            }
+        }
+        .toolChrome("Ports", subtitle: model.ports.hostName)
+        .animation(DS.Motion.snappy, value: ports)
+        .accessibilityIdentifier("ports-list")
+    }
+
+    private var list: some View {
         List {
             Section {
                 ForEach(ports.filter(\.isHTTP)) { port in row(port) }
@@ -92,9 +110,6 @@ struct PortsList: View {
         .listStyle(.insetGrouped)
         #endif
         .chromeGrouped()
-        .toolChrome("Ports", subtitle: model.ports.hostName)
-        .animation(DS.Motion.snappy, value: ports)
-        .accessibilityIdentifier("ports-list")
     }
 
     private func row(_ port: DetectedPort) -> some View {

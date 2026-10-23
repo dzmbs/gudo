@@ -20,13 +20,24 @@ struct FilesBrowserView: View {
     var onRevealInTerminal: (String) -> Void = { _ in }
     var onInsertPath: (String) -> Void = { _ in }
 
+    @Environment(WindowModel.self) private var model
+    /// Where browsing starts instead of `source.root` (Go to Home from a folder that is gone).
+    @State private var start: String?
+
     var body: some View {
         Group {
             if let reason = source.unavailableReason {
-                EmptyState("No Host", systemImage: "server.rack", message: reason) {}
-                    .toolChrome("Files")
+                EmptyState("No Host", systemImage: "server.rack", message: reason) {
+                    Button("Show Hosts") { model.showHosts() }
+                        .buttonStyle(.glass)
+                }
+                .toolChrome("Files")
             } else {
-                DirectoryListing(source: source, directory: source.root, actions: actions)
+                let root = start ?? source.root
+                DirectoryListing(
+                    source: source, directory: root, actions: actions,
+                    goHome: root == "~" ? nil : { start = "~" })
+                    .id(root)
             }
         }
         .navigationDestination(for: DirectoryRoute.self) { route in
@@ -84,11 +95,13 @@ private struct DirectoryListing: View {
     let source: any FileSource
     let directory: String
     let actions: FileActions
+    /// Where to go when the folder is gone (the start of browsing only).
+    var goHome: (() -> Void)?
 
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @State private var entries: [FileEntry]?
-    @State private var failure: String?
+    @State private var problem: ToolProblem?
     @State private var filter = ""
     @State private var isFiltering = false
     @Environment(\.toolLeaf) private var leaf
@@ -226,8 +239,15 @@ private struct DirectoryListing: View {
                 }
             }
             .accessibilityIdentifier("files-list")
-        } else if let failure {
-            EmptyState("Couldn't Read Folder", systemImage: "exclamationmark.triangle", message: failure) {
+        } else if let problem {
+            EmptyState(
+                problem.title ?? "Couldn't Read Folder", systemImage: problem.systemImage, message: problem.message,
+                detail: problem.detail.map(source.display)
+            ) {
+                if case .folderNotFound = problem, let goHome {
+                    Button("Go to Home", systemImage: "house") { goHome() }
+                        .buttonStyle(.glass)
+                }
                 Button("Try Again") { Task { await load() } }
                     .buttonStyle(.glass)
             }
@@ -450,12 +470,12 @@ private struct DirectoryListing: View {
     }
 
     private func load() async {
-        failure = nil
+        problem = nil
         do {
             let loaded = try await source.list(directory)
             withAnimation(entries == nil ? nil : DS.Motion.snappy) { entries = loaded }
         } catch {
-            failure = ScreenError.describe(error)
+            problem = ToolProblem(error, path: directory)
         }
     }
 
@@ -491,7 +511,7 @@ struct FilePreviewScreen: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @State private var preview: FilePreview?
-    @State private var failure: String?
+    @State private var problem: ToolProblem?
     @State private var shared: SharedFile?
     @State private var downloading: Double?
     @Environment(\.dismiss) private var dismiss
@@ -618,8 +638,11 @@ struct FilePreviewScreen: View {
                     .buttonStyle(.primaryGlass)
             }
         case nil:
-            if let failure {
-                EmptyState("Couldn't Open \(entry.name)", systemImage: "exclamationmark.triangle", message: failure) {
+            if let problem {
+                EmptyState(
+                    "Couldn't Open \(entry.name)", systemImage: problem.systemImage, message: problem.message,
+                    detail: problem.detail.map(source.display)
+                ) {
                     Button("Try Again") { Task { await load() } }
                         .buttonStyle(.glass)
                 }
@@ -630,11 +653,11 @@ struct FilePreviewScreen: View {
     }
 
     private func load() async {
-        failure = nil
+        problem = nil
         do {
             preview = try await source.preview(entry.path)
         } catch {
-            failure = ScreenError.describe(error)
+            problem = ToolProblem(error, path: entry.path)
         }
     }
 

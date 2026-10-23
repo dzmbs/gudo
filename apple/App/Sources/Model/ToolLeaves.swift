@@ -119,6 +119,12 @@ extension WindowModel {
         closeTool(member.id)
     }
 
+    /// A tool with no host to work on: Hosts, where one is connected (a sheet steps aside).
+    func showHosts() {
+        sheet = nil
+        destination = .hosts
+    }
+
     /// Whether the window can show tools in windows of their own.
     var hasToolWindows: Bool {
         #if os(macOS)
