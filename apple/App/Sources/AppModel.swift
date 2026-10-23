@@ -42,9 +42,9 @@ final class AppModel {
     private init() {
         CoreLog.install()
         let defaults = UserDefaults.standard
-        // `-hostsDirectory <path>`: saved hosts and secrets in that folder only (UI tests and
-        // screenshots against throwaway daemons never touch the user's own hosts or Keychain).
-        let isolated = defaults.string(forKey: "hostsDirectory").map { URL(fileURLWithPath: $0, isDirectory: true) }
+        // Tests and tooling keep hosts and secrets in a folder of their own (`AppData`): they
+        // never touch the user's hosts or Keychain.
+        let isolated = AppData.isolatedDirectory
         let repository = isolated.map { HostRepository(directory: $0) } ?? HostRepository.appDefault()
         let secrets: any SecretStore = isolated.map { FileSecretStore(directory: $0.appending(path: "secrets")) }
             ?? SecretStores.appDefault(

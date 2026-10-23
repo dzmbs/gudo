@@ -155,7 +155,9 @@ RTT at debug), `ssh`, `hosts` (pairing, bootstrap action and time). In the simul
 
 `-testTicket <ticket>` pair and show; `-testTickets <t1>,<t2>` with `-testTicketNames a,b` pair
 with several daemons and open them all in the window; `-hostsDirectory <path>` keeps saved hosts
-and secrets in that folder (tests never touch the user's hosts or Keychain); `-connectionProbe
+and secrets in that folder. Without it, any `-test…` argument, `-dogfood`, `-snapshot`, `-screen`,
+`-localEcho`, `-mock` or an XCTest environment uses `$TMPDIR/<bundle id>.test-data` (`AppData`):
+tests, dogfood runs and screenshot scripts never touch the user's hosts, replays or Keychain; `-connectionProbe
 YES` exposes each open host's connection identity and dial count to UI tests; `-testSSH user@host[:port]` with `-testSSHKey <path>` or
 `-testSSHPassword <pw>`; `-testTrustHostKeys YES`; `-testInstallHelper YES`; `-testRelay
 disabled`; `-testMirror YES` (core VT mirror for pane text).
