@@ -279,6 +279,9 @@ struct InboxView: View {
                 if let summary = item.summary {
                     Button("Copy Summary", systemImage: "text.quote") { copy(summary) }
                 }
+                if let host = item.hostId, let pane = item.paneId, !ReplayStore.shared.sessions(hostId: host, paneId: pane).isEmpty {
+                    Button("Session Replay", systemImage: "play.rectangle.on.rectangle") { model.showReplays(.pane(hostId: host, paneId: pane)) }
+                }
                 Divider()
                 Button("Mark Done", systemImage: "checkmark") {
                     withAnimation(DS.Motion.snappy) { feed.markDone(item.id) }

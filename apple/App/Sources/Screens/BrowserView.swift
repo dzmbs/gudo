@@ -24,6 +24,8 @@ struct BrowserView: View {
     var onOpenAsTab: ((URL) -> Void)?
     /// The user points at an element for the agent beside the page.
     var onPointOut: (() -> Void)?
+    /// Opens the page's recorded agent sessions (Session Replay).
+    var onReplays: (() -> Void)?
 
     @State private var pane: BrowserPane
     private var page: WebPage { pane.page }
@@ -50,10 +52,11 @@ struct BrowserView: View {
         pane: BrowserPane, routedHost: (id: String, name: String)? = nil,
         onOpenExternally: @escaping (URL) -> Void = { _ in }, onDone: (() -> Void)? = nil, doneTitle: String = "Done",
         isFocused: Bool = true, onClose: (() -> Void)? = nil, onNavigate: ((URL) -> Void)? = nil,
-        onPointOut: (() -> Void)? = nil
+        onPointOut: (() -> Void)? = nil, onReplays: (() -> Void)? = nil
     ) {
         self.isFocused = isFocused
         self.onPointOut = onPointOut
+        self.onReplays = onReplays
         self.onClose = onClose
         self.onNavigate = onNavigate
         self.routedHost = routedHost
@@ -156,6 +159,11 @@ struct BrowserView: View {
                     .help("Point Out to Agent")
                     .accessibilityIdentifier("browser-point-out")
             }
+            if let onReplays {
+                Button("Replays", systemImage: "play.rectangle.on.rectangle", action: onReplays)
+                    .help("Replays")
+                    .accessibilityIdentifier("browser-replays")
+            }
             if let onOpenAsTab {
                 Button("Open as Tab", systemImage: "plus.square.on.square") { onOpenAsTab(page.url ?? initialURL) }
                     .help("Open as Tab")
@@ -197,6 +205,10 @@ struct BrowserView: View {
                         }
                         if let onPointOut {
                             Button("Point Out to Agent", systemImage: "hand.point.up.left", action: onPointOut)
+                        }
+                        if let onReplays {
+                            Button("Replays", systemImage: "play.rectangle.on.rectangle", action: onReplays)
+                                .accessibilityIdentifier("browser-replays")
                         }
                         if let onOpenAsTab {
                             Button("Open as Tab", systemImage: "plus.square.on.square") { onOpenAsTab(page.url ?? initialURL) }
@@ -378,7 +390,8 @@ struct BrowserLeafView: View {
                     pane: pane, routedHost: member.hostId.map { (id: $0, name: model.groupName($0)) },
                     isFocused: isFocused, onClose: { model.closeBrowser(member.id) },
                     onNavigate: { model.browserNavigated(member.id, to: $0) },
-                    onPointOut: terminal == nil ? nil : { pointOut(pane) })
+                    onPointOut: terminal == nil ? nil : { pointOut(pane) },
+                    onReplays: ReplayStore.shared.sessions.contains { $0.page == member.id } ? { model.showReplays(.page(member.id)) } : nil)
                     .simultaneousGesture(TapGesture().onEnded { if !isFocused { focus() } })
                     .overlay(alignment: .bottom) { AgentBar(pane: pane) }
             } else {

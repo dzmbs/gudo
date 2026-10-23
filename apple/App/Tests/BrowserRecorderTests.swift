@@ -132,6 +132,19 @@ final class BrowserRecorderTests: XCTestCase {
 
         let session = try XCTUnwrap(BrowserRecorder.shared.store.sessions.first)
         XCTAssertEqual(session.actions.map(\.tool), ["browser_navigate", "browser_type"])
+
+        // It plays back in rrweb-player, offline.
+        let player = await ReplayPlayer(offline: true)
+        let lines = BrowserRecorder.shared.store.eventLines(session.id)
+        await player.load(events: "[" + lines.joined(separator: ",") + "]", size: CGSize(width: 640, height: 400))
+        XCTAssertTrue(player.isReady)
+        XCTAssertFalse(player.isEmpty)
+        XCTAssertGreaterThan(player.duration, 0)
+        XCTAssertGreaterThan(player.offset(of: session.actions[1]), 0)
+        // The page as recorded, rebuilt in rrweb's frame (playing on needs a page on screen).
+        let replayed = try await player.page.callJavaScript(
+            "const f = document.querySelector('iframe'); return f && f.contentDocument ? f.contentDocument.body.textContent : ''") as? String
+        XCTAssertTrue(replayed?.contains("Shop") == true, replayed ?? "")
         XCTAssertEqual(session.paneId, 3)
         BrowserRecorder.shared.finish(id)
         XCTAssertFalse(BrowserRecorder.shared.isRecording(id))

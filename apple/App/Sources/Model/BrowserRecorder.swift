@@ -75,7 +75,7 @@ final class BrowserRecorder {
             current = nil
         }
         if current == nil {
-            let session = ReplaySession(started: entry.time, title: page.title, hostId: entry.pane.hostId, paneId: entry.pane.pane.rawValue)
+            let session = ReplaySession(started: entry.time, title: page.title, hostId: entry.pane.hostId, paneId: entry.pane.pane.rawValue, page: entry.page)
             guard (try? store.create(session)) != nil else { return }
             current = Live(session: session, lastCheckout: entry.time)
             live[entry.page] = current

@@ -887,6 +887,8 @@ private struct SheetContent: View {
             SettingsView()
         case .shortcuts:
             ShortcutsSheet()
+        case .replays:
+            SessionReplaysSheet(request: model.replayRequest)
         }
     }
 

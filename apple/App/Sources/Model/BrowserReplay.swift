@@ -14,9 +14,10 @@ nonisolated struct ReplaySession: Codable, Identifiable, Hashable, Sendable {
     var ended: Date
     /// The page's title at the last action.
     var title: String
-    /// The agent's pane, while it is the same one.
+    /// The agent's pane, while it is the same one, and the page (`BrowserPane.id`).
     var hostId: String?
     var paneId: UInt64?
+    var page: UUID?
     var actions: [ReplayAction] = []
     /// Opened from a file: its page loads nothing from the network when it plays.
     var imported = false
@@ -30,13 +31,14 @@ nonisolated struct ReplaySession: Codable, Identifiable, Hashable, Sendable {
         return actions.lazy.compactMap { $0.urlAfter.flatMap(URL.init(string:))?.host() }.first ?? "Browser Session"
     }
 
-    init(id: UUID = UUID(), started: Date, title: String = "", hostId: String? = nil, paneId: UInt64? = nil) {
+    init(id: UUID = UUID(), started: Date, title: String = "", hostId: String? = nil, paneId: UInt64? = nil, page: UUID? = nil) {
         self.id = id
         self.started = started
         ended = started
         self.title = title
         self.hostId = hostId
         self.paneId = paneId
+        self.page = page
     }
 
     init(from decoder: any Decoder) throws {
@@ -47,6 +49,7 @@ nonisolated struct ReplaySession: Codable, Identifiable, Hashable, Sendable {
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         hostId = try c.decodeIfPresent(String.self, forKey: .hostId)
         paneId = try c.decodeIfPresent(UInt64.self, forKey: .paneId)
+        page = try c.decodeIfPresent(UUID.self, forKey: .page)
         actions = try c.decodeIfPresent([ReplayAction].self, forKey: .actions) ?? []
         imported = try c.decodeIfPresent(Bool.self, forKey: .imported) ?? false
         truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false

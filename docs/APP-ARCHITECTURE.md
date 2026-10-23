@@ -885,3 +885,19 @@ record themselves; their world's own `parent` sends their events to the app, whi
 to the top frame's rrweb (its `message` listener is taken, never added to the page), so a page
 never receives what its embedded frames (a payment form) recorded. Password and `cc-*` fields
 are masked.
+
+Session Replay (`SessionReplayView`, from the page's Replays button or More menu, an agent's
+row in Agents ▸ Session Replay, the palette, or a `.unreplay` file opened in the app): the steps
+(picture, tool, target, verdict) beside rrweb-player in its own `WebPage` (a throwaway data
+store, no navigation, the recorded page in rrweb's script-less sandboxed frame; a session from a
+file also loads nothing from the network). Play, pause, scrub (a tick per step), speed, and
+previous/next step (← →, space); the list follows the playhead.
+
+Sharing: a `.unreplay` file (exported type `<bundle prefix>.unreplay`, opened by the app) is one
+JSON document — `session` (the actions), `events` (rrweb) and `keyframes` (base64 JPEGs) — the
+same bytes for the same session. Export as Playwright Test (`ReplayPlaywright`) writes a
+TypeScript test: `page.goto`, then each step on its recorded locator (`getByRole(…).click()`,
+`.fill()`, `.check()`, `.selectOption()`, `keyboard.press`, `mouse.wheel`); without a locator it
+falls back to role and name, then the screenshot coordinates, and says so in a comment. Replay
+in Browser (`BrowserReplayRunner`) runs the steps again in a new tab by selector, healing by
+role, name and index; steps that wait for the user are skipped, never approved.
