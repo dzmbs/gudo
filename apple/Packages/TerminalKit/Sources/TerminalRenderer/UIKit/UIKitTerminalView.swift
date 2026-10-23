@@ -704,6 +704,10 @@ public final class TerminalView: UIView {
     /// Handles a paste of an image with no text; returns whether it took it.
     public var onPasteAttachment: ((UIPasteboard) -> Bool)?
 
+    /// Type identifiers of the app's own drags that carry text without being text to paste
+    /// (a tab dragged onto a pane's edge): dropped here, they go to the views around it.
+    public var unpastedDragTypes: [String] = []
+
     override public func selectAll(_ sender: Any?) {
         surface.terminal.selectAll()
         selectionChanged(showMenu: true)
@@ -1164,12 +1168,13 @@ extension TerminalView: UIDragInteractionDelegate, UIDropInteractionDelegate {
         return [item]
     }
 
-    /// Text and links. Images and files are the host's (a drawing placed in the pane), and a
-    /// selection dropped back on its own terminal is a slip, not a paste.
+    /// Text and links. Images and files are the host's (a drawing placed in the pane), a
+    /// selection dropped back on its own terminal is a slip, not a paste, and drags of
+    /// `unpastedDragTypes` are for the views around it.
     public func dropInteraction(_ interaction: UIDropInteraction, canHandle session: any UIDropSession) -> Bool {
         if session.localDragSession?.items.contains(where: { $0.localObject as? TerminalView === self }) == true { return false }
         return session.canLoadObjects(ofClass: String.self)
-            && !session.hasItemsConforming(toTypeIdentifiers: ["public.image", "public.file-url"])
+            && !session.hasItemsConforming(toTypeIdentifiers: ["public.image", "public.file-url"] + unpastedDragTypes)
     }
 
     public func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {

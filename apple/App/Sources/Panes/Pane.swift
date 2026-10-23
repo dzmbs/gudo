@@ -54,6 +54,9 @@ final class Pane {
         let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
         view = TerminalView(surface: surface)
         view.onInput = { bytes in bytes.withUnsafeBytes { backend.write($0) } }
+        #if os(iOS)
+        view.unpastedDragTypes = [TabDrag.typeIdentifier]
+        #endif
         surface.sizeFollowsStream = backend.sizeFollowsStream
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
         // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).

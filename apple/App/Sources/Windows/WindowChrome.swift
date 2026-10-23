@@ -81,9 +81,16 @@ struct SceneReader: UIViewRepresentable {
 /// A tab row or chip as a drag: its reference as text (reordering within the host) and, on
 /// iPad, the window activity, so dropping it outside the window opens it in a new window.
 enum TabDrag {
+    /// Marks the drag as a tab's, so a terminal under it does not paste its text.
+    static let typeIdentifier = "dev.unnamed.tab"
+
     @MainActor
     static func provider(for ref: TabRef, in model: WindowModel) -> NSItemProvider {
         let provider = NSItemProvider(object: ref.description as NSString)
+        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) { done in
+            done(Data(ref.description.utf8), nil)
+            return nil
+        }
         if let workspace = model.workspace(ofGroup: ref.hostId), let tab = workspace.session.tabs.first(where: { $0.id == ref.tab }) {
             let record = ref.hostId == HostGroups.localId ? nil : model.app.hosts.record(ref.hostId)
             let payload = HandoffPayload(

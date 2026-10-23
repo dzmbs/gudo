@@ -135,6 +135,7 @@ final class PaneMoveUITests: XCTestCase {
         expectCount(tabRows, tabs + 1, "a second tab")
         app.typeKey("1", modifierFlags: .command)
         let pane = panes.firstMatch
+        let dragged = String(tabRows.element(boundBy: tabs).identifier.dropFirst("tabbar-".count))
         // A hold can open the tab's menu instead of lifting it: dismiss and drag again.
         for _ in 0..<3 where tabRows.count > tabs {
             tabRows.element(boundBy: tabs).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
@@ -147,6 +148,9 @@ final class PaneMoveUITests: XCTestCase {
         expectCount(panes, 2, "beside the pane")
         let frames = panes.allElementsBoundByIndex.map(\.frame).sorted { $0.minX < $1.minX }
         XCTAssertLessThan(frames[0].maxX, frames[1].minX + 1, "side by side")
+        for screen in panes.allElementsBoundByIndex.map({ element($0.identifier + "-screen") }) {
+            XCTAssertFalse((screen.value as? String ?? "").contains(dragged), "the terminal under the drop did not paste the tab")
+        }
         shot("merged-by-drop")
         app.typeKey("w", modifierFlags: .command)
         expectCount(panes, 1, "closed")
