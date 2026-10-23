@@ -906,9 +906,10 @@ impl Core {
                     .map(|a| shell_quote(&a.to_string_lossy()))
                     .collect::<Vec<_>>()
                     .join(" ");
-                // integration for that shell.
+                // integration for that shell. Interactive, so rc files set `PATH` as in any
+                // pane and the install check holds.
                 let pre = pre.as_deref().unwrap_or_default();
-                cmd.args(["-l", "-c", &format!("{pre}{line}; {}", then_shell())]);
+                cmd.args(["-i", "-l", "-c", &format!("{pre}{line}; {}", then_shell())]);
                 for (k, v) in &spec.env {
                     cmd.env(k, v);
                 }

@@ -58,6 +58,8 @@ pub(crate) struct Ws {
     pub usage: Arc<crate::usage::Usage>,
     /// Workflow files (`proto::workflow`).
     pub workflows: Arc<workflows::Workflows>,
+    /// `PATH` as the user's terminal panes see it.
+    pub terminal_path: installs::TerminalPath,
 }
 
 impl Ws {
@@ -78,6 +80,7 @@ impl Ws {
                 .clone()
                 .unwrap_or_else(|| home.join(format!(".{}", brand::DIR_NAME)).join("worktrees")),
             usage: Arc::new(crate::usage::Usage::new(cfg)),
+            terminal_path: installs::TerminalPath::default(),
         }
     }
 
@@ -430,10 +433,16 @@ pub(crate) async fn handle(
                 .await
                 .map(A::WorkflowSaved)
         }
-        R::AgentInstalls => Ok(A::AgentInstalls(installs::check(&core.cfg).await)),
-        R::AgentMcpCommands { register } => Ok(A::AgentMcpCommands(
-            installs::mcp_commands(&core.cfg, register).await,
-        )),
+        R::AgentInstalls => {
+            let path = ws.terminal_path.refresh(&core.cfg).await;
+            Ok(A::AgentInstalls(installs::check(&core.cfg, path)))
+        }
+        R::AgentMcpCommands { register } => {
+            let path = ws.terminal_path.cached(&core.cfg).await;
+            Ok(A::AgentMcpCommands(installs::mcp_commands(
+                &core.cfg, path, register,
+            )))
+        }
     }
 }
 

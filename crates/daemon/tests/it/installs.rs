@@ -91,7 +91,7 @@ async fn names_each_installed_agents_mcp_command() {
 
     let add = c.client.agent_mcp_commands(true).await.unwrap();
     let claude = add.iter().find(|c| c.agent == AgentKind::Claude).unwrap();
-    // Off the login `PATH`: named by path.
+    // Every agent is named by path, on the terminal `PATH` or off it.
     assert_eq!(claude.argv[0], s(&home.join(".local/bin/claude")));
     assert_eq!(
         claude.argv[1..6],
@@ -100,7 +100,13 @@ async fn names_each_installed_agents_mcp_command() {
     let codex = add.iter().find(|c| c.agent == AgentKind::Codex).unwrap();
     assert_eq!(
         codex.argv[..5],
-        ["codex", "mcp", "add", "unnamed_drawings", "--"]
+        [
+            s(&bin.join("codex")).as_str(),
+            "mcp",
+            "add",
+            "unnamed_drawings",
+            "--"
+        ]
     );
     assert!(codex.argv[5].ends_with("un-hook"));
     assert_eq!(codex.argv[6..8], ["mcp", "--state"]);
