@@ -68,7 +68,8 @@ struct PortsList: View {
                     Image(systemName: "globe")
                         .foregroundStyle(.secondary)
                         .frame(width: 22)
-                    TextField("Address or localhost port", text: $address)
+                    // A literal once typed; the prompt is prose.
+                    TextField("Address", text: $address, prompt: Text("Address or localhost port").font(.body))
                         .font(DS.Font.literal)
                         .autocorrectionDisabled()
                         #if os(iOS)

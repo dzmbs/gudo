@@ -175,6 +175,7 @@ Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.pa
 |---|---|---|
 | `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the ink at 20 % behind the glyph (T4) |
 | `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | Ghostty `SearchButtonStyle` hover/press fills; iPad pointer highlight |
+| `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and a soft 25 % halo while focused; typed literals in SF Mono, the prompt in prose |
 | `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28–48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
@@ -693,3 +694,14 @@ side bar. "Kim is typing" and tab avatars use the cut-out `PresenceStack`. "Foll
 one glass capsule: their avatar, the words, a hairline, Stop in the accent; no second coloured
 edge. The shared approval reuses the Agents request block. Arrivals and departures are banners
 with the person's avatar. With people here the toolbar's avatars open `PeopleSwitcher`; alone
+
+
+The browser bar's way back names where it goes ("‹ Ports") in the ink, never the accent; Done
+stays a word. Page dialogs and agent requests over a page are panels, not capsules (three lines
+in a capsule read as a pill-shaped block), with the secondary verb `.quiet` beside the one
+`.primaryGlass` (never glass on glass); "Agent · …  Take Over" is one capsule with a hairline
+and an accent verb. Text prompts are prose even where the typed value is a literal (Hosts quick
+connect, the Ports address). Reviewed without changes: Share Session, Join, Links, Diff, Files,
+Add Host, Settings and Theme, the key bar, pane headers, the welcome state and the iPhone tab
+layout (they already follow the system's components). Screenshots:
+`before-{invite,join,links,diff,files,pairing,settings,keybar,welcome,iphone-*}-*.png`.

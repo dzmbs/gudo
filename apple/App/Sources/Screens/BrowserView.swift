@@ -223,11 +223,18 @@ struct BrowserView: View {
     private var regularBar: some View {
         HStack(spacing: DS.Space.xs) {
             if let onDone {
-                Button(doneTitle, action: onDone)
-                    .labelStyle(.titleOnly)
-                    .buttonStyle(.borderless)
-                    .padding(.trailing, DS.Space.s)
-                    .accessibilityIdentifier("browser-done")
+                // Safari's way back to where the page came from: the ink, never the accent
+                // (toolbars are monochrome).
+                Button(action: onDone) {
+                    if doneTitle == "Done" {
+                        Text(doneTitle)
+                    } else {
+                        Label(doneTitle, systemImage: "chevron.left")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .padding(.trailing, DS.Space.xs)
+                .accessibilityIdentifier("browser-done")
             }
             navigationButtons
             reloadButton
@@ -643,9 +650,10 @@ private struct DialogCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             Label("The page asks", systemImage: "exclamationmark.bubble")
-                .font(.callout.weight(.semibold))
+                .font(DS.Font.banner)
             Text(dialog.message)
                 .font(.callout)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             if dialog.kind == .prompt {
                 TextField("Answer", text: $text)
@@ -656,7 +664,7 @@ private struct DialogCard: View {
                 Spacer()
                 if dialog.kind != .alert {
                     Button(dialog.kind == .beforeunload ? "Stay" : "Cancel") { dialog.answer(false, nil) }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.quiet)
                         .accessibilityIdentifier("page-dialog-dismiss")
                 }
                 Button(dialog.kind == .beforeunload ? "Leave" : "OK") { dialog.answer(true, text) }
@@ -666,7 +674,8 @@ private struct DialogCard: View {
         }
         .padding(DS.Space.l)
         .frame(maxWidth: 440)
-        .floatingCapsule(interactive: true)
+        .chromeContent()
+        .floatingPanel()
     }
 }
 
@@ -682,14 +691,15 @@ private struct AgentBar: View {
             } else if let request = pane.agentRequest {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     Label(request.kind == .approve ? "The agent asks" : "Your turn", systemImage: request.kind == .approve ? "hand.raised" : "person.fill.checkmark")
-                        .font(.callout.weight(.semibold))
+                        .font(DS.Font.banner)
                     Text(request.message)
                         .font(.callout)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Spacer()
                         Button(request.kind == .approve ? "Deny" : "Cancel") { request.answer(false) }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.quiet)
                             .accessibilityIdentifier("agent-deny")
                         Button(request.kind == .approve ? "Allow" : "Done") { request.answer(true) }
                             .buttonStyle(.primaryGlass)
@@ -698,7 +708,8 @@ private struct AgentBar: View {
                 }
                 .padding(DS.Space.l)
                 .frame(maxWidth: 440)
-                .floatingCapsule(interactive: true)
+                .chromeContent()
+                .floatingPanel()
             } else if pane.userHasControl {
                 capsule(dot: DS.Palette.done, text: "You have control") {
                     Button("Hand Back") { pane.userHasControl = false }
@@ -721,15 +732,17 @@ private struct AgentBar: View {
         HStack(spacing: DS.Space.m) {
             Circle().fill(dot).frame(width: 8, height: 8)
             Text(text)
-                .font(.callout.weight(.medium))
+                .font(DS.Font.banner)
                 .lineLimit(1)
+            Hairline(.vertical)
+                .frame(height: 16)
             action()
-                .buttonStyle(.glass)
-                .controlSize(.small)
+                .buttonStyle(.quietProminent)
         }
         .padding(.leading, DS.Space.l)
-        .padding(.trailing, DS.Space.s)
-        .padding(.vertical, DS.Space.s)
+        .padding(.trailing, DS.Space.xs)
+        .padding(.vertical, DS.Space.xs)
+        .chromeContent()
         .floatingCapsule(interactive: true)
     }
 }
