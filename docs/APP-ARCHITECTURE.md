@@ -981,9 +981,10 @@ Everything else is `FilesProviderKit` over the daemon's file RPCs (DAEMON.md §5
   anchor, the enumerators answer `syncAnchorExpired` and the system lists again and works out
   what changed (`HostFilesSession`).
 
-Builds: the extension is always built (and its kit tested) but only runs where the app adds
-domains, which needs the shared groups: `FILES_PROVIDER = YES` and the groups in
-`Brand.xcconfig` (a paid team). Free builds never add a location.
+Builds: the extension builds by its own scheme (`FilesProvider`) and its kit is tested; the app
+embeds it only with a paid team, which gives it a provisioning profile and the shared groups:
+`FILES_PROVIDER = YES`, the groups in `Brand.xcconfig`, and `- target: FilesProvider` among App's
+dependencies in `project.yml`. Free builds never embed it or add a location.
 
 Tests: `FilesProviderKitTests` (`swift test` in `Packages/FilesProviderKit`, needs `cargo build
 -p hostd`): items and hidden/link handling, identifiers through renames and moves and across

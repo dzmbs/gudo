@@ -194,8 +194,8 @@ targets:
         destinationFilters: [iOS]
       - target: NotificationService
         destinationFilters: [iOS]
-      - target: FilesProvider
-        destinationFilters: [iOS]
+      # FilesProvider is embedded only with a paid team (FILES_PROVIDER = YES): its own bundle id
+      # needs a provisioning profile and shared groups. Add `- target: FilesProvider` here then.
       - target: AgentActivityWidget
         destinationFilters: [iOS]
   # Opens the daemons' sealed pushes (PushCrypto) and sets title, body, thread and category.
@@ -228,9 +228,8 @@ targets:
     dependencies:
       - package: NotifyKit
         product: NotifyKit
-  # Paired hosts in the Files app (FilesProviderKit). Built always so it stays compiled and
-  # tested; it only runs where the app adds its domains, which needs the shared groups
-  # (FILES_PROVIDER = YES with a paid team, Brand.xcconfig).
+  # Paired hosts in the Files app (FilesProviderKit). Built by its own scheme so it stays
+  # compiled; the app embeds it only with a paid team (FILES_PROVIDER = YES, Brand.xcconfig).
   FilesProvider:
     type: app-extension
     platform: iOS
@@ -323,6 +322,10 @@ targets:
     dependencies:
       - target: App
 schemes:
+  FilesProvider:
+    build:
+      targets:
+        FilesProvider: all
   App:
     build:
       targets:
