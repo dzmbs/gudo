@@ -21,42 +21,45 @@ struct InviteSheet: View {
     @State private var path: [ShareRoute] = UserDefaults.standard.string(forKey: "shareRoute").flatMap(ShareRoute.init(rawValue:)).map { [$0] } ?? []
 
     var body: some View {
+        #if os(macOS)
+        SheetScaffold("Share Session", primary: SheetAction("Done", identifier: "share-done") { dismiss() }) {
+            NavigationStack(path: $path) { root }
+        }
+        .frame(width: 560, height: 680)
+        #else
         NavigationStack(path: $path) {
-            Group {
-                if let session = workspace.multiplayer {
-                    ShareRoot(workspace: workspace, session: session)
-                        .navigationDestination(for: ShareRoute.self) { route in
-                            switch route {
-                            case .grants: GrantsView(session: session)
-                            case .audit: AuditLogView(session: session)
-                            }
-                        }
-                } else {
-                    EmptyState(
-                        "Sharing Needs the Helper", systemImage: "person.2.slash",
-                        message: "Only hosts running the helper can be shared. This device's own shell and plain SSH hosts stay private.") {
-                        EmptyView()
+            root
+                .navigationTitle("Share Session")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                            .accessibilityIdentifier("share-done")
                     }
                 }
-            }
-            .navigationTitle("Share Session")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .accessibilityIdentifier("share-done")
-                }
-            }
         }
-        #if os(iOS)
         .phoneDetents([.large])
         // People, the invite and its QR code side by side need the room of a page sheet.
         .presentationSizing(.page)
-        #else
-        .frame(minWidth: 520, idealWidth: 560, minHeight: 620, idealHeight: 720)
         #endif
+    }
+
+    @ViewBuilder private var root: some View {
+        if let session = workspace.multiplayer {
+            ShareRoot(workspace: workspace, session: session)
+                .navigationDestination(for: ShareRoute.self) { route in
+                    switch route {
+                    case .grants: GrantsView(session: session)
+                    case .audit: AuditLogView(session: session)
+                    }
+                }
+        } else {
+            EmptyState(
+                "Sharing Needs the Helper", systemImage: "person.2.slash",
+                message: "Only hosts running the helper can be shared. This device's own shell and plain SSH hosts stay private.") {
+                EmptyView()
+            }
+        }
     }
 }
 
@@ -144,6 +147,7 @@ private struct ShareRoot: View {
             SectionTitle("Asking to Join", count: session.knocks.count)
         } footer: {
             Text("They only see the session once you let them in. Earlier output stays hidden unless you choose otherwise.")
+            .foregroundStyle(DS.Palette.textSecondary)
         }
     }
 
@@ -185,7 +189,9 @@ private struct ShareRoot: View {
 
     private var composer: some View {
         Section {
-            TextField("Name, shown to everyone", text: $draft.name)
+            TextField("Name", text: $draft.name, prompt: Text("Name, shown to everyone"))
+                .labelsHidden()
+                .textFieldStyle(.plain)
                 .textContentType(.name)
                 .accessibilityIdentifier("invite-name")
             RolePicker(roles: $draft.roles)
@@ -253,6 +259,7 @@ private struct ShareRoot: View {
             SectionTitle("Invite")
         } footer: {
             Text(composerFooter)
+            .foregroundStyle(DS.Palette.textSecondary)
         }
         .onAppear {
             // Older helpers take neither knock links nor history limits.
@@ -316,6 +323,7 @@ private struct ShareRoot: View {
             SectionTitle("Your Access")
         } footer: {
             Text("Only the host's owner can invite people or see the audit log.")
+            .foregroundStyle(DS.Palette.textSecondary)
         }
     }
 
@@ -514,6 +522,7 @@ private struct InviteResult: View {
             }
         } footer: {
             Text("Anyone with this link or code joins with exactly these rights until it expires or you revoke it in Access & Grants.")
+            .foregroundStyle(DS.Palette.textSecondary)
         }
     }
 

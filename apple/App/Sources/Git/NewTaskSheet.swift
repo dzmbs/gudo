@@ -103,14 +103,22 @@ struct NewTaskSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            "New Agent",
+            cancel: SheetAction("Cancel") { dismiss() },
+            primary: SheetAction(
+                "Start", isEnabled: canStart, isBusy: isStarting, busyTitle: "Starting…",
+                identifier: "launch-start", action: start)
+        ) {
             Form {
                 // On the page, not in a card: a segmented control is a control, not a row.
+                #if os(iOS)
                 Section {
                     RunnerPicker(selection: $runner)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets())
                 }
+                #endif
                 if let unavailable, let host,
                    let guide = AgentInstallGuide(agent: unavailable.agent, os: daemon?.daemonInfo?.os ?? "")
                 {
@@ -155,6 +163,7 @@ struct NewTaskSheet: View {
                 } footer: {
                     if hosts.isEmpty {
                         Text("No host with the helper is connected. Connect one in Hosts first.")
+                            .foregroundStyle(DS.Palette.textSecondary)
                     }
                 }
                 .chromeRows()
@@ -173,7 +182,7 @@ struct NewTaskSheet: View {
                                 .buttonStyle(.borderless)
                                 .help("Another name")
                         }
-                        TextField(derivedBranch, text: $branch, prompt: Text(derivedBranch).foregroundStyle(DS.Palette.textTertiary))
+                        TextField("Branch", text: $branch, prompt: Text(derivedBranch).foregroundStyle(DS.Palette.textTertiary))
                             .font(DS.Font.literal)
                             .autocorrectionDisabled()
                             #if os(iOS)
@@ -181,7 +190,7 @@ struct NewTaskSheet: View {
                             #endif
                             .accessibilityIdentifier("task-branch")
                     } header: {
-                        Text("Name and branch")
+                        SectionTitle("Name and Branch")
                     } footer: {
                         VStack(alignment: .leading, spacing: DS.Space.xs) {
                             if let setup {
@@ -189,25 +198,22 @@ struct NewTaskSheet: View {
                             }
                             portNote
                         }
+                        .foregroundStyle(DS.Palette.textSecondary)
                     }
                     .chromeRows()
                 }
                 if runner != .shell {
-                    Section("Prompt") {
-                        TextEditor(text: $prompt)
-                            .frame(minHeight: 96)
-                            .scrollContentBackground(.hidden)
+                    Section {
+                        // The field's own placeholder, not an overlay on a TextEditor: it sits
+                        // exactly where the caret does on every platform.
+                        TextField("Prompt", text: $prompt, prompt: Text("What should \(runner.title) do? (optional)"), axis: .vertical)
+                            .lineLimit(4...10)
+                            .labelsHidden()
+                            .textFieldStyle(.plain)
                             .focused($isPromptFocused)
-                            .overlay(alignment: .topLeading) {
-                                if prompt.isEmpty {
-                                    Text("What should \(runner.title) do? (optional)")
-                                        .foregroundStyle(DS.Palette.textTertiary)
-                                        .padding(.top, 8)
-                                        .padding(.leading, 5)
-                                        .allowsHitTesting(false)
-                                }
-                            }
                             .accessibilityIdentifier("launch-prompt")
+                    } header: {
+                        SectionTitle("Prompt")
                     }
                     .chromeRows()
                 }
@@ -222,30 +228,14 @@ struct NewTaskSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
-            .navigationTitle("New Agent")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isStarting {
-                        HStack(spacing: DS.Space.s) {
-                            Spinner()
-                                .frame(width: 14, height: 14)
-                            Text("Starting…").foregroundStyle(DS.Palette.textSecondary)
-                        }
-                    } else {
-                        Button("Start", action: start)
-                            .buttonStyle(.primaryGlass)
-                            .disabled(!canStart)
-                            .keyboardShortcut(.return, modifiers: .command)
-                            .accessibilityIdentifier("launch-start")
-                    }
-                }
+            #if os(macOS)
+            // A Mac form draws a card behind every section: the picker sits on the page above it.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                RunnerPicker(selection: $runner)
+                    .padding(.horizontal, DS.Space.xl)
+                    .padding(.top, DS.Space.m)
             }
+            #endif
             .onAppear {
                 let seed = model.newAgentSeed
                 model.newAgentSeed = NewAgentSeed()
@@ -278,7 +268,7 @@ struct NewTaskSheet: View {
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        .frame(minWidth: 460, idealWidth: 500, minHeight: 520)
+        .frame(width: 520)
         #endif
     }
 
