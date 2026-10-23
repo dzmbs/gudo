@@ -66,6 +66,15 @@ struct TerminalApp: App {
         #endif
 
         #if os(macOS)
+        WindowGroup(id: ToolWindowRequest.sceneId, for: ToolWindowRequest.self) { $request in
+            if let request { ToolWindowRoot(request: request) }
+        }
+        .defaultSize(width: 960, height: 680)
+        .windowToolbarStyle(.unified(showsTitle: true))
+        .restorationBehavior(.disabled)
+        .handlesExternalEvents(matching: [])
+        .defaultLaunchBehavior(.suppressed)
+
         Settings {
             SettingsView()
         }
@@ -165,6 +174,12 @@ struct WindowContent: View {
                 guard !restored else { return }
                 restored = true
                 model.openWindow = { request in openWindow(value: request) }
+                #if os(macOS)
+                // Unit tests draw tool windows offscreen themselves; never a real one.
+                if !LaunchOptions.isTesting {
+                    model.openTool = { request in openWindow(id: ToolWindowRequest.sceneId, value: request) }
+                }
+                #endif
                 #if DEBUG && os(iOS)
                 // `-resetWindows YES` (UI tests): start from one window, whatever iPadOS restored.
                 if UserDefaults.standard.bool(forKey: "resetWindows") { WindowContent.closeOtherWindows(keeping: model) }

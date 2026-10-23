@@ -24,6 +24,7 @@ struct SessionReplaysSheet: View {
     @State private var store = ReplayStore.shared
     @State private var path: [UUID] = []
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.isToolWindow) private var isToolWindow
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -35,9 +36,11 @@ struct SessionReplaysSheet: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .accessibilityIdentifier("replays-done")
+                if !isToolWindow {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
+                            .accessibilityIdentifier("replays-done")
+                    }
                 }
             }
             .navigationDestination(for: UUID.self) { id in

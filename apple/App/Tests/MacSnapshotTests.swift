@@ -38,7 +38,10 @@ final class MacSnapshotTests: XCTestCase {
 
     private func makeWindow(_ root: some View, size: CGSize) -> NSWindow {
         let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
-        UserDefaults.standard.set(theme, forKey: TerminalPreferences.Key.theme)
+        // The argument domain, never the app's persistent defaults.
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = theme
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
         let window = OffscreenWindow(
             contentRect: NSRect(x: -30000, y: -30000, width: size.width, height: size.height),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -129,10 +132,38 @@ final class MacSnapshotTests: XCTestCase {
     }
 
     func testSheets() async throws {
-        for route in ["files", "diff", "links", "browser", "launchAgent", "pairing", "join", "invite", "shortcuts", "replays"] {
+        for route in ["links", "launchAgent", "pairing", "join", "invite", "shortcuts"] {
             try await window(route, screen: route)
         }
         try await window("ticket", screen: "ticket")
+    }
+
+    /// Files, Changes, Ports and Replays: windows of their own on the Mac.
+    func testToolWindows() async throws {
+        for route in [SheetRoute.files, .diff, .browser, .replays] {
+            try await tool("tool-\(route.rawValue)") { ToolWindowContent(route: route) }
+        }
+        let entry = FileEntry(path: "~/projects/unnamed/Cargo.toml", name: "Cargo.toml", isDirectory: false, size: 1_412)
+        try await tool("file-preview") {
+            NavigationStack {
+                FilePreviewScreen(
+                    source: MockFileSource(), entry: entry,
+                    actions: FileActions(openInEditor: { _ in }, revealInTerminal: { _ in }, insertPath: { _ in }))
+            }
+        }
+    }
+
+    private func tool(_ name: String, size: CGSize = CGSize(width: 960, height: 680), _ content: () -> some View) async throws {
+        guard wanted(name) else { return }
+        let model = WindowModel(app: .shared)
+        model.start()
+        let window = makeWindow(
+            ThemedRoot { content().environment(model).environment(model.app).environment(\.isToolWindow, true) },
+            size: size)
+        await pump(2)
+        try capture(window, name)
+        window.close()
+        model.close()
     }
 
     func testHostSwitcher() async throws {
