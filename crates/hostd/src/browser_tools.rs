@@ -35,7 +35,7 @@ struct Tool {
 fn target() -> Value {
     json!({
         "type": "object",
-        "description": "What to act on: {\"type\":\"ref\",\"ref\":\"ref_3\"} from a snapshot, or {\"type\":\"coordinate\",\"x\":120,\"y\":340} in viewport pixels of browser_screenshot.",
+        "description": "What to act on: {\"type\":\"ref\",\"ref\":\"ref_3\"} from a snapshot (ref_f1_3 is in a frame), or {\"type\":\"coordinate\",\"x\":120,\"y\":340} in pixels of the last browser_screenshot.",
         "properties": {
             "type": { "type": "string", "enum": ["ref", "coordinate"] },
             "ref": { "type": "string" },
@@ -50,17 +50,21 @@ fn none() -> Value {
     json!({})
 }
 
+fn force() -> Value {
+    json!({ "type": "boolean", "default": false, "description": "Skip the checks that the element is visible, enabled, still and not covered." })
+}
+
 const TOOLS: &[Tool] = &[
     Tool {
         name: "browser_navigate",
-        description: "Open a URL in the browser pane beside this terminal (opening the pane if needed), or move through history with \"back\", \"forward\" or \"reload\". The host's localhost is reachable as on the host. Returns the new page's interactive snapshot.",
+        description: "Open a URL in the browser pane beside this terminal (opening the pane if needed), or move through history with \"back\", \"forward\" or \"reload\". The host's localhost is reachable as on the host. Waits for the page to load; returns its interactive snapshot.",
         properties: || json!({ "url": { "type": "string", "description": "An http(s) URL (a bare host means https://; localhost means http://), or back, forward, reload." } }),
         required: &["url"],
         read_only: false,
     },
     Tool {
         name: "browser_snapshot",
-        description: "Read the page as an accessibility tree, one element per line: role \"name\" [ref_N]. Prefer this over screenshots. filter: interactive (controls only, the default), visible (everything on screen) or all (also off screen). ref limits it to that element's subtree. Unless full is true, a snapshot after the first says only what changed.",
+        description: "Read the page as an accessibility tree, one element per line: role \"name\" = \"value\" (states) [ref_N]; [cursor=pointer] marks other clickable elements, a frame's elements follow its iframe with refs like ref_f1_3. Prefer this over screenshots. filter: interactive (controls in view, the default), visible (everything in view) or all (also off screen). ref limits it to that element's subtree. Unless full is true, a snapshot after the first lists only changes: * new element, + changed, - gone.",
         properties: || {
             json!({
                 "filter": { "type": "string", "enum": ["interactive", "visible", "all"], "default": "interactive" },
@@ -89,33 +93,34 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_click",
-        description: "Click an element. Returns what changed on the page.",
-        properties: || json!({ "target": target(), "modifiers": { "type": "string", "description": "A chord such as shift or cmd+shift." } }),
+        description: "Click an element. Waits until it is visible, enabled and not covered (else says what covers it), clicks, waits for what the click started, and says what changed, or that nothing did and why.",
+        properties: || json!({ "target": target(), "modifiers": { "type": "string", "description": "A chord such as shift or cmd+shift." }, "force": force() }),
         required: &["target"],
         read_only: false,
     },
     Tool {
         name: "browser_double_click",
-        description: "Double-click an element. Returns what changed on the page.",
-        properties: || json!({ "target": target() }),
+        description: "Double-click an element. Says what changed on the page.",
+        properties: || json!({ "target": target(), "force": force() }),
         required: &["target"],
         read_only: false,
     },
     Tool {
         name: "browser_hover",
-        description: "Move the pointer over an element (menus, tooltips). Returns what changed.",
-        properties: || json!({ "target": target() }),
+        description: "Move the pointer over an element (menus, tooltips). Says what changed; hover styles made in CSS alone do not show for it.",
+        properties: || json!({ "target": target(), "force": force() }),
         required: &["target"],
         read_only: false,
     },
     Tool {
         name: "browser_type",
-        description: "Type text into the focused field, or into target first. submit presses Enter after. Password fields are left to the user on the device.",
+        description: "Type text key by key into the focused field, or click target first. submit presses Enter after. Password fields are left to the user on the device.",
         properties: || {
             json!({
                 "text": { "type": "string" },
                 "target": target(),
                 "submit": { "type": "boolean", "default": false },
+                "force": force(),
             })
         },
         required: &["text"],
@@ -123,14 +128,14 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_fill",
-        description: "Set a form field's value at once: text for inputs, true/false for checkboxes, an option's value or text for selects.",
+        description: "Set a form field's value at once, replacing what is there: text for inputs and text areas, a date or number as text, true/false for checkboxes and switches, an option's value or text for selects.",
         properties: || json!({ "target": target(), "value": { "type": ["string", "number", "boolean"] } }),
         required: &["target", "value"],
         read_only: false,
     },
     Tool {
         name: "browser_press",
-        description: "Press keys at the focus: \"Enter\", a chord such as \"cmd+a\", or a sequence such as \"Backspace Backspace\".",
+        description: "Press keys at the focus: \"Enter\", a chord such as \"cmd+a\", or a sequence such as \"Tab Tab Enter\". Useful when a site ignores clicks: focus the control, then press Enter or Space.",
         properties: || json!({ "keys": { "type": "string" }, "repeat": { "type": "integer", "minimum": 1, "maximum": 100, "default": 1 } }),
         required: &["keys"],
         read_only: false,
@@ -185,7 +190,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_tabs",
-        description: "The pages beside this terminal: list them, open a new one (optionally at url), switch to one or close one by tab_id.",
+        description: "The pages beside this terminal, with ids t1, t2, …: list them, open a new one (optionally at url), switch to one or close one by tab_id. Pages a page opens (links to a new window) become tabs here.",
         properties: || {
             json!({
                 "action": { "type": "string", "enum": ["list", "new", "switch", "close"] },
