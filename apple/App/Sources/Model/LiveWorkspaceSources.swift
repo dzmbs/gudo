@@ -1188,9 +1188,11 @@ extension WindowModel {
         if workspace?.hostId != host { show(.host(host)) }
         Task { @MainActor [weak self] in
             for _ in 0..<40 {
-                if let workspace = self?.workspace, workspace.hostId == host,
+                // Through the tab that holds it: a mixed or editor tab on screen would otherwise
+                // stay in front of the host's own tab.
+                if let self, let workspace = self.workspace(ofGroup: host),
                    workspace.session.tabs.contains(where: { $0.root.panes.contains(PaneId(pane)) }) {
-                    workspace.apply(.focus(PaneId(pane)))
+                    self.focus(pane: PaneId(pane), onGroup: host)
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(100))

@@ -240,6 +240,100 @@ final class EditorPanesTests: XCTestCase {
         model.editors.stop()
     }
 
+    /// Leaving full screen's editor (another tab, pane or screen, closing it) ends full screen:
+    /// coming back shows the window, never a bare workbench.
+    func testFullScreenEndsForGoodWhenItsEditorLeavesTheFront() async throws {
+        let model = WindowModel(app: .shared)
+        model.startMixedTabs()
+        model.followFullScreen()
+        var session = Session()
+        session.apply(.split(PaneId(1), .horizontal))
+        let terminal = model.composites.make(fromHost: "h1", tab: session.tabs[0])
+        model.focus(WindowModel.mixedRef(terminal))
+        model.showEditor(proj, placement: .tab)
+        let editorTab = try XCTUnwrap(model.activeMixedTab)
+
+        func settled() async { for _ in 0..<5 { await Task.yield() } }
+
+        // Another tab, then back.
+        model.toggleEditorFullScreen()
+        XCTAssertTrue(model.isEditorFullScreen)
+        model.focus(WindowModel.mixedRef(terminal))
+        await settled()
+        XCTAssertNil(model.fullScreenEditor)
+        model.focus(WindowModel.mixedRef(editorTab))
+        XCTAssertFalse(model.isEditorFullScreen, "back on the editor's tab: the window, not full screen")
+
+        // Another screen (Agents), then back.
+        model.toggleEditorFullScreen()
+        model.destination = .inbox
+        await settled()
+        model.destination = .terminal
+        XCTAssertFalse(model.isEditorFullScreen)
+
+        // The editor closed.
+        model.toggleEditorFullScreen()
+        XCTAssertTrue(model.isEditorFullScreen)
+        model.closeEditor(proj.id)
+        await settled()
+        XCTAssertNil(model.fullScreenEditor)
+        XCTAssertFalse(model.isEditorFullScreen)
+        model.editors.stop()
+    }
+
+    /// The collapsed exit control snaps to the corner or edge nearest where it was let go, clear
+    /// of VS Code's title and status bars.
+    func testTheExitControlSnapsToTheNearestSpot() {
+        typealias Spot = ExitFullScreenControl.Spot
+        let size = CGSize(width: 1000, height: 800)
+        XCTAssertEqual(Spot.nearest(to: CGPoint(x: 10, y: 10), in: size), .topLeading)
+        XCTAssertEqual(Spot.nearest(to: CGPoint(x: 520, y: 30), in: size), .top)
+        XCTAssertEqual(Spot.nearest(to: CGPoint(x: 990, y: 420), in: size), .trailing)
+        XCTAssertEqual(Spot.nearest(to: CGPoint(x: 980, y: 790), in: size), .bottomTrailing)
+        let top = Spot.topTrailing.center(in: size)
+        XCTAssertGreaterThan(top.y - ExitFullScreenControl.size / 2, 35, "below the title bar")
+        let bottom = Spot.bottom.center(in: size)
+        XCTAssertLessThan(bottom.y + ExitFullScreenControl.size / 2, size.height - 22, "above the status bar")
+    }
+
+    #if canImport(UIKit)
+    /// The editor's one web view stays with the newest view showing it: a view on its way out
+    /// (full screen and back mid-transition) never takes it back and leaves the editor blank.
+    func testTheWebViewStaysWithTheNewestViewShowingIt() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let webView = WKWebView()
+        let split = EditorWebHost.Container()
+        window.addSubview(split)
+        split.claim(webView)
+        XCTAssertTrue(webView.superview === split)
+
+        let fullScreen = EditorWebHost.Container()
+        fullScreen.claim(webView)
+        split.show(webView)
+        XCTAssertTrue(webView.superview === fullScreen, "the outgoing view's update leaves it alone")
+        window.addSubview(fullScreen)
+        split.removeFromSuperview()
+        XCTAssertTrue(webView.superview === fullScreen)
+        XCTAssertNotNil(webView.window, "on screen")
+
+        // Back: the new split view shows it; full screen going away does not take it along.
+        let back = EditorWebHost.Container()
+        back.claim(webView)
+        window.addSubview(back)
+        fullScreen.show(webView)
+        fullScreen.removeFromSuperview()
+        XCTAssertTrue(webView.superview === back)
+        XCTAssertNotNil(webView.window)
+
+        // A view made but never shown hands it back to the one still on screen.
+        let stillborn = EditorWebHost.Container()
+        stillborn.claim(webView)
+        window.addSubview(stillborn)
+        stillborn.removeFromSuperview()
+        XCTAssertTrue(webView.superview === back, "the one still on screen shows it again")
+    }
+    #endif
+
     func testOnlyTheWayOutLeavesVSCode() {
         let passing = WorkspaceAction.allShortcutActions.filter(\.passesEditor)
         XCTAssertEqual(Set(passing), Set((1...8).map(WorkspaceAction.selectTab) + [.lastTab, .closePane, .returnToTerminal, .fullScreenEditor]))

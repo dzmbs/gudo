@@ -57,6 +57,8 @@ final class EditorPane: Identifiable {
     private(set) var browser: TunnelBrowser?
     /// The workbench is up in the web view (else the steps, or the snapshot while resuming).
     var isWorkbenchVisible = false
+    /// The web view is on screen in one of the pane's views (not left in one that went away).
+    var isWebViewShown = false
     /// Released after a while off screen: the snapshot stands in until the workbench is back.
     private(set) var isSuspended = false
     /// The workbench as last seen (JPEG), shown while a suspended editor reloads.
@@ -572,7 +574,7 @@ extension WindowModel {
     }
 
     /// The focused editor fills the window: no sidebar, tab strip, toolbar or editor bar. Ends
-    /// by itself when another tab or pane takes the focus.
+    /// when another tab or pane takes the focus (`followFullScreen`).
     var isEditorFullScreen: Bool {
         guard let id = fullScreenEditor, destination == .terminal else { return false }
         return activeMixed?.focusedEditor?.id == id
@@ -582,12 +584,32 @@ extension WindowModel {
     func toggleEditorFullScreen() {
         if isEditorFullScreen {
             fullScreenEditor = nil
+            fullScreenHints.dismiss()
         } else if destination == .terminal, let editor = activeMixed?.focusedEditor {
             fullScreenEditor = editor.id
+            FullScreenHint.showIfNew(on: fullScreenHints)
         }
         #if os(macOS)
         NativeFullScreen.follow(isEditorFullScreen)
         #endif
+    }
+
+    /// Full screen ends for good once its editor is no longer the one in front (another tab,
+    /// pane or screen, the editor closed): coming back never finds the window bare again.
+    func followFullScreen() {
+        guard !isClosed else { return }
+        if fullScreenEditor != nil, !isEditorFullScreen {
+            fullScreenEditor = nil
+            #if os(macOS)
+            NativeFullScreen.follow(false)
+            #endif
+        }
+        withObservationTracking {
+            _ = isEditorFullScreen
+            _ = fullScreenEditor
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.followFullScreen() }
+        }
     }
 
     /// ⌃⌘` (Return to Terminal): from an editor, the terminal beside it in its tab, else the tab

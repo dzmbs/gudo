@@ -66,31 +66,22 @@ struct TerminalArea: View {
     }
 }
 
-/// An editor alone in the window (⌃⌘F): the workbench edge to edge. The way back always shows:
-/// a glass ⤡ in the workbench title bar's empty stretch (between the command center and the
-/// layout controls), spelled out as "Exit Full Screen ⌃⌘F" on entering and whenever the pointer
-/// nears the top, then fading to a quiet glyph. Escape stays VS Code's.
+/// An editor alone in the window (⌃⌘F): the workbench edge to edge, with the way back always
+/// on it (`ExitFullScreenControl`). Escape stays VS Code's.
 struct FullScreenEditorView: View {
     let member: EditorMember
     @Environment(WindowModel.self) private var model
-    @State private var isProminent = true
-    @State private var settle: Task<Void, Never>?
+    @State private var pointer: CGPoint?
+    @AppStorage(ExitFullScreenControl.spotKey) private var spot = ExitFullScreenControl.Spot.bottomTrailing
 
     var body: some View {
         EditorLeafView(member: member, isSplit: false, isFocused: true, focus: {}, isFullScreen: true)
-            .overlay(alignment: .topTrailing) {
-                ExitFullScreenButton(isProminent: isProminent) { model.toggleEditorFullScreen() }
-                    .onHover { inside in if inside { reveal() } }
-                    .padding(.top, 3)
-                    // Clear of VS Code's layout controls at the title bar's trailing end.
-                    .padding(.trailing, model.widthBucket == .compact ? 96 : 150)
+            .overlay {
+                ExitFullScreenControl(spot: $spot, pointer: pointer) { model.toggleEditorFullScreen() }
             }
+            .toastHost(model.fullScreenHints, topInset: ExitFullScreenControl.topInset)
             .onContinuousHover { phase in
-                if case .active(let point) = phase, point.y < 56 { reveal() }
-            }
-            .onAppear {
-                reveal()
-                model.toasts.show(Toast(ExitFullScreenButton.hint, systemImage: "arrow.down.right.and.arrow.up.left"))
+                if case .active(let point) = phase { pointer = point } else { pointer = nil }
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("editor-full-screen-view")
@@ -99,57 +90,213 @@ struct FullScreenEditorView: View {
             .persistentSystemOverlays(.hidden)
             #endif
     }
-
-    private func reveal() {
-        if !isProminent { withAnimation(DS.Motion.snappy) { isProminent = true } }
-        settle?.cancel()
-        settle = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.6)) { isProminent = false }
-        }
-    }
 }
 
-/// Exit Full Screen: the label and ⌃⌘F while prominent, the ⤡ glyph alone and faint at rest.
-private struct ExitFullScreenButton: View {
-    let isProminent: Bool
-    let action: () -> Void
+/// Exit Full Screen: a glass capsule spelled out on entering, then (2.5 s on) a small glass ⤡
+/// that rests where it was last dragged, snapping to the nearest corner or edge. A pointer
+/// coming near spells it out again. Glass, a hairline and a soft shadow keep it legible on any
+/// workbench theme.
+struct ExitFullScreenControl: View {
+    /// Where it rests: a corner or the middle of an edge.
+    enum Spot: String, CaseIterable {
+        case topLeading, top, topTrailing, leading, trailing, bottomLeading, bottom, bottomTrailing
 
-    static var hint: String {
-        #if os(iOS)
-        if GCKeyboard.coalesced == nil { return "Tap Exit Full Screen at the top to leave" }
-        return "Press ⌃⌘F, or tap Exit Full Screen at the top"
-        #else
-        return "Press ⌃⌘F, or click Exit Full Screen at the top"
-        #endif
+        var alignment: Alignment {
+            switch self {
+            case .topLeading: .topLeading
+            case .top: .top
+            case .topTrailing: .topTrailing
+            case .leading: .leading
+            case .trailing: .trailing
+            case .bottomLeading: .bottomLeading
+            case .bottom: .bottom
+            case .bottomTrailing: .bottomTrailing
+            }
+        }
+
+        var isTop: Bool { [.topLeading, .top, .topTrailing].contains(self) }
+        var isBottom: Bool { [.bottomLeading, .bottom, .bottomTrailing].contains(self) }
+        var isTrailing: Bool { [.topTrailing, .trailing, .bottomTrailing].contains(self) }
+        var isLeading: Bool { [.topLeading, .leading, .bottomLeading].contains(self) }
+
+        /// The collapsed glyph's centre at this spot in an area of `size`.
+        func center(in size: CGSize) -> CGPoint {
+            let half = ExitFullScreenControl.size / 2
+            let inset = ExitFullScreenControl.sideInset
+            let x = isLeading ? inset + half : isTrailing ? size.width - inset - half : size.width / 2
+            let y = isTop ? ExitFullScreenControl.topInset + half
+                : isBottom ? size.height - ExitFullScreenControl.bottomInset - half : size.height / 2
+            return CGPoint(x: x, y: y)
+        }
+
+        /// The spot nearest `point`.
+        static func nearest(to point: CGPoint, in size: CGSize) -> Spot {
+            allCases.min { distance(point, $0.center(in: size)) < distance(point, $1.center(in: size)) } ?? .bottomTrailing
+        }
+
+        static func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
     }
 
+    static let spotKey = "editorFullScreen.exitSpot"
+    /// Clear of VS Code's title bar (35 pt) and status bar (22 pt), so none of their controls
+    /// is ever covered.
+    static let topInset: CGFloat = 35 + 10
+    static let bottomInset: CGFloat = 22 + 10
+    static let sideInset: CGFloat = 12
+    static let size: CGFloat = 36
+    private static let space = "exit-full-screen-area"
+
+    @Binding var spot: Spot
+    var pointer: CGPoint?
+    let action: () -> Void
+
+    @State private var isExpanded = true
+    @State private var drag: CGSize = .zero
+    @State private var area: CGSize = .zero
+    @State private var collapse: Task<Void, Never>?
+    @State private var snaps = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var motion: Animation { reduceMotion ? DS.Motion.overlay : DS.Motion.menu }
+
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: DS.Space.xs) {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    .font(.footnote.weight(.semibold))
-                if isProminent {
-                    Text("Exit Full Screen")
-                        .font(.footnote.weight(.medium))
-                        .fixedSize()
-                    Text("⌃⌘F")
-                        .font(.footnote)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .fixedSize()
+        Color.clear
+            .overlay(alignment: spot.alignment) {
+                control
+                    .padding(.top, spot.isTop ? Self.topInset : 0)
+                    .padding(.bottom, spot.isBottom ? Self.bottomInset : 0)
+                    .padding(.leading, spot.isLeading ? Self.sideInset : 0)
+                    .padding(.trailing, spot.isTrailing ? Self.sideInset : 0)
+                    .offset(drag)
+            }
+            .onGeometryChange(for: CGSize.self, of: { $0.size }) { area = $0 }
+            .coordinateSpace(.named(Self.space))
+            .onAppear { reveal() }
+            .onDisappear { collapse?.cancel() }
+            .onChange(of: pointer) { _, point in
+                guard drag == .zero else { return }
+                if let point, Spot.distance(point, spot.center(in: area)) < 96 {
+                    reveal(holding: true)
+                } else if collapse == nil, isExpanded {
+                    settle()
                 }
             }
-            .padding(.horizontal, isProminent ? DS.Space.m : DS.Space.s)
-            .frame(minWidth: 30, minHeight: 30)
+    }
+
+    private var control: some View {
+        Button(action: action) {
+            HStack(spacing: DS.Space.s) {
+                // The glyph stays at the edge it rests on while the words come and go.
+                if spot.isTrailing { label }
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16)
+                if !spot.isTrailing { label }
+            }
+            .padding(.horizontal, isExpanded ? 14 : 0)
+            .frame(minWidth: Self.size, minHeight: Self.size)
+            // The words fade inside the capsule as it narrows, never past its edge.
+            .clipShape(.capsule)
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .capsule)
-        .opacity(isProminent ? 1 : 0.4)
+        .floatingCapsule(interactive: true)
+        .chromeContent()
+        .highPriorityGesture(dragToMove)
+        .sensoryFeedback(DS.Haptic.armed, trigger: snaps)
+        .onHover { inside in if inside { reveal(holding: true) } else { settle() } }
         .help("Exit Full Screen (⌃⌘F)")
         .accessibilityLabel("Exit Full Screen")
+        .accessibilityValue(spot.rawValue)
         .accessibilityIdentifier("editor-exit-full-screen")
+    }
+
+    @ViewBuilder private var label: some View {
+        if isExpanded {
+            HStack(spacing: DS.Space.s) {
+                Text("Exit Full Screen")
+                    .font(.subheadline.weight(.medium))
+                if Self.hasKeyboard {
+                    Text("⌃⌘F")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize()
+            .transition(.asymmetric(
+                insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.06)),
+                removal: .opacity.animation(.easeOut(duration: 0.1))))
+        }
+    }
+
+    private var dragToMove: some Gesture {
+        // In the area's space: the control's own moves with it.
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.space))
+            .onChanged { value in
+                collapse?.cancel()
+                collapse = nil
+                drag = value.translation
+            }
+            .onEnded { value in
+                // A flick carries it on a little.
+                let carry = 0.3
+                let end = CGPoint(
+                    x: value.location.x + (value.predictedEndLocation.x - value.location.x) * carry,
+                    y: value.location.y + (value.predictedEndLocation.y - value.location.y) * carry)
+                withAnimation(reduceMotion ? DS.Motion.overlay : DS.Motion.press) {
+                    spot = Spot.nearest(to: end, in: area)
+                    drag = .zero
+                }
+                snaps += 1
+                settle()
+            }
+    }
+
+    /// Spelled out; collapses again 2.5 s on unless `holding` (the pointer is on it).
+    private func reveal(holding: Bool = false) {
+        if !isExpanded { withAnimation(motion) { isExpanded = true } }
+        collapse?.cancel()
+        collapse = nil
+        if !holding { settle(after: .seconds(2.5)) }
+    }
+
+    private func settle(after delay: Duration = .seconds(1.2)) {
+        collapse?.cancel()
+        collapse = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            withAnimation(motion) { isExpanded = false }
+            collapse = nil
+        }
+    }
+
+    static var hasKeyboard: Bool {
+        #if os(iOS)
+        GCKeyboard.coalesced != nil
+        #else
+        true
+        #endif
+    }
+}
+
+/// The first few times in full screen: how to get back, as a banner.
+enum FullScreenHint {
+    static let shownKey = "editorFullScreen.hintsShown"
+    static let times = 3
+
+    /// The first few times only: after that the control speaks for itself.
+    @MainActor static func showIfNew(on center: ToastCenter) {
+        let shown = UserDefaults.standard.integer(forKey: shownKey)
+        guard shown < times else { return }
+        UserDefaults.standard.set(shown + 1, forKey: shownKey)
+        center.show(toast)
+    }
+
+    static var toast: Toast {
+        Toast(ExitFullScreenControl.hasKeyboard ? "Press ⌃⌘F or tap ⤡ to exit. Drag ⤡ anywhere." : "Tap ⤡ to exit full screen. Drag it anywhere.",
+              systemImage: "arrow.down.right.and.arrow.up.left",
+              // An action keeps it up long enough to read.
+              action: Toast.Action("Got It") { UserDefaults.standard.set(times, forKey: shownKey) })
     }
 }
 

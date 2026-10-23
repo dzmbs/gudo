@@ -196,6 +196,50 @@ final class AgentApprovalsUITests: XCTestCase {
         closeAgentPane()
     }
 
+    /// New Agent while a VS Code tab is in front: the agent's own tab comes forward, from
+    /// Agents' + and from the sidebar's +, never the editor's.
+    func testNewAgentComesForwardOverAnEditorTab() throws {
+        try launch()
+        func openEditor() {
+            palette("Open in VS Code")
+            let accept = element("editor-licence-accept")
+            let web = element("editor-web")
+            // The licence comes up once, when the host's editor first starts.
+            for _ in 0..<40 where !web.exists {
+                if accept.exists, accept.isHittable { accept.tap() }
+                _ = web.waitForExistence(timeout: 1)
+            }
+            XCTAssertTrue(web.exists, "the editor is in front")
+        }
+        func start(_ prompt: String) {
+            let field = app.textViews.matching(identifier: "launch-prompt").firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            field.tap()
+            field.typeText(prompt)
+            let worktree = app.switches["task-worktree"].firstMatch
+            if worktree.waitForExistence(timeout: 2), worktree.value as? String == "1" {
+                worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            }
+            element("launch-start").tap()
+            XCTAssertTrue(field.waitForNonExistence(timeout: 20))
+            XCTAssertTrue(agentScreen(containing: "prompt: \(prompt)").waitForExistence(timeout: 30), "the agent's tab is in front")
+            XCTAssertTrue(element("editor-web").waitForNonExistence(timeout: 5), "the editor's tab is not")
+        }
+
+        openEditor()
+        element("sidebar-inbox").tap()
+        element("inbox-new").tap()
+        element("inbox-new-agent").tap()
+        start("from agents")
+        shot("new-agent-from-agents")
+
+        openEditor()
+        element("new-tab").tap()
+        element("new-tab-agent").tap()
+        start("from the sidebar")
+        closeAgentPane()
+    }
+
     /// New Agent from each entry point: ⇧⌘N, the sidebar's +, the host's +, Agents' +, then
     /// Start from one; with an agent running, the host's Agents group has its own +.
     func testNewAgentFromEveryEntryPoint() throws {
