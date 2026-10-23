@@ -337,6 +337,13 @@ final class LiveAgentFeed: AgentFeed {
         window?.reveal(host: daemon.hostId, pane: pane)
     }
 
+    func installs(on host: LaunchHost.ID) async -> [AgentKind: InstallState]? {
+        guard let daemon = hosts.connection(host) as? DaemonConnection,
+              let api = try? daemon.workspace.client() as? DaemonAgentInstallAPI,
+              let list = try? await api.agentInstalls() else { return nil }
+        return Dictionary(list.map { (AgentKind($0.program), $0.state) }) { first, _ in first }
+    }
+
     func launch(_ request: AgentLaunchRequest) async throws -> String? {
         guard let daemon = hosts.connection(request.hostId) as? DaemonConnection else { throw HostError.notConnected }
         let api = try daemon.workspace.client()

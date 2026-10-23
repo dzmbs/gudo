@@ -1,6 +1,7 @@
 import DesignSystem
 import Foundation
 import Observation
+import enum UnnamedCore.InstallState
 
 // Stand-ins for the daemon-backed sources until the wiring lands. They hold believable data so
 // every screen can be designed, screenshotted and reviewed against real-length content.
@@ -111,6 +112,19 @@ final class MockAgentFeed: AgentFeed {
                 state: .working, since: .now, prompt: request.prompt, canReply: true),
             at: 0)
         return nil
+    }
+
+    /// Answers after a moment (`-mockAgentInstallDelay` seconds), as a host does;
+    /// `-mockAgentInstall notOnPath` or `missing` for Claude Code's other states.
+    func installs(on host: LaunchHost.ID) async -> [AgentKind: InstallState]? {
+        let delay = UserDefaults.standard.double(forKey: "mockAgentInstallDelay")
+        try? await Task.sleep(for: .seconds(delay > 0 ? delay : 1.5))
+        let claude: InstallState = switch UserDefaults.standard.string(forKey: "mockAgentInstall") {
+        case "notOnPath": .notOnPath(path: "/Users/you/.local/bin/claude")
+        case "missing": .missing
+        default: .installed(path: "/Users/you/.local/bin/claude")
+        }
+        return [.claude: claude, .codex: .installed(path: "/opt/homebrew/bin/codex")]
     }
 
     /// Standing approvals per item (the renderer agent has one in the screenshots).

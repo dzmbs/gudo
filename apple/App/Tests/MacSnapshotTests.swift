@@ -139,6 +139,44 @@ final class MacSnapshotTests: XCTestCase {
         try await window("ticket", screen: "ticket")
     }
 
+    /// New Agent opens at its final size: the host's answer (Claude Code off the PATH here)
+    /// changes the status row, never the sheet.
+    func testNewAgentKeepsItsSize() async throws {
+        guard wanted("launchAgent-steady") else { return }
+        for answer in ["installed", "notOnPath", "missing"] {
+            try await newAgent(answer: answer)
+        }
+    }
+
+    private func newAgent(answer: String) async throws {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments["mockAgentInstall"] = answer
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        defer {
+            arguments["mockAgentInstall"] = nil
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        }
+        let model = WindowModel(app: .shared)
+        model.start()
+        let window = makeWindow(WindowContent(request: nil, model: model).environment(AppModel.shared), size: CGSize(width: 1180, height: 760))
+        for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
+        model.sheet = .launchAgent
+        var opened: NSRect?
+        for _ in 0..<40 where opened == nil {
+            await pump(0.05)
+            opened = window.attachedSheet?.frame
+        }
+        let sheet = try XCTUnwrap(window.attachedSheet)
+        try capture(sheet, "launchAgent-checking-\(answer)")
+        await pump(2.5)
+        XCTAssertEqual(sheet.frame.size, opened?.size, "the sheet keeps the size it opened at")
+        try capture(sheet, "launchAgent-\(answer)")
+        model.sheet = nil
+        await pump(0.3)
+        window.close()
+        model.close()
+    }
+
     /// Files, Changes, Ports and Replays: windows of their own on the Mac.
     func testToolWindows() async throws {
         for route in [SheetRoute.files, .diff, .browser, .replays] {
