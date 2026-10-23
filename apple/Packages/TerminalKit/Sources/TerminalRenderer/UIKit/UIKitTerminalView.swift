@@ -36,6 +36,12 @@ public final class TerminalView: UIView {
     /// The pointer over the terminal (view points), nil when it leaves: hover affordances
     /// drawn by the host (a command's ✓/✗ and run time).
     public var onPointerMoved: ((CGPoint?) -> Void)?
+    /// The host's focused pane: it draws the focused cursor while its window is key, even with
+    /// the software keyboard down (no first responder), since typing goes there next.
+    public var isSelected = false {
+        didSet { if isSelected != oldValue { updateFocus() } }
+    }
+    private var focusObservers: [NSObjectProtocol] = []
     private var hoveredLinkTarget: TerminalLink?
     /// Where the last tap landed (view points), to anchor what it opens (a link's popover).
     public private(set) var lastTapLocation: CGPoint?
@@ -100,8 +106,10 @@ public final class TerminalView: UIView {
         self.surface = surface
         super.init(frame: .zero)
         layer.addSublayer(surface.layer)
-        backgroundColor = .black
+        backgroundColor = surface.backgroundColor.map(UIColor.init(cgColor:)) ?? .black
         isMultipleTouchEnabled = true
+        // Off screen until it is the key window's focused terminal: a hollow, steady cursor.
+        surface.isFocused = false
 
 
         installGestures()
@@ -141,8 +149,38 @@ public final class TerminalView: UIView {
         copiedToast.center = CGPoint(x: bounds.midX, y: bounds.minY + 28)
     }
 
+    /// Ghostty's focus: a solid, blinking cursor only in the focused terminal of the key window
+    /// of an active scene; otherwise (another split, another window, the app in the background)
+    /// a hollow, steady one.
+    private func updateFocus() {
+        guard let window else {
+            surface.isFocused = false
+            return
+        }
+        let sceneActive = window.windowScene.map { $0.activationState == .foregroundActive } ?? true
+        surface.isFocused = (isFirstResponder || isSelected) && window.isKeyWindow && sceneActive
+    }
+
+    override public func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        focusObservers.forEach(NotificationCenter.default.removeObserver)
+        focusObservers = []
+        guard let newWindow else { return }
+        let center = NotificationCenter.default
+        let update: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateFocus() }
+        }
+        for name in [UIWindow.didBecomeKeyNotification, UIWindow.didResignKeyNotification] {
+            focusObservers.append(center.addObserver(forName: name, object: newWindow, queue: .main, using: update))
+        }
+        for name in [UIScene.didActivateNotification, UIScene.willDeactivateNotification] {
+            focusObservers.append(center.addObserver(forName: name, object: newWindow.windowScene, queue: .main, using: update))
+        }
+    }
+
     override public func didMoveToWindow() {
         super.didMoveToWindow()
+        updateFocus()
         guard window != nil else {
             surface.stopDisplayLink()
             stopMomentum()
@@ -249,7 +287,7 @@ public final class TerminalView: UIView {
     @discardableResult
     override public func becomeFirstResponder() -> Bool {
         guard super.becomeFirstResponder() else { return false }
-        surface.isFocused = true
+        updateFocus()
         emit(surface.terminal.encodeFocus(true))
         onFocus?()
         return true
@@ -258,7 +296,7 @@ public final class TerminalView: UIView {
     @discardableResult
     override public func resignFirstResponder() -> Bool {
         guard super.resignFirstResponder() else { return false }
-        surface.isFocused = false
+        updateFocus()
         emit(surface.terminal.encodeFocus(false))
         repeater.stop()
         repeatingKey = nil
