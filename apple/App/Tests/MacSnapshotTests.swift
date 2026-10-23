@@ -139,7 +139,14 @@ final class MacSnapshotTests: XCTestCase {
         try await window("ticket", screen: "ticket")
     }
 
-    /// Files, Changes, Ports and Replays: windows of their own on the Mac.
+    /// Files, Changes, Ports and Replays beside the focused pane (the default on the Mac).
+    func testToolLeaves() async throws {
+        for route in [SheetRoute.files, .diff, .browser, .replays] {
+            try await window("leaf-\(route.rawValue)") { $0.sheet = route }
+        }
+    }
+
+    /// Files, Changes, Ports and Replays: windows of their own on the Mac (⌥).
     func testToolWindows() async throws {
         for route in [SheetRoute.files, .diff, .browser, .replays] {
             try await tool("tool-\(route.rawValue)") { ToolWindowContent(route: route) }

@@ -1,9 +1,10 @@
 import DesignSystem
+import PaneLayout
 import SwiftUI
 
-/// Files, Changes, Ports and Session Replays on the Mac: windows of their own beside the
-/// terminal (Finder's, Xcode's), not sheets that block the window they came from. Each belongs
-/// to the window that opened it and shows that window's host; asking again brings it forward.
+/// Files, Changes, Ports and Session Replays in a window of their own on the Mac (⌥, or a tool
+/// leaf's Open in New Window; leaves are the default, `ToolLeaves.swift`). Each belongs to the
+/// window that opened it and shows that window's host; asking again brings it forward.
 struct ToolWindowRequest: Codable, Hashable {
     var route: String
     /// The opening window's `WindowModel.serial`.
@@ -13,15 +14,7 @@ struct ToolWindowRequest: Codable, Hashable {
 }
 
 extension SheetRoute {
-    /// Browsing tools kept open beside the terminal: a window on the Mac, a sheet elsewhere.
-    var opensInWindow: Bool {
-        switch self {
-        case .files, .diff, .browser, .replays: true
-        default: false
-        }
-    }
-
-    /// The window's title until its content names it.
+    /// A browsing tool's name (its window's title until its content names it).
     var toolTitle: String {
         switch self {
         case .files: "Files"
@@ -65,7 +58,6 @@ struct ToolWindowRoot: View {
 /// One tool, sized for what it shows, on the window's seamless titlebar.
 struct ToolWindowContent: View {
     let route: SheetRoute
-    @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
 
     var body: some View {
@@ -77,24 +69,7 @@ struct ToolWindowContent: View {
     }
 
     @ViewBuilder private var content: some View {
-        switch route {
-        case .files:
-            NavigationStack {
-                FilesBrowserView(
-                    source: model.files,
-                    onOpenInEditor: model.files.unavailableReason == nil ? { path in model.openEditor(path: path) } : nil,
-                    onRevealInTerminal: { model.revealInTerminal($0) },
-                    onInsertPath: { model.insertInTerminal($0) })
-            }
-        case .diff:
-            NavigationStack { DiffReviewView(source: model.diffs) }
-        case .browser:
-            BrowserSheet()
-        case .replays:
-            SessionReplaysSheet(request: model.replayRequest)
-        default:
-            EmptyView()
-        }
+        if let tool = ToolMember.Tool(route: route) { ToolContent(tool: tool) }
     }
 
     private var minSize: CGSize {

@@ -29,6 +29,8 @@ struct MixedTabTree: PaneTree {
 
     func browser(_ leaf: PaneId) -> BrowserMember? { tab?.browsers[leaf] }
 
+    func tool(_ leaf: PaneId) -> ToolMember? { tab?.tools[leaf] }
+
     func focus(leaf: PaneId) {
         model.focusLeaf(leaf, inMixedTab: id)
     }

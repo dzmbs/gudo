@@ -32,31 +32,28 @@ struct DiffReviewView: View {
     @State private var notes: [ReviewNote] = []
     @State private var composing: NoteAnchor?
     @State private var isSending = false
+    /// The review's width: side by side only where both sides have room (a narrow leaf is unified).
+    @State private var width = CGFloat.infinity
+    @Environment(\.toolLeaf) private var leaf
 
     var body: some View {
         content
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .chromeContent()
-            .navigationTitle(repository.map { ($0.root as NSString).lastPathComponent } ?? source.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .navigationSubtitle(repository?.branch ?? "")
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    scopeMenu
-                    Menu("Layout", systemImage: isSplit ? "rectangle.split.2x1" : "rectangle") {
-                        Picker("Layout", selection: $layoutPreference) {
-                            Text("Automatic").tag(DiffLayout.automatic)
-                            Text("Unified").tag(DiffLayout.unified)
-                            Text("Side by Side").tag(DiffLayout.split)
-                        }
+            .toolChrome(repository.map { ($0.root as NSString).lastPathComponent } ?? source.title, subtitle: repository?.branch ?? "") {
+                scopeMenu
+                Menu("Layout", systemImage: isSplit ? "rectangle.split.2x1" : "rectangle") {
+                    Picker("Layout", selection: $layoutPreference) {
+                        Text("Automatic").tag(DiffLayout.automatic)
+                        Text("Unified").tag(DiffLayout.unified)
+                        Text("Side by Side").tag(DiffLayout.split)
                     }
-                    .help("Layout: automatic, unified or side by side")
-                    .menuIndicator(.hidden)
-                    Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }
-                        .help("Reload (⌘R)")
-                        .keyboardShortcut("r", modifiers: .command)
                 }
+                .help("Layout: automatic, unified or side by side")
+                .menuIndicator(.hidden)
+                Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }
+                    .help("Reload (⌘R)")
+                    .toolShortcut("r")
             }
             .background(theme.background.ignoresSafeArea())
             .safeAreaInset(edge: .bottom, spacing: 0) { reviewBar }
@@ -70,9 +67,9 @@ struct DiffReviewView: View {
         case .split: return true
         case .automatic:
             #if os(iOS)
-            return sizeClass == .regular
+            return sizeClass == .regular && width >= 720
             #else
-            return true
+            return width >= 720
             #endif
         }
     }
@@ -213,8 +210,12 @@ struct DiffReviewView: View {
                 }
             }
         } label: {
-            Label(scopeShort, systemImage: scopeSymbol)
-                .labelStyle(.titleAndIcon)
+            // A leaf's bar keeps its room for the title: the scope by its symbol there.
+            if leaf == nil {
+                Label(scopeShort, systemImage: scopeSymbol).labelStyle(.titleAndIcon)
+            } else {
+                Label(scopeShort, systemImage: scopeSymbol).labelStyle(.iconOnly)
+            }
         }
         .menuIndicator(.visible)
         .accessibilityIdentifier("diff-scope")
@@ -288,7 +289,7 @@ struct DiffReviewView: View {
                 }
                 .buttonStyle(.primaryGlass)
                 .disabled(reviewer == nil || isSending)
-                .keyboardShortcut(.return, modifiers: .command)
+                .toolShortcut(.return)
                 .accessibilityIdentifier("diff-send-review")
             }
             .padding(.horizontal, DS.Space.l)

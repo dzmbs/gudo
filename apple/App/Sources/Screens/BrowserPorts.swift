@@ -31,7 +31,7 @@ struct BrowserSheet: View {
                 }
             }
         }
-        .macMinimumSize(width: 720, height: 520)
+        .toolMinimumSize(width: 720, height: 520)
         .presentationSizing(.page)
     }
 }
@@ -92,11 +92,7 @@ struct PortsList: View {
         .listStyle(.insetGrouped)
         #endif
         .chromeGrouped()
-        .navigationTitle("Ports")
-        .navigationSubtitle(model.ports.hostName)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .toolChrome("Ports", subtitle: model.ports.hostName)
         .animation(DS.Motion.snappy, value: ports)
         .accessibilityIdentifier("ports-list")
     }
