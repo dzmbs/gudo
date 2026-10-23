@@ -293,7 +293,8 @@ public struct CommandPalette: View {
     }
 }
 
-/// A shortcut as small muted key caps, right-aligned in palette rows (Raycast).
+/// A shortcut right-aligned in palette rows as plain glyphs, the way system menus, Ghostty's
+/// palette and the host switcher show them: grey boxes behind every key read as clutter.
 struct PaletteKeys: View {
     let symbols: [String]
 
@@ -302,19 +303,10 @@ struct PaletteKeys: View {
     }
 
     var body: some View {
-        HStack(spacing: 3) {
-            ForEach(Array(symbols.enumerated()), id: \.offset) { _, symbol in
-                Text(symbol)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .monospacedDigit()
-                    .padding(.horizontal, symbol.count > 1 ? 4 : 0)
-                    .frame(minWidth: 18, minHeight: 18)
-                    .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.chip))
-            }
-        }
-        .foregroundStyle(DS.Palette.textSecondary)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(symbols.joined())
+        ShortcutLabel(symbols)
+            .font(DS.Font.menuShortcut)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(symbols.joined())
     }
 }
 

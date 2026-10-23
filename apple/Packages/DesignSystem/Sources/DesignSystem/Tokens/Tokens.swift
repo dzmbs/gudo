@@ -99,6 +99,11 @@ public extension DS {
         public static let keyBarPhone: CGFloat = 44
         public static let keyBarPad: CGFloat = 52
         public static let keyBarHardware: CGFloat = 36
+        /// A swipe action's width (Mail: 74).
+        public static let swipeAction: CGFloat = 74
+        public static let statusDot: CGFloat = 8
+        /// The host switcher's width: a host name, its state and ⌃⌘9 on one line.
+        public static let switcherWidth: CGFloat = 320
     }
 }
 
@@ -132,6 +137,57 @@ public extension DS {
         /// Toasts stay this long (long enough to read eight words).
         public static let toastDuration = Duration.milliseconds(2400)
         public static let feedbackDelay = Duration.milliseconds(200)
+
+        // to wobble, quick enough to feel attached to the finger.
+
+        /// Banners dropping in and lifting out.
+        public static let banner = Animation.spring(response: 0.42, dampingFraction: 0.82)
+        /// Menus, popovers and the highlight moving between their rows.
+        public static let menu = Animation.spring(response: 0.3, dampingFraction: 0.86)
+        /// A row settling open or shut after a swipe.
+        public static let swipe = Animation.spring(response: 0.32, dampingFraction: 0.86)
+        /// A control's pressed state.
+        public static let press = Animation.spring(response: 0.2, dampingFraction: 0.7)
+        /// Errors stay longer than confirmations: they are read, not glanced at.
+        public static let bannerErrorDuration = Duration.seconds(4)
+    }
+}
+
+// MARK: - Shadows
+
+public extension DS {
+    /// heavier shadow to read at all.
+    nonisolated enum Shadow: Sendable {
+        /// Banners, hint capsules, the agent cards: lifted a little off whatever is under them.
+        case float
+        /// The palette and the host switcher: the top of the stack.
+        case panel
+
+        func opacity(dark: Bool) -> Double {
+            switch self {
+            case .float: dark ? 0.35 : 0.12
+            case .panel: dark ? 0.45 : 0.16
+            }
+        }
+
+        var radius: CGFloat { self == .float ? 16 : 28 }
+        var y: CGFloat { self == .float ? 6 : 12 }
+    }
+}
+
+public extension View {
+    /// One of the two shadows, weighted for the chrome's scheme.
+    func shadow(_ shadow: DS.Shadow) -> some View {
+        modifier(ShadowModifier(shadow: shadow))
+    }
+}
+
+private struct ShadowModifier: ViewModifier {
+    let shadow: DS.Shadow
+    @Environment(\.chrome) private var chrome
+
+    func body(content: Content) -> some View {
+        content.shadow(color: .black.opacity(shadow.opacity(dark: chrome.scheme == .dark)), radius: shadow.radius, y: shadow.y)
     }
 }
 

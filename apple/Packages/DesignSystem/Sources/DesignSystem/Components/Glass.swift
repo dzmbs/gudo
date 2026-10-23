@@ -10,25 +10,48 @@ import SwiftUI
 
 public extension View {
     /// A floating panel over content: palette, search bar, reconnect card. The glass is tinted
-    /// `surface_2`), not the system's grey. `elevated` adds a hairline edge and a soft shadow for
-    /// a panel that sits above everything (the palette).
+    /// `surface_2`), not the system's grey. Every floating surface gets a hairline edge and the
+    /// float shadow so it lifts off whatever is under it; `elevated` casts the deeper panel
+    /// shadow for what sits above everything (the palette).
     func floatingPanel(cornerRadius: CGFloat = DS.Radius.panel, elevated: Bool = false) -> some View {
         modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius), interactive: false, elevated: elevated))
     }
 
-    /// A floating capsule: toasts, the resize readout on iPad, compact bars.
+    /// A floating capsule: banners, hints, the resize readout on iPad, compact bars.
     func floatingCapsule(interactive: Bool = false) -> some View {
         modifier(ThemedGlass(shape: .capsule, interactive: interactive, elevated: false))
+    }
+
+    /// key pill at primary 15 %): a lit rim on dark chrome, a faint ink line on light.
+    func glassEdge(_ shape: some InsettableShape) -> some View {
+        modifier(GlassEdge(shape: shape))
+    }
+}
+
+private struct GlassEdge<S: InsettableShape>: ViewModifier {
+    let shape: S
+    @Environment(\.chrome) private var chrome
+
+    func body(content: Content) -> some View {
+        let dark = chrome.scheme == .dark
+        content.overlay {
+            shape
+                .strokeBorder(dark ? Color.white.opacity(0.16) : Color.black.opacity(0.08), lineWidth: 0.5)
+                .blendMode(dark ? .plusLighter : .normal)
+                .allowsHitTesting(false)
+        }
     }
 }
 
 /// Glass tinted with the chrome's surface: the paper itself on light chrome (a raised grey there
-/// reads as a flat grey card), the raised surface on dark.
-private struct ThemedGlass<S: Shape>: ViewModifier {
+/// reads as a flat grey card), the raised surface on dark. Under Reduce Transparency the surface
+/// is opaque, as the system's own bars are.
+private struct ThemedGlass<S: InsettableShape>: ViewModifier {
     let shape: S
     let interactive: Bool
     let elevated: Bool
     @Environment(\.chrome) private var chrome
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     /// How much of the surface tints the glass: enough to carry the theme's hue, little enough
     /// that the glass still reads as glass.
@@ -37,13 +60,17 @@ private struct ThemedGlass<S: Shape>: ViewModifier {
     func body(content: Content) -> some View {
         let light = chrome.scheme == .light
         let surface = light ? chrome.baseColor : chrome.raisedColor
-        let glass = Glass.regular.tint(surface.opacity(elevated && light ? 0.8 : Self.tint))
-        content
-            .glassEffect(interactive ? glass.interactive() : glass, in: shape)
-            .overlay {
-                if elevated { shape.stroke(chrome.border, lineWidth: 0.5) }
+        // Light chrome needs more of its paper: text under clear glass reads through it.
+        let glass = Glass.regular.tint(surface.opacity(light ? 0.88 : Self.tint))
+        Group {
+            if reduceTransparency {
+                content.background(surface, in: shape)
+            } else {
+                content.glassEffect(interactive ? glass.interactive() : glass, in: shape)
             }
-            .shadow(color: .black.opacity(elevated ? (light ? 0.14 : 0.4) : 0), radius: 28, y: 12)
+        }
+        .glassEdge(shape)
+        .shadow(elevated ? .panel : .float)
     }
 }
 
@@ -156,4 +183,50 @@ private struct LitModifier: ViewModifier {
             .animation(DS.Motion.quick, value: isOn)
             .accessibilityAddTraits(isOn ? .isSelected : [])
     }
+}
+
+/// A text or icon button inside a row, a banner or a card: no chrome of its own, the label in the
+/// theme's secondary ink (or the accent for the row's main verb), a soft fill under the pointer or
+/// bars and floating surfaces: a glass capsule inside a list row reads as a sticker.
+public struct QuietButtonStyle: ButtonStyle {
+    var prominent: Bool
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    public init(prominent: Bool = false) {
+        self.prominent = prominent
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(DS.Font.button)
+            .foregroundStyle(foreground(configuration.isPressed))
+            .padding(.horizontal, DS.Space.s)
+            .padding(.vertical, DS.Space.xs)
+            .frame(minHeight: 28)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.field)
+                    .fill(DS.Palette.ink.opacity(configuration.isPressed ? 0.15 : isHovered ? 0.08 : 0)))
+            .contentShape(.rect(cornerRadius: DS.Radius.field))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(DS.Motion.press, value: configuration.isPressed)
+            .onHover { isHovered = $0 }
+            #if os(iOS)
+            .contentShape(.hoverEffect, .rect(cornerRadius: DS.Radius.field))
+            .hoverEffect(.highlight)
+            #endif
+    }
+
+    private func foreground(_ pressed: Bool) -> AnyShapeStyle {
+        guard isEnabled else { return AnyShapeStyle(DS.Palette.textQuaternary) }
+        if prominent { return AnyShapeStyle(DS.Palette.accent) }
+        return AnyShapeStyle(isHovered || pressed ? DS.Palette.text : DS.Palette.textSecondary)
+    }
+}
+
+public extension ButtonStyle where Self == QuietButtonStyle {
+    /// A secondary verb in a row (Reply, Open, Revoke).
+    static var quiet: QuietButtonStyle { QuietButtonStyle() }
+    /// The row's own main verb when it is not a decision (a banner's Undo).
+    static var quietProminent: QuietButtonStyle { QuietButtonStyle(prominent: true) }
 }
