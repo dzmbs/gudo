@@ -974,6 +974,14 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   `DaemonInfo.os`, to copy or run in a new tab (`ScriptRun`), and the vendor's guide; Start is
   off until it is installed. Code: `crates/daemon/src/ws/installs.rs`,
   `apple/App/Sources/Git/AgentInstallGuide.swift`.
+- `WorkspaceRequest::AgentMcpCommands{register}` → `AgentMcpCommands([AgentMcpCommand{agent,
+  argv}])`, offered as `DaemonFeatures::AGENT_MCP`. Owner only. One command per installed agent
+  (named by path when off the login `PATH`): `claude mcp add --scope user unnamed_drawings --
+  <un-hook> mcp --state <state>` and `codex mcp add unnamed_drawings -- …`, or with `register`
+  false `claude mcp remove --scope user …` / `codex mcp remove …`. Nothing runs on the daemon:
+  the app (Settings ▸ Agents ▸ Agent Tools, off by default) shows them and runs them in a new tab
+  (`ScriptRun`), so agents the user starts by hand get the §7.12 server; its pane comes from
+  the pane's `UN_PANE_ID`. Goldens: `crates/proto/tests/golden_agent_mcp.rs`.
 - Tests: `cargo test -p daemon --lib installs`, `cargo test -p daemon --test it installs`,
   goldens in `crates/proto/tests/golden_installs.rs`; app: `AgentInstallGuideTests`,
   `W3UITests.testAgentNotInstalledOffersTheOfficialInstaller` (`apple/scripts/w3-ui-test.sh`).

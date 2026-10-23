@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use proto::{AgentInstall, AgentKind, InstallState};
+use proto::{AgentInstall, AgentKind, AgentMcpCommand, InstallState};
 
 use crate::config::Config;
 
@@ -36,6 +36,31 @@ pub(crate) async fn check(cfg: &Config) -> Vec<AgentInstall> {
                 program: program.to_owned(),
                 state: state(program, path.as_deref(), &home),
             }
+        })
+        .collect()
+}
+
+/// Each installed agent's own command that adds the daemon's MCP server to the user's
+/// configuration (`register`), or removes it. An agent off the login `PATH` is named by path.
+pub(crate) async fn mcp_commands(cfg: &Config, register: bool) -> Vec<AgentMcpCommand> {
+    let hook_bin = cfg.hook_bin();
+    check(cfg)
+        .await
+        .into_iter()
+        .filter_map(|install| {
+            let program = match install.state {
+                InstallState::Installed { .. } => install.program,
+                InstallState::NotOnPath { path } => path,
+                InstallState::Missing => return None,
+            };
+            let command = match install.agent {
+                AgentKind::Claude => agents::ClaudeCode::user_mcp_command,
+                AgentKind::Codex => agents::Codex::user_mcp_command,
+            };
+            Some(AgentMcpCommand {
+                agent: install.agent,
+                argv: command(&program, &hook_bin, &cfg.state_dir, register),
+            })
         })
         .collect()
 }

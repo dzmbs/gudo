@@ -67,3 +67,49 @@ async fn reports_installed_off_path_and_missing_agents() {
     let installs = c.client.agent_installs().await.unwrap();
     assert_eq!(state(&installs, AgentKind::Codex), InstallState::Missing);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn names_each_installed_agents_mcp_command() {
+    let state_dir = tempfile::tempdir().unwrap();
+    let home_dir = tempfile::tempdir().unwrap();
+    let home = home_dir.path().canonicalize().unwrap();
+    let bin = home.join("bin");
+    executable(&bin.join("codex"));
+    executable(&home.join(".local/bin/claude"));
+    let env = [
+        ("HOME".to_owned(), s(&home)),
+        (
+            "PATH".to_owned(),
+            format!("{}:/usr/bin:/bin", bin.display()),
+        ),
+    ];
+    let daemon = start_with(state_dir.path(), move |c| c.pane_env.extend(env)).await;
+    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    c.attach_and_follow().await;
+    let features = c.client.daemon_info().unwrap().features;
+    assert!(features.contains(DaemonFeatures::AGENT_MCP));
+
+    let add = c.client.agent_mcp_commands(true).await.unwrap();
+    let claude = add.iter().find(|c| c.agent == AgentKind::Claude).unwrap();
+    // Off the login `PATH`: named by path.
+    assert_eq!(claude.argv[0], s(&home.join(".local/bin/claude")));
+    assert_eq!(
+        claude.argv[1..6],
+        ["mcp", "add", "--scope", "user", "unnamed_drawings"]
+    );
+    let codex = add.iter().find(|c| c.agent == AgentKind::Codex).unwrap();
+    assert_eq!(
+        codex.argv[..5],
+        ["codex", "mcp", "add", "unnamed_drawings", "--"]
+    );
+    assert!(codex.argv[5].ends_with("un-hook"));
+    assert_eq!(codex.argv[6..8], ["mcp", "--state"]);
+
+    std::fs::remove_file(bin.join("codex")).unwrap();
+    let remove = c.client.agent_mcp_commands(false).await.unwrap();
+    assert_eq!(remove.len(), 1, "a missing agent has no command");
+    assert_eq!(
+        remove[0].argv[1..],
+        ["mcp", "remove", "--scope", "user", "unnamed_drawings"]
+    );
+}
