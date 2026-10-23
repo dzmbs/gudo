@@ -37,6 +37,26 @@ nonisolated public protocol MultiplayerClientAPI: AnyObject, Sendable {
     func approvalStatuses() -> [ApprovalStatus]
     func setApprovalPolicy(sessionId: UInt64, policy: ApprovalPolicy) async throws -> ApprovalPolicy
     func claimApproval(requestId: UInt64, claim: Bool) async throws -> ApprovalStatus
+    func hasLivePresence() -> Bool
+    func setDraft(paneId: UInt64, source: DraftSource, text: String, caret: UInt32)
+    func clearDraft()
+    func setViewport(viewport: PeerViewport?)
+    func follow(principal: String?) throws
+    func setDeviceClass(device: DeviceClass)
+    func setPresenceState(state: PresenceState)
+    func peerList() -> PeerList
+}
+
+/// Fakes and older stand-ins have no live presence.
+nonisolated public extension MultiplayerClientAPI {
+    func hasLivePresence() -> Bool { false }
+    func setDraft(paneId: UInt64, source: DraftSource, text: String, caret: UInt32) {}
+    func clearDraft() {}
+    func setViewport(viewport: PeerViewport?) {}
+    func follow(principal: String?) throws {}
+    func setDeviceClass(device: DeviceClass) {}
+    func setPresenceState(state: PresenceState) {}
+    func peerList() -> PeerList { PeerList(you: nil, peers: []) }
 }
 
 extension DaemonClient: MultiplayerClientAPI {}
@@ -193,6 +213,13 @@ public final class MultiplayerSession {
     public private(set) var approvalPolicy: ApprovalPolicy = .standard
     /// Open approval requests with votes or a claim, by request id.
     public private(set) var approvalStatuses: [UInt64: ApprovalStatus] = [:]
+    /// Everyone's live presence by connection: focus, viewport, typing, drafts (daemons with
+    /// live presence; empty otherwise).
+    public private(set) var peers: [UInt64: Peer] = [:]
+    /// This connection among `peers`.
+    public private(set) var myPeer: UInt64?
+    /// The person this device follows (principal), or nil.
+    public private(set) var following: String?
 
     /// How long the holder may stay idle before the daemon hands the lease over
     /// (`[multiplayer] lease_idle_secs`, default 5 s).
@@ -207,6 +234,9 @@ public final class MultiplayerSession {
     @ObservationIgnored private var pump: Task<Void, Never>?
     @ObservationIgnored private var lastBlockedNotice = ContinuousClock.now - .seconds(10)
     @ObservationIgnored private var typingPane: UInt64?
+    @ObservationIgnored private var draftPane: UInt64?
+    /// A participant list arrived on this connection already (later ones announce changes).
+    @ObservationIgnored private var hasRoster = false
     private static let log = Logger(subsystem: Log.subsystem, category: "multiplayer")
 
     nonisolated public struct LeaseRequest: Identifiable, Equatable, Sendable {
@@ -248,6 +278,9 @@ public final class MultiplayerSession {
             case alreadyDecided(by: String)
             /// Revoked: the connection closes.
             case revoked
+            /// People came or went (by person, not device).
+            case arrived([String])
+            case left([String])
             /// A request failed.
             case failed(String)
         }
@@ -292,8 +325,16 @@ public final class MultiplayerSession {
         knocks = client.pendingKnocks()
         if let policy = client.approvalPolicyCached() { approvalPolicy = policy }
         approvalStatuses = Dictionary(client.approvalStatuses().map { ($0.requestId, $0) }, uniquingKeysWith: { $1 })
+        let live = client.peerList()
+        myPeer = live.you
+        peers = Dictionary(live.peers.map { ($0.peer, $0) }, uniquingKeysWith: { $1 })
+        client.setDeviceClass(device: Self.deviceClass)
+        if let following { try? client.follow(principal: following) }
         refreshGate()
     }
+
+    /// This device's kind, for "Ivan · iPad" (the app sets it at launch).
+    public static var deviceClass: DeviceClass = .unknown
 
     func detach() {
         pump?.cancel()
@@ -309,8 +350,10 @@ public final class MultiplayerSession {
         case .joined(let info):
             me = info
             isRevoked = false
+            hasRoster = false
             Self.log.info("joined as \(info.name, privacy: .public) roles=\(roleWords(info.roles), privacy: .public)")
         case .participants(let list):
+            announceArrivals(from: participants, to: list)
             participants = list
             // A request from someone who left is moot.
             let present = Set(list.map(\.actor.device))
@@ -369,6 +412,18 @@ public final class MultiplayerSession {
             approvalPolicy = policy
         case .approvalStatus(let status):
             approvalStatuses[status.requestId] = status
+        case .peers(let you, let list):
+            myPeer = you
+            peers = Dictionary(list.map { ($0.peer, $0) }, uniquingKeysWith: { $1 })
+        case .peerChanged(let peer):
+            guard (peers[peer.peer]?.rev ?? 0) < peer.rev else { break }
+            peers[peer.peer] = peer
+            // The participant list's typing and activity follow live presence.
+            for index in participants.indices where participants[index].actor == peer.actor {
+                participants[index].state = peer.state
+                participants[index].focus = peer.focus
+                participants[index].typing = peer.typing != nil
+            }
         }
         if case .decided(let decided) = event { approvalStatuses[decided.requestId] = nil }
         if case .joined = event { knocks = []; approvalStatuses = [:] }
@@ -448,6 +503,87 @@ public final class MultiplayerSession {
 
     private func refreshGate() {
         onInputGate?(inputGate)
+    }
+
+    // MARK: Live presence
+
+    /// Whether the host shares drafts, viewports and following.
+    public var hasLivePresence: Bool { client?.hasLivePresence() ?? false || !peers.isEmpty }
+
+    /// Other connections (this one excluded; this person's other devices included).
+    public var otherPeers: [Peer] {
+        peers.values.filter { $0.peer != myPeer }.sorted { ($0.sinceMs, $0.peer) < ($1.sinceMs, $1.peer) }
+    }
+
+    /// Drafts others are writing for a pane, oldest connection first.
+    public func drafts(in pane: UInt64) -> [Peer] {
+        otherPeers.filter { $0.draft?.paneId == pane && !($0.draft?.text.isEmpty ?? true) }
+    }
+
+    /// Others typing into a pane right now (raw keys or a draft).
+    public func typists(in pane: UInt64) -> [Peer] {
+        otherPeers.filter { $0.typing == pane }
+    }
+
+    /// Others looking at a pane.
+    public func viewers(of pane: UInt64) -> [Peer] {
+        otherPeers.filter { $0.focus == pane && $0.state != .away }
+    }
+
+    /// The device of `principal` to follow: the most recently changed one that is not away.
+    public func leader(_ principal: String) -> Peer? {
+        let theirs = otherPeers.filter { $0.actor.principal == principal }
+        return theirs.filter { $0.state != .away }.max { $0.rev < $1.rev } ?? theirs.max { $0.rev < $1.rev }
+    }
+
+    /// The device this one follows now.
+    public var leaderPeer: Peer? { following.flatMap(leader) }
+
+    /// People following this person.
+    public var followers: [Peer] {
+        guard let me = myPrincipal else { return [] }
+        return otherPeers.filter { $0.following == me }
+    }
+
+    /// Follows a person (their focus and scroll), or stops with nil.
+    public func follow(_ principal: String?) {
+        guard principal != following else { return }
+        following = principal
+        try? client?.follow(principal: principal)
+        Self.log.info("follow \(principal == nil ? "stopped" : "started", privacy: .public)")
+    }
+
+    /// The draft being typed for a pane; others see it live. Empty text clears it.
+    public func setDraft(_ pane: UInt64, source: DraftSource, text: String, caret: Int) {
+        guard let client, canPrompt else { return }
+        if text.isEmpty {
+            clearDraft()
+            return
+        }
+        draftPane = pane
+        client.setDraft(paneId: pane, source: source, text: text, caret: UInt32(max(0, caret)))
+    }
+
+    /// The draft was sent, discarded or left.
+    public func clearDraft() {
+        guard draftPane != nil else { return }
+        draftPane = nil
+        client?.clearDraft()
+    }
+
+    /// The rows of the focused pane on screen.
+    public func setViewport(_ viewport: PeerViewport?) {
+        client?.setViewport(viewport: viewport)
+    }
+
+    /// Says what kind of device this is (`deviceClass`).
+    public func announceDevice() {
+        client?.setDeviceClass(device: Self.deviceClass)
+    }
+
+    /// Away while the app is in the background.
+    public func setAway(_ away: Bool) {
+        client?.setPresenceState(state: away ? .away : .active)
     }
 
     // MARK: Control lease
@@ -680,6 +816,32 @@ public final class MultiplayerSession {
         postThrottled(.viewOnly(pane: pane), message)
     }
 
+    /// "Kim joined", "Kim and Rex left": once per person, not per device, and not for the
+    /// list that arrives on (re)connecting.
+    private func announceArrivals(from old: [UnnamedCore.Participant], to new: [UnnamedCore.Participant]) {
+        defer { hasRoster = true }
+        guard hasRoster, let me = myPrincipal else { return }
+        func people(_ list: [UnnamedCore.Participant]) -> [String: String] {
+            Dictionary(list.filter { $0.actor.principal != me }.map { ($0.actor.principal, $0.name) }, uniquingKeysWith: { a, _ in a })
+        }
+        let before = people(old), after = people(new)
+        let came = after.filter { before[$0.key] == nil }.map(\.value).sorted()
+        let went = before.filter { after[$0.key] == nil }.map(\.value).sorted()
+        if !came.isEmpty {
+            post(.arrived(came), "\(Self.names(came)) joined", failure: false)
+        } else if !went.isEmpty {
+            post(.left(went), "\(Self.names(went)) left", failure: false)
+        }
+    }
+
+    static func names(_ list: [String]) -> String {
+        switch list.count {
+        case 1: list[0]
+        case 2: "\(list[0]) and \(list[1])"
+        default: "\(list[0]) and \(list.count - 1) others"
+        }
+    }
+
     private func postThrottled(_ kind: Notice.Kind, _ message: String) {
         let now = ContinuousClock.now
         guard now - lastBlockedNotice > .seconds(3) else { return }
@@ -732,10 +894,12 @@ public final class MultiplayerSession {
     // MARK: Previews
 
     /// A session filled with sample data (previews, `-mock` screenshots).
-    public static func preview(me: JoinInfo, participants: [UnnamedCore.Participant], leases: [Lease] = [], client: (any MultiplayerClientAPI)? = nil) -> MultiplayerSession {
+    public static func preview(me: JoinInfo, participants: [UnnamedCore.Participant], leases: [Lease] = [], peers: [Peer] = [],
+                               client: (any MultiplayerClientAPI)? = nil) -> MultiplayerSession {
         let session = MultiplayerSession()
         session.me = me
         session.participants = participants
+        session.peers = Dictionary(peers.map { ($0.peer, $0) }, uniquingKeysWith: { $1 })
         for lease in leases { session.leases[lease.paneId] = lease }
         session.client = client
         return session

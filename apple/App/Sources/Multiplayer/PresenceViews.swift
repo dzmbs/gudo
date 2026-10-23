@@ -28,6 +28,10 @@ struct PresenceToolbarButton: View {
                     .animation(DS.Motion.indicator, value: others.map(\.actor.device))
             }
         }
+        .contextMenu {
+            FollowMenuItems(session: session)
+            Button("Share Session…", systemImage: "person.crop.circle.badge.plus", action: action)
+        }
         .help(others.isEmpty ? "Share Session" : "\(others.count) \(others.count == 1 ? "person" : "people") here")
         .accessibilityLabel(others.isEmpty ? "Share Session" : "Share Session, \(others.count) \(others.count == 1 ? "person" : "people") here")
         .accessibilityIdentifier("presence-button")
@@ -120,14 +124,35 @@ struct MultiplayerPaneOverlay: View {
                         .padding(DS.Space.s)
                         .scalingTransition(0.96, anchor: .topTrailing)
                 }
-                // A prompter's composer sits on every agent pane (it is their only input); the
-                // role banner only on the focused pane.
-                if session.isGuest && !session.canDrive, isFocused || (session.canPrompt && workspace.isAgentPane(pane)) {
-                    guestBar(session)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                        .padding(DS.Space.s)
-                        .movingTransition(.bottom)
+                SharedApproval(workspace: workspace, session: session, pane: pane.rawValue)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    // Under the control chip, never over it.
+                    .padding(.top, 52)
+                    .padding(.horizontal, DS.Space.m)
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    // Following someone: on the pane they brought you to, with how to stop.
+                    if isFocused {
+                        FollowPill(session: session)
+                            .movingTransition(.top)
+                    }
+                    ViewportMarkers(session: session, pane: pane.rawValue)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(DS.Space.s)
+                .animation(DS.Motion.overlay, value: session.following)
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    // Others' drafts and typing, live, above any composer of this device's.
+                    LivePaneActivity(session: session, pane: pane.rawValue)
+                    // A prompter's composer sits on every agent pane (it is their only input);
+                    // the role banner only on the focused pane.
+                    if session.isGuest && !session.canDrive, isFocused || (session.canPrompt && workspace.isAgentPane(pane)) {
+                        guestBar(session)
+                            .frame(maxWidth: .infinity)
+                            .movingTransition(.bottom)
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(DS.Space.s)
             }
             .animation(DS.Motion.panel, value: session.leaseRequests)
             .animation(DS.Motion.overlay, value: session.leases[pane.rawValue])
@@ -336,7 +361,11 @@ private struct PromptComposer: View {
         }
         .frame(maxWidth: 640)
         .onChange(of: text.isEmpty) { _, empty in session.setTyping(empty ? nil : pane) }
-        .onDisappear { session.setTyping(nil) }
+        .onChange(of: text) { _, text in session.setDraft(pane, source: .prompt, text: text, caret: text.count) }
+        .onDisappear {
+            session.setTyping(nil)
+            session.clearDraft()
+        }
         .animation(DS.Motion.overlay, value: error)
     }
 
@@ -366,6 +395,7 @@ struct MultiplayerWindowHooks: ViewModifier {
         content
             // Someone with a knock link waits for the owner (the Inbox has the full list).
             .overlay(alignment: .bottom) { KnockOverlay(workspace: workspace) }
+            .modifier(PresenceSyncModifier(workspace: workspace))
             .onChange(of: workspace.multiplayer?.notice) { _, notice in
                 if let notice { model.toasts.show(notice.toast) }
             }

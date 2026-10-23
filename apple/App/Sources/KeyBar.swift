@@ -5,6 +5,7 @@ import HostKit
 import TerminalCore
 import TerminalRenderer
 import UIKit
+import UnnamedCore
 import VoiceKit
 
 /// floating Liquid Glass shapes over the terminal, centred on the keyboard.
@@ -51,6 +52,10 @@ final class KeyBar: UIInputView {
     /// Called when the bar's height changes (rows shown or hidden), so the workspace can treat
     /// the resulting terminal resize like a keyboard slide (no cols × rows overlay).
     var onHeightChange: (() -> Void)?
+
+    /// The focused pane's draft as it is written (composer or line editor), "" once sent or
+    /// dropped: others in a shared session watch it live.
+    var onDraft: ((String, Int, DraftSource) -> Void)?
 
     /// Opens draw mode on the focused pane; nil when the pane cannot be drawn on (no daemon).
     var onDraw: (() -> Void)? {
@@ -187,7 +192,12 @@ final class KeyBar: UIInputView {
         composer.isHidden = true
         composer.onSubmit = { [weak self] text in self?.target?.sendComposedText(text, submit: true) }
         composer.onHeightChange = { [weak self] in self?.relayout() }
-        composer.onTextChange = { [weak self] text in self?.state.draft = text }
+        composer.onTextChange = { [weak self] text in
+            guard let self else { return }
+            state.draft = text
+            let caret = composer.textView.selectedRange.location
+            onDraft?(text, caret == NSNotFound ? text.count : min(caret, text.count), .composer)
+        }
         column.addArrangedSubview(composer)
 
         configureSnippetRow()
@@ -197,6 +207,7 @@ final class KeyBar: UIInputView {
         column.addArrangedSubview(arrowPadRow)
 
         lineEditor.onLayoutChange = { [weak self] in self?.relayout() }
+        lineEditor.onDraft = { [weak self] text, caret in self?.onDraft?(text, caret, .lineEditor) }
         column.insertArrangedSubview(lineEditor.decisionStrip, at: 1)
         column.addArrangedSubview(lineEditor.smartRow)
         column.addArrangedSubview(lineEditor.editorRow)

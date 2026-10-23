@@ -14,8 +14,8 @@ use grants::{DeviceKey, GrantSpec};
 use proto::{
     Actor, Admit, ApprovalPolicy, ApprovalStatus, AuditPage, AuditQuery, Decided, DeviceInfo,
     GrantChain, GrantInfo, InputRejectReason, Invite, InviteTerms, JoinInfo, Knock, KnockId,
-    KnockUpdate, Lease, LeaseOutcome, MpError, MpRequest, MpResponse, PaneId, Participant,
-    Presence, PresenceState, PrincipalId, RequestId, RevokeTarget, ServerCtl, SessionId,
+    KnockUpdate, Lease, LeaseOutcome, MpError, MpRequest, MpResponse, PaneId, Participant, Peer,
+    PeerId, Presence, PresenceState, PrincipalId, RequestId, RevokeTarget, ServerCtl, SessionId,
     UnixMillis,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -103,6 +103,18 @@ pub enum MultiplayerEvent {
         /// Where it stands.
         status: ApprovalStatus,
     },
+    /// Everyone's live presence, whole (after joining, and when someone joins or leaves).
+    Peers {
+        /// This connection.
+        you: PeerId,
+        /// Every connection, oldest first.
+        peers: Vec<Peer>,
+    },
+    /// One connection's live presence changed (draft, viewport, focus, typing, state).
+    PeerChanged {
+        /// Its new state.
+        peer: Peer,
+    },
 }
 
 /// Receives [`MultiplayerEvent`]s. Must return quickly; it runs on the network threads.
@@ -146,6 +158,8 @@ pub(crate) struct MpState {
     approvals: Mutex<HashMap<RequestId, ApprovalStatus>>,
     /// The invite this client joined with (guests).
     pub(crate) invite: Option<Invite>,
+    /// Live presence, both ways.
+    pub(crate) peers: crate::peer::PeerState,
 }
 
 impl MpState {
@@ -219,6 +233,7 @@ impl MpState {
             ServerCtl::AlreadyDecided { request_id, by } => {
                 (MultiplayerEvent::AlreadyDecided { request_id, by }, None)
             }
+            ServerCtl::Peers(push) => (self.peers.apply(push)?, None),
             msg @ ServerCtl::Revoked { .. } => (MultiplayerEvent::Revoked, Some(msg)),
             other => return Some(other),
         };
@@ -233,6 +248,7 @@ impl MpState {
     pub(crate) fn reset_for_connection(&self) {
         lock(&self.knocks).clear();
         lock(&self.approvals).clear();
+        self.peers.reset_for_connection();
     }
 
     /// The connection dropped: requests in flight will not be answered.

@@ -39,6 +39,7 @@ mod extras;
 mod mp;
 mod mp2;
 mod notify;
+mod peer;
 mod repo;
 mod ssh_api;
 mod types;
@@ -102,6 +103,7 @@ pub use notify::{
     open_push_notification, push_action_token, push_relay_register_body, push_seal_public_key,
     send_push_action, send_push_action_blocking,
 };
+pub use peer::{DeviceClass, Draft, DraftSource, Peer, PeerList, PeerViewport};
 pub use repo::*;
 pub use ssh_api::{
     BootstrapListener, BootstrapReport, BootstrapStep, EnvVar, GeneratedSshKey, HostKeyDelegate,

@@ -120,6 +120,8 @@ private struct TabChip: View {
                             .lineLimit(1)
                     }
                 }
+                // Who else is in this tab.
+                TabPresence(workspace: workspace, panes: tab.root.panes)
             }
             .font(DS.Font.tabTitle)
             .foregroundStyle(.primary)
@@ -172,6 +174,7 @@ private struct TabChip: View {
         .help(Self.tooltip(title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab)))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: nil))
+        .accessibilityValue(TabPresence.value(workspace, tab.root.panes))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tabbar-\(ref)")
     }

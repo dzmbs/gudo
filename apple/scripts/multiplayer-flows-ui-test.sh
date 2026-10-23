@@ -8,7 +8,12 @@
 #   daemon B  owned by the CLI only ("Ola"); its viewer link is opened in the app as a deep
 #             link, so the app joins as a guest.
 #
-# Afterwards the script checks Kim really got in as a driver.
+#             Live presence: Rex writes a prompt in pane 1 (`un draft`) that the app shows
+#             as he types; the app follows him to pane 2; an agent in pane 1 asks permission
+#             (agent-ask.py) and the app answers it for everyone.
+#
+# Afterwards the script checks Kim really got in as a driver, that the app followed Rex, that
+# the agent was allowed and that Rex saw who answered.
 #
 #   apple/scripts/multiplayer-flows-ui-test.sh [simulator-udid]
 #
@@ -63,11 +68,25 @@ join_link="$(cli owner-b invite --role viewer --name "Gus" --from Ola --no-qr | 
 
 log="$work/xcodebuild.log"
 status=0
+derived="${DERIVED_DATA:-$apple/build/DerivedData}"
+xcodebuild -project "$apple/App.xcodeproj" -scheme App -destination "platform=iOS Simulator,id=$sim" \
+  -derivedDataPath "$derived" build-for-testing >"$work/build.log" 2>&1 || { tail -30 "$work/build.log"; exit 1; }
+
+# Live presence: a second pane; Rex writes a prompt in pane 1, again and again until someone
+# follows him, then moves to pane 2. Meanwhile an agent in pane 1 asks for permission.
+cli owner-a split --pane 1 >/dev/null
+cli rex draft "Fix the flaky reconnect test" --pane 1 --cps 6 --then-focus 2 --hold 600 >"$work/rex-draft.log" 2>&1 &
+pids+=($!)
+python3 "$apple/scripts/agent-ask.py" "$work/a" 1 >"$work/ask.log" 2>&1 &
+ask_pid=$!
+pids+=("$ask_pid")
+
 TEST_RUNNER_PAIR_TICKET="$ticket_app" TEST_RUNNER_JOIN_LINK="$join_link" TEST_RUNNER_KNOCKER=1 TEST_RUNNER_DRIVER=1 \
+  TEST_RUNNER_PRESENCE=1 \
   xcodebuild -project "$apple/App.xcodeproj" -scheme App \
-  -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "${DERIVED_DATA:-$apple/build/DerivedData}" \
+  -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$derived" \
   -resultBundlePath "$work/result.xcresult" \
-  -only-testing:AppUITests/MultiplayerFlowsUITests test >"$log" 2>&1 || status=$?
+  -only-testing:AppUITests/MultiplayerFlowsUITests test-without-building >"$log" 2>&1 || status=$?
 grep -E "Test Case|error:|passed|failed|TEST (SUCCEEDED|FAILED)" "$log" | tail -20
 
 # Kim was let in as a driver: her `un join` finished and says so.
@@ -78,6 +97,20 @@ elif grep -q "driver" "$work/kim.log"; then
   echo "Kim: $(tail -1 "$work/kim.log")"
 else
   echo "Kim was not let in as a driver:"; cat "$work/kim.log"; status=1
+fi
+
+# The owner followed Rex to pane 2, answered the agent, and Rex saw who answered.
+if grep -q "came along to pane 2" "$work/rex-draft.log"; then
+  echo "Rex: $(grep 'came along' "$work/rex-draft.log")"
+else
+  echo "the owner did not follow Rex to pane 2:"; cat "$work/rex-draft.log"; status=1
+fi
+for _ in $(seq 1 25); do kill -0 "$ask_pid" 2>/dev/null || break; sleep 0.2; done
+if [[ "$(cat "$work/ask.log")" == "allow" ]]; then echo "agent: allowed"; else echo "agent was not allowed: $(cat "$work/ask.log")"; status=1; fi
+if grep -q "decided by" "$work/rex-who.log"; then
+  echo "Rex saw: $(grep 'decided by' "$work/rex-who.log" | tail -1)"
+else
+  echo "Rex never saw the decision"; status=1
 fi
 
 if [[ -n "${SCREENSHOTS:-}" ]]; then

@@ -59,6 +59,8 @@ pub(crate) enum Event {
     Participants,
     /// A participant's presence (typing, cursor).
     Presence(proto::Presence),
+    /// A connection's live presence changed (read it from `mp`).
+    Peer(ConnId),
     /// A pane's control lease changed.
     Lease(proto::Lease),
     /// A drawing or image of `session` changed, or live ink (not echoed to `from`).

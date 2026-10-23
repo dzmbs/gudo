@@ -1127,6 +1127,33 @@ rename and focus change. Clients send `ClientCtl::Presence` (typing, cursor, vie
 knows and fans `ServerCtl::Presence` out to the others, hiding panes outside each recipient's
 scope. `Client::set_typing(pane, bool)` is the composer's typing indicator.
 
+Clients that announce it send `ClientCtl::Peer(PeerUpdate)`: device class, `State` (away in
+the background), `Viewport` (rows from the bottom of the focused pane), `Draft` (the line
+editor's or composer's text and caret, `None` once sent or discarded), `Follow(principal)` and
+a `Heartbeat` every 10 s. The daemon answers with `ServerCtl::Peers`: `PeerPush::All` (every
+connection, the recipient's own id) on joining and whenever someone joins, leaves, renames or
+changes focus, then `PeerPush::Changed(peer)` per change. Rules:
+
+- *Ephemeral.* Drafts and viewports live in the connection's state only: never in scrollback,
+  history, search or the audit log; gone when the connection is.
+- *Roles and scope.* A draft needs the prompter, driver or approver role on its pane (else
+  `Forbidden{what: "Draft"}`); a viewport must be in scope. Focus, viewport, typing and draft
+  in panes outside the recipient's grant are withheld.
+- *Typing.* Raw input to a pane and draft changes mark the sender typing there for
+  `PresenceTimes::typing` (3 s); only transitions are broadcast. Clients without the cap hear
+  draft typing as the old `Presence.typing`.
+- *Ordering.* Every change takes the next daemon-wide revision; clients keep the newest per
+  peer (last write wins). Each connection's `ctl` writer keeps only the newest state per peer
+  while a write is pending (`mp::Mailbox`), so a slow guest catches up instead of replaying.
+  Clients send the first change at once and then at most every 33 ms.
+- *Liveness.* Idle after 2 min without input, focus, viewport or draft; away when the client
+  says so or a presence client is silent for 25 s; dropped after 60 s of silence (no ghosts).
+  A reconnecting client gets `All` again and re-sends its own state, draft included.
+- *Following* is by principal: the follower tracks that person's most recently active device
+  (its focus and viewport); the leader sees `following` on the follower.
+
+`un draft <text> [--cps N] [--then-focus PANE]` types a live draft (UI tests use it).
+
 ### 6.6 Signed approvals and the audit log
 
 - `Client::decide` signs `"approval-v1\0" ‖ postcard(daemon_id, request_id, option_id, actor)`

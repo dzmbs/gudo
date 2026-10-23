@@ -31,6 +31,8 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
     weak var terminal: UIResponder?
     /// Asked to relayout the bar when rows appear or disappear.
     var onLayoutChange: (() -> Void)?
+    /// The line and caret as they change ("" once it is gone), for others to watch.
+    var onDraft: ((String, Int) -> Void)?
     /// Whether the bar's profile is a shell (only shells get the line editor).
     var shellProfile = true {
         didSet { if shellProfile != oldValue { refresh() } }
@@ -114,6 +116,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         }
         let changed = editorRow.isHidden == show
         editorRow.isHidden = !show
+        if changed { reportDraft() }
         smartRow.isHidden = !show
         if changed {
             if show {
@@ -127,6 +130,12 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
     }
 
     // MARK: Editing
+
+    private func reportDraft() {
+        let text = isActive ? field.text ?? "" : ""
+        let caret = field.selectedTextRange.map { field.offset(from: field.beginningOfDocument, to: $0.start) } ?? text.count
+        onDraft?(text, caret)
+    }
 
     private func configureField() {
         field.font = .monospacedSystemFont(ofSize: 15, weight: .regular)
@@ -190,6 +199,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
                 guard let self else { return }
                 if run { field.text = "" }
                 message.isHidden = true
+                reportDraft()
             } catch AssistError.NotAtPrompt {
                 self?.show(message: "The shell is busy. Kept your line.")
             } catch {
@@ -279,6 +289,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
 
     /// Asks the host for candidates for the token at the caret; a newer keystroke cancels it.
     private func updateCompletions() {
+        reportDraft()
         completionTask?.cancel()
         guard let assist, isActive || prompt != nil else { return }
         let line = field.text ?? ""

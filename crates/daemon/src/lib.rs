@@ -80,7 +80,7 @@ pub use browser::{
     BROWSER_VERSION, BrowserAsk, BrowserCall, BrowserReply, CALL_TIMEOUT as BROWSER_CALL_TIMEOUT,
 };
 pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir};
-pub use config::{CustomRelays, PushConfig, RepoConfig};
+pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
 pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
 };
@@ -130,7 +130,7 @@ impl Daemon {
                 None
             }
         };
-        let mp = mp::Mp::open(&config.state_dir, config.lease_idle)?;
+        let mp = mp::Mp::open(&config.state_dir, config.lease_idle, config.presence)?;
         let core = Core::new(config, identity, layout, hooks, shell, mp);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records);

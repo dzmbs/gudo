@@ -101,6 +101,58 @@ final class MultiplayerFlowsUITests: XCTestCase {
         shot(app, "flows-5-audit")
     }
 
+    /// Live presence: Rex (CLI) writes a prompt in pane 1 and the owner watches it grow as he
+    /// types, with his name; the tab shows he is in it; the owner follows him and goes along
+    /// when he moves to pane 2 (the script checks Rex saw the owner arrive); an agent's
+    /// permission request shows on the pane with who may answer, and the owner's answer shows
+    /// for everyone (the script checks Rex heard it).
+    func testLivePresenceFollowAndSharedApproval() throws {
+        try XCTSkipIf((env["PRESENCE"] ?? "").isEmpty, "no live presence fixtures (run apple/scripts/multiplayer-flows-ui-test.sh)")
+        let app = try launchOwner()
+
+        // The draft, live: the mirror's text changes while Rex types.
+        let mirror = element(app, "draft-mirror-1")
+        XCTAssertTrue(mirror.waitForExistence(timeout: 40), "Rex's draft shows on the pane")
+        XCTAssertTrue(mirror.label.hasPrefix("Rex Diaz is writing: "), mirror.label)
+        let first = mirror.label
+        let grew = NSPredicate { _, _ in mirror.exists && mirror.label != first }
+        let moved = expectation(for: grew, evaluatedWith: nil)
+        wait(for: [moved], timeout: 15)
+        XCTAssertTrue("Rex Diaz is writing: Fix the flaky reconnect test".hasPrefix(mirror.label) || mirror.label.hasSuffix("test"), mirror.label)
+        shot(app, "flows-8-live-draft")
+
+        // The tab says who is in it.
+        let tab = app.descendants(matching: .any).matching(NSPredicate(format: "value CONTAINS 'Rex Diaz here'")).firstMatch
+        XCTAssertTrue(tab.waitForExistence(timeout: 10), "presence on the tab")
+
+        // The agent's request, on the pane for everyone, with who answers here.
+        let approval = element(app, "shared-approval")
+        XCTAssertTrue(approval.waitForExistence(timeout: 20), "the agent's request shows on the pane")
+        XCTAssertEqual(element(app, "shared-approval-who").label, "You answer")
+        shot(app, "flows-9-shared-approval")
+        element(app, "shared-approval-allow").tap()
+        XCTAssertTrue(element(app, "shared-approval-answered").waitForExistence(timeout: 10), "who answered shows")
+        XCTAssertTrue(approval.waitForNonExistence(timeout: 10))
+
+        // Follow Rex from Share Session; the pill names him.
+        element(app, "presence-button").tap()
+        let follow = element(app, "follow-Rex Diaz")
+        for _ in 0..<6 where !(follow.exists && follow.isHittable) {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        follow.tap()
+        app.buttons["Done"].firstMatch.tap()
+        let pill = element(app, "follow-pill")
+        XCTAssertTrue(pill.waitForExistence(timeout: 10), "the window says whom it follows")
+        XCTAssertTrue(app.staticTexts["Following Rex"].firstMatch.exists)
+        shot(app, "flows-10-following")
+        // Rex moves to pane 2 once followed; give the window time to go along (the script
+        // checks Rex saw it arrive), then stop.
+        sleep(4)
+        element(app, "stop-following").tap()
+        XCTAssertTrue(pill.waitForNonExistence(timeout: 5))
+    }
+
     /// Rex drives the pane; the owner's pane says so and Take Control moves the lease to them
     /// (at once if Rex is idle, else after he hands over or goes idle).
     func testTakeControlFromDriver() throws {

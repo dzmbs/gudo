@@ -18,7 +18,7 @@ use tokio::task::{AbortHandle, JoinSet};
 
 use crate::core::{ConnId, Core, Event, lock};
 use crate::forward;
-use crate::mp::{Authz, Knocker, Need, Redeemed, Target, policy};
+use crate::mp::{Authz, Knocker, Mailbox, Need, Redeemed, Target, policy};
 use crate::net::{self, NetError};
 use crate::stream::{Class, PaneStream, Start, StreamCmd, priority};
 
@@ -65,6 +65,8 @@ struct Client {
     bulk: tokio::sync::Mutex<Option<SendStream>>,
     /// Directory watches and the push channel for workspace requests.
     ws: crate::ws::ConnCtx,
+    /// Live presence waiting for the `ctl` writer (clients with `Caps::PRESENCE`).
+    peers: Option<Arc<Mailbox>>,
 }
 
 /// Serves one accepted connection until it closes.
@@ -139,7 +141,9 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
             let _ = ctl.send(ServerCtl::Knock(proto::KnockUpdate::Added(knock)));
         }
     }
-    core.mp.join(&core, id, &authz, ctl.clone(), conn.clone());
+    let presence = hello.caps.contains(Caps::PRESENCE);
+    core.mp
+        .join(&core, id, &authz, presence, ctl.clone(), conn.clone());
     if authz.history == proto::History::SinceJoin {
         open_views(&core, &authz).await;
     }
@@ -154,6 +158,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         state: Mutex::new(ConnState::default()),
         bulk: tokio::sync::Mutex::new(None),
         ws,
+        peers: presence.then(Arc::default),
     });
     core.client_connected(true);
     core.askpass.register(client.id, &client.authz, client.caps);
@@ -164,8 +169,10 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
         core.ws.repos.watch(true);
         client.forward(Event::Repos);
     }
+    // Everyone here and what they are doing, before any change to it.
+    client.forward(Event::Participants);
     let mut tasks = JoinSet::new();
-    tasks.spawn(write_ctl(ctl_tx, ctl_out));
+    tasks.spawn(write_ctl(ctl_tx, ctl_out, client.peers.clone()));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
     tasks.spawn(accept_uni(Arc::clone(&client)));
     tasks.spawn(accept_bi(Arc::clone(&client)));
@@ -220,7 +227,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::AGENT_INSTALLS
         | DaemonFeatures::PANE_MOVES
         | DaemonFeatures::BROWSER
-        | DaemonFeatures::AGENT_MCP;
+        | DaemonFeatures::AGENT_MCP
+        | DaemonFeatures::PRESENCE;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -321,7 +329,7 @@ async fn serve_knock(
     mut knocker: Knocker,
 ) -> Result<(), NetError> {
     let (ctl, ctl_out) = mpsc::unbounded_channel();
-    let writer = tokio::spawn(write_ctl(ctl_tx, ctl_out));
+    let writer = tokio::spawn(write_ctl(ctl_tx, ctl_out, None));
     // The knocker says who it is right after `Hello`; wait a moment for it, so the owner (and
     // the audit log) see the name rather than a placeholder.
     let first = tokio::time::timeout(
@@ -445,11 +453,30 @@ async fn serve_upgrade_only(
     Ok(())
 }
 
-async fn write_ctl(mut send: SendStream, mut out: mpsc::UnboundedReceiver<ServerCtl>) {
+/// Writes `ctl`. Live presence comes from `peers` rather than the queue: while a write is
+/// stuck on a slow link it keeps only the newest state per peer, so the link catches up with
+/// the present instead of replaying every keystroke.
+async fn write_ctl(
+    mut send: SendStream,
+    mut out: mpsc::UnboundedReceiver<ServerCtl>,
+    peers: Option<Arc<Mailbox>>,
+) {
     let mut buf = Vec::new();
-    while let Some(msg) = out.recv().await {
+    loop {
+        let first = tokio::select! {
+            msg = out.recv() => match msg {
+                Some(msg) => Some(msg),
+                None => return,
+            },
+            () = async {
+                match &peers {
+                    Some(p) => p.ready.notified().await,
+                    None => std::future::pending().await,
+                }
+            } => None,
+        };
         buf.clear();
-        let mut next = Some(msg);
+        let mut next = first;
         // Coalesce whatever is queued into one write.
         while let Some(msg) = next {
             if let Err(e) = proto::frame::encode(&msg, &mut buf) {
@@ -457,7 +484,12 @@ async fn write_ctl(mut send: SendStream, mut out: mpsc::UnboundedReceiver<Server
             }
             next = out.try_recv().ok();
         }
-        if send.write_all(&buf).await.is_err() {
+        for msg in peers.iter().flat_map(|p| p.take()) {
+            if let Err(e) = proto::frame::encode(&msg, &mut buf) {
+                tracing::warn!("encoding ctl message: {e}");
+            }
+        }
+        if !buf.is_empty() && send.write_all(&buf).await.is_err() {
             return;
         }
     }
@@ -652,6 +684,7 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             client.send(reject(InputRejectReason::UnknownPane));
             continue;
         };
+        client.core.mp.typed(&client.core, client.id, input.pane_id);
         if let Some(sub) = lock(&client.state).subs.get(&input.pane_id) {
             let _ = sub.cmds.send(StreamCmd::InputAck {
                 input_seq: input.input_seq,
@@ -792,9 +825,25 @@ impl Client {
                     self.send(ServerCtl::VsCodeTunnel(status));
                 }
             }
-            Event::Participants => self.send(ServerCtl::Participants {
-                participants: self.core.mp.participants(&self.core, &self.authz),
-            }),
+            Event::Participants => {
+                self.send(ServerCtl::Participants {
+                    participants: self.core.mp.participants(&self.core, &self.authz),
+                });
+                if let Some(mailbox) = &self.peers {
+                    mailbox.put(proto::PeerPush::All {
+                        you: proto::PeerId(self.id),
+                        peers: self.core.mp.peers(&self.core, &self.authz),
+                    });
+                }
+            }
+            Event::Peer(id) => {
+                if let Some(mailbox) = &self.peers
+                    && id != self.id
+                    && let Some(peer) = self.core.mp.peer(&self.core, id, &self.authz)
+                {
+                    mailbox.put(proto::PeerPush::Changed(peer));
+                }
+            }
             Event::Presence(mut p) => {
                 if p.focus.is_some_and(|f| !self.pane_allowed(f)) {
                     p.focus = None;
@@ -1728,8 +1777,22 @@ impl Client {
         if self.live().is_err() {
             return;
         }
+        self.core.mp.heard(&self.core, self.id);
         match msg {
             ClientCtl::Hello(_) => {}
+            ClientCtl::Peer(update) => {
+                // Drafts are typed to be sent: the same roles as the composer path.
+                let allowed = match &update {
+                    proto::PeerUpdate::Draft(Some(d)) => {
+                        self.permit("Draft", Need::Prompt, Target::Pane(d.pane_id))
+                    }
+                    proto::PeerUpdate::Viewport(Some(v)) => self.pane_allowed(v.pane_id),
+                    _ => true,
+                };
+                if allowed {
+                    self.core.mp.peer_update(&self.core, self.id, update);
+                }
+            }
             ClientCtl::Subscribe { pane_id, mode, .. } => {
                 if self.permit("Subscribe", Need::View, Target::Pane(pane_id)) {
                     self.subscribe(pane_id, mode).await;

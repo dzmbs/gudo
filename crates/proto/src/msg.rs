@@ -289,6 +289,9 @@ pub enum ClientCtl {
         /// The result.
         result: Result<String, String>,
     },
+    /// This connection's own presence: draft, viewport, following, activity (see
+    /// [`crate::peer`]). Needs [`Caps::PRESENCE`] for the answers; not answered.
+    Peer(crate::peer::PeerUpdate),
 }
 
 /// Opens a session. Always the first frame on `ctl`.
@@ -670,6 +673,9 @@ pub enum ServerCtl {
     /// A program in a pane asks for a URL, or an agent calls a browser tool. Sent to one
     /// client with [`Caps::BROWSER`] that may drive the pane (see `proto::browser`).
     Browser(crate::browser::BrowserPush),
+    /// Live presence of everyone connected (see [`crate::peer`]), to clients with
+    /// [`Caps::PRESENCE`].
+    Peers(crate::peer::PeerPush),
 }
 
 /// A successful [`ClientCtl::Attach`].

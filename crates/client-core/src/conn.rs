@@ -344,6 +344,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             }
             | Caps::APPROVALS
             | Caps::WORKFLOWS
+            | Caps::PRESENCE
             | if inner.options.askpass {
                 Caps::ASKPASS
             } else {
@@ -508,6 +509,10 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         ctl_out.clone(),
     ));
     tasks.spawn(send_acks(Arc::clone(inner), ack_notify, ctl_out.clone()));
+    tasks.spawn(crate::peer::send_presence(
+        Arc::clone(inner),
+        ctl_out.clone(),
+    ));
 
     let mut outgoing = inner.outgoing_rx.lock().await;
     let mut input_seq: u64 = 0;
