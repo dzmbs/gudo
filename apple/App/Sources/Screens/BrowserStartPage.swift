@@ -286,7 +286,7 @@ struct AddressSuggestionList: View {
                         Text(suggestion.title)
                             .lineLimit(1)
                         Text(suggestion.detail)
-                            .font(DS.Font.rowSubtitle)
+                            .font(DS.Font.rowDetail)
                             .foregroundStyle(DS.Palette.textTertiary)
                             .lineLimit(1)
                         Spacer(minLength: 0)

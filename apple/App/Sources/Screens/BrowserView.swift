@@ -120,8 +120,10 @@ struct BrowserView: View {
                         .frame(maxWidth: 640)
                         .floatingPanel()
                         .padding(DS.Space.s)
+                        .transition(.opacity.combined(with: .scale(0.98, anchor: isCompact ? .bottom : .top)))
                 }
             }
+            .animation(DS.Motion.menu, value: isEditing && !suggestions.isEmpty)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if isCompact { compactBar }
             }
@@ -255,7 +257,8 @@ struct BrowserView: View {
                     .accessibilityIdentifier("browser-close")
             }
         }
-        .buttonStyle(.bar)
+        .buttonStyle(.quiet)
+        .labelStyle(.iconOnly)
         .padding(.horizontal, DS.Space.s)
         .frame(height: DS.Size.tabBar)
         .background(DS.Palette.base)
