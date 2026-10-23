@@ -4,16 +4,33 @@ import SwiftUI
 nonisolated public struct Toast: Identifiable, Equatable, Sendable {
     public enum Style: Sendable { case neutral, success, failure }
 
+    /// One button on the toast ("Undo"); it stays longer so there is time to reach it.
+    public struct Action: Sendable {
+        public var title: String
+        public var perform: @MainActor @Sendable () -> Void
+
+        public init(_ title: String, perform: @escaping @MainActor @Sendable () -> Void) {
+            self.title = title
+            self.perform = perform
+        }
+    }
+
     public let id = UUID()
     public var message: String
     public var systemImage: String?
     public var style: Style
+    public var action: Action?
 
-    public init(_ message: String, systemImage: String? = nil, style: Style = .neutral) {
+    public init(_ message: String, systemImage: String? = nil, style: Style = .neutral, action: Action? = nil) {
         self.message = message
         self.systemImage = systemImage
         self.style = style
+        self.action = action
     }
+
+    public static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }
+
+    var duration: Duration { action == nil ? DS.Motion.toastDuration : .seconds(5) }
 }
 
 /// Shows one toast at a time; a new toast replaces the current one.
@@ -28,7 +45,7 @@ public final class ToastCenter {
         withAnimation(DS.Motion.indicator) { current = toast }
         dismissTask?.cancel()
         dismissTask = Task { [weak self] in
-            guard (try? await Task.sleep(for: DS.Motion.toastDuration)) != nil else { return }
+            guard (try? await Task.sleep(for: toast.duration)) != nil else { return }
             withAnimation(DS.Motion.overlay) { self?.current = nil }
         }
     }
@@ -53,6 +70,17 @@ private struct ToastHost: ViewModifier {
                     Text(toast.message)
                         .font(.callout.weight(.medium))
                         .lineLimit(2)
+                    if let action = toast.action {
+                        Button(action.title) {
+                            center.dismiss()
+                            action.perform()
+                        }
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(DS.Palette.accent)
+                        .buttonStyle(.plain)
+                        .padding(.leading, DS.Space.xs)
+                        .accessibilityIdentifier("toast-action")
+                    }
                 }
                 .chromeContent()
                 .padding(.horizontal, DS.Space.l)
@@ -62,7 +90,8 @@ private struct ToastHost: ViewModifier {
                 .padding(.top, DS.Space.s)
                 .movingTransition(.top)
                 .id(toast.id)
-                .accessibilityAddTraits(.isStaticText)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("toast")
                 .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
             }
         }

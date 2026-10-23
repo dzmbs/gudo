@@ -1,0 +1,296 @@
+import DesignSystem
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
+// Swipe, long-press and right-click actions for rows outside a system `List` (the sidebar is
+// drawn by hand): Mail's swipe on touch and the iPad trackpad, the same actions in the context
+// menu and to VoiceOver, and a confirmation before what cannot be undone.
+
+/// The one row of a list whose actions are showing: opening another closes it.
+@Observable
+final class RowSwipeState {
+    var open: String?
+}
+
+extension View {
+    /// A row's actions (`RowActions`) on a swipe, in its context menu after `menu`'s own items,
+    /// and as accessibility actions. `name` goes in the confirmation's question.
+    func rowActions(
+        _ actions: RowActions, id: String, name: String,
+        perform: @escaping (RowAction) -> Void,
+        @ViewBuilder menu: () -> some View = { EmptyView() }
+    ) -> some View {
+        modifier(RowActionsModifier(actions: actions, id: id, name: name, inList: false, perform: perform, menu: menu()))
+    }
+
+    /// The same for a row of a system `List`: its own swipe actions (trackpad swipes on the Mac too).
+    func listRowActions(
+        _ actions: RowActions, name: String,
+        perform: @escaping (RowAction) -> Void,
+        @ViewBuilder menu: () -> some View = { EmptyView() }
+    ) -> some View {
+        modifier(RowActionsModifier(actions: actions, id: "", name: name, inList: true, perform: perform, menu: menu()))
+    }
+}
+
+/// A menu item for a row action: its title, symbol and role.
+struct RowActionButton: View {
+    let action: RowAction
+    let perform: (RowAction) -> Void
+
+    var body: some View {
+        Button(action.title, systemImage: action.systemImage, role: action.isDestructive ? .destructive : nil) { perform(action) }
+            .accessibilityIdentifier("menu-\(action.rawValue)")
+    }
+}
+
+private struct RowActionsModifier<Menu: View>: ViewModifier {
+    let actions: RowActions
+    let id: String
+    let name: String
+    let inList: Bool
+    let perform: (RowAction) -> Void
+    let menu: Menu
+    @State private var confirming: RowAction?
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                menu
+                if !actions.all.isEmpty {
+                    Divider()
+                    // Destructive last, the outermost swipe action at the very end.
+                    ForEach(actions.leading + actions.trailing.reversed(), id: \.self) { action in
+                        RowActionButton(action: action, perform: request)
+                    }
+                }
+            }
+            .accessibilityActions {
+                ForEach(actions.all, id: \.self) { action in
+                    Button(action.title) { request(action) }
+                }
+            }
+            .swipeActions(edge: .leading) { if inList { swipeButtons(actions.leading) } }
+            .swipeActions(edge: .trailing) { if inList { swipeButtons(actions.trailing) } }
+            #if os(iOS)
+            .modifier(SwipeContainer(actions: inList ? RowActions() : actions, id: id, request: request))
+            #endif
+            .confirmationDialog(
+                confirming.map { $0.confirmation(name).title } ?? "",
+                isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+                titleVisibility: .visible,
+                presenting: confirming
+            ) { action in
+                Button(action.title.replacingOccurrences(of: "…", with: ""), role: .destructive) { perform(action) }
+                    .accessibilityIdentifier("confirm-\(action.rawValue)")
+            } message: { action in
+                Text(action.confirmation(name).message)
+            }
+    }
+
+    /// No destructive role: a `List` would take the row out before a confirmation is answered.
+    private func swipeButtons(_ edge: [RowAction]) -> some View {
+        ForEach(edge, id: \.self) { action in
+            Button(action.shortTitle, systemImage: action.systemImage) { request(action) }
+                .tint(action.tint.color)
+                .accessibilityLabel(action.title)
+                .accessibilityIdentifier(action.identifier)
+        }
+    }
+
+    private func request(_ action: RowAction) {
+        if actions.needsConfirmation(action) {
+            confirming = action
+        } else {
+            withAnimation(DS.Motion.snappy) { perform(action) }
+        }
+    }
+}
+
+extension RowTint {
+    var color: Color {
+        switch self {
+        case .red: .red
+        case .gray: .gray
+        case .orange: .orange
+        case .blue: .blue
+        case .indigo: .indigo
+        }
+    }
+}
+
+#if os(iOS)
+/// Mail's swipe: the row slides to show its actions behind it; past most of its width the
+/// outermost one takes the whole row and runs on release. A tap anywhere on an open row closes it.
+private struct SwipeContainer: ViewModifier {
+    let actions: RowActions
+    let id: String
+    let request: (RowAction) -> Void
+    @Environment(RowSwipeState.self) private var shared: RowSwipeState?
+    @State private var offset: CGFloat = 0
+    @State private var start: CGFloat?
+    @State private var width: CGFloat = 0
+    @State private var armed = false
+
+    private static let buttonWidth: CGFloat = 68
+    /// The share of the row's width past which a swipe runs its outermost action.
+    private static let fullSwipe: CGFloat = 0.6
+
+    func body(content: Content) -> some View {
+        if actions.all.isEmpty {
+            content
+        } else {
+            content
+                .overlay {
+                    if offset != 0, start == nil {
+                        Color.clear
+                            .contentShape(.rect)
+                            .onTapGesture { close() }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .offset(x: offset)
+                .background(alignment: .trailing) {
+                    if offset < 0 { buttons(actions.trailing, trailing: true, revealed: -offset) }
+                }
+                .background(alignment: .leading) {
+                    if offset > 0 { buttons(actions.leading, trailing: false, revealed: offset) }
+                }
+                .clipped()
+                .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
+                .gesture(HorizontalPan(changed: changed, ended: ended))
+                .sensoryFeedback(DS.Haptic.structure, trigger: armed) { _, now in now }
+                .onChange(of: shared?.open) { _, open in
+                    if open != id, offset != 0, start == nil { withAnimation(DS.Motion.snappy) { offset = 0 } }
+                }
+        }
+    }
+
+    /// The edge's buttons, the outermost at the edge; armed, it alone fills what is revealed.
+    private func buttons(_ edge: [RowAction], trailing: Bool, revealed: CGFloat) -> some View {
+        let shown = armed ? Array(edge.prefix(1)) : edge
+        let ordered = trailing ? Array(shown.reversed()) : shown
+        return HStack(spacing: DS.Space.xs) {
+            ForEach(ordered, id: \.self) { action in
+                Button {
+                    close()
+                    request(action)
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: action.systemImage)
+                            .font(.callout.weight(.semibold))
+                        Text(action.shortTitle)
+                            .font(.caption2.weight(.medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(action.tint.color, in: RoundedRectangle(cornerRadius: DS.Radius.control))
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(action.title)
+                .accessibilityIdentifier(action.identifier)
+            }
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, DS.Space.s)
+        .frame(width: max(0, revealed))
+        .animation(DS.Motion.snappy, value: armed)
+    }
+
+    private func reveal(_ edge: [RowAction]) -> CGFloat {
+        CGFloat(edge.count) * Self.buttonWidth + DS.Space.s * 2
+    }
+
+    private func changed(_ x: CGFloat) {
+        if start == nil {
+            start = offset
+            shared?.open = id
+        }
+        var next = (start ?? 0) + x
+        if actions.leading.isEmpty { next = min(0, next) }
+        if actions.trailing.isEmpty { next = max(0, next) }
+        offset = max(-width, min(width, next))
+        let edge = offset < 0 ? actions.trailing : actions.leading
+        armed = !edge.isEmpty && abs(offset) > width * Self.fullSwipe
+    }
+
+    private func ended(_ x: CGFloat, _ velocity: CGFloat) {
+        defer { start = nil }
+        let edge = offset < 0 ? actions.trailing : actions.leading
+        if armed, let action = edge.first {
+            armed = false
+            let sign: CGFloat = offset < 0 ? -1 : 1
+            withAnimation(DS.Motion.snappy) { offset = sign * width }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(180))
+                close(animated: false)
+                request(action)
+            }
+            return
+        }
+        let reveal = reveal(edge)
+        // A flick opens, a flick back closes; otherwise past half the buttons stays open.
+        let opens = offset < 0
+            ? (velocity < -300 || (velocity < 300 && -offset > reveal / 2))
+            : (velocity > 300 || (velocity > -300 && offset > reveal / 2))
+        withAnimation(DS.Motion.snappy) {
+            offset = opens && !edge.isEmpty ? (offset < 0 ? -reveal : reveal) : 0
+        }
+        if offset == 0, shared?.open == id { shared?.open = nil }
+    }
+
+    private func close(animated: Bool = true) {
+        armed = false
+        if animated {
+            withAnimation(DS.Motion.snappy) { offset = 0 }
+        } else {
+            offset = 0
+        }
+        if shared?.open == id { shared?.open = nil }
+    }
+}
+
+/// A pan that begins only when it is mostly horizontal, so the list still scrolls, taps still
+/// select and a long press still lifts the row; two-finger trackpad swipes count too.
+private struct HorizontalPan: UIGestureRecognizerRepresentable {
+    let changed: (CGFloat) -> Void
+    let ended: (CGFloat, CGFloat) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.allowedScrollTypesMask = .continuous
+        pan.delegate = context.coordinator
+        return pan
+    }
+
+    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        let x = pan.translation(in: pan.view).x
+        switch pan.state {
+        case .began, .changed: changed(x)
+        case .ended: ended(x, pan.velocity(in: pan.view).x)
+        case .cancelled, .failed: ended(x, 0)
+        default: break
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.x) > abs(velocity.y) * 1.2
+        }
+
+        /// The scroll view waits for a horizontal swipe to fail before it scrolls.
+        func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            other is UIPanGestureRecognizer && other.view is UIScrollView
+        }
+    }
+}
+#endif
