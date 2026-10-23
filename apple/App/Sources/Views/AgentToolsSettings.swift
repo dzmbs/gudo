@@ -87,7 +87,10 @@ private struct AgentToolsSheet: View {
                             .padding(.vertical, DS.Space.xs)
                         }
                     } else {
-                        Spinner().frame(width: 16, height: 16)
+                        HStack(spacing: DS.Space.s) {
+                            Spinner().frame(width: 16, height: 16)
+                            Text("Asking hosts…").foregroundStyle(DS.Palette.textSecondary)
+                        }
                     }
                 } footer: {
                     Text(register
@@ -103,7 +106,8 @@ private struct AgentToolsSheet: View {
             .chromeGrouped()
         }
         #if os(macOS)
-        .frame(width: 540)
+        // Fixed: the hosts' commands arrive after appear; the form scrolls.
+        .frame(width: 540, height: 360)
         #endif
         .task { plans = await Self.plans(register: register) }
     }

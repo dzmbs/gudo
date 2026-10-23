@@ -71,6 +71,8 @@ public struct HostSwitcher: View {
 
     @State private var query = ""
     @State private var highlighted: String?
+    /// The tallest the list has been: filtering leaves space below instead of shrinking the popover.
+    @State private var height: CGFloat = 0
     @FocusState private var isFieldFocused: Bool
     @Namespace private var highlight
 
@@ -162,7 +164,8 @@ public struct HostSwitcher: View {
                 .padding(.top, hostRows.isEmpty ? DS.Space.row : 0)
             }
         }
-        .frame(width: DS.Size.switcherWidth)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height = max(height, $0) }
+        .frame(width: DS.Size.switcherWidth, height: height > 0 ? height : nil, alignment: .top)
         .chromeContent()
         .onAppear {
             highlighted = hosts.first(where: \.isCurrent).map { "host-\($0.id)" } ?? rows.first?.id
@@ -233,6 +236,7 @@ public struct HostSwitcher: View {
                                 .truncationMode(.middle)
                         }
                     }
+                    .reservesSubtitleLine()
                     Spacer(minLength: DS.Space.s)
                     if host.link == .connecting {
                         Spinner(color: DS.Palette.textTertiary)
@@ -366,5 +370,21 @@ public struct SwitcherCheck: View {
             .opacity(isOn ? 1 : 0)
             .frame(width: 16)
             .accessibilityHidden(!isOn)
+    }
+}
+
+extension View {
+    /// As tall as a title over a caption whether or not the caption shows, so a status arriving
+    /// or leaving never resizes the row (or the popover it sits in).
+    func reservesSubtitleLine() -> some View {
+        ZStack(alignment: .leading) {
+            VStack(spacing: 0) {
+                Text(verbatim: " ").font(.body)
+                Text(verbatim: " ").font(.caption)
+            }
+            .hidden()
+            .accessibilityHidden(true)
+            self
+        }
     }
 }

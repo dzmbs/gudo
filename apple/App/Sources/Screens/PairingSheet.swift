@@ -125,7 +125,8 @@ struct PairingSheet: View {
         #if os(iOS)
         .phoneDetents([.medium, .large])
         #else
-        .frame(width: 500)
+        // Fixed: previews, the key section and errors arrive while typing; the form scrolls.
+        .frame(width: 500, height: 560)
         #endif
     }
 

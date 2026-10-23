@@ -3,7 +3,7 @@ import SwiftUI
 /// A popover that opens on pointer hover (Mac, iPad with a pointer) and closes 150 ms after the
 ///
 /// Content gets the system's popover padding and spacing (O3): give it `.padding()` and the
-/// default `VStack` spacing, a width of 260–480 and at most 400 tall, scrolling past that
+/// default `VStack` spacing, one fixed width and at most 400 tall, scrolling past that
 /// (`hoverPopoverFrame()`).
 public struct HoverPopover<Label: View, Content: View>: View {
     @Binding var isPresented: Bool
@@ -64,17 +64,18 @@ public struct HoverPopover<Label: View, Content: View>: View {
 }
 
 public extension DS.Size {
-    static let popoverMinWidth: CGFloat = 260
-    static let popoverMaxWidth: CGFloat = 480
+    /// Popovers: at most 400 tall, then they scroll.
     static let popoverMaxHeight: CGFloat = 400
+    /// One width for content that changes while open, so a longer line never widens it.
+    static let popoverWidth: CGFloat = 360
 }
 
 public extension View {
-    /// A popover's content at the system padding, 260–480 wide, scrolling past 400 tall.
+    /// A popover's content at the system padding, at one width, scrolling past 400 tall.
     func hoverPopoverFrame() -> some View {
         ScrollView {
             padding()
-                .frame(minWidth: DS.Size.popoverMinWidth, maxWidth: DS.Size.popoverMaxWidth, alignment: .leading)
+                .frame(width: DS.Size.popoverWidth, alignment: .leading)
         }
         .frame(maxHeight: DS.Size.popoverMaxHeight)
         .fixedSize(horizontal: false, vertical: true)

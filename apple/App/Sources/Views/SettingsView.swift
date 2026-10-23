@@ -84,7 +84,8 @@ struct SettingsView: View {
                 .sharedBackgroundVisibility(.hidden)
             }
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-            .frame(minWidth: 720, minHeight: 480)
+            // A pinned ideal size: the window opens at one size whichever pane's form is longer.
+            .frame(minWidth: 720, idealWidth: 720, minHeight: 480, idealHeight: 560)
         }
         #else
         NavigationStack(path: $path) {
