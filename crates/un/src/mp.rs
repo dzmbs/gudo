@@ -6,9 +6,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use client_core::proto::{
-    Admit, ApprovalMode, ApprovalPolicy, AuditKind, DeviceId, GrantId, History, InviteTerms,
-    KnockId, KnockUpdate, LeaseOutcome, MpResponse, PaneId, PresenceState, PrincipalId, RequestId,
-    RevokeTarget, Risk, Roles, Scope, SessionId, TabId, UnixMillis,
+    Admit, ApprovalMode, ApprovalPolicy, AuditKind, DeviceClass, DeviceId, Draft, DraftSource,
+    GrantId, History, InviteTerms, KnockId, KnockUpdate, LeaseOutcome, MpResponse, PaneId, Peer,
+    PresenceState, PrincipalId, RequestId, RevokeTarget, Risk, Roles, Scope, SessionId, TabId,
+    UnixMillis,
 };
 use client_core::{GrantSpec, MultiplayerEvent, MultiplayerEventQueue, now_millis};
 
@@ -125,6 +126,22 @@ pub(crate) enum MpCmd {
         /// Paste without pressing Enter.
         #[arg(long)]
         no_submit: bool,
+    },
+    /// Type a draft into a pane's composer, a character at a time, live for everyone in the
+    /// session (never sent to the pane), then hold it there.
+    Draft {
+        text: String,
+        #[arg(long)]
+        pane: Option<u64>,
+        /// Characters per second.
+        #[arg(long, default_value_t = 12.0)]
+        cps: f64,
+        /// Then wait until someone follows you, and move to this pane.
+        #[arg(long)]
+        then_focus: Option<u64>,
+        /// Seconds to stay afterwards.
+        #[arg(long, default_value_t = 30)]
+        hold: u64,
     },
     /// Grants and devices this daemon knows (owner).
     Grants {
@@ -513,6 +530,61 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let n = conn.client.prompt(pane_id, text, !no_submit).await?;
             println!("sent {n} characters to pane {pane_id}");
+        }
+        MpCmd::Draft {
+            text,
+            pane,
+            cps,
+            then_focus,
+            hold,
+        } => {
+            if !conn.client.has_live_presence() {
+                bail!("the host's helper is too old for live drafts; update it");
+            }
+            let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
+            let (listener, mut events) = MultiplayerEventQueue::channel();
+            conn.client.set_multiplayer_listener(listener);
+            conn.client.set_device_class(DeviceClass::Terminal);
+            conn.client.set_view(Some(pane_id), vec![pane_id]);
+            let pause = Duration::from_secs_f64(1.0 / cps.max(1.0));
+            let mut typed = String::new();
+            for c in text.chars() {
+                typed.push(c);
+                conn.client.set_draft(Some(Draft {
+                    pane_id,
+                    source: DraftSource::Composer,
+                    text: typed.clone(),
+                    caret: typed.chars().count() as u32,
+                }));
+                tokio::time::sleep(pause).await;
+            }
+            println!(
+                "drafted {} characters in pane {pane_id}",
+                typed.chars().count()
+            );
+            if let Some(next) = then_focus {
+                let me = conn.client.me().map(|m| m.actor.principal);
+                let followed = |p: &Peer| me.is_some() && p.following == me;
+                let mut by = conn.client.peers().1.into_iter().find(followed);
+                while by.is_none() {
+                    by = match events.recv().await {
+                        Some(MultiplayerEvent::PeerChanged { peer }) => {
+                            followed(&peer).then_some(peer)
+                        }
+                        Some(MultiplayerEvent::Peers { peers, .. }) => {
+                            peers.into_iter().find(followed)
+                        }
+                        Some(_) => None,
+                        None => bail!("disconnected"),
+                    };
+                }
+                println!("followed by {}", by.map(|p| p.name).unwrap_or_default());
+                conn.client.set_view(Some(PaneId(next)), vec![PaneId(next)]);
+                println!("moved to pane {next}");
+            }
+            tokio::time::sleep(Duration::from_secs(hold)).await;
+            conn.client.set_draft(None);
+            tokio::time::sleep(client_core::PRESENCE_INTERVAL * 3).await;
         }
         MpCmd::Grants { devices } => {
             if devices {

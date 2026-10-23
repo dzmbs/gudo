@@ -10,6 +10,7 @@
 pub(crate) mod approvals;
 pub(crate) mod audit;
 pub(crate) mod policy;
+mod presence;
 pub(crate) mod prompt;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -31,6 +32,7 @@ use tokio::sync::mpsc;
 
 pub(crate) use audit::{Audit, Entry as AuditEntry};
 pub(crate) use policy::{Need, Target};
+pub(crate) use presence::Mailbox;
 
 use crate::core::{ConnId, Core, Event, lock};
 use crate::fsutil::{hex, read_optional, unhex, write_atomic};
@@ -265,6 +267,7 @@ struct Live {
     typing: bool,
     cursor: Option<CursorPos>,
     last_presence: Option<Instant>,
+    peer: presence::PeerState,
     ctl: mpsc::UnboundedSender<ServerCtl>,
     conn: iroh::endpoint::Connection,
 }
@@ -341,10 +344,17 @@ pub(crate) struct Mp {
     pub approvals: approvals::Approvals,
     pub audit: Audit,
     lease_idle: Duration,
+    times: crate::config::PresenceTimes,
+    /// The newest live-presence revision handed out.
+    peer_rev: AtomicU64,
 }
 
 impl Mp {
-    pub fn open(state_dir: &Path, lease_idle: Duration) -> std::io::Result<Self> {
+    pub fn open(
+        state_dir: &Path,
+        lease_idle: Duration,
+        times: crate::config::PresenceTimes,
+    ) -> std::io::Result<Self> {
         let store_path = state_dir.join(STORE_FILE);
         Ok(Self {
             store: Mutex::new(Store::load(&store_path)),
@@ -356,6 +366,8 @@ impl Mp {
             approvals: approvals::Approvals::default(),
             audit: Audit::open(state_dir)?,
             lease_idle,
+            times,
+            peer_rev: AtomicU64::new(0),
         })
     }
 
@@ -514,11 +526,13 @@ impl Mp {
 
     // --- participants -----------------------------------------------------------------------
 
+    /// A connection joined; `heartbeats` when it announced live presence.
     pub fn join(
         &self,
         core: &Core,
         id: ConnId,
         authz: &Authz,
+        heartbeats: bool,
         ctl: mpsc::UnboundedSender<ServerCtl>,
         conn: iroh::endpoint::Connection,
     ) {
@@ -533,6 +547,7 @@ impl Mp {
                 typing: false,
                 cursor: None,
                 last_presence: None,
+                peer: presence::PeerState::new(heartbeats),
                 ctl,
                 conn,
             },
@@ -604,9 +619,14 @@ impl Mp {
                 scope: l.authz.scope,
                 grant_id: l.authz.grant_id(),
                 since: l.since,
-                state: l.state,
+                // Live presence knows better than the old self-reported state.
+                state: if l.peer.rev > 0 {
+                    self.state_of(l)
+                } else {
+                    l.state
+                },
                 focus: l.focus,
-                typing: l.typing,
+                typing: l.typing || l.peer.typing.is_some(),
                 cursor: l.cursor,
             })
             .collect();
@@ -651,6 +671,10 @@ impl Mp {
             let changed = l.focus != focus;
             l.focus = focus;
             l.state = PresenceState::Active;
+            l.peer.active = Instant::now();
+            if changed {
+                self.bump(l);
+            }
             changed
         });
         if changed {
@@ -1559,6 +1583,7 @@ impl Mp {
         }
         self.kick_invalid();
         self.drop_invalid_knocks(core);
+        self.tick_presence(core);
     }
 }
 

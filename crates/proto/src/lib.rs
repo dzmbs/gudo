@@ -53,6 +53,9 @@
 //! - The app's browser, used from the host (URLs programs open, agents' browser tools):
 //!   [`ServerCtl::Browser`] pushes to clients with [`Caps::BROWSER`], answered by
 //!   [`ClientCtl::BrowserResult`]; see [`browser`].
+//! - Live presence (drafts being typed, viewports, following, idle and away) is
+//!   [`ClientCtl::Peer`] in and [`ServerCtl::Peers`] out, for clients with [`Caps::PRESENCE`];
+//!   see [`peer`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -84,6 +87,7 @@ pub mod info;
 mod layout;
 pub mod mp;
 mod msg;
+pub mod peer;
 pub mod repo;
 mod serde_bytes;
 mod ticket;
@@ -109,6 +113,7 @@ pub use layout::{
 };
 pub use mp::*;
 pub use msg::*;
+pub use peer::*;
 pub use repo::*;
 pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
 pub use usage::*;
