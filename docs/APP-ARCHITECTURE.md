@@ -849,18 +849,29 @@ pane opens through `BROWSER` comes up beside that pane (`openFromHost`), a sign-
 sign-in sheet instead (`HostSignIn`).
 
 Agents' browser tools (`BrowserAgent`) act on the page beside the agent's pane, the first
-`browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`): one in an
-isolated content world (snapshots with `ref_N` refs, actions as pointer and key events and
-form values, the agent's cursor and a highlight shown before each action, labels for annotated
-screenshots, picking an element for Point Out to Agent), one in the page's world recording
-console messages and fetch/XHR requests. Clicks that buy, pay or send, and submits of sign-in or
+`browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`). One runs in
+every frame in an isolated content world: Playwright's injected script (`AgentBrowser/`, built
+from a pinned commit by `apple/scripts/build-agent-browser.sh`) under ours (`agent.js`).
+Snapshots are Playwright's aria tree as `role "name" [ref_N]` lines; a ref keeps its element,
+and one whose element was re-rendered is found again by role, name and index. Actions wait until
+the target is visible, enabled and still, check that their point hits it (else name what covers
+it), and send the event sequence of a real pointer or keyboard, one task per event (after
+Playwright's WebView input; `textInput` makes typing native). The other script, in the page's
+world, records console messages and fetch/XHR requests. After each action `BrowserAgentPage`
+waits for what it started (a navigation up to 10 s, else its requests up to 5 s, then a quiet
+DOM up to 3 s) and asks the page what changed; nothing changed means one retry with the
+element's own `click()`, then a "no observable effect" answer saying what to try. Each action
+is reported to `BrowserAgent.onAction` (`BrowserActionEntry`, with Playwright's selector and
+locator) for recordings. Clicks that buy, pay or send, and submits of sign-in or
 payment forms, wait for Allow on the page (or in the agent's own client when it supports MCP
 elicitation); typing into password or card fields is left to the user (Done). Take Over stops
 the agent's calls until Hand Back. Screenshots are the visible page at most 1280 px wide; their
 pixels are the coordinates targets use.
 
 Tests: `BrowserLeafTests` (PaneLayout), `BrowserTests` (sign-in URLs), `BrowserAgentScriptTests`
-(the page script on a fixture page: refs, deltas, stale refs, secrets, what waits for the user),
+(the page script on a fixture page: refs, deltas, refs found again, covered and disabled
+targets, effects, typing and filling, secrets, what waits for the user),
 `BrowserUITests` (iPad, `UI_TEST_CLASS=BrowserUITests apple/scripts/w3-ui-test.sh`: a sign-in
 through `BROWSER`, a host page in a pane beside its terminal surviving a relaunch, an agent
-driving a page with an approval on the device).
+driving a page with an approval on the device, and learning what covers a button and what had
+no effect).

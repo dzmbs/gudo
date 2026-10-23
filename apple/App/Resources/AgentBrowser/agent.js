@@ -242,14 +242,23 @@
   const MISSING = {
     visible: "is not visible", enabled: "is disabled", editable: "is read-only or disabled", stable: "keeps moving (an animation)",
   };
+  // The element's box is the same twice, a frame apart (timers, not animation frames: a page
+  // in a hidden pane draws none).
+  async function stable(el) {
+    const box = () => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(); };
+    const before = box();
+    if (document.visibilityState === "visible") await sleep(20); else { await task(() => {}); await task(() => {}); }
+    return box() === before;
+  }
   // Waits (at most 3 s) until the element can take the action.
   async function actionable(el, kind, label) {
-    const states = kind === "fill" || kind === "type" ? ["visible", "enabled", "editable"] : kind === "hover" ? ["visible", "stable"] : ["visible", "enabled", "stable"];
+    const states = kind === "fill" || kind === "type" ? ["visible", "enabled", "editable"] : kind === "hover" ? ["visible"] : ["visible", "enabled"];
     const deadline = Date.now() + 3000;
     for (;;) {
       bringIntoView(el);
       let r;
       try { r = await pw.checkElementStates(el, states, true); } catch (e) { throw new Error(label + ": " + e.message); }
+      if (r === undefined && kind !== "fill" && kind !== "type" && !(await stable(el))) r = { missingState: "stable" };
       if (r === undefined) return;
       if (r === "error:notconnected") throw new Error(label + " left the page. Snapshot again.");
       if (Date.now() > deadline) throw new Error(label + " " + (MISSING[r.missingState] || "is not " + r.missingState) + ".");
@@ -272,7 +281,10 @@
   // MARK: Input (after Playwright's WebViewInput: one task per event, marked so its
   // hit-target interceptor checks them)
 
-  const task = fn => new Promise(resolve => setTimeout(() => { try { resolve(fn()); } catch { resolve(undefined); } }));
+  // A task of its own, through a message port: timers in a page out of sight run once a second.
+  const post = fn => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); fn(); }; c.port2.postMessage(0); };
+  keyboardless._setTimeout = post;
+  const task = fn => new Promise(resolve => post(() => { try { resolve(fn()); } catch { resolve(undefined); } }));
   const mark = e => { Object.defineProperty(e, "__pwTrustedSynthetic", { value: true }); return e; };
   function mods(m) {
     const s = (m || "").toLowerCase();
@@ -476,7 +488,8 @@
     if (el && !el.isConnected) out.push("the element was replaced");
     if (now.value !== b.value && now.value !== null) out.push("value changed");
     if (now.checked !== b.checked || now.selected !== b.selected || now.expanded !== b.expanded || now.open !== b.open) out.push("state changed");
-    if (now.active !== b.active) out.push("focus moved");
+    // Focus on the element itself comes with clicking it, not from the page.
+    if (now.active !== b.active && now.active !== el) out.push("focus moved");
     if (now.scroll !== b.scroll) out.push("scrolled");
     if (now.mutations !== b.mutations) out.push((now.mutations - b.mutations) + " DOM changes");
     return { changes: out, intercepted: p.intercepted };
