@@ -76,9 +76,10 @@ final class MixedTabsUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
     }
 
-    private func launch(tickets: Bool, directory: String) throws -> XCUIApplication {
+    /// `pair` picks the tickets: pairing tickets are one-time, so each test that pairs has its own.
+    private func launch(tickets: Bool, directory: String, pair: String = "") throws -> XCUIApplication {
         let env = ProcessInfo.processInfo.environment
-        let alpha = env["PAIR_TICKET_A"] ?? "", beta = env["PAIR_TICKET_B"] ?? ""
+        let alpha = env["PAIR_TICKET_A\(pair)"] ?? "", beta = env["PAIR_TICKET_B\(pair)"] ?? ""
         try XCTSkipIf(alpha.isEmpty || beta.isEmpty, "no daemon tickets (run apple/scripts/mixed-ui-test.sh)")
         let app = XCUIApplication()
         if tickets {
@@ -165,7 +166,7 @@ final class MixedTabsUITests: XCTestCase {
     /// uploaded to beta and placed there (`DrawingTransfer`: another host gets the content, not
     /// a reference).
     func testDragAnImageToAnotherHostsPane() throws {
-        let app = try launch(tickets: true, directory: NSTemporaryDirectory() + "mixed-drag-\(UUID().uuidString)")
+        let app = try launch(tickets: true, directory: NSTemporaryDirectory() + "mixed-drag-\(UUID().uuidString)", pair: "2")
         XCTAssertTrue(element(app, "host-group-beta").waitForExistence(timeout: 40))
         waitFor(NSPredicate(format: "value == 'Connected'"), element(app, "host-group-alpha"), timeout: 40, "alpha connected")
         waitFor(NSPredicate(format: "value == 'Connected'"), element(app, "host-group-beta"), timeout: 40, "beta connected")
