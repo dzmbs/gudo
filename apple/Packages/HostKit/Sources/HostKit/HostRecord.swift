@@ -33,8 +33,12 @@ nonisolated public struct HostRecord: Codable, Identifiable, Hashable, Sendable 
     public var nameSource: NameSource?
     /// What the daemon last said about its machine.
     public var machine: Machine?
+    /// The helper the app itself runs on this device (the Mac's "This Mac"). Optional so older
+    /// `hosts.json` files decode.
+    public var thisDevice: Bool?
 
     public var isGuest: Bool { guest == true }
+    public var isThisDevice: Bool { thisDevice == true }
 
     /// Where a host's name came from: the app's placeholder, the machine's host name, or the
     /// user. Only placeholders are replaced by the machine's name, and only once.
