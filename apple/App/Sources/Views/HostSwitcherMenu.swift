@@ -54,6 +54,8 @@ struct HostToolbarButton: View {
     @Environment(\.chrome) private var chrome
 
     private var commands: [HostSwitcherCommand] {
+        // Start something here, then reach another machine: the switcher is where a new
+        // connection starts too, so its ways in are one click away.
         let rawCommands: [HostSwitcherCommand] = [
             HostSwitcherCommand(id: "new-tab", title: "New Tab", systemImage: "plus", shortcut: ["⌘", "T"]) {
                 model.newTab()
@@ -61,15 +63,21 @@ struct HostToolbarButton: View {
             HostSwitcherCommand(id: "new-agent", title: "New Agent…", systemImage: "sparkle", shortcut: ["⇧", "⌘", "N"]) {
                 model.newAgent(onGroup: model.currentGroupId)
             },
-            HostSwitcherCommand(id: "all-hosts", title: "All Hosts", systemImage: "server.rack", shortcut: ["⇧", "⌘", "H"]) {
-                withAnimation(DS.Motion.snappy) { model.destination = .hosts }
+            HostSwitcherCommand(id: "connect-ssh", group: 1, title: "Connect via SSH…", systemImage: "terminal") {
+                model.addHost(mode: .ssh)
             },
-            HostSwitcherCommand(id: "add-host", title: "Add Remote Host…", systemImage: "plus.circle") {
-                model.addHost()
+            HostSwitcherCommand(id: "pair-ticket", group: 1, title: "Pair with a Ticket…", systemImage: "ticket") {
+                model.addHost(mode: .ticket)
+            },
+            HostSwitcherCommand(id: "join", group: 1, title: "Join a Session…", systemImage: "person.2") {
+                model.sheet = .join
+            },
+            HostSwitcherCommand(id: "all-hosts", group: 2, title: "All Hosts", systemImage: "server.rack", shortcut: ["⇧", "⌘", "H"]) {
+                withAnimation(DS.Motion.snappy) { model.destination = .hosts }
             },
         ]
         return rawCommands.map { command in
-            HostSwitcherCommand(id: command.id, title: command.title, systemImage: command.systemImage, shortcut: command.shortcut) {
+            HostSwitcherCommand(id: command.id, group: command.group, title: command.title, systemImage: command.systemImage, shortcut: command.shortcut) {
                 afterClose = command.perform
                 model.isHostSwitcherShown = false
             }
@@ -96,6 +104,7 @@ extension WindowModel {
                 id: host.id, name: host.kind == .local ? Self.deviceName : host.name,
                 systemImage: Self.symbol(forHost: host.id, kind: host.kind),
                 detail: Self.switcherDetail(state, needsYou: host.needsYouCount),
+                address: host.kind == .local ? nil : host.address,
                 link: Self.link(state), needsYou: host.needsYouCount > 0, isCurrent: isCurrent,
                 shortcut: index < 9 ? index + 1 : nil)
         }
