@@ -53,6 +53,8 @@ final class MultiplayerUITests: XCTestCase {
 
         // Share Session: Mira is listed with her role.
         presence.tap()
+        let share = element(app, "people-share-session")
+        if share.waitForExistence(timeout: 3) { share.tap() }
         let mira = element(app, "person-Mira Holt")
         XCTAssertTrue(mira.waitForExistence(timeout: 15), "the guest is in People Here")
         XCTAssertTrue(mira.label.contains("Viewer"), "her role is shown: \(mira.label)")

@@ -20,6 +20,8 @@ nonisolated public struct Toast: Identifiable, Equatable, Sendable {
     public var systemImage: String?
     public var style: Style
     public var action: Action?
+    /// Someone the banner is about (joined, left): their avatar leads instead of the symbol.
+    public var person: Participant?
 
     public init(_ message: String, systemImage: String? = nil, style: Style = .neutral, action: Action? = nil) {
         self.message = message
@@ -74,7 +76,10 @@ public struct Banner: View {
 
     public var body: some View {
         HStack(spacing: DS.Space.gap10) {
-            if let image = toast.systemImage {
+            if let person = toast.person {
+                PresenceAvatar(person, size: 24)
+                    .accessibilityHidden(true)
+            } else if let image = toast.systemImage {
                 // The disc is the circle: a circled symbol inside it would be a ring in a ring.
                 Image(systemName: image.replacingOccurrences(of: ".circle.fill", with: "").replacingOccurrences(of: ".circle", with: ""))
                     .font(.footnote.weight(.bold))
@@ -103,7 +108,7 @@ public struct Banner: View {
                 .accessibilityIdentifier("toast-action")
             }
         }
-        .padding(.leading, toast.systemImage == nil ? DS.Space.l : DS.Space.s)
+        .padding(.leading, toast.systemImage == nil && toast.person == nil ? DS.Space.l : DS.Space.s)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.s)
         .frame(minHeight: 40)

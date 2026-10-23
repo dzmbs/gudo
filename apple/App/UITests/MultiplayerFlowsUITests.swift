@@ -83,6 +83,9 @@ final class MultiplayerFlowsUITests: XCTestCase {
 
         // The audit log records the knock and the admission.
         element(app, "presence-button").tap()
+        // With people here the button lists them; Share Session is its last row.
+        let share = element(app, "people-share-session")
+        if share.waitForExistence(timeout: 3) { share.tap() }
         let audit = element(app, "open-audit")
         for _ in 0..<8 where !(audit.exists && audit.isHittable) {
             app.collectionViews.firstMatch.swipeUp(velocity: .slow)
@@ -134,14 +137,11 @@ final class MultiplayerFlowsUITests: XCTestCase {
         XCTAssertTrue(element(app, "shared-approval-answered").waitForExistence(timeout: 10), "who answered shows")
         XCTAssertTrue(approval.waitForNonExistence(timeout: 10))
 
-        // Follow Rex from Share Session; the pill names him.
+        // Follow Rex from the people popover; the pill names him.
         element(app, "presence-button").tap()
         let follow = element(app, "follow-Rex Diaz")
-        for _ in 0..<6 where !(follow.exists && follow.isHittable) {
-            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
-        }
+        XCTAssertTrue(follow.waitForExistence(timeout: 10))
         follow.tap()
-        app.buttons["Done"].firstMatch.tap()
         let pill = element(app, "follow-pill")
         XCTAssertTrue(pill.waitForExistence(timeout: 10), "the window says whom it follows")
         XCTAssertTrue(app.staticTexts["Following Rex"].firstMatch.exists)
@@ -167,6 +167,9 @@ final class MultiplayerFlowsUITests: XCTestCase {
         XCTAssertFalse(take.exists)
         // Share Session shows the owner (this device) driving now.
         element(app, "presence-button").tap()
+        // With people here the button lists them; Share Session is its last row.
+        let share = element(app, "people-share-session")
+        if share.waitForExistence(timeout: 3) { share.tap() }
         let me = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'person-' AND label CONTAINS '(you)'")).firstMatch
         XCTAssertTrue(me.waitForExistence(timeout: 10))

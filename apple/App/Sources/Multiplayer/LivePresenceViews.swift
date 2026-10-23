@@ -42,12 +42,15 @@ struct DraftMirror: View {
         let caret = min(Int(draft?.caret ?? 0), text.count)
         let color = peer.avatar.color
         let command = draft?.source == .lineEditor
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
             HStack(spacing: DS.Space.s) {
-                PresenceAvatar(peer.avatar, size: 18)
+                // The name tag (Figma's cursor label): who is writing, in their colour.
                 Text(peer.firstName)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(color)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, DS.Space.s)
+                    .padding(.vertical, 2)
+                    .background(color, in: .capsule)
                 Text(subtitle(command: command))
                     .font(DS.Font.meta)
                     .foregroundStyle(DS.Palette.textSecondary)
@@ -60,23 +63,20 @@ struct DraftMirror: View {
             TimelineView(.periodic(from: .now, by: 0.55)) { context in
                 let on = reduceMotion || peer.typing != nil
                     || Int(context.date.timeIntervalSinceReferenceDate / 0.55).isMultiple(of: 2)
-                let caretMark = Text("▍").foregroundStyle(on ? AnyShapeStyle(color) : AnyShapeStyle(.clear))
+                // A thin bar like the system's caret, never a block.
+                let caretMark = Text("\u{2009}|\u{2009}").fontWeight(.light).foregroundStyle(on ? AnyShapeStyle(color) : AnyShapeStyle(.clear))
                 Text("\(String(text.prefix(caret)))\(caretMark)\(String(text.dropFirst(caret)))")
-                    .font(command ? .callout.monospaced() : .callout)
-                    .foregroundStyle(.primary)
+                    .font(command ? DS.Font.literal : .callout)
+                    .foregroundStyle(DS.Palette.text)
                     .lineLimit(1...4)
                     .truncationMode(.head)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
         }
-        .padding(.horizontal, DS.Space.m)
-        .padding(.vertical, DS.Space.s)
+        .padding(DS.Space.m)
         .frame(maxWidth: 640, alignment: .leading)
-        .floatingPanel(cornerRadius: DS.Radius.card)
-        .overlay(alignment: .leading) {
-            Capsule().fill(color).frame(width: 3).padding(.vertical, DS.Space.s).padding(.leading, 3)
-        }
+        .floatingPanel()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(peer.name) is writing: \(text)")
         .accessibilityIdentifier("draft-mirror-\(peer.draft?.paneId ?? 0)")
@@ -95,17 +95,16 @@ struct TypingPill: View {
     var body: some View {
         let first = people[0]
         HStack(spacing: DS.Space.s) {
-            HStack(spacing: -4) {
-                ForEach(people.prefix(3), id: \.peer) { PresenceAvatar($0.avatar, size: 16) }
-            }
+            PresenceStack(people.map(\.avatar), size: 18)
             Text(label)
                 .font(.footnote.weight(.medium))
+                .foregroundStyle(DS.Palette.text)
                 .lineLimit(1)
             TypingDots(color: AnyShapeStyle(first.avatar.color))
         }
-        .padding(.leading, DS.Space.xs)
+        .padding(.leading, DS.Space.row)
         .padding(.trailing, DS.Space.m)
-        .padding(.vertical, DS.Space.xs)
+        .padding(.vertical, DS.Space.row)
         .floatingCapsule()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
@@ -169,11 +168,7 @@ struct TabPresence: View {
             let ids = Set(panes.map(\.rawValue))
             let people = session.others.filter { $0.focus.map(ids.contains) ?? false }
             if !people.isEmpty {
-                HStack(spacing: -4) {
-                    ForEach(people.prefix(3), id: \.actor.device) { person in
-                        PresenceAvatar(person.avatar, size: 14)
-                    }
-                }
+                PresenceStack(people.map(\.avatar), size: 16)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(people.map(\.name).joined(separator: ", ") + " here")
                 .accessibilityIdentifier("tab-presence")
@@ -191,26 +186,28 @@ struct FollowPill: View {
             let leader = session.leader(principal)
             let name = leader?.firstName ?? session.name(ofPrincipal: principal)
             HStack(spacing: DS.Space.s) {
-                if let leader { PresenceAvatar(leader.avatar, size: 18) }
+                if let leader { PresenceAvatar(leader.avatar, size: 22) }
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Following \(name)")
-                        .font(.callout.weight(.semibold))
+                        .font(DS.Font.banner)
+                        .foregroundStyle(DS.Palette.text)
                     if leader == nil || leader?.state == .away || leader?.focus == nil {
                         Text(leader == nil ? "Not here right now" : leader?.state == .away ? "Away" : "Somewhere you can't see")
                             .font(DS.Font.meta)
                             .foregroundStyle(DS.Palette.textSecondary)
                     }
                 }
+                Hairline(.vertical)
+                    .frame(height: 16)
                 Button("Stop") { session.follow(nil) }
-                    .buttonStyle(.quiet)
+                    .buttonStyle(.quietProminent)
                     .keyboardShortcut(.escape, modifiers: [])
                     .accessibilityIdentifier("stop-following")
             }
-            .padding(.leading, DS.Space.xs)
+            .padding(.leading, DS.Space.row)
             .padding(.trailing, DS.Space.xs)
             .padding(.vertical, DS.Space.xs)
             .floatingCapsule(interactive: true)
-            .overlay(Capsule().strokeBorder(leader.map { AnyShapeStyle($0.avatar.color) } ?? AnyShapeStyle(DS.Palette.hairline), lineWidth: 1.5))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("follow-pill")
         }
@@ -259,7 +256,7 @@ struct SharedApproval: View {
                 Image(systemName: "hand.raised.fill")
                     .foregroundStyle(DS.Palette.attention)
                 Text("\(agent) asks")
-                    .font(.callout.weight(.semibold))
+                    .font(DS.Font.banner)
                 Spacer(minLength: 0)
                 Text(note)
                     .font(DS.Font.meta)
@@ -268,9 +265,13 @@ struct SharedApproval: View {
                     .accessibilityIdentifier("shared-approval-who")
             }
             Text(summary)
-                .font(.callout.monospaced())
+                .font(DS.Font.literal)
                 .lineLimit(3)
+                .padding(.horizontal, DS.Space.s)
+                .padding(.vertical, DS.Space.row)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
             if block == nil, !session.approvedAlready(requestId: request) {
                 HStack(spacing: DS.Space.s) {
                     Spacer(minLength: 0)
@@ -294,7 +295,8 @@ struct SharedApproval: View {
         }
         .padding(DS.Space.m)
         .frame(maxWidth: 520)
-        .floatingPanel(cornerRadius: DS.Radius.card)
+        .chromeContent()
+        .floatingPanel()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("shared-approval")
     }
@@ -325,6 +327,7 @@ struct SharedApproval: View {
                 .foregroundStyle(color.map { AnyShapeStyle($0) } ?? AnyShapeStyle(DS.Palette.done))
             Text("\(label) · \(who)")
                 .font(.footnote.weight(.medium))
+                .foregroundStyle(DS.Palette.text)
                 .lineLimit(1)
         }
         .padding(.horizontal, DS.Space.m)

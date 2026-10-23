@@ -206,12 +206,7 @@ public struct HostSwitcher: View {
                     if let shortcut = host.shortcut {
                         shortcutText(["⌃", "⌘", "\(shortcut)"])
                     }
-                    Image(systemName: "checkmark")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(DS.Palette.accent)
-                        .opacity(host.isCurrent ? 1 : 0)
-                        .frame(width: 16)
-                        .accessibilityHidden(!host.isCurrent)
+                    SwitcherCheck(host.isCurrent)
                 case .create(let destination):
                     Image(systemName: "arrow.right.circle")
                         .font(.subheadline)
@@ -235,23 +230,10 @@ public struct HostSwitcher: View {
                     Color.clear.frame(width: 16, height: 1)
                 }
             }
-            .padding(.horizontal, DS.Space.s)
-            .frame(minHeight: 36)
-            .background {
-                if isHighlighted {
-                    RoundedRectangle(cornerRadius: DS.Radius.control)
-                        .fill(DS.Palette.selectedFill)
-                        .matchedGeometryEffect(id: "highlight", in: highlight)
-                }
-            }
-            .contentShape(.rect(cornerRadius: DS.Radius.control))
+            .switcherRow(isHighlighted: isHighlighted, in: highlight)
         }
         .buttonStyle(.plain)
         .onHover { if $0 { withAnimation(DS.Motion.menu) { highlighted = row.id } } }
-        #if os(iOS)
-        .contentShape(.hoverEffect, .rect(cornerRadius: DS.Radius.control))
-        .hoverEffect(.highlight)
-        #endif
         .accessibilityAddTraits(isCurrent(row) ? .isSelected : [])
         .accessibilityIdentifier("host-switcher-\(row.id)")
     }
@@ -307,5 +289,47 @@ public struct HostSwitcherLabel<Glyph: View>: View {
         .font(.subheadline.weight(.medium))
         .padding(.horizontal, DS.Space.row)
         .contentShape(.rect)
+    }
+}
+
+// MARK: - Rows shared by the switchers
+
+public extension View {
+    /// A switcher row's padding and height, and the highlight that slides between rows
+    /// (`namespace` shared by the list).
+    func switcherRow(isHighlighted: Bool, in namespace: Namespace.ID) -> some View {
+        padding(.horizontal, DS.Space.s)
+            .frame(minHeight: 36)
+            .background {
+                if isHighlighted {
+                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                        .fill(DS.Palette.selectedFill)
+                        .matchedGeometryEffect(id: "highlight", in: namespace)
+                }
+            }
+            .contentShape(.rect(cornerRadius: DS.Radius.control))
+            #if os(iOS)
+            .contentShape(.hoverEffect, .rect(cornerRadius: DS.Radius.control))
+            .hoverEffect(.highlight)
+            #endif
+    }
+}
+
+/// The checkmark at a switcher row's end: the current choice. Its slot stays when off so rows
+/// align.
+public struct SwitcherCheck: View {
+    let isOn: Bool
+
+    public init(_ isOn: Bool) {
+        self.isOn = isOn
+    }
+
+    public var body: some View {
+        Image(systemName: "checkmark")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(DS.Palette.accent)
+            .opacity(isOn ? 1 : 0)
+            .frame(width: 16)
+            .accessibilityHidden(!isOn)
     }
 }

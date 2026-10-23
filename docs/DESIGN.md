@@ -179,8 +179,10 @@ Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.pa
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28–48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
-| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a glass capsule at the bottom (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer and the iPhone tab bar), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
-| `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N |
+| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer and the iPhone tab bar), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
+| `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N; stacks at any size, each avatar cutting a thin gap out of the one under it so they read on any background |
+| `PeopleSwitcher`, `PeopleSwitcherPerson` | `Components/PeopleSwitcher.swift` | the presence button's popover in the host switcher's form: "4 people here", one row per person (avatar, what they are doing, ✓ on the one followed; a tap follows or stops), then Share Session… |
+| `.switcherRow(isHighlighted:in:)`, `SwitcherCheck` | `Components/HostSwitcher.swift` | the switchers' shared row: 36 pt, the sliding highlight, the ✓ slot |
 | `KeyBarLook` | `Components/KeyBarLook.swift` | the key bar's look (app passes it as `KeyBarStyle.designSystem`) |
 | `ResizeOverlay`, `ProcessExitedBar`, `BellBorder`, `UnfocusedDim`, `SecureInputBadge`, `URLHoverBanner` | `Overlays/TerminalOverlays.swift` | Ghostty `SurfaceView.swift` 1:1 |
 | `TerminalSearchBar` | `Overlays/SearchBar.swift` | Ghostty `SurfaceSearchOverlay` 1:1 (glass instead of opaque) |
@@ -683,3 +685,11 @@ title menu grouped by host), `iphone-hetzner.png` (title + host line).
   simulators have a hardware keyboard attached; the full row uses the same `KeyBarLook` keys.
 - **Mac snapshots** (`-snapshot`) leave system lists (Inbox, Hosts) and glass grey: the Mac
   theme screenshots show the chrome around them; check lists on a live window.
+
+
+Someone's draft is a panel with their name tag (first name in white on their colour, Figma's
+cursor label), "iPad · writing a prompt" in meta and a thin caret in their colour; no coloured
+side bar. "Kim is typing" and tab avatars use the cut-out `PresenceStack`. "Following Kim" is
+one glass capsule: their avatar, the words, a hairline, Stop in the accent; no second coloured
+edge. The shared approval reuses the Agents request block. Arrivals and departures are banners
+with the person's avatar. With people here the toolbar's avatars open `PeopleSwitcher`; alone
