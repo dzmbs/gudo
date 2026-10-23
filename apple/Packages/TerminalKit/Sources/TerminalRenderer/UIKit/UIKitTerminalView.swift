@@ -189,8 +189,28 @@ public final class TerminalView: UIView {
         return element
     }()
 
+    #if DEBUG
+    /// Echo prediction as UI tests read it (`<view id>-prediction`): the predictor's counts and
+    /// the text drawn ahead of the echo.
+    private lazy var predictionElement: ScreenElement = {
+        let element = ScreenElement(accessibilityContainer: self)
+        element.text = { [weak self] in
+            guard let predictor = self?.surface.predictor else { return "off" }
+            let stats = predictor.stats
+            let ahead = predictor.overlay.sorted { ($0.y, $0.x) < ($1.y, $1.x) }.map(\.text).joined()
+            return "predicted=\(stats.predicted) confirmed=\(stats.confirmed) mispredicted=\(stats.mispredicted) ahead=\(ahead)"
+        }
+        return element
+    }()
+    #endif
+
     override public var accessibilityIdentifier: String? {
-        didSet { screenElement.accessibilityIdentifier = accessibilityIdentifier.map { "\($0)-screen" } }
+        didSet {
+            screenElement.accessibilityIdentifier = accessibilityIdentifier.map { "\($0)-screen" }
+            #if DEBUG
+            predictionElement.accessibilityIdentifier = accessibilityIdentifier.map { "\($0)-prediction" }
+            #endif
+        }
     }
 
     override public var isAccessibilityElement: Bool {
@@ -203,7 +223,12 @@ public final class TerminalView: UIView {
             screenElement.accessibilityFrameInContainerSpace = bounds
             // Views hosts add over the grid (the draw overlay, placement markers) come first.
             let hosted = subviews.filter { $0 !== startHandle && $0 !== endHandle && !$0.isHidden }.reversed()
-            return Array(hosted) + [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
+            var elements = Array(hosted) + [screenElement] + [startHandle, endHandle].filter { !$0.isHidden }
+            #if DEBUG
+            predictionElement.accessibilityFrameInContainerSpace = CGRect(x: 0, y: 0, width: 1, height: 1)
+            elements.append(predictionElement)
+            #endif
+            return elements
         }
         set {}
     }

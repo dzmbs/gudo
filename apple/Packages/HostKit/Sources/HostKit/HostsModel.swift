@@ -66,6 +66,9 @@ public final class HostsModel {
         /// What those builds are (`hostd-manifest.json`), to tell an older helper; nil when
         /// the app bundles none.
         public var bundledDaemons: @Sendable () -> BundledDaemons? = { nil }
+        /// Holds every event from a daemon back this long, in order: a slow link on loopback
+        /// (UI tests of echo prediction).
+        public var linkDelay: Duration?
         public init() {}
     }
 
@@ -203,8 +206,10 @@ public final class HostsModel {
         let config = clientConfig(key)
         // The app shows native password prompts (AskpassSession), so it asks the daemon for them.
         let options = relaySettings.connectOptions(askpass: true)
+        let delay = configuration.linkDelay
         return { ticket, listener in
-            try DaemonClient.connectWith(ticket: ticket, config: config, options: options, listener: listener)
+            let listener = delay.map { DelayedListener(listener, delay: $0) } ?? listener
+            return try DaemonClient.connectWith(ticket: ticket, config: config, options: options, listener: listener)
         }
     }
 

@@ -61,3 +61,27 @@ nonisolated final class ClosureListener: ClientEventListener {
         handler(event)
     }
 }
+
+/// Hands events on `delay` after they arrived, in order (`HostsModel.Configuration.linkDelay`).
+nonisolated final class DelayedListener: ClientEventListener {
+    private let events: AsyncStream<(ContinuousClock.Instant, ClientEvent)>.Continuation
+    private let delay: Duration
+
+    init(_ inner: any ClientEventListener, delay: Duration) {
+        self.delay = delay
+        let (stream, events) = AsyncStream<(ContinuousClock.Instant, ClientEvent)>.makeStream()
+        self.events = events
+        Task.detached {
+            for await (due, event) in stream {
+                try? await Task.sleep(until: due)
+                inner.onEvent(event: event)
+            }
+        }
+    }
+
+    deinit { events.finish() }
+
+    func onEvent(event: ClientEvent) {
+        events.yield((.now + delay, event))
+    }
+}
