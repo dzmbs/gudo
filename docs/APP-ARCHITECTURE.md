@@ -849,18 +849,86 @@ pane opens through `BROWSER` comes up beside that pane (`openFromHost`), a sign-
 sign-in sheet instead (`HostSignIn`).
 
 Agents' browser tools (`BrowserAgent`) act on the page beside the agent's pane, the first
-`browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`): one in an
-isolated content world (snapshots with `ref_N` refs, actions as pointer and key events and
-form values, the agent's cursor and a highlight shown before each action, labels for annotated
-screenshots, picking an element for Point Out to Agent), one in the page's world recording
-console messages and fetch/XHR requests. Clicks that buy, pay or send, and submits of sign-in or
+`browser_navigate` opening it. Pages carry two scripts (`BrowserAgentScript`). One runs in
+every frame in an isolated content world: Playwright's injected script (`AgentBrowser/`, built
+from a pinned commit by `apple/scripts/build-agent-browser.sh`) under ours (`agent.js`).
+Snapshots are Playwright's aria tree as `role "name" [ref_N]` lines; a ref keeps its element,
+and one whose element was re-rendered is found again by role, name and index. Actions wait until
+the target is visible, enabled and still, check that their point hits it (else name what covers
+it), and send the event sequence of a real pointer or keyboard, one task per event (after
+Playwright's WebView input; `textInput` makes typing native). The other script, in the page's
+world, records console messages and fetch/XHR requests. After each action `BrowserAgentPage`
+waits for what it started (a navigation up to 10 s, else its requests up to 5 s, then a quiet
+DOM up to 3 s) and asks the page what changed; nothing changed means one retry with the
+element's own `click()`, then a "no observable effect" answer saying what to try. Each action
+is reported to `BrowserAgent.onAction` (`BrowserActionEntry`, with Playwright's selector and
+locator) for recordings. Clicks that buy, pay or send, and submits of sign-in or
 payment forms, wait for Allow on the page (or in the agent's own client when it supports MCP
 elicitation); typing into password or card fields is left to the user (Done). Take Over stops
 the agent's calls until Hand Back. Screenshots are the visible page at most 1280 px wide; their
 pixels are the coordinates targets use.
 
 Tests: `BrowserLeafTests` (PaneLayout), `BrowserTests` (sign-in URLs), `BrowserAgentScriptTests`
-(the page script on a fixture page: refs, deltas, stale refs, secrets, what waits for the user),
+(the page script on a fixture page: refs, deltas, refs found again, covered and disabled
+targets, effects, typing and filling, secrets, what waits for the user),
 `BrowserUITests` (iPad, `UI_TEST_CLASS=BrowserUITests apple/scripts/w3-ui-test.sh`: a sign-in
 through `BROWSER`, a host page in a pane beside its terminal surviving a relaunch, an agent
-driving a page with an approval on the device).
+driving a page with an approval on the device, and learning what covers a button and what had
+no effect).
+
+### 21.1 Session Replay
+
+Agents' browser sessions are recorded on the device (Settings ▸ Browser ▸ Record Agent
+Sessions, on by default). `BrowserRecorder` takes each action from `BrowserAgent.onAction`
+(`BrowserActionEntry`: tool, element ref/role/name/nth, Playwright selector and locator, URLs,
+verdict), a JPEG of the visible page after it, and the page as rrweb events. A session is one
+agent pane on one page, from its first action until 15 minutes without one. `ReplayStore`
+keeps a folder per session (`session.json`, `events.jsonl`, `k<N>.jpg`) in Application Support,
+at most 512 MB and 30 days in all (oldest first; never the session being recorded) and 96 MB of
+events per session.
+
+rrweb runs in its own content world (`unnamed-replay`), in every frame, idle until the app
+answers its hello with "record". An isolated world sees the same DOM (mutation observers, input
+and scroll events), and the page sees nothing: no globals, no message handler in its world, no
+patched prototypes. What it misses — style rules a page inserts through the CSSOM later — comes
+back with a fresh full snapshot after actions (at most every 10 s). Frames from other origins
+record themselves; their world's own `parent` sends their events to the app, which hands them
+to the top frame's rrweb (its `message` listener is taken, never added to the page), so a page
+never receives what its embedded frames (a payment form) recorded. Password and `cc-*` fields
+are masked.
+
+Session Replay (`SessionReplayView`, from the page's Replays button or More menu, an agent's
+row in Agents ▸ Session Replay, the palette, or a `.unreplay` file opened in the app): the steps
+(picture, tool, target, verdict) beside rrweb-player in its own `WebPage` (a throwaway data
+store, no navigation, the recorded page in rrweb's script-less sandboxed frame; a session from a
+file also loads nothing from the network). Play, pause, scrub (a tick per step), speed, and
+previous/next step (← →, space); the list follows the playhead.
+
+Sharing: a `.unreplay` file (exported type `<bundle prefix>.unreplay`, opened by the app) is one
+JSON document — `session` (the actions), `events` (rrweb) and `keyframes` (base64 JPEGs) — the
+same bytes for the same session. Export as Playwright Test (`ReplayPlaywright`) writes a
+TypeScript test: `page.goto`, then each step on its recorded locator (`getByRole(…).click()`,
+`.fill()`, `.check()`, `.selectOption()`, `keyboard.press`, `mouse.wheel`); without a locator it
+falls back to role and name, then the screenshot coordinates, and says so in a comment. Replay
+in Browser (`BrowserReplayRunner`) runs the steps again in a new tab by selector, healing by
+role, name and index; steps that wait for the user are skipped, never approved.
+
+Mac input (`BrowserNativeInput`): AppKit mouse, drag, wheel and key events handed straight to
+the page's `WKWebView` (found by a token its content world carries), so the page gets trusted
+events, `:hover` and menus that open on hover (WebKit takes buttonless moves only in the key
+window), and pointer drags; the pointer on screen stays put. HTML drag and drop stays with the
+page script: its system drag session follows the real pointer, so `drag` refuses a drag source.
+Keys make the page first responder for the call and give the focus back. Agents' actions in
+the top frame (click, double-click, hover, type, press, scroll, drag) use it when the page is in
+a window: the page script still waits for the target, checks what covers it and reads the
+effect, but lists the events (`native` in `act`) for the app to send. Frames, iOS (no public
+equivalent) and pages off screen keep the script's events; `browser_drag` from an HTML drag
+source always uses the script's DataTransfer drag.
+
+Tests: `BrowserReplayTests` (store cap and age, `.unreplay` round trip and unsafe names,
+Playwright export with and without locators), `BrowserRecorderTests` (a `WebPage` fixture with
+a frame from another origin: rrweb's snapshot, mutations, masked input, nothing visible to the
+page, playback in rrweb-player), `BrowserNativeInputTests` (Mac, a page in a window: hover,
+clicks, drag, keys), `SessionReplayUITests` (iPad, `UI_TEST_CLASS=SessionReplayUITests
+apple/scripts/w3-ui-test.sh`: `un-hook browser` drives a page, its Replays step through the
+session and export the test).

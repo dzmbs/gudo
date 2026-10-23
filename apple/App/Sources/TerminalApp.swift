@@ -286,6 +286,18 @@ private struct WindowContent: View {
         }
         #endif
         #endif
+        // A `.unreplay` file opens in Session Replay.
+        if url.isFileURL, url.pathExtension.lowercased() == ReplayStore.fileExtension {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let session = try ReplayStore.shared.importBundle(Data(contentsOf: url))
+                model.showReplays(.session(session.id))
+            } catch {
+                model.toasts.show(Toast("Couldn't open the replay: \(error.localizedDescription)", systemImage: "exclamationmark.triangle.fill", style: .failure))
+            }
+            return
+        }
         // `<scheme>://inbox`: the agents Live Activity opens the Inbox (every host's agents).
         if url.host() == "inbox" {
             model.destination = .inbox

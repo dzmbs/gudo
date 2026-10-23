@@ -44,7 +44,7 @@ enum PaletteMode: Equatable {
 
 /// Modal surfaces. One at a time, like the system's own sheets.
 enum SheetRoute: String, Identifiable {
-    case pairing, launchAgent, invite, join, links, diff, files, browser, editor, settings, shortcuts
+    case pairing, launchAgent, invite, join, links, diff, files, browser, editor, settings, shortcuts, replays
     var id: String { rawValue }
 }
 
@@ -66,6 +66,8 @@ final class WindowModel {
         didSet { if destination != oldValue { reportViews() } }
     }
     var sheet: SheetRoute?
+    /// What the Replays sheet shows.
+    var replayRequest = ReplayRequest.all
     /// What the next New Agent sheet starts with, once: a prompt (Ask Agent about a command with
     /// no agent open), the host and repository whose + opened it.
     @ObservationIgnored var newAgentSeed = NewAgentSeed()
@@ -279,6 +281,7 @@ final class WindowModel {
             links.window = self
         }
         git.window = self
+        browsers.onPopup = { [weak self] opener, url in self?.openPopup(url, from: opener) }
         #if os(iOS)
         // A first guess from the screen until the window is measured (`WindowRoot`), so an
         // iPhone never draws the regular layout for a frame.

@@ -72,6 +72,7 @@ enum PaletteCommands {
             ("add-host", "Add Host", "plus.circle", nil, { model.addHost() }),
             ("settings", "Settings", "gearshape", ["⌘", ","], { model.sheet = .settings }),
             ("shortcuts", "Keyboard Shortcuts", "keyboard", ["⌘", "/"], { model.sheet = .shortcuts }),
+            ("replays", "Session Replays", "play.rectangle.on.rectangle", nil, { model.showReplays(.all) }),
             ("two-columns", model.isTwoColumns ? "One Column" : "Two Columns", "rectangle.split.2x1", nil, { model.toggleTwoColumns() }),
             ("sidebar", model.isSidebarShown ? "Hide Sidebar" : "Show Sidebar", "sidebar.leading", ["⌘", "B"], {
                 WorkspaceAction.toggleSidebar.perform(window: model)

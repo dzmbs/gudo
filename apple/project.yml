@@ -99,6 +99,22 @@ targets:
         # `.excalidraw` scenes: drawings dragged, copied and exported out of the app (with a
         # PNG alongside), and dropped or pasted in. Excalidraw declares no UTI; imported, not
         # owned.
+        # Session Replay files (`.unreplay`, ReplayStore): shared from the app and opened in it.
+        ReplayTypeIdentifier: $(BRAND_BUNDLE_ID_PREFIX).unreplay
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: $(BRAND_BUNDLE_ID_PREFIX).unreplay
+            UTTypeDescription: Session Replay
+            UTTypeConformsTo: [public.data, public.content]
+            UTTypeTagSpecification:
+              public.filename-extension: [unreplay]
+              public.mime-type: [application/vnd.unnamed.unreplay+json]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Session Replay
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes: [$(BRAND_BUNDLE_ID_PREFIX).unreplay]
+        # Opened files are read where they are (security-scoped, in onOpenURL) and imported.
+        LSSupportsOpeningDocumentsInPlace: true
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: com.excalidraw.json
             UTTypeDescription: Excalidraw Drawing

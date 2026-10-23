@@ -273,6 +273,9 @@ struct InboxView: View {
                 if let summary = item.summary {
                     Button("Copy Summary", systemImage: "text.quote") { copy(summary) }
                 }
+                if let host = item.hostId, let pane = item.paneId, !ReplayStore.shared.sessions(hostId: host, paneId: pane).isEmpty {
+                    Button("Session Replay", systemImage: "play.rectangle.on.rectangle") { model.showReplays(.pane(hostId: host, paneId: pane)) }
+                }
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox-\(item.id)")

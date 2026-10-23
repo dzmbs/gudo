@@ -159,6 +159,23 @@ canvas panes, bundled offline. Its fonts (Excalifont, Virgil, Nunito, Lilita One
 Cascadia Code, Liberation Sans, Assistant) ship under their own open licences (SIL OFL 1.1 /
 Apache 2.0); the Xiaolai CJK face is left out. Full text: `App/Resources/Excalidraw/LICENSE-excalidraw.txt`.
 
+## Playwright
+
+Source: https://github.com/microsoft/playwright at commit 20a2087ea43412b90c172c88faef80786ee18b8b
+(Apache License 2.0, Copyright (c) Microsoft Corporation; its NOTICE credits code derived from
+Puppeteer, Apache 2.0). `App/Resources/AgentBrowser/playwright-injected.js` is a build of
+`packages/injected/src/injectedScript.ts` and `packages/injected/src/webview/webViewInput.ts` with
+the `packages/isomorphic` modules they use (`scripts/build-agent-browser.sh`, unmodified sources).
+`App/Resources/AgentBrowser/agent.js` follows the event sequence of `webViewInput.ts`. The licence
+and NOTICE: `App/Resources/AgentBrowser/LICENSE-playwright.txt`.
+
+## rrweb
+
+Source: https://github.com/rrweb-io/rrweb, npm `@rrweb/record` and `rrweb-player` 2.1.7 (MIT License,
+Copyright (c) 2018 Contributors). `App/Resources/AgentBrowser/rrweb-record.js` is a build of
+`@rrweb/record`; `rrweb-player.js` and `rrweb-player.css` are the package's own builds. Full text:
+`App/Resources/AgentBrowser/LICENSE-rrweb.txt`.
+
 ## Warp UI framework (shimmer maths)
 
 Source: https://github.com/warpdotdev/warp, `crates/warpui_core/src/elements/shimmer_math.rs`

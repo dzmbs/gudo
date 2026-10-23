@@ -19,6 +19,10 @@ use crate::mcp::Backend;
 /// Snapshots longer than this many characters are saved to a file when asked to.
 const INLINE_LIMIT: usize = 20_000;
 
+/// Most bytes one `browser_upload` sends: as base64 they must fit one frame to the app
+/// (`proto::MAX_FRAME_LEN`).
+const MAX_UPLOAD: usize = 3_000_000;
+
 /// One tool: name, description, input properties, required inputs, read-only.
 struct Tool {
     name: &'static str,
@@ -31,7 +35,7 @@ struct Tool {
 fn target() -> Value {
     json!({
         "type": "object",
-        "description": "What to act on: {\"type\":\"ref\",\"ref\":\"ref_3\"} from a snapshot, or {\"type\":\"coordinate\",\"x\":120,\"y\":340} in viewport pixels of browser_screenshot.",
+        "description": "What to act on: {\"type\":\"ref\",\"ref\":\"ref_3\"} from a snapshot (ref_f1_3 is in a frame), or {\"type\":\"coordinate\",\"x\":120,\"y\":340} in pixels of the last browser_screenshot.",
         "properties": {
             "type": { "type": "string", "enum": ["ref", "coordinate"] },
             "ref": { "type": "string" },
@@ -46,17 +50,21 @@ fn none() -> Value {
     json!({})
 }
 
+fn force() -> Value {
+    json!({ "type": "boolean", "default": false, "description": "Skip the checks that the element is visible, enabled, still and not covered." })
+}
+
 const TOOLS: &[Tool] = &[
     Tool {
         name: "browser_navigate",
-        description: "Open a URL in the browser pane beside this terminal (opening the pane if needed), or move through history with \"back\", \"forward\" or \"reload\". The host's localhost is reachable as on the host. Returns the new page's interactive snapshot.",
+        description: "Open a URL in the browser pane beside this terminal (opening the pane if needed), or move through history with \"back\", \"forward\" or \"reload\". The host's localhost is reachable as on the host. Waits for the page to load; returns its interactive snapshot.",
         properties: || json!({ "url": { "type": "string", "description": "An http(s) URL (a bare host means https://; localhost means http://), or back, forward, reload." } }),
         required: &["url"],
         read_only: false,
     },
     Tool {
         name: "browser_snapshot",
-        description: "Read the page as an accessibility tree, one element per line: role \"name\" [ref_N]. Prefer this over screenshots. filter: interactive (controls only, the default), visible (everything on screen) or all (also off screen). ref limits it to that element's subtree. Unless full is true, a snapshot after the first says only what changed.",
+        description: "Read the page as an accessibility tree, one element per line: role \"name\" = \"value\" (states) [ref_N]; [cursor=pointer] marks other clickable elements, a frame's elements follow its iframe with refs like ref_f1_3. Prefer this over screenshots. filter: interactive (controls in view, the default), visible (everything in view) or all (also off screen). ref limits it to that element's subtree. Unless full is true, a snapshot after the first lists only changes: * new element, + changed, - gone.",
         properties: || {
             json!({
                 "filter": { "type": "string", "enum": ["interactive", "visible", "all"], "default": "interactive" },
@@ -85,33 +93,34 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_click",
-        description: "Click an element. Returns what changed on the page.",
-        properties: || json!({ "target": target(), "modifiers": { "type": "string", "description": "A chord such as shift or cmd+shift." } }),
+        description: "Click an element. Waits until it is visible, enabled and not covered (else says what covers it), clicks, waits for what the click started, and says what changed, or that nothing did and why.",
+        properties: || json!({ "target": target(), "modifiers": { "type": "string", "description": "A chord such as shift or cmd+shift." }, "force": force() }),
         required: &["target"],
         read_only: false,
     },
     Tool {
         name: "browser_double_click",
-        description: "Double-click an element. Returns what changed on the page.",
-        properties: || json!({ "target": target() }),
+        description: "Double-click an element. Says what changed on the page.",
+        properties: || json!({ "target": target(), "force": force() }),
         required: &["target"],
         read_only: false,
     },
     Tool {
         name: "browser_hover",
-        description: "Move the pointer over an element (menus, tooltips). Returns what changed.",
-        properties: || json!({ "target": target() }),
+        description: "Move the pointer over an element (menus, tooltips). Says what changed; hover styles made in CSS alone do not show for it.",
+        properties: || json!({ "target": target(), "force": force() }),
         required: &["target"],
         read_only: false,
     },
     Tool {
         name: "browser_type",
-        description: "Type text into the focused field, or into target first. submit presses Enter after. Password fields are left to the user on the device.",
+        description: "Type text key by key into the focused field, or click target first. submit presses Enter after. Password fields are left to the user on the device.",
         properties: || {
             json!({
                 "text": { "type": "string" },
                 "target": target(),
                 "submit": { "type": "boolean", "default": false },
+                "force": force(),
             })
         },
         required: &["text"],
@@ -119,14 +128,14 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_fill",
-        description: "Set a form field's value at once: text for inputs, true/false for checkboxes, an option's value or text for selects.",
+        description: "Set a form field's value at once, replacing what is there: text for inputs and text areas, a date or number as text, true/false for checkboxes and switches, an option's value or text for selects.",
         properties: || json!({ "target": target(), "value": { "type": ["string", "number", "boolean"] } }),
         required: &["target", "value"],
         read_only: false,
     },
     Tool {
         name: "browser_press",
-        description: "Press keys at the focus: \"Enter\", a chord such as \"cmd+a\", or a sequence such as \"Backspace Backspace\".",
+        description: "Press keys at the focus: \"Enter\", a chord such as \"cmd+a\", or a sequence such as \"Tab Tab Enter\". Useful when a site ignores clicks: focus the control, then press Enter or Space.",
         properties: || json!({ "keys": { "type": "string" }, "repeat": { "type": "integer", "minimum": 1, "maximum": 100, "default": 1 } }),
         required: &["keys"],
         read_only: false,
@@ -149,6 +158,13 @@ const TOOLS: &[Tool] = &[
         description: "Scroll an element into view.",
         properties: || json!({ "target": target() }),
         required: &["target"],
+        read_only: false,
+    },
+    Tool {
+        name: "browser_drag",
+        description: "Drag from target to `to` (sliders, sortable lists, HTML drag and drop). Returns what changed.",
+        properties: || json!({ "target": target(), "to": target() }),
+        required: &["target", "to"],
         read_only: false,
     },
     Tool {
@@ -181,7 +197,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_tabs",
-        description: "The pages beside this terminal: list them, open a new one (optionally at url), switch to one or close one by tab_id.",
+        description: "The pages beside this terminal, with ids t1, t2, …: list them, open a new one (optionally at url), switch to one or close one by tab_id. Pages a page opens (links to a new window) become tabs here.",
         properties: || {
             json!({
                 "action": { "type": "string", "enum": ["list", "new", "switch", "close"] },
@@ -190,6 +206,44 @@ const TOOLS: &[Tool] = &[
             })
         },
         required: &["action"],
+        read_only: false,
+    },
+    Tool {
+        name: "browser_dialog",
+        description: "Answer the dialog the page shows (alert, confirm, prompt, or a leave-page check), which tool results report as \"Dialog: …\": accept or dismiss it, with text for a prompt. The page waits until it is answered.",
+        properties: || {
+            json!({
+                "accept": { "type": "boolean", "description": "true for OK or Leave, false for Cancel or Stay." },
+                "text": { "type": "string", "description": "What a prompt answers with." },
+            })
+        },
+        required: &["accept"],
+        read_only: false,
+    },
+    Tool {
+        name: "browser_upload",
+        description: "Choose files for a file input: target its ref (or the button or label that opens it), or leave target out to answer the file picker an action opened. Files are paths on this host, or given as name, mime_type and base64 data; at most 3 MB in all. cancel closes an open picker without files.",
+        properties: || {
+            json!({
+                "target": target(),
+                "paths": { "type": "array", "items": { "type": "string" }, "description": "Files on this host." },
+                "files": {
+                    "type": "array",
+                    "description": "Files given inline.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string" },
+                            "mime_type": { "type": "string" },
+                            "data": { "type": "string", "description": "The bytes, base64." },
+                        },
+                        "required": ["name", "data"],
+                    },
+                },
+                "cancel": { "type": "boolean", "default": false },
+            })
+        },
+        required: &[],
         read_only: false,
     },
     Tool {
@@ -278,6 +332,11 @@ pub fn call_with(
     {
         return error(&format!("`{missing}` is required"));
     }
+    if name == "browser_upload"
+        && let Err(why) = load_files(&mut args)
+    {
+        return error(&why);
+    }
     if approve.is_some() {
         args["approval_by"] = json!("client");
     }
@@ -312,6 +371,102 @@ pub fn call_with(
             "the {} daemon is not reachable: {e}",
             brand::PRODUCT_NAME
         )),
+    }
+}
+
+/// Reads `browser_upload`'s `paths` on this host into its `files` (`{name, mime_type, data}`),
+/// within [`MAX_UPLOAD`] bytes in all.
+fn load_files(args: &mut Value) -> Result<(), String> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    let too_big = |what: &str| {
+        format!(
+            "{what} takes the upload past {} MB, the most one call carries",
+            MAX_UPLOAD / 1_000_000
+        )
+    };
+    let mut files = match args.get("files") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(files)) => files.clone(),
+        Some(_) => return Err("`files` is a list".into()),
+    };
+    let mut total = 0;
+    for file in &mut files {
+        let data = file["data"]
+            .as_str()
+            .ok_or("each of `files` needs name and data (base64)")?;
+        total += STANDARD
+            .decode(data)
+            .map_err(|e| format!("bad base64: {e}"))?
+            .len();
+        let name = file["name"]
+            .as_str()
+            .ok_or("each of `files` needs a name")?;
+        if total > MAX_UPLOAD {
+            return Err(too_big(name));
+        }
+        if file["mime_type"].as_str().is_none_or(str::is_empty) {
+            file["mime_type"] = json!(mime_for(name));
+        }
+    }
+    let paths = match args.get("paths") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::String(one)) => vec![one.clone()],
+        Some(Value::Array(paths)) => paths
+            .iter()
+            .map(|p| p.as_str().map(str::to_owned).ok_or("`paths` are strings"))
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err("`paths` is a list of paths".into()),
+    };
+    for path in paths {
+        let path = PathBuf::from(path);
+        let shown = path.display().to_string();
+        let meta = std::fs::metadata(&path).map_err(|e| format!("{shown}: {e}"))?;
+        if !meta.is_file() {
+            return Err(format!("{shown} is not a file"));
+        }
+        total += usize::try_from(meta.len()).unwrap_or(usize::MAX);
+        if total > MAX_UPLOAD {
+            return Err(too_big(&format!(
+                "{shown} ({:.1} MB)",
+                meta.len() as f64 / 1e6
+            )));
+        }
+        let bytes = std::fs::read(&path).map_err(|e| format!("{shown}: {e}"))?;
+        let name = path
+            .file_name()
+            .map_or_else(|| shown.clone(), |n| n.to_string_lossy().into_owned());
+        files.push(
+            json!({ "name": name, "mime_type": mime_for(&name), "data": STANDARD.encode(&bytes) }),
+        );
+    }
+    if let Some(map) = args.as_object_mut() {
+        map.remove("paths");
+        map.insert("files".into(), Value::Array(files));
+    }
+    Ok(())
+}
+
+/// A MIME type from a file name's extension.
+fn mime_for(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("heic") => "image/heic",
+        Some("svg") => "image/svg+xml",
+        Some("pdf") => "application/pdf",
+        Some("json") => "application/json",
+        Some("zip") => "application/zip",
+        Some("csv") => "text/csv",
+        Some("html" | "htm") => "text/html",
+        Some("txt" | "md" | "log") => "text/plain",
+        Some("mp4") => "video/mp4",
+        Some("mov") => "video/quicktime",
+        Some("mp3") => "audio/mpeg",
+        _ => "application/octet-stream",
     }
 }
 
@@ -391,8 +546,8 @@ pub fn cli(args: &[String], backend: &mut dyn Backend) -> i32 {
     status
 }
 
-/// A JSON object, or `key=value` pairs (`ref=ref_3` and `x=… y=…` make a target; values that
-/// parse as JSON are taken as such).
+/// A JSON object, or `key=value` pairs (`ref=ref_3` and `x=… y=…` make a target; each
+/// `path=…` is a file to upload; values that parse as JSON are taken as such).
 fn parse_cli_args(args: &[String]) -> Result<Value, String> {
     if let [one] = args
         && one.trim_start().starts_with('{')
@@ -404,6 +559,13 @@ fn parse_cli_args(args: &[String]) -> Result<Value, String> {
         let (key, value) = arg
             .split_once('=')
             .ok_or_else(|| format!("expected key=value, got {arg:?}"))?;
+        if key == "path" {
+            let paths = map.entry("paths").or_insert_with(|| json!([]));
+            if let Some(paths) = paths.as_array_mut() {
+                paths.push(json!(value));
+            }
+            continue;
+        }
         let value = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
         map.insert(key.to_owned(), value);
     }
@@ -484,6 +646,118 @@ mod tests {
         let v = parse_cli_args(&[r#"{"keys":"Enter"}"#.into()]).unwrap();
         assert_eq!(v, json!({ "keys": "Enter" }));
         assert!(parse_cli_args(&["nope".into()]).is_err());
+        let v =
+            parse_cli_args(&["ref=ref_4".into(), "path=a.png".into(), "path=7".into()]).unwrap();
+        assert_eq!(
+            v,
+            json!({ "target": { "type": "ref", "ref": "ref_4" }, "paths": ["a.png", "7"] })
+        );
+    }
+
+    #[test]
+    fn uploads_read_host_files_within_the_cap() {
+        let dir = std::env::temp_dir().join(format!("browser-upload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("notes.txt");
+        std::fs::write(&small, "hi").unwrap();
+        let mut args = json!({
+            "paths": [small.to_str().unwrap()],
+            "files": [
+                { "name": "pic.PNG", "data": "AAEC" },
+                { "name": "x.bin", "mime_type": "application/x-thing", "data": "" },
+            ],
+        });
+        load_files(&mut args).unwrap();
+        assert_eq!(
+            args,
+            json!({ "files": [
+                { "name": "pic.PNG", "mime_type": "image/png", "data": "AAEC" },
+                { "name": "x.bin", "mime_type": "application/x-thing", "data": "" },
+                { "name": "notes.txt", "mime_type": "text/plain", "data": "aGk=" },
+            ] })
+        );
+        // One path as a string; a cancel has no files.
+        let mut args = json!({ "paths": small.to_str().unwrap() });
+        load_files(&mut args).unwrap();
+        assert_eq!(args["files"][0]["name"], "notes.txt");
+        let mut args = json!({ "cancel": true });
+        load_files(&mut args).unwrap();
+        assert_eq!(args, json!({ "cancel": true, "files": [] }));
+
+        let big = dir.join("big.bin");
+        std::fs::write(&big, vec![0u8; MAX_UPLOAD + 1]).unwrap();
+        let mut args = json!({ "paths": [big.to_str().unwrap()] });
+        let why = load_files(&mut args).unwrap_err();
+        assert!(why.contains("past 3 MB"), "{why}");
+        // Under the cap each, over it together.
+        let half = dir.join("half.bin");
+        std::fs::write(&half, vec![0u8; MAX_UPLOAD / 2 + 1]).unwrap();
+        let path = half.to_str().unwrap();
+        let mut args = json!({ "paths": [path, path] });
+        assert!(load_files(&mut args).is_err());
+
+        let missing = dir.join("missing");
+        let mut args = json!({ "paths": [missing.to_str().unwrap()] });
+        assert!(load_files(&mut args).unwrap_err().contains("missing"));
+        let mut args = json!({ "files": [{ "data": "AA==" }] });
+        assert!(load_files(&mut args).unwrap_err().contains("name"));
+        let mut args = json!({ "files": [{ "name": "a", "data": "!!" }] });
+        assert!(load_files(&mut args).unwrap_err().contains("base64"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upload_and_dialog_calls_reach_the_app() {
+        use daemon::{PullOp, PullReply};
+        struct Fake(Vec<(String, Value)>);
+        impl Backend for Fake {
+            fn pull(&mut self, _: PullOp) -> io::Result<PullReply> {
+                Err(io::ErrorKind::NotFound.into())
+            }
+            fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply> {
+                if let BrowserAsk::Tool { name, args } = ask {
+                    self.0.push((name, args));
+                }
+                Ok(BrowserReply::Result(json!({ "text": "Done." }).to_string()))
+            }
+        }
+        let mut fake = Fake(vec![]);
+        let r = call(
+            "browser_dialog",
+            &json!({ "accept": true, "text": "Ada" }),
+            &mut fake,
+        );
+        assert_eq!(r["content"][0]["text"], "Done.");
+        assert_eq!(
+            fake.0[0],
+            (
+                "browser_dialog".into(),
+                json!({ "accept": true, "text": "Ada" })
+            )
+        );
+        // Required arguments are checked here.
+        let r = call("browser_dialog", &json!({}), &mut fake);
+        assert_eq!(r["isError"], true);
+        // A file that cannot be read never reaches the app.
+        let r = call(
+            "browser_upload",
+            &json!({ "paths": ["/nonexistent/f"] }),
+            &mut fake,
+        );
+        assert_eq!(r["isError"], true);
+        assert_eq!(fake.0.len(), 1);
+        call(
+            "browser_upload",
+            &json!({ "files": [{ "name": "a.txt", "data": "aGk=" }] }),
+            &mut fake,
+        );
+        assert_eq!(fake.0[1].1["files"][0]["mime_type"], "text/plain");
+
+        let tools = tools();
+        for name in ["browser_dialog", "browser_upload"] {
+            let tool = tools.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        }
     }
 
     #[test]

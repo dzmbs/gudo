@@ -25,14 +25,16 @@ use serde_json::{Value, json};
 /// What the server offers. The first paragraph stands on its own (clients may cut the rest).
 const INSTRUCTIONS: &str =
     "This terminal runs inside an app the user watches on their iPad, iPhone or Mac. \
-browser_* tools drive a real browser pane shown beside this terminal there: the user sees every \
-step and can take over. Pages reach this host's localhost as the host does. Read pages with \
-browser_snapshot (refs like ref_3) rather than screenshots; act with targets \
-{\"type\":\"ref\",\"ref\":\"ref_3\"}.
+browser_* tools drive a real browser pane shown beside this terminal there; the user sees every \
+step and can take over. Pages reach this host's localhost. Open with browser_navigate, read with \
+browser_snapshot (role \"name\" [ref_3]) rather than screenshots, act with targets \
+{\"type\":\"ref\",\"ref\":\"ref_3\"}. Each action waits for the page and says what changed.
 
-After each action the answer says what changed on the page. A stale ref means the page moved \
-on: snapshot again. Sign-ins, passwords, payments and purchases are left to the user on the \
-device: the tool waits while they act, then answers. list_drawings and get_drawing read the \
+If an action says it had no effect or the element is covered, deal with the cover (it is in the \
+snapshot), focus it and use browser_press, or click coordinates from browser_screenshot. Answer \
+dialogs with browser_dialog; new windows become tabs (browser_tabs). A stale ref means the page \
+moved on: snapshot again. Sign-ins, passwords, payments and purchases are left to the user on \
+the device: the tool waits while they act, then answers. list_drawings and get_drawing read the \
 drawings, sketches and images the user made in this terminal session; with no id, get_drawing \
 returns the most recent.";
 
@@ -874,6 +876,13 @@ mod tests {
             r["result"]["content"][1],
             json!({ "type": "text", "text": "┌──┐" })
         );
+    }
+
+    #[test]
+    fn instructions_lead_with_a_short_paragraph_that_stands_alone() {
+        let first = INSTRUCTIONS.split("\n\n").next().unwrap();
+        assert!(first.len() <= 512, "{} characters", first.len());
+        assert!(first.contains("browser_navigate") && first.contains("browser_snapshot"));
     }
 
     #[test]

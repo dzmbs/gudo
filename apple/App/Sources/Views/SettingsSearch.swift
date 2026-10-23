@@ -93,6 +93,8 @@ enum SettingsIndex {
             .init(id: "browser-history", title: "Clear Browsing History", section: .browser, synonyms: ["browser", "history", "recent", "frequent"]),
             .init(id: "agent-tools", title: "Browser and Drawings for Agents Started in a Terminal", section: .agentTools, synonyms: ["mcp", "claude", "codex", "browser", "drawings", "tools"]),
             .init(id: "usage-api-fallback", title: "Check Usage with Your Claude and Codex Sign-In", section: .agents, synonyms: ["usage", "limits", "plan", "meter", "quota"]),
+            .init(id: "record-agent-sessions", title: "Record Agent Sessions", section: .browser, synonyms: ["replay", "recording", "browser", "session", "rrweb"]),
+            .init(id: "delete-replays", title: "Delete All Replays", section: .browser, synonyms: ["replay", "recording", "storage", "clear"]),
             .init(id: "merge-strategy", title: "Merge Pull Requests With", section: .git, synonyms: ["pr", "squash", "rebase", "merge"]),
             .init(id: "auto-delete", title: "Delete Merged Worktrees", section: .git, synonyms: ["worktree", "cleanup", "branch"]),
             .init(id: "git-scripts", title: "Scripts", section: .git, synonyms: ["run", "command", "⌘r"]),

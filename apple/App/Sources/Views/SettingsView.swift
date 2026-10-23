@@ -102,6 +102,7 @@ struct SettingsView: View {
             SplitsSection().chromeRows()
             LinksSettingsSection().chromeRows()
             BrowserSettingsSection().chromeRows()
+            ReplaySettingsSection().chromeRows()
             KeyboardSection().chromeRows()
             PasswordsSection().chromeRows()
             VoiceSettingsSection().chromeRows()
@@ -137,7 +138,7 @@ struct SettingsView: View {
         case .appearance: AppearanceSection()
         case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection(); PasswordsSection()
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
-        case .browser: BrowserSettingsSection()
+        case .browser: BrowserSettingsSection(); ReplaySettingsSection()
         case .notifications: NotificationsSection()
         case .agents: AgentsSettingsSection(); AgentToolsSection()
         case .git: GitSettingsSection()
@@ -169,6 +170,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .browser: "Browser"
         case .notifications: "Notifications"
         case .agents: "Agents"
+        case .browser: "Browser"
         case .git: "Git"
         case .network: "Network"
         case .about: "About"
@@ -183,6 +185,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .browser: "globe"
         case .notifications: "bell.badge"
         case .agents: "sparkle"
+        case .browser: "globe"
         case .git: "arrow.triangle.branch"
         case .network: "network"
         case .about: "info.circle"

@@ -167,6 +167,7 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
     let mut app = TestClient::connect_browser(&ticket(&daemon), ClientConfig::generate_key());
     let pane = app.attach_and_follow().await.0.to_string();
     let state = dir.path().to_str().unwrap().to_owned();
+    let (state2, pane2) = (state.clone(), pane.clone());
     let call = tokio::task::spawn_blocking(move || {
         let mut server = Server::spawn(&["mcp", "--state", &state, "--pane", &pane]);
         server.request(
@@ -200,5 +201,37 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
     // Bad arguments never reach the app.
     assert_eq!(missing["isError"], true);
     assert_eq!(app.browser.len(), 1);
+
+    // A file near the upload cap is read on the host and reaches the app in one call.
+    let file = dir.path().join("photo.jpg");
+    std::fs::write(&file, vec![7u8; 2_900_000]).unwrap();
+    let (state, pane) = (state2, pane2);
+    let path = file.to_str().unwrap().to_owned();
+    let call = tokio::task::spawn_blocking(move || {
+        let mut server = Server::spawn(&["mcp", "--state", &state, "--pane", &pane]);
+        server.request(
+            "initialize",
+            json!({ "protocolVersion": "2025-11-25", "capabilities": {} }),
+        );
+        server.tool(
+            "browser_upload",
+            json!({ "target": { "type": "ref", "ref": "ref_2" }, "paths": [path] }),
+        )
+    });
+    app.until("the upload", |c| c.browser.len() == 2).await;
+    let BrowserPush::Call { id, tool, args, .. } = app.browser[1].clone() else {
+        panic!("not a call: {:?}", app.browser[1]);
+    };
+    assert_eq!(tool, "browser_upload");
+    let args: Value = serde_json::from_str(&args).unwrap();
+    assert_eq!(args["files"][0]["name"], "photo.jpg");
+    assert_eq!(args["files"][0]["mime_type"], "image/jpeg");
+    assert_eq!(
+        args["files"][0]["data"].as_str().unwrap().len(),
+        2_900_000_usize.div_ceil(3) * 4
+    );
+    app.client
+        .answer_browser_call(id, Ok(json!({ "text": "Done." }).to_string()));
+    assert_eq!(call.await.unwrap()["content"][0]["text"], "Done.");
     daemon.shutdown().await;
 }
