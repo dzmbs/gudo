@@ -93,7 +93,10 @@ final class DogfoodRunner {
 
     private let scenarioURL: URL
     private let outDir: URL
-    private let workspace: Workspace
+    private let initialWorkspace: Workspace
+    /// What the runner's window shows now (This Mac's helper replaces the empty local
+    /// workspace once it is up).
+    private var workspace: Workspace { ActiveWindow.model(for: initialWorkspace)?.workspace ?? initialWorkspace }
     private let pump = DogfoodEventPump()
     private var report: Report
     private var watchdog: DogfoodWatchdog?
@@ -108,7 +111,7 @@ final class DogfoodRunner {
     private init(scenarioURL: URL, outDir: URL, workspace: Workspace) {
         self.scenarioURL = scenarioURL
         self.outDir = outDir
-        self.workspace = workspace
+        initialWorkspace = workspace
         report = Report(scenario: scenarioURL.path, started: ISO8601DateFormatter().string(from: Date()))
         pump.performDisabledShortcut = { [weak self] event in self?.performWorkspaceShortcut(event) ?? false }
     }
@@ -273,6 +276,7 @@ final class DogfoodRunner {
         report.framesMissed = framesMissed
         // Quit like closing the window: hang up every shell, then make sure nothing outlives us.
         for pane in workspace.panes.values { pane.terminate() }
+        AppModel.shared.localHelper?.appWillTerminate()
         let deadline = Date().addingTimeInterval(3)
         var leftovers = DogfoodProcesses.tree(of: getpid()).filter { $0.pid != getpid() }
         while !leftovers.isEmpty, Date() < deadline {

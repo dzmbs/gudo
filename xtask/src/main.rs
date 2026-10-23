@@ -9,6 +9,8 @@
 //!   app bundle's SSH bootstrap and self upgrade, in `apple/build/hostd/`, stamped with the
 //!   build id and time (`UN_BUILD_ID`, `UN_BUILD_UNIX`; see `daemon::info`) and described in
 //!   `hostd-manifest.json` so the app knows what it bundles without running it.
+//! - `build-hostd-macos`: the stripped arm64 daemon the Mac app runs for "This Mac", in
+//!   `apple/build/hostd/macos/`, stamped the same way.
 //!
 //! See docs/APPLE-FFI.md.
 
@@ -67,7 +69,8 @@ commands:
   build-xcframework [--macos-only]   build apple/Packages/UnnamedCore (UnnamedCore.xcframework
                                      + generated Swift); --macos-only skips the iOS slices
   build-hostd-linux                  stripped, gzipped static musl daemons (aarch64, x86_64)
-                                     into apple/build/hostd/";
+                                     into apple/build/hostd/
+  build-hostd-macos                  the Mac app's own daemon (arm64) into apple/build/hostd/macos/";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -81,6 +84,7 @@ fn main() -> Result<()> {
             build_xcframework(macos_only)
         }
         Some("build-hostd-linux") if args.len() == 1 => build_hostd_linux(),
+        Some("build-hostd-macos") if args.len() == 1 => build_hostd_macos(),
         _ => bail!("{USAGE}"),
     }
 }
@@ -508,5 +512,34 @@ fn build_hostd_linux() -> Result<()> {
     let manifest = format!("{{\n  \"builds\": [\n{}\n  ]\n}}\n", manifest.join(",\n"));
     fs::write(out_dir.join("hostd-manifest.json"), manifest)?;
     eprintln!("bundle {} as app resources", out_dir.display());
+    Ok(())
+}
+
+fn build_hostd_macos() -> Result<()> {
+    let out_dir = root().join("apple/build/hostd/macos");
+    fs::create_dir_all(&out_dir)?;
+    let (build_id, built_unix) = build_stamp()?;
+    eprintln!("==> cargo build {} ({build_id})", MACOS.target);
+    run(cargo()
+        .args([
+            "build",
+            "--release",
+            "-p",
+            "hostd",
+            "--target",
+            MACOS.target,
+        ])
+        .env("MACOSX_DEPLOYMENT_TARGET", MACOS_MIN)
+        .env("CARGO_PROFILE_RELEASE_STRIP", "symbols")
+        .env("CARGO_PROFILE_RELEASE_DEBUG", "false")
+        .env("UN_BUILD_ID", &build_id)
+        .env("UN_BUILD_UNIX", built_unix.to_string()))?;
+    let binary = target_dir()
+        .join(MACOS.target)
+        .join("release")
+        .join(brand::DAEMON_BIN);
+    let dest = out_dir.join(brand::DAEMON_BIN);
+    fs::copy(&binary, &dest).with_context(|| format!("copying {}", binary.display()))?;
+    eprintln!("    {} ({:.1} MB)", dest.display(), size_mb(&dest));
     Ok(())
 }

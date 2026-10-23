@@ -1,0 +1,20 @@
+{
+  "name": "this-mac",
+  "description": "This Mac served by the bundled helper: run with `-- -localHelper YES` (a child helper in the test folder). The pane is a daemon pane (it has a pane id), and typing works.",
+  "window": { "width": 1100, "height": 700 },
+  "hangSeconds": 15,
+  "timeoutSeconds": 120,
+  "cases": [
+    {
+      "name": "helper-pane",
+      "steps": [
+        { "do": "sleep", "seconds": 6 },
+        { "do": "waitIdle", "quiet": 0.8, "timeout": 20 },
+        { "do": "type", "text": "echo pane-$UN_PANE_ID-$((6*7))\n" },
+        { "do": "waitText", "regex": "^pane-[0-9]+-42$", "timeout": 15 },
+        { "do": "assert", "tabs": 1 },
+        { "do": "screenshot", "name": "01-this-mac" }
+      ]
+    }
+  ]
+}

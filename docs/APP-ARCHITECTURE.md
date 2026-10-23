@@ -155,7 +155,9 @@ RTT at debug), `ssh`, `hosts` (pairing, bootstrap action and time). In the simul
 
 `-testTicket <ticket>` pair and show; `-testTickets <t1>,<t2>` with `-testTicketNames a,b` pair
 with several daemons and open them all in the window; `-hostsDirectory <path>` keeps saved hosts
-and secrets in that folder (tests never touch the user's hosts or Keychain); `-connectionProbe
+and secrets in that folder. Without it, any `-test…` argument, `-dogfood`, `-snapshot`, `-screen`,
+`-localEcho`, `-mock` or an XCTest environment uses `$TMPDIR/<bundle id>.test-data` (`AppData`):
+tests, dogfood runs and screenshot scripts never touch the user's hosts, replays or Keychain; `-connectionProbe
 YES` exposes each open host's connection identity and dial count to UI tests; `-testSSH user@host[:port]` with `-testSSHKey <path>` or
 `-testSSHPassword <pw>`; `-testTrustHostKeys YES`; `-testInstallHelper YES`; `-testRelay
 disabled`; `-testMirror YES` (core VT mirror for pane text).
@@ -394,6 +396,21 @@ Every connection learns what the daemon is before `Welcome`: `ClientEvent.daemon
 predate it). `DaemonConnection` keeps `daemonInfo`, `daemonInfoReported`, `incompatibility` (from
 `ClientEvent.incompatible`: the daemon draws terminals in another format; status reads "This
 host's helper needs an update") and `epoch` (the daemon run).
+
+**This Mac's helper** (`LocalHelper`, macOS). The Mac app bundles its own daemon
+(`Contents/MacOS/<name>-hostd`, from `cargo xtask build-hostd-macos`, copied and signed by the
+"This Mac Helper" build phase) and a LaunchAgent plist (`Contents/Library/LaunchAgents/<bundle
+id>.hostd.plist`, `BundleProgram`). At launch it registers the agent with `SMAppService` (runs at
+login, survives quitting the app), or runs the daemon as its child when Settings ▸ This Mac ▸ Keep
+Sessions Running in the Background is off or the login item is not allowed. The daemon uses its
+default folder (`~/Library/Application Support/<name>`, where `un` and the agent hooks look); a
+daemon already running there (`hostd service install`) is used as is. The app pairs once with a
+`pair --json --local` ticket (loopback addresses: works offline) as the owner, saved as a host with
+`thisDevice` and named "This Mac": listed first, no helper-update offers (a new app build restarts
+the login item: `launchctl kickstart -k`), and an empty plain local group gives way to it (plain
+shells still open stay until closed). Stop Helper ends it and brings back a plain shell. Test
+launches (`AppData`) never start it unless `-localHelper YES`, and then only as a child in the test
+folder (`apple/Dogfood/this-mac.json`). iPhone and iPad have no helper.
 
 **What the app bundles.** `cargo xtask build-hostd-linux` writes `build/hostd/hostd-manifest.json`
 next to the two `.gz` daemons (file, OS, CPU, build, time, level); project.yml bundles it and

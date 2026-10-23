@@ -37,6 +37,7 @@ crates/apple-ffi (lib name unnamed_core)        apple/Packages/UnnamedCore (Swif
 cargo xtask build-xcframework               # iOS + iOS simulator + macOS, arm64, release (~2 min cold)
 cargo xtask build-xcframework --macos-only  # enough for `swift test` on a Mac
 cargo xtask build-hostd-linux               # apple/build/hostd/unnamed-hostd-{aarch64,x86_64}-linux.gz
+cargo xtask build-hostd-macos               # apple/build/hostd/macos/unnamed-hostd (This Mac's helper)
 ```
 
 `build-xcframework`:

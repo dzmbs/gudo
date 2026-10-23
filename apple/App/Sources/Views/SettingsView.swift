@@ -165,6 +165,7 @@ struct SettingsView: View {
         case .agents: AgentsSettingsSection(); AgentToolsSection()
         case .git: GitSettingsSection()
         case .network: NetworkSettingsSection()
+        case .thisMac: ThisMacSettingsSection()
         case .about: AboutSection()
         }
     }
@@ -181,7 +182,7 @@ private enum SettingsPage: Hashable {
 #if os(macOS)
 /// The Mac Settings window's panes, in its sidebar.
 nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case appearance, terminal, keyboard, browser, notifications, agents, git, network, about
+    case appearance, terminal, keyboard, browser, notifications, agents, git, network, thisMac, about
     var id: String { rawValue }
 
     var title: String {
@@ -195,6 +196,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .browser: "Browser"
         case .git: "Git"
         case .network: "Network"
+        case .thisMac: "This Mac"
         case .about: "About"
         }
     }
@@ -210,6 +212,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .browser: "globe"
         case .git: "arrow.triangle.branch"
         case .network: "network"
+        case .thisMac: "laptopcomputer"
         case .about: "info.circle"
         }
     }

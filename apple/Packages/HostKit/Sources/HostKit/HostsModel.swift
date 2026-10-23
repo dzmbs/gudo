@@ -30,6 +30,8 @@ public struct HostEntry: Identifiable, Equatable, Sendable {
     public var isTailscale = false
     /// The last dial to a tailnet host failed: say that Tailscale must be connected here.
     public var needsTailscale = false
+    /// This device's own helper (the app runs and updates it).
+    public var isThisDevice = false
 }
 
 /// Everything about hosts the UI binds to: the saved hosts, their live connections, pairing,
@@ -141,12 +143,14 @@ public final class HostsModel {
                     .filter { !$0.isEmpty }.joined(separator: " · ")
             },
             isTailscale: isTailscale,
-            needsTailscale: isTailscale && dialFailed)
+            needsTailscale: isTailscale && dialFailed,
+            isThisDevice: record.isThisDevice)
     }
 
-    /// What to say about a daemon host's helper version, from its latest connection.
+    /// What to say about a daemon host's helper version, from its latest connection. Nothing
+    /// for this device's own helper: it comes with the app.
     public func helperAdvice(_ id: String) -> HelperAdvice? {
-        guard let record = record(id), record.kind == .daemon,
+        guard let record = record(id), record.kind == .daemon, !record.isThisDevice,
               let daemon = connections[id] as? DaemonConnection
         else { return nil }
         return HelperCheck.assess(
@@ -360,6 +364,22 @@ public final class HostsModel {
 
     public func setPinned(_ id: String, _ pinned: Bool) {
         update(id) { $0.pinned = pinned }
+    }
+
+    /// The host of this device's own helper, if paired.
+    public var thisDeviceId: String? {
+        records.first(where: \.isThisDevice)?.id
+    }
+
+    /// Pairs with this device's own helper (its ticket from the helper itself) and marks the host
+    /// as this device, under `name`. Any older such host for another daemon is removed.
+    @discardableResult
+    public func pairThisDevice(_ ticket: PairingTicket, name: String) async throws -> String {
+        let stale = records.filter { $0.isThisDevice && $0.daemonId != ticket.info.daemonId }.map(\.id)
+        let id = try await pair(ticket, name: name)
+        update(id) { $0.thisDevice = true }
+        for old in stale where old != id { remove(old) }
+        return id
     }
 
     // MARK: Pairing

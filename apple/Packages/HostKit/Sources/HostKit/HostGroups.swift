@@ -86,6 +86,10 @@ public final class HostGroups {
 
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
+    /// Whether this device's helper serves it (the Mac's "This Mac"): an empty local group then
+    /// gives way to the helper's host.
+    @ObservationIgnored public var helperServesLocal: () -> Bool = { false }
+
     public init(hosts: HostsModel, local: Local? = nil) {
         self.hosts = hosts
         self.local = local
@@ -98,7 +102,7 @@ public final class HostGroups {
     public var groups: [HostGroup] {
         var result: [HostGroup] = []
         let carriers = composites.carriers
-        if let local {
+        if let local, !(local.layout.session.tabs.isEmpty && helperServesLocal()) {
             let session = local.layout.session
             result.append(HostGroup(
                 id: Self.localId, name: local.name, kind: .local, status: .connected(rtt: nil),
@@ -121,10 +125,13 @@ public final class HostGroups {
         return result
     }
 
-    /// The open hosts, then hosts connected elsewhere in the app, in saved-host order.
+    /// This device's helper first, then the open hosts, then hosts connected elsewhere in the
+    /// app, in saved-host order.
     private var hostOrder: [String] {
         let others = hosts.records.map(\.id).filter { !openHosts.contains($0) && hosts.connections[$0] != nil }
-        return openHosts + others
+        let order = openHosts + others
+        let thisDevice = order.filter { hosts.record($0)?.isThisDevice == true }
+        return thisDevice + order.filter { !thisDevice.contains($0) }
     }
 
     public func group(_ id: String) -> HostGroup? {
