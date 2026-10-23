@@ -96,7 +96,9 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(panes.firstMatch.exists, "the terminal stays beside it")
         shot("browser-pane")
 
+        #if os(iOS)
         XCUIDevice.shared.press(.home)
+        #endif
         RunLoop.current.run(until: Date().addingTimeInterval(3))
         app.terminate()
         try launch(relaunch: true)

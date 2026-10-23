@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, font, cursor, splits, links, keyboard, passwords, voice, notifications, bell, agents, git, network, about
+    case appearance, font, cursor, splits, links, keyboard, passwords, voice, notifications, bell, agents, browser, git, network, about
 
     var title: String {
         switch self {
@@ -40,6 +40,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .notifications: "Notifications"
         case .bell: "Bell"
         case .agents: "Agent Usage"
+        case .browser: "Browser"
         case .git: "Git"
         case .network: "Network"
         case .about: "About"
@@ -54,6 +55,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .keyboard, .voice: .keyboard
         case .notifications, .bell: .notifications
         case .agents: .agents
+        case .browser: .browser
         case .git: .git
         case .network: .network
         case .about: .about
@@ -87,6 +89,8 @@ enum SettingsIndex {
             .init(id: "notify-background", title: "Only When the App Is in the Background", section: .notifications, synonyms: ["notification", "foreground"]),
             .init(id: "bell-features", title: "Flash Border on Bell", key: "bell-features", section: .bell, synonyms: ["bell", "beep", "alert"]),
             .init(id: "usage-api-fallback", title: "Check Usage with Your Claude and Codex Sign-In", section: .agents, synonyms: ["usage", "limits", "plan", "meter", "quota"]),
+            .init(id: "record-agent-sessions", title: "Record Agent Sessions", section: .browser, synonyms: ["replay", "recording", "browser", "session", "rrweb"]),
+            .init(id: "delete-replays", title: "Delete All Replays", section: .browser, synonyms: ["replay", "recording", "storage", "clear"]),
             .init(id: "merge-strategy", title: "Merge Pull Requests With", section: .git, synonyms: ["pr", "squash", "rebase", "merge"]),
             .init(id: "auto-delete", title: "Delete Merged Worktrees", section: .git, synonyms: ["worktree", "cleanup", "branch"]),
             .init(id: "git-scripts", title: "Scripts", section: .git, synonyms: ["run", "command", "⌘r"]),

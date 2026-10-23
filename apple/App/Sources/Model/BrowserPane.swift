@@ -49,9 +49,11 @@ final class BrowserPane: Identifiable {
         var configuration = WebPage.Configuration()
         if let dataStore { configuration.websiteDataStore = dataStore }
         BrowserAgentScript.install(in: configuration.userContentController)
+        BrowserRecorder.install(in: configuration.userContentController, page: id)
         let box = DeciderBox()
         page = WebPage(configuration: configuration, navigationDecider: Decider(box: box))
         box.pane = self
+        BrowserRecorder.shared.attach(page, id: id)
     }
 
     /// Loads the first page once (a view showing it again keeps where it is).
@@ -124,6 +126,7 @@ final class BrowserPanes {
         for (id, pane) in panes where !ids.contains(id) {
             panes[id] = nil
             pane.page.stopLoading()
+            BrowserRecorder.shared.finish(id)
         }
     }
 }

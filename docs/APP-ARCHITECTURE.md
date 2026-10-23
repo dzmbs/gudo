@@ -864,3 +864,24 @@ Tests: `BrowserLeafTests` (PaneLayout), `BrowserTests` (sign-in URLs), `BrowserA
 `BrowserUITests` (iPad, `UI_TEST_CLASS=BrowserUITests apple/scripts/w3-ui-test.sh`: a sign-in
 through `BROWSER`, a host page in a pane beside its terminal surviving a relaunch, an agent
 driving a page with an approval on the device).
+
+### 21.1 Session Replay
+
+Agents' browser sessions are recorded on the device (Settings ▸ Browser ▸ Record Agent
+Sessions, on by default). `BrowserRecorder` takes each action from `BrowserAgent.onAction`
+(`BrowserActionEntry`: tool, element ref/role/name/nth, Playwright selector and locator, URLs,
+verdict), a JPEG of the visible page after it, and the page as rrweb events. A session is one
+agent pane on one page, from its first action until 15 minutes without one. `ReplayStore`
+keeps a folder per session (`session.json`, `events.jsonl`, `k<N>.jpg`) in Application Support,
+at most 512 MB and 30 days in all (oldest first; never the session being recorded) and 96 MB of
+events per session.
+
+rrweb runs in its own content world (`unnamed-replay`), in every frame, idle until the app
+answers its hello with "record". An isolated world sees the same DOM (mutation observers, input
+and scroll events), and the page sees nothing: no globals, no message handler in its world, no
+patched prototypes. What it misses — style rules a page inserts through the CSSOM later — comes
+back with a fresh full snapshot after actions (at most every 10 s). Frames from other origins
+record themselves; their world's own `parent` sends their events to the app, which hands them
+to the top frame's rrweb (its `message` listener is taken, never added to the page), so a page
+never receives what its embedded frames (a payment form) recorded. Password and `cc-*` fields
+are masked.
