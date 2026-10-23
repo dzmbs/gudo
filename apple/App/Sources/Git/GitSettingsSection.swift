@@ -87,10 +87,20 @@ private struct ScriptEditor: View {
     private static let tints = ["green", "yellow", "red", "blue", "purple", "gray"]
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            script.name.isEmpty ? "New Script" : script.name,
+            cancel: SheetAction("Cancel") { dismiss() },
+            primary: SheetAction(
+                "Save",
+                isEnabled: !script.name.trimmingCharacters(in: .whitespaces).isEmpty && !script.command.trimmingCharacters(in: .whitespaces).isEmpty
+            ) {
+                save(script)
+                dismiss()
+            }
+        ) {
             Form {
-                TextField("Name", text: $script.name)
-                TextField("Command", text: $script.command)
+                TextField("Name", text: $script.name, prompt: Text("Test"))
+                TextField("Command", text: $script.command, prompt: Text(verbatim: "cargo test"))
                     .font(DS.Font.literal)
                     .autocorrectionDisabled()
                     #if os(iOS)
@@ -105,20 +115,10 @@ private struct ScriptEditor: View {
                 Toggle("Run with ⌘R", isOn: $script.isDefault)
             }
             .formStyle(.grouped)
-            .navigationTitle(script.name.isEmpty ? "New Script" : script.name)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        save(script)
-                        dismiss()
-                    }
-                    .disabled(script.name.trimmingCharacters(in: .whitespaces).isEmpty || script.command.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
+            .chromeGrouped()
         }
         #if os(macOS)
-        .frame(minWidth: 380, minHeight: 300)
+        .frame(width: 440)
         #endif
     }
 }

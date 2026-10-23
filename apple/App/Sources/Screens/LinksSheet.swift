@@ -39,8 +39,54 @@ struct LinksSheet: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        SheetScaffold(
+            "Links & Paths", subtitle: "On screen and in the output of the focused pane's recent commands.",
+            cancel: SheetAction("Done") { dismiss() }
+        ) {
+            VStack(spacing: DS.Space.s) {
+                HStack(spacing: DS.Space.m) {
+                    filterPicker.fixedSize()
+                    FilterField(text: $query)
+                }
+                .padding(.horizontal, DS.Space.xl)
+                .padding(.top, DS.Space.s)
+                list
+            }
+        }
+        .frame(width: 560, height: 480)
+        #else
         NavigationStack {
-            List {
+            list
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    filterPicker
+                        .padding(.horizontal, DS.Space.l)
+                        .padding(.vertical, DS.Space.s)
+                }
+                .searchable(text: $query, prompt: "Filter")
+                .navigationTitle("Links & Paths")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done", systemImage: "xmark") { dismiss() }
+                            .help("Done (Esc)")
+                    }
+                }
+        }
+        .phoneDetents([.medium, .large])
+        #endif
+    }
+
+    private var filterPicker: some View {
+        Picker("Show", selection: $filter) {
+            ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
+    private var list: some View {
+            GroupedList {
                 Section {
                     ForEach(visible) { link in
                         Button {
@@ -71,16 +117,15 @@ struct LinksSheet: View {
                         }
                     }
                 } footer: {
+                    // The Mac says it once, under the sheet's title.
+                    #if os(iOS)
                     if links?.isEmpty == false {
                         Text("Found on screen and in the output of the pane's recent commands.")
                     }
+                    #endif
                 }
                 .chromeRows()
             }
-            #if os(iOS)
-            .listStyle(.insetGrouped)
-            #endif
-            .chromeGrouped()
             .overlay {
                 if let failure {
                     EmptyState("Couldn't Read Links", systemImage: "exclamationmark.triangle", message: failure) {
@@ -97,33 +142,8 @@ struct LinksSheet: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                Picker("Show", selection: $filter) {
-                    ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, DS.Space.l)
-                .padding(.vertical, DS.Space.s)
-            }
-            .searchable(text: $query, prompt: "Filter")
-            .navigationTitle("Links & Paths")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done", systemImage: "xmark") { dismiss() }
-                        .help("Done (Esc)")
-                }
-            }
             .task { await load() }
             .accessibilityIdentifier("links-list")
-        }
-        .phoneDetents([.medium, .large])
-        #if os(macOS)
-        .frame(minWidth: 520, minHeight: 420)
-        #endif
     }
 
     private func load() async {
