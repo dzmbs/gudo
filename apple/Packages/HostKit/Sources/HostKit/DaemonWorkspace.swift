@@ -70,6 +70,9 @@ extension DaemonClient: DaemonUsageAPI {}
 /// `Unavailable` without being asked).
 nonisolated public protocol DaemonAgentInstallAPI: AnyObject, Sendable {
     func agentInstalls() async throws -> [AgentInstall]
+    /// The vendors' commands that add the host's MCP server to each installed agent's
+    /// user-wide configuration (`register`), or remove it; nothing runs (`agentMcp` helpers).
+    func agentMcpCommands(register: Bool) async throws -> [AgentMcpCommand]
 }
 
 extension DaemonClient: DaemonAgentInstallAPI {}

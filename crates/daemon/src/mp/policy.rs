@@ -218,6 +218,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::WorkflowList { pane_id: None } | R::WorkflowSave(_) => (Need::Drive, Target::Host),
         // Asked before launching an agent on the host.
         R::AgentInstalls => (Need::Drive, Target::Host),
+        // Changes the owner's agent configuration.
+        R::AgentMcpCommands { .. } => (Need::Own, Target::Daemon),
     }
 }
 

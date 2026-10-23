@@ -84,6 +84,7 @@ pub use config::{CustomRelays, PushConfig, RepoConfig};
 pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
 };
+pub use procinfo::inherited_env_var;
 pub use upgrade::prev_path as upgrade_prev_path;
 pub use usage::UsageConfig;
 

@@ -3,7 +3,7 @@
 //!
 //! the ports a pane's dev servers listen on (Linux: `/proc/net/tcp{,6}` mapped through
 //! `/proc/<pid>/fd` socket inodes; macOS: `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)`, no `lsof`),
-//! and to find an editor server's CLI channel.
+//! to find an editor server's CLI channel, and a pane variable a helper's ancestors carry.
 
 use std::path::PathBuf;
 
@@ -64,6 +64,22 @@ pub(crate) fn process_env_var(pid: u32, name: &str) -> Option<String> {
     imp::process_env(pid)?
         .into_iter()
         .find_map(|e| e.strip_prefix(&prefix).map(str::to_owned))
+}
+
+/// The value of `name` in the environment of this process's nearest ancestor that has it.
+///
+/// For a helper whose launcher cleared its environment (Codex starts MCP servers with a short
+/// allowlist) but whose ancestors still carry the pane's variables.
+pub fn inherited_env_var(name: &str) -> Option<String> {
+    let parents: std::collections::HashMap<u32, u32> = imp::parent_table().into_iter().collect();
+    let mut pid = std::os::unix::process::parent_id();
+    while pid > 1 {
+        if let Some(value) = process_env_var(pid, name) {
+            return Some(value);
+        }
+        pid = *parents.get(&pid)?;
+    }
+    None
 }
 
 /// The process's executable.
@@ -429,6 +445,13 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_a_variable_an_ancestor_carries() {
+        // The test runner's parent (cargo or the shell) has a PATH; nobody has this one.
+        assert!(inherited_env_var("PATH").is_some());
+        assert_eq!(inherited_env_var("UN_TEST_NOBODY_HAS_THIS"), None);
+    }
 
     #[test]
     fn finds_children_and_their_open_files() {

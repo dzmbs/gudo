@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, font, cursor, splits, links, browser, keyboard, passwords, voice, notifications, bell, agents, git, network, about
+    case appearance, font, cursor, splits, links, browser, keyboard, passwords, voice, notifications, bell, agents, agentTools, git, network, about
 
     var title: String {
         switch self {
@@ -41,6 +41,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .notifications: "Notifications"
         case .bell: "Bell"
         case .agents: "Agent Usage"
+        case .agentTools: "Agent Tools"
         case .git: "Git"
         case .network: "Network"
         case .about: "About"
@@ -55,7 +56,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .browser: .browser
         case .keyboard, .voice: .keyboard
         case .notifications, .bell: .notifications
-        case .agents: .agents
+        case .agents, .agentTools: .agents
         case .git: .git
         case .network: .network
         case .about: .about
@@ -90,6 +91,7 @@ enum SettingsIndex {
             .init(id: "bell-features", title: "Flash Border on Bell", key: "bell-features", section: .bell, synonyms: ["bell", "beep", "alert"]),
             .init(id: "search-engine", title: "Search Engine", section: .browser, synonyms: ["browser", "google", "duckduckgo", "bing", "kagi", "brave", "search"]),
             .init(id: "browser-history", title: "Clear Browsing History", section: .browser, synonyms: ["browser", "history", "recent", "frequent"]),
+            .init(id: "agent-tools", title: "Browser and Drawings for Agents Started in a Terminal", section: .agentTools, synonyms: ["mcp", "claude", "codex", "browser", "drawings", "tools"]),
             .init(id: "usage-api-fallback", title: "Check Usage with Your Claude and Codex Sign-In", section: .agents, synonyms: ["usage", "limits", "plan", "meter", "quota"]),
             .init(id: "merge-strategy", title: "Merge Pull Requests With", section: .git, synonyms: ["pr", "squash", "rebase", "merge"]),
             .init(id: "auto-delete", title: "Delete Merged Worktrees", section: .git, synonyms: ["worktree", "cleanup", "branch"]),
