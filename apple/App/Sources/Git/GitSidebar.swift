@@ -188,11 +188,19 @@ struct WorktreeRow: View {
             .modifier(GitRowStyle(selected: isActive))
         }
         .buttonStyle(.plain)
-        .contextMenu { WorktreeMenu(worktree: worktree, host: host, tab: tab) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(port: port))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("worktree-row-\(worktree.displayBranch)")
+        .rowActions(RowActions(.worktree(isMain: worktree.main)), id: "worktree-\(host)-\(worktree.path)", name: worktree.displayBranch) { action in
+            switch action {
+            case .archiveWorktree: model.git.archive(worktree, host: host)
+            case .deleteWorktree: model.git.delete(worktree, host: host)
+            default: break
+            }
+        } menu: {
+            WorktreeMenu(worktree: worktree, host: host, tab: tab)
+        }
     }
 
     private func accessibilityLabel(port: UInt16?) -> String {
@@ -236,18 +244,27 @@ struct WorktreeTabRow: View {
             .modifier(GitRowStyle(selected: isActive, depth: 1))
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            Button("Rename…", systemImage: "pencil") {
-                model.focus(TabRef(hostId: host, tab: tab.id))
-                workspace?.renamingTab = tab.id
-            }
-            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
-            Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace?.apply(.closeTab(tab.id)) }
-        }
         .tabDrag(TabRef(hostId: host, tab: tab.id), model: model)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("worktree-tab-\(number ?? 0)")
+        .rowActions(actions, id: "\(host)/\(tab.id)", name: title) { action in
+            let ref = TabRef(hostId: host, tab: tab.id)
+            switch action {
+            case .rename:
+                model.focus(ref)
+                workspace?.renamingTab = tab.id
+            case .closeTab:
+                model.closeTab(ref, undoable: actions.undoable.contains(.closeTab))
+            default: break
+            }
+        } menu: {
+            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
+        }
+    }
+
+    private var actions: RowActions {
+        RowActions(.terminalTab(isBusy: agent == .working || agent == .blocked))
     }
 }
 
@@ -345,12 +362,9 @@ private struct WorktreeMenu: View {
                 model.focus(TabRef(hostId: host, tab: tab.id))
                 model.workspace(ofGroup: host)?.renamingTab = tab.id
             }
-            Button("Close Tab", systemImage: "xmark") { model.workspace(ofGroup: host)?.apply(.closeTab(tab.id)) }
-        }
-        if !worktree.main {
-            Divider()
-            Button("Archive Worktree…", systemImage: "archivebox") { git.archive(worktree, host: host) }
-            Button("Delete Worktree…", systemImage: "trash", role: .destructive) { git.delete(worktree, host: host) }
+            Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage) {
+                model.closeTab(TabRef(hostId: host, tab: tab.id), undoable: true)
+            }
         }
     }
 }

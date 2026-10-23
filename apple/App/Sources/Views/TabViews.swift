@@ -15,6 +15,7 @@ import SwiftUI
 /// own material (white or grey next to a dark terminal on the Mac, an inset card on iPad); this one
 struct WorkspaceSidebar: View {
     @Environment(WindowModel.self) private var model
+    @State private var swipe = RowSwipeState()
 
     var body: some View {
         let groups = model.groups.groups
@@ -48,6 +49,9 @@ struct WorkspaceSidebar: View {
             .animation(DS.Motion.snappy, value: model.groups.collapsed)
         }
         .scrollIndicators(.never)
+        .environment(swipe)
+        // A row's swipe actions close when the list scrolls (Mail).
+        .onScrollPhaseChange { _, phase in if phase != .idle { swipe.open = nil } }
         // Dense rows in a fixed column: they grow with Dynamic Type up to accessibility 1
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .chromeContent()
@@ -292,7 +296,6 @@ private struct HostGroupHeader: View {
         .contentShape(.rect)
         .onTapGesture { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(group.id) } }
         .onHover { hovered = $0 }
-        .contextMenu { GroupMenu(group: group, collapsed: collapsed) }
         .animation(DS.Motion.overlay, value: state)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(group.name), \(state.title)")
@@ -301,6 +304,23 @@ private struct HostGroupHeader: View {
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("host-group-\(group.name)")
         .accessibilityAction(named: "New Tab") { model.newTab(onGroup: group.id) }
+        .rowActions(actions, id: "host-\(group.id)", name: group.name, perform: perform) {
+            GroupMenu(group: group, collapsed: collapsed)
+        }
+    }
+
+    private var actions: RowActions {
+        let pinned = model.hosts.hosts.first { $0.id == group.id }?.isPinned ?? false
+        return RowActions(.host(isLocal: group.isLocal, isOpen: true, isPinned: pinned))
+    }
+
+    private func perform(_ action: RowAction) {
+        switch action {
+        case .pin, .unpin: model.hosts.togglePin(group.id)
+        case .disconnect: model.closeHost(group.id)
+        case .removeHost: model.hosts.forget(group.id)
+        default: break
+        }
     }
 
     /// New Terminal, and New Agent where the host runs agents (a daemon).
@@ -502,7 +522,6 @@ private struct GroupMenu: View {
                 Button("Agent Usage", systemImage: "gauge.with.dots.needle.33percent") { model.usageDetailHost = group.id }
             }
             Button("Show in Hosts", systemImage: "server.rack") { model.destination = .hosts }
-            Button("Disconnect", systemImage: "xmark.circle", role: .destructive) { model.closeHost(group.id) }
         }
     }
 }
@@ -625,16 +644,6 @@ private struct TabRow: View {
             .sidebarRow(selected: isActive)
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            Button("Rename…", systemImage: "pencil") {
-                model.focus(ref)
-                workspace?.renamingTab = tab.id
-            }
-            Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
-                .accessibilityIdentifier("open-in-new-window")
-            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
-            Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace?.apply(.closeTab(tab.id)) }
-        }
         .tabDrag(ref, model: model)
         .dropDestination(for: String.self) { items, _ in
             // Reorder within a host; tabs live on their host, so they never cross groups.
@@ -650,6 +659,31 @@ private struct TabRow: View {
         .accessibilityValue(running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "")
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
+        .rowActions(actions, id: ref.description, name: title, perform: perform) {
+            Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
+                .accessibilityIdentifier("open-in-new-window")
+            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
+        }
+    }
+
+    private var actions: RowActions {
+        let busy = tab.root.panes.contains { pane in
+            let state = model.agentState(ofPane: pane, onGroup: group.id)
+            return state == .working || state == .blocked
+        }
+        return RowActions(.terminalTab(isBusy: busy))
+    }
+
+    private func perform(_ action: RowAction) {
+        switch action {
+        case .rename:
+            model.focus(ref)
+            model.workspace(ofGroup: group.id)?.renamingTab = tab.id
+        case .closeTab:
+            model.closeTab(ref, undoable: actions.undoable.contains(.closeTab))
+        default:
+            break
+        }
     }
 
     /// A context line worth a second line in the row.
@@ -668,6 +702,7 @@ private struct GroupAgents: View {
 
     private struct Row: Identifiable {
         var number: Int
+        var tab: TabId
         var pane: PaneId
         var state: AgentState
         var id: PaneId { pane }
@@ -676,7 +711,7 @@ private struct GroupAgents: View {
     var body: some View {
         let rows: [Row] = group.tabs.flatMap { tab in
             tab.root.panes.compactMap { pane in
-                model.agentState(ofPane: pane, onGroup: group.id).map { Row(number: numbers[group.ref(tab.id)] ?? 0, pane: pane, state: $0) }
+                model.agentState(ofPane: pane, onGroup: group.id).map { Row(number: numbers[group.ref(tab.id)] ?? 0, tab: tab.id, pane: pane, state: $0) }
             }
         }
         if !rows.isEmpty {
@@ -719,6 +754,20 @@ private struct GroupAgents: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(model.programIdentity(ofPane: row.pane, onGroup: group.id).displayName), tab \(row.number), \(row.state.title)")
                     .accessibilityIdentifier("agent-\(group.name)-\(row.pane.rawValue)")
+                    .rowActions(
+                        RowActions(.agent(row.state, canMarkRead: group.kind == .daemon)),
+                        id: "agent-\(group.id)-\(row.pane.rawValue)",
+                        name: model.programIdentity(ofPane: row.pane, onGroup: group.id).displayName
+                    ) { action in
+                        switch action {
+                        case .stopAgent: model.stopAgent(pane: row.pane, onGroup: group.id)
+                        case .closeTab: model.closeTab(group.ref(row.tab), undoable: false)
+                        case .markRead: model.markAgentRead(pane: row.pane, onGroup: group.id)
+                        default: break
+                        }
+                    } menu: {
+                        Button("Show Agent", systemImage: "arrow.up.forward") { model.focus(pane: row.pane, onGroup: group.id) }
+                    }
                 }
             }
         }
@@ -996,6 +1045,8 @@ struct TabMenu: View {
             model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
         }
         MergeIntoTabMenu(workspace: workspace, tab: tab.id)
-        Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }
+        Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage, role: .destructive) {
+            model.closeTab(TabRef(hostId: workspace.groupId, tab: tab.id), undoable: true)
+        }
     }
 }

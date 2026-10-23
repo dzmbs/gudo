@@ -1,5 +1,6 @@
 import DesignSystem
 import HostKit
+import PaneLayout
 import SwiftUI
 #if canImport(UIKit)
 import GameController
@@ -265,23 +266,12 @@ struct InboxView: View {
                 }
             })
             .id(item.id)
-            .swipeActions(edge: .trailing) {
-                Button("Mark Done", systemImage: "checkmark") {
-                    withAnimation(DS.Motion.snappy) { feed.markDone(item.id) }
-                }
-                .tint(DS.Palette.done)
-            }
-            .contextMenu {
-                if item.paneId != nil {
-                    Button("Open Pane", systemImage: "rectangle.on.rectangle") { open(item) }
-                }
+            .listRowActions(actions(item), name: item.agent.title) { action in
+                perform(action, on: item)
+            } menu: {
                 Button(item.isCommand ? "Copy Command" : "Copy Prompt", systemImage: "doc.on.doc") { copy(item.prompt) }
                 if let summary = item.summary {
                     Button("Copy Summary", systemImage: "text.quote") { copy(summary) }
-                }
-                Divider()
-                Button("Mark Done", systemImage: "checkmark") {
-                    withAnimation(DS.Motion.snappy) { feed.markDone(item.id) }
                 }
             }
             .accessibilityElement(children: .contain)
@@ -297,6 +287,23 @@ struct InboxView: View {
     }
 
     // MARK: Actions
+
+    private func actions(_ item: AgentItem) -> RowActions {
+        let canStop = !item.isCommand && item.paneId != nil && item.hostId.flatMap(model.workspace(ofGroup:)) != nil
+        var actions = RowActions(.agentItem(item.state, canStop: canStop))
+        if item.paneId == nil { actions.leading.removeAll { $0 == .open } }
+        return actions
+    }
+
+    private func perform(_ action: RowAction, on item: AgentItem) {
+        switch action {
+        case .open: open(item)
+        case .markDone: withAnimation(DS.Motion.snappy) { feed.markDone(item.id) }
+        case .stopAgent:
+            if let host = item.hostId, let pane = item.paneId { model.stopAgent(pane: PaneId(pane), onGroup: host) }
+        default: break
+        }
+    }
 
     private func approve(_ item: AgentItem) {
         approvedCount += 1
