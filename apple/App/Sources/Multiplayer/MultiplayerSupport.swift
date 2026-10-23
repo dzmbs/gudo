@@ -170,6 +170,8 @@ nonisolated enum MockMultiplayer {
                         ? [.init(paneId: 3, by: mira, name: "Mira Holt")] : [],
                      knocks: UserDefaults.standard.bool(forKey: "mockKnock") ? [knock] : [],
                      approvalPolicy: ApprovalPolicy(mode: .twoPerson, maxRisk: .edits))
+        // `-mockFollow YES`: this device follows Mira (the follow pill).
+        if UserDefaults.standard.bool(forKey: "mockFollow") { session.follow(mira.principal) }
         return session
     }()
 

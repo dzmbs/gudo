@@ -16,17 +16,33 @@ import UIKit
 /// nobody else is here. Opens Share Session.
 struct PresenceToolbarButton: View {
     let session: MultiplayerSession
+    /// The tab a pane is in, for "In cargo test".
+    var place: (UInt64) -> String? = { _ in nil }
     let action: () -> Void
+    @State private var showsPeople = false
 
     var body: some View {
         let others = session.others
-        Button(action: action) {
+        // Alone, it is Share Session; with people here it lists them (follow, then share).
+        Button {
+            if others.isEmpty { action() } else { showsPeople.toggle() }
+        } label: {
             if others.isEmpty {
                 Image(systemName: "person.crop.circle.badge.plus")
             } else {
                 PresenceStack(others.map(\.avatar))
                     .animation(DS.Motion.indicator, value: others.map(\.actor.device))
             }
+        }
+        .popover(isPresented: $showsPeople, arrowEdge: .top) {
+            PeopleSwitcher(
+                people: people,
+                commands: [
+                    HostSwitcherCommand(id: "share-session", title: "Share Session…", systemImage: "person.crop.circle.badge.plus", perform: action),
+                ],
+                onFollow: { session.follow($0) },
+                onDismiss: { showsPeople = false })
+                .presentationCompactAdaptation(.popover)
         }
         .contextMenu {
             FollowMenuItems(session: session)
@@ -35,6 +51,31 @@ struct PresenceToolbarButton: View {
         .help(others.isEmpty ? "Share Session" : "\(others.count) \(others.count == 1 ? "person" : "people") here")
         .accessibilityLabel(others.isEmpty ? "Share Session" : "Share Session, \(others.count) \(others.count == 1 ? "person" : "people") here")
         .accessibilityIdentifier("presence-button")
+    }
+
+    /// This device's person first, then the others as they arrived.
+    private var people: [PeopleSwitcherPerson] {
+        let followers = Set(session.followers.map(\.actor.principal))
+        var seen = Set<String>()
+        let everyone = session.participants.filter { $0.actor.principal == session.myPrincipal } + session.others
+        return everyone.compactMap { person in
+            guard seen.insert(person.actor.principal).inserted else { return nil }
+            let isMe = person.actor.principal == session.myPrincipal
+            return PeopleSwitcherPerson(
+                id: person.actor.principal, avatar: person.avatar, name: person.name,
+                detail: isMe ? nil : detail(person, followsMe: followers.contains(person.actor.principal)),
+                isFollowed: session.following == person.actor.principal, isMe: isMe)
+        }
+    }
+
+    /// What they are doing, in a few words: "Typing in cargo test", "Following you", "Away".
+    private func detail(_ person: UnnamedCore.Participant, followsMe: Bool) -> String? {
+        if person.state == .away { return "Away" }
+        let place = person.focus.flatMap(place)
+        if person.typing { return place.map { "Typing in \($0)" } ?? "Typing" }
+        if followsMe { return "Following you" }
+        if let place { return "In \(place)" }
+        return person.state == .idle ? "Idle" : nil
     }
 }
 
@@ -397,7 +438,7 @@ struct MultiplayerWindowHooks: ViewModifier {
             .overlay(alignment: .bottom) { KnockOverlay(workspace: workspace) }
             .modifier(PresenceSyncModifier(workspace: workspace))
             .onChange(of: workspace.multiplayer?.notice) { _, notice in
-                if let notice { model.toasts.show(notice.toast) }
+                if let notice, let session = workspace.multiplayer { model.toasts.show(PresenceNotices.toast(notice, in: session)) }
             }
             // Per host: the window no longer rebuilds per workspace (multi-host sidebar).
             .task(id: "\(workspace.hostId ?? "")/\(workspace.multiplayer?.me?.name ?? "")") {
@@ -415,5 +456,29 @@ struct MultiplayerWindowHooks: ViewModifier {
         #else
         UIDevice.current.name
         #endif
+    }
+}
+
+/// Banners for multiplayer notices; arrivals and departures of one person carry their avatar.
+enum PresenceNotices {
+    @MainActor static func toast(_ notice: MultiplayerSession.Notice, in session: MultiplayerSession) -> Toast {
+        var toast = notice.toast
+        switch notice.kind {
+        case .arrived(let names), .left(let names):
+            if names.count == 1 { toast.person = person(names[0], in: session) }
+        default: break
+        }
+        return toast
+    }
+
+    /// "Mira Holt joined", as the daemon would say it.
+    @MainActor static func toast(arrived names: [String], in session: MultiplayerSession) -> Toast {
+        var toast = Toast("\(names.joined(separator: ", ")) joined", systemImage: "person.crop.circle.badge.plus")
+        if names.count == 1 { toast.person = person(names[0], in: session) }
+        return toast
+    }
+
+    @MainActor private static func person(_ name: String, in session: MultiplayerSession) -> DesignSystem.Participant? {
+        session.participants.first { $0.name == name }?.avatar
     }
 }

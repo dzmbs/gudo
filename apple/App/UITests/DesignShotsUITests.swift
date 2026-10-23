@@ -17,10 +17,10 @@ final class DesignShotsUITests: XCTestCase {
 
     private var mode: String { env["DESIGN_SHOTS_MODE"] ?? "dark" }
 
-    private func launch(screen: String) {
+    private func launch(screen: String, _ extra: [String] = []) {
         app = XCUIApplication()
         let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
-        app.launchArguments += ["-mock", "-screen", screen, "-restoreLastTarget", "NO", "-theme", theme]
+        app.launchArguments += ["-mock", "-screen", screen, "-restoreLastTarget", "NO", "-theme", theme] + extra
         app.launch()
     }
 
@@ -58,6 +58,15 @@ final class DesignShotsUITests: XCTestCase {
         row.swipeLeft(velocity: .slow)
         sleep(1)
         try save("inbox-swipe")
+    }
+
+    func testPeopleShot() throws {
+        launch(screen: "splits", ["-mockPresence", "YES", "-mockFollow", "YES"])
+        let button = app.descendants(matching: .any)["presence-button"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        button.tap()
+        sleep(1)
+        try save("people")
     }
 
     func testHostSwitcherShot() throws {

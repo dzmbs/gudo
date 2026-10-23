@@ -112,6 +112,12 @@ enum DesignFixtures {
         case "toast":
             try? await Task.sleep(for: .seconds(1))
             model.toasts.show(Toast("Closed “cargo test”", systemImage: "xmark.circle.fill", action: Toast.Action("Undo") {}))
+        case "presence-notice":
+            // Someone arrives in a shared session (`-mockPresence YES`).
+            try? await Task.sleep(for: .seconds(1))
+            if let session = workspace.multiplayer {
+                model.toasts.show(PresenceNotices.toast(arrived: ["Mira Holt"], in: session))
+            }
         case "port-offer":
             // The dev-server offer with a banner over it: both clear of the panes' top bars.
             try? await Task.sleep(for: .seconds(1))

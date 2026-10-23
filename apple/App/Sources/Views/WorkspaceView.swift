@@ -415,7 +415,9 @@ private struct TerminalToolbar: ToolbarContent {
         }
         if let session = workspace.multiplayer {
             ToolbarItem(placement: .primaryAction) {
-                PresenceToolbarButton(session: session) { model.sheet = .invite }
+                PresenceToolbarButton(session: session, place: { pane in
+                    workspace.session.tabs.first { $0.root.panes.contains(PaneId(pane)) }.map(workspace.title(of:))
+                }) { model.sheet = .invite }
                     .buttonStyle(.plain)
             }
             .sharedBackgroundVisibility(.hidden)
