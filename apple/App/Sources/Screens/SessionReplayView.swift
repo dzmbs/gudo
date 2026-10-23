@@ -437,6 +437,7 @@ private struct ReplayStepRow: View {
         case "type", "fill": "character.cursor.ibeam"
         case "press": "keyboard"
         case "scroll", "scroll_to": "arrow.up.and.down"
+        case "drag": "hand.draw"
         default: "circle"
         }
     }
@@ -454,7 +455,9 @@ struct ReplayThumbnail: View {
             .fill(DS.Palette.raised)
             .overlay {
                 if let image {
+                    // Pages read from the top.
                     image.resizable().aspectRatio(contentMode: contentMode)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: contentMode == .fill ? .top : .center)
                 } else {
                     Image(systemName: "photo").foregroundStyle(DS.Palette.textTertiary)
                 }

@@ -76,6 +76,16 @@ nonisolated enum ReplayPlaywright {
             }
             if submit { out.append("await page.keyboard.press('Enter');") }
             return out
+        case "drag":
+            guard let from = target(action) else { return ["// browser_drag: nothing to act on was recorded."] }
+            var out = pointAt(from)
+            if let to = input["to"] as? [String: Any], to["type"] as? String == "coordinate" {
+                let x = (to["x"] as? NSNumber)?.intValue ?? 0, y = (to["y"] as? NSNumber)?.intValue ?? 0
+                out += ["await page.mouse.down();", "await page.mouse.move(\(x), \(y), { steps: 8 }); // the agent's screenshot coordinates", "await page.mouse.up();"]
+            } else {
+                out += ["await page.mouse.down();", "// browser_drag to \((input["to"] as? [String: Any])?["ref"] as? String ?? "?"): no locator was recorded for the drop target.", "await page.mouse.up();"]
+            }
+            return out
         default:
             guard let target = target(action) else { return ["// \(action.tool): nothing to act on was recorded."] }
             switch target {

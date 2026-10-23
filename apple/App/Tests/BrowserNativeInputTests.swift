@@ -43,8 +43,10 @@ final class BrowserNativeInputTests: XCTestCase {
         window = nil
     }
 
-    private func page() async throws -> WebPage {
-        let page = WebPage()
+    private func page(agent: Bool = false) async throws -> WebPage {
+        var configuration = WebPage.Configuration()
+        if agent { BrowserAgentScript.install(in: configuration.userContentController) }
+        let page = WebPage(configuration: configuration)
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: WebView(page).frame(width: 800, height: 600))
@@ -58,6 +60,49 @@ final class BrowserNativeInputTests: XCTestCase {
 
     private func log(_ page: WebPage) async throws -> [String] {
         try await page.callJavaScript("return log.splice(0)") as? [String] ?? []
+    }
+
+    private func act(_ page: WebPage, _ args: [String: Any]) async throws -> [String: Any] {
+        try await page.callJavaScript("return window.__un.act(args)", arguments: ["args": args], contentWorld: BrowserAgentScript.world) as? [String: Any] ?? [:]
+    }
+
+    /// The agent's actions on the Mac: the page script checks the target and lists the events,
+    /// the app sends them, and the effect is read as before. HTML drag sources stay with the
+    /// script's DataTransfer drag.
+    func testAgentActionsGoThroughNativeInput() async throws {
+        let page = try await page(agent: true)
+        let found = await BrowserNativeInput.for(page)
+        let input = try XCTUnwrap(found)
+        let snapshot = try await page.callJavaScript("return window.__un.snapshot(args)", arguments: ["args": ["full": true]], contentWorld: BrowserAgentScript.world) as? String ?? ""
+        let line = try XCTUnwrap(snapshot.split(separator: "\n").first { $0.contains("button \"Go\"") }, snapshot)
+        let ref = String(try XCTUnwrap(line.firstMatch(of: /\[(ref_\d+)\]/)).output.1)
+
+        let done = try await act(page, ["kind": "click", "phase": "do", "native": true, "id": "c1", "target": ["type": "ref", "ref": ref]])
+        let ops = try XCTUnwrap(done["native"] as? [[String: Any]], "\(done)")
+        XCTAssertEqual(ops.first?["op"] as? String, "click")
+        let untouched = try await log(page)
+        XCTAssertFalse(untouched.contains { $0.hasPrefix("click:") }, "the script itself sent nothing: \(untouched)")
+        await input.perform(ops)
+        let clicked = try await log(page)
+        XCTAssertTrue(clicked.contains("click:go:true"), "\(clicked)")
+
+        let focus = try await act(page, ["kind": "click", "phase": "do", "native": true, "id": "f1", "target": ["type": "coordinate", "x": 120, "y": 315]])
+        await input.perform(focus["native"] as? [[String: Any]] ?? [])
+        let typed = try await act(page, ["kind": "type", "phase": "do", "native": true, "id": "t1", "text": "Ada", "submit": false])
+        await input.perform(try XCTUnwrap(typed["native"] as? [[String: Any]], "\(typed)"))
+        let effect = try await page.callJavaScript("return window.__un.effect('t1')", contentWorld: BrowserAgentScript.world) as? [String: Any]
+        XCTAssertTrue((effect?["changes"] as? [String])?.contains("value changed") == true, "\(String(describing: effect))")
+
+        // A pointer drag is the app's; an HTML drag source is the script's.
+        let knob = try await act(page, ["kind": "drag", "phase": "do", "native": true, "id": "d1",
+                                        "target": ["type": "coordinate", "x": 170, "y": 160], "to": ["type": "coordinate", "x": 360, "y": 200]])
+        XCTAssertEqual((knob["native"] as? [[String: Any]])?.first?["op"] as? String, "drag")
+        _ = try await log(page)
+        let html = try await act(page, ["kind": "drag", "phase": "do", "native": true, "id": "d2",
+                                        "target": ["type": "coordinate", "x": 60, "y": 180], "to": ["type": "coordinate", "x": 360, "y": 200]])
+        XCTAssertNil(html["native"])
+        let dropped = try await log(page)
+        XCTAssertTrue(dropped.contains { $0.hasPrefix("dragstart:src:") } && dropped.contains { $0.hasPrefix("drop:dst:") }, "\(dropped)")
     }
 
     func testPointerKeysAndDragArriveAsTheUsersOwn() async throws {

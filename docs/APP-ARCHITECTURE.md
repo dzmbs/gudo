@@ -918,8 +918,12 @@ the page's `WKWebView` (found by a token its content world carries), so the page
 events, `:hover` and menus that open on hover (WebKit takes buttonless moves only in the key
 window), and pointer drags; the pointer on screen stays put. HTML drag and drop stays with the
 page script: its system drag session follows the real pointer, so `drag` refuses a drag source.
-Keys make the page first responder for the call and give the focus back. Agents' tools use
-it when it is there and fall back to the page script (iOS has no public equivalent).
+Keys make the page first responder for the call and give the focus back. Agents' actions in
+the top frame (click, double-click, hover, type, press, scroll, drag) use it when the page is in
+a window: the page script still waits for the target, checks what covers it and reads the
+effect, but lists the events (`native` in `act`) for the app to send. Frames, iOS (no public
+equivalent) and pages off screen keep the script's events; `browser_drag` from an HTML drag
+source always uses the script's DataTransfer drag.
 
 Tests: `BrowserReplayTests` (store cap and age, `.unreplay` round trip and unsafe names,
 Playwright export with and without locators), `BrowserRecorderTests` (a `WebPage` fixture with
