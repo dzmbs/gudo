@@ -34,18 +34,14 @@ final class Pane {
     @ObservationIgnored var isFocusedPane: () -> Bool = { false }
 
     @ObservationIgnored let backend: any PaneBackend
-    @ObservationIgnored private var appliedGrid: TerminalSurface.Grid?
-    @ObservationIgnored private var resizeTask: Task<Void, Never>?
-    /// Every grid change, undebounced, for the cols × rows overlay.
+    /// Grid changes, for the cols × rows overlay.
     @ObservationIgnored var onGridChange: ((TerminalSurface.Grid) -> Void)?
+    /// Resizes sent to the backend (UI tests: one per layout change).
+    private(set) var resizesSent = 0
 
     nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "pane")
     /// The grid's cell size in pixels, for resizes that follow the stream (off the main actor).
     nonisolated let cellPixels = OSAllocatedUnfairLock<(width: UInt32, height: UInt32)>(initialState: (0, 0))
-
-    /// PTY resizes (SIGWINCH) are debounced so a divider drag does not make TUIs redraw on every
-    /// frame (04-mobile-ux C3).
-    private static let resizeDebounce = Duration.milliseconds(80)
 
     init(id: PaneId, backend: any PaneBackend, appearance: TerminalAppearance = .init(), onExit: @escaping @Sendable () -> Void) throws {
         self.id = id
@@ -141,13 +137,11 @@ final class Pane {
     }
 
     func terminate() {
-        resizeTask?.cancel()
         backend.terminate()
     }
 
     /// The window closed; the pane stays in its host's layout (other windows, later windows).
     func detach() {
-        resizeTask?.cancel()
         if let shared = backend as? any SharedPaneTap { shared.detach() } else { backend.terminate() }
     }
 
@@ -172,17 +166,9 @@ final class Pane {
         cellPixels.withLock { $0 = (grid.cellWidth, grid.cellHeight) }
         onGridChange?(grid)
         if let size = view.surface.cellSize { onCellSize?(size) }
-        resizeTask?.cancel()
-        // The first layout applies at once, so the shell starts at the real size.
-        guard appliedGrid != nil else { return applyGrid(grid) }
-        resizeTask = Task { [weak self] in
-            guard (try? await Task.sleep(for: Self.resizeDebounce)) != nil else { return }
-            self?.applyGrid(grid)
-        }
-    }
-
-    private func applyGrid(_ grid: TerminalSurface.Grid) {
-        appliedGrid = grid
+        // With the grid, as Ghostty does: the surface already coalesced layout into grid
+        // changes, and a program redrawing after SIGWINCH must find the grid it was told of.
+        resizesSent += 1
         backend.resize(cols: grid.cols, rows: grid.rows, cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
     }
 }

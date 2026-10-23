@@ -47,7 +47,7 @@ struct SessionReplaysSheet: View {
                 if let session = store.session(id) { SessionReplayView(session: session) }
             }
         }
-        .macMinimumSize(width: 900, height: 600)
+        .toolMinimumSize(width: 900, height: 600)
         .presentationSizing(.page)
         .onAppear {
             // One session of a page or pane opens straight away.
@@ -81,10 +81,7 @@ struct SessionReplaysSheet: View {
                 EmptyState("No Replays Yet", systemImage: "play.rectangle.on.rectangle", message: "When an agent uses a browser page, what it does is kept here to play back.") {}
             }
         }
-        .navigationTitle("Replays")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .toolChrome("Replays")
     }
 }
 
@@ -156,11 +153,7 @@ struct SessionReplayView: View {
             }
         }
         .background(DS.Palette.base)
-        .navigationTitle(session.displayTitle)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbar { toolbar }
+        .toolChrome(session.displayTitle) { actions }
         .task(id: session.id) { await load() }
         .onDisappear { player?.stop() }
         .sheet(item: $exported) { test in PlaywrightTestSheet(test: test) }
@@ -219,18 +212,18 @@ struct SessionReplayView: View {
     private var transport: some View {
         HStack(spacing: DS.Space.m) {
             Button("Previous Step", systemImage: "backward.end.fill") { step(-1) }
-                .keyboardShortcut(.leftArrow, modifiers: [])
+                .toolShortcut(.leftArrow, modifiers: [])
                 .accessibilityIdentifier("replay-step-back")
             Button(player?.isPlaying == true ? "Pause" : "Play", systemImage: player?.isPlaying == true ? "pause.fill" : "play.fill") {
                 guard let player else { return }
                 if player.isPlaying { player.pause() } else { player.play() }
             }
-            .keyboardShortcut(.space, modifiers: [])
+            .toolShortcut(.space, modifiers: [])
             .contentTransition(.symbolEffect(.replace))
             .disabled(player?.isEmpty != false)
             .accessibilityIdentifier("replay-play")
             Button("Next Step", systemImage: "forward.end.fill") { step(1) }
-                .keyboardShortcut(.rightArrow, modifiers: [])
+                .toolShortcut(.rightArrow, modifiers: [])
                 .accessibilityIdentifier("replay-step-forward")
             scrubber
             Text(timeLabel)
@@ -345,31 +338,28 @@ struct SessionReplayView: View {
 
     // MARK: Toolbar
 
-    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            ShareLink(
-                item: ReplayFile(session: session.id),
-                preview: SharePreview(session.displayTitle + "." + ReplayStore.fileExtension, image: Image(systemName: "play.rectangle"))
-            ) {
-                Label("Share Replay", systemImage: "square.and.arrow.up")
-            }
-            .accessibilityIdentifier("replay-share")
+    @ViewBuilder private var actions: some View {
+        ShareLink(
+            item: ReplayFile(session: session.id),
+            preview: SharePreview(session.displayTitle + "." + ReplayStore.fileExtension, image: Image(systemName: "play.rectangle"))
+        ) {
+            Label("Share Replay", systemImage: "square.and.arrow.up")
         }
-        ToolbarItem(placement: .primaryAction) {
-            Menu("More", systemImage: "ellipsis") {
-                Button("Export as Playwright Test", systemImage: "chevron.left.forwardslash.chevron.right") {
-                    exported = ExportedTest(name: ReplayPlaywright.fileName(for: session), text: ReplayPlaywright.test(for: session))
-                }
-                .accessibilityIdentifier("replay-export-playwright")
-                if session.hostId != nil {
-                    Button("Replay in Browser", systemImage: "arrow.clockwise.circle") { replayInBrowser() }
-                        .accessibilityIdentifier("replay-in-browser")
-                }
-                Divider()
-                Button("Delete Replay", systemImage: "trash", role: .destructive) { confirmDelete = true }
+        .accessibilityIdentifier("replay-share")
+        Menu("More", systemImage: "ellipsis") {
+            Button("Export as Playwright Test", systemImage: "chevron.left.forwardslash.chevron.right") {
+                exported = ExportedTest(name: ReplayPlaywright.fileName(for: session), text: ReplayPlaywright.test(for: session))
             }
-            .accessibilityIdentifier("replay-more")
+            .accessibilityIdentifier("replay-export-playwright")
+            if session.hostId != nil {
+                Button("Replay in Browser", systemImage: "arrow.clockwise.circle") { replayInBrowser() }
+                    .accessibilityIdentifier("replay-in-browser")
+            }
+            Divider()
+            Button("Delete Replay", systemImage: "trash", role: .destructive) { confirmDelete = true }
         }
+        .menuIndicator(.hidden)
+        .accessibilityIdentifier("replay-more")
     }
 
     private func replayInBrowser() {

@@ -158,8 +158,13 @@ final class Workspace {
         #if os(iOS)
         NotificationCenter.default.addObserver(
             forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.keyboardFrameChangeUntil = .now + .milliseconds(800) }
+        ) { [weak self] note in
+            let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0
+            MainActor.assumeIsolated {
+                self?.keyboardFrameChangeUntil = .now + .milliseconds(800)
+                // The keyboard slides: the terminals' grids change once it has.
+                if duration > 0 { TerminalSurface.holdGrids(for: .seconds(duration)) }
+            }
         }
         keyBar.onHeightChange = { Workspace.keyBarResizeUntil = .now + .milliseconds(800) }
         #endif

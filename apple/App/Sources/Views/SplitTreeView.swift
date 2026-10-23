@@ -2,6 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+import TerminalRenderer
 
 /// What a split tree's leaves show and how the tree changes: one host's tab (`HostTabTree`), or
 /// a mixed tab whose leaves are panes on several hosts (`MixedTabTree`). A leaf resolves to the
@@ -23,11 +24,14 @@ protocol PaneTree {
     func editor(_ leaf: PaneId) -> EditorMember?
     /// The page a leaf shows, when it is a browser leaf.
     func browser(_ leaf: PaneId) -> BrowserMember?
+    /// The tool a leaf shows, when it is a tool leaf.
+    func tool(_ leaf: PaneId) -> ToolMember?
 }
 
 extension PaneTree {
     func editor(_ leaf: PaneId) -> EditorMember? { nil }
     func browser(_ leaf: PaneId) -> BrowserMember? { nil }
+    func tool(_ leaf: PaneId) -> ToolMember? { nil }
 }
 
 /// A host's tab: the window's active one, or (Two Columns) another tab of the same window.
@@ -76,6 +80,7 @@ struct SplitTreeView: View {
     var animated = true
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @State private var lastShape = ShapeMemo()
 
     init(node: Node, tree: any PaneTree, isSplit: Bool, animated: Bool = true) {
         self.node = node
@@ -90,7 +95,18 @@ struct SplitTreeView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
+        let shape = SplitShape(node)
+        // Here rather than in `onChange`: the hold must start before the animation's first
+        // frame resizes a terminal.
+        if lastShape.update(shape) {
+            if animated { TerminalSurface.holdGrids(for: .seconds(DS.Motion.splitDuration)) }
+            // The grids change with the layout, not by a resize the user makes: no cols × rows
+            // overlay (a window tab's tree changes without `Workspace.apply`).
+            for leaf in node.panes {
+                tree.resolve(leaf)?.workspace.layoutChangeUntil = .now + .milliseconds(700)
+            }
+        }
+        return GeometryReader { geometry in
             let layout = SplitLayout(
                 node: node, size: geometry.size,
                 gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
@@ -113,7 +129,19 @@ struct SplitTreeView: View {
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         // Only shape changes animate: a divider drag must track the pointer frame for frame.
-        .animation(animated ? DS.Motion.split : nil, value: SplitShape(node))
+        .animation(animated ? DS.Motion.split : nil, value: shape)
+    }
+}
+
+/// The shape a tree view last showed (not state SwiftUI observes).
+private final class ShapeMemo {
+    private var shape: SplitShape?
+
+    /// Records `shape`; true when it is new: a change, or a tree just shown (a tab turning
+    /// into a window tab swaps the whole view, and its panes move with it).
+    func update(_ shape: SplitShape) -> Bool {
+        defer { self.shape = shape }
+        return self.shape != shape
     }
 }
 
@@ -283,6 +311,8 @@ private struct PaneLeaf: View {
             EditorLeafView(member: editor, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
         } else if let browser = tree.browser(leaf) {
             BrowserLeafView(member: browser, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
+        } else if let tool = tree.tool(leaf) {
+            ToolLeafView(member: tool, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf, focus: { tree.focus(leaf: leaf) })
         } else if let (workspace, pane) = tree.resolve(leaf) {
             PaneSlot(
                 id: pane, workspace: workspace, isSplit: isSplit, isFocused: tree.focusedLeaf == leaf,

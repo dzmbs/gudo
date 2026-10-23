@@ -211,9 +211,20 @@ public final class TerminalSurface {
     /// terminal at whatever size it has until the resize arrives (about one round trip).
     public var sizeFollowsStream = false
 
-    /// Sizes the drawable and the cell grid for a view of `size` points at `scale` pixels/point.
-    /// The grid is a whole number of cells; the remainder becomes right/bottom padding (Ghostty
+    /// Sizes the drawable for a view of `size` points at `scale` pixels/point, and the cell grid
+    /// to fit it: a whole number of cells, the remainder becoming right/bottom padding (Ghostty
     /// without `window-padding-balance`).
+    ///
+    /// The drawable follows every layout; the grid does not. A grid change reflows the screen
+    /// and sends the program SIGWINCH (a shell redraws its prompt), so it is coalesced the way
+    /// Ghostty's IO thread coalesces resizes: during an animated layout change
+    /// (`holdGrids(for:)`) the grid waits until the view settles and changes once; otherwise it
+    /// changes once the size has held for `steadyInterval` (a size that lasts a single layout
+    /// pass, as keyboard avoidance produces, never reaches the program), and at most every
+    /// `gridInterval` while the size keeps changing (a divider drag, a live window resize),
+    /// always ending at the final size. Meanwhile the
+    /// current grid stays drawn where it was, anchored top-left: clipped by a shrinking view,
+    /// on background in a growing one, never reflowed.
     public func layout(size: CGSize, scale: CGFloat) {
         lastLayout = (size, scale)
         if fonts == nil || layer.contentsScale != scale {
@@ -223,34 +234,33 @@ public final class TerminalSurface {
             builder.style = Self.frameStyle(appearance)
         }
         guard let fonts else { return }
-        pixelSize = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        let newPixelSize = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        if newPixelSize != pixelSize { lastSizeChange = .now }
+        pixelSize = newPixelSize
         layer.drawableSize = pixelSize
 
         let m = fonts.metrics
         let pad = Int((appearance.padding * scale).rounded())
         let cols = max(1, (Int(pixelSize.width) - 2 * pad) / m.cellWidth)
         let rows = max(1, (Int(pixelSize.height) - 2 * pad) / m.cellHeight)
-        // `window-padding-balance`: split the space left over after whole cells evenly, so the
-        // grid sits centered instead of hugging the top-left edge.
-        let extraX = Int(pixelSize.width) - 2 * pad - cols * m.cellWidth
-        let extraY = Int(pixelSize.height) - 2 * pad - rows * m.cellHeight
-        let left = appearance.paddingBalance ? pad + extraX / 2 : pad
-        let top = appearance.paddingBalance ? pad + extraY / 2 : pad
-        paddingPx = SIMD4(
-            Float(top),
-            Float(Int(pixelSize.width) - left - cols * m.cellWidth),
-            Float(Int(pixelSize.height) - top - rows * m.cellHeight),
-            Float(left))
+        let target = Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
 
-        let newGrid = Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
-        if newGrid != grid {
-            grid = newGrid
-            if !sizeFollowsStream {
-                terminal.resize(cols: newGrid.cols, rows: newGrid.rows, cellWidth: newGrid.cellWidth, cellHeight: newGrid.cellHeight)
-            }
-            predictor?.reset()
-            onGridChange?(newGrid)
+        if let grid, target == grid {
+            pendingGrid = nil
+            pendingIsHeld = false
+            if ContinuousClock.now >= Self.gridHoldUntil { updateInset(for: grid) }
+        } else if let grid, pixelSize.width > 0, pixelSize.height > 0,
+                  target.cellWidth == grid.cellWidth, target.cellHeight == grid.cellHeight
+        {
+            if pendingGrid == nil { pendingSince = .now }
+            pendingGrid = target
+            if ContinuousClock.now < Self.gridHoldUntil { pendingIsHeld = true }
+            scheduleGridCommit()
+        } else if pixelSize.width > 0, pixelSize.height > 0 {
+            // The first real size, or new cells (font, scale): at once.
+            commitGrid(target)
         }
+        placeGrid()
         invalidate()
         // On screen: draw at the new size now, presented with the transaction that resizes the
         // layer, rather than on the next display-link tick a frame later (a split's new pane,
@@ -262,6 +272,107 @@ public final class TerminalSurface {
             layer.presentsWithTransaction = false
         }
     }
+
+    // MARK: Grid commits
+
+    /// The least time between two grid changes while the size keeps changing (Ghostty
+    /// coalesces for 25 ms; kitty waits 100 ms before redrawing a live resize).
+    public static let gridInterval = Duration.milliseconds(100)
+    /// How long a held view's size must stay put before its grid changes: a spring's tail
+    /// still moves it after the animation's nominal duration.
+    static let settleInterval = Duration.milliseconds(50)
+    /// How long a size must hold before its grid applies (Ghostty coalesces for 25 ms).
+    static let steadyInterval = Duration.milliseconds(25)
+    static var gridHoldUntil = ContinuousClock.now
+
+    /// An animated layout change starts (a split, a close, a zoom, a sidebar): every surface
+    /// keeps its grid while its view resizes during `duration`, then changes it once, at the
+    /// size it settles at. Hosts call this before the animation's first frame.
+    public static func holdGrids(for duration: Duration) {
+        gridHoldUntil = max(gridHoldUntil, .now + duration)
+    }
+
+    /// The grid the view's size calls for, waiting to be applied.
+    private var pendingGrid: Grid?
+    /// The pending grid came from a held layout: it waits for the view to settle.
+    private var pendingIsHeld = false
+    private var pendingSince = ContinuousClock.now
+    private var lastGridCommit: ContinuousClock.Instant?
+    private var lastSizeChange = ContinuousClock.now
+    private var gridCommitTask: Task<Void, Never>?
+    /// The grid's top-left inset in pixels when it was last applied, kept while a grid waits.
+    private var gridInset = SIMD2<Int>(0, 0)
+
+    /// When the pending grid may be applied; nil when it may be now.
+    private func commitDue() -> ContinuousClock.Instant? {
+        let now = ContinuousClock.now
+        let due = pendingIsHeld
+            ? max(Self.gridHoldUntil, lastSizeChange + Self.settleInterval)
+            : max(
+                lastGridCommit.map { $0 + Self.gridInterval } ?? now,
+                min(lastSizeChange + Self.steadyInterval, pendingSince + Self.gridInterval))
+        return due > now ? due : nil
+    }
+
+    private func scheduleGridCommit() {
+        guard gridCommitTask == nil else { return }
+        gridCommitTask = Task { [weak self] in
+            while let self, self.pendingGrid != nil, !Task.isCancelled {
+                guard let due = self.commitDue() else { break }
+                // In steps: the hold can end early.
+                try? await Task.sleep(until: min(due, .now + Self.steadyInterval), clock: .continuous)
+            }
+            guard let self else { return }
+            self.gridCommitTask = nil
+            guard let pending = self.pendingGrid, !Task.isCancelled else { return }
+            self.commitGrid(pending)
+            self.placeGrid()
+            self.invalidate()
+        }
+    }
+
+    private func commitGrid(_ newGrid: Grid) {
+        pendingGrid = nil
+        pendingIsHeld = false
+        gridCommitTask?.cancel()
+        gridCommitTask = nil
+        // The first grid is a starting point, not a step of a resize: the next may follow at once.
+        if grid != nil { lastGridCommit = .now }
+        let changed = newGrid != grid
+        grid = newGrid
+        updateInset(for: newGrid)
+        guard changed else { return }
+        if !sizeFollowsStream {
+            terminal.resize(cols: newGrid.cols, rows: newGrid.rows, cellWidth: newGrid.cellWidth, cellHeight: newGrid.cellHeight)
+        }
+        predictor?.reset()
+        onGridChange?(newGrid)
+    }
+
+    /// `window-padding-balance`: split the space left over after whole cells evenly, so the grid
+    /// sits centered instead of hugging the top-left edge.
+    private func updateInset(for grid: Grid) {
+        let pad = Int((appearance.padding * layer.contentsScale).rounded())
+        guard appearance.paddingBalance else { return gridInset = SIMD2(pad, pad) }
+        let extraX = Int(pixelSize.width) - 2 * pad - Int(grid.cols) * Int(grid.cellWidth)
+        let extraY = Int(pixelSize.height) - 2 * pad - Int(grid.rows) * Int(grid.cellHeight)
+        gridInset = SIMD2(pad + max(0, extraX) / 2, pad + max(0, extraY) / 2)
+    }
+
+    /// Padding around the applied grid in the current drawable: the kept inset on the top and
+    /// left, whatever remains (none when clipped) on the right and bottom.
+    private func placeGrid() {
+        guard let grid else { return }
+        let width = Int(grid.cols) * Int(grid.cellWidth), height = Int(grid.rows) * Int(grid.cellHeight)
+        paddingPx = SIMD4(
+            Float(gridInset.y),
+            Float(max(0, Int(pixelSize.width) - gridInset.x - width)),
+            Float(max(0, Int(pixelSize.height) - gridInset.y - height)),
+            Float(gridInset.x))
+    }
+
+    /// The grid the view's size calls for while the applied one waits (nil: none waits).
+    public var pendingGridSize: Grid? { pendingGrid }
 
     private var previousDrawableSize = CGSize.zero
 

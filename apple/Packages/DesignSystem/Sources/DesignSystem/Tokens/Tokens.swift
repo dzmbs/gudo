@@ -130,7 +130,8 @@ public extension DS {
         /// Bell border (Ghostty BellBorderOverlay: easeInOut 0.3).
         public static let bell = Animation.easeInOut(duration: 0.3)
         /// Sheets and panels sliding in.
-        public static let panel = Animation.smooth(duration: 0.35)
+        public static let panel = Animation.smooth(duration: panelDuration)
+        public static let panelDuration = 0.35
         /// How long the cols × rows overlay stays after the last resize (Ghostty
         /// `resize-overlay-duration` default 750 ms).
         public static let resizeOverlayDuration = Duration.milliseconds(750)
@@ -140,9 +141,11 @@ public extension DS {
 
         // to wobble, quick enough to feel attached to the finger.
 
-        /// Panes splitting, closing and zooming: critically damped, since a terminal overshooting
-        /// its size would reflow twice.
-        public static let split = Animation.smooth(duration: 0.28)
+        /// Panes splitting, closing and zooming: a spring-like curve that ends on time (a
+        /// spring's tail creeps on for another quarter second), with no overshoot. Terminals
+        /// keep their grids until it ends, then reflow once.
+        public static let split = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: splitDuration)
+        public static let splitDuration = 0.25
         /// Banners dropping in and lifting out.
         public static let banner = Animation.spring(response: 0.42, dampingFraction: 0.82)
         /// Menus, popovers and the highlight moving between their rows.

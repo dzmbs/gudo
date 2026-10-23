@@ -76,6 +76,12 @@ final class W3UITests: XCTestCase {
         field.typeText(command + "\n")
     }
 
+    /// Closes the tool on screen: its leaf beside the pane (regular width), else its sheet.
+    private func closeTool() {
+        let leaf = app.buttons["tool-close"].firstMatch
+        if leaf.exists { leaf.tap() } else { app.buttons.matching(NSPredicate(format: "identifier == 'sheet-done' OR label == 'Done'")).firstMatch.tap() }
+    }
+
     /// The navigation back button of the pushed screen (not the sheet's Done).
     private func back() {
         let button = app.buttons["BackButton"].firstMatch
@@ -264,7 +270,7 @@ final class W3UITests: XCTestCase {
         let send = element("diff-send-review")
         XCTAssertTrue(send.isEnabled, "the agent in the repository takes the review")
         send.tap()
-        app.buttons["sheet-done"].firstMatch.tap()
+        closeTool()
         let reviewed = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier ENDSWITH '-screen' AND value CONTAINS 'review note from the app'")).firstMatch
         XCTAssertTrue(reviewed.waitForExistence(timeout: 20), "the review was typed into the agent")
@@ -388,7 +394,7 @@ final class W3UITests: XCTestCase {
         element("browser-done").tap()
         XCTAssertTrue(element("port-18765").waitForExistence(timeout: 5), "the ports list shows it")
         shot("ports")
-        app.buttons["Done"].firstMatch.tap()
+        closeTool()
         type(inPane: "")
         app.typeKey("c", modifierFlags: .control)
     }
@@ -416,7 +422,7 @@ final class W3UITests: XCTestCase {
             XCTAssertTrue(element("browser-address").label.contains("\(name):\(port)"), element("browser-address").label)
             shot("browser-origin-\(name)")
             element("browser-done").tap()
-            app.buttons["Done"].firstMatch.tap()
+            closeTool()
             type(inPane: "")
             app.typeKey("c", modifierFlags: .control)
         }
