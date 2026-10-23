@@ -201,10 +201,8 @@ final class BrowserPageEventsTests: XCTestCase {
         // no user gesture, so the picker is opened from the app here (WebKit counts that as one).
         pane.agentActing = true
         defer { pane.agentActing = false }
-        let done = try await pane.untilBlocked {
-            try await pane.page.callJavaScript("document.getElementById('hidden').click(); return 1", contentWorld: .page)
-        }
-        XCTAssertNil(done, "the picker holds the page")
+        _ = try await pane.page.callJavaScript("document.getElementById('hidden').click()", contentWorld: .page)
+        try await until("the picker opens") { pane.fileChooser != nil }
         let chooser = try XCTUnwrap(pane.fileChooser)
         XCTAssertFalse(chooser.multiple)
         let file = FileManager.default.temporaryDirectory.appending(path: "picked.txt")

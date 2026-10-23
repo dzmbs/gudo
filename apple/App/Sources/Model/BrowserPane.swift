@@ -235,6 +235,7 @@ final class BrowserPanes {
             panes[id] = nil
             pane.page.stopLoading()
             BrowserRecorder.shared.finish(id)
+            popups.remove(id)
         }
     }
 }
