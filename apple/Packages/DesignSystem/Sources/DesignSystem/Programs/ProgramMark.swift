@@ -33,17 +33,21 @@ public struct ProgramMark: View {
     }
 
     public var body: some View {
+        // Keyed by what is drawn, not the program: shell → zsh, or a prompt's brief `git`
+        // under the same glyph, must not fade the mark out and back.
         ZStack {
             art
-                .id(identity.id)
+                .id(artKey)
                 .scalingTransition(0.7)
         }
         .frame(width: size, height: size)
-        .animation(DS.Motion.indicator, value: identity.id)
+        .animation(DS.Motion.indicator, value: artKey)
         .accessibilityElement()
         .accessibilityLabel(identity.displayName)
         .accessibilityIdentifier("program-mark-\(identity.id)")
     }
+
+    private var artKey: String { identity.logo?.asset ?? identity.symbol }
 
     @ViewBuilder private var art: some View {
         if let logo = identity.logo {

@@ -316,7 +316,7 @@ struct MixedTabView: View {
             // Compact width shows the focused pane alone, as for a host tab.
             let single = compact ? tab.focusedLeaf : tab.layout.zoomed
             let isSplit = single == nil && tab.leaves.count > 1
-            SplitTreeView(node: single.map(Node.leaf) ?? tab.layout.root, tree: MixedTabTree(model: model, id: id, isActive: isActive), isSplit: isSplit)
+            SplitTreeView(node: single.map(Node.leaf) ?? tab.layout.root, tree: MixedTabTree(model: model, id: id, isActive: isActive), isSplit: isSplit, animated: !compact)
                 .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
                 .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
                 .background(theme.background, ignoresSafeAreaEdges: [])
@@ -680,6 +680,7 @@ private struct TabColumn: View {
             SplitTreeView(
                 node: tab.zoomed.map(Node.leaf) ?? tab.root,
                 tree: HostTabTree(workspace: workspace, tab: tab.id, model: model, isActive: isActive), isSplit: isSplit)
+                .id(ref)
                 .connectionOverlay(
                     model.connectionState(ofGroup: ref.hostId), hostName: model.groupName(ref.hostId),
                     onRetry: { model.hosts.retry(ref.hostId) }, onDisconnect: { model.closeHost(ref.hostId) })
