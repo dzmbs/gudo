@@ -94,6 +94,89 @@ enum ScreenError {
     }
 }
 
+/// Why a tool (Files, Changes) can't show what it was asked for, sorted once here so screens
+/// show a calm state with the host's own words as a detail at most, never as the message.
+@MainActor
+enum ToolProblem: Error, Equatable {
+    case notARepository(folder: String)
+    case folderNotFound(path: String)
+    case notAllowed(path: String?, detail: String)
+    case disconnected
+    /// The host says why in words meant for people (git missing, a limit).
+    case unavailable(String)
+    case failed(detail: String)
+
+    /// Sorts an error; `path` is what was asked for, when the caller knows.
+    init(_ error: any Error, path: String? = nil) {
+        if let problem = error as? ToolProblem {
+            self = problem
+        } else if let error = error as? WorkspaceError {
+            switch error {
+            // The daemon maps git's "not a git repository" to NotFound with git's words.
+            case .NotFound(let message) where message.contains("not a git repository"):
+                self = .notARepository(folder: path ?? "")
+            case .NotFound(let message):
+                self = path.map { .folderNotFound(path: $0) } ?? .failed(detail: message)
+            case .Denied(let message): self = .notAllowed(path: path, detail: message)
+            case .Disconnected: self = .disconnected
+            case .Unavailable(let message), .Invalid(let message), .Conflict(let message): self = .unavailable(message)
+            case .Failed(let message): self = .failed(detail: message)
+            }
+        } else if let error = error as? HostError, error == .notConnected {
+            self = .disconnected
+        } else {
+            self = .failed(detail: ScreenError.describe(error))
+        }
+    }
+
+    var title: String? {
+        switch self {
+        case .notARepository: "Not a Git Repository"
+        case .folderNotFound: "Folder Not Found"
+        case .notAllowed: "No Access"
+        case .disconnected: "Host Not Connected"
+        case .unavailable, .failed: nil
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .notARepository: "arrow.triangle.branch"
+        case .folderNotFound: "questionmark.folder"
+        case .notAllowed: "lock"
+        case .disconnected: "bolt.horizontal.circle"
+        case .unavailable, .failed: "exclamationmark.triangle"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .notARepository(let folder): "\(Self.name(folder) ?? "This folder") isn't inside a Git repository."
+        case .folderNotFound(let path): "\(Self.name(path) ?? "This folder") isn't on the host any more."
+        case .notAllowed(let path, _): "The host doesn't allow reading \(Self.name(path) ?? "this folder")."
+        case .disconnected: "It picks up again when the host is back."
+        case .unavailable(let message): message
+        case .failed: "The host couldn't finish this."
+        }
+    }
+
+    /// The path, or the host's own words, under the message.
+    var detail: String? {
+        switch self {
+        case .notARepository(let path), .folderNotFound(let path): path.nonEmpty
+        case .notAllowed(_, let detail), .failed(let detail): detail.nonEmpty
+        case .disconnected, .unavailable: nil
+        }
+    }
+
+    /// "“proj”", or nil for no path.
+    private static func name(_ path: String?) -> String? {
+        guard let path, !path.isEmpty else { return nil }
+        let name = (path as NSString).lastPathComponent
+        return "“\(name.isEmpty ? path : name)”"
+    }
+}
+
 // MARK: - Inbox
 
 /// The agents of every connected daemon (`PaneMeta.agent`) merged with each daemon's attention
@@ -774,7 +857,13 @@ final class LiveDiffSource: DiffSource {
 
     func repository() async throws -> DiffRepository {
         guard let context else { throw HostError.notConnected }
-        let status = try await context.api().gitStatus(path: context.directory ?? "~")
+        let folder = context.directory ?? "~"
+        let status: GitStatus
+        do {
+            status = try await context.api().gitStatus(path: folder)
+        } catch {
+            throw ToolProblem(error, path: folder)
+        }
         root = status.root
         return DiffRepository(
             root: status.root, branch: status.branch, ahead: Int(status.ahead), behind: Int(status.behind),
@@ -933,6 +1022,7 @@ final class LivePortSource: PortSource {
     }
 
     var hostName: String { context?.name ?? "" }
+    var unavailableReason: String? { context == nil ? HostContext.noHost : nil }
 
     var ports: [DetectedPort] {
         guard let context else { return [] }

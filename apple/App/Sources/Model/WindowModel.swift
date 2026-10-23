@@ -68,13 +68,8 @@ final class WindowModel {
     }
     var sheet: SheetRoute? {
         didSet {
-            #if os(macOS)
-            // Browsing tools open in a window of their own (`ToolWindows.swift`).
-            if let route = sheet, route.opensInWindow, let openTool {
-                sheet = nil
-                openTool(ToolWindowRequest(route: route.rawValue, window: serial))
-            }
-            #endif
+            // Browsing tools open beside the pane, or in a window of their own (`ToolLeaves.swift`).
+            if let route = sheet, presentTool(route) { sheet = nil }
         }
     }
     /// Opens a tool window (macOS), set by the window's view.

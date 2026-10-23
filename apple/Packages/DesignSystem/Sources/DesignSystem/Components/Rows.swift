@@ -88,12 +88,15 @@ public struct EmptyState<Actions: View>: View {
     let title: String
     let systemImage: String
     let message: String
+    /// A quiet literal under the message (a path, the host's own words), selectable.
+    let detail: String?
     let actions: Actions
 
-    public init(_ title: String, systemImage: String, message: String, @ViewBuilder actions: () -> Actions) {
+    public init(_ title: String, systemImage: String, message: String, detail: String? = nil, @ViewBuilder actions: () -> Actions) {
         self.title = title
         self.systemImage = systemImage
         self.message = message
+        self.detail = detail
         self.actions = actions()
     }
 
@@ -117,6 +120,15 @@ public struct EmptyState<Actions: View>: View {
                     .foregroundStyle(DS.Palette.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                if let detail {
+                    Text(verbatim: detail)
+                        .font(DS.Font.literalSmall)
+                        .foregroundStyle(DS.Palette.textTertiary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
                 if Actions.self != EmptyView.self {
                     HStack(spacing: DS.Space.s) {
                         actions

@@ -1,0 +1,215 @@
+import DesignSystem
+import PaneLayout
+import SwiftUI
+
+/// What a tool's screens need to know when they are a leaf of the split tree.
+struct ToolLeafContext {
+    let member: ToolMember
+    let isSplit: Bool
+    let isFocused: Bool
+    let focus: () -> Void
+    let close: () -> Void
+    /// Mac: the tool in a window of its own instead (nil where there are none).
+    let openInWindow: (() -> Void)?
+}
+
+extension EnvironmentValues {
+    /// Set inside a tool leaf: screens draw the leaf's bar instead of a navigation bar or the
+    /// window's toolbar, which belong to the whole window there.
+    @Entry var toolLeaf: ToolLeafContext?
+}
+
+extension View {
+    /// A tool screen's title, subtitle and actions: the navigation bar and toolbar in a sheet or
+    /// tool window, the leaf's own bar in the split tree.
+    func toolChrome(_ title: String, subtitle: String = "", @ViewBuilder actions: () -> some View) -> some View {
+        modifier(ToolChrome(title: title, subtitle: subtitle, actions: actions()))
+    }
+
+    func toolChrome(_ title: String, subtitle: String = "") -> some View {
+        toolChrome(title, subtitle: subtitle) { EmptyView() }
+    }
+
+    /// A tool's keyboard shortcut. In a leaf only while it has the focus: the window's panes
+    /// take keys too.
+    func toolShortcut(_ key: KeyEquivalent, modifiers: EventModifiers = .command) -> some View {
+        modifier(ToolShortcut(shortcut: KeyboardShortcut(key, modifiers: modifiers)))
+    }
+
+    /// A sheet's or tool window's least size; a leaf takes the room its split gives it.
+    func toolMinimumSize(width: CGFloat, height: CGFloat) -> some View {
+        modifier(ToolMinimumSize(width: width, height: height))
+    }
+}
+
+private struct ToolChrome<Actions: View>: ViewModifier {
+    let title: String
+    let subtitle: String
+    let actions: Actions
+    @Environment(\.toolLeaf) private var leaf
+
+    func body(content: Content) -> some View {
+        if let leaf {
+            VStack(spacing: 0) {
+                ToolLeafBar(leaf: leaf, title: title, subtitle: subtitle) { actions }
+                content.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .navigationBarBackButtonHidden()
+            #if os(iOS)
+            .toolbar(.hidden, for: .navigationBar)
+            #endif
+        } else {
+            content
+                .navigationTitle(title)
+                .navigationSubtitle(subtitle)
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItemGroup(placement: .primaryAction) { actions }
+                }
+        }
+    }
+}
+
+private struct ToolShortcut: ViewModifier {
+    let shortcut: KeyboardShortcut
+    @Environment(\.toolLeaf) private var leaf
+
+    func body(content: Content) -> some View {
+        content.keyboardShortcut(leaf.map(\.isFocused) ?? true ? shortcut : nil)
+    }
+}
+
+private struct ToolMinimumSize: ViewModifier {
+    let width: CGFloat
+    let height: CGFloat
+    @Environment(\.toolLeaf) private var leaf
+
+    func body(content: Content) -> some View {
+        if leaf == nil { content.macMinimumSize(width: width, height: height) } else { content }
+    }
+}
+
+/// A tool leaf's strip, an editor leaf's twin: close, the way back from a pushed screen, the
+/// tool and what it shows, its actions, and more. A pane header's 24 pt beside other panes.
+private struct ToolLeafBar<Actions: View>: View {
+    let leaf: ToolLeafContext
+    let title: String
+    let subtitle: String
+    @ViewBuilder let actions: Actions
+    @Environment(\.terminalTheme) private var theme
+    @Environment(\.isPresented) private var isPushed
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        HStack(spacing: leaf.isSplit ? DS.Space.xs + 2 : DS.Space.s) {
+            Button("Close \(leaf.member.tool.title)", systemImage: "xmark", action: leaf.close)
+                .help("Close (⌘W)")
+                .accessibilityIdentifier("tool-close")
+            if isPushed {
+                Button("Back", systemImage: "chevron.backward") { dismiss() }
+                    .help("Back")
+                    .accessibilityIdentifier("BackButton")
+            } else {
+                Image(systemName: leaf.member.tool.systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .accessibilityHidden(true)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
+                Text(verbatim: title)
+                    .font(leaf.isSplit ? .caption.weight(leaf.isFocused ? .semibold : .regular) : .callout.weight(.medium))
+                    .foregroundStyle(leaf.isFocused ? DS.Palette.text : DS.Palette.textSecondary)
+                    .layoutPriority(1)
+                if !subtitle.isEmpty {
+                    Text(verbatim: subtitle)
+                        .font(DS.Font.literalSmall)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .truncationMode(.middle)
+                }
+            }
+            .lineLimit(1)
+            .layoutPriority(1)
+            Spacer(minLength: DS.Space.s)
+            actions
+                .fixedSize()
+            if let openInWindow = leaf.openInWindow {
+                Menu("More", systemImage: "ellipsis") {
+                    Button("Open in New Window", systemImage: "macwindow", action: openInWindow)
+                        .accessibilityIdentifier("tool-new-window")
+                }
+                .menuIndicator(.hidden)
+                .accessibilityIdentifier("tool-more")
+            }
+        }
+        .font(leaf.isSplit ? .caption : nil)
+        .labelStyle(.iconOnly)
+        .buttonStyle(.bar)
+        .padding(.leading, leaf.isSplit ? DS.Space.xs : DS.Space.m)
+        .padding(.trailing, leaf.isSplit ? DS.Space.xxs : DS.Space.m)
+        .frame(height: leaf.isSplit ? 24 : DS.Size.tabBar)
+        .background(theme.background)
+        .overlay(alignment: .bottom) { theme.splitDivider.frame(height: 1) }
+        .contentShape(.rect)
+        .onTapGesture { if !leaf.isFocused { leaf.focus() } }
+    }
+}
+
+/// A tool's screens for the window's model, as a tool window or a leaf shows them.
+struct ToolContent: View {
+    let tool: ToolMember.Tool
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        switch tool {
+        case .files:
+            NavigationStack {
+                FilesBrowserView(
+                    source: model.files,
+                    onOpenInEditor: model.files.unavailableReason == nil ? { path in model.openEditor(path: path) } : nil,
+                    onRevealInTerminal: { model.revealInTerminal($0) },
+                    onInsertPath: { model.insertInTerminal($0) })
+            }
+        case .changes:
+            NavigationStack { DiffReviewView(source: model.diffs) }
+        case .ports:
+            BrowserSheet()
+        case .replays:
+            SessionReplaysSheet(request: model.replayRequest)
+                // Asked again for other sessions: start over on them.
+                .id(model.replayRequest)
+        }
+    }
+}
+
+/// A tool leaf of a split tree: the tool's screens under its bar, focused by a tap, closed and
+/// moved to a window through the window.
+struct ToolLeafView: View {
+    let member: ToolMember
+    let isSplit: Bool
+    let isFocused: Bool
+    let focus: () -> Void
+    @Environment(WindowModel.self) private var model
+    @Environment(\.terminalTheme) private var theme
+
+    var body: some View {
+        ToolContent(tool: member.tool)
+            .environment(\.isToolWindow, true)
+            .environment(\.toolLeaf, ToolLeafContext(
+                member: member, isSplit: isSplit, isFocused: isFocused, focus: focus,
+                close: { model.closeTool(member.id) },
+                openInWindow: model.hasToolWindows ? { model.moveToolToWindow(member) } : nil))
+            .background(theme.background)
+            .simultaneousGesture(TapGesture().onEnded { if !isFocused { focus() } })
+            .overlay(alignment: .topLeading) {
+                // A marker: an identifier on the container would replace its controls' own.
+                Color.clear.frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityLabel(member.tool.title)
+                    .accessibilityIdentifier("tool-leaf-\(member.tool.rawValue)")
+            }
+            // One leaf's screens are never another's.
+            .id(member.id)
+    }
+}

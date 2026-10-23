@@ -291,7 +291,12 @@ extension WindowModel {
         if let editor = tab.focusedEditor ?? (tab.isEditorOnly ? tab.leaves.compactMap({ tab.editors[$0] }).first : nil) {
             return editor.folderName
         }
-        if let member = tab.focusedMember, let open = workspace(ofGroup: member.hostId),
+        // A tool beside a terminal keeps the terminal's name for the tab.
+        if tab.members.isEmpty, let tool = tab.focusedTool ?? tab.leaves.lazy.compactMap({ tab.tools[$0] }).first {
+            return tool.tool.title
+        }
+        let member = tab.focusedMember ?? (tab.focusedTool != nil ? tab.leaves.lazy.compactMap({ tab.members[$0] }).first : nil)
+        if let member, let open = workspace(ofGroup: member.hostId),
            var carrier = open.session.tab(containing: member.pane)
         {
             carrier.focused = member.pane
@@ -305,7 +310,9 @@ extension WindowModel {
     func programIdentity(ofMixedTab tab: CompositeTab) -> ProgramIdentity {
         if tab.focusedBrowser != nil || tab.isBrowserOnly { return .browser }
         if tab.focusedEditor != nil || tab.isEditorOnly { return .vscode }
-        return tab.focusedMember.map { programIdentity(ofPane: $0.pane, onGroup: $0.hostId) } ?? .shell
+        // A tool has no mark of its own: the tab's terminal keeps showing.
+        let member = tab.focusedMember ?? tab.leaves.lazy.compactMap { tab.members[$0] }.first
+        return member.map { programIdentity(ofPane: $0.pane, onGroup: $0.hostId) } ?? .shell
     }
 
     // MARK: What the daemons hear

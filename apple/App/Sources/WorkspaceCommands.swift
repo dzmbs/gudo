@@ -73,8 +73,8 @@ struct WorkspaceCommands: Commands {
         CommandMenu("Git") {
             Button("Run Script") { model?.git.runDefault() }
                 .keyboardShortcut("r")
-                // Sheets with their own ⌘R (Diff, Browser reload) keep it.
-                .disabled(editorHasKeys || model?.sheet != nil)
+                // Sheets and tool leaves with their own ⌘R (Diff, Browser reload) keep it.
+                .disabled(editorHasKeys || model?.sheet != nil || model?.activeMixed?.focusedTool != nil)
             Divider()
             Button("Open Pull Request on GitHub") { model?.git.openOnGitHub() }
                 .keyboardShortcut("g", modifiers: [.command, .control])
