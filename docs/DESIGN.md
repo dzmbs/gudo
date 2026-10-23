@@ -47,8 +47,9 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
 | `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | rows, tabs, the selected tab pill |
 | `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | 1 px lines (`Hairline`), the sidebar edge, tab strip rule |
-| `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground | focus, toggles, links, the selected theme card |
-| `selection` / `onSelection` | the accent deepened toward the darker ink until the lighter ink reads on it at 4.5:1 | the palette's selected row, the one primary button (`.primaryGlass`) |
+| `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48–0.62 (light chrome) / 0.68–0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
+| `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (Spotlight, Raycast) |
+| `prominent` / `onProminent` | the accent deepened toward the darker ink until the lighter ink reads on it at 4.5:1 | the one primary button (`.primaryGlass`) |
 | `terminal`, `ansi(n)` | the theme itself | the grid, presence avatars |
 | `bell` | `#FFCC00` 50 % | bell border (Ghostty `BellBorderOverlay`) |
 | split divider | background × 0.6 brightness (dark) / × 0.92 (light) | splits only (Ghostty `splitDividerColor`) |
@@ -97,7 +98,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 |---|---|---|
 | Divider visible / hit (pointer) / hit (touch) | 1 / +6 / 20 pt | Ghostty `SplitView` (1 + 6); touch is ours |
 | Tab strip / tab | 34 / 28 pt (selected pill inset 3) | macOS 26 titlebar tabs, Ghostty native tabs |
-| Command palette width | ≤ 560 pt | Ghostty 500, plus room for shortcuts |
+| Command palette width | 580 pt Mac / 640 pt touch | Spotlight, Raycast: a title and its context on one line |
 | Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | 04-mobile-ux C5, keyboard key height |
 | Window padding | 2 pt, balanced | Ghostty `window-padding-x/y` = 2, `window-padding-balance` |
 
@@ -106,6 +107,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `chip` | 4 | resize overlay, key caps (Ghostty) |
 | `field` | 6 | search field, bar buttons (Ghostty) |
 | `control` | 8 | row highlights, inline code blocks |
+| `paletteRow` | 8 | command palette rows, concentric with the 16 pt panel at an 8 pt inset |
 | `tabPill` | 7 | Ghostty/AppKit selected tab |
 | `secureBadge` | 12 | Ghostty's secure-input badge |
 | `searchPanel` | 14 | scrollback search bar glass |
@@ -331,10 +333,17 @@ New Tab there opens Add Host. The local echo backend is only for UI tests (`-loc
 
 ### Command palette (⌘K, ⇧⌘P)
 
-Ghostty's palette in a glass panel near the top: 20 pt light query "Execute a command…", divider,
-rows with icon or status glyph, title, subtitle, badge and shortcut. Empty query: sections Needs
-You → Tabs → Terminal → Go → Hosts. With a query: fuzzy ranked flat list, matched characters bold
-in the accent. ↑↓ / ⌃P ⌃N move, Return runs, Esc or a click outside closes.
+Spotlight's placement (`spotlightOverlay`): centred on the window, its top a sixth of the way
+down, over a light scrim that dims the find bar and everything else beneath. Glass on the theme's
+paper (light) or raised surface (dark), a hairline edge and a soft shadow. A magnifier and the
+20 pt light query "Execute a command…", a hairline, then compact one-line rows (40 pt touch,
+32 pt Mac): the program's mark for tabs and agents (with the agent's state as a small badge) or a
+symbol, the title, the subtitle inline in secondary, a badge, and the shortcut as small muted key
+caps. Small tertiary section headers. The selected row is the soft `selection` tint, the text
+unchanged. Empty query: sections Needs You → Tabs → Terminal → Go → Hosts. With a query: fuzzy
+ranked flat list, matched characters bold. ↑↓ / ⌃P ⌃N move, Return runs, Esc or a click outside
+closes. Workflow forms open in the same place. Fixtures: `palette`, `palette-search`, `goto`,
+`palette-workflows`.
 
 Two more modes of the same panel: **Go to Tab…** (⌘P, "Go to a tab on any host…") lists every
 tab on every host in sidebar order, subtitle "host · context", so a query matches a tab's name,

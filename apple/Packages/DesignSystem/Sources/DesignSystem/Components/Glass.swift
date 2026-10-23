@@ -10,35 +10,44 @@ import SwiftUI
 
 public extension View {
     /// A floating panel over content: palette, search bar, reconnect card. The glass is tinted
-    /// is `surface_2`), not the system's grey.
-    func floatingPanel(cornerRadius: CGFloat = DS.Radius.panel) -> some View {
-        modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius), interactive: false))
+    /// `surface_2`), not the system's grey. `elevated` adds a hairline edge and a soft shadow for
+    /// a panel that sits above everything (the palette).
+    func floatingPanel(cornerRadius: CGFloat = DS.Radius.panel, elevated: Bool = false) -> some View {
+        modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius), interactive: false, elevated: elevated))
     }
 
     /// A floating capsule: toasts, the resize readout on iPad, compact bars.
     func floatingCapsule(interactive: Bool = false) -> some View {
-        modifier(ThemedGlass(shape: .capsule, interactive: interactive))
+        modifier(ThemedGlass(shape: .capsule, interactive: interactive, elevated: false))
     }
 }
 
-/// Glass tinted with the chrome's raised surface.
+/// Glass tinted with the chrome's surface: the paper itself on light chrome (a raised grey there
+/// reads as a flat grey card), the raised surface on dark.
 private struct ThemedGlass<S: Shape>: ViewModifier {
     let shape: S
     let interactive: Bool
+    let elevated: Bool
     @Environment(\.chrome) private var chrome
 
-    /// How much of the raised surface tints the glass: enough to carry the theme's hue, little
-    /// enough that the glass still reads as glass.
+    /// How much of the surface tints the glass: enough to carry the theme's hue, little enough
+    /// that the glass still reads as glass.
     static var tint: Double { 0.55 }
 
     func body(content: Content) -> some View {
-        let glass = Glass.regular.tint(chrome.raisedColor.opacity(Self.tint))
+        let light = chrome.scheme == .light
+        let surface = light ? chrome.baseColor : chrome.raisedColor
+        let glass = Glass.regular.tint(surface.opacity(elevated && light ? 0.8 : Self.tint))
         content
             .glassEffect(interactive ? glass.interactive() : glass, in: shape)
+            .overlay {
+                if elevated { shape.stroke(chrome.border, lineWidth: 0.5) }
+            }
+            .shadow(color: .black.opacity(elevated ? (light ? 0.14 : 0.4) : 0), radius: 28, y: 12)
     }
 }
 
-/// The one primary action on a screen: prominent glass tinted with the theme's selection colour
+/// The one primary action on a screen: prominent glass tinted with the theme's prominent colour
 /// (its accent deepened until the label reads on it at 4.5:1). A pale accent (Dracula's lavender,
 /// Ghostty's blue) under the system's white label would not.
 public struct PrimaryGlassButtonStyle: PrimitiveButtonStyle {
@@ -47,9 +56,9 @@ public struct PrimaryGlassButtonStyle: PrimitiveButtonStyle {
     public func makeBody(configuration: Configuration) -> some View {
         Button(configuration)
             .buttonStyle(.glassProminent)
-            .tint(DS.Palette.selection)
+            .tint(DS.Palette.prominent)
             // Its own label colour: content under `chromeContent()` carries the theme's ink.
-            .foregroundStyle(DS.Palette.onSelection)
+            .foregroundStyle(DS.Palette.onProminent)
     }
 }
 
@@ -89,14 +98,11 @@ public extension ButtonStyle where Self == BarButtonStyle {
 /// inbox rows on Mac). On iPad the pointer gets the system lift/highlight effect.
 public struct RowButtonStyle: ButtonStyle {
     var isSelected: Bool
-    /// A solid accent selection (the palette) instead of the quiet 20 % one.
-    var isProminent = false
     var cornerRadius = DS.Radius.control
     @State private var isHovered = false
 
-    public init(isSelected: Bool = false, isProminent: Bool = false, cornerRadius: CGFloat = DS.Radius.control) {
+    public init(isSelected: Bool = false, cornerRadius: CGFloat = DS.Radius.control) {
         self.isSelected = isSelected
-        self.isProminent = isProminent
         self.cornerRadius = cornerRadius
     }
 
@@ -113,7 +119,7 @@ public struct RowButtonStyle: ButtonStyle {
     }
 
     private func fill(_ pressed: Bool) -> AnyShapeStyle {
-        if isSelected { return isProminent ? AnyShapeStyle(DS.Palette.selection) : AnyShapeStyle(DS.Palette.accent.opacity(0.2)) }
+        if isSelected { return AnyShapeStyle(DS.Palette.selection) }
         if pressed { return AnyShapeStyle(DS.Palette.pressedFill) }
         if isHovered { return AnyShapeStyle(DS.Palette.hoverFill) }
         return AnyShapeStyle(Color.clear)
@@ -123,8 +129,9 @@ public struct RowButtonStyle: ButtonStyle {
 public extension ButtonStyle where Self == RowButtonStyle {
     static var row: RowButtonStyle { RowButtonStyle() }
     static func row(selected: Bool) -> RowButtonStyle { RowButtonStyle(isSelected: selected) }
+    /// The command palette's row: the soft accent selection (Raycast, Spotlight).
     static func paletteRow(selected: Bool) -> RowButtonStyle {
-        RowButtonStyle(isSelected: selected, isProminent: true, cornerRadius: DS.Radius.paletteRow)
+        RowButtonStyle(isSelected: selected, cornerRadius: DS.Radius.paletteRow)
     }
 }
 

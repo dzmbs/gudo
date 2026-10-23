@@ -59,8 +59,8 @@ struct WorkflowArgumentsForm: View {
         }
         .chromeContent()
         .frame(maxWidth: DS.Size.paletteWidth)
-        .floatingPanel(cornerRadius: DS.Radius.panel)
-        .padding()
+        .floatingPanel(cornerRadius: DS.Radius.panel, elevated: true)
+        .padding(.horizontal, DS.Space.l)
         #if os(macOS)
         .onAppear { Task { focused = 0 } }
         .onChange(of: focused) { if let focused { current = focused } }
@@ -289,8 +289,8 @@ struct NewWorkflowForm: View {
         }
         .chromeContent()
         .frame(maxWidth: DS.Size.paletteWidth)
-        .floatingPanel(cornerRadius: DS.Radius.panel)
-        .padding()
+        .floatingPanel(cornerRadius: DS.Radius.panel, elevated: true)
+        .padding(.horizontal, DS.Space.l)
         .onAppear { Task { focused = .name } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("new-workflow-form")
