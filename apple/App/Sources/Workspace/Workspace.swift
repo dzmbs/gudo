@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import os
 import PaneLayout
+import SwiftUI
 import TerminalCore
 import TerminalRenderer
 #if os(iOS)
@@ -61,6 +62,19 @@ final class Workspace {
     /// width), which must not flash the cols x rows overlay.
     @ObservationIgnored var layoutChangeUntil = ContinuousClock.now
     @ObservationIgnored private var keyboardFrameChangeUntil = ContinuousClock.now
+    #if os(iOS)
+    /// The top of the software keyboard (with the key bar) in the window, nil while it is down:
+    /// the terminals' room at the bottom (`KeyboardRoom`).
+    private(set) var keyboardTop: CGFloat?
+
+    private func keyboardTop(screenFrame: CGRect?) -> CGFloat? {
+        guard let screenFrame, let window = panes.values.lazy.compactMap({ $0.view.window }).first
+            ?? UIApplication.shared.connectedScenes.lazy.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+        else { return nil }
+        let frame = window.convert(screenFrame, from: window.screen.coordinateSpace)
+        return frame.minY < window.bounds.maxY && frame.height > 0 ? frame.minY : nil
+    }
+    #endif
     /// Terminal appearance for every pane (the design layer may replace it).
     @ObservationIgnored var appearance = TerminalAppearance.fromPreferences() {
         didSet { for pane in panes.values { pane.view.surface.appearance = appearance } }
@@ -86,6 +100,8 @@ final class Workspace {
     private static var sharedKeyBarStorage: KeyBar?
     /// Until when the shared key bar's height change resizes the grids.
     static var keyBarResizeUntil = ContinuousClock.now
+    /// How long past the keyboard's slide the grids stay held: the layout can trail it.
+    static let keyboardSettle = 0.15
     /// The focused pane's repository workflows the key bar shows (`followWorkflows`).
     @ObservationIgnored let keyBarWorkflows = KeyBarWorkflowState()
     #endif
@@ -160,10 +176,15 @@ final class Workspace {
             forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
         ) { [weak self] note in
             let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0
+            let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
             MainActor.assumeIsolated {
-                self?.keyboardFrameChangeUntil = .now + .milliseconds(800)
+                guard let self else { return }
+                self.keyboardFrameChangeUntil = .now + .milliseconds(800)
                 // The keyboard slides: the terminals' grids change once it has.
-                if duration > 0 { TerminalSurface.holdGrids(for: .seconds(duration)) }
+                if duration > 0 { TerminalSurface.holdGrids(for: .seconds(duration + Self.keyboardSettle)) }
+                let top = self.keyboardTop(screenFrame: end)
+                guard top != self.keyboardTop else { return }
+                withAnimation(duration > 0 ? .easeOut(duration: duration) : nil) { self.keyboardTop = top }
             }
         }
         keyBar.onHeightChange = { Workspace.keyBarResizeUntil = .now + .milliseconds(800) }

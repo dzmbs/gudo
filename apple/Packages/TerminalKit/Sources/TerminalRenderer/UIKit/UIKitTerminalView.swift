@@ -282,10 +282,19 @@ public final class TerminalView: UIView {
     // MARK: Focus
 
     override public var canBecomeFirstResponder: Bool { true }
+
+    /// Long enough to reach the keyboard's will-change (seen up to 0.4 s later), which holds
+    /// through its slide.
+    private static func holdForKeyboard() {
+        TerminalSurface.holdGrids(for: .milliseconds(700))
+    }
     override public var inputAccessoryView: UIView? { keyBar }
 
     @discardableResult
     override public func becomeFirstResponder() -> Bool {
+        // The keyboard and key bar may come with it, and the layout starts making room before
+        // UIKit says how much: grids hold from here, so they change once, when it is made.
+        Self.holdForKeyboard()
         guard super.becomeFirstResponder() else { return false }
         updateFocus()
         emit(surface.terminal.encodeFocus(true))
@@ -295,6 +304,7 @@ public final class TerminalView: UIView {
 
     @discardableResult
     override public func resignFirstResponder() -> Bool {
+        Self.holdForKeyboard()
         guard super.resignFirstResponder() else { return false }
         updateFocus()
         emit(surface.terminal.encodeFocus(false))
