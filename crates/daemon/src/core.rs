@@ -1296,8 +1296,12 @@ async fn pane_task(
             }
             _ = agent_tick.tick() => {
                 detect_tick += 1;
-                if detect_tick.is_multiple_of(2) && lock(&entry.agent).is_none() {
-                    detect_agent(&entry);
+                if detect_tick.is_multiple_of(2) {
+                    if lock(&entry.agent).is_none() {
+                        detect_agent(&entry);
+                    } else {
+                        end_exited_agent(&core, &entry);
+                    }
                 }
                 if detect_tick.is_multiple_of(2) {
                     capture_codex_session(&core, &entry, &codex_lookup);
@@ -1433,7 +1437,49 @@ fn detect_agent(entry: &PaneEntry) {
         _ => return,
     };
     let adapter = crate::agent::adapter(kind);
-    *lock(&entry.agent) = Some(AgentRuntime::new(kind, entry.pane.id, adapter, false));
+    let mut rt = AgentRuntime::new(kind, entry.pane.id, adapter, false);
+    rt.note_process(fg.pid);
+    *lock(&entry.agent) = Some(rt);
+}
+
+/// Ends the pane's agent once its process exited and the pane is back at its shell: the
+/// pane is a shell again, on every client and after a restore.
+fn end_exited_agent(core: &Core, entry: &PaneEntry) {
+    let foreground = entry.pane.pty().foreground_process();
+    // A launched agent's pane at its own shell, past the `sh -c` that ran the agent.
+    let launched = matches!(lock(&entry.record).launch, PaneLaunch::Agent { .. });
+    let at_shell = launched
+        && foreground.as_ref().is_some_and(|fg| {
+            fg.pid == entry.pane.pty().pid()
+                && !fg.argv.is_empty()
+                && !fg.argv.iter().any(|a| a == "-c")
+        });
+    let event = {
+        let mut agent = lock(&entry.agent);
+        let Some(rt) = agent.as_mut() else {
+            return;
+        };
+        if !rt.process_gone(foreground.as_ref(), at_shell, |pid| {
+            pty::ForegroundProcess::of(pid).is_some()
+        }) {
+            return;
+        }
+        rt.process_exited()
+    };
+    let id = entry.pane.id;
+    tracing::info!(pane = %id, "agent exited");
+    // While the runtime is still there, so its open requests are retired.
+    core.agent_event(id, event);
+    *lock(&entry.agent) = None;
+    {
+        let mut record = lock(&entry.record);
+        if let PaneLaunch::Agent { cwd, .. } = &record.launch {
+            record.launch = PaneLaunch::Shell { cwd: cwd.clone() };
+        }
+        record.agent = None;
+    }
+    core.mark_dirty();
+    core.emit(Event::PaneMeta(id));
 }
 
 /// Quotes `s` for a POSIX shell as one word.

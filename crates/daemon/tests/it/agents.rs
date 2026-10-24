@@ -74,3 +74,28 @@ async fn permission_request_is_answered_from_a_client() {
     drop(c);
     daemon.shutdown().await;
 }
+
+/// An agent run by hand is tracked while it runs and forgotten once it exits back to the shell,
+/// with no SessionEnd hook.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_that_exits_leaves_a_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("claude");
+    std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
+    let daemon = start(dir.path()).await;
+    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = c.attach_and_follow().await;
+
+    c.type_line(pane, &format!("{} 60", fake.display()));
+    c.until("agent tracked", |c| {
+        c.metas.get(&pane).is_some_and(|m| m.agent.is_some())
+    })
+    .await;
+    c.client.send_input(pane, b"\x03".to_vec());
+    c.until("agent gone", |c| {
+        c.metas.get(&pane).is_some_and(|m| m.agent.is_none())
+    })
+    .await;
+    drop(c);
+    daemon.shutdown().await;
+}
