@@ -164,8 +164,12 @@ struct PortsList: View {
             open(DetectedPort(port: number, process: "", url: nil, isHTTP: true, loopbackOnly: true, pane: nil))
             return
         }
-        let url = URL(string: input.contains("://") ? input : "https://" + input)
-        if let url { withAnimation(DS.Motion.snappy) { model.browserURL = url } }
+        guard let url = URL(string: input.contains("://") ? input : "https://" + input) else { return }
+        if model.opensToolsAsLeaves {
+            model.openPage(url, hostId: nil)
+        } else {
+            withAnimation(DS.Motion.snappy) { model.browserURL = url }
+        }
     }
 }
 
@@ -236,8 +240,14 @@ extension WindowModel {
         return (ports.hostName, ports.ports.filter(\.isHTTP))
     }
 
-    /// Forwards a host port and shows it in the in-app browser.
+    /// Shows a host port in the in-app browser: a page leaf beside, which reaches the host's
+    /// `localhost` itself, where tools are leaves; else the browser sheet, through a forward.
     func openPort(_ port: DetectedPort) async {
+        if opensToolsAsLeaves {
+            ports.dismissOffer()
+            openPage(DevServerRouting.pageURL(for: port), hostId: ports.hostId)
+            return
+        }
         do {
             let url = try await ports.open(port)
             ports.dismissOffer()
@@ -267,7 +277,24 @@ extension WindowModel {
             await openPort(detected)
             return
         }
-        browserURL = url
-        sheet = .browser
+        openPage(url, hostId: nil)
+    }
+
+    /// A page in the in-app browser. Where tools are leaves, a page leaf beside the focused one
+    /// (the one already showing it comes forward), so Ports stays a list; else the sheet.
+    func openPage(_ url: URL, hostId: String?) {
+        guard opensToolsAsLeaves else {
+            browserURL = url
+            browserHost = hostId
+            if sheet != .browser { sheet = .browser }
+            return
+        }
+        if let mixed = activeMixed, let leaf = mixed.leaves.first(where: {
+            mixed.browsers[$0].map { $0.url == url.absoluteString && $0.hostId == hostId } ?? false
+        }) {
+            focusLeaf(leaf, inMixedTab: mixed.id)
+            return
+        }
+        openBrowser(url, hostId: hostId, placement: .split)
     }
 }
