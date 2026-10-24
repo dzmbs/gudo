@@ -192,9 +192,9 @@ final class BrowserAgent {
             let go: @MainActor @Sendable () -> Void = { [weak page] in
                 guard let page else { return }
                 switch text.lowercased() {
-                case "back": if let item = page.page.backForwardList.backList.last { _ = page.page.load(item) }
-                case "forward": if let item = page.page.backForwardList.forwardList.first { _ = page.page.load(item) }
-                case "reload": _ = page.page.reload()
+                case "back": page.page.goBack()
+                case "forward": page.page.goForward()
+                case "reload": page.page.reloadPage()
                 default: if let url { page.load(url) }
                 }
             }

@@ -31,6 +31,16 @@ final class BrowserPageEventsTests: XCTestCase {
             """,
             "/popped": "<!doctype html><title>Popped</title><button onclick=\"window.close()\">Close me</button>",
             "/opened": "<!doctype html><title>Opened</title>",
+            "/opener": """
+            <!doctype html><title>Opener</title><p id="out"></p>
+            <button onclick="window.open('/signin', 'signin', 'width=400,height=500')">Sign in with Example</button>
+            <script>addEventListener('message', e => { out.textContent += (out.textContent ? ' ' : '') + e.data })</script>
+            """,
+            "/signin": """
+            <!doctype html><title>Sign in</title>
+            <button onclick="window.opener.postMessage('token-42', '*'); window.close()">Continue</button>
+            <script>window.opener && window.opener.postMessage('ready', '*')</script>
+            """,
             "/dialogs": """
             <!doctype html><title>Dialogs</title><p id="out"></p>
             <button id="alert" onclick="alert('Hello'); out.textContent='after alert'">Alert</button>
@@ -133,6 +143,32 @@ final class BrowserPageEventsTests: XCTestCase {
         try await until("the popup closes") { closed }
     }
 
+    /// A "Sign in with…" popup: it has `window.opener`, messages it, and closes itself.
+    func testPopupTalksToItsOpenerAndClosesItself() async throws {
+        let pane = try await open("/opener")
+        var popups: [BrowserPane] = []
+        pane.onPopupPane = { popups.append($0) }
+        pane.agentActing = true
+        let text = try await pane.snapshot(["full": true])
+        _ = try await act(pane, ["kind": "click", "target": ["type": "ref", "ref": try ref("Sign in with Example", in: text)]])
+        try await until("the popup opens") { popups.count == 1 }
+        let popup = popups[0]
+        XCTAssertNotNil(popup.popupPage, "WebKit's own web view, with the opener")
+        try await until("the popup loads") { !popup.page.isLoading && !popup.frames.tokens.isEmpty }
+        XCTAssertEqual(popup.page.url?.path(), "/signin")
+        try await until("the opener hears it") { try await out(pane) == "ready" }
+
+        // Agents' tools work on it as on any page.
+        var closed = false
+        popup.onClose = { closed = true }
+        popup.agentActing = true
+        let signin = try await popup.snapshot(["full": true])
+        // The page goes away under the action, which may not get to answer.
+        _ = try? await act(popup, ["kind": "click", "target": ["type": "ref", "ref": try ref("Continue", in: signin)]])
+        try await until("the token reaches the opener") { try await out(pane) == "ready token-42" }
+        try await until("the popup closes") { closed }
+    }
+
     // MARK: Dialogs
 
     func testEachDialogWaitsForItsAnswer() async throws {
@@ -201,7 +237,7 @@ final class BrowserPageEventsTests: XCTestCase {
         // no user gesture, so the picker is opened from the app here (WebKit counts that as one).
         pane.agentActing = true
         defer { pane.agentActing = false }
-        _ = try await pane.page.callJavaScript("document.getElementById('hidden').click()", contentWorld: .page)
+        _ = try await pane.page.run("document.getElementById('hidden').click()", in: .page)
         try await until("the picker opens") { pane.fileChooser != nil }
         let chooser = try XCTUnwrap(pane.fileChooser)
         XCTAssertFalse(chooser.multiple)
