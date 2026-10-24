@@ -305,7 +305,7 @@ final class MockPortSource: PortSource {
         DetectedPort(port: 5432, process: "postgres", url: nil, isHTTP: false, loopbackOnly: true, pane: nil),
     ]
     var hostName: String { "studio" }
-    var hostId: String? { nil }
+    var hostId: String?
     var unavailableReason: String? { nil }
     var offer: DetectedPort?
     func dismissOffer() { offer = nil }
