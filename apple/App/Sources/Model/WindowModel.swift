@@ -114,7 +114,7 @@ final class WindowModel {
     func quietLayoutResizes() {
         for workspace in workspaces.values { workspace.layoutChangeUntil = .now + .milliseconds(700) }
         // The terminals resize through the animation: their grids change once, as it settles.
-        TerminalSurface.holdGrids(for: .seconds(DS.Motion.panelDuration))
+        TerminalSurface.holdGrids(for: .seconds(DS.Motion.sidebarDuration))
     }
     var isSearchShown = false
     var searchNeedle = "" {

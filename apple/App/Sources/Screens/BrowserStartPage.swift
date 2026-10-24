@@ -1,8 +1,12 @@
 import DesignSystem
 import SwiftUI
 
-/// A new browser tab's page: a search and address field, the host's dev servers one tap away,
-/// and the pages visited most and last. Native, on the terminal theme's colours.
+/// A new browser tab's page: a search and address field, the pages visited most and last, and
+/// the host's dev servers one tap away. Native, on the terminal theme's colours.
+///
+/// Safari's order: what this device knows comes first and is there from the first frame; dev
+/// servers come and go with the host's scans, so they sit last, where arriving or leaving never
+/// moves what is above them.
 struct BrowserStartPage: View {
     /// The host whose dev servers show, by name, and its HTTP ports.
     var hostName: String
@@ -28,9 +32,9 @@ struct BrowserStartPage: View {
             VStack(alignment: .leading, spacing: DS.Space.xxxl) {
                 field
                 if text.isEmpty {
-                    if !devServers.isEmpty { devServerSection }
                     if !history.frequent.isEmpty { frequentSection }
                     if !history.recent.isEmpty { recentSection }
+                    if !devServers.isEmpty { devServerSection }
                     if devServers.isEmpty && history.entries.isEmpty {
                         Text("Dev servers you start in a terminal show up here.")
                             .font(DS.Font.rowSubtitle)
@@ -48,6 +52,7 @@ struct BrowserStartPage: View {
         .scrollDismissesKeyboard(.interactively)
         .background(theme.background)
         .animation(DS.Motion.snappy, value: text.isEmpty)
+        .animation(DS.Motion.snappy, value: devServers)
         .onAppear { if focusOnAppear { isFocused = true } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("start-page")

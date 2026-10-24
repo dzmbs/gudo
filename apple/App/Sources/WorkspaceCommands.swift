@@ -1,3 +1,4 @@
+import PaneLayout
 import SwiftUI
 import WebKit
 
@@ -48,6 +49,15 @@ struct WorkspaceCommands: Commands {
             buttons(WorkspaceAction.drawActions)
             Divider()
             buttons([.links])
+            #if os(macOS)
+            Divider()
+            // The focused tool leaf's own Open in New Window, as ⌥ opens a tool in one.
+            Button("Open in New Window") {
+                if let model, let tool = model.focusedToolLeaf { model.moveToolToWindow(tool) }
+            }
+                .keyboardShortcut(ToolMember.Tool.newWindowShortcut)
+                .disabled(model?.focusedToolLeaf == nil || model?.hasToolWindows != true)
+            #endif
         }
         CommandMenu("Tab") {
             buttons(WorkspaceAction.tabActions)

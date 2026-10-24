@@ -1,5 +1,6 @@
 import Foundation
 import PaneLayout
+import SwiftUI
 #if os(macOS)
 import AppKit
 #else
@@ -33,6 +34,10 @@ extension ToolMember.Tool {
     }
 
     var title: String { route.toolTitle }
+
+    /// Mac: Pane ▸ Open in New Window for the focused tool leaf (⌘N's window, with ⌥: the
+    /// modifier that opens a tool in a window of its own).
+    static let newWindowShortcut = KeyboardShortcut("n", modifiers: [.command, .option])
 
     var systemImage: String {
         switch self {
@@ -111,6 +116,11 @@ extension WindowModel {
         #else
         return false
         #endif
+    }
+
+    /// The tool leaf with the focus, if any.
+    var focusedToolLeaf: ToolMember? {
+        destination == .terminal ? activeMixed?.focusedTool : nil
     }
 
     /// Open in New Window from a tool leaf: the window takes over, the leaf closes.

@@ -127,7 +127,8 @@ nonisolated enum BrowserAddress {
 @MainActor
 @Observable
 final class BrowserHistory {
-    static let shared = BrowserHistory()
+    /// Mock runs (fixtures, snapshots) keep theirs apart from the real one.
+    static let shared = LaunchOptions.mock ? BrowserHistory(defaults: UserDefaults(suiteName: "mock-browser-history") ?? .standard) : BrowserHistory()
 
     nonisolated struct Entry: Codable, Hashable, Sendable {
         var url: String

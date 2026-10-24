@@ -306,6 +306,9 @@ public final class TerminalSurface {
     /// When the pending grid may be applied; nil when it may be now.
     private func commitDue() -> ContinuousClock.Instant? {
         let now = ContinuousClock.now
+        // A hold that starts while a grid waits holds it too: a layout can start moving
+        // before the change that explains it is announced (the keyboard).
+        if now < Self.gridHoldUntil { pendingIsHeld = true }
         let due = pendingIsHeld
             ? max(Self.gridHoldUntil, lastSizeChange + Self.settleInterval)
             : max(

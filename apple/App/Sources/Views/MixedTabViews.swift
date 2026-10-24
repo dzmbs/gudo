@@ -52,6 +52,13 @@ struct TerminalArea: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
+        content
+            #if os(iOS)
+            .modifier(KeyboardRoom(workspace: workspace))
+            #endif
+    }
+
+    @ViewBuilder private var content: some View {
         if model.isEditorFullScreen, let editor = model.activeMixed?.focusedEditor {
             FullScreenEditorView(member: editor)
         } else if !compact, model.columns != nil {
@@ -67,6 +74,24 @@ struct TerminalArea: View {
         }
     }
 }
+
+#if os(iOS)
+/// The terminals' bottom at the software keyboard's top, as UIKit reports it. SwiftUI's own
+/// avoidance can stop short when the key bar grows mid-slide and catch up only on a later
+/// layout (focus moving to another pane): the room it leaves is topped up here, in the same
+/// layout pass, so each keyboard change resizes the panes once and focus moving between panes
+/// with the keyboard up resizes none.
+private struct KeyboardRoom: ViewModifier {
+    let workspace: Workspace
+
+    func body(content: Content) -> some View {
+        GeometryReader { proxy in
+            content
+                .padding(.bottom, workspace.keyboardTop.map { max(0, proxy.frame(in: .global).maxY - $0) } ?? 0)
+        }
+    }
+}
+#endif
 
 /// An editor alone in the window (⌃⌘F): the workbench edge to edge, with the way back always
 /// on it (`ExitFullScreenControl`). Escape stays VS Code's.

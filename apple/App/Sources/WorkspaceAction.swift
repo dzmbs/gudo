@@ -217,7 +217,7 @@ enum WorkspaceAction: Hashable {
     func perform(window: WindowModel) {
         switch self {
         case .toggleSidebar:
-            withAnimation(DS.Motion.panel) { window.isSidebarShown.toggle() }
+            withAnimation(DS.Motion.sidebar) { window.isSidebarShown.toggle() }
         default:
             if let workspace = window.workspace { perform(on: workspace, window: window) }
         }

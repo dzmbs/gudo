@@ -117,6 +117,26 @@ enum DesignFixtures {
             let page = "<html><body style='font:17px -apple-system;margin:40px'><h1>Dev server</h1><p>localhost:5173 · pnpm dev</p></body></html>"
             model.browserURL = URL(string: "data:text/html;charset=utf-8," + (page.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))
             model.sheet = .browser
+        case "start-page":
+            // A new browser tab on the host whose dev servers turn up after it opens.
+            let history = BrowserHistory.shared
+            if history.entries.isEmpty {
+                for (url, title) in [("https://ghostty.org/docs", "Ghostty Docs"), ("https://github.com", "GitHub"), ("https://developer.apple.com", "Apple Developer")] {
+                    history.record(URL(string: url)!, title: title)
+                }
+            }
+            if let ports = model.ports as? MockPortSource {
+                let found = ports.ports
+                ports.hostId = "studio"
+                ports.ports = []
+                // Once the splits above have landed: a page's view made mid-animation is made twice.
+                try? await Task.sleep(for: .seconds(1))
+                model.openBrowser(URL(string: "about:blank")!, hostId: ports.hostId, placement: .tab)
+                Task {
+                    try? await Task.sleep(for: .seconds(6))
+                    ports.ports = found
+                }
+            }
         case "presence-notice":
             // Someone arrives in a shared session (`-mockPresence YES`).
             try? await Task.sleep(for: .seconds(1))
