@@ -1,5 +1,6 @@
 #if os(macOS)
 import DesignSystem
+import ServiceManagement
 import SwiftUI
 
 /// Settings ▸ This Mac: the helper that gives This Mac files, changes, ports, the editor and
@@ -22,6 +23,12 @@ struct ThisMacSettingsSection: View {
                     }
                     .accessibilityIdentifier("settings-this-mac-keep-running")
                     .settingAnchor("this-mac-keep-running")
+                if helper.needsApproval {
+                    LabeledContent("Allow it in Login Items to keep sessions running after the app quits.") {
+                        Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
+                    }
+                    .font(DS.Font.rowDetail)
+                }
                 if helper.isEnabled && helper.state != .off {
                     Button("Stop Helper", role: .destructive) { helper.stop() }
                         .accessibilityIdentifier("settings-this-mac-stop")

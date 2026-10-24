@@ -3,6 +3,7 @@ import Foundation
 import HostKit
 import Observation
 import os
+import Security
 import ServiceManagement
 
 /// This Mac's own helper: the daemon bundled in the app (`Contents/MacOS/<name>-hostd`), run for
@@ -22,6 +23,8 @@ final class LocalHelper {
     }
 
     private(set) var state = State.off
+    /// The login item waits for approval in System Settings ▸ General ▸ Login Items.
+    private(set) var needsApproval = false
     @ObservationIgnored let hosts: HostsModel
     @ObservationIgnored let binary: URL?
     /// The helper's state folder (keys, paired devices, layout).
@@ -38,7 +41,7 @@ final class LocalHelper {
 
     static let enabledKey = "localHelper"
     static let keepsRunningKey = "localHelperKeepsRunning"
-    private static let binaryStampKey = "localHelperBinaryStamp"
+    private static let registeredKey = "localHelperRegistered"
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "helper")
 
     init(hosts: HostsModel, binary: URL?, stateDirectory: URL, isIsolated: Bool, defaults: UserDefaults = .standard) {
@@ -150,9 +153,12 @@ final class LocalHelper {
     private func run() async throws -> String {
         guard let binary else { throw HelperError.notBundled }
         if Self.runningEndpoint(in: stateDirectory) == nil {
-            try launch(binary)
-        } else {
-            restartIfUpdated(binary)
+            try await launch(binary)
+        } else if keepsRunning, agent.status == .enabled, !isRegistered(binary) {
+            // An older build's login item still runs: it is replaced, never restarted, because
+            // launchd only spawns the exact build that was registered.
+            try await stopLoginItem()
+            try await launch(binary)
         }
         let endpoint = try await waitForEndpoint()
         if let id = hosts.thisDeviceId, hosts.record(id)?.daemonId == endpoint.daemonId { return id }
@@ -160,21 +166,49 @@ final class LocalHelper {
         return try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
     }
 
-    private func launch(_ binary: URL) throws {
-        if keepsRunning {
-            do {
-                if agent.status != .enabled { try agent.register() }
-                if agent.status == .enabled {
-                    noteBinary(binary)
-                    return
-                }
-                Self.log.info("login item status \(String(describing: self.agent.status), privacy: .public): running as a child")
-                // Not left behind to start later and find the folder taken.
-                try? agent.unregister()
-            } catch {
-                Self.log.error("login item: \(String(describing: error), privacy: .public): running as a child")
-            }
+    private func launch(_ binary: URL) async throws {
+        if keepsRunning, await startLoginItem(binary) { return }
+        try startChild(binary)
+    }
+
+    /// Registers the login item (again when the build changed) and waits for it to come up.
+    /// False when it isn't allowed or doesn't start: the caller runs the helper as a child.
+    private func startLoginItem(_ binary: URL) async -> Bool {
+        do {
+            if agent.status == .enabled, !isRegistered(binary) { try await stopLoginItem() }
+            if agent.status != .enabled { try agent.register() }
+        } catch {
+            Self.log.error("login item: \(String(describing: error), privacy: .public)")
         }
+        needsApproval = agent.status == .requiresApproval
+        guard agent.status == .enabled else {
+            Self.log.info("login item status \(String(describing: self.agent.status), privacy: .public): running as a child")
+            // Not left behind to start later and find the folder taken.
+            try? await agent.unregister()
+            return false
+        }
+        noteRegistered(binary)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
+            if Self.runningEndpoint(in: stateDirectory) != nil { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        Self.log.error("login item registered but not running: running as a child")
+        try? await stopLoginItem()
+        return false
+    }
+
+    /// Unregisters the login item and waits for its helper to let go of the state folder.
+    private func stopLoginItem() async throws {
+        try await agent.unregister()
+        defaults.removeObject(forKey: Self.registeredKey)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while Self.runningEndpoint(in: stateDirectory) != nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    private func startChild(_ binary: URL) throws {
         try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
         let process = Process()
         process.executableURL = binary
@@ -185,29 +219,25 @@ final class LocalHelper {
         child = process
     }
 
-    /// A login item started by an older app build still runs the old helper: restart it.
-    private func restartIfUpdated(_ binary: URL) {
-        guard keepsRunning, agent.status == .enabled else { return }
-        let stamp = Self.stamp(binary)
-        guard defaults.string(forKey: Self.binaryStampKey) != stamp else { return }
-        Self.log.info("helper build changed: restarting the login item")
-        let kick = Process()
-        kick.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        kick.arguments = ["kickstart", "-k", "gui/\(getuid())/\(Self.label)"]
-        try? kick.run()
-        kick.waitUntilExit()
-        noteBinary(binary)
+    /// Whether the registered login item is this exact build: launchd pins the registered
+    /// app's code and won't spawn a rebuilt helper under the old registration.
+    private func isRegistered(_ binary: URL) -> Bool {
+        defaults.string(forKey: Self.registeredKey) == Self.identity(binary)
     }
 
-    private func noteBinary(_ binary: URL) {
-        defaults.set(Self.stamp(binary), forKey: Self.binaryStampKey)
+    private func noteRegistered(_ binary: URL) {
+        defaults.set(Self.identity(binary), forKey: Self.registeredKey)
     }
 
-    private static func stamp(_ binary: URL) -> String {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: binary.path)
-        let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
-        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        return "\(size)-\(Int(modified))"
+    /// The helper's location and code hash.
+    nonisolated static func identity(_ binary: URL) -> String {
+        var code: SecStaticCode?
+        var info: CFDictionary?
+        guard SecStaticCodeCreateWithPath(binary as CFURL, [], &code) == errSecSuccess, let code,
+              SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
+              let hash = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data
+        else { return binary.path }
+        return binary.path + "#" + hash.map { String(format: "%02x", $0) }.joined()
     }
 
     private static var label: String { (Bundle.main.bundleIdentifier ?? "app") + ".hostd" }
