@@ -38,6 +38,8 @@ final class Pane {
     @ObservationIgnored var onGridChange: ((TerminalSurface.Grid) -> Void)?
     /// Resizes sent to the backend (UI tests: one per layout change).
     private(set) var resizesSent = 0
+    /// Scrolls and input so far, whoever made them: following tells its own from the user's.
+    @ObservationIgnored private(set) var moves = 0
 
     nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "pane")
     /// The grid's cell size in pixels, for resizes that follow the stream (off the main actor).
@@ -49,7 +51,10 @@ final class Pane {
         let terminal = Terminal(cols: 80, rows: 24, configuration: appearance.terminalConfiguration) { backend.write($0) }
         let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
         view = TerminalView(surface: surface)
-        view.onInput = { bytes in bytes.withUnsafeBytes { backend.write($0) } }
+        view.onInput = { [weak self] bytes in
+            self?.moves += 1
+            bytes.withUnsafeBytes { backend.write($0) }
+        }
         surface.sizeFollowsStream = backend.sizeFollowsStream
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
         // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).
@@ -69,7 +74,8 @@ final class Pane {
         if let feed = backend as? any PredictionFeed {
             // Keystrokes carry the predictor's input sequence number, which the backend acks.
             surface.enablePrediction()
-            view.onInput = { [weak surface] bytes in
+            view.onInput = { [weak self, weak surface] bytes in
+                self?.moves += 1
                 let seq = surface?.predictor?.lastInputSeq ?? 0
                 bytes.withUnsafeBytes { feed.writeInput($0, inputSeq: seq) }
             }
@@ -118,7 +124,8 @@ final class Pane {
             backend.start(events: handle)
         }
         // Scrolling to the top of what the pane holds asks the host for older scrollback.
-        surface.onScroll = { [weak surface] rows in
+        surface.onScroll = { [weak self, weak surface] rows in
+            self?.moves += 1
             guard rows < 0, let terminal = surface?.terminal, terminal.scrollbar.offset == 0 else { return }
             _ = backend.requestHistory()
         }

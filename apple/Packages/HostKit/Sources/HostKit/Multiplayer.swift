@@ -283,6 +283,8 @@ public final class MultiplayerSession {
             case left([String])
             /// A request failed.
             case failed(String)
+            /// This device's own navigation ended following someone (principal).
+            case stoppedFollowing(String)
         }
         public let id = UUID()
         public var kind: Kind
@@ -553,6 +555,15 @@ public final class MultiplayerSession {
         Self.log.info("follow \(principal == nil ? "stopped" : "started", privacy: .public)")
     }
 
+    /// Own navigation (a scroll, a tab or pane change, typing) ends following, as in Zed and
+    /// Figma; the notice offers to follow again.
+    public func breakFollow() {
+        guard let leader = following else { return }
+        follow(nil)
+        let name = name(ofPrincipal: leader).split(separator: " ").first.map(String.init) ?? "them"
+        post(.stoppedFollowing(leader), "Stopped following \(name)", failure: false)
+    }
+
     /// The draft being typed for a pane; others see it live. Empty text clears it.
     public func setDraft(_ pane: UInt64, source: DraftSource, text: String, caret: Int) {
         guard let client, canPrompt else { return }
@@ -663,7 +674,10 @@ public final class MultiplayerSession {
         guard pane != typingPane else { return }
         if let old = typingPane { client?.setTyping(paneId: old, typing: false) }
         typingPane = pane
-        if let pane { client?.setTyping(paneId: pane, typing: true) }
+        if let pane {
+            client?.setTyping(paneId: pane, typing: true)
+            breakFollow()
+        }
     }
 
     // MARK: Owner: invites, grants, devices, audit

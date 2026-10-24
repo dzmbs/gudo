@@ -73,7 +73,8 @@ xcodebuild -project "$apple/App.xcodeproj" -scheme App -destination "platform=iO
   -derivedDataPath "$derived" build-for-testing >"$work/build.log" 2>&1 || { tail -30 "$work/build.log"; exit 1; }
 
 # Live presence: a second pane; Rex writes a prompt in pane 1, again and again until someone
-# follows him, then moves to pane 2. Meanwhile an agent in pane 1 asks for permission.
+# follows him, then moves to pane 2 (the app scrolls there by hand, which stops following,
+# and follows again). Meanwhile an agent in pane 1 asks for permission.
 cli owner-a split --pane 1 >/dev/null
 cli rex draft "Fix the flaky reconnect test" --pane 1 --cps 6 --then-focus 2 --hold 600 >"$work/rex-draft.log" 2>&1 &
 pids+=($!)

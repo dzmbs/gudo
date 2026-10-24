@@ -39,9 +39,9 @@ enum BrowserReplayRunner {
         switch action.kind {
         case "navigate":
             switch (input["url"] as? String ?? "").lowercased() {
-            case "back": if let item = pane.page.backForwardList.backList.last { _ = pane.page.load(item) }
-            case "forward": if let item = pane.page.backForwardList.forwardList.first { _ = pane.page.load(item) }
-            case "reload": _ = pane.page.reload()
+            case "back": pane.page.goBack()
+            case "forward": pane.page.goForward()
+            case "reload": pane.page.reloadPage()
             default:
                 // The tab opened on the first page already.
                 if !first, let url = (action.urlAfter ?? input["url"] as? String).flatMap(URL.init(string:)) { pane.load(url) }
@@ -80,7 +80,7 @@ enum BrowserReplayRunner {
         args["role"] = action.role
         args["name"] = action.name
         args["nth"] = action.nth
-        guard let found = try? await pane.page.callJavaScript(script, arguments: ["args": args], contentWorld: BrowserAgentScript.world) as? [Any],
+        guard let found = try? await pane.page.run(script, arguments: ["args": args], in: BrowserAgentScript.world) as? [Any],
               found.count == 3, let x = found[0] as? NSNumber, let y = found[1] as? NSNumber
         else { return nil }
         return (CGPoint(x: x.doubleValue, y: y.doubleValue), found[2] as? Bool ?? false)
@@ -93,8 +93,8 @@ enum BrowserReplayRunner {
         input["kind"] = action.kind
         input["phase"] = "do"
         if let point { input["target"] = ["type": "coordinate", "x": point.x, "y": point.y] } else { input["target"] = nil }
-        let result = try? await pane.page.callJavaScript(
-            "return window.__un ? window.__un.act(args) : null", arguments: ["args": input], contentWorld: BrowserAgentScript.world) as? [String: Any]
+        let result = try? await pane.page.run(
+            "return window.__un ? window.__un.act(args) : null", arguments: ["args": input], in: BrowserAgentScript.world) as? [String: Any]
         guard let result else { return false }
         return result["needsUser"] == nil
     }

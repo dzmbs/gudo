@@ -477,6 +477,9 @@ enum PresenceNotices {
         switch notice.kind {
         case .arrived(let names), .left(let names):
             if names.count == 1 { toast.person = person(names[0], in: session) }
+        case .stoppedFollowing(let principal):
+            toast.person = session.participants.first { $0.actor.principal == principal }?.avatar
+            toast.action = Toast.Action("Follow Again") { session.follow(principal) }
         default: break
         }
         return toast

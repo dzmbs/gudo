@@ -30,7 +30,7 @@ struct BrowserView: View {
     var onReplays: (() -> Void)?
 
     @State private var pane: BrowserPane
-    private var page: WebPage { pane.page }
+    private var page: any BrowserPageContent { pane.page }
     private var initialURL: URL { pane.initialURL }
     #if DEBUG
     /// UI tests: connections sent to `routedHost` (proof the page went through the host).
@@ -106,11 +106,17 @@ struct BrowserView: View {
                     .overlay(alignment: .bottom) { progressLine }
             }
             ZStack {
-                WebView(page)
-                    .webViewBackForwardNavigationGestures(.enabled)
-                    // `prefers-color-scheme` on the page: the theme's, or the device's.
-                    .environment(\.colorScheme, followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
-                    .ignoresSafeArea(edges: isCompact ? .bottom : [])
+                Group {
+                    if let web = pane.webPage {
+                        WebView(web)
+                            .webViewBackForwardNavigationGestures(.enabled)
+                            // `prefers-color-scheme` on the page: the theme's, or the device's.
+                            .environment(\.colorScheme, followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
+                    } else if let popup = pane.popupPage {
+                        PopupWebView(page: popup, colorScheme: followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
+                    }
+                }
+                .ignoresSafeArea(edges: isCompact ? .bottom : [])
                 if showsStart { startPage }
             }
             .overlay(alignment: isCompact ? .bottom : .top) {
@@ -312,7 +318,7 @@ struct BrowserView: View {
                     .floatingCapsule(interactive: true)
                 if !isEditing {
                     Menu("More", systemImage: "ellipsis") {
-                        Button("Reload", systemImage: "arrow.clockwise") { page.reload() }
+                        Button("Reload", systemImage: "arrow.clockwise") { page.reloadPage() }
                         if let url = page.url {
                             ShareLink(item: url)
                         }
@@ -348,43 +354,43 @@ struct BrowserView: View {
 
     /// Back and forward; a long press (or a held click) lists the history, as in Safari.
     @ViewBuilder private var navigationButtons: some View {
-        let list = page.backForwardList
+        let list = page.history
         Menu {
-            ForEach(list.backList.reversed()) { item in
-                Button(Self.title(of: item)) { page.load(item) }
+            ForEach(list.back.reversed()) { item in
+                Button(Self.title(of: item)) { page.go(to: item) }
             }
         } label: {
             Label("Back", systemImage: "chevron.backward")
         } primaryAction: {
-            if let item = list.backList.last { page.load(item) }
+            page.goBack()
         }
         .menuIndicator(.hidden)
-        .disabled(list.backList.isEmpty)
+        .disabled(list.back.isEmpty)
         .help("Back")
         .accessibilityIdentifier("browser-back")
         Menu {
-            ForEach(list.forwardList) { item in
-                Button(Self.title(of: item)) { page.load(item) }
+            ForEach(list.forward) { item in
+                Button(Self.title(of: item)) { page.go(to: item) }
             }
         } label: {
             Label("Forward", systemImage: "chevron.forward")
         } primaryAction: {
-            if let item = list.forwardList.first { page.load(item) }
+            page.goForward()
         }
         .menuIndicator(.hidden)
-        .disabled(list.forwardList.isEmpty)
+        .disabled(list.forward.isEmpty)
         .help("Forward")
         .accessibilityIdentifier("browser-forward")
     }
 
-    private static func title(of item: WebPage.BackForwardList.Item) -> String {
+    private static func title(of item: BrowserHistoryItem) -> String {
         if let title = item.title, !title.isEmpty { return title }
         return BrowserAddress.display(item.url)
     }
 
     private var reloadButton: some View {
         Button(page.isLoading ? "Stop" : "Reload", systemImage: page.isLoading ? "xmark" : "arrow.clockwise") {
-            if page.isLoading { page.stopLoading() } else { page.reload() }
+            if page.isLoading { page.stopLoading() } else { page.reloadPage() }
         }
         .help(page.isLoading ? "Stop" : "Reload")
         .contentTransition(.symbolEffect(.replace))
@@ -398,11 +404,11 @@ struct BrowserView: View {
             Group {
                 Button("Open Location") { isEditing = true }
                     .keyboardShortcut("l")
-                Button("Reload") { page.reload() }
+                Button("Reload") { page.reloadPage() }
                     .keyboardShortcut("r")
-                Button("Back") { if let item = page.backForwardList.backList.last { page.load(item) } }
+                Button("Back") { page.goBack() }
                     .keyboardShortcut("[")
-                Button("Forward") { if let item = page.backForwardList.forwardList.first { page.load(item) } }
+                Button("Forward") { page.goForward() }
                     .keyboardShortcut("]")
                 if isEditing {
                     Button("Cancel Edit") { cancelEditing() }
@@ -624,11 +630,11 @@ extension BrowserLeafView {
         guard let terminal, let daemon = model.app.hosts.connection(terminal.hostId) as? DaemonConnection else { return }
         model.toasts.show(Toast("Tap what to point out", systemImage: "hand.point.up.left"))
         Task {
-            _ = try? await pane.page.callJavaScript("return window.__un.pick()", contentWorld: BrowserAgentScript.world)
+            _ = try? await pane.page.run("return window.__un.pick()", in: BrowserAgentScript.world)
             var picked = ""
             for _ in 0..<600 where picked.isEmpty {
                 try? await Task.sleep(for: .milliseconds(100))
-                picked = (try? await pane.page.callJavaScript("return window.__un.picked()", contentWorld: BrowserAgentScript.world) as? String) ?? ""
+                picked = (try? await pane.page.run("return window.__un.picked()", in: BrowserAgentScript.world) as? String) ?? ""
             }
             guard !picked.isEmpty else { return }
             daemon.paste("In the browser beside you: " + picked.replacingOccurrences(of: "\n", with: " ") + " ", into: terminal.pane.rawValue)

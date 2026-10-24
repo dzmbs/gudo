@@ -26,10 +26,10 @@ struct BrowserNativeInput {
     let view: WKWebView
 
     /// The input of the view showing `page`, if it is in a window.
-    static func `for`(_ page: WebPage) async -> BrowserNativeInput? {
+    static func `for`(_ page: any BrowserPageContent) async -> BrowserNativeInput? {
         let token = UUID().uuidString
         do {
-            _ = try await page.callJavaScript("window.__unInputToken = token", arguments: ["token": token], contentWorld: world)
+            _ = try await page.run("window.__unInputToken = token", arguments: ["token": token], in: world)
         } catch {
             return nil
         }
@@ -227,6 +227,6 @@ struct BrowserNativeInput {
         try? await Task.sleep(for: .milliseconds(ms))
     }
     #else
-    static func `for`(_ page: WebPage) async -> BrowserNativeInput? { nil }
+    static func `for`(_ page: any BrowserPageContent) async -> BrowserNativeInput? { nil }
     #endif
 }

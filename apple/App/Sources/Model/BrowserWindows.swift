@@ -1,11 +1,15 @@
 import WebKit
+#if os(macOS)
+import AppKit
+#endif
 
 /// New windows and closing for a page. `WebPage` has no API for either, so its web view's UI
-/// delegate is wrapped: `window.open` becomes a new browser leaf (`BrowserPane.onPopup`), and
-/// everything else goes on to `WebPage`'s own delegate (dialogs, file pickers).
+/// delegate is wrapped: `window.open` and `target=_blank` become a new browser leaf holding the
+/// web view WebKit configured for it (`BrowserPane.makePopup`, so `window.opener` works), and
+/// everything else goes on to the inner delegate (`WebPage`'s, or a popup's `PopupDelegate`).
 ///
-/// A page opened that way loads on its own, without `window.opener`, so WebKit would refuse
-/// its `window.close()`; `closeScript` lets it close its leaf instead.
+/// A page opened by URL alone (no `window.opener`), WebKit would not let `window.close()`;
+/// `closeScript` lets it close its leaf instead.
 @MainActor
 final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
     /// The message handler a popup's `window.close()` posts to.
@@ -15,11 +19,15 @@ final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
         injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)
 
     private weak var webView: WKWebView?
-    /// `WebPage`'s delegate (it keeps it alive). Read by the forwarding below, which WebKit
-    /// calls on the main thread.
+    /// The wrapped delegate (`WebPage` keeps its own alive). Read by the forwarding below,
+    /// which WebKit calls on the main thread.
     nonisolated(unsafe) private weak var inner: (any WKUIDelegate)?
-    var onOpen: ((URL) -> Void)?
+    /// The web view for a new window, made with the given configuration; nil opens none.
+    var onCreate: ((WKWebViewConfiguration, WKNavigationAction) -> WKWebView?)?
     var onClose: (() -> Void)?
+
+    /// Whether new windows come here (else WebKit's own delegate would drop them).
+    var isAdopted: Bool { webView != nil }
 
     /// Puts itself in front of `webView`'s delegate, once.
     func adopt(_ webView: WKWebView) {
@@ -38,8 +46,7 @@ final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
         _ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
         for action: WKNavigationAction, windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        if let url = action.request.url, ["http", "https"].contains(url.scheme) { onOpen?(url) }
-        return nil
+        onCreate?(configuration, action)
     }
 
     func webViewDidClose(_ webView: WKWebView) { onClose?() }
@@ -56,4 +63,49 @@ final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
     nonisolated override func forwardingTarget(for selector: Selector!) -> Any? {
         inner?.responds(to: selector) == true ? inner : nil
     }
+}
+
+/// A popup's navigation and dialogs, as `BrowserPane`'s decider and dialog presenter do them
+/// for a `WebPage`.
+@MainActor
+final class PopupDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
+    weak var pane: BrowserPane?
+
+    func webView(
+        _ webView: WKWebView, decidePolicyFor action: WKNavigationAction, preferences: WKWebpagePreferences
+    ) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
+        guard let pane else { return (.allow, preferences) }
+        let policy = await pane.decide(
+            action.request, newWindow: action.targetFrame == nil, mainFrame: action.targetFrame?.isMainFrame ?? true,
+            type: action.navigationType, download: action.shouldPerformDownload)
+        return (policy, preferences)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
+        _ = await pane?.present(.alert, message)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        await pane?.present(.confirm, message).0 == true
+    }
+
+    func webView(
+        _ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?,
+        initiatedByFrame frame: WKFrameInfo
+    ) async -> String? {
+        guard let (accept, text) = await pane?.present(.prompt, prompt, defaultText: defaultText), accept else { return nil }
+        return text ?? defaultText ?? ""
+    }
+
+    #if os(macOS)
+    /// The agent's upload while it acts; else the user picks, as Safari asks.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
+        if let pane, pane.agentActing { return await pane.chooseFiles(multiple: parameters.allowsMultipleSelection) }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        guard let window = webView.window else { return panel.runModal() == .OK ? panel.urls : nil }
+        return await panel.beginSheetModal(for: window) == .OK ? panel.urls : nil
+    }
+    #endif
 }

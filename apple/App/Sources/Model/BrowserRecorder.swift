@@ -37,7 +37,7 @@ final class BrowserRecorder {
     private var saving: [UUID: Task<Void, Never>] = [:]
 
     private struct WeakPage {
-        weak var page: WebPage?
+        weak var page: (any BrowserPageContent)?
     }
 
     private init() {
@@ -52,7 +52,7 @@ final class BrowserRecorder {
     }
 
     /// A page that can record (its configuration went through `install`).
-    func attach(_ page: WebPage, id: UUID) {
+    func attach(_ page: any BrowserPageContent, id: UUID) {
         pages = pages.filter { $0.value.page != nil }
         pages[id] = WeakPage(page: page)
     }
@@ -80,7 +80,7 @@ final class BrowserRecorder {
             current = Live(session: session, lastCheckout: entry.time)
             live[entry.page] = current
             store.cleanUp(keeping: liveSessions)
-            Task { _ = try? await page.callJavaScript("window.__unReplay && window.__unReplay.start()", contentWorld: Self.world) }
+            Task { _ = try? await page.run("window.__unReplay && window.__unReplay.start()", in: Self.world) }
         }
         guard var current else { return }
         let index = current.session.actions.count
@@ -96,7 +96,7 @@ final class BrowserRecorder {
             await previous?.value
             let frame = await Self.keyframe(page)
             guard let self, var session = self.live[entry.page]?.session ?? self.store.session(id) else { return }
-            if checkout { _ = try? await page.callJavaScript("window.__unReplay && window.__unReplay.checkout()", contentWorld: Self.world) }
+            if checkout { _ = try? await page.run("window.__unReplay && window.__unReplay.checkout()", in: Self.world) }
             if let frame, let name = self.store.writeKeyframe(frame, session: id, action: index), index < session.actions.count {
                 session.actions[index].keyframe = name
                 if self.live[entry.page]?.session.id == id { self.live[entry.page]?.session.actions[index].keyframe = name }
@@ -119,7 +119,7 @@ final class BrowserRecorder {
     /// Waits for a session's pictures and events to be on disk.
     func flush(_ page: UUID) async {
         guard let webPage = pages[page]?.page, let id = live[page]?.session.id else { return }
-        _ = try? await webPage.callJavaScript("window.__unReplay && window.__unReplay.flush()", contentWorld: Self.world)
+        _ = try? await webPage.run("window.__unReplay && window.__unReplay.flush()", in: Self.world)
         await saving[id]?.value
     }
 
@@ -145,9 +145,9 @@ final class BrowserRecorder {
             let origin = Self.origin(frame.securityOrigin)
             let url = frame.request.url?.absoluteString ?? ""
             Task {
-                _ = try? await webPage.callJavaScript(
+                _ = try? await webPage.run(
                     "window.__unReplay && window.__unReplay.frame(message, origin, url)",
-                    arguments: ["message": message, "origin": origin, "url": url], contentWorld: Self.world)
+                    arguments: ["message": message, "origin": origin, "url": url], in: Self.world)
             }
             return nil
         default:
@@ -176,10 +176,10 @@ final class BrowserRecorder {
     // MARK: Pictures
 
     /// The visible page as a JPEG at most 960 points wide.
-    static func keyframe(_ page: WebPage) async -> Data? {
-        guard let size = try? await page.callJavaScript("return [innerWidth, innerHeight]", contentWorld: world) as? [Double],
+    static func keyframe(_ page: any BrowserPageContent) async -> Data? {
+        guard let size = try? await page.run("return [innerWidth, innerHeight]", in: world) as? [Double],
               size.count == 2, size[0] > 0, size[1] > 0,
-              let data = try? await page.exported(as: .image(region: .rect(CGRect(x: 0, y: 0, width: size[0], height: size[1])), snapshotWidth: min(size[0], 960)))
+              let data = try? await page.picture(CGRect(x: 0, y: 0, width: size[0], height: size[1]), width: min(size[0], 960))
         else { return nil }
         return jpeg(data)
     }

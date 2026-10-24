@@ -24,7 +24,7 @@ extension BrowserPane {
                 value = try await web.callAsyncJavaScript(body, arguments: ["args": args], in: info, contentWorld: BrowserAgentScript.world)
             } else {
                 try await ready()
-                value = try await page.callJavaScript(body, arguments: ["args": args], contentWorld: BrowserAgentScript.world)
+                value = try await page.run(body, arguments: ["args": args], in: BrowserAgentScript.world)
             }
             guard let value = value as? T else { throw BrowserCallError("The page answered nothing.") }
             return value
@@ -38,7 +38,7 @@ extension BrowserPane {
     /// Waits a moment for the agent's script (a page still loading, about:blank).
     private func ready() async throws {
         for attempt in 0..<20 {
-            let ready = try await page.callJavaScript("return !!window.__un", contentWorld: BrowserAgentScript.world) as? Bool ?? false
+            let ready = try await page.run("return !!window.__un", in: BrowserAgentScript.world) as? Bool ?? false
             if ready { return }
             if page.url == nil || page.url?.scheme == "about" {
                 throw BrowserCallError("The page is empty: call browser_navigate with a URL.")
@@ -66,8 +66,8 @@ extension BrowserPane {
     }
 
     func recorded<T>(_ list: String) async throws -> [T] {
-        let value = try await page.callJavaScript(
-            "const l = window.__unRecorder; return l ? l[name].splice(0) : []", arguments: ["name": list], contentWorld: .page)
+        let value = try await page.run(
+            "const l = window.__unRecorder; return l ? l[name].splice(0) : []", arguments: ["name": list], in: .page)
         return value as? [T] ?? []
     }
 
@@ -176,7 +176,7 @@ extension BrowserPane {
 
     /// The page now, to tell what an action started.
     func activity() async -> Activity {
-        let started = try? await page.callJavaScript("const l = window.__unRecorder; return l ? l.started : 0", contentWorld: .page) as? Int
+        let started = try? await page.run("const l = window.__unRecorder; return l ? l.started : 0", in: .page) as? Int
         return Activity(url: page.url, started: started ?? 0)
     }
 
@@ -199,7 +199,7 @@ extension BrowserPane {
         if busy { try? await Task.sleep(for: .milliseconds(500)) }
         let deadline = ContinuousClock.now + .seconds(3)
         while ContinuousClock.now < deadline, !Task.isCancelled, dialog == nil, fileChooser == nil {
-            let quiet = (try? await page.callJavaScript("return window.__un ? window.__un.quiet() : 1000", contentWorld: BrowserAgentScript.world) as? Int) ?? 1000
+            let quiet = (try? await page.run("return window.__un ? window.__un.quiet() : 1000", in: BrowserAgentScript.world) as? Int) ?? 1000
             if quiet >= 100 { break }
             try? await Task.sleep(for: .milliseconds(50))
         }
@@ -216,9 +216,9 @@ extension BrowserPane {
 
     /// No fetch or XHR in flight (for `quiet` ms).
     func networkIdle(quiet: Int = 500) async -> Bool {
-        let idle = try? await page.callJavaScript(
+        let idle = try? await page.run(
             "const l = window.__unRecorder; return !l || (l.pending === 0 && Date.now() - l.lastActivity >= q)",
-            arguments: ["q": quiet], contentWorld: .page) as? Bool
+            arguments: ["q": quiet], in: .page) as? Bool
         return idle ?? true
     }
 
@@ -245,7 +245,7 @@ extension BrowserPane {
     /// A region of the page (CSS pixels from the document's top left) as a JPEG `width` pixels
     /// wide: the whole page is drawn, then cut, so bars over the page never shift it.
     func picture(_ view: Viewport, region: CGRect, width: Double) async throws -> Data {
-        let data = try await page.exported(as: .image(region: .contents, snapshotWidth: view.pageWidth))
+        let data = try await page.picture(nil, width: view.pageWidth)
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let whole = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { throw BrowserCallError("The page could not be drawn.") }

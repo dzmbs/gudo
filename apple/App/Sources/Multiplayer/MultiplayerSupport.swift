@@ -101,6 +101,7 @@ extension MultiplayerSession.Notice {
         case .forbidden, .failed: "exclamationmark.triangle.fill"
         case .arrived: "person.crop.circle.badge.plus"
         case .left: "person.crop.circle.badge.minus"
+        case .stoppedFollowing: "eye.slash"
         }
         let granted: Bool = if case .controlGranted = kind { true } else { false }
         return Toast(message, systemImage: image, style: isFailure ? .failure : granted ? .success : .neutral)
