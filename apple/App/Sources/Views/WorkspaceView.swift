@@ -172,7 +172,7 @@ struct WorkspaceView: View {
                 DetailColumn(workspace: workspace)
             }
         }
-        .animation(DS.Motion.panel, value: model.isSidebarShown)
+        .animation(DS.Motion.sidebar, value: model.isSidebarShown)
         .animation(DS.Motion.panel, value: model.isEditorFullScreen)
         .chromeBackground(DS.Palette.base)
         #if os(macOS)

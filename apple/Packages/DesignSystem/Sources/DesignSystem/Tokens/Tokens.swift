@@ -132,6 +132,10 @@ public extension DS {
         /// Sheets and panels sliding in.
         public static let panel = Animation.smooth(duration: panelDuration)
         public static let panelDuration = 0.35
+        /// The sidebar showing and hiding: AppKit's split view collapse (ease in-out, 0.25 s).
+        /// A curve that ends on time, so the terminals' one reflow follows straight after.
+        public static let sidebar = Animation.easeInOut(duration: sidebarDuration)
+        public static let sidebarDuration = 0.25
         /// How long the cols × rows overlay stays after the last resize (Ghostty
         /// `resize-overlay-duration` default 750 ms).
         public static let resizeOverlayDuration = Duration.milliseconds(750)
