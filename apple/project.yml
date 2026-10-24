@@ -160,7 +160,10 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         # The macOS app spawns login shells on local PTYs, which the App Sandbox forbids.
         ENABLE_APP_SANDBOX: NO
-        ENABLE_HARDENED_RUNTIME: NO
+        # Notarization needs the hardened runtime (the bundled helper gets it too, below). Its
+        # only exception: the microphone, for dictation.
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_RESOURCE_ACCESS_AUDIO_INPUT: YES
         # Push only with a team (Brand.xcconfig): `#if PUSH_YES` registers with APNs.
         # Files locations only with the shared groups: `#if FILES_PROVIDER_YES`.
         # The helper's LaunchAgent (the "This Mac Helper" phase); iOS bundles none, and Xcode
@@ -192,9 +195,12 @@ targets:
             signed="$DERIVED_FILE_DIR/$BRAND_NAME-hostd"
             mkdir -p "$DERIVED_FILE_DIR"
             cp -f "$src" "$signed"
-            runtime=""
-            [ "$ENABLE_HARDENED_RUNTIME" = YES ] && runtime="--options runtime"
-            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --identifier "$PRODUCT_BUNDLE_IDENTIFIER.hostd" $runtime "$signed"
+            flags=""
+            [ "$ENABLE_HARDENED_RUNTIME" = YES ] && flags="--options runtime"
+            # A real identity gets a secure timestamp, which notarization requires.
+            identity="${EXPANDED_CODE_SIGN_IDENTITY:--}"
+            [ "$identity" != "-" ] && flags="$flags --timestamp"
+            codesign --force --sign "$identity" --identifier "$PRODUCT_BUNDLE_IDENTIFIER.hostd" $flags "$signed"
             cp -f "$signed" "$dst"
           else
             rm -f "$dst"
