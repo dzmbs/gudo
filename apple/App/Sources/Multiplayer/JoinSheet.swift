@@ -108,14 +108,15 @@ struct JoinSheet: View {
             }
             .formStyle(.grouped)
             .chromeGrouped()
+            .macFittedForm(maxHeight: 560)
             .onDisappear { knocking?.cancel() }
             .animation(DS.Motion.snappy, value: trimmed)
         }
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        // Fixed: the invite card and knock status arrive after the link; the form scrolls.
-        .frame(width: 500, height: 620)
+        // As tall as the form: the invite card and knock status grow it, then it scrolls.
+        .frame(width: 500)
         #endif
     }
 

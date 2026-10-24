@@ -108,6 +108,7 @@ struct PairingSheet: View {
                     .padding(.top, DS.Space.m)
             }
             #endif
+            .macFittedForm(maxHeight: 520)
             .onAppear { focusField() }
             .onChange(of: mode) {
                 error = nil
@@ -125,8 +126,8 @@ struct PairingSheet: View {
         #if os(iOS)
         .phoneDetents([.medium, .large])
         #else
-        // Fixed: previews, the key section and errors arrive while typing; the form scrolls.
-        .frame(width: 500, height: 560)
+        // As tall as the form: previews, the key section and errors grow it, then it scrolls.
+        .frame(width: 500)
         #endif
     }
 

@@ -18,6 +18,26 @@ private struct PhoneDetents: ViewModifier {
     }
 }
 
+private struct FittedForm: ViewModifier {
+    let maxHeight: CGFloat
+    /// Measured in the first layout pass, before the sheet shows.
+    @State private var height: CGFloat?
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
+            } action: { _, measured in
+                height = measured
+            }
+            .frame(height: min(height ?? maxHeight / 2, maxHeight))
+        #else
+        content
+        #endif
+    }
+}
+
 public extension View {
     /// A Mac sheet's size from its first frame (resizable larger), so content that loads later
     /// scrolls inside it rather than growing it; iOS sheets size to the device.
@@ -27,6 +47,12 @@ public extension View {
         #else
         self
         #endif
+    }
+
+    /// A Mac sheet's form as tall as its rows, up to `maxHeight` (then it scrolls): the sheet has
+    /// no blank space under it, grows as rows arrive, and the system places it by that height.
+    func macFittedForm(maxHeight: CGFloat) -> some View {
+        modifier(FittedForm(maxHeight: maxHeight))
     }
 
     /// Sheet detents on iPhone only.

@@ -64,7 +64,9 @@ final class MacSnapshotTests: XCTestCase {
         frameView.layoutSubtreeIfNeeded()
         let bounds = frameView.bounds
         let rep: NSBitmapImageRep
-        if let image = Self.windowImage(window.windowNumber) {
+        // `SNAPSHOT_DRAW=1`: the views' own drawing, for when the window server hands back blank
+        // pictures (a locked or sleeping display).
+        if env["SNAPSHOT_DRAW"] == nil, let image = Self.windowImage(window.windowNumber) {
             // The window server's picture of our own window (no recording permission needed):
             // glass and vibrancy included, which `cacheDisplay` draws as white slabs.
             rep = NSBitmapImageRep(cgImage: image)
@@ -139,6 +141,27 @@ final class MacSnapshotTests: XCTestCase {
         try await window("ticket", screen: "ticket")
     }
 
+    /// Form sheets are as tall as their rows: macOS 26 centres a sheet shorter than its window,
+    /// so blank space under a form would show as a sheet that opens low.
+    func testFormSheetsFitTheirRows() async throws {
+        guard wanted("sheet-fit") else { return }
+        let model = WindowModel(app: .shared)
+        model.start()
+        let window = makeWindow(WindowContent(request: nil, model: model).environment(AppModel.shared), size: CGSize(width: 1180, height: 760))
+        for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
+        // The mock's empty Add Host and Join forms: a field, its note and the buttons.
+        for route in [SheetRoute.pairing, .join] {
+            model.sheet = route
+            await pump(1.5)
+            let sheet = try XCTUnwrap(window.attachedSheet, "\(route)")
+            XCTAssertLessThan(sheet.frame.height, 320, "\(route) has blank space under its form")
+            model.sheet = nil
+            for _ in 0..<30 where window.attachedSheet != nil { await pump(0.1) }
+        }
+        window.close()
+        model.close()
+    }
+
     /// Files, Changes, Ports and Replays beside the focused pane (the default on the Mac).
     func testToolLeaves() async throws {
         for route in [SheetRoute.files, .diff, .browser, .replays] {
@@ -164,7 +187,8 @@ final class MacSnapshotTests: XCTestCase {
 
 
     /// New Agent opens at its final size: the host's answer (Claude Code off the PATH here)
-    /// changes the status row, never the sheet.
+    /// changes the status row, never the sheet. Its height is its form's, with nothing blank
+    /// under the prompt.
     func testNewAgentKeepsItsSize() async throws {
         guard wanted("launchAgent-steady") else { return }
         for answer in ["installed", "notOnPath", "missing"] {
@@ -252,10 +276,16 @@ final class MacSnapshotTests: XCTestCase {
     }
 
     func testSettings() async throws {
-        guard wanted("settings") else { return }
-        let window = makeWindow(ThemedRoot { SettingsView() }, size: CGSize(width: 820, height: 560))
+        try await settings("settings")
+        try await settings("settings-theme", SettingsNavigation(path: [.theme]))
+        try await settings("settings-acknowledgements", SettingsNavigation(pane: .about, path: [.acknowledgements]))
+    }
+
+    private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation()) async throws {
+        guard wanted(name) else { return }
+        let window = makeWindow(ThemedRoot { SettingsView(navigation: navigation) }, size: CGSize(width: 820, height: 560))
         await pump(1.5)
-        try capture(window, "settings")
+        try capture(window, name)
         window.close()
     }
 }
