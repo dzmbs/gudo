@@ -117,6 +117,81 @@ final class MotionUITests: XCTestCase {
         XCTAssertEqual(counts[1], first + 2, "after the close: \(counts)")
     }
 
+    /// Hiding and showing the sidebar resizes each pane once, as the slide ends.
+    @MainActor
+    func testSidebarResizesEachPaneOnce() throws {
+        let app = probedApp()
+        paneMenu(app, "Split Right")
+        XCTAssertTrue(element(app, "pane-3").waitForExistence(timeout: 5))
+        let start = settledResizes(app)
+        for step in 1...2 {
+            element(app, "toggle-sidebar").tap()
+            let counts = settledResizes(app)
+            XCTAssertEqual(counts[1], start[1].map { $0 + step }, "toggle \(step): \(counts)")
+            XCTAssertEqual(counts[3], start[3].map { $0 + step }, "toggle \(step): \(counts)")
+        }
+    }
+
+    /// The software keyboard coming up and going down resizes each pane once; focus moving
+    /// between panes while it stays up resizes none.
+    @MainActor
+    func testKeyboardResizesEachPaneOnce() throws {
+        let app = probedApp()
+        paneMenu(app, "Split Right")
+        XCTAssertTrue(element(app, "pane-3").waitForExistence(timeout: 5))
+        let start = settledResizes(app)
+
+        element(app, "pane-1").tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the software keyboard comes up")
+        var counts = settledResizes(app)
+        XCTAssertEqual(counts[1], start[1].map { $0 + 1 }, "keyboard up: \(counts)")
+        XCTAssertEqual(counts[3], start[3].map { $0 + 1 }, "keyboard up: \(counts)")
+
+        let up = counts
+        for pane in ["pane-3", "pane-1", "pane-3"] {
+            element(app, pane).tap()
+            counts = settledResizes(app)
+            XCTAssertEqual(counts, up, "focus to \(pane), keyboard still up: \(counts)")
+        }
+
+        element(app, "keybar-hide-keyboard").tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "the keyboard goes down")
+        counts = settledResizes(app)
+        XCTAssertEqual(counts[1], start[1].map { $0 + 2 }, "keyboard down: \(counts)")
+        XCTAssertEqual(counts[3], start[3].map { $0 + 2 }, "keyboard down: \(counts)")
+    }
+
+    /// A new browser tab's start page: the host's dev servers, found after it opened, arrive
+    /// below Frequently Visited, which stays where it was.
+    @MainActor
+    func testStartPageKeepsItsPlaceAsDevServersArrive() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-mock", "-screen", "start-page", "-restoreLastTarget", "NO"]
+        app.launch()
+        let frequent = app.buttons["start-frequent"].firstMatch
+        XCTAssertTrue(frequent.waitForExistence(timeout: 15))
+        let before = frequent.frame
+        let server = app.buttons["start-dev-5173"].firstMatch
+        XCTAssertFalse(server.exists, "the scan is still running")
+        XCTAssertTrue(server.waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(frequent.frame, before, "Frequently Visited stays put")
+        XCTAssertGreaterThan(server.frame.minY, frequent.frame.maxY, "dev servers come after")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "start-page-dev-servers"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// Two-pane-ready app with the resize probe, the keyboard down.
+    private func probedApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-windowProbe", "YES", "-noAutoFocus", "YES", "-sidebarShown", "YES"]
+        app.launch()
+        XCTAssertTrue(element(app, "pane-1").waitForExistence(timeout: 10))
+        return app
+    }
+
     private func paneMenu(_ app: XCUIApplication, _ title: String) {
         element(app, "pane-menu").tap()
         let item = app.buttons[title].firstMatch

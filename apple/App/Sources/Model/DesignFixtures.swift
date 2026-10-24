@@ -133,7 +133,7 @@ enum DesignFixtures {
                 try? await Task.sleep(for: .seconds(1))
                 model.openBrowser(URL(string: "about:blank")!, hostId: ports.hostId, placement: .tab)
                 Task {
-                    try? await Task.sleep(for: .seconds(4))
+                    try? await Task.sleep(for: .seconds(6))
                     ports.ports = found
                 }
             }

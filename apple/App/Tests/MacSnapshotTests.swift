@@ -93,7 +93,7 @@ final class MacSnapshotTests: XCTestCase {
     /// The window on the design fixture `screen`, then whatever `then` opens over it.
     private func window(
         _ name: String, screen: String = "splits", size: CGSize = CGSize(width: 1180, height: 760),
-        then: ((WindowModel) async -> Void)? = nil
+        early: String? = nil, then: ((WindowModel) async -> Void)? = nil
     ) async throws {
         guard wanted(name) else { return }
         let model = WindowModel(app: .shared)
@@ -108,6 +108,10 @@ final class MacSnapshotTests: XCTestCase {
             for _ in 0..<20 where workspace.focusedPane == nil { await pump(0.1) }
             await DesignFixtures.apply(screen, workspace: workspace, model: model)
         }
+        if let early {
+            await pump(2)
+            try capture(window, early)
+        }
         await then?(model)
         await pump(2)
         try capture(window, name)
@@ -118,6 +122,9 @@ final class MacSnapshotTests: XCTestCase {
             try capture(child, name + "-popover")
         }
         model.sheet = nil
+        // Window tabs outlive the window: a page left in one would be shown by the next
+        // fixture's window too, which WebKit does not allow.
+        for tab in model.composites.tabs where !tab.browsers.isEmpty { model.closeMixedTab(tab.id) }
         await pump(0.3)
         window.close()
         model.close()
@@ -143,6 +150,60 @@ final class MacSnapshotTests: XCTestCase {
     func testToolLeaves() async throws {
         for route in [SheetRoute.files, .diff, .browser, .replays] {
             try await window("leaf-\(route.rawValue)") { $0.sheet = route }
+        }
+    }
+
+    /// A page opened from the Ports leaf opens in a browser leaf beside it; Ports stays a list.
+    func testPortsLeafOpensPagesBeside() async throws {
+        try await window("leaf-browser-open") { model in
+            model.sheet = .browser
+            // Once the leaf has landed: a page's view made mid-split is made twice (WebKit traps).
+            await self.pump(1.5)
+            await model.openPort(model.ports.ports[0])
+            let tab = try? XCTUnwrap(model.activeMixed)
+            XCTAssertEqual(tab?.tools.values.map(\.tool), [.ports], "Ports stays a leaf")
+            XCTAssertEqual(tab?.browsers.count, 1, "the page is a leaf of its own")
+            XCTAssertNotNil(tab?.focusedBrowser, "and has the focus")
+            XCTAssertNil(model.browserURL, "the Ports leaf shows no page")
+            // Again: the leaf showing it comes forward.
+            await model.openPort(model.ports.ports[0])
+            XCTAssertEqual(model.activeMixed?.browsers.count, 1)
+        }
+    }
+
+    /// Pane ▸ Open in New Window moves the focused tool leaf to a window, with ⌥⌘N.
+    func testOpenInNewWindowIsInTheMenuBar() throws {
+        guard wanted("menu") else { return }
+        let item = NSApp.mainMenu?.item(withTitle: "Pane")?.submenu?.item(withTitle: "Open in New Window")
+        XCTAssertNotNil(item, "Pane ▸ Open in New Window")
+        XCTAssertEqual(item?.keyEquivalent, "n")
+        XCTAssertEqual(item?.keyEquivalentModifierMask.intersection([.command, .option, .shift, .control]), [.command, .option])
+    }
+
+    /// A new browser tab's start page while its host's dev servers are found, and after: they
+    /// arrive below Frequently and Recently Visited, which stay where they were.
+    func testStartPageKeepsItsPlace() async throws {
+        try await window("start-page", screen: "start-page", early: "start-page-scanning") { _ in await self.pump(3) }
+    }
+
+    /// Add Host fits its mode: compact for SSH, a ticket's lines, the sign-in section with the
+    /// real hosts model; an address typed changes values, never the sheet's size.
+    func testAddHostFitsItsMode() async throws {
+        guard wanted("addHost") else { return }
+        let model = WindowModel(app: .shared)
+        for live in [false, true] {
+            for (mode, destination) in [(PairingSheet.Mode.ssh, ""), (.ssh, "me@devbox:2222"), (.ticket, "")] {
+                let window = makeWindow(ThemedRoot {
+                    Color.clear.sheet(isPresented: .constant(true)) {
+                        PairingSheet(directory: model.hosts, live: live ? model.app.hosts : nil, initialMode: mode, destination: destination)
+                            .environment(model).environment(model.app)
+                    }
+                }, size: CGSize(width: 1180, height: 760))
+                await pump(1.5)
+                let sheet = try XCTUnwrap(window.attachedSheet)
+                try capture(sheet, "addHost-\(mode.rawValue)\(destination.isEmpty ? "" : "-typed")\(live ? "-live" : "")")
+                window.close()
+            }
         }
     }
 
