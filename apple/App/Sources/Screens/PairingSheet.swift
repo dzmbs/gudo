@@ -125,10 +125,22 @@ struct PairingSheet: View {
         #if os(iOS)
         .phoneDetents([.medium, .large])
         #else
-        // Fixed: previews, the key section and errors arrive while typing; the form scrolls.
-        .frame(width: 500, height: 560)
+        // Fitted to the mode, as the system's sheets are: when it opens and when the mode
+        // changes (a choice, so the change animates), never for what arrives later (a new key's
+        // public half, an error), which scrolls.
+        .frame(width: 500, height: macHeight)
+        .animation(DS.Motion.snappy, value: mode)
         #endif
     }
+
+    #if os(macOS)
+    private var macHeight: CGFloat {
+        switch mode {
+        case .ssh: live == nil ? 340 : 590
+        case .ticket, .scan: 350
+        }
+    }
+    #endif
 
     private var methodPicker: some View {
         Picker("Method", selection: $mode) {
@@ -158,23 +170,22 @@ struct PairingSheet: View {
                 .focused($focus, equals: .destination)
                 .onSubmit(confirm)
                 .accessibilityIdentifier("pairing-destination")
-            if let parsed {
-                preview("User", parsed.user ?? defaultUser, placeholder: parsed.user == nil)
-                preview("Host", parsed.host, placeholder: false)
-                preview("Port", parsed.port.map(String.init) ?? "22", placeholder: parsed.port == nil)
-                if isTailnet {
-                    // Quiet while typing: what the address is, and what it needs.
-                    LabeledContent("Network") {
-                        HStack(spacing: DS.Space.xs) {
-                            TailscaleTag()
-                            Text("needs Tailscale connected here")
-                                .font(DS.Font.rowSubtitle)
-                                .foregroundStyle(DS.Palette.textTertiary)
-                                .lineLimit(1)
-                        }
+            // Always there, the defaults standing in until typed: the form keeps its shape.
+            preview("User", parsed?.user ?? defaultUser, placeholder: parsed?.user == nil)
+            preview("Host", parsed?.host ?? "Required", placeholder: parsed == nil)
+            preview("Port", parsed?.port.map(String.init) ?? "22", placeholder: parsed?.port == nil)
+            if isTailnet {
+                // Quiet while typing: what the address is, and what it needs.
+                LabeledContent("Network") {
+                    HStack(spacing: DS.Space.xs) {
+                        TailscaleTag()
+                        Text("needs Tailscale connected here")
+                            .font(DS.Font.rowSubtitle)
+                            .foregroundStyle(DS.Palette.textTertiary)
+                            .lineLimit(1)
                     }
-                    .accessibilityIdentifier("pairing-tailscale")
                 }
+                .accessibilityIdentifier("pairing-tailscale")
             }
         } footer: {
             VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -216,7 +227,8 @@ struct PairingSheet: View {
             // The field's own placeholder, so it and the caret share one inset.
             TextField("Ticket", text: $ticket, prompt: Text("Pairing ticket"), axis: .vertical)
                 .labelsHidden()
-                .lineLimit(4...8)
+                // A pasted ticket scrolls inside its lines rather than growing the form.
+                .lineLimit(5, reservesSpace: true)
                 .textFieldStyle(.plain)
                 .font(DS.Font.literalSmall)
                 .autocorrectionDisabled()
