@@ -74,6 +74,28 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertNil(items.first?.request)
     }
 
+    /// A dialog read off the screen (Claude's folder-trust menu) has no words: no empty request,
+    /// and no shared approval card.
+    func testADialogWithoutWordsMakesNoEmptyRequest() {
+        let metas: [PaneId: PaneMeta] = [
+            PaneId(1): meta(1, agent: AgentStatus(kind: "claude", state: .blocked(requestId: 3, summary: "", options: []))),
+        ]
+        let item = try! XCTUnwrap(LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: metas, attention: []).first)
+        XCTAssertEqual(item.state, .blocked)
+        XCTAssertNil(item.request)
+        XCTAssertFalse(SharedApproval.shows(summary: ""))
+        XCTAssertFalse(SharedApproval.shows(summary: " \n"))
+        XCTAssertTrue(SharedApproval.shows(summary: "rm -rf build"))
+    }
+
+    /// The daemon drops a pane's agent once its process exits: the pane leaves the Agents list.
+    func testAnAgentThatExitedLeavesTheList() {
+        let running: [PaneId: PaneMeta] = [PaneId(1): meta(1, agent: AgentStatus(kind: "claude", state: .idle))]
+        XCTAssertEqual(LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: running, attention: []).map(\.id), ["h/1"])
+        let exited: [PaneId: PaneMeta] = [PaneId(1): meta(1, agent: nil)]
+        XCTAssertTrue(LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: exited, attention: []).isEmpty)
+    }
+
     /// A pane titled with its directory and an agent in the home directory: the row says what
     /// the agent waits for and "~", never a lone "~" and the user's name.
     func testAgentInHomeDirectoryReadsAsAState() {

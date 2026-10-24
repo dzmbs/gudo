@@ -252,7 +252,7 @@ final class Workspace {
         if let daemon = host as? DaemonConnection, let agent = daemon.meta[pane]?.agent {
             let kind = agent.kind.prefix(1).uppercased() + agent.kind.dropFirst()
             switch agent.state {
-            case .blocked(_, let summary, _): return "\(kind): \(summary)"
+            case .blocked(_, let summary, _): return SharedApproval.shows(summary: summary) ? "\(kind): \(summary)" : "\(kind) needs you"
             case .running: return daemon.meta[pane].map { $0.title.isEmpty ? "\(kind) working" : "\(kind): \($0.title)" }
             case .idle, .done: break
             }

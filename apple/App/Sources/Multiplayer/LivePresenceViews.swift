@@ -227,7 +227,7 @@ struct SharedApproval: View {
         if !session.others.isEmpty {
             let agent = workspace.daemon?.meta[PaneId(pane)]?.agent
             // Still "blocked" until the agent's next event: an answered request is done.
-            if case .blocked(let request, let summary, let choices)? = agent?.state,
+            if case .blocked(let request, let summary, let choices)? = agent?.state, Self.shows(summary: summary),
                !session.decisions.contains(where: { $0.requestId == request }) {
                 card(request: request, summary: summary, choices: choices, agent: workspace.agentName(PaneId(pane)) ?? "The agent")
                     .task(id: request) { options[request] = choices }
@@ -238,6 +238,12 @@ struct SharedApproval: View {
                 }
             }
         }
+    }
+
+    /// Only a request that says what it asks gets a card: a dialog read off the screen (a TUI
+    /// menu such as Claude's folder-trust prompt) carries no words to show.
+    static func shows(summary: String) -> Bool {
+        !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// The last answer on this pane, for a few seconds after it came.
