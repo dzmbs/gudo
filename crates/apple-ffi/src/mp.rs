@@ -1067,6 +1067,12 @@ impl DaemonClient {
         self.inner.me().map(Into::into)
     }
 
+    /// The device key (hex) that signed the invite this client joined with, `None` for a
+    /// paired device.
+    pub fn inviter_device(&self) -> Option<String> {
+        self.inner.inviter_device().map(|d| hex(&d.0))
+    }
+
     /// The last participant list pushed (no round trip).
     pub fn participant_list(&self) -> Vec<Participant> {
         self.inner

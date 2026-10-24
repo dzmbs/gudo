@@ -374,6 +374,18 @@ impl Client {
         lock(&self.inner.mp.me).clone()
     }
 
+    /// The device that signed the invite this client joined with (`None` for paired
+    /// devices): whom a guest follows by default.
+    pub fn inviter_device(&self) -> Option<proto::DeviceId> {
+        self.inner
+            .mp
+            .invite
+            .as_ref()?
+            .chain
+            .leaf()
+            .map(|g| g.issuer)
+    }
+
     /// The last participant list the daemon pushed.
     pub fn participant_list(&self) -> Vec<Participant> {
         lock(&self.inner.mp.participants).clone()

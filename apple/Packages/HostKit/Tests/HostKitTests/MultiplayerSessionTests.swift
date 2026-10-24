@@ -21,6 +21,9 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         var policies: [(UInt64, ApprovalPolicy)] = []
         var claims: [(UInt64, Bool)] = []
         var policyError: MultiplayerError?
+        var inviter: String?
+        var grants: [GrantInfo] = []
+        var linkRequests: [String] = []
     }
     let state = Mutex(State())
 
@@ -40,7 +43,12 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         let link = "unnamed://join/abc\(options.label.lowercased())"
         return CreatedInvite(link: link, qrPayload: link.uppercased(), grantId: String(repeating: "ab", count: 16), expiresMs: options.ttlSecs.map { $0 * 1000 })
     }
-    func listGrants() async throws -> [GrantInfo] { [] }
+    func listGrants() async throws -> [GrantInfo] { state.withLock { $0.grants } }
+    func inviterDevice() -> String? { state.withLock { $0.inviter } }
+    func inviteLink(grantId: String, inviter: String) async throws -> String {
+        state.withLock { $0.linkRequests.append(grantId) }
+        return "unnamed://join/again-\(grantId)"
+    }
     func listDevices() async throws -> [DeviceInfo] { [] }
     func revoke(target: RevokeTarget) async throws -> RevokeResult {
         state.withLock { $0.revoked.append(target) }
@@ -95,8 +103,8 @@ private func person(_ actor: Actor, _ name: String, _ roles: [Role], focus: UInt
     UnnamedCore.Participant(actor: actor, name: name, roles: roles, scope: .daemon, grantId: nil, sinceMs: 1, state: .active, focus: focus, typing: typing, cursor: nil)
 }
 
-private func peer(_ id: UInt64, rev: UInt64, _ actor: Actor, _ name: String, focus: UInt64? = nil, typing: UInt64? = nil, draft: Draft? = nil) -> Peer {
-    Peer(peer: id, rev: rev, actor: actor, name: name, roles: [.driver], device: .tablet, sinceMs: 1, state: .active,
+private func peer(_ id: UInt64, rev: UInt64, _ actor: Actor, _ name: String, roles: [Role] = [.driver], focus: UInt64? = nil, typing: UInt64? = nil, draft: Draft? = nil) -> Peer {
+    Peer(peer: id, rev: rev, actor: actor, name: name, roles: roles, device: .tablet, sinceMs: 1, state: .active,
          focus: focus, viewport: nil, typing: typing, draft: draft, following: nil)
 }
 
@@ -181,6 +189,86 @@ private func settle(_ condition: () -> Bool) async throws {
         #expect(session.leaderPeer?.peer == 3 && session.leaderPeer?.focus == 7)
         session.follow(nil)
         #expect(session.leaderPeer == nil)
+    }
+
+    @Test func guestsFollowTheirInviterUntilTheyMoveOnTheirOwn() {
+        let session = MultiplayerSession()
+        let viewer = Actor(principal: "cc", device: String(repeating: "c", count: 64))
+        session.apply(.joined(info: info(viewer, "Gus", [.viewer], grant: "g1")))
+        // Only the owner here: the guest follows them as soon as they show up.
+        session.apply(.peers(you: 3, peers: [peer(3, rev: 1, viewer, "Gus", roles: [.viewer]), peer(1, rev: 2, ownerActor, "Alex", roles: [.owner], focus: 4)]))
+        #expect(session.following == ownerActor.principal)
+        #expect(session.leaderPeer?.focus == 4)
+        // A move of one's own ends it for good; Follow starts it again.
+        session.breakFollow()
+        session.apply(.peerChanged(peer: peer(1, rev: 3, ownerActor, "Alex", roles: [.owner], focus: 5)))
+        #expect(session.following == nil && session.followDeclined)
+        session.follow(ownerActor.principal)
+        #expect(session.following == ownerActor.principal && !session.followDeclined)
+        session.follow(nil)
+        session.apply(.peerChanged(peer: peer(1, rev: 4, ownerActor, "Alex", roles: [.owner], focus: 6)))
+        #expect(session.following == nil, "Stop stays stopped")
+    }
+
+    @Test func aDelegatedGuestFollowsWhoeverInvitedThem() async throws {
+        let client = FakeMultiplayerClient()
+        client.state.withLock { $0.inviter = guestActor.device }
+        let session = MultiplayerSession()
+        session.attach(client)
+        let viewer = Actor(principal: "cc", device: String(repeating: "c", count: 64))
+        session.apply(.joined(info: info(viewer, "Gus", [.viewer], grant: "g2")))
+        session.apply(.peers(you: 3, peers: [
+            peer(1, rev: 5, ownerActor, "Alex", roles: [.owner]), peer(2, rev: 1, guestActor, "Mira"), peer(3, rev: 1, viewer, "Gus", roles: [.viewer]),
+        ]))
+        #expect(session.following == guestActor.principal)
+    }
+
+    @Test func ownersAndPairedDevicesNeverFollowByThemselves() {
+        let session = MultiplayerSession()
+        session.apply(.joined(info: info(ownerActor, "Alex", [.owner])))
+        session.apply(.peers(you: 1, peers: [peer(1, rev: 1, ownerActor, "Alex", roles: [.owner]), peer(2, rev: 2, guestActor, "Mira", roles: [.owner])]))
+        #expect(session.following == nil)
+    }
+
+    @Test func sharingListsLinksAndPeopleAndSharesALinkAgain() async throws {
+        let client = FakeMultiplayerClient()
+        let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        func grant(_ id: String, expires: UInt64?, revoked: Bool = false, issued: UInt64) -> GrantInfo {
+            GrantInfo(grant: Grant(grantId: id, issuer: ownerActor.device, roles: [.viewer], scope: .daemon, issuedAtMs: issued, expiresMs: expires,
+                                   maxUses: 3, bind: nil, delegate: false, label: id), parent: nil, bound: [], revoked: revoked)
+        }
+        client.state.withLock {
+            $0.grants = [
+                grant("old", expires: now + 60_000, issued: 1), grant("new", expires: nil, issued: 2),
+                grant("gone", expires: nil, revoked: true, issued: 3), grant("over", expires: now - 1, issued: 4),
+            ]
+        }
+        let session = MultiplayerSession()
+        session.attach(client)
+        session.apply(.joined(info: info(ownerActor, "Alex", [.owner])))
+        try await settle { session.grants.count == 4 }
+        #expect(session.activeGrants.map(\.grant.grantId) == ["new", "old"])
+        #expect(session.sharingSummary == "Shared · 2 links")
+        var mira = person(guestActor, "Mira", [.viewer])
+        mira.grantId = "old"
+        session.apply(.participants(participants: [person(ownerActor, "Alex", [.owner]), mira]))
+        #expect(session.guests.map(\.name) == ["Mira"])
+        #expect(session.sharingSummary == "Shared · 1 person · 2 links")
+
+        // Made here: the link as created. Made elsewhere: asked of the host once.
+        let made = try await session.createInvite(InviteOptions(
+            roles: [.viewer], scope: .daemon, ttlSecs: nil, maxUses: nil, delegate: false, label: "Kim", inviter: "Alex", knock: false, sinceJoin: false))
+        let mine = GrantInfo(grant: Grant(grantId: made.grantId, issuer: ownerActor.device, roles: [.viewer], scope: .daemon, issuedAtMs: 5, expiresMs: nil,
+                                          maxUses: nil, bind: nil, delegate: false, label: "Kim"), parent: nil, bound: [], revoked: false)
+        #expect(await session.link(for: mine) == made.link)
+        let old = session.activeGrants[1]
+        #expect(await session.link(for: old) == "unnamed://join/again-old")
+        #expect(await session.link(for: old) == "unnamed://join/again-old")
+        #expect(client.state.withLock { $0.linkRequests } == ["old"])
+
+        // Removing a person revokes their device, not the link they came with.
+        await session.remove(mira)
+        #expect(client.state.withLock { $0.revoked } == [.device(device: guestActor.device)])
     }
 
     @Test func ownNavigationBreaksFollowingWithAWayBack() {
