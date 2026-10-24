@@ -183,6 +183,29 @@ private func settle(_ condition: () -> Bool) async throws {
         #expect(session.leaderPeer == nil)
     }
 
+    @Test func ownNavigationBreaksFollowingWithAWayBack() {
+        let session = MultiplayerSession()
+        session.apply(.joined(info: info(ownerActor, "Alex", [.owner])))
+        session.apply(.participants(participants: [person(ownerActor, "Alex", [.owner]), person(guestActor, "Mira Holt", [.driver])]))
+        session.breakFollow()
+        #expect(session.notice == nil, "nothing to break")
+        session.follow(guestActor.principal)
+        session.breakFollow()
+        #expect(session.following == nil)
+        #expect(session.notice?.message == "Stopped following Mira")
+        #expect(session.notice?.kind == .stoppedFollowing(guestActor.principal))
+        // Typing in a composer is a move of one's own too.
+        session.follow(guestActor.principal)
+        session.setTyping(3)
+        #expect(session.following == nil)
+        session.setTyping(nil)
+        // Stopping by hand is no news.
+        session.follow(guestActor.principal)
+        let notice = session.notice
+        session.follow(nil)
+        #expect(session.notice == notice)
+    }
+
     @Test func peopleComingAndGoingAreAnnouncedOncePerPerson() {
         let session = MultiplayerSession()
         session.apply(.joined(info: info(ownerActor, "Alex", [.owner])))

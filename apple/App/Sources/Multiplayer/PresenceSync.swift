@@ -8,12 +8,15 @@ import UIKit
 
 /// Keeps a window's live presence in step with the host, ten times a second: reports where this
 /// device looks (the focused pane's scroll position), and while following someone moves the
-/// window to their pane and scroll position. Moving to another pane yourself stops following.
+/// window to their pane and scroll position. Any move of your own (another pane or tab, a scroll,
+/// a key) stops following.
 @MainActor
 final class PresenceSync {
     private let workspace: Workspace
     /// The pane following last put in focus, to tell the user's own moves from ours.
     private var followedFocus: PaneId?
+    /// That pane's `moves` after following's own last scroll; any other count is the user's.
+    private var followedMoves: Int?
     /// The leader's viewport last applied, so their every scroll is applied once.
     private var appliedViewport: PeerViewport?
     private var leaderPeer: UInt64?
@@ -46,13 +49,16 @@ final class PresenceSync {
     private func follow(_ session: MultiplayerSession) {
         guard session.following != nil else {
             followedFocus = nil
+            followedMoves = nil
             appliedViewport = nil
             return
         }
-        // Moved away by hand: stop following, as Zed does.
-        if let followedFocus, workspace.focusedPane != followedFocus {
-            session.follow(nil)
+        // Moved by hand: stop following, as Zed and Figma do.
+        if let followedFocus,
+           workspace.focusedPane != followedFocus || workspace.panes[followedFocus]?.moves != followedMoves {
+            session.breakFollow()
             self.followedFocus = nil
+            followedMoves = nil
             return
         }
         guard let leader = session.leaderPeer, let focus = leader.focus else { return }
@@ -73,6 +79,7 @@ final class PresenceSync {
             let delta = Int(current) - Int(target.fromBottom)
             if delta != 0 { view.surface.scroll(rows: delta) }
         }
+        followedMoves = workspace.panes[pane]?.moves
     }
 }
 

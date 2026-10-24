@@ -147,8 +147,19 @@ final class MultiplayerFlowsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Following Rex"].firstMatch.exists)
         shot(app, "flows-10-following")
         // Rex moves to pane 2 once followed; give the window time to go along (the script
-        // checks Rex saw it arrive), then stop.
+        // checks Rex saw it arrive).
         sleep(4)
+        // Scrolling by hand stops following, quietly, with a way back.
+        let pane = element(app, "pane-2")
+        XCTAssertTrue(pane.waitForExistence(timeout: 5), "following brought the window to Rex's pane")
+        pane.swipeDown(velocity: .slow)
+        XCTAssertTrue(pill.waitForNonExistence(timeout: 5), "a scroll of one's own ends following")
+        let banner = element(app, "toast")
+        XCTAssertTrue(banner.waitForExistence(timeout: 5))
+        XCTAssertEqual(banner.label, "Stopped following Rex")
+        shot(app, "flows-11-stopped-following")
+        element(app, "toast-action").tap()
+        XCTAssertTrue(pill.waitForExistence(timeout: 5), "Follow Again follows again")
         element(app, "stop-following").tap()
         XCTAssertTrue(pill.waitForNonExistence(timeout: 5))
     }
