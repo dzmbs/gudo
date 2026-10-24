@@ -238,6 +238,7 @@ struct NewTaskSheet: View {
                     .padding(.top, DS.Space.m)
             }
             #endif
+            .macFittedForm(maxHeight: 560)
             .onAppear {
                 let seed = model.newAgentSeed
                 model.newAgentSeed = NewAgentSeed()
@@ -270,8 +271,8 @@ struct NewTaskSheet: View {
         #if os(iOS)
         .phoneDetents([.large])
         #else
-        // One size whatever the host answers or the form shows; the form scrolls inside it.
-        .frame(width: 520, height: 600)
+        // As tall as the form (its status row is one size in every state); a longer form scrolls.
+        .frame(width: 520)
         #endif
     }
 

@@ -262,7 +262,11 @@ final class LiveAgentFeed: AgentFeed {
                 if answered[id] == requestId {
                     state = .working
                 } else {
-                    request = options.isEmpty ? .question(summary) : .permission(tool: "Wants to run", detail: summary)
+                    if !options.isEmpty {
+                        request = .permission(tool: "Wants to run", detail: summary)
+                    } else if SharedApproval.shows(summary: summary) {
+                        request = .question(summary)
+                    }
                     // The title often repeats the request (Claude puts it there): say what it waits for.
                     let title = meta.title.trimmingCharacters(in: .whitespaces)
                     let repeats = title.isEmpty || summary.contains(title) || title.contains(summary)

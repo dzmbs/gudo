@@ -108,6 +108,7 @@ struct PairingSheet: View {
                     .padding(.top, DS.Space.m)
             }
             #endif
+            .macFittedForm(maxHeight: 520)
             .onAppear { focusField() }
             .onChange(of: mode) {
                 error = nil

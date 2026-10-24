@@ -135,6 +135,8 @@ pub(crate) struct AgentRuntime {
     /// Notifications the arbiter asked for, with the event that caused them, until the core
     /// takes them for the attention feed.
     notices: Vec<(agents::Notify, Option<AgentEvent>)>,
+    /// The agent's process, once seen as the pane's foreground job.
+    pid: Option<u32>,
 }
 
 impl AgentRuntime {
@@ -159,6 +161,7 @@ impl AgentRuntime {
             requests: Vec::new(),
             last_decided: None,
             notices: Vec::new(),
+            pid: None,
         }
     }
 
@@ -274,6 +277,33 @@ impl AgentRuntime {
         let update = self.arbiter.tick(now());
         events.extend(self.take(update));
         events
+    }
+
+    /// Notes the agent's process, seen as the pane's foreground job.
+    pub fn note_process(&mut self, pid: u32) {
+        self.pid = Some(pid);
+    }
+
+    /// Follows the agent's process through the pane's foreground job: `true` once the process
+    /// seen there has exited, or, if it was never seen, once the pane is back at its own shell
+    /// (`at_shell`). The shell outlives the agent, and hooks don't report every exit (Claude
+    /// quitting at its trust prompt sends no SessionEnd).
+    pub fn process_gone(
+        &mut self,
+        foreground: Option<&pty::ForegroundProcess>,
+        at_shell: bool,
+        alive: impl FnOnce(u32) -> bool,
+    ) -> bool {
+        if let Some(fg) = foreground
+            && fg.program() == program(self.kind)
+        {
+            self.note_process(fg.pid);
+            return false;
+        }
+        match self.pid {
+            Some(pid) => foreground.is_none_or(|fg| fg.pid != pid) && !alive(pid),
+            None => at_shell,
+        }
     }
 
     pub fn process_exited(&mut self) -> Option<AgentEvent> {
@@ -724,7 +754,9 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
     let payload = serde_json::to_vec(&request.payload).unwrap_or_default();
     let (event, blocked) = {
         let mut agent = lock(&entry.agent);
+        // A late SessionEnd must not bring back an agent that already exited.
         if agent.is_none()
+            && request.event != "SessionEnd"
             && let Some(kind) = agent_kind(&request.agent)
         {
             *agent = Some(AgentRuntime::new(kind, pane_id, adapter(kind), false));
@@ -777,5 +809,54 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         Ok(Ok(response)) => response,
         // No decision: the agent falls back to its own prompt in the terminal.
         _ => HookResponse::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime() -> AgentRuntime {
+        AgentRuntime::new(
+            AgentKind::Claude,
+            PaneId(1),
+            adapter(AgentKind::Claude),
+            false,
+        )
+    }
+
+    fn job(pid: u32, program: &str) -> pty::ForegroundProcess {
+        pty::ForegroundProcess {
+            pid,
+            name: program.into(),
+            argv: vec![program.into()],
+        }
+    }
+
+    #[test]
+    fn the_shell_before_the_agent_starts_is_not_an_exit() {
+        let mut rt = runtime();
+        assert!(!rt.process_gone(Some(&job(10, "zsh")), false, |_| false));
+    }
+
+    #[test]
+    fn an_agent_never_seen_ends_at_the_shell() {
+        let mut rt = runtime();
+        assert!(rt.process_gone(Some(&job(10, "zsh")), true, |_| false));
+    }
+
+    #[test]
+    fn the_agent_exiting_back_to_the_shell_is_an_exit() {
+        let mut rt = runtime();
+        assert!(!rt.process_gone(Some(&job(20, "claude")), false, |_| true));
+        assert!(rt.process_gone(Some(&job(10, "zsh")), true, |_| false));
+    }
+
+    #[test]
+    fn a_suspended_agent_is_still_running() {
+        let mut rt = runtime();
+        assert!(!rt.process_gone(Some(&job(20, "claude")), false, |_| true));
+        assert!(!rt.process_gone(Some(&job(10, "zsh")), true, |pid| pid == 20));
+        assert!(!rt.process_gone(None, false, |pid| pid == 20));
     }
 }
