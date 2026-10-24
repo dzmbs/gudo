@@ -1169,6 +1169,21 @@ impl DaemonClient {
         Ok(all.into_iter().map(Into::into).collect())
     }
 
+    /// A registered grant's shareable link, again (owner only).
+    ///
+    /// # Errors
+    ///
+    /// `Invalid` for a malformed id; `Failed` when the host is too old; the daemon's refusal.
+    pub async fn invite_link(
+        &self,
+        grant_id: String,
+        inviter: String,
+    ) -> Result<String, MultiplayerError> {
+        let id = proto::GrantId(unhex("grant id", &grant_id)?);
+        self.mp_call(|c| async move { c.invite_link(id, inviter).await })
+            .await
+    }
+
     /// Owner and guest devices (owner only).
     ///
     /// # Errors

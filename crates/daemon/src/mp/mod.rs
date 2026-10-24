@@ -819,6 +819,20 @@ impl Mp {
             .collect()
     }
 
+    /// A registered grant's chain and terms, for sharing its link again.
+    pub fn invite_link(&self, id: GrantId) -> Result<MpResponse, MpError> {
+        let store = lock(&self.store);
+        let stored = store
+            .grant(id)
+            .ok_or_else(|| MpError::NotFound(format!("grant {}", hex(&id.0))))?;
+        let chain = Store::chain_of(stored)
+            .ok_or_else(|| MpError::Failed("stored grant chain is unreadable".into()))?;
+        Ok(MpResponse::InviteLink {
+            chain,
+            terms: stored.terms,
+        })
+    }
+
     pub fn list_devices(&self, core: &Core) -> Vec<DeviceInfo> {
         let connected = |d: DeviceId| {
             lock(&self.live)

@@ -1078,7 +1078,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Workspace`: `EditorLaunch`, `EditorStop`, `VsCodeCliInstall`, `VsCodeTunnelStart`, `VsCodeTunnelStop` | **owner** | daemon |
 | Streams: `PortForward`, `Forward`, `Upload`, `Download` | driver | host |
 | `RegisterGrant` | owner, or the chain's leaf issuer | — |
-| `ListGrants`, `ListDevices`, `Revoke`, `Audit` | **owner** | daemon |
+| `ListGrants`, `InviteLink`, `ListDevices`, `Revoke`, `Audit` | **owner** | daemon |
 | `Artifact`: `List`, `Get`, `Export`; blob download | any role | artifact visible (below) |
 | `Artifact`: `Create`, `Apply`, `Delete`, `SetAnchor`, `SetPreview`; `InkLive`; blob upload | **prompter or driver** | artifact visible; anchor pane / session in scope |
 | `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |

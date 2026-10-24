@@ -691,3 +691,136 @@ async fn pane_scoped_guest_sees_only_its_pane() {
     drop((pam, owner));
     daemon.shutdown().await;
 }
+
+/// The owner's sharing list: every link with its terms and uses, its link again for copying,
+/// and revoking one refuses it at once while the others keep working.
+#[tokio::test(flavor = "multi_thread")]
+async fn links_are_listed_shared_again_and_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let once = invite(&owner, spec(Roles::VIEWER, "once")).await;
+    let mut open = spec(Roles::DRIVER | Roles::VIEWER, "open");
+    open.max_uses = None;
+    let open = invite(&owner, open).await;
+    let mut ann = guest(&once, pane).await;
+
+    let grants = owner.client.list_grants().await.unwrap();
+    let listed = |id| grants.iter().find(|g| g.grant.grant_id == id).unwrap();
+    let (a, b) = (listed(once.chain.grant_id()), listed(open.chain.grant_id()));
+    assert_eq!((a.grant.max_uses, a.bound.len()), (Some(1), 1));
+    assert_eq!((b.grant.max_uses, b.bound.len()), (None, 0));
+    assert!(b.grant.roles.contains(Roles::DRIVER) && !b.revoked);
+
+    // Its link again, the same invite the creator shared.
+    let again = owner
+        .client
+        .invite_link(open.chain.grant_id(), "alice".into())
+        .await
+        .unwrap();
+    assert_eq!(again.parse::<Invite>().unwrap(), open);
+    assert!(matches!(
+        owner
+            .client
+            .invite_link(client_core::proto::GrantId([9; 16]), "alice".into())
+            .await,
+        Err(MpError::NotFound(_))
+    ));
+    assert!(matches!(
+        ann.client
+            .invite_link(open.chain.grant_id(), "ann".into())
+            .await,
+        Err(MpError::Forbidden(_))
+    ));
+
+    // Revoked: whoever used it is out now and the link is refused; the other link works.
+    owner
+        .client
+        .revoke(RevokeTarget::Grant(once.chain.grant_id()))
+        .await
+        .unwrap();
+    ann.until("ann kicked", |c| {
+        c.refused.iter().any(|r| r.contains("Revoked"))
+    })
+    .await;
+    let mut late = TestClient::join(&once.to_string(), ClientConfig::generate_key());
+    late.until("revoked link refused", |c| !c.refused.is_empty())
+        .await;
+    let mut bob = guest(&open, pane).await;
+    owner.type_line(pane, "echo after-revoke");
+    bob.wait_text(pane, "after-revoke").await;
+    let grants = owner.client.list_grants().await.unwrap();
+    assert!(
+        grants
+            .iter()
+            .any(|g| g.grant.grant_id == once.chain.grant_id() && g.revoked)
+    );
+    drop((ann, bob, late, owner));
+    daemon.shutdown().await;
+}
+
+/// Removing one person disconnects their device at once and keeps them out, while others who
+/// joined with the same link stay.
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_person_keeps_the_link_for_everyone_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let mut team = spec(Roles::VIEWER, "team");
+    team.max_uses = None;
+    let link = invite(&owner, team).await;
+    let ann_key = ClientConfig::generate_key();
+    let mut ann = TestClient::join(&link.to_string(), ann_key.clone());
+    ann.client.attach(None);
+    ann.until("ann in", |c| c.layout.is_some()).await;
+    let mut bob = guest(&link, pane).await;
+    owner
+        .until("both listed", |c| c.client.participant_list().len() == 3)
+        .await;
+
+    let ann_device = ann.client.me().unwrap().actor.device;
+    let MpResponse::Revoked { disconnected, .. } = owner
+        .client
+        .revoke(RevokeTarget::Device(ann_device))
+        .await
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(disconnected, 1);
+    ann.until("ann removed", |c| {
+        c.mp.iter().any(|e| matches!(e, MultiplayerEvent::Revoked))
+    })
+    .await;
+    owner
+        .until("ann gone", |c| {
+            c.client
+                .participant_list()
+                .iter()
+                .all(|p| p.actor.device != ann_device)
+        })
+        .await;
+    // The same device cannot come back with the link; Bob is still here.
+    drop(ann);
+    let mut again = TestClient::join(&link.to_string(), ann_key);
+    again
+        .until("ann refused", |c| {
+            c.refused.iter().any(|r| r.contains("Revoked"))
+        })
+        .await;
+    owner.type_line(pane, "echo bob-stays");
+    bob.wait_text(pane, "bob-stays").await;
+    assert!(
+        !owner
+            .client
+            .list_grants()
+            .await
+            .unwrap()
+            .iter()
+            .any(|g| g.revoked)
+    );
+    drop((again, bob, owner));
+    daemon.shutdown().await;
+}
