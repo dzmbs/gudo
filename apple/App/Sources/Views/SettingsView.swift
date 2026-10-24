@@ -8,9 +8,8 @@ import UnnamedCore
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     #if os(macOS)
-    @State private var pane = SettingsPane.appearance
+    @State private var navigation: SettingsNavigation
     #else
-    @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     /// `-screen themes` opens the theme picker (design review).
     @State private var path: [SettingsPage] = LaunchOptions.screen == "themes" ? [.theme] : []
     #endif
@@ -21,6 +20,10 @@ struct SettingsView: View {
     @State private var jump: SettingsEntry?
     #if os(macOS)
     private static let sidebarWidth: CGFloat = 220
+
+    init(navigation: SettingsNavigation = SettingsNavigation()) {
+        _navigation = State(initialValue: navigation)
+    }
     #endif
 
     var body: some View {
@@ -36,7 +39,7 @@ struct SettingsView: View {
                         .padding(.top, DS.Space.xs)
                         .padding(.bottom, DS.Space.s)
                     if query.isEmpty {
-                        List(SettingsPane.allCases, selection: $pane) { pane in
+                        List(SettingsPane.allCases, selection: $navigation.pane) { pane in
                             Label(pane.title, systemImage: pane.systemImage)
                                 .tag(pane)
                         }
@@ -60,16 +63,17 @@ struct SettingsView: View {
                 Hairline(.vertical, style: DS.Palette.separator)
                     .ignoresSafeArea()
                 // A stack, so the theme picker pushes with a way back.
-                NavigationStack {
+                NavigationStack(path: $navigation.path) {
                     ScrollViewReader { proxy in
-                        Form { detail(pane).chromeRows() }
+                        Form { detail(navigation.pane).chromeRows() }
                             .formStyle(.grouped)
                             .chromeGrouped()
-                            .navigationTitle(pane.title)
+                            .navigationTitle(navigation.pane.title)
                             .environment(\.settingsHighlight, highlight)
+                            .navigationDestination(for: SettingsPage.self) { SettingsPageView(page: $0) }
                         .onChange(of: jump) { _, entry in
                             guard let entry else { return }
-                            pane = entry.section.pane
+                            navigation.pane = entry.section.pane
                             reveal(entry, proxy: proxy)
                         }
                     }
@@ -82,6 +86,16 @@ struct SettingsView: View {
                     Color.clear.frame(width: Self.sidebarWidth - 78, height: 1).accessibilityHidden(true)
                 }
                 .sharedBackgroundVisibility(.hidden)
+                // System Settings' back chevron, at the detail's leading edge before the title
+                // (the stack's own would sit over the sidebar).
+                if !navigation.path.isEmpty {
+                    ToolbarItem(placement: .navigation) {
+                        Button("Back", systemImage: "chevron.left") { navigation.path.removeLast() }
+                            .help("Back")
+                            .keyboardShortcut("[", modifiers: .command)
+                            .accessibilityIdentifier("settings-back")
+                    }
+                }
             }
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             // A pinned ideal size: the window opens at one size whichever pane's form is longer.
@@ -106,7 +120,7 @@ struct SettingsView: View {
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Settings or Ghostty Keys")
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: SettingsPage.self) { _ in ThemePicker(selection: $themeName) }
+            .navigationDestination(for: SettingsPage.self) { SettingsPageView(page: $0) }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -173,10 +187,52 @@ struct SettingsView: View {
     #endif
 }
 
-#if os(iOS)
-/// Pages pushed onto the iOS Settings stack by value.
-private enum SettingsPage: Hashable {
-    case theme
+/// Pages pushed onto the Settings stack by value.
+enum SettingsPage: Hashable {
+    case theme, lightTheme, darkTheme, keyBarProfiles, acknowledgements
+}
+
+/// A pushed page.
+private struct SettingsPageView: View {
+    let page: SettingsPage
+    @AppStorage(TerminalPreferences.Key.theme) private var theme = TerminalPreferences.Default.theme
+    @AppStorage(ThemePair.lightKey) private var light = ThemePair.resolvedDefaultLight
+    @AppStorage(ThemePair.darkKey) private var dark = ThemePair.defaultDark
+
+    var body: some View {
+        Group {
+            switch page {
+            case .theme: ThemePicker(selection: $theme)
+            case .lightTheme: ThemePicker(selection: $light)
+            case .darkTheme: ThemePicker(selection: $dark)
+            case .keyBarProfiles:
+                #if os(iOS)
+                KeyBarProfilesView()
+                #endif
+            case .acknowledgements: AcknowledgementsView()
+            }
+        }
+        #if os(macOS)
+        // The window's toolbar has the back button (`SettingsView`).
+        .navigationBarBackButtonHidden()
+        #endif
+    }
+}
+
+#if os(macOS)
+/// The Mac window's pane and the pages pushed over it. Choosing a pane starts it at its root,
+/// as System Settings does.
+@Observable
+final class SettingsNavigation {
+    var pane: SettingsPane {
+        didSet { if pane != oldValue { path = [] } }
+    }
+    var path: [SettingsPage]
+
+    init(pane: SettingsPane = .appearance, path: [SettingsPage] = []) {
+        self.pane = pane
+        self.path = path
+    }
 }
 #endif
 
@@ -264,9 +320,7 @@ private struct AppearanceSection: View {
     var body: some View {
         Section {
             if !themePair {
-                NavigationLink {
-                    ThemePicker(selection: $theme)
-                } label: {
+                NavigationLink(value: SettingsPage.theme) {
                     HStack {
                         ConfigLabel("Theme", key: "theme")
                         Spacer()
@@ -277,7 +331,7 @@ private struct AppearanceSection: View {
                 .accessibilityIdentifier("settings-theme")
                 .settingAnchor("theme")
             }
-            ThemePairRows { ThemePicker(selection: $0) }
+            ThemePairRows()
             Picker(selection: $paneStyle) {
                 ForEach(TerminalPreferences.PaneStyle.allCases) { Text($0.title).tag($0) }
             } label: {
@@ -434,7 +488,7 @@ private struct KeyboardSection: View {
                 Text("Full Key Bar").tag(KeyBar.HardwareMode.full.rawValue)
             }
             .settingAnchor("hardware-key-bar")
-            NavigationLink("Key Bar Profiles") { KeyBarProfilesView() }
+            NavigationLink("Key Bar Profiles", value: SettingsPage.keyBarProfiles)
                 .settingAnchor("key-bar-profiles")
             #endif
         } header: {
@@ -469,7 +523,7 @@ private struct AboutSection: View {
         Section {
             LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                 .settingAnchor("version")
-            NavigationLink("Acknowledgements") { AcknowledgementsView() }
+            NavigationLink("Acknowledgements", value: SettingsPage.acknowledgements)
                 .settingAnchor("acknowledgements")
         } header: {
             PaneSectionTitle("About")

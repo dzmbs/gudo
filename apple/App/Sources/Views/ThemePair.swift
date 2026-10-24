@@ -114,11 +114,10 @@ final class SystemAppearanceObserver {
 }
 
 /// Settings rows: the switch, then the light and the dark theme, each opening the picker.
-struct ThemePairRows<Picker: View>: View {
+struct ThemePairRows: View {
     @AppStorage(ThemePair.enabledKey) private var enabled = false
     @AppStorage(ThemePair.lightKey) private var light = ThemePair.resolvedDefaultLight
     @AppStorage(ThemePair.darkKey) private var dark = ThemePair.defaultDark
-    let picker: (Binding<String>) -> Picker
 
     var body: some View {
         Toggle(isOn: $enabled.animation(DS.Motion.quick)) {
@@ -132,20 +131,18 @@ struct ThemePairRows<Picker: View>: View {
         .accessibilityIdentifier("settings-theme-pair")
         .settingAnchor("theme-pair")
         if enabled {
-            row("Light Theme", selection: $light, id: "theme-light")
-            row("Dark Theme", selection: $dark, id: "theme-dark")
+            row("Light Theme", selection: light, page: .lightTheme, id: "theme-light")
+            row("Dark Theme", selection: dark, page: .darkTheme, id: "theme-dark")
         }
     }
 
-    private func row(_ title: String, selection: Binding<String>, id: String) -> some View {
-        NavigationLink {
-            picker(selection)
-        } label: {
+    private func row(_ title: String, selection: String, page: SettingsPage, id: String) -> some View {
+        NavigationLink(value: page) {
             HStack {
                 Text(title)
                 Spacer()
-                ThemeSwatchTile(theme: ThemeCatalog.theme(named: selection.wrappedValue))
-                Text(selection.wrappedValue).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
+                ThemeSwatchTile(theme: ThemeCatalog.theme(named: selection))
+                Text(selection).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
             }
         }
         .accessibilityIdentifier("settings-\(id)")
