@@ -137,6 +137,39 @@ final class BrowserPane: Identifiable {
     var webPage: WebPage? { page as? WebPage }
     var popupPage: PopupPage? { page as? PopupPage }
 
+    /// The view showing the page. A `WebPage` may be in one `WebView` at a time (WebKit traps
+    /// on a second), and a view swapped for another is made before the old one goes: the first
+    /// to ask keeps it for as long as it lives, and the others wait.
+    @ObservationIgnored private(set) var shownBy: UUID?
+    /// Counts the views that let go, so one waiting asks again.
+    private var releases = 0
+
+    /// Whether `view` shows the page (asked while it draws: the page is its from then on).
+    func mayShow(in view: UUID) -> Bool {
+        _ = releases
+        if shownBy == nil { shownBy = view }
+        return shownBy == view
+    }
+
+    func release(_ view: UUID) {
+        guard shownBy == view else { return }
+        shownBy = nil
+        releases += 1
+    }
+
+    /// A view's hold on the page, let go when the view is gone (after its `WebView`).
+    final class ViewHold {
+        let id = UUID()
+        private weak var pane: BrowserPane?
+
+        init(_ pane: BrowserPane) { self.pane = pane }
+
+        deinit {
+            let id = id
+            Task { @MainActor [pane] in pane?.release(id) }
+        }
+    }
+
     /// A new window this page asked for: a pane of its own, or nil (WebKit then opens none).
     private func makePopup(_ configuration: WKWebViewConfiguration, for action: WKNavigationAction) -> WKWebView? {
         let url = action.request.url

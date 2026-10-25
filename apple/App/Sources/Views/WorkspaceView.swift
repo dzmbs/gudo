@@ -177,7 +177,7 @@ struct WorkspaceView: View {
         .chromeBackground(DS.Palette.base)
         #if os(macOS)
         // Ghostty's window title: the directory, with its folder as the proxy icon.
-        .modifier(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
+        .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
         // The titlebar is the terminal's and the sidebar's own background, seamless.
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         #endif
@@ -311,14 +311,29 @@ private struct SidebarDivider: View {
 
 #if os(macOS)
 /// The window's represented folder: the titlebar shows its icon, and ⌘-clicking it shows the path.
-private struct RepresentedDirectory: ViewModifier {
+/// Set on the window, not by a modifier applied only while a folder is known: that swapped the
+/// window's whole view tree each time one came or went (a new pane's directory arriving).
+private struct RepresentedDirectory: NSViewRepresentable {
     let path: String?
 
-    func body(content: Content) -> some View {
-        if let path {
-            content.navigationDocument(URL(fileURLWithPath: path, isDirectory: true))
-        } else {
-            content
+    func makeNSView(context: Context) -> Marker { Marker() }
+
+    func updateNSView(_ marker: Marker, context: Context) {
+        marker.url = path.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    final class Marker: NSView {
+        var url: URL? { didSet { apply() } }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        private func apply() {
+            if let window, window.representedURL != url { window.representedURL = url }
         }
     }
 }
