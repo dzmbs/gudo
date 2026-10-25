@@ -98,11 +98,12 @@ private struct ShareRoot: View {
                 yourAccess.chromeRows()
             }
             if session.isOwner {
+                ActiveLinksSection(session: session).chromeRows()
                 ApprovalRulesSection(session: session, sessionId: sessionId, supported: supportsMP2)
                     .chromeRows()
                 Section {
                     NavigationLink(value: ShareRoute.grants) {
-                        Label { rowText("Access & Grants", "Links, devices, revoke") } icon: { Image(systemName: "key") }
+                        Label { rowText("Access & Grants", "Every device, ended links") } icon: { Image(systemName: "key") }
                     }
                     .accessibilityIdentifier("open-grants")
                     NavigationLink(value: ShareRoute.audit) {
@@ -115,16 +116,7 @@ private struct ShareRoot: View {
         }
         .formStyle(.grouped)
         .chromeGrouped()
-        .confirmationDialog(
-            "Remove \(revoking?.name ?? "")?", isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
-            titleVisibility: .visible, presenting: revoking
-        ) { person in
-            Button("Revoke Access", role: .destructive) {
-                Task { await revoke(person) }
-            }
-        } message: { person in
-            Text("\(person.name) is disconnected at once and their link stops working. Anything they already started keeps running.")
-        }
+        .modifier(RemovePersonDialog(session: session, person: $revoking))
     }
 
     /// The host speaks MP2: knock links, scrollback since joining, approval rules.
@@ -332,11 +324,11 @@ private struct ShareRoot: View {
     private var people: some View {
         Section {
             ForEach(session.participants.sortedForDisplay(me: session.myPrincipal), id: \.actor.device) { person in
-                PersonRow(person: person, session: session, workspace: workspace)
+                PersonRow(person: person, session: session, workspace: workspace, onRemove: canRevoke(person) ? { revoking = person } : nil)
                     .contextMenu { personMenu(person) }
                     .swipeActions {
                         if canRevoke(person) {
-                            Button("Revoke", systemImage: "person.crop.circle.badge.xmark", role: .destructive) { revoking = person }
+                            Button("Remove", systemImage: "person.crop.circle.badge.xmark", role: .destructive) { revoking = person }
                         }
                     }
             }
@@ -345,7 +337,7 @@ private struct ShareRoot: View {
                     .foregroundStyle(DS.Palette.textSecondary)
             }
         } header: {
-            SectionTitle("People Here", count: session.participants.count)
+            SectionTitle("People", count: session.participants.count)
         }
     }
 
@@ -360,7 +352,7 @@ private struct ShareRoot: View {
         Button("Copy Device Key", systemImage: "doc.on.doc") { Pasteboard.copy(person.actor.device) }
         if canRevoke(person) {
             Divider()
-            Button("Revoke Access…", systemImage: "person.crop.circle.badge.xmark", role: .destructive) { revoking = person }
+            Button("Remove…", systemImage: "person.crop.circle.badge.xmark", role: .destructive) { revoking = person }
         }
     }
 
@@ -370,13 +362,6 @@ private struct ShareRoot: View {
 
     private func paneTitle(_ pane: UInt64) -> String {
         workspace.paneTitle(pane)
-    }
-
-    private func revoke(_ person: UnnamedCore.Participant) async {
-        let target: RevokeTarget = person.grantId.map { .grant(grantId: $0) } ?? .device(device: person.actor.device)
-        if await session.revoke(target) != nil {
-            ActiveWindow.model?.toasts.show(Toast("\(person.name) was removed", systemImage: "person.crop.circle.badge.xmark", style: .success))
-        }
     }
 }
 
@@ -521,7 +506,7 @@ private struct InviteResult: View {
                     .accessibilityIdentifier("new-invite")
             }
         } footer: {
-            Text("Anyone with this link or code joins with exactly these rights until it expires or you revoke it in Access & Grants.")
+            Text("Anyone with this link or code joins with exactly these rights until it expires or you revoke it under Active Links.")
             .foregroundStyle(DS.Palette.textSecondary)
         }
     }
@@ -572,11 +557,17 @@ private struct PersonRow: View {
     let person: UnnamedCore.Participant
     let session: MultiplayerSession
     let workspace: Workspace
+    var onRemove: (() -> Void)?
 
     var body: some View {
         let isMe = person.actor.principal == session.myPrincipal
         HStack(spacing: DS.Space.s) {
             info(isMe: isMe)
+            if let onRemove {
+                Button("Remove", role: .destructive, action: onRemove)
+                    .buttonStyle(QuietButtonStyle())
+                    .accessibilityIdentifier("remove-\(person.name)")
+            }
             if !isMe, session.hasLivePresence {
                 let following = session.following == person.actor.principal
                 Button(following ? "Following" : "Follow") {

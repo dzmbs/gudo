@@ -228,7 +228,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::PANE_MOVES
         | DaemonFeatures::BROWSER
         | DaemonFeatures::AGENT_MCP
-        | DaemonFeatures::PRESENCE;
+        | DaemonFeatures::PRESENCE
+        | DaemonFeatures::INVITE_LINKS;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -2284,6 +2285,10 @@ impl Client {
             MpRequest::ListGrants => {
                 self.allow(Need::Own, Target::Daemon)?;
                 Ok(MpResponse::Grants(mp.list_grants()))
+            }
+            MpRequest::InviteLink(id) => {
+                self.allow(Need::Own, Target::Daemon)?;
+                mp.invite_link(id)
             }
             MpRequest::ListDevices => {
                 self.allow(Need::Own, Target::Daemon)?;

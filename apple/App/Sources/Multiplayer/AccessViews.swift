@@ -111,9 +111,13 @@ struct GrantsView: View {
     }
 }
 
-private struct GrantRow: View {
+struct GrantRow: View {
     let info: GrantInfo
     let session: MultiplayerSession
+    /// With both, the row carries Copy Link and Revoke (Share Session's Active Links).
+    var onCopy: (() -> Void)?
+    var onRevoke: (() -> Void)?
+    var copied = false
 
     var body: some View {
         let grant = info.grant
@@ -141,18 +145,39 @@ private struct GrantRow: View {
                     .foregroundStyle(info.revoked ? AnyShapeStyle(DS.Palette.error) : AnyShapeStyle(DS.Palette.textTertiary))
             }
             Spacer(minLength: 0)
-            Text(groupedHex(grant.grantId, groups: 2))
-                .font(DS.Font.literalSmall)
-                .foregroundStyle(DS.Palette.textTertiary)
+            if let onCopy, let onRevoke {
+                HStack(spacing: 0) {
+                    Button(action: onCopy) {
+                        Label(copied ? "Copied" : "Copy Link", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .help("Copy Link")
+                    .accessibilityIdentifier("copy-link-\(grant.label)")
+                    Button(role: .destructive, action: onRevoke) {
+                        Label("Revoke", systemImage: "xmark.circle")
+                    }
+                    .help("Revoke")
+                    .accessibilityIdentifier("revoke-link-\(grant.label)")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(QuietButtonStyle())
+            } else {
+                Text(groupedHex(grant.grantId, groups: 2))
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(DS.Palette.textTertiary)
+            }
         }
         .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: onCopy == nil ? .combine : .contain)
         .accessibilityIdentifier("grant-\(grant.label)")
     }
 
     private var statusLine: String {
         let grant = info.grant
         var parts: [String] = []
+        if onCopy != nil, let created = RelativeTime.string(ms: grant.issuedAtMs) {
+            parts.append("Created \(created)")
+        }
         if info.revoked {
             parts.append("Revoked")
         } else if let expires = grant.expiresMs {
@@ -161,8 +186,8 @@ private struct GrantRow: View {
         } else {
             parts.append("Never expires")
         }
-        let used = info.bound.count
-        parts.append(grant.maxUses.map { "\(used) of \($0) used" } ?? "\(used) joined")
+        let used = UInt32(info.bound.count)
+        parts.append(grant.maxUses.map { used >= $0 ? "all \($0) used" : "\(used) of \($0) used, \($0 - used) left" } ?? "\(used) joined")
         if info.parent != nil { parts.append("delegated") }
         return parts.joined(separator: " · ")
     }
@@ -462,5 +487,85 @@ private struct AuditRow: View {
 
     static func hex(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - Managing sharing
+
+/// Every link that still lets people in, newest first, each with Copy Link and Revoke. Revoking
+/// refuses the link at once and disconnects everyone who joined with it.
+struct ActiveLinksSection: View {
+    let session: MultiplayerSession
+    @State private var revoking: GrantInfo?
+    @State private var copied: String?
+
+    var body: some View {
+        let links = session.activeGrants
+        Section {
+            ForEach(links, id: \.grant.grantId) { info in
+                GrantRow(info: info, session: session, onCopy: { copy(info) }, onRevoke: { revoking = info }, copied: copied == info.grant.grantId)
+                    .contextMenu {
+                        Button("Copy Link", systemImage: "doc.on.doc") { copy(info) }
+                        Button("Revoke…", systemImage: "xmark.circle", role: .destructive) { revoking = info }
+                    }
+            }
+            if links.isEmpty {
+                Text("No links. Anyone you invite shows up here until the link expires or you revoke it.")
+                    .foregroundStyle(DS.Palette.textSecondary)
+            }
+        } header: {
+            SectionTitle("Active Links", count: links.count)
+        }
+        .confirmationDialog(
+            "Revoke \(revoking.map { $0.grant.label.isEmpty ? "this link" : "“\($0.grant.label)”" } ?? "")?",
+            isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
+            titleVisibility: .visible, presenting: revoking
+        ) { info in
+            Button("Revoke Link", role: .destructive) {
+                Task {
+                    if await session.revoke(.grant(grantId: info.grant.grantId)) != nil {
+                        ActiveWindow.model?.toasts.show(Toast("Link revoked", systemImage: "xmark.circle", style: .success))
+                    }
+                }
+            }
+        } message: { _ in
+            Text("The link stops working now. Everyone who joined with it, and anyone they invited, is disconnected.")
+        }
+        .accessibilityIdentifier("active-links")
+        .task { await session.refreshGrants() }
+    }
+
+    private func copy(_ info: GrantInfo) {
+        Task {
+            guard let link = await session.link(for: info) else { return }
+            Pasteboard.copy(link)
+            withAnimation(DS.Motion.indicator) { copied = info.grant.grantId }
+            try? await Task.sleep(for: .milliseconds(1500))
+            withAnimation(DS.Motion.indicator) { if copied == info.grant.grantId { copied = nil } }
+        }
+    }
+}
+
+/// Removes a person now: their device is disconnected and kept out. The link they used keeps
+/// working for anyone else.
+struct RemovePersonDialog: ViewModifier {
+    let session: MultiplayerSession
+    @Binding var person: UnnamedCore.Participant?
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Remove \(person?.name ?? "")?", isPresented: Binding(get: { person != nil }, set: { if !$0 { person = nil } }),
+            titleVisibility: .visible, presenting: person
+        ) { person in
+            Button("Remove", role: .destructive) {
+                Task {
+                    if await session.remove(person) != nil {
+                        ActiveWindow.model?.toasts.show(Toast("\(person.name) was removed", systemImage: "person.crop.circle.badge.xmark", style: .success))
+                    }
+                }
+            }
+        } message: { person in
+            Text("\(person.name) is disconnected now and can't rejoin from this device. Anything they started keeps running; their link still works for others until you revoke it.")
+        }
     }
 }

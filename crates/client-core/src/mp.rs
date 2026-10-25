@@ -13,10 +13,10 @@ use std::time::Duration;
 use grants::{DeviceKey, GrantSpec};
 use proto::{
     Actor, Admit, ApprovalPolicy, ApprovalStatus, AuditPage, AuditQuery, Decided, DeviceInfo,
-    GrantChain, GrantInfo, InputRejectReason, Invite, InviteTerms, JoinInfo, Knock, KnockId,
-    KnockUpdate, Lease, LeaseOutcome, MpError, MpRequest, MpResponse, PaneId, Participant, Peer,
-    PeerId, Presence, PresenceState, PrincipalId, RequestId, RevokeTarget, ServerCtl, SessionId,
-    UnixMillis,
+    GrantChain, GrantId, GrantInfo, InputRejectReason, Invite, InviteTerms, JoinInfo, Knock,
+    KnockId, KnockUpdate, Lease, LeaseOutcome, MpError, MpRequest, MpResponse, PaneId, Participant,
+    Peer, PeerId, Presence, PresenceState, PrincipalId, RequestId, RevokeTarget, ServerCtl,
+    SessionId, UnixMillis,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -374,6 +374,18 @@ impl Client {
         lock(&self.inner.mp.me).clone()
     }
 
+    /// The device that signed the invite this client joined with (`None` for paired
+    /// devices): whom a guest follows by default.
+    pub fn inviter_device(&self) -> Option<proto::DeviceId> {
+        self.inner
+            .mp
+            .invite
+            .as_ref()?
+            .chain
+            .leaf()
+            .map(|g| g.issuer)
+    }
+
     /// The last participant list the daemon pushed.
     pub fn participant_list(&self) -> Vec<Participant> {
         lock(&self.inner.mp.participants).clone()
@@ -580,6 +592,35 @@ impl Client {
     /// Grants the daemon knows (owner only).
     pub async fn list_grants(&self) -> Result<Vec<GrantInfo>, MpError> {
         expect!(self.multiplayer(MpRequest::ListGrants).await?, MpResponse::Grants(g) => g)
+    }
+
+    /// The shareable link of a registered grant, as [`create_invite_with_terms`] made it,
+    /// signed by `inviter` (owner only).
+    ///
+    /// # Errors
+    ///
+    /// [`MpError::Failed`] when the daemon is too old to answer; [`MpError::NotFound`] for a
+    /// grant it does not know.
+    ///
+    /// [`create_invite_with_terms`]: Self::create_invite_with_terms
+    pub async fn invite_link(&self, grant_id: GrantId, inviter: String) -> Result<String, MpError> {
+        if !self.daemon_has(proto::DaemonFeatures::INVITE_LINKS) {
+            return Err(MpError::Failed(
+                "the host's helper is too old to share a link again; update it".into(),
+            ));
+        }
+        let (chain, terms) = expect!(self.multiplayer(MpRequest::InviteLink(grant_id)).await?,
+            MpResponse::InviteLink { chain, terms } => (chain, terms))?;
+        let ticket = &self.inner.ticket;
+        let invite = Invite {
+            v: Invite::VERSION,
+            daemon_id: ticket.daemon_id,
+            addrs: ticket.addrs.clone(),
+            relay_url: ticket.relay_url.clone(),
+            inviter,
+            chain,
+        };
+        Ok(invite.to_string_with_terms(terms))
     }
 
     /// Owner and guest devices (owner only).

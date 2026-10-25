@@ -377,6 +377,10 @@ pub enum MpRequest {
         /// `false` releases this principal's claim (an owner may release anyone's).
         claim: bool,
     },
+    /// A registered grant's chain and terms, to share its link again →
+    /// [`MpResponse::InviteLink`]. Owner only; daemons with
+    /// [`DaemonFeatures::INVITE_LINKS`](crate::DaemonFeatures::INVITE_LINKS).
+    InviteLink(GrantId),
 }
 
 /// Answer to [`MpRequest::TakeControl`] and friends.
@@ -437,6 +441,13 @@ pub enum MpResponse {
     ApprovalPolicy(ApprovalPolicy),
     /// An approval request's state after a claim.
     Approval(ApprovalStatus),
+    /// A registered grant's chain and the terms it was registered with.
+    InviteLink {
+        /// The chain, root first.
+        chain: GrantChain,
+        /// Its terms.
+        terms: InviteTerms,
+    },
 }
 
 /// Why a multiplayer request (or any request refused by policy) failed.

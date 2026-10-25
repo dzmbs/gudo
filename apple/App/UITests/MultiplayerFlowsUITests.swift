@@ -8,6 +8,8 @@ import XCTest
 ///   owner app shows the knock over the terminal and admits her as a driver.
 /// - **Take control**: "Rex Diaz" (CLI driver) holds the pane's lease; the owner sees who drives
 ///   and takes control.
+/// - **Mirror**: the joined guest follows its inviter into a tab opened after joining.
+/// - **Manage sharing**: the owner copies and revokes a link and removes a person.
 ///
 /// Each test skips without the environment the script provides.
 @MainActor
@@ -61,6 +63,80 @@ final class MultiplayerFlowsUITests: XCTestCase {
         XCTAssertTrue(banner.waitForExistence(timeout: 40), "joined: the guest's role banner shows")
         XCTAssertTrue(banner.label.contains("View only"), banner.label)
         shot(app, "flows-2-joined")
+
+        // A full mirror: Ola opens a tab after Gus joined and writes there; Gus's window goes
+        // along by itself and shows the draft live.
+        guard !(env["MIRROR"] ?? "").isEmpty else { return }
+        let pill = element(app, "follow-pill")
+        XCTAssertTrue(pill.waitForExistence(timeout: 30), "a guest follows whoever invited them")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Following '")).firstMatch.exists)
+        XCTAssertTrue(element(app, "pane-2").waitForExistence(timeout: 30), "the new tab shows in the guest's window")
+        let mirror = element(app, "draft-mirror-2")
+        XCTAssertTrue(mirror.waitForExistence(timeout: 20), "the leader's draft in the new tab shows live")
+        XCTAssertTrue(mirror.label.contains("is writing: S"), mirror.label)
+        shot(app, "flows-2b-mirrored")
+    }
+
+    /// Scrolls the sheet until `target` is on screen.
+    private func reveal(_ app: XCUIApplication, _ target: XCUIElement, up: Bool = true) {
+        for _ in 0..<8 where !(target.exists && target.isHittable) {
+            up ? app.swipeUp(velocity: .slow) : app.swipeDown(velocity: .slow)
+        }
+    }
+
+    private func confirm(_ app: XCUIApplication, _ title: String) {
+        let button = app.buttons.matching(NSPredicate(format: "label == %@ AND NOT (identifier BEGINSWITH 'remove-')", title)).firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "the \(title) confirmation")
+        button.tap()
+    }
+
+    private func palette(_ app: XCUIApplication, _ command: String) {
+        let field = app.textFields.matching(identifier: "command-palette").firstMatch
+        if !field.waitForExistence(timeout: 2) { element(app, "open-palette").tap() }
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.typeText("\(command)\n")
+    }
+
+    /// The owner's sharing: Active Links copies a link made on another device and revokes it;
+    /// People removes Pat now; Manage Sharing and the Hosts badge show what is left.
+    func testManageSharing() throws {
+        try XCTSkipIf((env["SHARING"] ?? "").isEmpty, "no sharing fixtures (run apple/scripts/multiplayer-flows-ui-test.sh)")
+        let app = try launchOwner()
+        element(app, "presence-button").tap()
+        let share = element(app, "people-share-session")
+        if share.waitForExistence(timeout: 3) { share.tap() }
+
+        let copy = element(app, "copy-link-Temp")
+        reveal(app, copy)
+        XCTAssertTrue(copy.waitForExistence(timeout: 10), "the link made by the CLI is listed")
+        copy.tap()
+        let copied = NSPredicate { _, _ in copy.label == "Copied" }
+        wait(for: [expectation(for: copied, evaluatedWith: nil)], timeout: 10)
+        shot(app, "flows-12-active-links")
+        element(app, "revoke-link-Temp").tap()
+        confirm(app, "Revoke Link")
+        XCTAssertTrue(copy.waitForNonExistence(timeout: 10), "a revoked link leaves Active Links")
+
+        let remove = element(app, "remove-Pat Quinn")
+        reveal(app, remove, up: false)
+        XCTAssertTrue(remove.waitForExistence(timeout: 10), "a connected guest can be removed")
+        shot(app, "flows-13-people")
+        remove.tap()
+        confirm(app, "Remove")
+        XCTAssertTrue(element(app, "person-Pat Quinn").waitForNonExistence(timeout: 10), "removed at once")
+        element(app, "share-done").tap()
+
+        palette(app, "Manage Sharing")
+        XCTAssertTrue(element(app, "sharing-list").waitForExistence(timeout: 10), "every shared host in one place")
+        XCTAssertFalse(element(app, "remove-Pat Quinn").exists)
+        XCTAssertFalse(element(app, "copy-link-Temp").exists)
+        shot(app, "flows-14-manage-sharing")
+        element(app, "sharing-done").tap()
+
+        palette(app, "Go to Hosts")
+        let badge = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'sharing-' AND label BEGINSWITH 'Shared'")).firstMatch
+        XCTAssertTrue(badge.waitForExistence(timeout: 10), "the host's row says it is shared")
+        shot(app, "flows-15-hosts-badge")
     }
 
     /// Kim knocks with an ask-first link; the owner sees her over the terminal and lets her in

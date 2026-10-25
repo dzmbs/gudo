@@ -333,5 +333,8 @@ bitset! {
         /// Live presence: answers `ClientCtl::Peer` and pushes `ServerCtl::Peers` to clients
         /// with `Caps::PRESENCE` (see `proto::peer`).
         PRESENCE = 10;
+        /// Answers `MpRequest::InviteLink`: a registered invite's chain and terms, so an
+        /// owner can copy its link again.
+        INVITE_LINKS = 11;
     }
 }

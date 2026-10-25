@@ -199,6 +199,43 @@ extension MultiplayerIntegrationTests {
     }
 }
 
+extension MultiplayerIntegrationTests {
+    /// A guest mirrors whoever invited them from the moment they join; the owner's second
+    /// device lists the link, shares it again and removes the guest, who is out at once while
+    /// the link stays.
+    @Test func guestsMirrorTheirInviterAndOwnersManageSharing() async throws {
+        let daemon = try LocalDaemon()
+        let owner = makeModel()
+        let ownerHost = try await owner.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        let ownerConnection = try #require(owner.connection(ownerHost) as? DaemonConnection)
+        let mp = ownerConnection.multiplayer
+        try await eventually("owner identity") { mp.me != nil }
+
+        var draft = InviteDraft()
+        draft.name = "Gus"
+        draft.scope = .session
+        draft.uses = .five
+        let invite = try await mp.createInvite(draft.options(inviter: "Alex", session: ownerConnection.layout.sessionId, tab: nil, pane: nil))
+        let guest = makeModel()
+        let guestHost = try await guest.join(invite: invite.link)
+        let guestConnection = try #require(guest.connection(guestHost) as? DaemonConnection)
+        let gmp = guestConnection.multiplayer
+        try await eventually("guest follows the owner", timeout: .seconds(10)) { gmp.following != nil && gmp.following == mp.myPrincipal }
+
+        let second = makeModel()
+        let secondHost = try await second.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        let smp = try #require(second.connection(secondHost) as? DaemonConnection).multiplayer
+        try await eventually("sharing summary", timeout: .seconds(10)) { smp.sharingSummary == "Shared · 1 person · 1 link" }
+        let grant = try #require(smp.activeGrants.first)
+        let link = try #require(await smp.link(for: grant))
+        #expect(try inspectInvite(invite: link).label == "Gus")
+        let person = try #require(smp.guests.first)
+        #expect(await smp.remove(person) != nil)
+        try await eventually("guest removed", timeout: .seconds(10)) { gmp.isRevoked || !guestConnection.status.isLive }
+        try await eventually("summary: the link only", timeout: .seconds(10)) { smp.sharingSummary == "Shared · 1 link" }
+    }
+}
+
 nonisolated final class ClientEventCollector: ClientEventListener {
     private let state = Mutex(false)
     var connected: Bool { state.withLock { $0 } }

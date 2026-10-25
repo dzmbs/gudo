@@ -13,7 +13,7 @@ use client_core::proto::{
 use client_core::{ClientConfig, MultiplayerEvent, now_millis};
 use daemon::{Daemon, PresenceTimes};
 
-use crate::support::{TestClient, start_with, ticket};
+use crate::support::{TestClient, leaves, start_with, ticket};
 
 const PERMISSION: &str =
     include_str!("../../../agents/tests/fixtures/claude/permission_request.json");
@@ -239,6 +239,79 @@ async fn following_tracks_focus_and_scroll() {
         })
         .await;
     drop((kim, owner));
+    daemon.shutdown().await;
+}
+
+/// A session-scoped viewer follows the owner into a tab opened after joining (an agent gets
+/// its own tab): the tab, the owner's focus on it and its live output reach the guest within
+/// a second, and every frame keeps coming.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_follower_sees_a_new_tab_and_its_output_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path(), quick()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let first = owner.attach_and_follow().await;
+    let session = owner.layout.as_ref().unwrap().session_id;
+    let mut gus = guest(
+        &owner,
+        spec(Roles::VIEWER, "Gus", Scope::Session(session)),
+        first,
+    )
+    .await;
+    let owner_p = principal(&owner);
+    gus.client.follow(Some(owner_p));
+    gus.until("owner listed", |c| peer(c, owner_p).is_some())
+        .await;
+
+    let at = Instant::now();
+    let OpOutcome::TabCreated { pane_id: agent, .. } = owner
+        .op(client_core::proto::LayoutOp::NewTab {
+            session_id: session,
+            name: "agent".into(),
+            launch: PaneLaunch::Command {
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "i=0; while :; do i=$((i+1)); printf '\\rframe %d ' $i; sleep 0.02; done"
+                        .into(),
+                ],
+                cwd: None,
+            },
+        })
+        .await
+    else {
+        panic!("new tab failed")
+    };
+    owner.client.set_view(Some(agent), vec![agent]);
+
+    // What the follower's window does: the tab arrives, the leader is on it, so show it.
+    gus.until("the new tab and the leader on it", |c| {
+        c.layout
+            .as_ref()
+            .is_some_and(|l| l.tabs.iter().any(|t| leaves(&t.root).contains(&agent)))
+            && peer(c, owner_p).is_some_and(|p| p.focus == Some(agent))
+    })
+    .await;
+    gus.follow(agent).await;
+    gus.wait_text(agent, "frame").await;
+    let latency = at.elapsed();
+    eprintln!("new tab to follower's screen: {latency:?}");
+    assert!(latency < Duration::from_secs(1), "took {latency:?}");
+
+    // Live, not a snapshot: frames keep arriving.
+    let frame = |c: &TestClient| -> u32 {
+        let text = c.text(agent);
+        text.rsplit("frame ")
+            .next()
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    };
+    let seen = frame(&gus);
+    gus.until("ten more frames", |c| frame(c) >= seen + 10)
+        .await;
+
+    drop((gus, owner));
     daemon.shutdown().await;
 }
 

@@ -21,6 +21,8 @@ nonisolated public protocol MultiplayerClientAPI: AnyObject, Sendable {
     func setName(name: String) async throws
     func createInvite(options: InviteOptions) async throws -> CreatedInvite
     func listGrants() async throws -> [GrantInfo]
+    func inviteLink(grantId: String, inviter: String) async throws -> String
+    func inviterDevice() -> String?
     func listDevices() async throws -> [DeviceInfo]
     func revoke(target: RevokeTarget) async throws -> RevokeResult
     func takeControl(paneId: UInt64, force: Bool) async throws -> LeaseOutcome
@@ -49,6 +51,10 @@ nonisolated public protocol MultiplayerClientAPI: AnyObject, Sendable {
 
 /// Fakes and older stand-ins have no live presence.
 nonisolated public extension MultiplayerClientAPI {
+    func inviteLink(grantId: String, inviter: String) async throws -> String {
+        throw MultiplayerError.Failed(message: "This host can't share a link again.")
+    }
+    func inviterDevice() -> String? { nil }
     func hasLivePresence() -> Bool { false }
     func setDraft(paneId: UInt64, source: DraftSource, text: String, caret: UInt32) {}
     func clearDraft() {}
@@ -220,6 +226,9 @@ public final class MultiplayerSession {
     public private(set) var myPeer: UInt64?
     /// The person this device follows (principal), or nil.
     public private(set) var following: String?
+    /// A guest follows whoever invited them (else the owner, else the driver) until they stop
+    /// or move on their own; then only "Follow" starts it again.
+    public private(set) var followDeclined = false
 
     /// How long the holder may stay idle before the daemon hands the lease over
     /// (`[multiplayer] lease_idle_secs`, default 5 s).
@@ -235,6 +244,10 @@ public final class MultiplayerSession {
     @ObservationIgnored private var lastBlockedNotice = ContinuousClock.now - .seconds(10)
     @ObservationIgnored private var typingPane: UInt64?
     @ObservationIgnored private var draftPane: UInt64?
+    /// The device that signed this guest's invite.
+    @ObservationIgnored private var inviterDevice: String?
+    /// Links of invites known on this device, by grant id.
+    @ObservationIgnored private var links: [String: String] = [:]
     /// A participant list arrived on this connection already (later ones announce changes).
     @ObservationIgnored private var hasRoster = false
     private static let log = Logger(subsystem: Log.subsystem, category: "multiplayer")
@@ -331,8 +344,10 @@ public final class MultiplayerSession {
         myPeer = live.you
         peers = Dictionary(live.peers.map { ($0.peer, $0) }, uniquingKeysWith: { $1 })
         client.setDeviceClass(device: Self.deviceClass)
+        inviterDevice = client.inviterDevice()
         if let following { try? client.follow(principal: following) }
         refreshGate()
+        followByDefault()
     }
 
     /// This device's kind, for "Ivan · iPad" (the app sets it at launch).
@@ -430,6 +445,11 @@ public final class MultiplayerSession {
         if case .decided(let decided) = event { approvalStatuses[decided.requestId] = nil }
         if case .joined = event { knocks = []; approvalStatuses = [:] }
         refreshGate()
+        followByDefault()
+        switch event {
+        case .joined, .participants: if isOwner { refreshSharing() }
+        default: break
+        }
     }
 
     // MARK: Derived state
@@ -549,10 +569,35 @@ public final class MultiplayerSession {
 
     /// Follows a person (their focus and scroll), or stops with nil.
     public func follow(_ principal: String?) {
+        followDeclined = principal == nil
+        setFollowing(principal)
+    }
+
+    private func setFollowing(_ principal: String?) {
         guard principal != following else { return }
         following = principal
         try? client?.follow(principal: principal)
         Self.log.info("follow \(principal == nil ? "stopped" : "started", privacy: .public)")
+    }
+
+    /// Whom a guest follows by default: whoever signed their invite, else an owner device,
+    /// else whoever drives a pane.
+    public var defaultLeader: String? {
+        let others = otherPeers.filter { $0.actor.principal != myPrincipal }
+        if let inviterDevice, let inviter = others.first(where: { $0.actor.device == inviterDevice }) {
+            return inviter.actor.principal
+        }
+        if let owner = others.filter({ $0.roles.contains(.owner) }).max(by: { $0.rev < $1.rev }) {
+            return owner.actor.principal
+        }
+        let present = Set(others.map(\.actor.principal))
+        return leases.values.filter { $0.mode == .leased }.compactMap(\.holder).sorted().first(where: present.contains)
+    }
+
+    /// A guest mirrors the session from the moment they join: same tab, pane and scroll.
+    private func followByDefault() {
+        guard following == nil, !followDeclined, isGuest, !isRevoked, hasLivePresence, let leader = defaultLeader else { return }
+        setFollowing(leader)
     }
 
     /// Own navigation (a scroll, a tab or pane change, typing) ends following, as in Zed and
@@ -688,6 +733,8 @@ public final class MultiplayerSession {
         guard let client else { throw MultiplayerError.Disconnected }
         let invite = try await client.createInvite(options: options)
         invites.insert(invite, at: 0)
+        links[invite.grantId] = invite.link
+        refreshSharing()
         Self.log.info("invite created grant=\(invite.grantId.prefix(8), privacy: .public) roles=\(roleWords(options.roles), privacy: .public)")
         return invite
     }
@@ -702,6 +749,62 @@ public final class MultiplayerSession {
         } catch {
             fail(error)
         }
+    }
+
+    /// Grants and devices without telling the user when it fails (counts, badges).
+    private func refreshSharing() {
+        guard let client else { return }
+        Task {
+            async let grants = client.listGrants()
+            async let devices = client.listDevices()
+            if let (grants, devices) = try? await (grants, devices) {
+                (self.grants, self.devices) = (grants, devices)
+            }
+        }
+    }
+
+    /// Links that still let people in: neither revoked nor expired.
+    public var activeGrants: [GrantInfo] {
+        let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        return grants
+            .filter { !$0.revoked && ($0.grant.expiresMs ?? .max) > now }
+            .sorted { $0.grant.issuedAtMs > $1.grant.issuedAtMs }
+    }
+
+    /// Guests connected now, one per person.
+    public var guests: [UnnamedCore.Participant] {
+        others.filter { $0.grantId != nil }
+    }
+
+    /// "Shared · 2 people · 1 link", or nil when nothing is shared.
+    public var sharingSummary: String? {
+        let people = guests.count, links = activeGrants.count
+        guard people + links > 0 else { return nil }
+        var parts = ["Shared"]
+        if people > 0 { parts.append(people == 1 ? "1 person" : "\(people) people") }
+        if links > 0 { parts.append(links == 1 ? "1 link" : "\(links) links") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A link's text to share again: as made on this device, else signed again from the host's
+    /// record. Nil (with a notice) when the host can't.
+    public func link(for grant: GrantInfo) async -> String? {
+        if let link = links[grant.grant.grantId] { return link }
+        guard let client else { return nil }
+        do {
+            let link = try await client.inviteLink(grantId: grant.grant.grantId, inviter: me?.name ?? "")
+            links[grant.grant.grantId] = link
+            return link
+        } catch {
+            fail(error)
+            return nil
+        }
+    }
+
+    /// Disconnects a person now and keeps their device out; links stay for everyone else.
+    @discardableResult
+    public func remove(_ person: UnnamedCore.Participant) async -> RevokeResult? {
+        await revoke(.device(device: person.actor.device))
     }
 
     /// Revokes and refreshes. Returns what it hit.

@@ -65,6 +65,7 @@ enum PaletteCommands {
                 model.sheet = .browser
             }),
             ("share", "Share Session", "person.crop.circle.badge.plus", nil, { model.sheet = .invite }),
+            ("sharing", "Manage Sharing…", "person.2.badge.key", nil, { model.sheet = .sharing }),
             ("join", "Join a Session…", "person.2.badge.plus", nil, { model.joinInvite = ""; model.sheet = .join }),
             ("agent", WorkspaceAction.newAgent.title, "sparkle", WorkspaceAction.newAgent.shortcut.symbols, { model.newAgent() }),
             ("inbox", "Go to Agents", Destination.inbox.systemImage, WorkspaceAction.inbox.shortcut.symbols, { model.destination = .inbox }),
