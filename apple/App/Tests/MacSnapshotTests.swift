@@ -180,8 +180,6 @@ final class MacSnapshotTests: XCTestCase {
     func testPortsLeafOpensPagesBeside() async throws {
         try await window("leaf-browser-open") { model in
             model.sheet = .browser
-            // Once the leaf has landed: a page's view made mid-split is made twice (WebKit traps).
-            await self.pump(1.5)
             await model.openPort(model.ports.ports[0])
             let tab = try? XCTUnwrap(model.activeMixed)
             XCTAssertEqual(tab?.tools.values.map(\.tool), [.ports], "Ports stays a leaf")

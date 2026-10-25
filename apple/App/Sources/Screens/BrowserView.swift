@@ -30,6 +30,8 @@ struct BrowserView: View {
     var onReplays: (() -> Void)?
 
     @State private var pane: BrowserPane
+    /// This view's hold on the page's one `WebView`.
+    @State private var hold: BrowserPane.ViewHold
     private var page: any BrowserPageContent { pane.page }
     private var initialURL: URL { pane.initialURL }
     #if DEBUG
@@ -67,6 +69,7 @@ struct BrowserView: View {
         self.onDone = onDone
         self.doneTitle = doneTitle
         _pane = State(initialValue: pane)
+        _hold = State(initialValue: BrowserPane.ViewHold(pane))
     }
     @Environment(WindowModel.self) private var model: WindowModel?
     @Environment(\.colorScheme) private var chromeScheme
@@ -108,10 +111,12 @@ struct BrowserView: View {
             ZStack {
                 Group {
                     if let web = pane.webPage {
-                        WebView(web)
-                            .webViewBackForwardNavigationGestures(.enabled)
-                            // `prefers-color-scheme` on the page: the theme's, or the device's.
-                            .environment(\.colorScheme, followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
+                        if pane.mayShow(in: hold.id) {
+                            WebView(web)
+                                .webViewBackForwardNavigationGestures(.enabled)
+                                // `prefers-color-scheme` on the page: the theme's, or the device's.
+                                .environment(\.colorScheme, followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
+                        }
                     } else if let popup = pane.popupPage {
                         PopupWebView(page: popup, colorScheme: followsTheme ? chromeScheme : WebsiteAppearance.systemScheme)
                     }
