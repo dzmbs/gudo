@@ -312,6 +312,7 @@ private extension ConnectionState {
 private struct HostRow: View {
     let host: HostSummary
     let emphasizeNeedsYou: Bool
+    @Environment(WindowModel.self) private var model
 
     /// A 16 pt glyph slot (18 on touch), then the text column where separators start.
     #if os(macOS)
@@ -352,6 +353,18 @@ private struct HostRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 detail
+                if let sharing = host.sharing {
+                    Button { model.sheet = .sharing } label: {
+                        Label(sharing, systemImage: "person.2.fill")
+                            .labelStyle(.titleAndIcon)
+                            .font(.footnote)
+                            .foregroundStyle(DS.Palette.accent)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Manage Sharing")
+                    .accessibilityIdentifier("sharing-\(host.name)")
+                }
                 if host.needsTailscale {
                     TailscaleHint(compact: true)
                 }

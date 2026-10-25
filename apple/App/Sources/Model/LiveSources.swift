@@ -84,7 +84,8 @@ final class LiveHostDirectory: HostDirectory {
             progress: app.hosts.installs[entry.id]?.summary ?? app.hosts.helperUpdates[entry.id]?.summary,
             canInstallHelper: entry.canInstallHelper,
             helper: entry.helper.map(HelperOffer.init),
-            isTailscale: entry.isTailscale, needsTailscale: entry.needsTailscale)
+            isTailscale: entry.isTailscale, needsTailscale: entry.needsTailscale,
+            sharing: daemon.flatMap { $0.multiplayer.isOwner ? $0.multiplayer.sharingSummary : nil })
     }
 
     func connect(_ id: HostSummary.ID) {

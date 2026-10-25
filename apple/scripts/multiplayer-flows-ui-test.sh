@@ -12,8 +12,15 @@
 #             as he types; the app follows him to pane 2; an agent in pane 1 asks permission
 #             (agent-ask.py) and the app answers it for everyone.
 #
+#             Sharing: "Pat Quinn" stays connected and a "Temp" link waits; the app copies and
+#             revokes the link and removes Pat.
+#
+#             Mirror: once the app's guest is in on daemon B, Ola opens a tab and writes
+#             there; the guest follows her into it by itself.
+#
 # Afterwards the script checks Kim really got in as a driver, that the app followed Rex, that
-# the agent was allowed and that Rex saw who answered.
+# the agent was allowed and that Rex saw who answered, that Pat was cut off and the revoked
+# link is refused.
 #
 #   apple/scripts/multiplayer-flows-ui-test.sh [simulator-udid]
 #
@@ -57,6 +64,14 @@ pids+=($!)
 sleep 0.5
 cli rex take-control --pane 1 >"$work/rex-take.log" 2>&1
 
+# Sharing: Pat stays connected (to be removed); "Temp" is a link to copy and revoke.
+pat_link="$(cli owner-a invite --role viewer --name "Pat Quinn" --from Alex --no-qr | grep -oE '[a-z]+://join/[^ ]+' | head -1)"
+temp_link="$(cli owner-a invite --role viewer --name "Temp" --uses 0 --from Alex --no-qr | grep -oE '[a-z]+://join/[^ ]+' | head -1)"
+cli pat join "$pat_link" >/dev/null
+cli pat who --watch >"$work/pat-who.log" 2>&1 &
+pat_pid=$!
+pids+=("$pat_pid")
+
 # Kim knocks and waits for the owner (the app) to answer.
 cli kim join --name "Kim Lee" "$knock_link" >"$work/kim.log" 2>&1 &
 kim_pid=$!
@@ -64,7 +79,14 @@ pids+=("$kim_pid")
 
 # Daemon B: Ola's viewer link for the app's guest join.
 cli owner-b pair "$(cli_ticket b)" >/dev/null
-join_link="$(cli owner-b invite --role viewer --name "Gus" --from Ola --no-qr | grep -oE '[a-z]+://join/[^ ]+' | head -1)"
+join_link="$(cli owner-b invite --role viewer --name "Gus" --scope session --from Ola --no-qr | grep -oE '[a-z]+://join/[^ ]+' | head -1)"
+# The mirror: once a guest is in, Ola opens a tab (pane 2) and writes a prompt there.
+(
+  for _ in $(seq 1 600); do cli owner-b who 2>/dev/null | grep -v "(you)" | grep -q viewer && break; sleep 0.5; done
+  cli owner-b tab new agent
+  cli owner-b draft "Ship the mirror" --pane 2 --cps 8 --hold 40
+) >"$work/ola.log" 2>&1 &
+pids+=($!)
 
 log="$work/xcodebuild.log"
 status=0
@@ -83,7 +105,7 @@ ask_pid=$!
 pids+=("$ask_pid")
 
 TEST_RUNNER_PAIR_TICKET="$ticket_app" TEST_RUNNER_JOIN_LINK="$join_link" TEST_RUNNER_KNOCKER=1 TEST_RUNNER_DRIVER=1 \
-  TEST_RUNNER_PRESENCE=1 \
+  TEST_RUNNER_PRESENCE=1 TEST_RUNNER_MIRROR=1 TEST_RUNNER_SHARING=1 \
   xcodebuild -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$derived" \
   -resultBundlePath "$work/result.xcresult" \
@@ -113,6 +135,15 @@ if grep -q "decided by" "$work/rex-who.log"; then
 else
   echo "Rex never saw the decision"; status=1
 fi
+
+# Pat was cut off; the revoked link lets nobody in.
+for _ in $(seq 1 25); do kill -0 "$pat_pid" 2>/dev/null || break; sleep 0.2; done
+if grep -q "revoked" "$work/pat-who.log"; then echo "Pat: removed"; else echo "Pat was not removed:"; cat "$work/pat-who.log"; status=1; fi
+cli late join "$temp_link" >"$work/late.log" 2>&1 &
+late_pid=$!
+pids+=("$late_pid")
+for _ in $(seq 1 50); do kill -0 "$late_pid" 2>/dev/null || break; sleep 0.2; done
+if grep -q "refused" "$work/late.log"; then echo "revoked link: $(tail -1 "$work/late.log")"; else echo "the revoked link still works:"; cat "$work/late.log"; status=1; fi
 
 if [[ -n "${SCREENSHOTS:-}" ]]; then
   mkdir -p "$SCREENSHOTS"

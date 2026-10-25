@@ -45,7 +45,7 @@ enum PaletteMode: Equatable {
 
 /// Modal surfaces. One at a time, like the system's own sheets.
 enum SheetRoute: String, Identifiable {
-    case pairing, launchAgent, invite, join, links, diff, files, browser, editor, settings, shortcuts, replays
+    case pairing, launchAgent, invite, sharing, join, links, diff, files, browser, editor, settings, shortcuts, replays
     var id: String { rawValue }
 }
 

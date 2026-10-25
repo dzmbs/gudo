@@ -54,6 +54,8 @@ nonisolated struct HostSummary: Identifiable, Hashable, Sendable {
     var isTailscale = false
     /// A dial to it failed: the Tailscale app must be connected on this device.
     var needsTailscale = false
+    /// Owned and shared: "Shared · 2 people · 1 link".
+    var sharing: String?
 
     var needsYouCount: Int {
         max((agentCounts[.blocked] ?? 0) + (agentCounts[.error] ?? 0), needsYou == nil ? 0 : 1)

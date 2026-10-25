@@ -791,6 +791,8 @@ private struct SheetContent: View {
             ToolSheet(route: route)
         case .invite:
             InviteSheet(workspace: workspace)
+        case .sharing:
+            SharingSheet()
         case .join:
             JoinSheet(invite: model.joinInvite.isEmpty ? UserDefaults.standard.string(forKey: "joinInvite") ?? "" : model.joinInvite)
         case .settings:
