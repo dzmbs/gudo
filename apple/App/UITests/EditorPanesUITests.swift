@@ -97,6 +97,13 @@ final class EditorPanesUITests: XCTestCase {
 
     private var webField: XCUIElement { app.webViews.textFields.firstMatch }
 
+    /// Focuses the workbench's field from a tap on the page first: a tap on a field that already
+    /// has focus opens its edit menu, which then takes the keys meant for the page.
+    private func focusWebField() {
+        text(containing: "Fake VS Code workbench").tap()
+        webField.tap()
+    }
+
     /// Waits for the workbench of `folder` (its name in the page's location line).
     private func waitForWorkbench(_ folder: String, timeout: TimeInterval = 40) {
         XCTAssertTrue(text(containing: "Fake VS Code workbench").waitForExistence(timeout: timeout), "the workbench loads")
@@ -109,7 +116,7 @@ final class EditorPanesUITests: XCTestCase {
 
     private func typeInWorkbench(_ text: String) {
         XCTAssertTrue(webField.waitForExistence(timeout: 10))
-        webField.tap()
+        focusWebField()
         app.typeText(text)
         waitFor(NSPredicate(format: "value CONTAINS %@", text), webField, timeout: 5, "typed in the workbench")
     }
@@ -184,7 +191,7 @@ final class EditorPanesUITests: XCTestCase {
         XCTAssertEqual(pageLoads(), projLoads, "not loaded again")
 
         // From inside VS Code, ⌘2 is the app's (the second tab: site); ⌘P stays VS Code's.
-        webField.tap()
+        focusWebField()
         app.typeKey("p", modifierFlags: .command)
         XCTAssertTrue(text(containing: "cmd+p").waitForExistence(timeout: 5), "⌘P reached VS Code")
         XCTAssertFalse(app.textFields.matching(identifier: "command-palette").firstMatch.exists, "the app's palette stayed closed")
@@ -207,7 +214,7 @@ final class EditorPanesUITests: XCTestCase {
         shot("editor-beside-terminal")
 
         // ⌃⌘` leaves VS Code for the terminal: the app's ⌘K works again.
-        webField.tap()
+        focusWebField()
         app.typeKey("k", modifierFlags: .command)
         XCTAssertFalse(app.textFields.matching(identifier: "command-palette").firstMatch.waitForExistence(timeout: 2), "⌘K is VS Code's in the editor")
         app.typeKey("`", modifierFlags: [.command, .control])
@@ -231,7 +238,7 @@ final class EditorPanesUITests: XCTestCase {
         shot("editor-restored")
 
         // ⌘W in VS Code closes its pane, not the window (the system's Close Window is ⇧⌘W).
-        webField.tap()
+        focusWebField()
         // The simulator drops the first hardware key after a launch (here the relaunch).
         app.typeKey(XCUIKeyboardKey.shift, modifierFlags: [])
         app.typeKey("w", modifierFlags: .command)

@@ -272,6 +272,9 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 class S(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
+    # A page dropping its connection is routine: no traceback over the shell's prompt.
+    def handle_error(self, request, client_address):
+        pass
 server = S(("127.0.0.1", port), H)
 print("  Local:   http://%s:%d/" % (name, port), flush=True)
 server.serve_forever()

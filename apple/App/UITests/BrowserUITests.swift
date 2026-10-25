@@ -133,7 +133,8 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         shot("start-page")
         field.tap()
-        field.typeText("4831")
+        // The whole port: the suite's other dev servers (4831x) are still up.
+        field.typeText("48316")
         let suggestion = app.buttons["address-suggestion-0"].firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 5), "typing suggests the dev server")
         XCTAssertTrue(suggestion.label.contains("localhost:48316"), suggestion.label)
@@ -273,17 +274,17 @@ final class BrowserUITests: XCTestCase {
     func testAgentUploadsIntoAFrameAndAnswersDialogs() throws {
         try launch()
         panes.firstMatch.tap()
-        app.typeText("H=$(sed -n 's/^exec \\(.*\\) open-url.*/\\1/p' \"$BROWSER\"); mkdir -p fr && cd fr; clear\n")
-        app.typeText("printf '<title>Outer</title><button onclick=\"document.title=\\x27c \\x27+confirm(\\x27Leave site?\\x27)\">Ask</button><iframe src=\"inner.html\"></iframe>' > outer.html\n")
-        app.typeText("printf '<input type=file onchange=\"parent.document.title=\\x27got \\x27+this.files[0].name\">' > inner.html\n")
-        app.typeText("python3 -m http.server 48319 --bind 127.0.0.1 >/dev/null 2>&1 &\n")
+        app.typeText("H=$(sed -n 's/^exec \\(.*\\) open-url.*/\\1/p' \"$BROWSER\"); mkdir -p fr; clear\n")
+        app.typeText("printf '<title>Outer</title><button onclick=\"document.title=\\x27c \\x27+confirm(\\x27Leave site?\\x27)\">Ask</button><iframe src=\"inner.html\"></iframe>' > fr/outer.html\n")
+        app.typeText("printf '<input type=file onchange=\"parent.document.title=\\x27got \\x27+this.files[0].name\">' > fr/inner.html\n")
+        app.typeText("python3 -m http.server 48319 --bind 127.0.0.1 --directory fr >/dev/null 2>&1 &\n")
         app.typeText("sleep 1; clear; $H browser navigate url=localhost:48319/outer.html | grep -c frame\n")
         XCTAssertTrue(app.descendants(matching: .any)["browser-leaf"].firstMatch.waitForExistence(timeout: 20))
         app.typeText("clear; $H browser snapshot full=true filter=all | grep -A3 'frame f'\n")
         waitFor(screen, contains: "[ref_f1_", timeout: 30)
         shot("frame-snapshot")
 
-        app.typeText("clear; R=$($H browser snapshot full=true filter=all | sed -n 's/.*\\[\\(ref_f[0-9_]*\\)\\].*/\\1/p' | head -1); $H browser upload ref=$R path=inner.html | head -2; $H browser get_text | head -1\n")
+        app.typeText("clear; R=$($H browser snapshot full=true filter=all | sed -n 's/.*\\[\\(ref_f[0-9_]*\\)\\].*/\\1/p' | head -1); $H browser upload ref=$R path=fr/inner.html | head -2; $H browser get_text | head -1\n")
         waitFor(screen, contains: "Page: got inner.html", timeout: 30)
         shot("uploaded")
 

@@ -55,6 +55,7 @@ final class Pane {
             self?.moves += 1
             bytes.withUnsafeBytes { backend.write($0) }
         }
+        view.unpastedDragTypes = [TabDrag.typeIdentifier]
         surface.sizeFollowsStream = backend.sizeFollowsStream
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
         // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).
