@@ -43,13 +43,13 @@ enum ThemePair {
         }
     }
 
-    /// The system's own appearance: not the window's, which `window-theme` overrides.
+    /// The system's own appearance: not the window's or the app's, which follow the theme.
     @MainActor static var systemIsDark: Bool {
         #if os(iOS)
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         return (scene?.traitCollection ?? UITraitCollection.current).userInterfaceStyle == .dark
         #else
-        return NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return WebsiteAppearance.systemScheme == .dark
         #endif
     }
 }
