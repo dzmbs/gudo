@@ -7,11 +7,12 @@ import UIKit
 import AppKit
 #endif
 
-/// Browse a host's files: directories first, git status at the trailing edge, push to descend,
-/// tap a file to preview it (text, images). Upload from Files or by dropping, download to share
-/// or save, new folder, rename, move to the host's trash. The directory is watched, so changes
-/// made in the terminal or by an agent show up by themselves.
-/// Works inside the caller's NavigationStack (it registers its own destinations).
+/// Browse a host's files: directories first, git status at the trailing edge, open a folder to
+/// descend, a file to preview it (text, images). Upload from Files or by dropping, download to
+/// share or save, new folder, rename, move to the host's trash. The directory is watched, so
+/// changes made in the terminal or by an agent show up by themselves.
+/// In a leaf and on the Mac it keeps Finder's history and draws each place itself; in an iOS
+/// sheet it pushes onto the caller's NavigationStack.
 struct FilesBrowserView: View {
     let source: any FileSource
     /// Opens a file in the editor (VS Code on the host).
@@ -21,8 +22,20 @@ struct FilesBrowserView: View {
     var onInsertPath: (String) -> Void = { _ in }
 
     @Environment(WindowModel.self) private var model
+    @Environment(\.toolLeaf) private var leaf
     /// Where browsing starts instead of `source.root` (Go to Home from a folder that is gone).
     @State private var start: String?
+    @State private var ownNavigator = FilesNavigator(root: "~")
+
+    /// A push from a leaf lands in the window's navigation, not the leaf's, and Mac tools have no
+    /// back gesture to keep: both draw each place here instead.
+    private var navigatesInPlace: Bool {
+        #if os(macOS)
+        true
+        #else
+        leaf != nil
+        #endif
+    }
 
     var body: some View {
         Group {
@@ -32,6 +45,10 @@ struct FilesBrowserView: View {
                         .buttonStyle(.glass)
                 }
                 .toolChrome("Files")
+            } else if navigatesInPlace {
+                InPlaceFiles(
+                    source: source, actions: actions,
+                    navigator: leaf.map { model.filesNavigator(for: $0.member.id, root: source.root) } ?? ownNavigator)
             } else {
                 let root = start ?? source.root
                 DirectoryListing(
@@ -68,6 +85,123 @@ private struct FileRoute: Hashable {
     var entry: FileEntry
 }
 
+/// Finder's path bar: every folder from the top down to the one shown, each a click away.
+private struct PathBar: View {
+    let trail: [String]
+    /// The file previewed in the last folder.
+    let file: String?
+    let go: (String) -> Void
+    @Environment(\.terminalTheme) private var theme
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: DS.Space.xs) {
+                ForEach(Array(trail.enumerated()), id: \.element) { index, folder in
+                    if index > 0 { separator }
+                    Button { go(folder) } label: {
+                        Label(InPlaceFiles.name(folder), systemImage: InPlaceFiles.symbol(folder))
+                            .fontWeight(index == trail.count - 1 && file == nil ? .semibold : .regular)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("path-\(InPlaceFiles.name(folder))")
+                }
+                if let file {
+                    separator
+                    Label(file, systemImage: "doc").fontWeight(.semibold)
+                }
+            }
+            .labelStyle(PathLabelStyle())
+            .font(DS.Font.meta)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, DS.Space.s)
+        }
+        .scrollIndicators(.hidden)
+        // The deepest folders stay in view; the top scrolls away first.
+        .defaultScrollAnchor(.trailing)
+        .frame(height: 24)
+        .background(theme.background)
+        .overlay(alignment: .top) { theme.splitDivider.frame(height: 1) }
+        .accessibilityIdentifier("files-path")
+    }
+
+    private var separator: some View {
+        Image(systemName: "chevron.compact.right").foregroundStyle(.tertiary).accessibilityHidden(true)
+    }
+}
+
+private struct PathLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon.imageScale(.small)
+            configuration.title
+        }
+    }
+}
+
+/// Browsing drawn in place: the place on screen, Finder's back and forward, and the folders
+/// enclosing it (the bar's title menu, ⌘↑).
+private struct InPlaceFiles: View {
+    let source: any FileSource
+    let actions: FileActions
+    let navigator: FilesNavigator
+
+    var body: some View {
+        Group {
+            switch navigator.place {
+            case .folder(let path):
+                DirectoryListing(
+                    source: source, directory: path, actions: actions,
+                    goHome: navigator.canGoBack || path == "~" ? nil : { navigator.reset(to: "~") },
+                    navigator: navigator)
+            case .file(let entry):
+                FilePreviewScreen(source: source, entry: entry, actions: actions)
+            }
+        }
+        .id(navigator.place)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            PathBar(trail: navigator.trail, file: { if case .file(let entry) = navigator.place { entry.name } else { nil } }()) {
+                navigator.go(to: $0)
+            }
+        }
+        .environment(\.toolNavigation, navigation)
+        .onChange(of: source.root, initial: true) { _, root in
+            // Until something is opened, the start follows the focused pane's folder.
+            if navigator.isAtStart, navigator.place != .folder(root) { navigator.reset(to: root) }
+        }
+    }
+
+    private var navigation: ToolNavigation {
+        let trail = navigator.trail
+        let enclosing = navigator.place == .folder(navigator.folder) ? trail.dropLast() : trail[...]
+        return ToolNavigation(
+            back: navigator.canGoBack ? { navigator.goBack() } : nil,
+            forward: navigator.canGoForward ? { navigator.goForward() } : nil,
+            enclosing: enclosing.reversed().map { folder in
+                ToolNavigation.Stop(id: folder, title: Self.name(folder), systemImage: Self.symbol(folder)) {
+                    navigator.go(to: folder)
+                }
+            },
+            location: "\(source.display(navigator.place.path)) · \(source.hostName)")
+    }
+
+    static func name(_ folder: String) -> String {
+        switch folder {
+        case "~": "Home"
+        case "/": "/"
+        default: (folder as NSString).lastPathComponent
+        }
+    }
+
+    static func symbol(_ folder: String) -> String {
+        switch folder {
+        case "~": "house"
+        case "/": "internaldrive"
+        default: "folder"
+        }
+    }
+}
+
 /// The listing's filter: the system search field in a sheet or window, a field under the bar
 /// in a leaf (the window's search field belongs to the whole window there).
 private struct ListingFilter: ViewModifier {
@@ -97,6 +231,8 @@ private struct DirectoryListing: View {
     let actions: FileActions
     /// Where to go when the folder is gone (the start of browsing only).
     var goHome: (() -> Void)?
+    /// Browsing in place: rows open through it, and folders expand beneath their row.
+    var navigator: FilesNavigator?
 
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
@@ -129,14 +265,36 @@ private struct DirectoryListing: View {
         }
     }
 
-    private var visible: [FileEntry] {
-        let sorted = (entries ?? []).sorted {
+    private struct Row: Identifiable {
+        let entry: FileEntry
+        let depth: Int
+        var id: String { entry.path }
+    }
+
+    private static func sorted(_ entries: [FileEntry]) -> [FileEntry] {
+        entries.sorted {
             if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
+    }
+
+    /// The folder's entries, each expanded folder's beneath it (Finder's list view); a filter
+    /// matches the folder's own entries.
+    private var rows: [Row] {
         let query = filter.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return sorted }
-        return sorted.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        guard query.isEmpty else {
+            return Self.sorted(entries ?? []).filter { $0.name.localizedCaseInsensitiveContains(query) }.map { Row(entry: $0, depth: 0) }
+        }
+        func tree(_ entries: [FileEntry], depth: Int) -> [Row] {
+            Self.sorted(entries).flatMap { entry in
+                var rows = [Row(entry: entry, depth: depth)]
+                if entry.isDirectory, let navigator, navigator.expanded.contains(entry.path) {
+                    rows += tree(navigator.listings[entry.path] ?? [], depth: depth + 1)
+                }
+                return rows
+            }
+        }
+        return tree(entries ?? [], depth: 0)
     }
 
     var body: some View {
@@ -206,7 +364,8 @@ private struct DirectoryListing: View {
             }
             .onChange(of: entries) { _, entries in
                 guard LaunchOptions.screen == "file-preview", directory == source.root, fixtureFile == nil else { return }
-                fixtureFile = entries?.first { $0.name == "Cargo.toml" }
+                guard let cargo = entries?.first(where: { $0.name == "Cargo.toml" }) else { return }
+                if let navigator { navigator.open(.file(cargo)) } else { fixtureFile = cargo }
             }
     }
 
@@ -217,8 +376,8 @@ private struct DirectoryListing: View {
     @ViewBuilder private var content: some View {
         if entries != nil {
             List {
-                ForEach(visible) { entry in
-                    row(entry)
+                ForEach(rows) { row in
+                    self.row(row.entry, depth: row.depth)
                         .listRowBackground(theme.background)
                 }
             }
@@ -227,7 +386,7 @@ private struct DirectoryListing: View {
             .background(theme.background)
             .refreshable { await load() }
             .overlay {
-                if visible.isEmpty {
+                if rows.isEmpty {
                     if filter.isEmpty {
                         EmptyState("Empty Folder", systemImage: "folder", message: "Drop files here, or upload some from this device.") {
                             Button("Upload Files…", systemImage: "square.and.arrow.up") { isImporting = true }
@@ -264,15 +423,27 @@ private struct DirectoryListing: View {
         }
     }
 
-    @ViewBuilder private func row(_ entry: FileEntry) -> some View {
+    @ViewBuilder private func row(_ entry: FileEntry, depth: Int) -> some View {
         Group {
-            if entry.isDirectory {
+            if let navigator {
+                HStack(spacing: DS.Space.xs) {
+                    disclosure(entry, navigator: navigator)
+                    Button {
+                        navigator.open(entry.isDirectory ? .folder(entry.path) : .file(entry))
+                    } label: {
+                        label(entry)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.leading, CGFloat(depth) * Self.indent)
+            } else if entry.isDirectory {
                 NavigationLink(value: DirectoryRoute(path: entry.path)) { label(entry) }
             } else {
                 NavigationLink(value: FileRoute(entry: entry)) { label(entry) }
             }
         }
-        .accessibilityIdentifier("file-\(entry.name)")
+        // Nested rows by path: names repeat across folders.
+        .accessibilityIdentifier(depth == 0 ? "file-\(entry.name)" : "file-\(entry.path)")
         .contextMenu {
             if !entry.isDirectory, let open = actions.openInEditor {
                 Button("Open in VS Code", systemImage: "chevron.left.forwardslash.chevron.right") { open(entry.path) }
@@ -306,6 +477,47 @@ private struct DirectoryListing: View {
         #else
         "Share…"
         #endif
+    }
+
+    private static let indent: CGFloat = 16
+
+    /// The disclosure triangle: a folder's entries beneath its row. Files keep its width so
+    /// names line up.
+    @ViewBuilder private func disclosure(_ entry: FileEntry, navigator: FilesNavigator) -> some View {
+        if entry.isDirectory {
+            let isExpanded = navigator.expanded.contains(entry.path)
+            Button(isExpanded ? "Collapse" : "Expand", systemImage: "chevron.right") { toggle(entry, navigator: navigator) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .frame(width: Self.indent, height: Self.indent)
+                .contentShape(.rect)
+                .accessibilityIdentifier("disclose-\(entry.name)")
+        } else {
+            Color.clear.frame(width: Self.indent, height: Self.indent)
+        }
+    }
+
+    private func toggle(_ entry: FileEntry, navigator: FilesNavigator) {
+        withAnimation(DS.Motion.snappy) {
+            if navigator.expanded.remove(entry.path) == nil { navigator.expanded.insert(entry.path) }
+        }
+        if navigator.expanded.contains(entry.path), navigator.listings[entry.path] == nil {
+            Task { await loadChildren(entry.path) }
+        }
+    }
+
+    private func loadChildren(_ path: String) async {
+        guard let navigator else { return }
+        do {
+            let loaded = try await source.list(path)
+            withAnimation(DS.Motion.snappy) { navigator.listings[path] = loaded }
+        } catch {
+            navigator.expanded.remove(path)
+            model.toasts.show(Toast("Couldn't read \((path as NSString).lastPathComponent): \(ScreenError.describe(error))", systemImage: "exclamationmark.triangle.fill", style: .failure))
+        }
     }
 
     private func label(_ entry: FileEntry) -> some View {
@@ -474,6 +686,9 @@ private struct DirectoryListing: View {
         do {
             let loaded = try await source.list(directory)
             withAnimation(entries == nil ? nil : DS.Motion.snappy) { entries = loaded }
+            for path in navigator?.expanded ?? [] where path.hasPrefix(directory + "/") {
+                await loadChildren(path)
+            }
         } catch {
             problem = ToolProblem(error, path: directory)
         }
