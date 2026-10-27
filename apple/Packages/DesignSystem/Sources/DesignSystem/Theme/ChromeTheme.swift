@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// Puts a window's (or a sheet's, or a Settings window's) chrome on the terminal theme: the theme
 /// and its `ChromePalette` in the environment and the window scheme (Ghostty `window-theme`).
@@ -11,10 +14,22 @@ private struct ChromeThemeModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let chrome = ChromePalette.cached(theme: theme, scheme: requestedScheme)
+        let preferred = preferredScheme(chrome)
         content
             .environment(\.terminalTheme, theme)
             .environment(\.chrome, chrome)
-            .preferredColorScheme(preferredScheme(chrome))
+            // The content's scheme from its first frame, not once the window has taken the
+            // preferred one: AppKit-backed controls (a tinted menu's pop-up button) keep the
+            // appearance they were made in.
+            .environment(\.colorScheme, preferred ?? colorScheme)
+            .preferredColorScheme(preferred)
+            #if os(macOS)
+            // The app's appearance too, so sheets, alerts, menus and panels open in the theme's
+            // scheme rather than the system's.
+            .onChange(of: preferred, initial: true) { _, scheme in
+                NSApplication.shared.appearance = scheme.flatMap { NSAppearance(named: $0 == .dark ? .darkAqua : .aqua) }
+            }
+            #endif
     }
 
     /// The scheme the user asked the window to take, nil for Match Theme.
@@ -129,6 +144,8 @@ private struct ChromeContentModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .foregroundStyle(chrome.text, chrome.textSecondary, chrome.textTertiary)
+            // A tinted menu's AppKit button takes its appearance only when the tint changes. The
+            // accent always does with the scheme (its lightness bands are apart), so menus follow.
             .tint(chrome.accentColor)
     }
 }

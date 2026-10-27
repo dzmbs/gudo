@@ -435,8 +435,7 @@ private struct SSHAuthSections: View {
                 Toggle("Remember Password", isOn: $flow.rememberPassword)
             }
             #if os(macOS)
-            // A labelled pop-down, as System Settings draws one: the form's own control, legible
-            // in either scheme (a bare menu in a grouped row draws dark text on its bezel).
+            // A labelled pop-down, as System Settings draws one.
             LabeledContent("New Key") {
                 newKeyMenu {
                     Text("Create or Import…")
