@@ -17,6 +17,28 @@ extension EnvironmentValues {
     /// Set inside a tool leaf: screens draw the leaf's bar instead of a navigation bar or the
     /// window's toolbar, which belong to the whole window there.
     @Entry var toolLeaf: ToolLeafContext?
+    /// A tool's way around where nothing pushes (a leaf, a Mac tool window): set by the screen
+    /// that keeps the history, drawn by `toolChrome`.
+    @Entry var toolNavigation: ToolNavigation?
+}
+
+/// Back, forward and the places around the one shown (Finder's toolbar and title menu).
+struct ToolNavigation {
+    struct Stop: Identifiable {
+        var id: String
+        var title: String
+        var systemImage: String
+        var go: () -> Void
+    }
+
+    var back: (() -> Void)?
+    var forward: (() -> Void)?
+    /// The places enclosing this one, nearest first: the title's menu; ⌘↑ goes to the first.
+    var enclosing: [Stop] = []
+    /// The whole location, for the title's help.
+    var location: String?
+    /// A NavigationStack draws the way back itself (a sheet on iPhone and iPad).
+    var isStacked = false
 }
 
 extension View {
@@ -47,28 +69,89 @@ private struct ToolChrome<Actions: View>: ViewModifier {
     let subtitle: String
     let actions: Actions
     @Environment(\.toolLeaf) private var leaf
+    @Environment(\.toolNavigation) private var navigation
 
     func body(content: Content) -> some View {
-        if let leaf {
-            VStack(spacing: 0) {
-                ToolLeafBar(leaf: leaf, title: title, subtitle: subtitle) { actions }
-                content.frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .navigationBarBackButtonHidden()
-            #if os(iOS)
-            .toolbar(.hidden, for: .navigationBar)
-            #endif
-        } else {
-            content
-                .navigationTitle(title)
-                .navigationSubtitle(subtitle)
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItemGroup(placement: .primaryAction) { actions }
+        Group {
+            if let leaf {
+                VStack(spacing: 0) {
+                    ToolLeafBar(leaf: leaf, title: title, subtitle: subtitle, navigation: navigation) { actions }
+                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .navigationBarBackButtonHidden()
+                #if os(iOS)
+                .toolbar(.hidden, for: .navigationBar)
+                #endif
+            } else {
+                content
+                    .navigationTitle(title)
+                    .navigationSubtitle(subtitle)
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar {
+                        if let navigation, !navigation.isStacked {
+                            ToolbarItemGroup(placement: .navigation) { HistoryButtons(navigation: navigation) }
+                        }
+                        ToolbarItemGroup(placement: .primaryAction) { actions }
+                    }
+                    .toolbarTitleMenu {
+                        if let navigation { EnclosingMenu(navigation: navigation) }
+                    }
+            }
         }
+        .background {
+            if let navigation, leaf?.isFocused ?? true { HistoryShortcuts(navigation: navigation) }
+        }
+    }
+}
+
+/// Finder's ‹ › pair.
+private struct HistoryButtons: View {
+    let navigation: ToolNavigation
+
+    var body: some View {
+        Button("Back", systemImage: "chevron.backward") { navigation.back?() }
+            .disabled(navigation.back == nil)
+            .help("Back (⌘[)")
+            .accessibilityIdentifier("tool-back")
+        Button("Forward", systemImage: "chevron.forward") { navigation.forward?() }
+            .disabled(navigation.forward == nil)
+            .help("Forward (⌘])")
+            .accessibilityIdentifier("tool-forward")
+    }
+}
+
+/// The places enclosing the one shown, nearest first (Finder's title menu).
+private struct EnclosingMenu: View {
+    let navigation: ToolNavigation
+
+    var body: some View {
+        ForEach(navigation.enclosing) { stop in
+            Button(stop.title, systemImage: stop.systemImage, action: stop.go)
+        }
+    }
+}
+
+/// ⌘[ ⌘] ⌘↑, as Finder has them.
+private struct HistoryShortcuts: View {
+    let navigation: ToolNavigation
+
+    var body: some View {
+        Group {
+            Button("Back") { navigation.back?() }
+                .keyboardShortcut("[")
+                .disabled(navigation.back == nil)
+            Button("Forward") { navigation.forward?() }
+                .keyboardShortcut("]")
+                .disabled(navigation.forward == nil)
+            Button("Enclosing Folder") { navigation.enclosing.first?.go() }
+                .keyboardShortcut(.upArrow)
+                .disabled(navigation.enclosing.isEmpty)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 }
 
@@ -91,12 +174,14 @@ private struct ToolMinimumSize: ViewModifier {
     }
 }
 
-/// A tool leaf's strip, an editor leaf's twin: close, the way back from a pushed screen, the
-/// tool and what it shows, its actions, and more. A pane header's 24 pt beside other panes.
+/// A tool leaf's strip, an editor leaf's twin: close, back and forward where the tool keeps a
+/// history, the tool and what it shows (its title a menu of the places around it), its actions,
+/// and more. A pane header's 24 pt beside other panes.
 private struct ToolLeafBar<Actions: View>: View {
     let leaf: ToolLeafContext
     let title: String
     let subtitle: String
+    let navigation: ToolNavigation?
     @ViewBuilder let actions: Actions
     @Environment(\.terminalTheme) private var theme
     @Environment(\.isPresented) private var isPushed
@@ -107,7 +192,9 @@ private struct ToolLeafBar<Actions: View>: View {
             Button("Close \(leaf.member.tool.title)", systemImage: "xmark", action: leaf.close)
                 .help("Close (⌘W)")
                 .accessibilityIdentifier("tool-close")
-            if isPushed {
+            if let navigation {
+                HStack(spacing: 0) { HistoryButtons(navigation: navigation) }
+            } else if isPushed {
                 Button("Back", systemImage: "chevron.backward") { dismiss() }
                     .help("Back")
                     .accessibilityIdentifier("BackButton")
@@ -117,20 +204,9 @@ private struct ToolLeafBar<Actions: View>: View {
                     .foregroundStyle(DS.Palette.textSecondary)
                     .accessibilityHidden(true)
             }
-            HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
-                Text(verbatim: title)
-                    .font(leaf.isSplit ? .caption.weight(leaf.isFocused ? .semibold : .regular) : .callout.weight(.medium))
-                    .foregroundStyle(leaf.isFocused ? DS.Palette.text : DS.Palette.textSecondary)
-                    .layoutPriority(1)
-                if !subtitle.isEmpty {
-                    Text(verbatim: subtitle)
-                        .font(DS.Font.literalSmall)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .truncationMode(.middle)
-                }
-            }
-            .lineLimit(1)
-            .layoutPriority(1)
+            titleMenu
+                .layoutPriority(1)
+                .help(navigation?.location ?? title)
             Spacer(minLength: DS.Space.s)
             actions
                 .fixedSize()
@@ -151,8 +227,45 @@ private struct ToolLeafBar<Actions: View>: View {
         .frame(height: leaf.isSplit ? 24 : DS.Size.tabBar)
         .background(theme.background)
         .overlay(alignment: .bottom) { theme.splitDivider.frame(height: 1) }
+        .frame(maxWidth: .infinity)
+        .clipped()
         .contentShape(.rect)
         .onTapGesture { if !leaf.isFocused { leaf.focus() } }
+    }
+
+    private var titles: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
+            Text(verbatim: title)
+                .font(leaf.isSplit ? .caption.weight(leaf.isFocused ? .semibold : .regular) : .callout.weight(.medium))
+                .foregroundStyle(leaf.isFocused ? DS.Palette.text : DS.Palette.textSecondary)
+                .truncationMode(.middle)
+                .layoutPriority(1)
+            if !subtitle.isEmpty {
+                Text(verbatim: subtitle)
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .truncationMode(.middle)
+            }
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("tool-title")
+    }
+
+    /// Finder's title menu: the enclosing places, from a click on the title.
+    @ViewBuilder private var titleMenu: some View {
+        if let navigation, !navigation.enclosing.isEmpty {
+            Menu {
+                EnclosingMenu(navigation: navigation)
+            } label: {
+                titles.contentShape(.rect)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+        } else {
+            titles
+        }
     }
 }
 

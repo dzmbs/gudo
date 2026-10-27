@@ -99,8 +99,16 @@ extension WindowModel {
         return member
     }
 
+    func filesNavigator(for id: UUID, root: String) -> FilesNavigator {
+        if let kept = filesNavigators[id] { return kept }
+        let made = FilesNavigator(root: root)
+        filesNavigators[id] = made
+        return made
+    }
+
     /// Closes a tool leaf.
     func closeTool(_ id: UUID) {
+        filesNavigators[id] = nil
         guard let tab = composites.tab(containingTool: id), let leaf = tab.leaf(forTool: id) else { return }
         composites.close(leaf: leaf, in: tab.id)
         if activeMixedTab == tab.id { syncMixedFocus() }
