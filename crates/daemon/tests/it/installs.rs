@@ -95,7 +95,7 @@ async fn names_each_installed_agents_mcp_command() {
     assert_eq!(claude.argv[0], s(&home.join(".local/bin/claude")));
     assert_eq!(
         claude.argv[1..6],
-        ["mcp", "add", "--scope", "user", "unnamed_drawings"]
+        ["mcp", "add", "--scope", "user", "unnamed"]
     );
     let codex = add.iter().find(|c| c.agent == AgentKind::Codex).unwrap();
     assert_eq!(
@@ -104,18 +104,40 @@ async fn names_each_installed_agents_mcp_command() {
             s(&bin.join("codex")).as_str(),
             "mcp",
             "add",
-            "unnamed_drawings",
+            "unnamed",
             "--"
         ]
     );
     assert!(codex.argv[5].ends_with("un-hook"));
     assert_eq!(codex.argv[6..8], ["mcp", "--state"]);
 
+    // A registration under the server's old name is removed first, and only where it exists.
+    std::fs::write(
+        home.join(".claude.json"),
+        r#"{"mcpServers":{"unnamed_drawings":{"command":"un-hook"}}}"#,
+    )
+    .unwrap();
+    let add = c.client.agent_mcp_commands(true).await.unwrap();
+    let claude: Vec<_> = add
+        .iter()
+        .filter(|c| c.agent == AgentKind::Claude)
+        .collect();
+    assert_eq!(
+        claude[0].argv[1..],
+        ["mcp", "remove", "--scope", "user", "unnamed_drawings"]
+    );
+    assert_eq!(claude[1].argv[2], "add");
+    assert_eq!(
+        add.iter().filter(|c| c.agent == AgentKind::Codex).count(),
+        1
+    );
+
     std::fs::remove_file(bin.join("codex")).unwrap();
+    std::fs::remove_file(home.join(".claude.json")).unwrap();
     let remove = c.client.agent_mcp_commands(false).await.unwrap();
     assert_eq!(remove.len(), 1, "a missing agent has no command");
     assert_eq!(
         remove[0].argv[1..],
-        ["mcp", "remove", "--scope", "user", "unnamed_drawings"]
+        ["mcp", "remove", "--scope", "user", "unnamed"]
     );
 }

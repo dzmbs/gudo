@@ -73,21 +73,33 @@ pub(crate) fn mcp_commands(
     register: bool,
 ) -> Vec<AgentMcpCommand> {
     let hook_bin = cfg.hook_bin();
+    let home = cfg.home();
+    let legacy = agents::legacy_mcp_server_name();
     check(cfg, path)
         .into_iter()
-        .filter_map(|install| {
+        .flat_map(|install| {
             let program = match install.state {
                 InstallState::Installed { path } | InstallState::NotOnPath { path } => path,
-                InstallState::Missing => return None,
+                InstallState::Missing => return Vec::new(),
             };
-            let command = match install.agent {
-                AgentKind::Claude => agents::ClaudeCode::user_mcp_command,
-                AgentKind::Codex => agents::Codex::user_mcp_command,
+            let (state_dir, agent) = (&cfg.state_dir, install.agent);
+            let (add, old) = match agent {
+                AgentKind::Claude => (
+                    agents::ClaudeCode::user_mcp_command(&program, &hook_bin, state_dir, register),
+                    agents::ClaudeCode::user_mcp_registered(&home, &legacy)
+                        .then(|| agents::ClaudeCode::user_mcp_remove(&program, &legacy)),
+                ),
+                AgentKind::Codex => (
+                    agents::Codex::user_mcp_command(&program, &hook_bin, state_dir, register),
+                    agents::Codex::user_mcp_registered(&home, &legacy)
+                        .then(|| agents::Codex::user_mcp_remove(&program, &legacy)),
+                ),
             };
-            Some(AgentMcpCommand {
-                agent: install.agent,
-                argv: command(&program, &hook_bin, &cfg.state_dir, register),
-            })
+            // The server's old name goes too, so an agent does not run it twice.
+            old.into_iter()
+                .chain([add])
+                .map(|argv| AgentMcpCommand { agent, argv })
+                .collect()
         })
         .collect()
 }
