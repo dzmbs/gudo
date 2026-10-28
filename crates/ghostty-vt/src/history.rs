@@ -6,13 +6,13 @@ use std::ptr::{self, NonNull};
 
 use ghostty_vt_sys as ffi;
 
+use crate::snapshot::KITTY_IMAGE_PAYLOAD_TAG as TAG_KITTY_IMAGE_PAYLOAD;
 use crate::terminal::CONTINUATION_MAX_BYTES;
 use crate::{Error, HistoryPage, Screen, Terminal};
 
 const RECORD_HEADER_LEN: usize = 10;
 const TAG_PAGE: u16 = 3;
 const TAG_FINISH: u16 = 6;
-const TAG_KITTY_IMAGE_PAYLOAD: u16 = 9;
 const TAG_KITTY_IMAGE_PAGE_PLACEMENTS: u16 = 10;
 
 /// Bytes handed to the decoder's reader, with a read cursor.
@@ -30,10 +30,10 @@ struct Source {
 /// `bulk` stream), and every complete page in them is prepended at once. The terminal can be
 /// rendered, written to and resized in between.
 ///
-/// Pushed bytes may end anywhere; a partial record is kept until the rest arrives. A page (or
-/// an image's pixels) is decoded once the record after it has arrived, because the decoder
-/// reads on to see whether image placements follow the page, and running out of bytes there is
-/// the end of the snapshot to it.
+/// Pushed bytes may end anywhere; a partial record is kept until the rest arrives. A page is
+/// decoded once the record after it has arrived, because the decoder reads on to see whether
+/// image placements follow the page, and running out of bytes there is the end of the snapshot
+/// to it. An image's pixels are attached as soon as their record is complete.
 ///
 /// # Examples
 ///
@@ -86,13 +86,15 @@ impl std::fmt::Debug for StreamingRestore {
 unsafe impl Send for StreamingRestore {}
 
 impl StreamingRestore {
-    /// Decodes a snapshot's READY prefix (see [`ready_len`](crate::ready_len)).
+    /// Decodes a snapshot's READY prefix (see [`ready_len`](crate::ready_len)), and the pixels
+    /// of any images that follow it (see [`screen_len`](crate::screen_len)).
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidValue`] if the bytes are not a complete READY section of this
     /// snapshot format, and [`Error::OutOfMemory`] if allocation fails.
     pub fn new(ready: &[u8]) -> Result<Self, Error> {
+        crate::kitty::install_png_decoder();
         let mut source = Box::new(Source {
             data: ready.to_vec(),
             pos: 0,
@@ -121,6 +123,11 @@ impl StreamingRestore {
                 ))
             };
             set(
+                ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                ptr::from_ref(&crate::KITTY_IMAGE_STORAGE_LIMIT).cast(),
+            )
+            .map_err(free)?;
+            set(
                 ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES,
                 ptr::from_ref(&CONTINUATION_MAX_BYTES).cast(),
             )
@@ -143,7 +150,7 @@ impl StreamingRestore {
             .ok_or(Error::InvalidValue)
             .map_err(free)?;
         let scanned = source.pos;
-        Ok(Self {
+        let mut restore = Self {
             decoder,
             // SAFETY: on success the caller owns the returned live terminal; the decoder keeps
             // referring to it, which `Self` allows only through the methods below.
@@ -152,7 +159,9 @@ impl StreamingRestore {
             scanned,
             pending: VecDeque::new(),
             finished: false,
-        })
+        };
+        restore.push(&[])?;
+        Ok(restore)
     }
 
     /// The restored terminal.
@@ -171,8 +180,8 @@ impl StreamingRestore {
     /// # Errors
     ///
     /// As for [`Terminal::resize`].
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), Error> {
-        self.terminal.resize(cols, rows)
+    pub fn resize(&mut self, cols: u16, rows: u16, cell_px: (u32, u32)) -> Result<(), Error> {
+        self.terminal.resize(cols, rows, cell_px)
     }
 
     /// Caps the terminal's scrollback; see [`Terminal::set_scrollback_max_bytes`]. A restored
@@ -209,7 +218,8 @@ impl StreamingRestore {
         self.finished
     }
 
-    /// Adds history records and prepends every page they complete, newest first.
+    /// Adds history records and prepends every page they complete, newest first; image pixels
+    /// among them are attached to their images.
     ///
     /// # Errors
     ///
@@ -252,9 +262,14 @@ impl StreamingRestore {
                     self.finished = true;
                     break;
                 }
-                TAG_PAGE | TAG_KITTY_IMAGE_PAYLOAD => {
-                    let placements = tag == TAG_PAGE
-                        && self.pending.get(1) == Some(&TAG_KITTY_IMAGE_PAGE_PLACEMENTS);
+                TAG_KITTY_IMAGE_PAYLOAD => {
+                    if !matches!(self.next()?, Step::Image) {
+                        return Err(Error::InvalidValue);
+                    }
+                    self.pending.pop_front();
+                }
+                TAG_PAGE => {
+                    let placements = self.pending.get(1) == Some(&TAG_KITTY_IMAGE_PAGE_PLACEMENTS);
                     let records = 1 + usize::from(placements);
                     // The decoder reads the record after these; wait until it is here.
                     if self.pending.len() <= records {
@@ -262,8 +277,7 @@ impl StreamingRestore {
                     }
                     match self.next()? {
                         Step::Page(page) => pages.push(page),
-                        Step::Image => {}
-                        Step::Finished => return Err(Error::InvalidValue),
+                        Step::Image | Step::Finished => return Err(Error::InvalidValue),
                     }
                     self.pending.drain(..records);
                 }
@@ -474,7 +488,7 @@ pub fn count_pages(records: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TextRegion, ready_len};
+    use crate::{TextRegion, ready_len, screen_len};
 
     fn busy_terminal(lines: usize) -> Result<Terminal, Error> {
         let mut t = Terminal::new(40, 5)?;
@@ -538,6 +552,53 @@ mod tests {
             terminal.text(TextRegion::All)?,
             daemon.text(TextRegion::All)?
         );
+        Ok(())
+    }
+
+    /// A 2×2 RGBA image with id `id`, displayed at the cursor.
+    fn image(id: u32) -> String {
+        format!("\x1b_Ga=T,f=32,s=2,v=2,i={id},q=2;/wAA//8AAP//AAD//wAA/w==\x1b\\")
+    }
+
+    #[test]
+    fn image_pixels_arrive_after_ready() -> Result<(), Error> {
+        let mut daemon = Terminal::new(20, 4)?;
+        daemon.resize(20, 4, (10, 20))?;
+        daemon.set_scrollback_max_bytes(Some(64 << 20))?;
+        // One image that scrolls far into history, one on screen.
+        daemon.write(image(1).as_bytes());
+        for i in 0..2000 {
+            daemon.write(format!("line {i}\r\n").as_bytes());
+        }
+        daemon.write(image(2).as_bytes());
+        let snapshot = daemon.encode_snapshot()?;
+        let ready = ready_len(&snapshot).unwrap();
+        let screen = screen_len(&snapshot).unwrap();
+        assert!(screen > ready);
+
+        // READY alone: the images are known, their pixels pending.
+        let pending = StreamingRestore::new(&snapshot[..ready])?;
+        let on_screen = pending.terminal().kitty_image(2).expect("restored");
+        assert_eq!((on_screen.width, on_screen.pixels), (2, None));
+
+        // With the pixels in view: the image on screen is complete at once.
+        let mut client = StreamingRestore::new(&snapshot[..screen])?;
+        assert!(client.terminal().kitty_image(2).unwrap().pixels.is_some());
+        assert_eq!(client.terminal().kitty_image(1).unwrap().pixels, None);
+        assert_eq!(
+            client.terminal().kitty_placements(),
+            daemon.kitty_placements()
+        );
+        for (start, end) in history_chunks(&snapshot, screen, 4096) {
+            client.push(&snapshot[start..end])?;
+        }
+        assert!(client.is_finished());
+        // Generations are per process, never shared between terminals.
+        let pixels = |t: &Terminal, id| t.kitty_image(id).and_then(|i| i.pixels);
+        for id in [1, 2] {
+            assert!(pixels(client.terminal(), id).is_some());
+            assert_eq!(pixels(client.terminal(), id), pixels(&daemon, id));
+        }
         Ok(())
     }
 }

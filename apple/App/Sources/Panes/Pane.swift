@@ -57,6 +57,7 @@ final class Pane {
         }
         view.unpastedDragTypes = [TabDrag.typeIdentifier]
         surface.sizeFollowsStream = backend.sizeFollowsStream
+        terminal.answersQueries = !backend.hostAnswersQueries
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
         // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).
         view.keyInterceptor = { [weak self] event in self.map { VoiceDictation.shared.handleKey(event, pane: $0) } ?? false }
@@ -104,12 +105,15 @@ final class Pane {
             case .history(let records, _):
                 _ = try? terminal.appendHistory(records)
                 surface.outputArrived()
-            case .resized(let cols, let rows):
+            case .resized(let cols, let rows, let cellWidth, let cellHeight):
                 // The remote PTY changed size at this point of the stream: follow it here, in
-                // order with the output around it, so the bytes after it lay out as they did there.
-                let cell = cellPixels.withLock { $0 }
+                // order with the output around it, so the bytes after it lay out as they did
+                // there; in the host's cells, so images move the cursor as they did there too.
+                let local = cellPixels.withLock { $0 }
                 Pane.log.debug("remote resize \(cols)x\(rows)")
-                terminal.resize(cols: cols, rows: rows, cellWidth: cell.width, cellHeight: cell.height)
+                terminal.resize(
+                    cols: cols, rows: rows,
+                    cellWidth: cellWidth > 0 ? cellWidth : local.width, cellHeight: cellHeight > 0 ? cellHeight : local.height)
                 surface.outputArrived()
             case .connection(let state):
                 Task { @MainActor in self?.connection = state }

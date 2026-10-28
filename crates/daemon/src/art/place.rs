@@ -1,20 +1,17 @@
 //! Inline placements: artifacts shown in a terminal pane, glued to an output row, so a
 //!
-//! The daemon owns image and placement state instead of leaving it to the VT's kitty
-//! or attaches later would lose them. Placements travel as `ArtifactEvent::Placed` and are
-//! sent again on `Attach`; their rows are tracked pins like ink anchors.
-//!
-//! Three ways in: a person places an artifact (the overlay's "done", or "place" from a
-//! list), a file is pasted or dropped onto the pane (`Import`), or a program in the pane
-//! prints a PNG with the kitty graphics protocol (`un draw show`, `kitten icat`), which the
-//! output scanner hands over with the cursor row pinned.
+//! Placements travel as `ArtifactEvent::Placed` and are sent again on `Attach`; their rows
+//! are tracked pins like ink anchors. Two ways in: a person places an artifact (the overlay's
+//! "done", or "place" from a list), or a file is pasted or dropped onto the pane (`Import`).
+//! Images programs print with the kitty graphics protocol are not placements: the VTs keep
+//! them and snapshots carry them (docs/DAEMON.md §7.10).
 
 use std::sync::Arc;
 
 use proto::{
-    Actor, AnchorState, ArtifactError, ArtifactEvent, ArtifactId, ArtifactKind, DetachReason,
-    ExportFormat, ImageRef, ImportRequest, PaneId, PaneSize, PlaceRequest, Placement,
-    PlacementSource, UnixMillis,
+    Actor, AnchorState, ArtifactError, ArtifactId, ArtifactKind, DetachReason, ExportFormat,
+    ImageRef, ImportRequest, PaneId, PaneSize, PlaceRequest, Placement, PlacementSource,
+    UnixMillis,
 };
 
 use super::{Art, Result, row_anchor};
@@ -22,7 +19,7 @@ use crate::anchor::AnchorPos;
 use crate::core::{Core, lock};
 use crate::identity::now_millis;
 
-/// Anchor keys of placements (artifact anchors use the artifact id; kitty captures set bit 62).
+/// Anchor keys of placements (artifact anchors use the artifact id).
 pub(crate) const PLACEMENT_KEY: u64 = 1 << 63;
 /// Default cell size in image pixels for sizing a placement (2× renders of 9×18 pt cells).
 const CELL_PX: (f32, f32) = (18.0, 36.0);
@@ -342,69 +339,4 @@ pub(crate) fn import(
             Err(e)
         }
     }
-}
-
-/// A PNG a program printed with the kitty graphics protocol, its top-left cell already
-/// pinned under `key` by the output scanner: kept as an image artifact and placement.
-pub(crate) fn kitty_image(
-    core: &Arc<Core>,
-    pane: PaneId,
-    key: u64,
-    png: &[u8],
-    (col, cols, rows): (u16, u16, u16),
-) {
-    let Some(entry) = core.pane(pane) else { return };
-    let Some(session) = core.session_of_pane(pane) else {
-        entry.pane.anchor_remove(key);
-        return;
-    };
-    let actor = Actor {
-        principal: proto::PrincipalId([0; 16]),
-        device: proto::DeviceId(core.identity.daemon_id().0),
-    };
-    let created = core.art.put_blob(png).and_then(|image| {
-        core.art.create(
-            actor,
-            &proto::ArtifactCreate {
-                session_id: session,
-                kind: ArtifactKind::Image,
-                title: "kitty image".into(),
-                space: proto::CoordSpace::Canvas,
-                anchor: None,
-                image: Some(image.hash),
-                ops: Vec::new(),
-            },
-            None,
-        )
-    });
-    let info = match created {
-        Ok((info, _)) => info,
-        Err(e) => {
-            tracing::debug!(%pane, "kitty image not kept: {e}");
-            entry.pane.anchor_remove(key);
-            return;
-        }
-    };
-    let Some(image) = info.image else { return };
-    let pos = entry
-        .pane
-        .anchor_position(key)
-        .unwrap_or(AnchorPos::Detached(DetachReason::RowGone));
-    let (cols, rows) = size_for(&image, entry.pane.size(), col, cols, rows);
-    let placement = Placement {
-        placement_id: core.art.alloc_placement(),
-        pane_id: pane,
-        artifact_id: info.artifact_id,
-        version: 0,
-        image,
-        anchor: row_anchor(pane, pos, None),
-        col,
-        cols,
-        rows,
-        source: PlacementSource::Kitty,
-        at: UnixMillis(now_millis()),
-    };
-    core.art.insert_placement(placement.clone(), key);
-    core.emit_artifact(session, ArtifactEvent::Created(info), None);
-    core.emit_artifact(session, ArtifactEvent::Placed(placement), None);
 }

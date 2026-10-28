@@ -132,6 +132,18 @@ pub(crate) struct MetaState {
     pub secret_prompt: Option<String>,
     /// The program's own last OSC 7501 report (or `status_set`), whatever the program.
     pub program: Option<agents::ProgramStatus>,
+    /// Turns the pane's agent has finished, and the last one.
+    pub turns: u64,
+    pub last_turn: Option<LastTurn>,
+}
+
+/// How an agent's last turn ended, for agents waiting on it (`daemon::term`).
+#[derive(Debug, Clone)]
+pub(crate) struct LastTurn {
+    pub outcome: agents::TurnOutcome,
+    pub message: Option<String>,
+    pub at: proto::UnixMillis,
+    pub transcript: Option<PathBuf>,
 }
 
 pub(crate) struct PaneEntry {
@@ -1015,7 +1027,10 @@ impl Core {
             cmd,
             size,
             self.cfg.ring_capacity,
-            self.cfg.scrollback_bytes,
+            crate::pane::VtLimits {
+                scrollback_bytes: self.cfg.scrollback_bytes,
+                image_storage_bytes: self.cfg.image_storage_bytes,
+            },
         )
         .map_err(|e| (OpError::SpawnFailed, e.to_string()))?;
         let record = PaneRecord {
@@ -1108,6 +1123,16 @@ impl Core {
             | EventKind::Interrupted
             | EventKind::Error
             | EventKind::SessionEnded => {
+                if let (Some(turn), Some(entry)) = (&event.turn, self.pane(id)) {
+                    let mut meta = lock(&entry.meta);
+                    meta.turns += 1;
+                    meta.last_turn = Some(LastTurn {
+                        outcome: turn.outcome,
+                        message: turn.last_message.clone(),
+                        at: proto::UnixMillis(crate::identity::now_millis()),
+                        transcript: event.session.transcript.clone(),
+                    });
+                }
                 self.ws
                     .turns
                     .record(crate::ws::turns::Boundary::End { pane: id });
@@ -1139,7 +1164,8 @@ impl Core {
             let message = event
                 .as_ref()
                 .and_then(|e| e.turn.as_ref())
-                .and_then(|t| t.last_message.clone());
+                .and_then(|t| t.last_message.as_deref())
+                .map(notice_text);
             let notice = match notify {
                 agents::Notify::Blocked { .. } => {
                     let (request_id, summary) = match &wire {
@@ -1318,13 +1344,6 @@ async fn pane_task(
                     }
                     VtEvent::Osc(osc) => handle_osc(&core, &entry, osc),
                     VtEvent::Command(update) => handle_command(&core, &entry, update),
-                    VtEvent::KittyImage { key, png, col, cols, rows } => {
-                        let core = Arc::clone(&core);
-                        // Hashing and writing the blob stays off the pane's event loop.
-                        tokio::task::spawn_blocking(move || {
-                            crate::art::place::kitty_image(&core, id, key, &png, (col, cols, rows));
-                        });
-                    }
                 }
             }
             changed = echo.changed() => {
@@ -1600,4 +1619,13 @@ pub(crate) fn saved_state(core: &Core) -> persist::Saved {
         .map(|(id, e)| (id.0, lock(&e.record).clone()))
         .collect();
     persist::Saved::new(layout, panes)
+}
+
+/// A notification's share of an agent's message.
+fn notice_text(message: &str) -> String {
+    const MAX: usize = 500;
+    match message.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &message[..cut]),
+        None => message.to_owned(),
+    }
 }

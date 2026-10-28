@@ -37,25 +37,30 @@ public final class RenderState {
         public var palette: [RGB]
     }
 
-    private let state: GhosttyRenderState
+    let state: GhosttyRenderState
     private let rowIterator: GhosttyRenderStateRowIterator
     private let rowCells: GhosttyRenderStateRowCells
+    let imageIterator: GhosttyRenderStateImageIterator
 
     public init() {
         var state: GhosttyRenderState?
         var iterator: GhosttyRenderStateRowIterator?
         var cells: GhosttyRenderStateRowCells?
+        var images: GhosttyRenderStateImageIterator?
         guard ghostty_render_state_new(nil, &state) == GHOSTTY_SUCCESS,
               ghostty_render_state_row_iterator_new(nil, &iterator) == GHOSTTY_SUCCESS,
               ghostty_render_state_row_cells_new(nil, &cells) == GHOSTTY_SUCCESS,
-              let state, let iterator, let cells
+              ghostty_render_state_image_iterator_new(nil, &images) == GHOSTTY_SUCCESS,
+              let state, let iterator, let cells, let images
         else { fatalError("libghostty-vt allocation failed") }
         self.state = state
         rowIterator = iterator
         rowCells = cells
+        imageIterator = images
     }
 
     deinit {
+        ghostty_render_state_image_iterator_free(imageIterator)
         ghostty_render_state_row_cells_free(rowCells)
         ghostty_render_state_row_iterator_free(rowIterator)
         ghostty_render_state_free(state)

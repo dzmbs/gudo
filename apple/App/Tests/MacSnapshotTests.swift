@@ -150,6 +150,27 @@ final class MacSnapshotTests: XCTestCase {
         try await window("program-status", screen: "program-status")
     }
 
+    /// A kitty graphics image a program printed, drawn in the pane by the Metal renderer from
+    /// the render state's placements: a gradient over 24 × 6 cells between lines of text.
+    func testKittyImageInAPane() async throws {
+        try await window("kitty-image", screen: "single") { model in
+            guard let workspace = model.workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else {
+                return XCTFail("no pane")
+            }
+            let surface = pane.view.surface
+            let (width, height) = (240, 120)
+            var pixels: [UInt8] = []
+            for y in 0..<height {
+                for x in 0..<width { pixels += [UInt8(x * 255 / width), UInt8(y * 255 / height), 210, 255] }
+            }
+            let image = "\u{1b}_Ga=T,f=32,s=\(width),v=\(height),i=1,c=24,r=6,q=2;\(Data(pixels).base64EncodedString())\u{1b}\\"
+            surface.terminal.write(Array("\r\n$ kitten icat gradient.png\r\n\(image)\r\n$ echo after\r\nafter\r\n".utf8))
+            surface.outputArrived()
+            await self.pump(1)
+            XCTAssertEqual(surface.kittyPlacements.map(\.imageID), [1])
+        }
+    }
+
     func testSheets() async throws {
         for route in ["links", "launchAgent", "pairing", "join", "invite", "shortcuts"] {
             try await window(route, screen: route)

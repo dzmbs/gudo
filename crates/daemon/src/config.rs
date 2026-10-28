@@ -115,6 +115,10 @@ pub struct Config {
     pub ring_capacity: usize,
     /// Scrollback the daemon's VT keeps per pane, in bytes.
     pub scrollback_bytes: usize,
+    /// Kitty graphics image storage per pane and screen, in bytes; 0 turns the protocol off
+    /// (`terminal.image_storage_mb` in `config.toml`). Clients keep the same default, so a
+    /// larger value may let them evict images the daemon still shows.
+    pub image_storage_bytes: u64,
     /// Size of a pane no client has sized yet: (cols, rows).
     pub default_size: (u16, u16),
     /// Quiet period before layout changes are written to disk.
@@ -284,6 +288,7 @@ impl Config {
             pane_env: Vec::new(),
             ring_capacity: pty::DEFAULT_RING_CAPACITY,
             scrollback_bytes: 10 * 1024 * 1024,
+            image_storage_bytes: ghostty_vt::KITTY_IMAGE_STORAGE_LIMIT,
             default_size: (80, 24),
             persist_debounce: Duration::from_millis(500),
             hook_bin: None,
@@ -351,6 +356,9 @@ impl Config {
     /// ignore_space = true          # commands typed with a leading space are not kept
     /// max_entries = 50000
     /// import = true                # import zsh/bash/fish history once
+    ///
+    /// [terminal]
+    /// image_storage_mb = 64        # kitty graphics images per pane and screen; 0 = off
     ///
     /// [askpass]                    # docs/DAEMON.md §9
     /// enabled = true               # askpass helper in panes, detected prompts
@@ -440,6 +448,9 @@ impl Config {
         if let Some(on) = history.import {
             self.history.import = on;
         }
+        if let Some(mb) = file.terminal.image_storage_mb {
+            self.image_storage_bytes = mb << 20;
+        }
         if let Some(on) = file.askpass.enabled {
             self.askpass.enabled = on;
         }
@@ -524,6 +535,13 @@ struct UserFile {
     multiplayer: MultiplayerSection,
     history: HistorySection,
     askpass: AskpassSection,
+    terminal: TerminalSection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TerminalSection {
+    image_storage_mb: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

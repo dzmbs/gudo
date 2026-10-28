@@ -74,7 +74,7 @@ impl Codex {
     /// ```
     /// use std::path::Path;
     /// let remove = agents::Codex::user_mcp_command("codex", Path::new("/b/un-hook"), Path::new("/s"), false);
-    /// assert_eq!(remove.join(" "), "codex mcp remove unnamed_drawings");
+    /// assert_eq!(remove.join(" "), "codex mcp remove unnamed");
     /// ```
     pub fn user_mcp_command(
         program: &str,
@@ -93,6 +93,23 @@ impl Codex {
             argv.extend(user_mcp_server(hook_bin, state_dir));
         }
         argv
+    }
+
+    /// Codex's command that removes the user's registration of server `name`.
+    pub fn user_mcp_remove(program: &str, name: &str) -> Vec<String> {
+        [program, "mcp", "remove", name].map(String::from).into()
+    }
+
+    /// Whether `~/.codex/config.toml` under `home` registers server `name`.
+    pub fn user_mcp_registered(home: &Path, name: &str) -> bool {
+        std::fs::read_to_string(home.join(".codex/config.toml")).is_ok_and(|config| {
+            config.lines().any(|line| {
+                let line = line.trim_start_matches(['[', ' ']);
+                line.strip_prefix("mcp_servers.")
+                    .and_then(|rest| rest.strip_prefix(name))
+                    .is_some_and(|rest| rest.starts_with([']', '.', ' ', '=']))
+            })
+        })
     }
 }
 
@@ -315,6 +332,23 @@ impl AgentAdapter for Codex {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn finds_a_user_registration_by_exact_name() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".codex")).unwrap();
+        let config = home.path().join(".codex/config.toml");
+        std::fs::write(
+            &config,
+            "[mcp_servers.unnamed_drawings_x]\ncommand = \"x\"\n",
+        )
+        .unwrap();
+        assert!(!Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
+        std::fs::write(&config, "[mcp_servers.unnamed_drawings]\ncommand = \"x\"\n").unwrap();
+        assert!(Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
+        std::fs::write(&config, "mcp_servers.unnamed_drawings.command = \"x\"\n").unwrap();
+        assert!(Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
+    }
     use super::*;
     use crate::AgentState;
     use crate::event::NativeSessionId;
@@ -345,9 +379,9 @@ mod tests {
                 "-c",
                 r#"tui.notification_condition="always""#,
                 "-c",
-                r#"mcp_servers.unnamed_drawings.command="/opt/un/bin/un-hook""#,
+                r#"mcp_servers.unnamed.command="/opt/un/bin/un-hook""#,
                 "-c",
-                r#"mcp_servers.unnamed_drawings.args=["mcp","--state","/state","--pane","p_9f2"]"#,
+                r#"mcp_servers.unnamed.args=["mcp","--state","/state","--pane","p_9f2"]"#,
             ]
         );
         assert!(spec.files.is_empty());

@@ -85,6 +85,10 @@ public final class Terminal: @unchecked Sendable {
     final class Effects: Sendable {
         let writePty: @Sendable (UnsafeRawBufferPointer) -> Void
         let events = Mutex(Events())
+        /// Whether query replies produced while writing output go to `writePty`.
+        let answersQueries = Atomic<Bool>(true)
+        /// Set while output is being parsed: whatever `writePty` gets then is a reply.
+        let parsing = Atomic<Bool>(false)
 
         init(writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
             self.writePty = writePty
@@ -150,6 +154,7 @@ public final class Terminal: @unchecked Sendable {
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA, userdata)
         let onWritePty: GhosttyTerminalWritePtyFn = { _, userdata, data, len in
             guard let data, let effects = Effects.from(userdata) else { return }
+            if effects.parsing.load(ordering: .relaxed), !effects.answersQueries.load(ordering: .relaxed) { return }
             effects.writePty(UnsafeRawBufferPointer(start: data, count: len))
         }
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(onWritePty, to: UnsafeRawPointer.self))
@@ -157,6 +162,9 @@ public final class Terminal: @unchecked Sendable {
 
         var scrollback = configuration.scrollbackBytes
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &scrollback)
+        _ = KittyGraphics.installPNGDecoder
+        var images = KittyGraphics.storageLimit
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &images)
         applyDefaults(terminal, configuration)
         // Ghostty's default `grapheme-width-method = unicode`: mode 2027 on, so emoji ZWJ
         // sequences, flags and skin tones occupy one (wide) cell.
@@ -235,6 +243,14 @@ public final class Terminal: @unchecked Sendable {
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT, unsafeBitCast(prompt, to: UnsafeRawPointer.self))
     }
 
+    /// Whether the terminal answers the program's queries (device attributes, cursor reports,
+    /// kitty graphics replies) through `writePty`. Off for a mirror of a remote pane, whose host
+    /// VT already answers: the program would get every reply twice. Pastes still go out.
+    public var answersQueries: Bool {
+        get { effects.answersQueries.load(ordering: .relaxed) }
+        set { effects.answersQueries.store(newValue, ordering: .relaxed) }
+    }
+
     /// Replaces the event handlers. Safe from any thread.
     public func setEvents(_ events: Events) {
         effects.events.withLock { $0 = events }
@@ -243,14 +259,19 @@ public final class Terminal: @unchecked Sendable {
     /// Feeds raw PTY output through the VT parser.
     public func write(_ bytes: UnsafeRawBufferPointer) {
         guard let base = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-        lock.withLock { _ in ghostty_terminal_vt_write(terminal, base, bytes.count) }
+        lock.withLock { _ in
+            effects.parsing.store(true, ordering: .relaxed)
+            ghostty_terminal_vt_write(terminal, base, bytes.count)
+            effects.parsing.store(false, ordering: .relaxed)
+        }
     }
 
     public func write(_ bytes: some Sequence<UInt8>) {
         Array(bytes).withUnsafeBytes { write($0) }
     }
 
-    /// Resizes the grid. Cell pixel sizes feed pixel-size reports (CSI 14/16 t, kitty images).
+    /// Resizes the grid. Cell pixel sizes feed pixel-size reports (CSI 14/16 t) and size kitty
+    /// images; a mirror of a remote pane uses the host's, so images move the cursor alike.
     public func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {
         lock.withLock { _ in _ = ghostty_terminal_resize(terminal, cols, rows, cellWidth, cellHeight) }
     }

@@ -56,7 +56,7 @@ impl ClaudeCode {
     /// ```
     /// use std::path::Path;
     /// let add = agents::ClaudeCode::user_mcp_command("claude", Path::new("/b/un-hook"), Path::new("/s"), true);
-    /// assert_eq!(add.join(" "), "claude mcp add --scope user unnamed_drawings -- /b/un-hook mcp --state /s");
+    /// assert_eq!(add.join(" "), "claude mcp add --scope user unnamed -- /b/un-hook mcp --state /s");
     /// ```
     pub fn user_mcp_command(
         program: &str,
@@ -79,6 +79,21 @@ impl ClaudeCode {
             argv.extend(user_mcp_server(hook_bin, state_dir));
         }
         argv
+    }
+
+    /// Claude Code's command that removes the user's registration of server `name`.
+    pub fn user_mcp_remove(program: &str, name: &str) -> Vec<String> {
+        [program, "mcp", "remove", "--scope", "user", name]
+            .map(String::from)
+            .into()
+    }
+
+    /// Whether the user's configuration under `home` registers server `name`.
+    pub fn user_mcp_registered(home: &Path, name: &str) -> bool {
+        std::fs::read(home.join(".claude.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .is_some_and(|config| config["mcpServers"].get(name).is_some())
     }
 
     /// Returns where the hook settings file for this context lives.
@@ -701,10 +716,7 @@ mod tests {
             settings["hooks"]["PreToolUse"][0]["matcher"],
             "AskUserQuestion"
         );
-        assert_eq!(
-            settings["permissions"]["allow"],
-            json!(["mcp__unnamed_drawings"])
-        );
+        assert_eq!(settings["permissions"]["allow"], json!(["mcp__unnamed"]));
     }
 
     #[test]
@@ -717,7 +729,7 @@ mod tests {
             config,
             json!({
                 "mcpServers": {
-                    "unnamed_drawings": {
+                    "unnamed": {
                         "type": "stdio",
                         "command": "/opt/un/bin/un-hook",
                         "args": ["mcp", "--state", "/state", "--pane", "p_9f2"],
@@ -806,6 +818,30 @@ mod tests {
         assert_eq!(state, AgentState::Blocked);
         assert!(visible);
         assert!(rule.is_some());
+    }
+
+    #[test]
+    fn screen_detects_the_folder_trust_dialog() {
+        let screen = "\
+────────────────────────────────────────
+ Accessing workspace:
+
+ /Users/me/src/app
+
+ Quick safety check: Is this a project you created or one you trust? (Like your
+ own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel";
+        let (state, rule, visible) = screen_state(screen, "");
+        assert_eq!(state, AgentState::Blocked);
+        assert_eq!(rule.as_deref(), Some("trust_directory"));
+        assert!(visible);
     }
 
     #[test]

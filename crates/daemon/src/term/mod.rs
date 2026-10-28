@@ -101,6 +101,10 @@ pub enum ErrorCode {
     CursorExpired,
     /// The pane has exited.
     Closed,
+    /// The agent waits on the user (an approval, a question, a sign-in).
+    AgentBlocked,
+    /// The agent is still working, or not ready for a prompt yet.
+    AgentBusy,
     Failed,
 }
 
@@ -335,6 +339,45 @@ struct WaitArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SpawnArgs {
+    kind: AgentName,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    of: Option<String>,
+    #[serde(default)]
+    direction: Direction,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PromptArgs {
+    pane: String,
+    text: String,
+    #[serde(default)]
+    wait: bool,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentWaitArgs {
+    panes: Vec<String>,
+    #[serde(default)]
+    until: Vec<String>,
+    #[serde(default)]
+    all: bool,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StatusArgs {
     state: String,
     #[serde(default)]
@@ -423,6 +466,10 @@ impl Ctx {
             "pane_wait" => self.pane_wait(args(value)?).await,
             "pane_send" => self.pane_send(args(value)?).await,
             "status_set" => self.status_set(args(value)?),
+            "agent_spawn" => self.agent_spawn(args(value)?).await,
+            "agent_prompt" => self.agent_prompt(args(value)?).await,
+            "agent_wait" => self.agent_wait(args(value)?).await,
+            "agent_result" => self.agent_result(args(value)?),
             other => Err(ToolError::new(
                 ErrorCode::NotFound,
                 format!("no tool {other}"),
@@ -1025,6 +1072,194 @@ impl Ctx {
         Ok(json!({ "status": status, "output": Output::new(text, max, at), "command": command }))
     }
 
+    // --- agents -----------------------------------------------------------------------------
+
+    /// A worker agent: its pane, kind, state and finished turns.
+    fn agent_info(&self, pane: PaneId, entry: &PaneEntry) -> Value {
+        let kind = match &lock(&entry.record).launch {
+            PaneLaunch::Agent { agent, .. } => Some(crate::agent::program(*agent)),
+            _ => None,
+        };
+        let turns = lock(&entry.meta).turns;
+        let exited = self.core.pane_meta(pane).and_then(|m| m.exit).is_some();
+        let status = status(&self.core, pane, entry);
+        let state = if exited {
+            "exited"
+        } else {
+            status["state"].as_str().unwrap_or("starting")
+        };
+        json!({
+            "pane": pane_ref(pane),
+            "kind": kind,
+            "state": state,
+            "status": status,
+            "turns": turns,
+        })
+    }
+
+    /// Waits until the agent in `entry` is ready for a prompt: idle, and its screen settled.
+    async fn agent_ready(&self, pane: PaneId, entry: &PaneEntry, deadline: Instant) -> Result<()> {
+        let mut quiet_since = None;
+        let mut head = entry.pane.head();
+        while Instant::now() < deadline {
+            let info = self.agent_info(pane, entry);
+            match info["state"].as_str() {
+                Some("exited") => return Err(closed()),
+                Some("blocked") => return Err(agent_blocked(pane, &info)),
+                Some("idle" | "done") => {
+                    let now = entry.pane.head();
+                    if now != head {
+                        head = now;
+                        quiet_since = None;
+                    }
+                    let since = *quiet_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= Duration::from_millis(400) {
+                        return Ok(());
+                    }
+                }
+                _ => quiet_since = None,
+            }
+            tokio::time::sleep(TICK).await;
+        }
+        Err(ToolError::new(
+            ErrorCode::AgentBusy,
+            format!("{} is not ready for a prompt", pane_ref(pane)),
+        )
+        .hint("wait for it with agent_wait, then prompt it"))
+    }
+
+    async fn deliver(&self, entry: &PaneEntry, text: String) -> Result<()> {
+        write(entry, entry.pane.encode_input(InputPayload::Paste(text))).await?;
+        // Let the agent's input box take the paste before Enter arrives.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        write(entry, b"\r".to_vec()).await?;
+        Ok(())
+    }
+
+    async fn agent_spawn(&self, a: SpawnArgs) -> Result<Value> {
+        let (of, _) = self.resolve(a.of.as_deref())?;
+        self.may_read(of)?;
+        let launch = Self::launch(None, Some(a.kind), a.cwd);
+        let pane = self.split(of, a.direction, launch, false)?;
+        let entry = self.core.pane(pane).ok_or_else(closed)?;
+        if let Some(prompt) = a.prompt.filter(|p| !p.trim().is_empty()) {
+            let deadline = Instant::now() + wait_for(a.timeout_ms.or(Some(60_000)));
+            self.agent_ready(pane, &entry, deadline).await?;
+            self.deliver(&entry, prompt).await?;
+        }
+        Ok(json!({ "agent": self.agent_info(pane, &entry) }))
+    }
+
+    async fn agent_prompt(&self, a: PromptArgs) -> Result<Value> {
+        let (pane, entry) = self.resolve(Some(&a.pane))?;
+        self.may_drive(pane)?;
+        if entry.pane.echo().is_hidden_input() {
+            return Err(secret_prompt(pane));
+        }
+        let info = self.agent_info(pane, &entry);
+        match info["state"].as_str() {
+            Some("exited") => return Err(closed()),
+            Some("blocked") => return Err(agent_blocked(pane, &info)),
+            Some("working") => {
+                return Err(ToolError::new(
+                    ErrorCode::AgentBusy,
+                    format!("{} is working", pane_ref(pane)),
+                )
+                .hint("wait for it with agent_wait, then prompt it"));
+            }
+            _ => {}
+        }
+        let turns = lock(&entry.meta).turns;
+        self.deliver(&entry, a.text).await?;
+        if !a.wait {
+            return Ok(json!({ "delivered": true, "agent": self.agent_info(pane, &entry) }));
+        }
+        let deadline = Instant::now() + wait_for(a.timeout_ms);
+        loop {
+            let info = self.agent_info(pane, &entry);
+            let finished = lock(&entry.meta).turns > turns;
+            let stuck = matches!(info["state"].as_str(), Some("blocked" | "exited"));
+            if finished || stuck || Instant::now() >= deadline {
+                let result = finished.then(|| self.last_turn(&entry));
+                return Ok(json!({
+                    "delivered": true,
+                    "status": if finished { "finished" } else if stuck { info["state"].as_str().unwrap_or("blocked") } else { "timeout" },
+                    "agent": info,
+                    "result": result,
+                }));
+            }
+            tokio::time::sleep(TICK).await;
+        }
+    }
+
+    async fn agent_wait(&self, a: AgentWaitArgs) -> Result<Value> {
+        if a.panes.is_empty() {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArgs,
+                "no panes to wait for",
+            ));
+        }
+        let until: Vec<String> = if a.until.is_empty() {
+            ["idle", "done", "blocked", "error", "exited"]
+                .map(String::from)
+                .into()
+        } else {
+            a.until
+        };
+        let agents = a
+            .panes
+            .iter()
+            .map(|p| {
+                let (pane, entry) = self.resolve(Some(p))?;
+                self.may_read(pane)?;
+                Ok((pane, entry))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let deadline = Instant::now() + wait_for(a.timeout_ms);
+        loop {
+            let infos: Vec<Value> = agents.iter().map(|(p, e)| self.agent_info(*p, e)).collect();
+            let reached = |i: &Value| {
+                i["state"]
+                    .as_str()
+                    .is_some_and(|s| until.iter().any(|u| u == s))
+            };
+            let done = if a.all {
+                infos.iter().all(reached)
+            } else {
+                infos.iter().any(reached)
+            };
+            if done || Instant::now() >= deadline {
+                return Ok(
+                    json!({ "status": if done { "ok" } else { "timeout" }, "agents": infos }),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn agent_result(&self, a: PaneArg) -> Result<Value> {
+        let (pane, entry) = self.resolve(Some(&a.pane))?;
+        self.may_read(pane)?;
+        Ok(json!({ "agent": self.agent_info(pane, &entry), "result": self.last_turn(&entry) }))
+    }
+
+    fn last_turn(&self, entry: &PaneEntry) -> Value {
+        let meta = lock(&entry.meta);
+        let Some(turn) = &meta.last_turn else {
+            return Value::Null;
+        };
+        json!({
+            "outcome": match turn.outcome {
+                agents::TurnOutcome::Completed => "completed",
+                agents::TurnOutcome::Cancelled => "cancelled",
+                agents::TurnOutcome::Failed => "failed",
+            },
+            "message": turn.message,
+            "endedAt": turn.at.0,
+            "transcriptPath": turn.transcript.as_ref().map(|p| p.to_string_lossy()),
+        })
+    }
+
     /// Reports the caller's own status, as OSC 7501 would, for agents that cannot print it.
     fn status_set(&self, a: StatusArgs) -> Result<Value> {
         let state = agents::ProgramState::parse(&a.state).ok_or_else(|| {
@@ -1134,6 +1369,18 @@ async fn wait_quiet(entry: &PaneEntry, quiet: Duration, deadline: Instant) -> bo
         }
     }
     false
+}
+
+fn agent_blocked(pane: PaneId, info: &Value) -> ToolError {
+    let what = info
+        .pointer("/status/kind")
+        .and_then(Value::as_str)
+        .unwrap_or("the user");
+    ToolError::new(
+        ErrorCode::AgentBlocked,
+        format!("{} is waiting on {what}", pane_ref(pane)),
+    )
+    .hint("the user answers it on their device; agent_wait tells you when it moves on")
 }
 
 fn closed() -> ToolError {
