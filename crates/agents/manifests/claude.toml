@@ -3,10 +3,22 @@
 # The rule format is documented in crates/agents/src/manifest.rs.
 
 id = "claude"
-version = "2026.10.11.1"
+version = "2026.10.28.1"
 min_engine_version = 2
 updated_at = "2026-10-11T00:00:00Z"
 aliases = ["claude-code"]
+
+# Not from herdr: the first-run folder trust dialog, which no hook reports.
+[[rules]]
+id = "trust_directory"
+state = "blocked"
+priority = 1150
+region = "bottom_non_empty_lines(30)"
+visible_blocker = true
+all = [
+  { contains = ["Is this a project you created or one you trust?"] },
+  { contains = ["Yes, I trust this folder"] },
+]
 
 [[rules]]
 id = "osc_title_working"
