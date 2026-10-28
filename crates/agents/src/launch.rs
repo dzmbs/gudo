@@ -116,6 +116,16 @@ pub fn mcp_server_name() -> String {
     format!("{product}_drawings")
 }
 
+/// The MCP server's terminal tools that act (run, type, open, close): an agent's own permission
+/// prompt asks before each, as it does for its shell tool. The rest only read.
+pub const ACTING_TOOLS: &[&str] = &[
+    "cmd_run",
+    "pane_send",
+    "pane_split",
+    "tab_new",
+    "pane_close",
+];
+
 /// Returns the hook shim's arguments that run the MCP server for this pane:
 /// `mcp --state <state_dir> --pane <pane>`. The shim reads the socket and token from the state
 /// directory, so no secret goes on a command line.

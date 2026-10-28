@@ -67,7 +67,7 @@ SystemConfiguration and libresolv; the app gets them through the package. The li
 the xcframework is named `libUnnamedCoreFFI.a` (a `libUnnamedCore.a` would collide with
 SwiftPM's own product for the `UnnamedCore` target).
 
-Requirements: Xcode (iOS SDKs), Zig 0.16, `rustup target add aarch64-apple-ios
+Requirements: Xcode (iOS SDKs), Zig 0.17, `rustup target add aarch64-apple-ios
 aarch64-apple-ios-sim` (in `rust-toolchain.toml`), `cargo install cargo-zigbuild` for the daemons.
 
 ## 2. API

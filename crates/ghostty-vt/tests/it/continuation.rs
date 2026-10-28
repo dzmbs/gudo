@@ -350,8 +350,6 @@ struct Stats {
     /// reference snapshot even though every observable state matches.
     reencode_differs: usize,
     first_reencode_diff: Option<String>,
-    /// Cut points where the source terminal could not be snapshotted at all.
-    unencodable: usize,
 }
 
 /// What every restored terminal must match: the never-disconnected reference.
@@ -371,15 +369,7 @@ fn check_cut(
     stats: &mut Stats,
 ) -> Result<Option<String>, String> {
     let at = |what: &'static str| move |error: Error| format!("{what}: {error}");
-    let snapshot = match source.encode_snapshot() {
-        Ok(snapshot) => snapshot,
-        // Known upstream gap, pinned by `c1_byte_inside_apc_blocks_snapshots`.
-        Err(Error::InvalidValue) => {
-            stats.unencodable += 1;
-            return Ok(None);
-        }
-        Err(error) => return Err(at("encode")(error)),
-    };
+    let snapshot = source.encode_snapshot().map_err(at("encode"))?;
     let mut report = String::new();
 
     let mut full = SnapshotDecoder::new(&snapshot)
@@ -470,10 +460,9 @@ fn snapshot_at_every_cut_point_continues_identically() {
         }
     }
     println!(
-        "continuation: {seeds} streams, {} cut points ({} not encodable), all identical; \
+        "continuation: {seeds} streams, {} cut points, all identical; \
          re-encoded snapshot bytes differ at {} cut points (first: {})",
         stats.cuts,
-        stats.unencodable,
         stats.reencode_differs,
         stats.first_reencode_diff.as_deref().unwrap_or("none"),
     );
@@ -515,20 +504,14 @@ fn history_streams_in_after_live_input() -> Result<(), Error> {
     Ok(())
 }
 
-/// Upstream gap: inside an APC string (`ESC _`), a raw C1 byte (0x90 DCS, 0x9B CSI, 0x9D OSC)
-/// starts a new sequence whose replay start the continuation tracker cannot find, so encoding
-/// fails until that sequence ends. DCS and OSC strings are not affected. When this test starts
-/// failing, upstream fixed it: drop the skip in `check_cut`.
+/// A raw C1 byte (0x90 DCS, 0x9B CSI, 0x9D OSC) inside an APC string (`ESC _`) starts a new
+/// sequence, and a snapshot taken there replays from it.
 #[test]
-fn c1_byte_inside_apc_blocks_snapshots() -> Result<(), Error> {
+fn c1_byte_inside_apc_snapshots() -> Result<(), Error> {
     for c1 in [0x90, 0x9b, 0x9d] {
         let mut terminal = new_terminal()?;
         terminal.write(&[0x1b, b'_', c1]);
-        assert_eq!(
-            terminal.encode_snapshot(),
-            Err(Error::InvalidValue),
-            "C1 {c1:#x}"
-        );
+        terminal.encode_snapshot()?;
         terminal.write(b"m\x1b\\\x07ok");
         terminal.encode_snapshot()?;
     }

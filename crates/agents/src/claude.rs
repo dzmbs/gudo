@@ -135,9 +135,15 @@ impl ClaudeCode {
         };
         let short = Some(HOOK_TIMEOUT_SECS);
         json!({
-            // The drawings server's tools only read (docs/DAEMON.md §7.12); permission arrays
-            // merge with the user's own.
-            "permissions": { "allow": [format!("mcp__{}", mcp_server_name())] },
+            // The server's tools that act ask like Claude's own Bash tool; the rest are allowed.
+            // Permission arrays merge with the user's own.
+            "permissions": {
+                "allow": [format!("mcp__{}", mcp_server_name())],
+                "ask": crate::ACTING_TOOLS
+                    .iter()
+                    .map(|tool| format!("mcp__{}__{tool}", mcp_server_name()))
+                    .collect::<Vec<_>>(),
+            },
             "statusLine": {
                 "type": "command",
                 "command": format!("{bin} claude StatusLine"),

@@ -33,7 +33,7 @@ build without it gives This Mac plain shells only.
 
 ## Setup
 
-Needs Xcode 27 (iOS 27 simulators), Zig 0.16.x and XcodeGen (`brew install zig@0.16 xcodegen`).
+Needs Xcode 27 (iOS 27 simulators), Zig 0.17.x and XcodeGen (`brew install zig xcodegen`).
 
 ```sh
 git submodule update --init vendor/ghostty

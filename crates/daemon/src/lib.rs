@@ -52,6 +52,7 @@ mod procinfo;
 mod scan;
 mod shell;
 mod stream;
+mod term;
 mod upgrade;
 mod usage;
 mod ws;
@@ -85,6 +86,7 @@ pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
 };
 pub use procinfo::inherited_env_var;
+pub use term::{ErrorCode as TermErrorCode, TERM_VERSION, TermAsk, TermCall, TermReply, ToolError};
 pub use upgrade::prev_path as upgrade_prev_path;
 pub use usage::UsageConfig;
 

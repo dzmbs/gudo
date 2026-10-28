@@ -19,6 +19,7 @@ mod relays;
 mod repos;
 mod shell;
 mod support;
+mod term;
 mod terminal;
 mod upgrade;
 mod usage;

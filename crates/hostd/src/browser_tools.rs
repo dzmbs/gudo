@@ -720,6 +720,9 @@ mod tests {
                 }
                 Ok(BrowserReply::Result(json!({ "text": "Done." }).to_string()))
             }
+            fn term(&mut self, _: daemon::TermAsk) -> io::Result<daemon::TermReply> {
+                Err(io::ErrorKind::NotFound.into())
+            }
         }
         let mut fake = Fake(vec![]);
         let r = call(

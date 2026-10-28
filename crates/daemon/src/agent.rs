@@ -551,6 +551,8 @@ impl HeldRequest {
 pub(crate) struct HookServer {
     socket: PathBuf,
     token: String,
+    /// Derives each pane's own token from `token`.
+    pane_key: ring::hmac::Key,
     endpoint_file: PathBuf,
     hook_bin: PathBuf,
     state_dir: PathBuf,
@@ -580,6 +582,7 @@ impl HookServer {
         Ok(Self {
             endpoint_file: state_dir.join("hook.endpoint"),
             socket,
+            pane_key: ring::hmac::Key::new(ring::hmac::HMAC_SHA256, token.as_bytes()),
             token,
             hook_bin,
             state_dir: state_dir.to_owned(),
@@ -587,11 +590,25 @@ impl HookServer {
         })
     }
 
+    /// The token a pane's helpers present (`UN_TOKEN`): it speaks for that pane only, so one
+    /// pane's programs cannot act as another's.
+    pub fn pane_token(&self, pane: PaneId) -> String {
+        fsutil::hex(ring::hmac::sign(&self.pane_key, pane.0.to_string().as_bytes()).as_ref())
+    }
+
+    /// Whether `token` speaks for `pane`: the pane's own token, or the daemon's, which only
+    /// the state directory holds.
+    pub fn verify(&self, token: &str, pane: &str) -> bool {
+        let own = fsutil::unhex::<32>(token)
+            .is_some_and(|tag| ring::hmac::verify(&self.pane_key, pane.as_bytes(), &tag).is_ok());
+        own || fsutil::constant_eq(token.as_bytes(), self.token.as_bytes())
+    }
+
     pub fn launch_context(&self, pane: PaneId, cwd: PathBuf) -> LaunchContext {
         LaunchContext {
             pane_id: agents::PaneId::new(pane.0.to_string()),
             socket: self.socket.clone(),
-            token: self.token.clone(),
+            token: self.pane_token(pane),
             endpoint_file: self.endpoint_file.clone(),
             hook_bin: self.hook_bin.clone(),
             state_dir: self.state_dir.clone(),
@@ -685,10 +702,6 @@ impl HookServer {
         &self.socket
     }
 
-    pub fn token(&self) -> &str {
-        &self.token
-    }
-
     pub fn endpoint_file(&self) -> &Path {
         &self.endpoint_file
     }
@@ -719,6 +732,14 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         write.write_all(&out).await?;
         return write.shutdown().await;
     }
+    // So do the terminal tools.
+    if let Ok(call) = serde_json::from_str::<crate::term::TermCall>(&line) {
+        let reply = crate::term::serve(core, call, peer_uid).await;
+        let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        out.push(b'\n');
+        write.write_all(&out).await?;
+        return write.shutdown().await;
+    }
     // So does the MCP pull channel (§7.12).
     if let Ok(call) = serde_json::from_str::<crate::art::pull::PullCall>(&line) {
         let reply = crate::art::pull::serve(core, call).await;
@@ -736,7 +757,7 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
 }
 
 async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
-    if request.token != core.hooks.token {
+    if !core.hooks.verify(&request.token, &request.pane) {
         tracing::warn!("hook with a bad token");
         return HookResponse::default();
     }

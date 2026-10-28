@@ -1,5 +1,6 @@
 //! Restoring a snapshot whose history arrives later, in pieces, over the network.
 
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
 
@@ -11,6 +12,8 @@ use crate::{Error, HistoryPage, Screen, Terminal};
 const RECORD_HEADER_LEN: usize = 10;
 const TAG_PAGE: u16 = 3;
 const TAG_FINISH: u16 = 6;
+const TAG_KITTY_IMAGE_PAYLOAD: u16 = 9;
+const TAG_KITTY_IMAGE_PAGE_PLACEMENTS: u16 = 10;
 
 /// Bytes handed to the decoder's reader, with a read cursor.
 #[derive(Default)]
@@ -27,8 +30,10 @@ struct Source {
 /// `bulk` stream), and every complete page in them is prepended at once. The terminal can be
 /// rendered, written to and resized in between.
 ///
-/// Pushed bytes must be whole records that end after a page record or at FINISH (the daemon
-/// cuts pages that way); a partial record is kept until the rest arrives.
+/// Pushed bytes may end anywhere; a partial record is kept until the rest arrives. A page (or
+/// an image's pixels) is decoded once the record after it has arrived, because the decoder
+/// reads on to see whether image placements follow the page, and running out of bytes there is
+/// the end of the snapshot to it.
 ///
 /// # Examples
 ///
@@ -58,10 +63,10 @@ pub struct StreamingRestore {
     decoder: NonNull<ffi::GhosttySnapshotDecoderImpl>,
     terminal: Terminal,
     source: Box<Source>,
-    /// Offset in `source.data` of the first record not yet scanned for pages.
+    /// Offset in `source.data` of the first record not yet scanned.
     scanned: usize,
-    pending_pages: u32,
-    finish_seen: bool,
+    /// Tags of the scanned records not yet decoded, oldest first.
+    pending: VecDeque<u16>,
     finished: bool,
 }
 
@@ -145,8 +150,7 @@ impl StreamingRestore {
             terminal: unsafe { Terminal::from_raw(terminal) },
             source,
             scanned,
-            pending_pages: 0,
-            finish_seen: false,
+            pending: VecDeque::new(),
             finished: false,
         })
     }
@@ -234,35 +238,49 @@ impl StreamingRestore {
                 break;
             }
             self.scanned = end;
-            match tag {
-                TAG_PAGE => self.pending_pages += 1,
-                TAG_FINISH => self.finish_seen = true,
-                _ => {}
-            }
+            self.pending.push_back(tag);
         }
 
         let mut pages = Vec::new();
-        while self.pending_pages > 0 {
-            self.pending_pages -= 1;
-            match self.next()? {
-                Some(page) => pages.push(page),
-                None => return Err(Error::InvalidValue),
+        while let Some(&tag) = self.pending.front() {
+            match tag {
+                TAG_FINISH => {
+                    if !matches!(self.next()?, Step::Finished) {
+                        return Err(Error::InvalidValue);
+                    }
+                    self.pending.clear();
+                    self.finished = true;
+                    break;
+                }
+                TAG_PAGE | TAG_KITTY_IMAGE_PAYLOAD => {
+                    let placements = tag == TAG_PAGE
+                        && self.pending.get(1) == Some(&TAG_KITTY_IMAGE_PAGE_PLACEMENTS);
+                    let records = 1 + usize::from(placements);
+                    // The decoder reads the record after these; wait until it is here.
+                    if self.pending.len() <= records {
+                        break;
+                    }
+                    match self.next()? {
+                        Step::Page(page) => pages.push(page),
+                        Step::Image => {}
+                        Step::Finished => return Err(Error::InvalidValue),
+                    }
+                    self.pending.drain(..records);
+                }
+                // Records the decoder skips or reads along with the next step.
+                _ => {
+                    self.pending.pop_front();
+                }
             }
-        }
-        if self.finish_seen {
-            if self.next()?.is_some() {
-                return Err(Error::InvalidValue);
-            }
-            self.finished = true;
         }
         Ok(pages)
     }
 
-    fn next(&mut self) -> Result<Option<HistoryPage>, Error> {
+    fn next(&mut self) -> Result<Step, Error> {
         let decoder = self.decoder.as_ptr();
         // SAFETY: the decoder is live; the terminal and source it refers to live in `self`.
         match unsafe { ffi::ghostty_snapshot_decoder_next(decoder) } {
-            ffi::GhosttyResult_GHOSTTY_NO_VALUE => Ok(None),
+            ffi::GhosttyResult_GHOSTTY_NO_VALUE => Ok(Step::Finished),
             code => {
                 Error::check(code)?;
                 let get = |data, out: *mut c_void| {
@@ -270,6 +288,16 @@ impl StreamingRestore {
                     // `out` points at its documented type.
                     Error::check(unsafe { ffi::ghostty_snapshot_decoder_get(decoder, data, out) })
                 };
+                let mut kind: ffi::GhosttySnapshotDecoderProgressKind = 0;
+                get(
+                    ffi::GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_KIND,
+                    (&raw mut kind).cast(),
+                )?;
+                if kind
+                    == ffi::GhosttySnapshotDecoderProgressKind_GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_IMAGE
+                {
+                    return Ok(Step::Image);
+                }
                 let mut screen: ffi::GhosttyTerminalScreen = 0;
                 let mut rows = 0usize;
                 let mut remaining = 0u32;
@@ -285,7 +313,7 @@ impl StreamingRestore {
                     ffi::GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_REMAINING,
                     (&raw mut remaining).cast(),
                 )?;
-                Ok(Some(HistoryPage {
+                Ok(Step::Page(HistoryPage {
                     screen: Screen::from_raw(screen),
                     rows,
                     remaining,
@@ -306,6 +334,15 @@ impl StreamingRestore {
             ptr::read(&this.terminal)
         }
     }
+}
+
+/// What one decoder step restored.
+enum Step {
+    Page(HistoryPage),
+    /// An image's pixels.
+    Image,
+    /// FINISH: everything is restored.
+    Finished,
 }
 
 impl Drop for StreamingRestore {
@@ -457,9 +494,12 @@ mod tests {
         let chunks = history_chunks(&snapshot, ready, 4096);
         assert!(chunks.len() > 2, "{} chunks", chunks.len());
         let mut rows = 0;
+        let mut decoded = 0;
         for (i, (start, end)) in chunks.iter().copied().enumerate() {
             let pages = client.push(&snapshot[start..end])?;
-            assert_eq!(pages.len() as u32, count_pages(&snapshot[start..end]));
+            // A chunk's last page waits for the record after it.
+            assert!(pages.len() as u32 <= count_pages(&snapshot[start..end]) + 1);
+            decoded += pages.len() as u32;
             rows += pages.iter().map(|p| p.rows).sum::<usize>();
             if i == 1 {
                 // Live output keeps flowing while history is restored.
@@ -468,6 +508,7 @@ mod tests {
             }
         }
         assert!(client.is_finished());
+        assert_eq!(decoded, count_pages(&snapshot[ready..]));
         assert!(rows > 4000, "{rows}");
         assert_eq!(
             client.terminal().text(TextRegion::All)?,

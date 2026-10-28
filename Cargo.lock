@@ -1807,6 +1807,7 @@ dependencies = [
 name = "hostd"
 version = "0.0.0"
 dependencies = [
+ "agents",
  "anyhow",
  "base64 0.23.1",
  "brand",

@@ -101,13 +101,8 @@ fn clear_and_erase_scrollback() {
     t.write(b"\x1b[3J");
     let after_ed3_old = t.pin_point(old);
     println!("ED3: scrollback pin -> {after_ed3_old:?}");
-    // ED 3 frees the scrollback pages, but the tracked reference is not invalidated: it is
-    // moved to the top-left cell of the screen, i.e. a *different* row. So `pin_point`
-    // alone cannot tell an erased anchor from a live one: the daemon keeps the anchored
-    // row's text as a fingerprint and detaches when the row no longer matches it.
-    let moved = after_ed3_old.expect("pin still reports a point");
-    assert_eq!(moved, Point { y: 0, x: 0 });
-    assert_ne!(row_text(&t, moved.y), "line 4");
+    // ED 3 frees the scrollback pages and the tracked reference with them.
+    assert_eq!(after_ed3_old, None, "an erased anchor reports no point");
 }
 
 #[test]

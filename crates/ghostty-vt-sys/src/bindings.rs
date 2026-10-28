@@ -164,6 +164,13 @@ pub struct GhosttyRenderStateRowCellsImpl {
 pub type GhosttyRenderStateRowCells = *mut GhosttyRenderStateRowCellsImpl;
 #[repr(C)]
 #[derive(Debug)]
+pub struct GhosttyRenderStateImageIteratorImpl {
+    _unused: [u8; 0],
+}
+#[doc = " Opaque handle to an iterator over the image placements of a render\n state.\n\n @ingroup render"]
+pub type GhosttyRenderStateImageIterator = *mut GhosttyRenderStateImageIteratorImpl;
+#[repr(C)]
+#[derive(Debug)]
 pub struct GhosttySearchImpl {
     _unused: [u8; 0],
 }
@@ -1462,7 +1469,7 @@ pub struct GhosttyTerminalSelectionFormatOptions {
     pub emit: GhosttyFormatterFormat,
     #[doc = " Whether to unwrap soft-wrapped lines."]
     pub unwrap: bool,
-    #[doc = " Whether to trim trailing whitespace on non-blank lines."]
+    #[doc = " Whether to trim trailing whitespace on non-blank lines. Trailing blank\n lines are always trimmed, except in VT output without trimming, where\n they are kept as part of the layout."]
     pub trim: bool,
     #[doc = " Optional selection to format.\n\n If NULL, the terminal's current active selection is used. If the terminal\n has no active selection, formatting returns GHOSTTY_NO_VALUE.\n\n If non-NULL, the pointed-to selection must be a valid snapshot selection\n for this terminal and must obey GhosttySelection lifetime rules."]
     pub selection: *const GhosttySelection,
@@ -1969,7 +1976,7 @@ pub const GhosttyOscCommandData_GHOSTTY_OSC_DATA_MAX_VALUE: GhosttyOscCommandDat
 #[doc = " OSC command data types.\n\n These values specify what type of data to extract from an OSC command\n using `ghostty_osc_command_data`.\n\n @ingroup osc"]
 pub type GhosttyOscCommandData = ::core::ffi::c_int;
 unsafe extern "C" {
-    #[doc = " Create a new OSC parser instance.\n\n Creates a new OSC (Operating System Command) parser using the provided\n allocator. The parser must be freed using ghostty_vt_osc_free() when\n no longer needed.\n\n @param allocator Pointer to the allocator to use for memory management, or NULL to use the default allocator\n @param parser Pointer to store the created parser handle\n @return GHOSTTY_SUCCESS on success, or an error code on failure\n\n @ingroup osc"]
+    #[doc = " Create a new OSC parser instance.\n\n Creates a new OSC (Operating System Command) parser using the provided\n allocator. The parser must be freed using ghostty_osc_free() when\n no longer needed.\n\n @param allocator Pointer to the allocator to use for memory management, or NULL to use the default allocator\n @param parser Pointer to store the created parser handle\n @return GHOSTTY_SUCCESS on success, or an error code on failure\n\n @ingroup osc"]
     pub fn ghostty_osc_new(
         allocator: *const GhosttyAllocator,
         parser: *mut GhosttyOscParser,
@@ -2069,10 +2076,10 @@ pub const GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_INVALID: GhosttyK
 #[doc = " Populate a pre-allocated placement iterator with placement data from\n the storage. Iterator data is only valid as long as the underlying\n terminal is not mutated.\n\n Output type: GhosttyKittyGraphicsPlacementIterator *"]
 pub const GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR:
     GhosttyKittyGraphicsData = 1;
-#[doc = " Generation stamp of the last content mutation to this storage:\n any image transmit/replace, placement add, or delete. Zero means\n the storage has never been mutated (and is therefore empty).\n\n If the generation is unchanged since a previous query, the set of\n placements and all image data are identical, so placement iteration\n and image staleness checks can be skipped entirely. Note that\n placement *geometry* may still have changed (scrolling and resizing\n move placements without changing the storage contents), so rendering\n geometry such as ghostty_kitty_graphics_placement_render_info()\n must still be recomputed for frames marked dirty.\n\n Stamps are unique and monotonically increasing process-wide: a\n value observed from any storage never recurs for different content,\n even across screen switches (main vs. alternate screen have\n independent storages) or terminal resets. It is therefore safe to\n key caches on this value alone.\n\n Output type: uint64_t *"]
+#[doc = " A value that changes whenever a program sends, replaces, places or\n deletes an image. It is 0 if nothing has changed the storage yet,\n which means the storage is empty.\n\n If the value matches the last one you read, the storage holds the\n same images and placements as before. The placements may still have\n moved on screen, because scrolling and resizing move them without\n changing the storage. So this value can't tell you when to read the\n render state's image list again. For that, use\n GHOSTTY_RENDER_STATE_DATA_IMAGE_PLACEMENTS_GENERATION. See \"Knowing\n What Changed\" in the @ref kitty_graphics documentation.\n\n A value is never reused, not even by another screen, after a reset,\n or by another terminal. You can use it as a cache key on its own.\n\n Output type: uint64_t *"]
 pub const GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION:
     GhosttyKittyGraphicsData = 2;
-#[doc = " Generation stamp of the last content mutation to this storage:\n any image transmit/replace, placement add, or delete. Zero means\n the storage has never been mutated (and is therefore empty).\n\n If the generation is unchanged since a previous query, the set of\n placements and all image data are identical, so placement iteration\n and image staleness checks can be skipped entirely. Note that\n placement *geometry* may still have changed (scrolling and resizing\n move placements without changing the storage contents), so rendering\n geometry such as ghostty_kitty_graphics_placement_render_info()\n must still be recomputed for frames marked dirty.\n\n Stamps are unique and monotonically increasing process-wide: a\n value observed from any storage never recurs for different content,\n even across screen switches (main vs. alternate screen have\n independent storages) or terminal resets. It is therefore safe to\n key caches on this value alone.\n\n Output type: uint64_t *"]
+#[doc = " A value that changes whenever a program sends, replaces, places or\n deletes an image. It is 0 if nothing has changed the storage yet,\n which means the storage is empty.\n\n If the value matches the last one you read, the storage holds the\n same images and placements as before. The placements may still have\n moved on screen, because scrolling and resizing move them without\n changing the storage. So this value can't tell you when to read the\n render state's image list again. For that, use\n GHOSTTY_RENDER_STATE_DATA_IMAGE_PLACEMENTS_GENERATION. See \"Knowing\n What Changed\" in the @ref kitty_graphics documentation.\n\n A value is never reused, not even by another screen, after a reset,\n or by another terminal. You can use it as a cache key on its own.\n\n Output type: uint64_t *"]
 pub const GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_MAX_VALUE: GhosttyKittyGraphicsData =
     2147483647;
 #[doc = " Queryable data kinds for ghostty_kitty_graphics_get().\n\n @ingroup kitty_graphics"]
@@ -2086,7 +2093,7 @@ pub const GhosttyKittyGraphicsPlacementData_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DAT
 #[doc = " The placement ID.\n\n Output type: uint32_t *"]
 pub const GhosttyKittyGraphicsPlacementData_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID:
     GhosttyKittyGraphicsPlacementData = 2;
-#[doc = " Whether this is a virtual placement (unicode placeholder).\n\n Output type: bool *"]
+#[doc = " Whether this is a virtual placement, which a program shows with\n Unicode placeholder cells.\n\n A virtual placement appears wherever its placeholder cells are, so\n the storage has no position for it. The render state's image list\n positions it from its cells like any other placement, so a renderer\n doesn't need to check this. See \"Unicode Placeholders\" in the\n @ref kitty_graphics documentation.\n\n Output type: bool *"]
 pub const GhosttyKittyGraphicsPlacementData_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL:
     GhosttyKittyGraphicsPlacementData = 3;
 #[doc = " Pixel offset from the left edge of the cell.\n\n Output type: uint32_t *"]
@@ -2121,21 +2128,26 @@ pub const GhosttyKittyGraphicsPlacementData_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DAT
     GhosttyKittyGraphicsPlacementData = 2147483647;
 #[doc = " Queryable data kinds for ghostty_kitty_graphics_placement_get().\n\n @ingroup kitty_graphics"]
 pub type GhosttyKittyGraphicsPlacementData = ::core::ffi::c_int;
+#[doc = " Every placement. This is the default."]
 pub const GhosttyKittyPlacementLayer_GHOSTTY_KITTY_PLACEMENT_LAYER_ALL: GhosttyKittyPlacementLayer =
     0;
+#[doc = " Placements drawn below the cell backgrounds: z < INT32_MIN / 2."]
 pub const GhosttyKittyPlacementLayer_GHOSTTY_KITTY_PLACEMENT_LAYER_BELOW_BG:
     GhosttyKittyPlacementLayer = 1;
+#[doc = " Placements drawn above the cell backgrounds and below the text:\n  INT32_MIN / 2 <= z < 0."]
 pub const GhosttyKittyPlacementLayer_GHOSTTY_KITTY_PLACEMENT_LAYER_BELOW_TEXT:
     GhosttyKittyPlacementLayer = 2;
+#[doc = " Placements drawn above the text: z >= 0."]
 pub const GhosttyKittyPlacementLayer_GHOSTTY_KITTY_PLACEMENT_LAYER_ABOVE_TEXT:
     GhosttyKittyPlacementLayer = 3;
+#[doc = " Placements drawn above the text: z >= 0."]
 pub const GhosttyKittyPlacementLayer_GHOSTTY_KITTY_PLACEMENT_LAYER_MAX_VALUE:
     GhosttyKittyPlacementLayer = 2147483647;
-#[doc = " Z-layer classification for kitty graphics placements.\n\n Based on the kitty protocol z-index conventions:\n - BELOW_BG:   z < INT32_MIN/2  (drawn below cell background)\n - BELOW_TEXT:  INT32_MIN/2 <= z < 0  (above background, below text)\n - ABOVE_TEXT:  z >= 0  (above text)\n - ALL:         no filtering (current behavior)\n\n @ingroup kitty_graphics"]
+#[doc = " A layer to limit the storage placement iterator to, set with\n GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_LAYER.\n\n The Kitty graphics protocol picks a placement's layer from its\n z-index, as each value below describes. This filter is only for the\n storage iterator. To draw, use the layer the render state gives each\n entry (GHOSTTY_RENDER_STATE_IMAGE_DATA_LAYER). It follows the same\n rules, and it also covers virtual placements, which are always drawn\n below the text.\n\n @ingroup kitty_graphics"]
 pub type GhosttyKittyPlacementLayer = ::core::ffi::c_int;
-#[doc = " Set the z-layer filter for the iterator.\n\n Input type: GhosttyKittyPlacementLayer *"]
+#[doc = " Only return placements in one layer. See GhosttyKittyPlacementLayer.\n\n Input type: GhosttyKittyPlacementLayer *"]
 pub const GhosttyKittyGraphicsPlacementIteratorOption_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_LAYER : GhosttyKittyGraphicsPlacementIteratorOption = 0 ;
-#[doc = " Set the z-layer filter for the iterator.\n\n Input type: GhosttyKittyPlacementLayer *"]
+#[doc = " Only return placements in one layer. See GhosttyKittyPlacementLayer.\n\n Input type: GhosttyKittyPlacementLayer *"]
 pub const GhosttyKittyGraphicsPlacementIteratorOption_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_MAX_VALUE : GhosttyKittyGraphicsPlacementIteratorOption = 2147483647 ;
 #[doc = " Settable options for ghostty_kitty_graphics_placement_iterator_set().\n\n @ingroup kitty_graphics"]
 pub type GhosttyKittyGraphicsPlacementIteratorOption = ::core::ffi::c_int;
@@ -2184,41 +2196,41 @@ pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR:
 #[doc = " Length of the raw pixel data in bytes. Always equal to\n width * height * bytes-per-pixel for the reported format. For a\n pending image, this is the expected length reserved against the\n storage limit even though DATA_PTR is not available yet.\n\n Output type: size_t *"]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN:
     GhosttyKittyGraphicsImageData = 8;
-#[doc = " Generation stamp assigned when this image was added to (or\n replaced in) the storage. A changed generation for a given image\n ID means the pixel contents may have changed even when the\n dimensions, format, and data length are identical (e.g. a\n retransmission of the same image ID), so texture caches must key\n staleness on this value rather than on size heuristics.\n\n Stamps are unique and monotonically increasing process-wide and\n are drawn from the same sequence as\n GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION. Never zero for a stored\n image, so zero can be used as an \"empty\" sentinel by callers. Pending\n payload completion preserves this value to retain image age; consumers\n detect that completion through GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION\n and retry DATA_PTR.\n\n Output type: uint64_t *"]
+#[doc = " A value that changes whenever this image's pixels may have changed:\n when a program sends the image or replaces it, and when an animation\n moves to a new frame. Use it as part of your texture cache key. If\n it matches the texture you have, you don't need to read the pixels\n again. The render state reports the same value for each of its\n entries as GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION.\n\n Don't use the image's size or data length to detect changes instead.\n A program can send new pixels of the same size under the same ID.\n\n A value is never reused, not even by another image, another screen,\n or another terminal. It is never 0 for a stored image, so you can\n use 0 to mean \"no texture yet\".\n\n One case doesn't change this value. When a program finishes sending\n an image whose pixels were still on the way, the image keeps its\n value, and GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR starts returning the\n pixels. GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION changes when that\n happens, so read DATA_PTR again then.\n\n Output type: uint64_t *"]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_GENERATION:
     GhosttyKittyGraphicsImageData = 9;
-#[doc = " Generation stamp assigned when this image was added to (or\n replaced in) the storage. A changed generation for a given image\n ID means the pixel contents may have changed even when the\n dimensions, format, and data length are identical (e.g. a\n retransmission of the same image ID), so texture caches must key\n staleness on this value rather than on size heuristics.\n\n Stamps are unique and monotonically increasing process-wide and\n are drawn from the same sequence as\n GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION. Never zero for a stored\n image, so zero can be used as an \"empty\" sentinel by callers. Pending\n payload completion preserves this value to retain image age; consumers\n detect that completion through GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION\n and retry DATA_PTR.\n\n Output type: uint64_t *"]
+#[doc = " A value that changes whenever this image's pixels may have changed:\n when a program sends the image or replaces it, and when an animation\n moves to a new frame. Use it as part of your texture cache key. If\n it matches the texture you have, you don't need to read the pixels\n again. The render state reports the same value for each of its\n entries as GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION.\n\n Don't use the image's size or data length to detect changes instead.\n A program can send new pixels of the same size under the same ID.\n\n A value is never reused, not even by another image, another screen,\n or another terminal. It is never 0 for a stored image, so you can\n use 0 to mean \"no texture yet\".\n\n One case doesn't change this value. When a program finishes sending\n an image whose pixels were still on the way, the image keeps its\n value, and GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR starts returning the\n pixels. GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION changes when that\n happens, so read DATA_PTR again then.\n\n Output type: uint64_t *"]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_MAX_VALUE:
     GhosttyKittyGraphicsImageData = 2147483647;
 #[doc = " Queryable data kinds for ghostty_kitty_graphics_image_get().\n\n @ingroup kitty_graphics"]
 pub type GhosttyKittyGraphicsImageData = ::core::ffi::c_int;
-#[doc = " Combined rendering geometry for a placement in a single sized struct.\n\n Combines the results of ghostty_kitty_graphics_placement_pixel_size(),\n ghostty_kitty_graphics_placement_grid_size(),\n ghostty_kitty_graphics_placement_viewport_pos(), and\n ghostty_kitty_graphics_placement_source_rect() into one call. This is\n an optimization over calling those four functions individually,\n particularly useful in environments with high per-call overhead such\n as FFI or Cgo.\n\n This struct uses the sized-struct ABI pattern. Initialize with\n GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsPlacementRenderInfo) before calling\n ghostty_kitty_graphics_placement_render_info().\n\n @ingroup kitty_graphics"]
+#[doc = " The geometry of a storage placement, filled in by\n ghostty_kitty_graphics_placement_render_info().\n\n It holds the results of ghostty_kitty_graphics_placement_pixel_size(),\n ghostty_kitty_graphics_placement_grid_size(),\n ghostty_kitty_graphics_placement_viewport_pos() and\n ghostty_kitty_graphics_placement_source_rect(), so you can get all of\n them in one call. That helps most when each call is expensive, such\n as through FFI or Cgo.\n\n This is for inspecting the storage. To draw, use the render state's\n image list, which gives the same values for every image on screen.\n See \"Drawing Images\" in the @ref kitty_graphics documentation.\n\n Later versions may add fields to the end of this struct. Set `size`\n with GHOSTTY_INIT_SIZED before each call, so the library knows which\n fields you have:\n\n @code{.c}\n GhosttyKittyGraphicsPlacementRenderInfo info =\n     GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsPlacementRenderInfo);\n ghostty_kitty_graphics_placement_render_info(iter, image, terminal, &info);\n @endcode\n\n @ingroup kitty_graphics"]
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct GhosttyKittyGraphicsPlacementRenderInfo {
-    #[doc = " Size of this struct in bytes. Must be set to sizeof(GhosttyKittyGraphicsPlacementRenderInfo)."]
+    #[doc = " The size of this struct in bytes. Set it with GHOSTTY_INIT_SIZED."]
     pub size: usize,
-    #[doc = " Rendered width in pixels."]
+    #[doc = " The width to draw the image at, in pixels."]
     pub pixel_width: u32,
-    #[doc = " Rendered height in pixels."]
+    #[doc = " The height to draw the image at, in pixels."]
     pub pixel_height: u32,
-    #[doc = " Number of grid columns the placement occupies."]
+    #[doc = " The number of columns of cells the placement covers."]
     pub grid_cols: u32,
-    #[doc = " Number of grid rows the placement occupies."]
+    #[doc = " The number of rows of cells the placement covers."]
     pub grid_rows: u32,
-    #[doc = " Viewport-relative column (may be negative for partially visible placements)."]
+    #[doc = " The column of the top-left cell, where 0 is the leftmost column of\n  the viewport. Only meaningful when `viewport_visible` is true."]
     pub viewport_col: i32,
-    #[doc = " Viewport-relative row (may be negative for partially visible placements)."]
+    #[doc = " The row of the top-left cell, where 0 is the top row of the\n  viewport. It is negative when the top of the placement scrolled\n  above the viewport. Only meaningful when `viewport_visible` is\n  true."]
     pub viewport_row: i32,
-    #[doc = " False when the placement is fully off-screen or virtual."]
+    #[doc = " True when any part of the placement is in the viewport. False when\n  it is entirely outside the viewport, or when the storage can't find\n  its position: a virtual placement, or a placement relative to one."]
     pub viewport_visible: bool,
-    #[doc = " Resolved source rectangle x origin in pixels."]
+    #[doc = " The left edge of the part of the image to draw, in image pixels."]
     pub source_x: u32,
-    #[doc = " Resolved source rectangle y origin in pixels."]
+    #[doc = " The top edge of the part of the image to draw, in image pixels."]
     pub source_y: u32,
-    #[doc = " Resolved source rectangle width in pixels."]
+    #[doc = " The width of the part of the image to draw, in image pixels."]
     pub source_width: u32,
-    #[doc = " Resolved source rectangle height in pixels."]
+    #[doc = " The height of the part of the image to draw, in image pixels."]
     pub source_height: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
@@ -2260,6 +2272,14 @@ unsafe extern "C" {
         graphics: GhosttyKittyGraphics,
         data: GhosttyKittyGraphicsData,
         out: *mut ::core::ffi::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Advance playing animations and get the time of the next frame.\n\n Every playing animation moves to the frame that is due at `now_ms`.\n An animation moves forward at most one frame per call. If calls\n arrive late, playback slows down rather than skipping frames.\n\n Images that moved to a new frame get a new\n @ref GHOSTTY_KITTY_IMAGE_DATA_GENERATION, and their\n @ref GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR returns the new frame's pixels.\n\n Time is measured in milliseconds on a clock you choose, such as the\n time since your application started. The clock must only move\n forward, and you must keep using the same clock with the same\n starting point for as long as the terminal exists. The time written\n to `next_ms` uses the same clock.\n\n This call changes the image storage. Like ghostty_terminal_vt_write(),\n it invalidates any @ref GhosttyKittyGraphicsImage handles and image\n data pointers you are holding, so look images up again afterwards.\n The @ref GhosttyKittyGraphics handle itself stays valid.\n\n Call this once each time you prepare a frame to draw, not in a loop.\n The \"Animation\" section of @ref kitty_graphics explains how to\n schedule redraws with the returned time and includes an example.\n\n @param graphics The kitty graphics handle\n @param now_ms The current time in milliseconds\n @param[out] next_ms Set to the time the next frame is due, in\n   milliseconds on the same clock as `now_ms`. Only written when the\n   function returns GHOSTTY_SUCCESS.\n @return GHOSTTY_SUCCESS if an animation is playing and `next_ms` was\n   set, GHOSTTY_NO_VALUE if nothing is playing or Kitty graphics are\n   disabled at build time, GHOSTTY_INVALID_VALUE if `next_ms` is NULL\n\n @ingroup kitty_graphics"]
+    pub fn ghostty_kitty_graphics_animation_tick(
+        graphics: GhosttyKittyGraphics,
+        now_ms: u64,
+        next_ms: *mut u64,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
@@ -2362,7 +2382,7 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    #[doc = " Get the viewport-relative grid position of the current placement.\n\n Converts the placement's internal pin to viewport-relative column and\n row coordinates. The returned coordinates represent the top-left\n corner of the placement in the viewport's grid coordinate space.\n\n The row value can be negative when the placement's origin has\n scrolled above the top of the viewport. For example, a 4-row\n image that has scrolled up by 2 rows returns row=-2, meaning\n its top 2 rows are above the visible area but its bottom 2 rows\n are still on screen. Embedders should use these coordinates\n directly when computing the destination rectangle for rendering;\n the embedder is responsible for clipping the portion of the image\n that falls outside the viewport.\n\n Returns GHOSTTY_SUCCESS for any placement that is at least\n partially visible in the viewport. Returns GHOSTTY_NO_VALUE when\n the placement is completely outside the viewport (its bottom edge\n is above the viewport or its top edge is at or below the last\n viewport row), or when the placement is a virtual (unicode\n placeholder) placement.\n\n @param iterator The placement iterator positioned on a placement\n @param image The image handle for this placement's image\n @param terminal The terminal handle\n @param[out] out_col On success, receives the viewport-relative column\n @param[out] out_row On success, receives the viewport-relative row\n             (may be negative for partially visible placements)\n @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if fully\n         off-screen or virtual, GHOSTTY_INVALID_VALUE if any handle\n         is NULL or the iterator is not positioned\n\n @ingroup kitty_graphics"]
+    #[doc = " Get the top-left cell of the current placement, relative to the\n viewport.\n\n This is for inspecting the storage. To draw, use the render state's\n image list instead. It positions every image on screen, including\n virtual placements and placements relative to them, and covers\n overscan rows. If you draw from both, images are drawn twice. See\n \"Drawing Images\" in the @ref kitty_graphics documentation.\n\n The row is negative when the top of the placement scrolled above the\n viewport. For example, an image 4 rows tall that scrolled up by 2\n rows has a row of -2. Its top 2 rows are above the viewport and its\n bottom 2 rows are still visible.\n\n @param iterator The placement iterator, moved to a placement\n @param image The image of this placement\n @param terminal The terminal the storage belongs to\n @param[out] out_col On success, receives the column\n @param[out] out_row On success, receives the row, which can be\n             negative\n @return GHOSTTY_SUCCESS if any part of the placement is in the\n         viewport. GHOSTTY_NO_VALUE if it is entirely outside the\n         viewport, if it is a virtual placement or relative to one, or\n         if Kitty graphics are disabled at build time.\n         GHOSTTY_INVALID_VALUE if any handle is NULL or the iterator is\n         not on a placement.\n\n @ingroup kitty_graphics"]
     pub fn ghostty_kitty_graphics_placement_viewport_pos(
         iterator: GhosttyKittyGraphicsPlacementIterator,
         image: GhosttyKittyGraphicsImage,
@@ -2383,7 +2403,7 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    #[doc = " Get all rendering geometry for a placement in a single call.\n\n Combines pixel size, grid size, viewport position, and source\n rectangle into one struct. Initialize with\n GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsPlacementRenderInfo).\n\n When viewport_visible is false, the placement is fully off-screen\n or is a virtual placement; viewport_col and viewport_row may\n contain meaningless values in that case.\n\n @param iterator The iterator positioned on a placement\n @param image The image handle for this placement's image\n @param terminal The terminal handle\n @param[out] out_info Pointer to receive the rendering geometry\n @return GHOSTTY_SUCCESS on success\n\n @ingroup kitty_graphics"]
+    #[doc = " Get all of the geometry of the current placement in one call.\n\n This fills in a GhosttyKittyGraphicsPlacementRenderInfo with the pixel\n size, grid size, viewport position and source rectangle. Set its\n `size` with GHOSTTY_INIT_SIZED first.\n\n This is for inspecting the storage. To draw, use the render state's\n image list instead. It gives the same values for every image on\n screen, including virtual placements and placements relative to them.\n If you draw from both, images are drawn twice. See \"Drawing Images\"\n in the @ref kitty_graphics documentation.\n\n The call succeeds even when the placement isn't in the viewport.\n Check `viewport_visible` before using `viewport_col` and\n `viewport_row`.\n\n @param iterator The placement iterator, moved to a placement\n @param image The image of this placement\n @param terminal The terminal the storage belongs to\n @param[out] out_info Receives the geometry\n @return GHOSTTY_SUCCESS on success. GHOSTTY_INVALID_VALUE if any\n         handle or `out_info` is NULL, the iterator is not on a\n         placement, or `out_info->size` is too small.\n         GHOSTTY_NO_VALUE if Kitty graphics are disabled at build time.\n\n @ingroup kitty_graphics"]
     pub fn ghostty_kitty_graphics_placement_render_info(
         iterator: GhosttyKittyGraphicsPlacementIterator,
         image: GhosttyKittyGraphicsImage,
@@ -2526,6 +2546,113 @@ pub const GhosttyTerminalCursorStyle_GHOSTTY_TERMINAL_CURSOR_STYLE_MAX_VALUE:
     GhosttyTerminalCursorStyle = 2147483647;
 #[doc = " Visual style of the terminal cursor.\n\n @ingroup terminal"]
 pub type GhosttyTerminalCursorStyle = ::core::ffi::c_int;
+#[doc = " The stream is not inside any escape sequence or partial UTF-8\n character. This is a safe point to insert your own sequences.\n\n Ground is a state, not an event. If the stream is already at ground,\n the call stops immediately and consumes nothing."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_GROUND: GhosttyTerminalBoundary = 1;
+#[doc = " The byte that started an APC string: `_` after ESC, or 0x9F.\n\n SOS (`X` or 0x98) and PM (`^` or 0x9E) strings also report this\n boundary, because the parser handles all three the same way. Check\n GhosttyTerminalWriteStop.byte to tell them apart."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_APC_START: GhosttyTerminalBoundary = 2;
+#[doc = " The byte that ended an APC, SOS or PM string."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_APC_END: GhosttyTerminalBoundary = 4;
+#[doc = " The byte that started a DCS string: `P` after ESC, or 0x90.\n\n A DCS has a header before its payload: parameters, intermediates and\n a final byte, in the same shape as a CSI sequence. The stop lands on\n the introducer, so the header follows it. A 0x90 inside the header\n restarts the header without leaving the string, so it does not stop."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_DCS_START: GhosttyTerminalBoundary = 8;
+#[doc = " The byte that ended a DCS string, whether it was still in its header\n or already in its payload. A DCS cut short in its header reports this\n without ever having had a payload."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_DCS_END: GhosttyTerminalBoundary = 16;
+#[doc = " The byte that started an OSC string: `]` after ESC, or 0x9D."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_OSC_START: GhosttyTerminalBoundary = 32;
+#[doc = " The byte that ended an OSC string. This is reported for every OSC,\n including ones the terminal does not understand."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_OSC_END: GhosttyTerminalBoundary = 64;
+#[doc = " The byte that ended an OSC string. This is reported for every OSC,\n including ones the terminal does not understand."]
+pub const GhosttyTerminalBoundary_GHOSTTY_TERMINAL_BOUNDARY_MAX_VALUE: GhosttyTerminalBoundary =
+    2147483647;
+#[doc = " A point in the VT stream where ghostty_terminal_vt_write_until() can stop.\n\n The values are bit flags. Combine them with `|` to stop at any of several\n boundaries.\n\n Most boundaries mark the first or last byte of a control string: an APC,\n DCS or OSC sequence, made of an introducer, some content, and a\n terminator. GROUND is different. It marks the state between sequences\n rather than a byte inside one.\n\n Terminal protocols spell control bytes two ways, and both are recognized.\n A 7-bit introducer is ESC followed by one byte, such as `ESC ]` for OSC.\n The 8-bit form is a single byte in the range 0x80 to 0x9F, such as 0x9D\n for OSC. The string terminator ST is `ESC \\` or the single byte 0x9C.\n\n @ingroup terminal"]
+pub type GhosttyTerminalBoundary = ::core::ffi::c_int;
+#[doc = " An APC, SOS or PM string. GhosttyTerminalWriteStop.byte at the start\n of the string tells you which one it is:\n\n | Byte               | String |\n |--------------------|--------|\n | `_` (0x5F) or 0x9F | APC    |\n | `X` (0x58) or 0x98 | SOS    |\n | `^` (0x5E) or 0x9E | PM     |"]
+pub const GhosttyTerminalStringKind_GHOSTTY_TERMINAL_STRING_KIND_APC: GhosttyTerminalStringKind = 0;
+#[doc = " A DCS string, started by `P` (0x50) after ESC or by 0x90."]
+pub const GhosttyTerminalStringKind_GHOSTTY_TERMINAL_STRING_KIND_DCS: GhosttyTerminalStringKind = 1;
+#[doc = " An OSC string, started by `]` (0x5D) after ESC or by 0x9D."]
+pub const GhosttyTerminalStringKind_GHOSTTY_TERMINAL_STRING_KIND_OSC: GhosttyTerminalStringKind = 2;
+#[doc = " An OSC string, started by `]` (0x5D) after ESC or by 0x9D."]
+pub const GhosttyTerminalStringKind_GHOSTTY_TERMINAL_STRING_KIND_MAX_VALUE:
+    GhosttyTerminalStringKind = 2147483647;
+#[doc = " The kind of control string that started or ended.\n\n @ingroup terminal"]
+pub type GhosttyTerminalStringKind = ::core::ffi::c_int;
+#[doc = " ESC followed by `_`, `X`, `^`, `P` or `]`. The stop's `consumed`\n count includes only the final byte, because the ESC may have arrived\n in an earlier call."]
+pub const GhosttyTerminalStringIntroducer_GHOSTTY_TERMINAL_STRING_INTRODUCER_ESC:
+    GhosttyTerminalStringIntroducer = 0;
+#[doc = " A single 8-bit byte: 0x9F (APC), 0x98 (SOS), 0x9E (PM), 0x90 (DCS) or\n 0x9D (OSC).\n\n When the stream is at ground, these bytes are decoded as UTF-8 and do\n not start a string. They only start a string when they arrive while\n the stream is already inside another escape sequence."]
+pub const GhosttyTerminalStringIntroducer_GHOSTTY_TERMINAL_STRING_INTRODUCER_C1:
+    GhosttyTerminalStringIntroducer = 1;
+#[doc = " A single 8-bit byte: 0x9F (APC), 0x98 (SOS), 0x9E (PM), 0x90 (DCS) or\n 0x9D (OSC).\n\n When the stream is at ground, these bytes are decoded as UTF-8 and do\n not start a string. They only start a string when they arrive while\n the stream is already inside another escape sequence."]
+pub const GhosttyTerminalStringIntroducer_GHOSTTY_TERMINAL_STRING_INTRODUCER_MAX_VALUE:
+    GhosttyTerminalStringIntroducer = 2147483647;
+#[doc = " How a control string started.\n\n @ingroup terminal"]
+pub type GhosttyTerminalStringIntroducer = ::core::ffi::c_int;
+#[doc = " ESC, the first byte of the string terminator `ESC \\`.\n\n The ESC is consumed but the `\\` after it is not. Pass the `\\` as the\n first byte of your next write, where it completes the terminator. If\n you forward the stream elsewhere, forward the ESC along with the\n string."]
+pub const GhosttyTerminalStringEnd_GHOSTTY_TERMINAL_STRING_END_ST_ESC: GhosttyTerminalStringEnd = 0;
+#[doc = " 0x9C, the 8-bit string terminator. The stream is now at ground.\n\n Inside an OSC, and inside a DCS once its header is complete, 0x9C is\n content rather than a terminator. So this is only reported for an APC\n or for a DCS still in its header."]
+pub const GhosttyTerminalStringEnd_GHOSTTY_TERMINAL_STRING_END_ST_C1: GhosttyTerminalStringEnd = 1;
+#[doc = " CAN (0x18) or SUB (0x1A) cancelled the string. The stream is now at\n ground.\n\n The terminal discards a cancelled APC or OSC. Its command does not\n run and it is not passed to the unknown sequence callback. For\n example, `ESC _ G a=t,i=7;AAAA` followed by CAN stores no image."]
+pub const GhosttyTerminalStringEnd_GHOSTTY_TERMINAL_STRING_END_CANCELLED: GhosttyTerminalStringEnd =
+    2;
+#[doc = " Another 8-bit control byte cut the string short. Most of these return\n the stream to ground. CSI (0x9B) starts a CSI sequence instead. The\n introducers DCS (0x90), OSC (0x9D), APC (0x9F), SOS (0x98) and PM\n (0x9E) start a new string on the same byte, which the stop reports\n with a START flag as well. See GhosttyTerminalWriteStop.reached.\n\n Inside an OSC, and inside a DCS once its header is complete, 8-bit\n bytes are content. So this is only reported for an APC or for a DCS\n still in its header.\n\n The terminal discards an aborted APC, just like a cancelled one."]
+pub const GhosttyTerminalStringEnd_GHOSTTY_TERMINAL_STRING_END_ABORTED: GhosttyTerminalStringEnd =
+    3;
+#[doc = " BEL (0x07) terminated the string. Only an OSC ends this way."]
+pub const GhosttyTerminalStringEnd_GHOSTTY_TERMINAL_STRING_END_BEL: GhosttyTerminalStringEnd = 4;
+#[doc = " BEL (0x07) terminated the string. Only an OSC ends this way."]
+pub const GhosttyTerminalStringEnd_GHOSTTY_TERMINAL_STRING_END_MAX_VALUE: GhosttyTerminalStringEnd =
+    2147483647;
+#[doc = " How a control string ended.\n\n @ingroup terminal"]
+pub type GhosttyTerminalStringEnd = ::core::ffi::c_int;
+#[doc = " Where ghostty_terminal_vt_write_until() stopped, and why.\n\n Initialize this struct with GHOSTTY_INIT_SIZED(). The call resets every\n field except `size` before it writes the result, so you can reuse one\n struct across calls.\n\n Fields that don't apply to a stop are zero. Zero is also a valid value\n for `kind`, `introducer` and `end`, so always check `reached` first to\n see which fields apply.\n\n @ingroup terminal"]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyTerminalWriteStop {
+    #[doc = " Size of this struct in bytes. Set by GHOSTTY_INIT_SIZED()."]
+    pub size: usize,
+    #[doc = " Number of input bytes consumed, including the byte that reached the\n boundary. This is 0 when the stream was already at ground and you\n asked for GHOSTTY_TERMINAL_BOUNDARY_GROUND."]
+    pub consumed: usize,
+    #[doc = " The GhosttyTerminalBoundary flags that the stopping byte reached. Only\n flags you asked for are set, and this is 0 when no boundary was\n reached.\n\n This is usually one flag. It holds two when a single byte does two\n things:\n\n - It ends a string and returns to ground. BEL, CAN, SUB, 0x9C and the\n   other 8-bit control bytes all do this. So if you asked for both\n   OSC_END and GROUND, an OSC_END stop can include GROUND too.\n - It ends one string and starts another. An 8-bit introducer of a\n   different kind does this inside an APC, or inside a DCS header: 0x90\n   or 0x9D in an APC ends it and starts a DCS or OSC, and 0x9F, 0x98,\n   0x9E or 0x9D in a DCS header ends it and starts an APC or OSC. The\n   stop has an END flag and a START flag, `end` is ABORTED and\n   `introducer` is C1. See ghostty_terminal_vt_write_until() for an\n   example.\n\n A START flag and an END flag of the same kind are never set together."]
+    pub reached: u32,
+    #[doc = " The kind of string. Valid when `reached` has a START or END flag.\n\n When one byte both ends a string and starts another, this is the kind\n of the string that ended. The START flag in `reached` names the kind\n that started, since APC_START, DCS_START and OSC_START each belong to\n one kind."]
+    pub kind: GhosttyTerminalStringKind,
+    #[doc = " How the string started. Valid when `reached` has a START flag."]
+    pub introducer: GhosttyTerminalStringIntroducer,
+    #[doc = " How the string ended. Valid when `reached` has an END flag."]
+    pub end: GhosttyTerminalStringEnd,
+    #[doc = " The byte that started or ended the string, such as `]`, 0x90, ESC or\n BEL. Valid when `reached` has a START or END flag."]
+    pub byte: u8,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyTerminalWriteStop"]
+        [::core::mem::size_of::<GhosttyTerminalWriteStop>() - 40usize];
+    ["Alignment of GhosttyTerminalWriteStop"]
+        [::core::mem::align_of::<GhosttyTerminalWriteStop>() - 8usize];
+    ["Offset of field: GhosttyTerminalWriteStop::size"]
+        [::core::mem::offset_of!(GhosttyTerminalWriteStop, size) - 0usize];
+    ["Offset of field: GhosttyTerminalWriteStop::consumed"]
+        [::core::mem::offset_of!(GhosttyTerminalWriteStop, consumed) - 8usize];
+    ["Offset of field: GhosttyTerminalWriteStop::reached"]
+        [::core::mem::offset_of!(GhosttyTerminalWriteStop, reached) - 16usize];
+    ["Offset of field: GhosttyTerminalWriteStop::kind"]
+        [::core::mem::offset_of!(GhosttyTerminalWriteStop, kind) - 20usize];
+    ["Offset of field: GhosttyTerminalWriteStop::introducer"]
+        [::core::mem::offset_of!(GhosttyTerminalWriteStop, introducer) - 24usize];
+    ["Offset of field: GhosttyTerminalWriteStop::end"]
+        [::core::mem::offset_of!(GhosttyTerminalWriteStop, end) - 28usize];
+    ["Offset of field: GhosttyTerminalWriteStop::byte"]
+        [::core::mem::offset_of!(GhosttyTerminalWriteStop, byte) - 32usize];
+};
+impl Default for GhosttyTerminalWriteStop {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[doc = " Scrollbar state for the terminal viewport.\n\n Represents the scrollable area dimensions needed to render a scrollbar.\n\n @ingroup terminal"]
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -2755,7 +2882,7 @@ impl Default for GhosttyTerminalUnknownSequence {
         }
     }
 }
-#[doc = " Callback function type for unsupported terminal sequences.\n\n Called once for each complete sequence that libghostty-vt does not\n implement. Check `sequence->tag` first, because more kinds of sequences\n may be reported in later versions.\n\n These are not reported:\n\n - Sequences the program cancelled partway through with CAN or SUB.\n - Sequences libghostty-vt implements, even when their contents are\n   malformed.\n - Supported protocols that the embedder turned off.\n\n The callback runs during ghostty_terminal_vt_write(). It may write a reply\n to the pty, and that reply stays in order with the terminal's own\n replies. It must not call ghostty_terminal_vt_write() on the same\n terminal.\n\n Nothing is reported until GHOSTTY_TERMINAL_OPT_UNKNOWN_MAX_BYTES is also\n set to a nonzero value. Installing the callback by itself keeps no data\n and allocates no memory.\n\n @param terminal The terminal handle\n @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA\n @param sequence Borrowed unsupported sequence\n\n @ingroup terminal"]
+#[doc = " Callback function type for unsupported terminal sequences.\n\n Called once for each complete sequence that libghostty-vt does not\n implement. Check `sequence->tag` first, because more kinds of sequences\n may be reported in later versions.\n\n These are not reported:\n\n - Sequences cut short before their terminator, either cancelled by CAN\n   or SUB or aborted by another 8-bit control byte.\n - Sequences libghostty-vt implements, even when their contents are\n   malformed.\n - Supported protocols that the embedder turned off.\n\n The callback runs during ghostty_terminal_vt_write(). It may write a reply\n to the pty, and that reply stays in order with the terminal's own\n replies. It must not call ghostty_terminal_vt_write() on the same\n terminal.\n\n Nothing is reported until GHOSTTY_TERMINAL_OPT_UNKNOWN_MAX_BYTES is also\n set to a nonzero value. Installing the callback by itself keeps no data\n and allocates no memory.\n\n @param terminal The terminal handle\n @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA\n @param sequence Borrowed unsupported sequence\n\n @ingroup terminal"]
 pub type GhosttyTerminalUnknownSequenceFn = ::core::option::Option<
     unsafe extern "C" fn(
         terminal: GhosttyTerminal,
@@ -3784,7 +3911,7 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    #[doc = " Set an option on the terminal.\n\n Configures terminal callbacks and associated state such as the\n write_pty callback and userdata pointer. The value is passed\n directly for pointer types (callbacks, userdata) or as a pointer\n to the value for non-pointer types (e.g. GhosttyString*).\n The behavior of a NULL value is specific to each option and is\n documented by the corresponding GhosttyTerminalOption value.\n\n Callbacks are invoked synchronously during VT writes. Callbacks must not\n call ghostty_terminal_vt_write() or\n ghostty_terminal_vt_write_until_ground() on the same terminal\n (no reentrancy).\n\n @param terminal The terminal handle (may be NULL, in which case this is a no-op)\n @param option The option to set\n @param value Pointer to the value to set (type depends on the option),\n              or NULL to clear the option\n\n @ingroup terminal"]
+    #[doc = " Set an option on the terminal.\n\n Configures terminal callbacks and associated state such as the\n write_pty callback and userdata pointer. The value is passed\n directly for pointer types (callbacks, userdata) or as a pointer\n to the value for non-pointer types (e.g. GhosttyString*).\n The behavior of a NULL value is specific to each option and is\n documented by the corresponding GhosttyTerminalOption value.\n\n Callbacks are invoked synchronously during VT writes. Callbacks must not\n call ghostty_terminal_vt_write() or\n ghostty_terminal_vt_write_until() on the same terminal\n (no reentrancy).\n\n @param terminal The terminal handle (may be NULL, in which case this is a no-op)\n @param option The option to set\n @param value Pointer to the value to set (type depends on the option),\n              or NULL to clear the option\n\n @ingroup terminal"]
     pub fn ghostty_terminal_set(
         terminal: GhosttyTerminal,
         option: GhosttyTerminalOption,
@@ -3796,12 +3923,13 @@ unsafe extern "C" {
     pub fn ghostty_terminal_vt_write(terminal: GhosttyTerminal, data: *const u8, len: usize);
 }
 unsafe extern "C" {
-    #[doc = " Write VT-encoded data, but only the shortest prefix needed to reach ground.\n\n Ground is when the stream isn't in the middle of any type of sequence:\n UTF-8, ESC, CSI, OSC, etc. It is the stateless point of the stream.\n\n This is useful to know because it is a point at which you can\n safely insert out-of-band VT sequences. For example, while reading\n from a pty if you want to make your own changes, you can wait until\n the pty input reaches ground, then write yours.\n\n If the stream is already at ground then this consumes nothing and returns\n GHOSTTY_SUCCESS. On success, out_consumed is the number of bytes consumed\n before reaching ground, including the byte that reaches it.\n GHOSTTY_NO_VALUE means the full slice was consumed without reaching ground.\n\n @param terminal The terminal handle (must not be NULL)\n @param data Pointer to the data to write, or NULL when len is zero\n @param len Length of the data in bytes\n @param[out] out_consumed Number of bytes consumed (must not be NULL)\n @return GHOSTTY_SUCCESS if ground was reached, GHOSTTY_NO_VALUE if all input\n         was consumed without reaching ground, or GHOSTTY_INVALID_VALUE if\n         an argument is invalid\n\n @ingroup terminal"]
-    pub fn ghostty_terminal_vt_write_until_ground(
+    #[doc = " Write VT-encoded data to the terminal, stopping right after the first\n byte that reaches one of the requested boundaries.\n\n This works like ghostty_terminal_vt_write(), but it can pause at points\n you care about. It tells you exactly where a control string starts or\n ends, using the same parse that updates the terminal. For example, a\n program that sits between a shell and a terminal can use it to:\n\n - Find the exact bytes of each APC, DCS or OSC string, such as a Kitty\n   graphics command, a tmux control mode message or a clipboard write,\n   so it can forward, rewrite or drop that string.\n - Wait until the stream is at ground before inserting its own\n   sequences, so it never splits a sequence from the program.\n\n Pass the boundaries to stop at as GhosttyTerminalBoundary flags. The\n call consumes input up to and including the first byte that reaches one\n of them, and reports that point in `out`. The terminal only processes\n the consumed bytes, and callbacks only run for those bytes. Pass the\n remaining bytes in your next call.\n\n Every byte you pass is eventually consumed in order, so the terminal\n ends up in the same state as if you had called\n ghostty_terminal_vt_write() with all of it.\n\n ## Finding string content\n\n After a START stop, the string's content begins at the first byte that\n was not consumed. For a Kitty graphics command that byte is `G`. For an\n OSC it is the first digit of the command number. An END stop consumes\n the byte that ended the string, which is not part of the content. A\n string can start in one call and end several calls later.\n\n This loop handles one chunk of output and finds the content of the APC\n strings in it. DCS and OSC strings work the same way with their own\n flags:\n\n @code{.c}\n uint32_t want = GHOSTTY_TERMINAL_BOUNDARY_APC_START |\n                 GHOSTTY_TERMINAL_BOUNDARY_APC_END;\n size_t off = 0;\n while (off < len) {\n   GhosttyTerminalWriteStop stop =\n       GHOSTTY_INIT_SIZED(GhosttyTerminalWriteStop);\n   GhosttyResult r = ghostty_terminal_vt_write_until(\n       terminal, data + off, len - off, want, &stop);\n   if (r == GHOSTTY_NO_VALUE) {\n     // No boundary in the rest of the chunk. Everything was consumed.\n     break;\n   }\n\n   off += stop.consumed;\n   if (stop.reached & GHOSTTY_TERMINAL_BOUNDARY_APC_START) {\n     // The content starts at data + off.\n   }\n   if (stop.reached & GHOSTTY_TERMINAL_BOUNDARY_APC_END) {\n     // The ending byte is at data + off - 1. The content stops just\n     // before it.\n   }\n }\n @endcode\n\n ## Strings that end with ESC\n\n The usual string terminator is the two bytes `ESC \\`. The call stops\n after the ESC with GHOSTTY_TERMINAL_STRING_END_ST_ESC and does not\n consume the `\\`. The loop above needs no special case for this. The\n `\\` is simply the first byte of the next call, where it completes the\n terminator and brings the stream back to ground.\n\n ## DCS strings\n\n A DCS_START stop lands on the introducer, before the header. The bytes\n after it are the parameters, intermediates and final byte of the header,\n then the payload. For `ESC P 1 ; 2 | data ESC \\` the stop lands on `P`,\n and `1;2|` is the header that follows.\n\n The string can end in its header. CAN, SUB, 0x9C, ESC or another 8-bit\n control byte there gives a DCS_END stop for a DCS that never had a\n payload. Past the header, only ESC, CAN and SUB end the string, and\n every other byte is payload, 8-bit bytes included. A 0x90 in the header\n restarts the header without ending the string, so it does not stop.\n\n ## One byte that ends a string and starts another\n\n An 8-bit introducer of a different kind inside an APC, or inside a DCS\n header, ends that string and starts the new one on the same byte. The\n stop has both an END flag and a START flag in `reached`, `end` is\n ABORTED and `introducer` is C1. The content of the new string begins\n right after the stop.\n\n For example, in `ESC _ a 0x9D 2 ; t BEL` the 0x9D ends the APC and\n starts an OSC. Asking for APC_END and OSC_START gives one stop on the\n 0x9D with both flags set, `kind` APC and `byte` 0x9D. The OSC content\n `2;t` begins right after it, and the BEL then gives an OSC_END stop.\n GhosttyTerminalWriteStop.reached lists which bytes do this.\n\n ## Waiting for ground\n\n GHOSTTY_TERMINAL_BOUNDARY_GROUND is a state, not an event. If the\n stream is already at ground, the call returns GHOSTTY_SUCCESS right away\n with `consumed` set to 0. If you keep asking for ground with the same\n input, you never make progress. After a ground stop, write the next\n bytes without the GROUND flag, or with ghostty_terminal_vt_write().\n\n @param terminal The terminal handle (must not be NULL)\n @param data Pointer to the data to write, or NULL when len is zero\n @param len Length of the data in bytes\n @param boundaries GhosttyTerminalBoundary flags to stop at. Must be\n                   nonzero and contain only defined flags.\n @param[out] out Where the call stopped. Must not be NULL, and its `size`\n                 must be set with GHOSTTY_INIT_SIZED().\n @return GHOSTTY_SUCCESS if a boundary was reached.\n         GHOSTTY_NO_VALUE if all input was consumed without reaching a\n         boundary. In that case `out->consumed` is `len` and\n         `out->reached` is 0.\n         GHOSTTY_INVALID_VALUE if an argument is invalid. No input is\n         consumed.\n\n @ingroup terminal"]
+    pub fn ghostty_terminal_vt_write_until(
         terminal: GhosttyTerminal,
         data: *const u8,
         len: usize,
-        out_consumed: *mut usize,
+        boundaries: u32,
+        out: *mut GhosttyTerminalWriteStop,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
@@ -3988,7 +4116,7 @@ pub struct GhosttyFormatterTerminalOptions {
     pub emit: GhosttyFormatterFormat,
     #[doc = " Whether to unwrap soft-wrapped lines."]
     pub unwrap: bool,
-    #[doc = " Whether to trim trailing whitespace on non-blank lines."]
+    #[doc = " Whether to trim trailing whitespace on non-blank lines. Trailing blank\n lines are always trimmed, except in VT output without trimming, where\n they are kept as part of the layout."]
     pub trim: bool,
     #[doc = " Extra terminal state to include in styled output."]
     pub extra: GhosttyFormatterTerminalExtra,
@@ -4181,7 +4309,13 @@ pub const GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_OVERSCAN: GhosttyRend
 #[doc = " The overscan request most recently set with\n  GHOSTTY_RENDER_STATE_OPTION_OVERSCAN (GhosttyRenderStateOverscan).\n  The next update uses this request. Both sides are zero if it was\n  never set."]
 pub const GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_OVERSCAN_REQUEST:
     GhosttyRenderStateData = 21;
-#[doc = " The overscan request most recently set with\n  GHOSTTY_RENDER_STATE_OPTION_OVERSCAN (GhosttyRenderStateOverscan).\n  The next update uses this request. Both sides are zero if it was\n  never set."]
+#[doc = " Populate an existing GhosttyRenderStateImageIterator with the image\n  placements found by the last update. See \"Images\" in the render\n  state overview."]
+pub const GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR: GhosttyRenderStateData =
+    22;
+#[doc = " A value (uint64_t) that changes whenever an update changes the\n  placements that GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR returns. If\n  it matches the value from the last time you read the iterator, the\n  placements are the same and you don't need to read them again. See\n  \"Knowing When Images Changed\" in the render state overview for an\n  example and for exactly when the value changes.\n\n  The value belongs to the whole list. To know when the pixels of a\n  single image changed, use\n  GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION.\n\n  Only compare the value for equality. It is always 0 when Kitty\n  graphics are disabled."]
+pub const GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_IMAGE_PLACEMENTS_GENERATION:
+    GhosttyRenderStateData = 23;
+#[doc = " A value (uint64_t) that changes whenever an update changes the\n  placements that GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR returns. If\n  it matches the value from the last time you read the iterator, the\n  placements are the same and you don't need to read them again. See\n  \"Knowing When Images Changed\" in the render state overview for an\n  example and for exactly when the value changes.\n\n  The value belongs to the whole list. To know when the pixels of a\n  single image changed, use\n  GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION.\n\n  Only compare the value for equality. It is always 0 when Kitty\n  graphics are disabled."]
 pub const GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_MAX_VALUE: GhosttyRenderStateData =
     2147483647;
 #[doc = " Queryable data kinds for ghostty_render_state_get().\n\n @ingroup render"]
@@ -4196,6 +4330,103 @@ pub const GhosttyRenderStateOption_GHOSTTY_RENDER_STATE_OPTION_MAX_VALUE: Ghostt
     2147483647;
 #[doc = " Settable options for ghostty_render_state_set().\n\n @ingroup render"]
 pub type GhosttyRenderStateOption = ::core::ffi::c_int;
+#[doc = " The Kitty graphics protocol. Read the image with\n  ghostty_kitty_graphics_image()."]
+pub const GhosttyImageProtocol_GHOSTTY_IMAGE_PROTOCOL_KITTY: GhosttyImageProtocol = 0;
+#[doc = " The Kitty graphics protocol. Read the image with\n  ghostty_kitty_graphics_image()."]
+pub const GhosttyImageProtocol_GHOSTTY_IMAGE_PROTOCOL_MAX_VALUE: GhosttyImageProtocol = 2147483647;
+#[doc = " The image protocols that a terminal supports.\n\n The render state uses this to say which protocol each image placement\n came from (see GHOSTTY_RENDER_STATE_IMAGE_DATA_PROTOCOL). Use it to\n decide where to read the image's pixels. Unlike the other image types\n here, the name has no RenderState prefix, because the protocol isn't\n specific to the render state.\n\n New protocols may be added in later versions. Skip placements with a\n protocol you don't support.\n\n @ingroup render"]
+pub type GhosttyImageProtocol = ::core::ffi::c_int;
+#[doc = " Below the cell background colors."]
+pub const GhosttyRenderStateImageLayer_GHOSTTY_RENDER_STATE_IMAGE_LAYER_BELOW_BACKGROUND:
+    GhosttyRenderStateImageLayer = 0;
+#[doc = " Above the cell background colors and below the text."]
+pub const GhosttyRenderStateImageLayer_GHOSTTY_RENDER_STATE_IMAGE_LAYER_BELOW_TEXT:
+    GhosttyRenderStateImageLayer = 1;
+#[doc = " Above the text."]
+pub const GhosttyRenderStateImageLayer_GHOSTTY_RENDER_STATE_IMAGE_LAYER_ABOVE_TEXT:
+    GhosttyRenderStateImageLayer = 2;
+#[doc = " Above the text."]
+pub const GhosttyRenderStateImageLayer_GHOSTTY_RENDER_STATE_IMAGE_LAYER_MAX_VALUE:
+    GhosttyRenderStateImageLayer = 2147483647;
+#[doc = " Where an image is drawn relative to the terminal's text.\n\n Draw the layers in this order: every image below backgrounds, then\n cell backgrounds, then images below text, then text, then images above\n text. Within a layer, draw images in order of their z-index, lowest\n first.\n\n @ingroup render"]
+pub type GhosttyRenderStateImageLayer = ::core::ffi::c_int;
+#[doc = " Part of a virtual placement: one run of neighboring placeholder\n  cells in a single row. It is always one row tall."]
+pub const GhosttyRenderStateKittyPlacementKind_GHOSTTY_RENDER_STATE_KITTY_PLACEMENT_KIND_VIRTUAL:
+    GhosttyRenderStateKittyPlacementKind = 0;
+#[doc = " A placement that a program positioned relative to another\n  placement, its parent. Kitty graphics lets a program attach one\n  image to another so that they move together. The parent is either\n  a virtual or a fixed placement, possibly through a chain of other\n  relative placements.\n\n  With a virtual parent, the position depends on the placeholder\n  cells. It is measured from the top-left corner of the parent's\n  cells on screen. That is the leftmost column and the topmost row\n  that any of its cells use, which matches Kitty. If none of those\n  cells are in the captured rows (the viewport plus any overscan), the\n  relative placement is not included.\n\n  With a fixed parent, the position is measured from the parent's\n  cell. The relative placement is included at its full size when any\n  part of it is in the captured rows, even if the parent isn't, so it\n  may need to be clipped when drawn.\n\n  See \"Kitty Graphics Relative Placements\" in the @ref render\n  documentation."]
+pub const GhosttyRenderStateKittyPlacementKind_GHOSTTY_RENDER_STATE_KITTY_PLACEMENT_KIND_RELATIVE : GhosttyRenderStateKittyPlacementKind = 1 ;
+#[doc = " A placement at a cell on the screen. It scrolls with the text,\n  like a line of output would. Its z-index is the one the program\n  chose, so it can be in any layer.\n\n  It is included at its full size when any part of it is in the\n  captured rows, so it may need to be clipped when drawn. See \"Images\n  Partly Outside the Captured Rows\" in the @ref render documentation."]
+pub const GhosttyRenderStateKittyPlacementKind_GHOSTTY_RENDER_STATE_KITTY_PLACEMENT_KIND_FIXED:
+    GhosttyRenderStateKittyPlacementKind = 2;
+#[doc = " A placement at a cell on the screen. It scrolls with the text,\n  like a line of output would. Its z-index is the one the program\n  chose, so it can be in any layer.\n\n  It is included at its full size when any part of it is in the\n  captured rows, so it may need to be clipped when drawn. See \"Images\n  Partly Outside the Captured Rows\" in the @ref render documentation."]
+pub const GhosttyRenderStateKittyPlacementKind_GHOSTTY_RENDER_STATE_KITTY_PLACEMENT_KIND_MAX_VALUE : GhosttyRenderStateKittyPlacementKind = 2147483647 ;
+#[doc = " The kinds of Kitty graphics placements in a render state's image list.\n\n Read with GHOSTTY_RENDER_STATE_IMAGE_DATA_KITTY_KIND. Most renderers\n can draw every kind the same way. The kind is useful when you need to\n tell them apart, for example for debugging.\n\n @ingroup render"]
+pub type GhosttyRenderStateKittyPlacementKind = ::core::ffi::c_int;
+#[doc = " Invalid value. Querying it returns GHOSTTY_INVALID_VALUE."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_INVALID:
+    GhosttyRenderStateImageData = 0;
+#[doc = " The protocol the image came from (GhosttyImageProtocol)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_PROTOCOL:
+    GhosttyRenderStateImageData = 1;
+#[doc = " The ID of the image to draw (uint32_t). IDs are only unique within\n  one protocol, so look the image up in the storage of its protocol.\n  For Kitty graphics, use ghostty_kitty_graphics_image()."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_ID:
+    GhosttyRenderStateImageData = 2;
+#[doc = " The generation of the image's contents (uint64_t). It changes\n  whenever the image's pixels change, including when an animation\n  moves to a new frame. Use it as part of your texture cache key,\n  with the protocol and image ID: if it matches the texture you have,\n  you don't need to read the pixels again. For Kitty graphics, this\n  is the same value as GHOSTTY_KITTY_IMAGE_DATA_GENERATION.\n\n  To know when the list of placements as a whole changed, use\n  GHOSTTY_RENDER_STATE_DATA_IMAGE_PLACEMENTS_GENERATION."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION:
+    GhosttyRenderStateImageData = 3;
+#[doc = " The layer to draw the image in (GhosttyRenderStateImageLayer)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_LAYER:
+    GhosttyRenderStateImageData = 4;
+#[doc = " The z-index (int32_t), which orders images within a layer. Images\n  with a lower z-index are drawn first. The value comes from the\n  image's protocol. For Kitty graphics, it is the z-index the program\n  asked for, and virtual placements are always -1."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_Z:
+    GhosttyRenderStateImageData = 5;
+#[doc = " The column of the top-left cell (int32_t), where 0 is the leftmost\n  column of the viewport. Fixed and relative placements are reported\n  at their full size, so they can start to the left of the viewport,\n  which gives a negative value. Virtual placements never do. See\n  \"Images Partly Outside the Captured Rows\" in the @ref render\n  documentation."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_COL:
+    GhosttyRenderStateImageData = 6;
+#[doc = " The row of the top-left cell (int32_t), where 0 is the top row of\n  the viewport. A placement in an overscan row above the viewport has\n  a negative row, the same as GHOSTTY_RENDER_STATE_ROW_DATA_VIEWPORT_Y.\n  Fixed and relative placements are reported at their full size, so\n  they can also start above the first overscan row. Virtual\n  placements are always inside the captured rows. See \"Images Partly\n  Outside the Captured Rows\" in the @ref render documentation."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_ROW:
+    GhosttyRenderStateImageData = 7;
+#[doc = " The number of columns of cells the placement covers (uint32_t)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_GRID_COLS:
+    GhosttyRenderStateImageData = 8;
+#[doc = " The number of rows of cells the placement covers (uint32_t)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_GRID_ROWS:
+    GhosttyRenderStateImageData = 9;
+#[doc = " How far the image starts from the left edge of the top-left cell,\n  in pixels (uint32_t). For a virtual placement, an image that is\n  narrower than its cells is centered, so this can be larger than a\n  cell is wide. For fixed and relative placements, this is the offset\n  the program asked for, limited to less than one cell."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_X:
+    GhosttyRenderStateImageData = 10;
+#[doc = " How far the image starts from the top edge of the top-left cell,\n  in pixels (uint32_t). For a virtual placement, an image that is\n  shorter than its cells is centered, so this can be larger than a\n  cell is tall. For fixed and relative placements, this is the offset\n  the program asked for, limited to less than one cell."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_Y:
+    GhosttyRenderStateImageData = 11;
+#[doc = " The width to draw the image at, in pixels (uint32_t)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_WIDTH:
+    GhosttyRenderStateImageData = 12;
+#[doc = " The height to draw the image at, in pixels (uint32_t)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_HEIGHT:
+    GhosttyRenderStateImageData = 13;
+#[doc = " The left edge of the part of the image to draw, in image pixels\n  (uint32_t)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_X:
+    GhosttyRenderStateImageData = 14;
+#[doc = " The top edge of the part of the image to draw, in image pixels\n  (uint32_t)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_Y:
+    GhosttyRenderStateImageData = 15;
+#[doc = " The width of the part of the image to draw, in image pixels\n  (uint32_t). Scale it to PIXEL_WIDTH when drawing."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_WIDTH:
+    GhosttyRenderStateImageData = 16;
+#[doc = " The height of the part of the image to draw, in image pixels\n  (uint32_t). Scale it to PIXEL_HEIGHT when drawing."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_HEIGHT:
+    GhosttyRenderStateImageData = 17;
+#[doc = " Kitty graphics only: the placement ID (uint32_t), or 0 if there\n  isn't one.\n\n  For a virtual placement, this is the placement ID that the\n  placeholder cells ask for. Cells that don't ask for one show the\n  image's virtual placement, whichever it is, and report 0. For a\n  fixed or relative placement, this is the ID the program gave it, or\n  0 if it didn't give one."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_KITTY_PLACEMENT_ID:
+    GhosttyRenderStateImageData = 18;
+#[doc = " Kitty graphics only: the kind of placement\n  (GhosttyRenderStateKittyPlacementKind)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_KITTY_KIND:
+    GhosttyRenderStateImageData = 19;
+#[doc = " Kitty graphics only: the kind of placement\n  (GhosttyRenderStateKittyPlacementKind)."]
+pub const GhosttyRenderStateImageData_GHOSTTY_RENDER_STATE_IMAGE_DATA_MAX_VALUE:
+    GhosttyRenderStateImageData = 2147483647;
+#[doc = " Data you can read about the current placement of an image iterator\n with ghostty_render_state_image_get().\n\n The type in parentheses is the type that the `out` pointer must point\n to. All pixel values use the cell size set with ghostty_terminal_resize().\n\n Some values only apply to one protocol, and have the protocol in their\n name. For example, GHOSTTY_RENDER_STATE_IMAGE_DATA_KITTY_KIND only\n applies to Kitty graphics placements. Reading one of these for a\n placement from another protocol returns GHOSTTY_NO_VALUE.\n\n @ingroup render"]
+pub type GhosttyRenderStateImageData = ::core::ffi::c_int;
 #[doc = " Invalid / sentinel value."]
 pub const GhosttyRenderStateRowData_GHOSTTY_RENDER_STATE_ROW_DATA_INVALID:
     GhosttyRenderStateRowData = 0;
@@ -4539,6 +4770,41 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Free a row cells instance.\n\n @param cells The row cells handle to free (may be NULL)\n\n @ingroup render"]
     pub fn ghostty_render_state_row_cells_free(cells: GhosttyRenderStateRowCells);
+}
+unsafe extern "C" {
+    #[doc = " Create a new image iterator.\n\n The iterator starts out empty. Fill it from a render state with\n ghostty_render_state_get() and GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR.\n You can keep one iterator for the lifetime of your renderer and fill it\n again after every update. See \"Images\" in the render state overview for\n a complete example.\n\n @param allocator Pointer to allocator, or NULL to use the default allocator\n @param[out] out_iterator On success, receives the created iterator handle\n @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_MEMORY on allocation\n         failure\n\n @ingroup render"]
+    pub fn ghostty_render_state_image_iterator_new(
+        allocator: *const GhosttyAllocator,
+        out_iterator: *mut GhosttyRenderStateImageIterator,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Free an image iterator.\n\n @param iterator The iterator handle to free (may be NULL)\n\n @ingroup render"]
+    pub fn ghostty_render_state_image_iterator_free(iterator: GhosttyRenderStateImageIterator);
+}
+unsafe extern "C" {
+    #[doc = " Move an image iterator to the next image placement.\n\n Call this before reading the first placement, and keep calling it\n until it returns false.\n\n The order of placements is not the order to draw them in. Sort them\n by layer (GHOSTTY_RENDER_STATE_IMAGE_DATA_LAYER) and then by z-index\n (GHOSTTY_RENDER_STATE_IMAGE_DATA_Z) first.\n\n Only placements with something to draw are returned. For example,\n placements of an image the terminal hasn't fully received yet are\n skipped.\n\n The iterator reads from the render state that filled it. After the\n next update of that render state, fill the iterator again before\n using it.\n\n @param iterator The iterator handle (NULL returns false)\n @return true if the iterator moved to a placement, false if there are\n         no more placements\n\n @ingroup render"]
+    pub fn ghostty_render_state_image_iterator_next(
+        iterator: GhosttyRenderStateImageIterator,
+    ) -> bool;
+}
+unsafe extern "C" {
+    #[doc = " Read one value from the current placement of an image iterator.\n\n The `out` pointer must point to a value of the type listed for `data`\n in GhosttyRenderStateImageData. To read several values at once, use\n ghostty_render_state_image_get_multi().\n\n @param iterator The iterator handle, moved to a placement with\n        ghostty_render_state_image_iterator_next()\n @param data The value to read\n @param[out] out Pointer that receives the value\n @return GHOSTTY_SUCCESS on success. GHOSTTY_NO_VALUE if `data` only\n         applies to another protocol. GHOSTTY_INVALID_VALUE if the\n         iterator is NULL, is not on a placement, or `data` is not a\n         valid value.\n\n @ingroup render"]
+    pub fn ghostty_render_state_image_get(
+        iterator: GhosttyRenderStateImageIterator,
+        data: GhosttyRenderStateImageData,
+        out: *mut ::core::ffi::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    #[doc = " Read several values from the current placement of an image iterator in\n one call.\n\n This works like calling ghostty_render_state_image_get() once for each\n key. `values[i]` receives the value for `keys[i]`. The keys are read in\n order, and reading stops at the first error.\n\n @param iterator The iterator handle, moved to a placement with\n        ghostty_render_state_image_iterator_next()\n @param count The number of keys and values\n @param keys The values to read\n @param values Output pointers, one for each key\n @param[out] out_written If not NULL, receives the number of values\n             written before any error\n @return GHOSTTY_SUCCESS if every value was written, otherwise the\n         error from the first value that failed\n\n @ingroup render"]
+    pub fn ghostty_render_state_image_get_multi(
+        iterator: GhosttyRenderStateImageIterator,
+        count: usize,
+        keys: *const GhosttyRenderStateImageData,
+        values: *mut *mut ::core::ffi::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 }
 unsafe extern "C" {
     #[doc = " Free a tracked grid reference.\n\n Passing NULL is allowed and has no effect. A tracked reference may be freed\n after the terminal that created it is freed.\n\n @param ref Tracked grid reference to free.\n\n @ingroup grid_ref"]
@@ -5693,11 +5959,25 @@ pub const GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTI
 #[doc = " Compress scrollback history while it is restored.\n\n By default, restoring a snapshot leaves all of its scrollback history\n uncompressed, even if the terminal that produced the snapshot had\n compressed it. The history stays that size until the application calls\n ghostty_terminal_compress(). For a terminal with a lot of scrollback,\n that can be many times more memory than the terminal needed before.\n\n When this option is true, the decoder compresses each history page right\n after restoring it. The restored terminal starts out compressed, and the\n decode never holds more than one uncompressed history page at a time.\n The result is the same as decoding normally and then calling\n ghostty_terminal_compress() with GHOSTTY_TERMINAL_COMPRESSION_MODE_FULL,\n without the memory spike in between.\n\n A history page that is on screen when it is restored stays uncompressed.\n This only happens if the viewport is scrolled to the top of the\n scrollback during an incremental decode. Compressed history is\n uncompressed automatically when it is accessed later, for example by\n scrolling or searching.\n\n This only changes how the restored terminal stores its history in\n memory. The snapshot format is unchanged, so it works with any snapshot.\n On platforms that do not support scrollback compression, this option is\n accepted and has no effect.\n\n This is false by default.\n\n Input type: bool *"]
 pub const GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY:
     GhosttySnapshotDecoderOption = 2;
-#[doc = " Compress scrollback history while it is restored.\n\n By default, restoring a snapshot leaves all of its scrollback history\n uncompressed, even if the terminal that produced the snapshot had\n compressed it. The history stays that size until the application calls\n ghostty_terminal_compress(). For a terminal with a lot of scrollback,\n that can be many times more memory than the terminal needed before.\n\n When this option is true, the decoder compresses each history page right\n after restoring it. The restored terminal starts out compressed, and the\n decode never holds more than one uncompressed history page at a time.\n The result is the same as decoding normally and then calling\n ghostty_terminal_compress() with GHOSTTY_TERMINAL_COMPRESSION_MODE_FULL,\n without the memory spike in between.\n\n A history page that is on screen when it is restored stays uncompressed.\n This only happens if the viewport is scrolled to the top of the\n scrollback during an incremental decode. Compressed history is\n uncompressed automatically when it is accessed later, for example by\n scrolling or searching.\n\n This only changes how the restored terminal stores its history in\n memory. The snapshot format is unchanged, so it works with any snapshot.\n On platforms that do not support scrollback compression, this option is\n accepted and has no effect.\n\n This is false by default.\n\n Input type: bool *"]
+#[doc = " Kitty graphics image storage limit, in bytes, for each restored screen.\n\n The limit of the terminal that wrote the snapshot is not part of the\n snapshot, so the decoder always applies this one. Images are restored\n oldest first, and an image that does not fit evicts older images,\n exactly as a live transmission would. The newest images are kept, and\n the placements of evicted images are dropped with them. Zero disables\n Kitty graphics on the restored terminal.\n\n The default is the storage limit of a new terminal. Change the limit\n of a restored terminal later with\n GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT.\n\n Input type: uint64_t *"]
+pub const GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT:
+    GhosttySnapshotDecoderOption = 3;
+#[doc = " Kitty graphics image storage limit, in bytes, for each restored screen.\n\n The limit of the terminal that wrote the snapshot is not part of the\n snapshot, so the decoder always applies this one. Images are restored\n oldest first, and an image that does not fit evicts older images,\n exactly as a live transmission would. The newest images are kept, and\n the placements of evicted images are dropped with them. Zero disables\n Kitty graphics on the restored terminal.\n\n The default is the storage limit of a new terminal. Change the limit\n of a restored terminal later with\n GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT.\n\n Input type: uint64_t *"]
 pub const GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_VALUE:
     GhosttySnapshotDecoderOption = 2147483647;
 #[doc = " Configurable snapshot decoder options.\n\n Options may only be changed before decoding starts. Calling\n ghostty_snapshot_decoder_set() after ghostty_snapshot_decoder_ready() or\n ghostty_snapshot_decoder_decode() returns GHOSTTY_INVALID_VALUE."]
 pub type GhosttySnapshotDecoderOption = ::core::ffi::c_int;
+#[doc = " One history page, together with the Kitty graphics placements pinned\n to it. GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_ROWS and\n GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_REMAINING describe it."]
+pub const GhosttySnapshotDecoderProgressKind_GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_PAGE:
+    GhosttySnapshotDecoderProgressKind = 0;
+#[doc = " The pixels of one Kitty graphics image or animation frame. The\n GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_* values describe it."]
+pub const GhosttySnapshotDecoderProgressKind_GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_IMAGE:
+    GhosttySnapshotDecoderProgressKind = 1;
+#[doc = " The pixels of one Kitty graphics image or animation frame. The\n GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_* values describe it."]
+pub const GhosttySnapshotDecoderProgressKind_GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_MAX_VALUE:
+    GhosttySnapshotDecoderProgressKind = 2147483647;
+#[doc = " What the most recent successful ghostty_snapshot_decoder_next() call\n decoded.\n\n Query it with GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_KIND, then read the\n progress values that apply to that kind."]
+pub type GhosttySnapshotDecoderProgressKind = ::core::ffi::c_int;
 #[doc = " Invalid data type. Never results in data extraction."]
 pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_INVALID:
     GhosttySnapshotDecoderData = 0;
@@ -5713,13 +5993,13 @@ pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_
 #[doc = " Advisory complete logical history extent for the alternate screen.\n\n The value has the same semantics and lifetime as\n GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_PRIMARY. Querying it returns\n GHOSTTY_NO_VALUE when the snapshot does not declare an alternate screen.\n\n Output type: uint64_t *"]
 pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_ALTERNATE:
     GhosttySnapshotDecoderData = 4;
-#[doc = " Screen associated with the most recently decoded history page.\n\n This value is available only after ghostty_snapshot_decoder_next()\n returns GHOSTTY_SUCCESS. A later call to next replaces it or clears it\n when FINISH is reached or an error occurs.\n\n Output type: GhosttyTerminalScreen *"]
+#[doc = " Screen associated with the most recently decoded history page or\n image pixels.\n\n This value is available only after ghostty_snapshot_decoder_next()\n returns GHOSTTY_SUCCESS. A later call to next replaces it or clears it\n when FINISH is reached or an error occurs.\n\n Output type: GhosttyTerminalScreen *"]
 pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_SCREEN:
     GhosttySnapshotDecoderData = 5;
-#[doc = " Rows prepended by the most recently decoded history page.\n\n Zero means the page was consumed and validated but could not be\n applied to the live terminal.\n\n Output type: size_t *"]
+#[doc = " Rows prepended by the most recently decoded history page.\n\n Zero means the page was consumed and validated but could not be\n applied to the live terminal. Returns GHOSTTY_NO_VALUE unless the\n progress kind is GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_PAGE.\n\n Output type: size_t *"]
 pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_ROWS:
     GhosttySnapshotDecoderData = 6;
-#[doc = " Page records remaining in the same screen's HISTORY sequence.\n\n This is not a count of all pages remaining in the snapshot.\n\n Output type: uint32_t *"]
+#[doc = " Page records remaining in the same screen's HISTORY sequence.\n\n This is not a count of all pages remaining in the snapshot. Returns\n GHOSTTY_NO_VALUE unless the progress kind is\n GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_PAGE.\n\n Output type: uint32_t *"]
 pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_REMAINING:
     GhosttySnapshotDecoderData = 7;
 #[doc = " Whether decoded continuation tracking is retained on returned terminals.\n\n This value is available in every non-failed decoder state.\n\n Output type: bool *"]
@@ -5728,7 +6008,34 @@ pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_RETAIN_CONTIN
 #[doc = " Whether history is compressed while it is restored.\n\n See GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY. This value is\n available in every non-failed decoder state.\n\n Output type: bool *"]
 pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_COMPRESS_HISTORY:
     GhosttySnapshotDecoderData = 9;
-#[doc = " Whether history is compressed while it is restored.\n\n See GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY. This value is\n available in every non-failed decoder state.\n\n Output type: bool *"]
+#[doc = " Kitty graphics image storage limit applied to each restored screen.\n\n See GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT. This value\n is available in every non-failed decoder state.\n\n Output type: uint64_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_IMAGE_STORAGE_LIMIT:
+    GhosttySnapshotDecoderData = 10;
+#[doc = " What the most recent successful ghostty_snapshot_decoder_next() call\n decoded: a history page or the pixels of a Kitty graphics image.\n\n This value has the same lifetime as\n GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_SCREEN.\n\n Output type: GhosttySnapshotDecoderProgressKind *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_KIND:
+    GhosttySnapshotDecoderData = 11;
+#[doc = " ID of the Kitty graphics image whose pixels the most recent\n ghostty_snapshot_decoder_next() call decoded.\n\n Returns GHOSTTY_NO_VALUE unless the progress kind is\n GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_IMAGE.\n\n Output type: uint32_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_ID:
+    GhosttySnapshotDecoderData = 12;
+#[doc = " Which frame of the image those pixels are for, numbered as the Kitty\n graphics protocol numbers frames. 1 is the image itself, and 2 and up\n are its animation frames.\n\n Returns GHOSTTY_NO_VALUE unless the progress kind is\n GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_IMAGE.\n\n Output type: uint32_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_FRAME:
+    GhosttySnapshotDecoderData = 13;
+#[doc = " Number of pixel bytes the most recent\n ghostty_snapshot_decoder_next() call attached to its image.\n\n Zero means the pixels were consumed and validated but dropped. That\n happens when live input deleted the image or sent a new image with the\n same ID, when the image did not fit the storage limit, or when its\n screen was removed or replaced. Returns GHOSTTY_NO_VALUE unless the\n progress kind is GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_IMAGE.\n\n Output type: size_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_BYTES:
+    GhosttySnapshotDecoderData = 14;
+#[doc = " Number of Kitty graphics images restored for the primary screen at\n READY.\n\n These images can be placed and queried right away, but their pixels\n arrive later through ghostty_snapshot_decoder_next(). Until then,\n GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR returns GHOSTTY_NO_VALUE for them.\n This value becomes available after READY validates, and is zero in a\n library built without Kitty graphics.\n\n Output type: uint32_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_IMAGES_PRIMARY:
+    GhosttySnapshotDecoderData = 15;
+#[doc = " Number of Kitty graphics images restored for the alternate screen at\n READY.\n\n Returns GHOSTTY_NO_VALUE when the snapshot does not declare an\n alternate screen. See GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_IMAGES_PRIMARY.\n\n Output type: uint32_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_IMAGES_ALTERNATE:
+    GhosttySnapshotDecoderData = 16;
+#[doc = " Bytes of Kitty graphics pixels for the primary screen that were still\n to come at READY.\n\n Use it to size a progress indicator while the pixels arrive, adding\n up GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_BYTES for the primary\n screen after each call to ghostty_snapshot_decoder_next(), which has an\n example. Pixels that are dropped report zero bytes, so the sum can end\n up below this total. Pixels may arrive between history pages, so they\n are only known to be done once next returns GHOSTTY_NO_VALUE. This\n value becomes available after READY validates.\n\n Output type: uint64_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_PENDING_BYTES_PRIMARY:
+    GhosttySnapshotDecoderData = 17;
+#[doc = " Bytes of Kitty graphics pixels for the alternate screen that were\n still to come at READY.\n\n Returns GHOSTTY_NO_VALUE when the snapshot does not declare an\n alternate screen. See\n GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_PENDING_BYTES_PRIMARY.\n\n Output type: uint64_t *"]
+pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_PENDING_BYTES_ALTERNATE:
+    GhosttySnapshotDecoderData = 18;
+#[doc = " Bytes of Kitty graphics pixels for the alternate screen that were\n still to come at READY.\n\n Returns GHOSTTY_NO_VALUE when the snapshot does not declare an\n alternate screen. See\n GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_PENDING_BYTES_PRIMARY.\n\n Output type: uint64_t *"]
 pub const GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_MAX_VALUE:
     GhosttySnapshotDecoderData = 2147483647;
 #[doc = " Queryable snapshot decoder data.\n\n Each variant documents the output pointer type expected by\n ghostty_snapshot_decoder_get()."]
@@ -5795,7 +6102,7 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    #[doc = " Decode one history page into the terminal returned by READY.\n\n Each GHOSTTY_SUCCESS consumes and validates one PAGE record. Query the\n GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_* values before calling next again.\n GHOSTTY_NO_VALUE means FINISH was validated; repeated calls after FINISH\n also return GHOSTTY_NO_VALUE.\n\n The terminal may be rendered, resized, and fed live PTY input between calls.\n If a history page can no longer be applied safely, it is still consumed and\n validated and progress reports zero rows. The decoder applies history\n to the caller-owned terminal produced by its READY operation.\n\n If GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY is true, the page is\n compressed before this function returns, unless it is visible in the\n terminal's viewport.\n\n A decoding error invalidates the decoder's source position. The terminal\n remains caller-owned and usable with its already-restored history, but only\n ghostty_snapshot_decoder_free() may subsequently be called on the decoder.\n\n @param decoder Decoder handle (must not be NULL)\n @return GHOSTTY_SUCCESS for one page, GHOSTTY_NO_VALUE after FINISH, or an\n         error code on failure\n\n @ingroup snapshot"]
+    #[doc = " Decode one history page, or the pixels of one Kitty graphics image, into\n the terminal returned by READY.\n\n Each GHOSTTY_SUCCESS consumes and validates one record: a history page\n together with the Kitty graphics placements pinned to it, or the pixels\n of one image or animation frame. Pixels may arrive at any point, even\n between history pages. Query GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_KIND\n and the progress values for that kind before calling next again.\n GHOSTTY_NO_VALUE means FINISH was validated; repeated calls after FINISH\n also return GHOSTTY_NO_VALUE.\n\n @code{.c}\n // How many image bytes the primary screen is waiting for, to show\n // progress while they arrive.\n uint64_t pending = 0;\n ghostty_snapshot_decoder_get(\n     decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_PENDING_BYTES_PRIMARY,\n     &pending);\n uint64_t received = 0;\n\n GhosttyResult result;\n while ((result = ghostty_snapshot_decoder_next(decoder)) == GHOSTTY_SUCCESS) {\n   GhosttySnapshotDecoderProgressKind kind;\n   ghostty_snapshot_decoder_get(\n       decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_KIND, &kind);\n\n   if (kind == GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_PAGE) {\n     // Scrollback grew by this many rows.\n     size_t rows = 0;\n     ghostty_snapshot_decoder_get(\n         decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_ROWS, &rows);\n     continue;\n   }\n\n   // An image's pixels arrived.\n   GhosttyTerminalScreen screen;\n   size_t bytes = 0;\n   ghostty_snapshot_decoder_get(\n       decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_SCREEN, &screen);\n   ghostty_snapshot_decoder_get(\n       decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_BYTES, &bytes);\n   if (screen == GHOSTTY_TERMINAL_SCREEN_PRIMARY) received += bytes;\n }\n\n // GHOSTTY_NO_VALUE means the snapshot is complete. Dropped pixels report\n // zero bytes, so received can end up below pending.\n @endcode\n\n The terminal may be rendered, resized, and fed live PTY input between calls.\n If a history page can no longer be applied safely, it is still consumed and\n validated and progress reports zero rows. Image pixels work the same way:\n if live input deleted the image, or sent a new image with the same ID, the\n pixels are consumed and validated and progress reports zero bytes. The\n decoder applies history and pixels to the caller-owned terminal produced\n by its READY operation.\n\n If GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY is true, the page is\n compressed before this function returns, unless it is visible in the\n terminal's viewport.\n\n A decoding error invalidates the decoder's source position. The terminal\n remains caller-owned and usable with its already-restored history, but only\n ghostty_snapshot_decoder_free() may subsequently be called on the decoder.\n\n @param decoder Decoder handle (must not be NULL)\n @return GHOSTTY_SUCCESS for one page or image, GHOSTTY_NO_VALUE after\n         FINISH, or an error code on failure\n\n @ingroup snapshot"]
     pub fn ghostty_snapshot_decoder_next(decoder: GhosttySnapshotDecoder) -> GhosttyResult;
 }
 unsafe extern "C" {

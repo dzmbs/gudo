@@ -41,9 +41,9 @@ extension Terminal {
         if let failure { throw failure }
     }
 
-    /// Prepends scrollback from history records of the last restored snapshot (whole records
-    /// cut after a page or at FINISH, as the daemon's `bulk` stream sends them). Returns the
-    /// number of pages applied; 0 if nothing is being restored.
+    /// Prepends scrollback from history records of the last restored snapshot, cut anywhere (a
+    /// partial record waits for the rest). Returns the number of pages applied; 0 if nothing is
+    /// being restored.
     @discardableResult
     public func appendHistory(_ records: Data) throws(SnapshotError) -> Int {
         let (code, pages): (GhosttyResult, Int) = lock.withLock { _ in
@@ -107,6 +107,8 @@ final class SnapshotRestore {
     private static let tagReady: UInt16 = 5
     private static let tagPage: UInt16 = 3
     private static let tagFinish: UInt16 = 6
+    private static let tagImagePayload: UInt16 = 9
+    private static let tagPagePlacements: UInt16 = 10
 
     /// Bytes the decoder reads, with its read cursor; the reader callback's userdata.
     final class Source {
@@ -121,8 +123,8 @@ final class SnapshotRestore {
     private var decoder: GhosttySnapshotDecoder?
     private let source: Source
     private var scanned = 0
-    private var pendingPages = 0
-    private var finishSeen = false
+    /// Tags of the scanned records not yet decoded, oldest first.
+    private var pending: [UInt16] = []
     private(set) var finished = false
 
     init(ready: UnsafeRawBufferPointer) {
@@ -156,7 +158,9 @@ final class SnapshotRestore {
         return (code, terminal)
     }
 
-    /// Adds records and decodes every page they complete (see `StreamingRestore::push`).
+    /// Adds records and decodes every page they complete (see `StreamingRestore::push`). A page
+    /// or an image's pixels is decoded once the record after it is here: the decoder reads on
+    /// to see whether placements follow, and running out of bytes there ends the snapshot.
     func push(_ records: Data) -> (code: GhosttyResult, pages: Int) {
         guard let decoder, !finished else { return (GHOSTTY_SUCCESS, 0) }
         let consumed = source.position
@@ -172,20 +176,28 @@ final class SnapshotRestore {
             let end = scanned + Self.headerLength + length
             guard end <= data.count else { break }
             scanned = end
-            if tag == Self.tagPage { pendingPages += 1 }
-            if tag == Self.tagFinish { finishSeen = true }
+            pending.append(tag)
         }
         var pages = 0
-        while pendingPages > 0 {
-            pendingPages -= 1
-            let code = ghostty_snapshot_decoder_next(decoder)
-            guard code == GHOSTTY_SUCCESS else { return (code == GHOSTTY_NO_VALUE ? GHOSTTY_INVALID_VALUE : code, pages) }
-            pages += 1
-        }
-        if finishSeen {
-            let code = ghostty_snapshot_decoder_next(decoder)
-            guard code == GHOSTTY_NO_VALUE else { return (code == GHOSTTY_SUCCESS ? GHOSTTY_INVALID_VALUE : code, pages) }
-            finished = true
+        while let tag = pending.first {
+            switch tag {
+            case Self.tagFinish:
+                let code = ghostty_snapshot_decoder_next(decoder)
+                guard code == GHOSTTY_NO_VALUE else { return (code == GHOSTTY_SUCCESS ? GHOSTTY_INVALID_VALUE : code, pages) }
+                pending.removeAll()
+                finished = true
+                return (GHOSTTY_SUCCESS, pages)
+            case Self.tagPage, Self.tagImagePayload:
+                let records = tag == Self.tagPage && pending.dropFirst().first == Self.tagPagePlacements ? 2 : 1
+                guard pending.count > records else { return (GHOSTTY_SUCCESS, pages) }
+                let code = ghostty_snapshot_decoder_next(decoder)
+                guard code == GHOSTTY_SUCCESS else { return (code == GHOSTTY_NO_VALUE ? GHOSTTY_INVALID_VALUE : code, pages) }
+                if tag == Self.tagPage { pages += 1 }
+                pending.removeFirst(records)
+            default:
+                // Skipped by the decoder, or read along with the next step.
+                pending.removeFirst()
+            }
         }
         return (GHOSTTY_SUCCESS, pages)
     }
