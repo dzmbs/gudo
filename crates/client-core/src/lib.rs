@@ -867,6 +867,15 @@ impl Client {
         lock(&self.inner.mirrors).get(&pane_id)?.snapshot()
     }
 
+    /// Kitty graphics placements on a followed pane's mirror (active screen), each with its
+    /// image; the image's `pixels` are `None` while still on the way.
+    pub fn pane_images(
+        &self,
+        pane_id: PaneId,
+    ) -> Option<Vec<(ghostty_vt::KittyPlacement, Option<ghostty_vt::KittyImage>)>> {
+        lock(&self.inner.mirrors).get(&pane_id)?.images()
+    }
+
     /// The mirror as VT escape sequences that redraw the visible screen, styles and cursor
     /// included (used by `un attach` to repaint after a snapshot).
     pub fn pane_vt(&self, pane_id: PaneId) -> Option<String> {

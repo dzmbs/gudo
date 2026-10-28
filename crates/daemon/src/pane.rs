@@ -23,7 +23,6 @@ use tokio::sync::{mpsc, watch};
 
 use crate::anchor::{AnchorPos, Anchors, ScrollLog};
 use crate::commands::{CommandLog, CommandUpdate};
-use crate::kitty::KittyScanner;
 use crate::osc::{Osc, OscScanner};
 use crate::scan::{self, LinkCollector, ScreenText};
 
@@ -36,6 +35,8 @@ const ACTIVITY_INTERVAL: Duration = Duration::from_millis(100);
 const HISTORY_SNAPSHOTS: usize = 2;
 /// Longest command output returned; longer output keeps its end.
 const MAX_OUTPUT: usize = 2 << 20;
+/// Cell size in pixels for clients that report none: kitty images need one to have a size.
+const DEFAULT_CELL_PX: (u16, u16) = (10, 20);
 
 /// What the output hook reports to the pane's task.
 #[derive(Debug)]
@@ -49,15 +50,6 @@ pub(crate) enum VtEvent {
     Activity,
     /// Shell integration reported a prompt or command step.
     Command(CommandUpdate),
-    /// A program displayed a PNG with the kitty graphics protocol; its top-left cell (the
-    /// cursor when the sequence ended) is pinned under `key`.
-    KittyImage {
-        key: u64,
-        png: Vec<u8>,
-        col: u16,
-        cols: u16,
-        rows: u16,
-    },
 }
 
 /// A resize applied at an output offset, numbered in order of application.
@@ -88,10 +80,9 @@ struct Vt {
     /// Rows scrolled per output chunk, for resolving client row positions.
     scroll: ScrollLog,
     anchors: Anchors,
-    kitty: KittyScanner,
-    next_kitty: u64,
-    /// Scrollback limit, for views.
+    /// Scrollback and image storage limits, for views.
     scrollback_bytes: usize,
+    image_storage_bytes: u64,
     /// Guests who see only what was written after they joined (multiplayer `since_join`).
     views: Vec<View>,
 }
@@ -122,28 +113,7 @@ impl Vt {
     }
 
     fn feed(&mut self, seq: pty::Seq, data: &[u8]) {
-        // Write up to the end of each kitty image so its cell can be pinned where the
-        // program put it (the cursor at that moment).
-        let images = self.kitty.feed(data);
-        let mut written = 0;
-        for img in images {
-            self.term.write(&data[written..img.end]);
-            written = img.end;
-            let key = (1 << 62) | self.next_kitty;
-            self.next_kitty += 1;
-            let at = seq.get() + img.end as u64;
-            let col = self.term.cursor().x;
-            if self.anchors.pin_cursor(&mut self.term, at, key).is_ok() {
-                let _ = self.events.send(VtEvent::KittyImage {
-                    key,
-                    png: img.png,
-                    col,
-                    cols: img.cols,
-                    rows: img.rows,
-                });
-            }
-        }
-        self.term.write(&data[written..]);
+        self.term.write(data);
         for view in &mut self.views {
             view.term.write(data);
         }
@@ -186,8 +156,9 @@ impl Vt {
     }
 }
 
-/// A snapshot at a known stream position: the READY prefix compressed for the wire, and the
-/// whole encoding for history paging.
+/// A snapshot at a known stream position: the prefix that shows the screen (READY and the
+/// pixels of the images in view) compressed for the wire, and the whole encoding for history
+/// paging.
 #[derive(Debug)]
 pub(crate) struct Snapshot {
     pub seq: Seq,
@@ -195,7 +166,8 @@ pub(crate) struct Snapshot {
     pub resize_count: u64,
     pub raw_len: u32,
     pub zstd: Vec<u8>,
-    /// The complete snapshot; history records follow the first `raw_len` bytes.
+    /// The complete snapshot; history (and the other images' pixels) follow the first
+    /// `raw_len` bytes.
     full: Vec<u8>,
 }
 
@@ -254,12 +226,11 @@ impl Pane {
         cmd: Command,
         size: PaneSize,
         ring_capacity: usize,
-        scrollback_bytes: usize,
+        limits: VtLimits,
     ) -> io::Result<(Arc<Self>, mpsc::UnboundedReceiver<VtEvent>)> {
         let (events, events_rx) = mpsc::unbounded_channel();
-        let mut term = Terminal::new(size.cols, size.rows).map_err(io::Error::other)?;
-        term.set_scrollback_max_bytes(Some(scrollback_bytes))
-            .map_err(io::Error::other)?;
+        let size = with_pixels(size);
+        let mut term = new_terminal(size, limits).map_err(io::Error::other)?;
         let replies = events.clone();
         term.set_reply_sink(Box::new(move |bytes| {
             let _ = replies.send(VtEvent::Reply(bytes.to_vec()));
@@ -282,9 +253,8 @@ impl Pane {
             events,
             scroll: ScrollLog::default(),
             anchors: Anchors::default(),
-            kitty: KittyScanner::default(),
-            next_kitty: 0,
-            scrollback_bytes,
+            scrollback_bytes: limits.scrollback_bytes,
+            image_storage_bytes: limits.image_storage_bytes,
             views: Vec::new(),
         }));
         let hook_vt = Arc::clone(&vt);
@@ -362,19 +332,23 @@ impl Pane {
     }
 
     /// Resizes the terminal and the PTY. Returns `false` if the size is unchanged.
+    ///
+    /// A size without pixels gets [`DEFAULT_CELL_PX`] cells, recorded and reported to the
+    /// program and clients as if the client had sent it.
     pub fn resize(&self, size: PaneSize) -> io::Result<bool> {
         if size.cols == 0 || size.rows == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty size"));
         }
+        let size = with_pixels(size);
         let mut vt = lock(&self.vt);
         if vt.size == size {
             return Ok(false);
         }
         vt.term
-            .resize(size.cols, size.rows)
+            .resize(size.cols, size.rows, size.cell_px())
             .map_err(io::Error::other)?;
         for view in &mut vt.views {
-            if let Err(e) = view.term.resize(size.cols, size.rows) {
+            if let Err(e) = view.term.resize(size.cols, size.rows, size.cell_px()) {
                 tracing::warn!(pane = %self.id, "resizing a since-join view: {e}");
             }
         }
@@ -861,9 +835,9 @@ impl Pane {
 }
 
 impl Snapshot {
-    /// Compresses the READY prefix of a full encoding for the wire.
+    /// Compresses the screen prefix of a full encoding for the wire.
     fn compress(full: Vec<u8>, seq: Seq, resize_count: u64) -> Result<Self, SnapshotError> {
-        let ready = ghostty_vt::ready_len(&full).ok_or(ghostty_vt::Error::InvalidValue)?;
+        let ready = ghostty_vt::screen_len(&full).ok_or(ghostty_vt::Error::InvalidValue)?;
         let zstd = zstd::bulk::compress(&full[..ready], ZSTD_LEVEL)?;
         Ok(Self {
             seq,
@@ -890,21 +864,28 @@ fn open_view(vt: &mut Vt, principal: PrincipalId) -> Result<(), ghostty_vt::Erro
     if vt.view(principal).is_some() {
         return Ok(());
     }
-    // Only the READY section: the screens and the rows sharing their pages; older history
+    // Only the screens, the rows sharing their pages and the images in view; older history
     // is never decoded, and `forget_history` drops the rest.
+    let limits = VtLimits {
+        scrollback_bytes: vt.scrollback_bytes,
+        image_storage_bytes: vt.image_storage_bytes,
+    };
     let copy = vt.term.encode_snapshot().and_then(|bytes| {
-        let ready = ghostty_vt::ready_len(&bytes).ok_or(ghostty_vt::Error::InvalidValue)?;
-        Ok(ghostty_vt::StreamingRestore::new(&bytes[..ready])?.into_terminal())
+        let screen = ghostty_vt::screen_len(&bytes).ok_or(ghostty_vt::Error::InvalidValue)?;
+        Ok(ghostty_vt::StreamingRestore::new(&bytes[..screen])?.into_terminal())
     });
     let mut term = match copy {
-        Ok(term) => term,
+        Ok(mut term) => {
+            term.set_kitty_image_storage_limit(limits.image_storage_bytes)?;
+            term
+        }
         Err(e) => {
             tracing::debug!(pane = %vt.pane, "since-join view starts blank: {e}");
-            Terminal::new(vt.size.cols, vt.size.rows)?
+            new_terminal(vt.size, limits)?
         }
     };
     term.forget_history()?;
-    term.set_scrollback_max_bytes(Some(vt.scrollback_bytes))?;
+    term.set_scrollback_max_bytes(Some(limits.scrollback_bytes))?;
     vt.views.push(View {
         principal,
         term,
@@ -913,6 +894,40 @@ fn open_view(vt: &mut Vt, principal: PrincipalId) -> Result<(), ghostty_vt::Erro
         snapshots: VecDeque::new(),
     });
     Ok(())
+}
+
+/// What a pane's terminal may hold.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VtLimits {
+    pub scrollback_bytes: usize,
+    pub image_storage_bytes: u64,
+}
+
+/// A terminal of `size` (pixels included) within `limits`. Kitty graphics files and shared
+/// memory stay off (libghostty-vt's default): clients mirror the byte stream and could not
+/// read the host's files, so programs fall back to sending pixels inline.
+fn new_terminal(size: PaneSize, limits: VtLimits) -> Result<Terminal, ghostty_vt::Error> {
+    let mut term = Terminal::new(size.cols, size.rows)?;
+    term.resize(size.cols, size.rows, size.cell_px())?;
+    term.set_scrollback_max_bytes(Some(limits.scrollback_bytes))?;
+    term.set_kitty_image_storage_limit(limits.image_storage_bytes)?;
+    Ok(term)
+}
+
+/// `size`, with [`DEFAULT_CELL_PX`] cells for whichever pixel dimension the client left out.
+fn with_pixels(size: PaneSize) -> PaneSize {
+    let fill = |px: u16, cells: u16, cell: u16| {
+        if px > 0 {
+            px
+        } else {
+            cells.saturating_mul(cell)
+        }
+    };
+    PaneSize {
+        width_px: fill(size.width_px, size.cols, DEFAULT_CELL_PX.0),
+        height_px: fill(size.height_px, size.rows, DEFAULT_CELL_PX.1),
+        ..size
+    }
 }
 
 pub(crate) fn win_size(size: PaneSize) -> WinSize {

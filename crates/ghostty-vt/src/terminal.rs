@@ -256,6 +256,7 @@ impl Terminal {
     /// Returns [`Error::InvalidValue`] if either dimension is zero and
     /// [`Error::OutOfMemory`] if allocation fails.
     pub fn new(cols: u16, rows: u16) -> Result<Self, Error> {
+        crate::kitty::install_png_decoder();
         let mut raw = ptr::null_mut();
         // SAFETY: `raw` is a valid out pointer; a null allocator selects the default one.
         Error::check(unsafe { ffi::ghostty_terminal_new(ptr::null(), &mut raw, cols, rows) })?;
@@ -266,6 +267,7 @@ impl Terminal {
             ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES,
             Some(CONTINUATION_MAX_BYTES),
         )?;
+        terminal.set_kitty_image_storage_limit(crate::KITTY_IMAGE_STORAGE_LIMIT)?;
         Ok(terminal)
     }
 
@@ -297,17 +299,21 @@ impl Terminal {
         unsafe { ffi::ghostty_terminal_vt_write(self.as_raw(), bytes.as_ptr(), bytes.len()) }
     }
 
-    /// Resizes the grid to `cols` × `rows`, reflowing the primary screen.
+    /// Resizes the grid to `cols` × `rows` cells of `cell_px` (width, height) pixels each,
+    /// reflowing the primary screen.
     ///
-    /// The cell pixel size is set to zero; pixel-based reports and images are not used yet.
+    /// The cell size sizes kitty graphics images and pixel reports. Terminals that mirror each
+    /// other must use the same one, or an image moves the cursor by different rows.
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidValue`] if either dimension is zero and
     /// [`Error::OutOfMemory`] if allocation fails.
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), Error> {
+    pub fn resize(&mut self, cols: u16, rows: u16, cell_px: (u32, u32)) -> Result<(), Error> {
         // SAFETY: the handle is live.
-        Error::check(unsafe { ffi::ghostty_terminal_resize(self.as_raw(), cols, rows, 0, 0) })
+        Error::check(unsafe {
+            ffi::ghostty_terminal_resize(self.as_raw(), cols, rows, cell_px.0, cell_px.1)
+        })
     }
 
     /// Caps scrollback memory at `limit` bytes, or removes the byte cap with `None`.
@@ -1031,9 +1037,9 @@ mod tests {
     #[test]
     fn resize_changes_dimensions() -> Result<(), Error> {
         let mut terminal = Terminal::new(80, 24)?;
-        terminal.resize(100, 30)?;
+        terminal.resize(100, 30, (8, 16))?;
         assert_eq!((terminal.cols(), terminal.rows()), (100, 30));
-        assert_eq!(terminal.resize(0, 30), Err(Error::InvalidValue));
+        assert_eq!(terminal.resize(0, 30, (8, 16)), Err(Error::InvalidValue));
         Ok(())
     }
 

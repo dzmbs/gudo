@@ -376,7 +376,7 @@ mod tests {
         feed(&mut t, &mut log, &mut seq, b"$ ls\r\none\r\n");
         // A client of the new size names "one" (row 1) before any output follows the resize.
         let at = seq;
-        t.resize(40, 30).unwrap();
+        t.resize(40, 30, (8, 16)).unwrap();
         log.resized(&mut t);
         let fb = t.total_rows() as u64 - 2;
         feed(&mut t, &mut log, &mut seq, b"$ ");

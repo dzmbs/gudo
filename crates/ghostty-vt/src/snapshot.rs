@@ -57,6 +57,7 @@ impl<'a> SnapshotDecoder<'a> {
     ///
     /// Returns [`Error::OutOfMemory`] if allocation fails.
     pub fn new(snapshot: &'a [u8]) -> Result<Self, Error> {
+        crate::kitty::install_png_decoder();
         let mut raw = ptr::null_mut();
         // SAFETY: `raw` is a valid out pointer; the bytes stay borrowed and immutable for 'a,
         // which outlives the decoder.
@@ -72,8 +73,13 @@ impl<'a> SnapshotDecoder<'a> {
             raw: NonNull::new(raw).ok_or(Error::InvalidValue)?,
             _source: PhantomData,
         };
-        // SAFETY: MAX_CONTINUATION_BYTES reads a `size_t`, RETAIN_CONTINUATION a `bool`.
+        // SAFETY: MAX_CONTINUATION_BYTES reads a `size_t`, RETAIN_CONTINUATION a `bool`,
+        // KITTY_IMAGE_STORAGE_LIMIT a `uint64_t`.
         unsafe {
+            decoder.set(
+                ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                &crate::KITTY_IMAGE_STORAGE_LIMIT,
+            )?;
             decoder.set(
                 ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES,
                 &CONTINUATION_MAX_BYTES,
@@ -218,8 +224,8 @@ impl Restore<'_> {
     /// # Errors
     ///
     /// As for [`Terminal::resize`].
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), Error> {
-        self.terminal.resize(cols, rows)
+    pub fn resize(&mut self, cols: u16, rows: u16, cell_px: (u32, u32)) -> Result<(), Error> {
+        self.terminal.resize(cols, rows, cell_px)
     }
 
     /// Total scrollback rows the snapshot declares for `screen`, for sizing a scrollbar early.
@@ -245,6 +251,7 @@ impl Restore<'_> {
     }
 
     /// Decodes and prepends one scrollback page, or returns `None` once FINISH is reached.
+    /// Image pixels on the way are attached to their images.
     ///
     /// # Errors
     ///
@@ -252,12 +259,24 @@ impl Restore<'_> {
     /// [`Error::OutOfMemory`] if allocation fails. The terminal stays usable with the history
     /// restored so far (see [`into_terminal`](Self::into_terminal)), but the decoder is spent.
     pub fn next_page(&mut self) -> Result<Option<HistoryPage>, Error> {
-        // SAFETY: the decoder is live and the terminal it restores into is alive in `self`.
-        match unsafe { ffi::ghostty_snapshot_decoder_next(self.decoder.raw.as_ptr()) } {
-            ffi::GhosttyResult_GHOSTTY_NO_VALUE => Ok(None),
-            code => {
-                Error::check(code)?;
-                let decoder = &self.decoder;
+        loop {
+            // SAFETY: the decoder is live and the terminal it restores into is alive in `self`.
+            let code = unsafe { ffi::ghostty_snapshot_decoder_next(self.decoder.raw.as_ptr()) };
+            if code == ffi::GhosttyResult_GHOSTTY_NO_VALUE {
+                return Ok(None);
+            }
+            Error::check(code)?;
+            let decoder = &self.decoder;
+            // SAFETY: PROGRESS_KIND writes a `GhosttySnapshotDecoderProgressKind`.
+            let kind: ffi::GhosttySnapshotDecoderProgressKind = unsafe {
+                decoder.get(
+                    ffi::GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_KIND,
+                )
+            }
+            .ok_or(Error::NoValue)?;
+            if kind
+                == ffi::GhosttySnapshotDecoderProgressKind_GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_PAGE
+            {
                 // SAFETY: after a successful `next`, PROGRESS_SCREEN writes a
                 // `GhosttyTerminalScreen`, PROGRESS_ROWS a `size_t` and PROGRESS_REMAINING a
                 // `uint32_t`.
@@ -276,7 +295,7 @@ impl Restore<'_> {
                             .ok_or(Error::NoValue)?,
                     }
                 };
-                Ok(Some(page))
+                return Ok(Some(page));
             }
         }
     }
@@ -307,6 +326,8 @@ const ENVELOPE_LEN: usize = 10;
 const RECORD_HEADER_LEN: usize = 10;
 /// Record tag of the READY marker.
 const READY_TAG: u16 = 5;
+/// Record tag of one image's (or animation frame's) pixels.
+pub(crate) const KITTY_IMAGE_PAYLOAD_TAG: u16 = 9;
 
 /// Returns the length of the snapshot's prefix up to and including the READY record.
 ///
@@ -346,6 +367,39 @@ pub fn ready_len(snapshot: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+/// Returns the length of the prefix a client needs to show the screen: through READY plus the
+/// pixels of the images in view, which the encoder writes right after it.
+///
+/// Like [`ready_len`], only walks record headers. Returns `None` if [`ready_len`] does.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), ghostty_vt::Error> {
+/// use ghostty_vt::{Terminal, ready_len, screen_len};
+///
+/// let mut daemon = Terminal::new(20, 4)?;
+/// daemon.resize(20, 4, (10, 20))?;
+/// daemon.write(b"\x1b_Ga=T,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+/// let snapshot = daemon.encode_snapshot()?;
+/// assert!(screen_len(&snapshot) > ready_len(&snapshot));
+/// # Ok(())
+/// # }
+/// ```
+pub fn screen_len(snapshot: &[u8]) -> Option<usize> {
+    let mut pos = ready_len(snapshot)?;
+    while let Some(header) = snapshot.get(pos..pos + RECORD_HEADER_LEN) {
+        let tag = u16::from_le_bytes([header[0], header[1]]);
+        let len = u32::from_le_bytes([header[2], header[3], header[4], header[5]]) as usize;
+        let end = pos.checked_add(RECORD_HEADER_LEN + len)?;
+        if tag != KITTY_IMAGE_PAYLOAD_TAG || end > snapshot.len() {
+            break;
+        }
+        pos = end;
+    }
+    Some(pos)
 }
 
 /// Returns the snapshot format version this build of libghostty-vt writes.

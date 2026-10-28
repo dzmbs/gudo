@@ -40,7 +40,6 @@ mod forward;
 mod fsutil;
 mod identity;
 mod input;
-mod kitty;
 mod layout;
 mod mp;
 mod net;
