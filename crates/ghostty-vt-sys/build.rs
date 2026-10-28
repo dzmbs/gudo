@@ -35,7 +35,7 @@ fn main() {
     }
 
     let target = env::var("TARGET").expect("TARGET");
-    let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
+    let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "fast".into());
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let prefix = out_dir.join("zig-out");
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
@@ -51,7 +51,7 @@ fn main() {
         .arg(format!("-Dtarget={}", zig_target(&target)))
         .status()
         .unwrap_or_else(|err| {
-            panic!("failed to run {zig:?} (Zig 0.16.x required; set ZIG to override): {err}")
+            panic!("failed to run {zig:?} (Zig 0.17.x required; set ZIG to override): {err}")
         });
     assert!(
         status.success(),

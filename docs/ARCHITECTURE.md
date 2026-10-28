@@ -116,7 +116,7 @@ the safe *Prompter* role possible),  kitty graphics, foldable layouts, external 
    (Rust consts) and `apple/Brand.xcconfig` (Swift/Info.plist) — and nothing else hard-codes it, so a
    rename is a two-file change plus a CI grep check for stray `unnamed`/`UN_`.
    to be written as `docs/TESTING.md` before code.
-4. ~~Toolchain~~ — Zig **0.16.0** installed (`brew install zig@0.16`). Ghostty requires major.minor to
+4. ~~Toolchain~~ — Zig **0.17.0** installed (`brew install zig`). Ghostty requires major.minor to
    match exactly (`src/build/zig.zig:9`), so 0.17 won't work; pin it in CI too.
 
 ## 9. Things to verify (claims from research not yet checked)

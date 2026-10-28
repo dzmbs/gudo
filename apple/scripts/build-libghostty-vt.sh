@@ -4,14 +4,14 @@
 #
 # Output: apple/build/ghostty-vt/lib/ghostty-vt.xcframework
 #
-# Requires Zig 0.16.x (Ghostty pins major.minor) and Xcode: xcodebuild assembles the xcframework,
+# Requires Zig 0.17.x (Ghostty pins major.minor) and Xcode: xcodebuild assembles the xcframework,
 # and the iOS slices are only emitted when the iOS SDK is installed.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ghostty="$repo_root/vendor/ghostty"
 prefix="${GHOSTTY_VT_PREFIX:-$repo_root/apple/build/ghostty-vt}"
-optimize="${GHOSTTY_VT_OPTIMIZE:-ReleaseFast}"
+optimize="${GHOSTTY_VT_OPTIMIZE:-fast}"
 zig="${ZIG:-zig}"
 
 if [[ ! -f "$ghostty/build.zig" ]]; then
@@ -19,8 +19,8 @@ if [[ ! -f "$ghostty/build.zig" ]]; then
 fi
 
 zig_version="$("$zig" version)"
-if [[ "$zig_version" != 0.16.* ]]; then
-  echo "error: Zig 0.16.x required, found $zig_version" >&2
+if [[ "$zig_version" != 0.17.* ]]; then
+  echo "error: Zig 0.17.x required, found $zig_version" >&2
   exit 1
 fi
 if ! xcodebuild -version >/dev/null 2>&1; then
