@@ -264,7 +264,8 @@ final class Workspace {
         return "Shell"
     }
 
-    /// The live line under a tab's name: what its agent is doing, else the program running in the
+    /// The live line under a tab's name: what its agent (or a program's own report) says it is
+    /// doing, else the program running in the
     /// focused pane, else the program's own title (OSC 0/2), else the git checkout as
     /// `repo:branch`, else the directory.
     func context(of tab: Tab) -> String? {
@@ -277,6 +278,10 @@ final class Workspace {
             case .running: return daemon.meta[pane].map { $0.title.isEmpty ? "\(kind) working" : "\(kind): \($0.title)" }
             case .idle, .done: break
             }
+        } else if let daemon = host as? DaemonConnection, let report = daemon.report(of: pane), report.state != .idle {
+            // Any other program's own report: its words, else its state.
+            let words = report.detail ?? report.state.title
+            return report.program.map { "\($0): \(words)" } ?? words
         }
         if let program = panes[pane]?.foregroundProgram ?? foregrounds[pane]?.program, !program.isEmpty,
            !PaneForeground.shells.contains(program)

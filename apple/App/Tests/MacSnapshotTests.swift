@@ -141,6 +141,15 @@ final class MacSnapshotTests: XCTestCase {
         try await window("nosidebar") { $0.isSidebarShown = false }
     }
 
+    /// Any program's own status (pi blocked on a question) in its pane header and tab glyph.
+    func testProgramStatus() async throws {
+        defer {
+            MockPaneStatus.fixture = nil
+            MockPaneStatus.details = [:]
+        }
+        try await window("program-status", screen: "program-status")
+    }
+
     func testSheets() async throws {
         for route in ["links", "launchAgent", "pairing", "join", "invite", "shortcuts"] {
             try await window(route, screen: route)

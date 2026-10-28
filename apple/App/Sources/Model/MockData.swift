@@ -179,6 +179,10 @@ final class MockPaneStatus: PaneStatusSource {
     /// A fixture's own programs and states by pane (the `programs` screen); replaces the defaults.
     /// Static: every window model reads it (iPad launches make two).
     static var fixture: [String: (program: String, state: AgentState?)]?
+    /// A fixture's programs' own words by pane (`PaneReport.detail`).
+    static var details: [String: String] = [:]
+
+    func detail(of pane: String) -> String? { Self.details[pane] }
 
     func state(of pane: String) -> AgentState? {
         if let fixture = Self.fixture { return fixture[pane]?.state }

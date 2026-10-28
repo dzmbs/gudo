@@ -761,13 +761,19 @@ final class WindowModel {
     /// stand-ins (`-mock`) for local panes.
     func agentState(ofPane pane: PaneId, onGroup id: String) -> DesignSystem.AgentState? {
         if id == HostGroups.localId { return paneStatus.state(of: pane.description) }
-        return (app.hosts.connection(id) as? DaemonConnection)?.meta[pane]?.agent.map { DesignSystem.AgentState($0.state) }
+        return (app.hosts.connection(id) as? DaemonConnection)?.report(of: pane)?.state
     }
 
     /// The program that reports an agent state in a pane of any group.
     func agentProgram(ofPane pane: PaneId, onGroup id: String) -> String? {
         if id == HostGroups.localId { return paneStatus.program(of: pane.description) }
-        return (app.hosts.connection(id) as? DaemonConnection)?.meta[pane]?.agent?.kind
+        return (app.hosts.connection(id) as? DaemonConnection)?.report(of: pane)?.program
+    }
+
+    /// The program's own words and progress in a pane of any group (`PaneReport.detail`).
+    func agentDetail(ofPane pane: PaneId, onGroup id: String) -> String? {
+        if id == HostGroups.localId { return paneStatus.detail(of: pane.description) }
+        return (app.hosts.connection(id) as? DaemonConnection)?.report(of: pane)?.detail
     }
 
     /// Keeps this window's workspace for every host it has open whose connection exists (a new
