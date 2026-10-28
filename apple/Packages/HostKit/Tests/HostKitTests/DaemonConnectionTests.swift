@@ -188,4 +188,18 @@ import UnnamedCore
         client().send(.paneClosed(paneId: 2))
         try await eventually("closed") { connection.blockedAgents.isEmpty }
     }
+
+    @Test func programReportsAreTrackedButAreNoApprovals() async throws {
+        let (connection, client) = try makeConnection()
+        let report = ProgramReport(state: .blocked, kind: .question, app: "pi", message: "Which framework?", progress: nil)
+        client().send(.programStatus(paneId: 3, status: report))
+        try await eventually("report") { connection.programs[PaneId(3)] == report }
+        #expect(connection.blockedAgents.isEmpty)
+        client().send(.programStatus(paneId: 3, status: nil))
+        try await eventually("cleared") { connection.programs.isEmpty }
+        client().send(.programStatus(paneId: 3, status: report))
+        try await eventually("again") { connection.programs[PaneId(3)] == report }
+        client().send(.paneClosed(paneId: 3))
+        try await eventually("closed") { connection.programs.isEmpty }
+    }
 }

@@ -164,6 +164,7 @@ async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
     core.askpass.register(client.id, &client.authz, client.caps);
     core.browser.register(client.id, &client.authz, client.caps);
     client.approvals_state();
+    client.program_state();
     let repo_watch = client.caps.contains(Caps::REPO_STATUS);
     if repo_watch {
         core.ws.repos.watch(true);
@@ -229,7 +230,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::BROWSER
         | DaemonFeatures::AGENT_MCP
         | DaemonFeatures::PRESENCE
-        | DaemonFeatures::INVITE_LINKS;
+        | DaemonFeatures::INVITE_LINKS
+        | DaemonFeatures::PROGRAM_STATUS;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -948,6 +950,14 @@ impl Client {
                     self.send(ServerCtl::Assist(push));
                 }
             }
+            Event::ProgramStatus(pane_id) => {
+                if self.caps.contains(Caps::PROGRAM_STATUS) && self.in_session(pane_id) {
+                    self.send(ServerCtl::ProgramStatus {
+                        pane_id,
+                        status: self.core.program_report(pane_id),
+                    });
+                }
+            }
             Event::Askpass(push) => {
                 if self.may_answer(crate::askpass::push_pane(&push)) {
                     self.send(ServerCtl::Askpass(push));
@@ -993,6 +1003,23 @@ impl Client {
                 if conn == self.id {
                     self.send(ServerCtl::Browser(push));
                 }
+            }
+        }
+    }
+
+    /// The reports of the panes in `Welcome`, for a connection that just arrived.
+    fn program_state(&self) {
+        if !self.caps.contains(Caps::PROGRAM_STATUS) {
+            return;
+        }
+        for (pane_id, _) in self.core.pane_entries() {
+            if self.pane_allowed(pane_id)
+                && let Some(status) = self.core.program_report(pane_id)
+            {
+                self.send(ServerCtl::ProgramStatus {
+                    pane_id,
+                    status: Some(status),
+                });
             }
         }
     }
@@ -2459,6 +2486,13 @@ impl Client {
                 self.send(ServerCtl::Lease(lease));
             }
             self.askpass_state(pane);
+            // `None` too: a report cleared while another session was attached.
+            if self.caps.contains(Caps::PROGRAM_STATUS) {
+                self.send(ServerCtl::ProgramStatus {
+                    pane_id: pane,
+                    status: self.core.program_report(pane),
+                });
+            }
         }
         self.send(ServerCtl::Participants {
             participants: self.core.mp.participants(&self.core, &self.authz),

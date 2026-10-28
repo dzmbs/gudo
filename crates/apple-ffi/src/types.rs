@@ -679,6 +679,70 @@ impl From<proto::AgentStatus> for AgentStatus {
     }
 }
 
+/// What any program in a pane says about itself (OSC 7501 or the `status_set` tool). A
+/// blocked report is a status only: there is no request to answer.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramReport {
+    /// What it is doing.
+    pub state: ProgramState,
+    /// What a blocked program waits for, if it said.
+    pub kind: Option<ProgramKind>,
+    /// The program's name (`pi`, `opencode`), if it gave one.
+    pub app: Option<String>,
+    /// One line for people.
+    pub message: Option<String>,
+    /// Percent complete (0–100).
+    pub progress: Option<u8>,
+}
+
+/// What a program says it is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum ProgramState {
+    /// At rest.
+    Idle,
+    /// Running.
+    Working,
+    /// Finished work not looked at yet.
+    Done,
+    /// Waiting on the user.
+    Blocked,
+    /// Failed and stopped.
+    Error,
+}
+
+/// What a blocked program waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum ProgramKind {
+    /// Approval to do something.
+    Permission,
+    /// An answer to type.
+    Question,
+    /// A login or credential.
+    Auth,
+}
+
+impl From<proto::ProgramReport> for ProgramReport {
+    fn from(r: proto::ProgramReport) -> Self {
+        Self {
+            state: match r.state {
+                proto::ProgramState::Idle => ProgramState::Idle,
+                proto::ProgramState::Working => ProgramState::Working,
+                proto::ProgramState::Done => ProgramState::Done,
+                proto::ProgramState::Blocked => ProgramState::Blocked,
+                proto::ProgramState::Error => ProgramState::Error,
+            },
+            kind: r.kind.map(|k| match k {
+                proto::ProgramKind::Permission => ProgramKind::Permission,
+                proto::ProgramKind::Question => ProgramKind::Question,
+                proto::ProgramKind::Auth => ProgramKind::Auth,
+            }),
+            app: r.app,
+            message: r.message,
+            progress: r.progress,
+        }
+    }
+}
+
 /// Whose size a pane's PTY follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum SizePolicy {

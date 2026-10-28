@@ -449,6 +449,7 @@ private struct PaneHeader: View {
                 .font(.caption.weight(isFocused ? .semibold : .regular))
                 .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
                 .lineLimit(1)
+                .layoutPriority(1)
             if namesHost, let group = model.groups.group(workspace.groupId) {
                 HostChip(group: group, emphasized: isFocused)
             }
@@ -457,6 +458,16 @@ private struct PaneHeader: View {
                 Text(state.title)
                     .font(.caption)
                     .foregroundStyle(state.color)
+                    .layoutPriority(1)
+                // The program's own words ("Which framework? · 40%"): they take the squeeze.
+                if let detail = model.paneStatus.detail(of: id.description) {
+                    Text(verbatim: detail)
+                        .font(.caption)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(detail)
+                }
             }
             Spacer(minLength: 0)
             PanePresence(workspace: workspace, pane: id)

@@ -30,8 +30,8 @@ enum PaletteCommands {
 
         for item in model.agents.items where item.state.needsYou {
             commands.append(PaletteCommand(
-                id: "agent-\(item.id)", title: needsYouTitle(item), subtitle: "\(item.agent.title) · \(item.hostName) · \(item.sessionTitle)",
-                section: "Needs You", program: item.agent.identity, state: item.state) { model.destination = .inbox })
+                id: "agent-\(item.id)", title: needsYouTitle(item), subtitle: "\(item.title) · \(item.hostName) · \(item.sessionTitle)",
+                section: "Needs You", program: item.identity, state: item.state) { model.destination = .inbox })
         }
 
         commands += tabs(model: model, section: "Tabs")

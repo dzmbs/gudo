@@ -65,6 +65,37 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertNil(items.first { $0.id == "h/a1" }, "a blocked item is the live agent's row, not history")
     }
 
+    /// Any program's own report (pi) is a row of its own, a status only: no request to answer.
+    /// Where an agent integration knows the pane, it wins.
+    func testProgramReportsListAsStatusOnly() {
+        let blocked = ProgramReport(state: .blocked, kind: .question, app: "pi", message: "Which framework?", progress: 40)
+        let metas: [PaneId: PaneMeta] = [
+            PaneId(1): meta(1, title: "pi", agent: nil),
+            PaneId(2): meta(2, agent: AgentStatus(kind: "claude", state: .idle)),
+        ]
+        let programs = [PaneId(1): blocked, PaneId(2): ProgramReport(state: .working, kind: nil, app: "claude-code", message: nil, progress: nil)]
+        let items = LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: metas, programs: programs, attention: [])
+
+        let pi = try! XCTUnwrap(items.first { $0.id == "h/1" })
+        XCTAssertEqual(pi.state, .blocked)
+        XCTAssertNil(pi.request, "no approval card for a status")
+        XCTAssertEqual(pi.prompt, "Which framework? · 40%")
+        XCTAssertEqual(pi.title, "pi")
+        XCTAssertTrue(pi.canReply)
+
+        let claude = try! XCTUnwrap(items.first { $0.id == "h/2" })
+        XCTAssertEqual(claude.state, .done, "the agent integration wins over the report")
+        XCTAssertNil(claude.program)
+        XCTAssertEqual(items.count, 2)
+
+        let report = try! XCTUnwrap(PaneReport(meta: metas[PaneId(1)], program: ProgramReport(state: .blocked, kind: .auth, app: nil, message: nil, progress: nil)))
+        XCTAssertEqual(report.detail, "Needs you to sign in")
+        XCTAssertEqual(PaneReport(meta: metas[PaneId(2)], program: blocked)?.state, .idle)
+        var exited = meta(1, agent: nil)
+        exited.exit = 0
+        XCTAssertNil(PaneReport(meta: exited, program: blocked), "a pane whose process ended reports nothing")
+    }
+
     func testAnsweredRequestShowsAsWorkingUntilTheDaemonMovesOn() {
         let metas: [PaneId: PaneMeta] = [
             PaneId(1): meta(1, agent: AgentStatus(kind: "claude", state: .blocked(requestId: 9, summary: "ls", options: [DecisionOption(id: 1, label: "Allow")]))),

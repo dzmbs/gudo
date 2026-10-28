@@ -265,7 +265,7 @@ struct InboxView: View {
             reply: { text in
                 do {
                     try await feed.reply(item.id, text: text)
-                    model.toasts.show(Toast("Sent to \(item.agent.title)", systemImage: "arrow.up.circle.fill", style: .success))
+                    model.toasts.show(Toast("Sent to \(item.title)", systemImage: "arrow.up.circle.fill", style: .success))
                     return true
                 } catch {
                     model.toasts.show(Toast("Couldn't reply: \(ScreenError.describe(error))", systemImage: "exclamationmark.triangle.fill", style: .failure))
@@ -273,7 +273,7 @@ struct InboxView: View {
                 }
             })
             .id(item.id)
-            .listRowActions(actions(item), name: item.agent.title) { action in
+            .listRowActions(actions(item), name: item.title) { action in
                 perform(action, on: item)
             } menu: {
                 Button(item.isCommand ? "Copy Command" : "Copy Prompt", systemImage: "doc.on.doc") { copy(item.prompt) }
@@ -654,11 +654,11 @@ private struct InboxRow: View {
     private var meta: some View {
         HStack(spacing: DS.Space.xs) {
             if !item.isCommand {
-                ProgramMark(item.agent.identity, size: 12)
+                ProgramMark(item.identity, size: 12)
                     .foregroundStyle(.primary)
                     .opacity(DS.Opacity.mutedGlyph)
             }
-            Text([item.isCommand ? "Command" : item.agent.title, item.hostName, item.sessionTitle]
+            Text([item.isCommand ? "Command" : item.title, item.hostName, item.sessionTitle]
                 .filter { !$0.isEmpty }.joined(separator: " · "))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -691,7 +691,7 @@ private struct InboxRow: View {
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.quiet)
-                .help("Reply to \(item.agent.title)")
+                .help("Reply to \(item.title)")
                 .accessibilityIdentifier("inbox-reply-\(item.id)")
             }
             if item.paneId != nil {
@@ -886,7 +886,7 @@ private struct InboxRow: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: DS.Space.s) {
-            TextField("Reply to \(item.agent.title)", text: $draft, axis: .vertical)
+            TextField("Reply to \(item.title)", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .padding(.horizontal, DS.Space.gap10)

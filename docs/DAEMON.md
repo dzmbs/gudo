@@ -2024,7 +2024,12 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
 - **Status.** Any program's last OSC 7501 report about itself (no `id=`) is the pane's
   `status`, whatever the program; panes without one show their agent integration's state.
   `pane_wait {status: [...]}` waits for it, and `status_set` reports it for agents that cannot
-  print the sequence.
+  print the sequence. Clients announcing `Caps::PROGRAM_STATUS` (daemons with
+  `DaemonFeatures::PROGRAM_STATUS`) get it as `ServerCtl::ProgramStatus{pane_id, status}`
+  (`proto::program`): on every change, for the panes they would get `PaneMeta` for; for every
+  pane in their scope that has one on joining; and for every pane of the session on attaching
+  (`None` included, so a report cleared while they looked elsewhere goes). A blocked report is a
+  status, never an approval request: approvals stay in `PaneMeta.agent`.
 - **Workers.** `agent_spawn` starts Claude or Codex in a pane beside the caller (owned, no
   focus) and gives it its first prompt once it is idle and its screen has settled; a worker on
   a dialog (folder trust, an approval) is reported blocked instead. `agent_prompt` refuses a

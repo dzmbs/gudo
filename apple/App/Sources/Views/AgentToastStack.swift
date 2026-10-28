@@ -81,7 +81,7 @@ private struct AgentToastCard: View {
     }
 
     private var mark: some View {
-        ProgramMark(item.agent.identity, size: 22)
+        ProgramMark(item.identity, size: 22)
             .foregroundStyle(.primary)
             .frame(width: 28, height: 28)
             .overlay(alignment: .bottomTrailing) {
@@ -103,9 +103,9 @@ private struct AgentToastCard: View {
     private var headline: String {
         switch card.kind {
         case .needsYou:
-            if case .question? = item.request { "\(item.agent.title) has a question" } else { "\(item.agent.title) needs you" }
-        case .finished: "\(item.agent.title) finished"
-        case .failed: "\(item.agent.title) failed"
+            if case .question? = item.request { "\(item.title) has a question" } else { "\(item.title) needs you" }
+        case .finished: "\(item.title) finished"
+        case .failed: "\(item.title) failed"
         }
     }
 

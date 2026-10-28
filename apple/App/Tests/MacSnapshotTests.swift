@@ -141,6 +141,15 @@ final class MacSnapshotTests: XCTestCase {
         try await window("nosidebar") { $0.isSidebarShown = false }
     }
 
+    /// Any program's own status (pi blocked on a question) in its pane header and tab glyph.
+    func testProgramStatus() async throws {
+        defer {
+            MockPaneStatus.fixture = nil
+            MockPaneStatus.details = [:]
+        }
+        try await window("program-status", screen: "program-status")
+    }
+
     /// A kitty graphics image a program printed, drawn in the pane by the Metal renderer from
     /// the render state's placements: a gradient over 24 × 6 cells between lines of text.
     func testKittyImageInAPane() async throws {

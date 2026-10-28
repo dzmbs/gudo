@@ -143,6 +143,12 @@ nonisolated struct AgentItem: Identifiable, Hashable, Sendable {
     var canReply = false
     /// A long command that finished unseen (attention feed), not an agent.
     var isCommand = false
+    /// Another program reporting its own status (OSC 7501: pi, opencode), by its name.
+    var program: String?
+
+    /// Who it is, for headlines and rows: the program's name, else the agent's.
+    @MainActor var title: String { program.map { ProgramCatalog.identity(process: $0).displayName } ?? agent.title }
+    @MainActor var identity: ProgramIdentity { program.map { ProgramCatalog.identity(process: $0) } ?? agent.identity }
 }
 
 /// A host an agent can start on (a connected daemon).
@@ -266,6 +272,12 @@ protocol PaneStatusSource: AnyObject, Observable {
     func state(of pane: String) -> AgentState?
     /// The foreground program's name, for the sidebar's pane rows.
     func program(of pane: String) -> String?
+    /// The program's own words and progress ("Which framework? · 40%"), if it reported any.
+    func detail(of pane: String) -> String?
+}
+
+extension PaneStatusSource {
+    func detail(of pane: String) -> String? { nil }
 }
 
 nonisolated struct DetectedLink: Identifiable, Hashable, Sendable {

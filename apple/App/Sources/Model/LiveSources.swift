@@ -52,9 +52,9 @@ final class LiveHostDirectory: HostDirectory {
         let connection = app.hosts.connection(entry.id)
         let daemon = connection as? DaemonConnection
         var counts: [DesignSystem.AgentState: Int] = [:]
-        for meta in daemon?.meta.values ?? [:].values {
-            if let agent = meta.agent { counts[DesignSystem.AgentState(agent.state), default: 0] += 1 }
-        }
+        let panes = Set(daemon.map { Array($0.meta.keys) + Array($0.programs.keys) } ?? [])
+        let reports = panes.sorted().compactMap { daemon?.report(of: $0) }
+        for report in reports { counts[report.state, default: 0] += 1 }
         let sessions: Int
         if let daemon, daemon.isReady {
             sessions = daemon.layout.session.tabs.count
@@ -66,6 +66,8 @@ final class LiveHostDirectory: HostDirectory {
         var needsYou: String?
         if let blocked = daemon?.blockedAgents.values.first, case .blocked(_, let summary, _) = blocked.state {
             needsYou = "\(AgentKind(blocked.kind).title): \(summary)"
+        } else if let blocked = reports.first(where: { $0.state == .blocked }) {
+            needsYou = [blocked.program ?? "A program", blocked.detail].compactMap(\.self).joined(separator: ": ")
         } else if entry.status.needsUser {
             needsYou = entry.status.summary
         }
@@ -186,24 +188,24 @@ extension AgentKind {
     }
 }
 
-/// Status glyphs for the panes of the window's daemon (`PaneMeta.agent`); nothing for local and
-/// plain-SSH panes, which do not report status.
+/// Status glyphs for the panes of the window's daemon (`PaneReport`: agent integrations, else
+/// the program's own report); nothing for local and plain-SSH panes, which do not report status.
 @MainActor
 @Observable
 final class LivePaneStatus: PaneStatusSource {
     @ObservationIgnored weak var window: WindowModel?
 
-    private func meta(of pane: String) -> PaneMeta? {
-        guard let daemon = window?.workspace?.host as? DaemonConnection else { return nil }
-        return daemon.meta.first { $0.key.description == pane }?.value
+    private func report(of pane: String) -> PaneReport? {
+        guard let daemon = window?.workspace?.host as? DaemonConnection,
+              pane.hasPrefix("pane-"), let raw = UInt64(pane.dropFirst("pane-".count))
+        else { return nil }
+        return daemon.report(of: PaneId(raw))
     }
 
-    func state(of pane: String) -> DesignSystem.AgentState? {
-        meta(of: pane)?.agent.map { DesignSystem.AgentState($0.state) }
-    }
+    func state(of pane: String) -> DesignSystem.AgentState? { report(of: pane)?.state }
 
-    func program(of pane: String) -> String? {
-        meta(of: pane)?.agent?.kind
-    }
+    func program(of pane: String) -> String? { report(of: pane)?.program }
+
+    func detail(of pane: String) -> String? { report(of: pane)?.detail }
 }
 

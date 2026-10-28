@@ -676,6 +676,14 @@ pub enum ServerCtl {
     /// Live presence of everyone connected (see [`crate::peer`]), to clients with
     /// [`Caps::PRESENCE`].
     Peers(crate::peer::PeerPush),
+    /// What the program in a pane reports about itself changed (see [`crate::program`]), to
+    /// clients with [`Caps::PROGRAM_STATUS`] that see the pane like its [`PaneMeta`].
+    ProgramStatus {
+        /// The pane.
+        pane_id: PaneId,
+        /// The report; `None` once cleared or when the pane has none.
+        status: Option<crate::program::ProgramReport>,
+    },
 }
 
 /// A successful [`ClientCtl::Attach`].

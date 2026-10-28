@@ -179,8 +179,9 @@ enum ToolProblem: Error, Equatable {
 
 // MARK: - Inbox
 
-/// The agents of every connected daemon (`PaneMeta.agent`) merged with each daemon's attention
-/// feed (finished turns, failures, long commands, unseen counts). Approve and Deny are signed
+/// The agents of every connected daemon (`PaneMeta.agent`, then other programs' own reports)
+/// merged with each daemon's attention feed (finished turns, failures, long commands, unseen
+/// counts). Approve and Deny are signed
 /// decisions; Reply types through the composer path; New Agent launches a pane.
 @MainActor
 @Observable
@@ -224,7 +225,7 @@ final class LiveAgentFeed: AgentFeed {
         var result: [AgentItem] = []
         for (hostId, hostName, daemon) in daemons {
             result += Self.items(
-                hostId: hostId, hostName: hostName, meta: daemon.meta,
+                hostId: hostId, hostName: hostName, meta: daemon.meta, programs: daemon.programs,
                 attention: daemon.existingWorkspace?.attention ?? [], answered: answered
             ).filter { dismissed[$0.id] != $0.state }
         }
@@ -245,8 +246,8 @@ final class LiveAgentFeed: AgentFeed {
     /// One host's items: live agents (with their latest attention item for summary and unseen),
     /// then finished history whose pane is gone, and long commands. Pure, for tests.
     static func items(
-        hostId: String, hostName: String, meta: [PaneId: PaneMeta], attention: [AttentionItem],
-        answered: [AgentItem.ID: UInt64] = [:]
+        hostId: String, hostName: String, meta: [PaneId: PaneMeta], programs: [PaneId: ProgramReport] = [:],
+        attention: [AttentionItem], answered: [AgentItem.ID: UInt64] = [:]
     ) -> [AgentItem] {
         var result: [AgentItem] = []
         let byPane = Dictionary(grouping: attention, by: \.paneId).mapValues { $0.max { $0.id < $1.id }! }
@@ -299,6 +300,24 @@ final class LiveAgentFeed: AgentFeed {
                 prompt: prompt.nonEmpty ?? AgentKind(agent.kind).title,
                 request: request, summary: summary, hostId: hostId, paneId: pane.rawValue,
                 unseen: latest.map { !$0.seen } ?? false, canReply: request == nil || options(agent).isEmpty))
+        }
+        // Other programs' own reports: status only, never a request to answer here.
+        for (pane, program) in programs where meta[pane]?.agent == nil {
+            guard let report = PaneReport(meta: meta[pane], program: program) else { continue }
+            livePanes.insert(pane.rawValue)
+            let paneMeta = meta[pane]
+            let fallback = switch report.state {
+            case .working: "Working…"
+            case .blocked: "Waiting for you"
+            case .error: "Stopped with an error"
+            default: "Waiting for your next instruction"
+            }
+            let prompt = report.detail ?? fallback
+            result.append(AgentItem(
+                id: "\(hostId)/\(pane.rawValue)", agent: .other, hostName: hostName,
+                sessionTitle: paneMeta?.cwd.map(Self.folder) ?? paneMeta?.title ?? "",
+                state: report.state == .idle ? .done : report.state, since: .now, prompt: prompt,
+                hostId: hostId, paneId: pane.rawValue, canReply: true, program: report.program))
         }
         // History: finished agents whose pane is gone, and long commands.
         var history: [AgentItem] = []

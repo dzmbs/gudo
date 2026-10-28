@@ -109,6 +109,17 @@ enum DesignFixtures {
             }
             try? await Task.sleep(for: .seconds(0.6))
             withAnimation(DS.Motion.snappy) { feed.simulate("a4", state: .done, summary: "The reconnect test waited on a stale timer; fixed.") }
+        case "program-status":
+            // A program other than Claude or Codex reports its own status (OSC 7501): pi asks a
+            // question beside Claude at work. A status only, no approval card.
+            let panes = workspace.session.activeTab?.root.panes ?? []
+            guard panes.count > 2 else { return }
+            MockPaneStatus.fixture = [
+                panes[0].description: ("zsh", nil),
+                panes[1].description: ("pi", .blocked),
+                panes[2].description: ("claude", .working),
+            ]
+            MockPaneStatus.details = [panes[1].description: "Which framework, React or Vue? · 40%"]
         case "toast":
             try? await Task.sleep(for: .seconds(1))
             model.toasts.show(Toast("Closed “cargo test”", systemImage: "xmark.circle.fill", action: Toast.Action("Undo") {}))

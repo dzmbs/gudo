@@ -34,6 +34,9 @@ public final class DaemonConnection: HostConnection {
     public let layout: DaemonLayoutStore
     /// Pane metadata (title, cwd, agent) by pane.
     public private(set) var meta: [PaneId: PaneMeta] = [:]
+    /// What any program in a pane last reported about itself (OSC 7501, `status_set`), by pane.
+    /// A blocked report is a status only: approvals stay in `meta[pane].agent`.
+    public private(set) var programs: [PaneId: ProgramReport] = [:]
     /// Panes whose agent waits for a decision.
     public var blockedAgents: [PaneId: AgentStatus] {
         meta.compactMapValues { meta in
@@ -357,8 +360,11 @@ public final class DaemonConnection: HostConnection {
             pushView()
         case .paneMeta(let meta):
             self.meta[PaneId(meta.paneId)] = meta
+        case .programStatus(let pane, let status):
+            programs[PaneId(pane)] = status
         case .paneClosed(let pane):
             meta[PaneId(pane)] = nil
+            programs[PaneId(pane)] = nil
         case .opResult(_, let outcome):
             if case .failed = outcome { layout.revertToConfirmed() }
         case .paneSnapshot, .paneResized:
