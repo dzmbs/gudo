@@ -299,6 +299,9 @@ bitset! {
         /// viewports, following, heartbeats (see `proto::peer`). Silent such clients are
         /// marked away, then disconnected.
         PRESENCE = 14;
+        /// Wants `ServerCtl::ProgramStatus`: what any program in a visible pane reports
+        /// about itself (see `proto::program`).
+        PROGRAM_STATUS = 15;
     }
 }
 
@@ -336,5 +339,7 @@ bitset! {
         /// Answers `MpRequest::InviteLink`: a registered invite's chain and terms, so an
         /// owner can copy its link again.
         INVITE_LINKS = 11;
+        /// Pushes `ServerCtl::ProgramStatus` to clients with `Caps::PROGRAM_STATUS`.
+        PROGRAM_STATUS = 12;
     }
 }
