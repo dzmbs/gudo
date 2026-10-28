@@ -1,6 +1,7 @@
 //! The real MCP server (`un-hook mcp`) against a daemon in this process: an agent's MCP client
 //! initializes, lists the tools, and pulls the session's drawing as an image and as text; a
-//! browser tool call reaches the app showing the pane and its answer comes back as content.
+//! browser tool call reaches the app showing the pane and its answer comes back as content; a
+//! terminal tool runs a real command and answers with typed results.
 
 #[allow(dead_code)]
 #[path = "../../daemon/tests/it/support.rs"]
@@ -234,4 +235,55 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
         .answer_browser_call(id, Ok(json!({ "text": "Done." }).to_string()));
     assert_eq!(call.await.unwrap()["content"][0]["text"], "Done.");
     daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_run_commands_over_mcp_with_typed_results() {
+    let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh", "/opt/homebrew/bin/zsh"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+    else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = support::start_with(dir.path(), |c| c.shell = Some(zsh.into())).await;
+    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = c.attach_and_follow().await.0.to_string();
+    let state = dir.path().to_str().unwrap();
+    let mut server = Server::spawn(&["mcp", "--state", state, "--pane", &pane]);
+    server.request(
+        "initialize",
+        json!({ "protocolVersion": "2025-11-25", "capabilities": {} }),
+    );
+
+    let tools = server.request("tools/list", json!({}))["result"]["tools"].clone();
+    let run = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "cmd_run")
+        .unwrap();
+    assert_eq!(
+        run["outputSchema"]["properties"]["status"]["enum"][0],
+        "exited"
+    );
+    assert_eq!(run["annotations"]["readOnlyHint"], false);
+
+    let result = server.tool("cmd_run", json!({ "command": "echo hi; (exit 2)" }));
+    let typed = &result["structuredContent"];
+    assert_eq!(typed["status"], "exited", "{result}");
+    assert_eq!(typed["command"]["exitCode"], 2, "{result}");
+    assert_eq!(typed["output"]["text"], "hi", "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("status: exited, exit code 2"), "{text}");
+
+    let refused = server.tool("pane_send", json!({ "pane": "self", "text": "x" }));
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("forbidden")
+    );
 }

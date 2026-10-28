@@ -1962,6 +1962,33 @@ and approves purchases and form submits on sign-in or payment pages, or types pa
 themselves; the call waits meanwhile. `crates/agents/skills/browser/SKILL.md` teaches agents
 the tools.
 
+### Terminal tools (`daemon::term`)
+
+Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, token, pane, term:
+{tool, args}}` line per call on the hook socket, answered by `TermReply::Ok(value)` or
+`TermReply::Error({code, message, retryable, hint})`. Design and the competitors it is measured
+
+- **Identity.** `UN_TOKEN` in a pane is that pane's own token (an HMAC of its id under
+  `hook.token`), so a pane's programs cannot act as another pane. `hook.token` itself, which only
+  the state directory holds, speaks for any pane. Every hook-socket caller is checked this way.
+- **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
+  `pane_wait`, `pane_send`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
+- **Rules.** Read any pane of the caller's session; type into, run in and close only the panes it
+  created (or that those created), never its own; nothing it opens takes the user's focus;
+  input is refused while the program asks for a password (echo off, canonical).
+- **Output.** Bytes are rendered by a scratch terminal of the pane's width, so carriage returns,
+  erases and colors come out as seen. Results cap at 16 KiB by default (256 KiB at most), keeping
+  the first third and last two thirds. A cursor (`c<seq>`, the pane's output offset) reads on
+  from where a result ended; it expires once the 1 MiB ring drops it.
+- **Commands.** `cmd_run` waits for the shell's prompt, pastes the command, and follows its
+  OSC 133 mark to the exit code and the command's own output. Shells without integration report
+  `status: unknown` after the output settles. Waits default to 30 s and stop at 240 s with
+  `status: timeout`, never an error.
+- **MCP.** Every tool has an `outputSchema` and returns `structuredContent` (typed values for
+  code-mode harnesses) plus text that leads with a summary and then the output verbatim.
+  Annotations mark the read-only tools; `agents::ACTING_TOOLS` are the ones Claude's permission
+  prompt asks about.
+
 ## 10. Known gaps / follow-ups
 
 - **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last

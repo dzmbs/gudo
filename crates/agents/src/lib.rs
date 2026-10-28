@@ -37,7 +37,8 @@ pub use event::{
     SubagentId, Turn, TurnOutcome, UnixMillis,
 };
 pub use launch::{
-    LaunchContext, LaunchMode, LaunchSpec, SupportFile, mcp_args, mcp_server_name, pane_env,
+    ACTING_TOOLS, LaunchContext, LaunchMode, LaunchSpec, SupportFile, mcp_args, mcp_server_name,
+    pane_env,
 };
 pub use manifest::{
     ENGINE_VERSION, Manifest, ManifestError, Region, ScreenInput, ScreenMatch, ScreenVerdict,

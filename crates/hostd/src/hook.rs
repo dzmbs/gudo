@@ -20,6 +20,7 @@ mod askpass;
 mod browser;
 mod browser_tools;
 mod mcp;
+mod term_tools;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;

@@ -1,6 +1,6 @@
-//! `un-hook mcp`: a stdio MCP server through which an agent reads the drawings of its terminal
-//! session (docs/DAEMON.md §7.12) and uses the browser pane beside its terminal in the app
-//! (`browser_tools`).
+//! `un-hook mcp`: a stdio MCP server through which an agent drives the terminal it runs in
+//! (`term_tools`), reads the drawings of its terminal session (docs/DAEMON.md §7.12) and uses
+//! the browser pane beside its terminal in the app (`browser_tools`).
 //!
 //! JSON-RPC 2.0, one message per line. Each tool call becomes one [`PullCall`] on the daemon's
 //! hook socket. The socket comes from `<state>/hook.endpoint` and the token from
@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use daemon::{
     BROWSER_VERSION, BrowserAsk, BrowserCall, BrowserReply, PULL_FORMATS, PULL_VERSION, PullCall,
-    PullExport, PullOp, PullReply, PullSummary,
+    PullExport, PullOp, PullReply, PullSummary, TERM_VERSION, TermAsk, TermCall, TermReply,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -24,7 +24,11 @@ use serde_json::{Value, json};
 
 /// What the server offers. The first paragraph stands on its own (clients may cut the rest).
 const INSTRUCTIONS: &str =
-    "This terminal runs inside an app the user watches on their iPad, iPhone or Mac. \
+    "This terminal runs inside an app the user watches on their iPad, iPhone or Mac. Run \
+commands with cmd_run (exit code and the command's own output, in a pane of your own the user \
+can see), wait with pane_wait, read with pane_read; follow output with the cursor each result \
+returns. You may type into and close only panes you created, never at a password prompt.
+
 browser_* tools drive a real browser pane shown beside this terminal there; the user sees every \
 step and can take over. Pages reach this host's localhost. Open with browser_navigate, read with \
 browser_snapshot (role \"name\" [ref_3]) rather than screenshots, act with targets \
@@ -60,6 +64,13 @@ pub trait Backend {
     ///
     /// As [`Backend::pull`]; refusals arrive as [`BrowserReply::Error`].
     fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply>;
+
+    /// Runs one terminal tool.
+    ///
+    /// # Errors
+    ///
+    /// As [`Backend::pull`]; refusals arrive as [`TermReply::Error`].
+    fn term(&mut self, ask: TermAsk) -> io::Result<TermReply>;
 }
 
 /// What the server remembers of its client: whether it takes `elicitation/create` requests
@@ -211,7 +222,9 @@ pub fn handle_in(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").unwrap_or(&Value::Null);
-            if crate::browser_tools::is_tool(name) {
+            if crate::term_tools::is_tool(name) {
+                crate::term_tools::call(name, args, backend)
+            } else if crate::browser_tools::is_tool(name) {
                 browser_call(name, args, params, backend, session, peer)
             } else {
                 match call_tool(name, args, backend) {
@@ -318,7 +331,11 @@ fn initialize(params: &Value) -> Value {
 fn tools() -> Value {
     let formats: Vec<&str> = PULL_FORMATS.iter().map(|f| f.name).collect();
     let read_only = json!({ "readOnlyHint": true, "openWorldHint": false });
-    let mut tools = json!([
+    let mut tools = json!([]);
+    if let Some(list) = tools.as_array_mut() {
+        list.extend(crate::term_tools::tools());
+    }
+    let drawings = json!([
         {
             "name": "list_drawings",
             "description": "List the drawings, sketches and images the user made in this \
@@ -343,7 +360,8 @@ fn tools() -> Value {
             "annotations": read_only,
         },
     ]);
-    if let Some(list) = tools.as_array_mut() {
+    if let (Some(list), Value::Array(drawings)) = (tools.as_array_mut(), drawings) {
+        list.extend(drawings);
         list.extend(crate::browser_tools::tools());
     }
     tools
@@ -613,6 +631,17 @@ impl Backend for SocketBackend {
         };
         self.exchange(&call, daemon::BROWSER_CALL_TIMEOUT + Duration::from_secs(5))
     }
+
+    fn term(&mut self, ask: TermAsk) -> io::Result<TermReply> {
+        let call = TermCall {
+            v: TERM_VERSION,
+            token: self.token()?,
+            pane: self.pane.clone(),
+            term: ask,
+        };
+        // Waits run up to four minutes on the daemon.
+        self.exchange(&call, Duration::from_secs(250))
+    }
 }
 
 #[cfg(test)]
@@ -644,6 +673,12 @@ mod tests {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "no socket"));
             }
             Ok(self.browser_replies.remove(0))
+        }
+
+        fn term(&mut self, ask: TermAsk) -> io::Result<TermReply> {
+            Ok(TermReply::Ok(
+                json!({ "asked": ask.tool, "args": ask.args }),
+            ))
         }
     }
 
@@ -789,9 +824,10 @@ mod tests {
         let r = rpc(&mut Fake::default(), "tools/list", Value::Null);
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names[..2], ["list_drawings", "get_drawing"]);
-        assert!(names.contains(&"browser_snapshot"));
-        let format = &tools[1]["inputSchema"]["properties"]["format"];
+        assert_eq!(names[..2], ["whoami", "pane_list"]);
+        assert!(names.contains(&"list_drawings") && names.contains(&"browser_snapshot"));
+        let get = tools.iter().find(|t| t["name"] == "get_drawing").unwrap();
+        let format = &get["inputSchema"]["properties"]["format"];
         assert_eq!(format["enum"], json!(["png", "svg", "ascii", "excalidraw"]));
         assert_eq!(format["default"], "png");
     }
@@ -882,7 +918,19 @@ mod tests {
     fn instructions_lead_with_a_short_paragraph_that_stands_alone() {
         let first = INSTRUCTIONS.split("\n\n").next().unwrap();
         assert!(first.len() <= 512, "{} characters", first.len());
-        assert!(first.contains("browser_navigate") && first.contains("browser_snapshot"));
+        assert!(first.contains("cmd_run") && first.contains("pane_wait"));
+    }
+
+    #[test]
+    fn terminal_tools_return_structured_results() {
+        let r = rpc(
+            &mut Fake::default(),
+            "tools/call",
+            json!({ "name": "cmd_run", "arguments": { "command": "ls" } }),
+        );
+        assert_eq!(r["result"]["structuredContent"]["asked"], "cmd_run");
+        assert_eq!(r["result"]["structuredContent"]["args"]["command"], "ls");
+        assert!(r["result"]["content"][0]["text"].is_string());
     }
 
     #[test]
