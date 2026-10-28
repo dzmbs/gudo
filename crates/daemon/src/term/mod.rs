@@ -324,10 +324,25 @@ struct WaitArgs {
     quiet_ms: Option<u64>,
     #[serde(default)]
     exit: Option<u64>,
+    /// Until the program reports one of these states (`blocked`, `done`, …).
+    #[serde(default)]
+    status: Vec<String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
     max_bytes: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StatusArgs {
+    state: String,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    progress: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -407,6 +422,7 @@ impl Ctx {
             "pane_read" => self.pane_read(args(value)?).await,
             "pane_wait" => self.pane_wait(args(value)?).await,
             "pane_send" => self.pane_send(args(value)?).await,
+            "status_set" => self.status_set(args(value)?),
             other => Err(ToolError::new(
                 ErrorCode::NotFound,
                 format!("no tool {other}"),
@@ -512,6 +528,7 @@ impl Ctx {
             "exited": meta.as_ref().and_then(|m| m.exit).is_some(),
             "foreground": foreground,
             "lastCommand": last,
+            "status": status(&self.core, id, entry),
             "cursor": output::cursor(entry.pane.head()),
         })
     }
@@ -852,11 +869,26 @@ impl Ctx {
             .map(Regex::new)
             .transpose()
             .map_err(|e| ToolError::new(ErrorCode::InvalidArgs, e.to_string()))?;
-        if re.is_none() && !a.prompt && a.quiet_ms.is_none() && a.exit.is_none() {
+        if re.is_none()
+            && !a.prompt
+            && a.quiet_ms.is_none()
+            && a.exit.is_none()
+            && a.status.is_empty()
+        {
             return Err(ToolError::new(
                 ErrorCode::InvalidArgs,
-                "wait for what? give match, prompt, quietMs or exit",
+                "wait for what? give match, prompt, quietMs, exit or status",
             ));
+        }
+        if let Some(bad) = a
+            .status
+            .iter()
+            .find(|s| agents::ProgramState::parse(s).is_none())
+        {
+            return Err(
+                ToolError::new(ErrorCode::InvalidArgs, format!("no status {bad}"))
+                    .hint("statuses are idle, working, done, blocked and error"),
+            );
         }
         let since = match &a.since {
             Some(c) => output::parse_cursor(c).ok_or_else(|| {
@@ -896,6 +928,25 @@ impl Ctx {
                     }));
                 }
                 text = Some(rendered);
+            }
+            if !a.status.is_empty() {
+                let now = status(&self.core, pane, &entry);
+                if now["state"]
+                    .as_str()
+                    .is_some_and(|s| a.status.iter().any(|w| w == s))
+                {
+                    let mut done = self.waited(
+                        "status",
+                        text.clone(),
+                        &bytes,
+                        cols,
+                        max,
+                        position(&sub),
+                        None,
+                    )?;
+                    done["programStatus"] = now;
+                    return Ok(done);
+                }
             }
             let phase = entry.pane.line_snapshot().view.phase;
             if a.prompt && phase == Phase::Prompt {
@@ -974,6 +1025,38 @@ impl Ctx {
         Ok(json!({ "status": status, "output": Output::new(text, max, at), "command": command }))
     }
 
+    /// Reports the caller's own status, as OSC 7501 would, for agents that cannot print it.
+    fn status_set(&self, a: StatusArgs) -> Result<Value> {
+        let state = agents::ProgramState::parse(&a.state).ok_or_else(|| {
+            ToolError::new(ErrorCode::InvalidArgs, format!("no status {}", a.state))
+                .hint("statuses are idle, working, done, blocked, error, and clear to remove it")
+        })?;
+        let kind = a
+            .kind
+            .as_deref()
+            .map(|k| {
+                agents::ProgramKind::parse(k).ok_or_else(|| {
+                    ToolError::new(ErrorCode::InvalidArgs, format!("no kind {k}"))
+                        .hint("kinds are permission, question and auth")
+                })
+            })
+            .transpose()?
+            .filter(|_| state == agents::ProgramState::Blocked);
+        let (_, entry) = self.resolve(None)?;
+        lock(&entry.meta).program =
+            (state != agents::ProgramState::Clear).then(|| agents::ProgramStatus {
+                state,
+                kind,
+                id: None,
+                app: None,
+                progress: a.progress.map(|p| p.min(100)),
+                title: None,
+                msg: a.message,
+                seq: None,
+            });
+        Ok(json!({ "status": status(&self.core, self.caller, &entry) }))
+    }
+
     // --- input ------------------------------------------------------------------------------
 
     async fn pane_send(&self, a: SendArgs) -> Result<Value> {
@@ -1002,6 +1085,30 @@ impl Ctx {
         }
         Ok(json!({ "written": written, "cursor": output::cursor(entry.pane.head()) }))
     }
+}
+
+/// What the program in the pane says it is doing: its own last report, else what an agent
+/// integration knows, else nothing.
+fn status(core: &Core, id: PaneId, entry: &PaneEntry) -> Value {
+    if let Some(report) = &lock(&entry.meta).program {
+        return json!({
+            "state": report.state.as_str(),
+            "kind": report.kind.map(agents::ProgramKind::as_str),
+            "app": report.app,
+            "message": report.msg,
+            "progress": report.progress,
+        });
+    }
+    let Some(agent) = core.pane_meta(id).and_then(|m| m.agent) else {
+        return Value::Null;
+    };
+    let (state, kind) = match agent.state {
+        proto::AgentState::Idle => ("idle", None),
+        proto::AgentState::Running => ("working", None),
+        proto::AgentState::Blocked(_) => ("blocked", Some("permission")),
+        proto::AgentState::Done => ("done", None),
+    };
+    json!({ "state": state, "kind": kind, "app": agent.kind })
 }
 
 fn position(sub: &pty::Subscriber) -> Seq {

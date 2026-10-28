@@ -49,7 +49,8 @@ pub enum ProgramState {
 }
 
 impl ProgramState {
-    fn parse(s: &str) -> Option<Self> {
+    /// The state named `s` in a report (`working`, `blocked`, …).
+    pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "idle" => Self::Idle,
             "working" => Self::Working,
@@ -61,7 +62,8 @@ impl ProgramState {
         })
     }
 
-    fn as_str(self) -> &'static str {
+    /// The state's name in a report.
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Idle => "idle",
             Self::Working => "working",
@@ -85,7 +87,8 @@ pub enum ProgramKind {
 }
 
 impl ProgramKind {
-    fn parse(s: &str) -> Option<Self> {
+    /// The kind named `s` in a report (`permission`, `question`, `auth`).
+    pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "permission" => Self::Permission,
             "question" => Self::Question,
@@ -94,7 +97,8 @@ impl ProgramKind {
         })
     }
 
-    fn as_str(self) -> &'static str {
+    /// The kind's name in a report.
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Permission => "permission",
             Self::Question => "question",
