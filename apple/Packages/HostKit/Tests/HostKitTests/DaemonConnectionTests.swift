@@ -89,8 +89,8 @@ import UnnamedCore
         // Echo hints reach the predictor, in-band resizes the pane.
         client().send(.echoHint(hint: UnnamedCore.EchoHint(paneId: 3, echo: true, icanon: false, altScreen: false, atPrompt: true, atSeq: 104, prediction: .allow)))
         #expect(predictions.all.last == .hint(TerminalCore.EchoHint(echo: true, canonical: false, atPrompt: true, altScreen: false)))
-        client().send(.paneResized(paneId: 3, seq: 105, size: PaneSize(cols: 100, rows: 30, widthPx: 0, heightPx: 0)))
-        #expect(sink.all.last == .resized(cols: 100, rows: 30))
+        client().send(.paneResized(paneId: 3, seq: 105, size: PaneSize(cols: 100, rows: 30, widthPx: 1000, heightPx: 600)))
+        #expect(sink.all.last == .resized(cols: 100, rows: 30, cellWidth: 10, cellHeight: 20))
 
         backend.resize(cols: 120, rows: 40, cellWidth: 10, cellHeight: 20)
         #expect(client().calls.last == .resize(3, PaneSize(cols: 120, rows: 40, widthPx: 1200, heightPx: 800)))

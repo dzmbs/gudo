@@ -164,6 +164,7 @@ app (`ClientEvent::PaneHistory`) for its own decoder.
   path: focused 50 ms (64 KiB – 1 MiB), others 10 ms (16 – 256 KiB). Over budget the stream drops
   bytes and marks the pane dirty; once everything sent is acked it sends one snapshot and resumes
   bytes from the snapshot's `seq`. One frame always goes through when nothing is in flight.
+  and the pixels of the kitty images in view right after it (§7.10),
   zstd level 3, cached per (seq, resize count) so many clients share one encode. Rate limit:
 - **Resizes are in-band**: `Resized{seq, size}` is sent at its exact offset in the byte stream,
   so client VTs resize at the same point as the daemon's.
@@ -1412,8 +1413,7 @@ elements, a concurrent tie settled by `versionNonce` on every client and the dae
 stamped and not echoed, tombstones, resync after suspend, viewer refused, closing a `NewTab`
 canvas keeps the scene, deleting the scene closes its pane everywhere); inline placements
 (placed at the cursor row, followed through 40 lines of output, sent to a client attaching later, replaced after
-an edit, a kitty PNG printed by a program in the pane captured as an image artifact and
-placement with its `c`/`r` size, a dropped `.excalidraw` file and photo imported and placed,
+an edit, a dropped `.excalidraw` file and photo imported and placed,
 detached by `clear`, removed, kept detached after a restart with the scene intact); two
 clients — live ink fan-out
 (200 chunks, latency printed, no echo to the sender), batches from both converge, the second
@@ -1445,14 +1445,14 @@ Export (SVG, PNG, ASCII) converts elements to vectors (rectangles, ellipses, dia
 and lines, freedraw with pressure, text, images); the hand-drawn look is the app's (its PNG
 render, uploaded as preview or with `Place`/`Send`).
 
-### 7.10 Inline placements ("never leave the terminal")
+### 7.10 Inline placements ("never leave the terminal") and kitty graphics
 
 A **placement** shows an artifact inside a terminal pane: a `cols × rows` cell box at column
-`col` of an anchored row, drawn by clients over the cells like kitty graphics, scrolling with
-the output (the anchor is a tracked pin, §7.3). The daemon owns image and placement state
-because Ghostty snapshots carry no images: placements are sent on every `Attach` (resume,
-reattach, a new device) and as `ArtifactEvent::Placed` / `Unplaced`, and persisted in
-`index.bin` (detached after a restart). Three ways in:
+`col` of an anchored row, drawn by clients over the cells in the "above text" layer, scrolling
+with the output (the anchor is a tracked pin, §7.3). The daemon owns placement state:
+placements are sent on every `Attach` (resume, reattach, a new device) and as
+`ArtifactEvent::Placed` / `Unplaced`, and persisted in `index.bin` (detached after a restart).
+Two ways in:
 
 - **Place** (`PlaceRequest{pane, artifact, version, anchor | cursor row, col, cols, rows,
   png, replace}`): the overlay's "done". `png` is the device's render, else the image, the
@@ -1461,14 +1461,51 @@ reattach, a new device) and as `ArtifactEvent::Placed` / `Unplaced`, and persist
   placement the overlay was re-opened from.
 - **Import** (`ImportRequest{pane, name, data | blob}`): a pasted or dropped image or
   `.excalidraw` file becomes an artifact placed at the cursor row.
-- **kitty graphics in the output**: the output scanner (`kitty.rs`) recognises PNG images a
-  program displays with the kitty protocol (`a=T,f=100`, direct, chunked or not; `c`/`r`
-  sizes), pins the cursor row at the exact byte where the sequence ends (the VT write is split
-  there), and keeps the PNG as an image artifact plus a `Kitty` placement. So `un draw show`,
-  `kitten icat` or an agent printing an image inside our pane shows inline on every client
-  and survives snapshots. Not handled: transmit-then-place (`a=t` + `a=p`), raw RGB data,
-  file/shm transmission, animation, deletes. The daemon's and clients' VTs keep kitty storage
-  off, so both ignore the sequence identically.
+
+**Kitty graphics** (`kitten icat`, yazi and ranger previews, chafa/timg, matplotlib's kitty
+backend, `un draw show`, agents printing screenshots) are not placements: Ghostty implements
+the protocol. The daemon's VT and every client's VT keep the images (64 MiB per pane and
+screen by default, `[terminal] image_storage_mb`; clients keep the same default, so a host
+set higher may see a client evict an image it still shows). Everything the protocol has
+works: direct and chunked transmission, PNG (decoded with the `png` crate on the daemon,
+ImageIO on Apple) and raw RGB/RGBA/gray, transmit then place, placement ids, source rects,
+cell offsets, `c`/`r` scaling, z layers, relative placements, Unicode placeholders,
+animation and deletion. Query replies (`a=q`, and the `OK`/errors of transmissions without
+`q=2`) come from the daemon's VT through its reply sink like other VT replies; a client's
+mirror never answers (`Terminal.answersQueries`), or the program would read each reply
+twice. The file, temporary-file and shared-memory mediums stay off (Ghostty's default):
+clients mirror the byte stream and cannot read the host's files, so programs fall back to
+sending pixels inline, as `icat` does after its probe fails.
+
+Every VT of a pane must lay images out alike, or an image moves the cursor by a different
+number of rows on one of them. So all use the pane's cell size from its `PaneSize`
+(`width_px / cols`, `height_px / rows`): a client that sends no pixel size gets 10 × 20 px
+cells, which the daemon writes into the size it records, reports to the program
+(`TIOCSWINSZ`) and sends in `Resized`. The app's VT uses that cell size and the renderer
+scales placements to its own cells.
+
+Snapshots carry the images: the bytes sent to a client are the READY prefix plus the pixel
+records of the images in view, which the encoder writes right after READY
+(`ghostty_vt::screen_len`), so a resumed or new client shows them at once. Images further
+back arrive with the history pages they were placed on, and the rest after the last page; a
+restored image is drawn only once its pixels are there (the render state leaves pending
+images out), at its final size.
+
+The app draws placements from the render state's image list (`RenderState.imagePlacements`)
+in Ghostty's three layers, lowest z first, clipped to the grid, with a texture per image and
+generation, kept only for images on screen and scaled down beyond 4096 px. Animations tick
+with each frame and wake the renderer when the next frame is due, so nothing runs while none
+plays.
+
+Tests: `tests/it/kitty.rs` (a query answered once; a PNG with `a=T` sized from the default
+cells; `a=t` then `a=p` twice with raw RGBA; a chunked transfer; `a=d,d=I`; a second client
+and a reconnecting one restoring the images with their pixels from the snapshot),
+`ghostty_vt` `history::tests::image_pixels_arrive_after_ready`; TerminalKit
+`KittyGraphicsTests` (placement position, offsets, source rect, layer; a negative row after
+scrolling; deletion; pending pixels after a restore; replies left to the host) and
+`KittyImageTests` (pixels on screen, layers against cell backgrounds, host cells scaled to
+the renderer's, a restored image appearing with its pixels, animation frames); the Mac
+`MacSnapshotTests.testKittyImageInAPane` fixture.
 
 Roles: `Place`, `Unplace`, `Import` need the draw role on the pane; `Placements` any role.
 
@@ -2035,7 +2072,8 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
   untested against a real browser; no transfer resume by offset for uploads (downloads take an
   offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
-  `.excalidraw` export (import works); kitty capture covers displayed PNGs only (§7.10);
+  `.excalidraw` export (import works); kitty images cannot be dragged out of a pane (they
+  are not placements, §7.10);
   Excalidraw scenes keep no history (only the current revision exports); live ink is relayed without per-connection
   rate limiting; a session's artifacts are deleted with it; anchors detach on daemon restart;
   the daemon's raster render draws text and images as outlines only.

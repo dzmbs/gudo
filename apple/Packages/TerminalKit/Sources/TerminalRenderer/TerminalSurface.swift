@@ -106,6 +106,14 @@ public final class TerminalSurface {
     private var lastMarks: [GutterMark] = []
     private var marksDirty = false
 
+    /// Kitty graphics: the terminal's placements as of the last frame, a texture per image on
+    /// screen (only those, so memory follows what is shown), and the draws of the last frame.
+    public private(set) var kittyPlacements: [ImagePlacement] = []
+    private var kittyTextures: [UInt32: KittyTexture] = [:]
+    private var kittyGenerations: (placements: UInt64, storage: UInt64)?
+    private var kittyDraws = KittyDraws()
+    private var animationWake: Task<Void, Never>?
+
     private let renderer: MetalRenderer
     private var fonts: FontGrid?
     private let state = RenderState()
@@ -202,6 +210,8 @@ public final class TerminalSurface {
         displayLinkTarget = nil
         blinkTask?.cancel()
         blinkTask = nil
+        animationWake?.cancel()
+        animationWake = nil
     }
 
     // MARK: Geometry
@@ -678,6 +688,78 @@ public final class TerminalSurface {
         return MTLScissorRect(x: x, y: y, width: width, height: height)
     }
 
+    // MARK: Kitty graphics
+
+    /// Reads the placements again when they or the storage changed (an image added, moved,
+    /// deleted, its pixels arriving after a restore, an animation frame) and uploads the
+    /// pixels of images whose texture is missing or stale. Returns whether anything changed.
+    private func refreshKittyImages(full: Bool) -> Bool {
+        let generations = (state.imagePlacementsGeneration, terminal.kittyStorageGeneration)
+        guard full || kittyGenerations.map({ $0 != generations }) ?? true else { return false }
+        kittyGenerations = generations
+        let placements = state.imagePlacements()
+        let changed = placements != kittyPlacements || !placements.isEmpty
+        kittyPlacements = placements
+        var shown = Set<UInt32>()
+        for p in placements {
+            shown.insert(p.imageID)
+            guard kittyTextures[p.imageID]?.generation != p.generation else { continue }
+            // Pixels still on the way (after a restore) or replaced since the update: the
+            // image appears, at its final size, once a later frame finds them.
+            guard let pixels = terminal.kittyImage(id: p.imageID), pixels.generation == p.generation,
+                  let texture = KittyTexture(pixels, renderer: renderer)
+            else { continue }
+            kittyTextures[p.imageID] = texture
+        }
+        kittyTextures = kittyTextures.filter { shown.contains($0.key) }
+        return changed || full
+    }
+
+    /// The placements as quads in their layers, lowest z first, scaled from the terminal's cell
+    /// pixels to the renderer's (a remote pane lays images out in the host's cells).
+    private func kittyImageDraws(metrics m: CellMetrics) -> KittyDraws {
+        var draws = KittyDraws()
+        guard !kittyPlacements.isEmpty, let grid else { return draws }
+        let vtCell = terminal.cellPixelSize
+        guard vtCell.width > 0, vtCell.height > 0 else { return draws }
+        let sx = Float(m.cellWidth) / Float(vtCell.width), sy = Float(m.cellHeight) / Float(vtCell.height)
+        let sorted = kittyPlacements.sorted { ($0.layer, $0.z) < ($1.layer, $1.z) }
+        for p in sorted {
+            guard let image = kittyTextures[p.imageID], image.generation == p.generation else { continue }
+            let top = Float(p.row) * Float(m.cellHeight) + Float(p.offsetY) * sy
+            let height = Float(p.height) * sy
+            guard top + height > 0, top < Float(Int(grid.rows) * m.cellHeight) else { continue }
+            let t = image.scale
+            let draw = ImageDraw(texture: image.texture, vertex: ImageVertex(
+                gridPos: SIMD2(Float(p.col), Float(p.row)),
+                cellOffset: SIMD2(Float(p.offsetX) * sx, Float(p.offsetY) * sy),
+                sourceRect: SIMD4(Float(p.sourceX) * t, Float(p.sourceY) * t, Float(p.sourceWidth) * t, Float(p.sourceHeight) * t),
+                destSize: SIMD2(Float(p.width) * sx, height)))
+            switch p.layer {
+            case .belowBackground: draws.belowBackground.append(draw)
+            case .belowText: draws.belowText.append(draw)
+            case .aboveText: draws.aboveText.append(draw)
+            }
+        }
+        return draws
+    }
+
+    /// Wakes the renderer when the next animation frame is due; nothing while none plays.
+    private func scheduleAnimationFrame(_ dueMs: UInt64?) {
+        animationWake?.cancel()
+        animationWake = nil
+        guard let dueMs, displayLink != nil else { return }
+        // Never sooner than a 120 Hz frame.
+        let delay = max(Int64(dueMs) - Int64(Self.nowMs()), 8)
+        animationWake = Task { [weak self] in
+            guard (try? await Task.sleep(for: .milliseconds(delay))) != nil else { return }
+            self?.setNeedsRender()
+        }
+    }
+
+    /// The animation clock: milliseconds of monotonic uptime, the same for every terminal.
+    private static func nowMs() -> UInt64 { DispatchTime.now().uptimeNanoseconds / 1_000_000 }
+
     // MARK: Gutter marks
 
     /// The gutter marks changed (added, finished, re-anchored): draw again.
@@ -830,6 +912,7 @@ public final class TerminalSurface {
     public func renderIfDirty(offscreen: Bool = false) -> Bool {
         guard let fonts, pixelSize.width > 0 else { return false }
         let start = CACurrentMediaTime()
+        scheduleAnimationFrame(terminal.tickKittyAnimations(nowMs: Self.nowMs()))
         state.update(from: terminal)
         let cursor = state.cursor
         let overlay = currentOverlay(cursor: cursor)
@@ -838,7 +921,9 @@ public final class TerminalSurface {
         let imagesChanged = imagesDirty || images != lastImages
         let marks = gutterMarks?() ?? []
         let marksChanged = marksDirty || marks != lastMarks
-        guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged || marksChanged else { return false }
+        let kittyChanged = refreshKittyImages(full: state.dirty == .full || needsFullRender)
+        guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged || marksChanged || kittyChanged
+        else { return false }
         if cursor.blinking != cursorBlinks {
             cursorBlinks = cursor.blinking
             restartBlink()
@@ -852,7 +937,8 @@ public final class TerminalSurface {
         lastOverlay = overlay
         lastImages = images
         imagesDirty = false
-        let draws = rowTintDraws(marks, colors: state.colors, metrics: fonts.metrics)
+        kittyDraws = kittyImageDraws(metrics: fonts.metrics)
+        let draws = rowTintDraws(marks, colors: state.colors, metrics: fonts.metrics) + kittyDraws.aboveText
             + (images.isEmpty && inlineImageFrames.isEmpty ? [] : imageDraws(images, metrics: fonts.metrics))
         lastMarks = marks
         marksDirty = false
@@ -864,7 +950,7 @@ public final class TerminalSurface {
         if let target = drawable?.texture ?? (offscreen ? offscreenTarget() : nil) {
             renderer.draw(
                 frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: target, present: drawable,
-                images: draws, imageClip: imageClip, gutter: stripes, gutterClip: gutterClip
+                belowBackground: kittyDraws.belowBackground, belowText: kittyDraws.belowText, images: draws, imageClip: imageClip, gutter: stripes, gutterClip: gutterClip
             ) {
                 stats.recordGPU(seconds: $0)
             }
@@ -914,11 +1000,12 @@ public final class TerminalSurface {
     public func snapshot() -> CGImage? {
         guard let fonts, let texture = offscreenTarget() else { return nil }
         let done = DispatchSemaphore(value: 0)
-        let draws = rowTintDraws(lastMarks, colors: state.colors, metrics: fonts.metrics)
+        let draws = rowTintDraws(lastMarks, colors: state.colors, metrics: fonts.metrics) + kittyDraws.aboveText
             + (lastImages.isEmpty ? [] : imageDraws(lastImages, metrics: fonts.metrics))
         let stripes = lastMarks.isEmpty ? [] : gutterDraws(lastMarks, colors: state.colors, metrics: fonts.metrics)
         renderer.draw(
-            frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: texture, present: nil, images: draws, imageClip: imageClip,
+            frame, uniforms: uniforms(fonts.metrics), fonts: fonts, to: texture, present: nil,
+            belowBackground: kittyDraws.belowBackground, belowText: kittyDraws.belowText, images: draws, imageClip: imageClip,
             gutter: stripes, gutterClip: gutterClip
         ) { _ in done.signal() }
         done.wait()

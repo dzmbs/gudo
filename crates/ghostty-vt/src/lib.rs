@@ -38,6 +38,7 @@ mod cells;
 mod error;
 mod history;
 mod input;
+mod kitty;
 mod snapshot;
 mod terminal;
 
@@ -48,7 +49,8 @@ pub use input::{
     Key, KeyAction, KeyEncoder, KeyEvent, Mods, MouseAction, MouseButton, MouseEncoder, MouseEvent,
     char_width, encode_paste, paste_is_safe,
 };
-pub use snapshot::{HistoryPage, Restore, SnapshotDecoder, ready_len, snapshot_format};
+pub use kitty::{ImageFormat, KITTY_IMAGE_STORAGE_LIMIT, KittyImage, KittyPlacement};
+pub use snapshot::{HistoryPage, Restore, SnapshotDecoder, ready_len, screen_len, snapshot_format};
 pub use terminal::{
     CONTINUATION_MAX_BYTES, Cursor, Mode, PinId, Point, PromptKind, ReplySink, Screen,
     SemanticPrompt, SemanticPromptKind, Terminal, TextRegion, Wrap,

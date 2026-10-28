@@ -783,6 +783,24 @@ pub struct PaneSize {
     pub height_px: u16,
 }
 
+impl PaneSize {
+    /// One cell in pixels (width, height), as every VT showing the pane sizes its kitty
+    /// graphics images; 0 where the pixel size is unknown.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let size = proto::PaneSize { cols: 80, rows: 24, width_px: 800, height_px: 480 };
+    /// assert_eq!(size.cell_px(), (10, 20));
+    /// ```
+    pub fn cell_px(&self) -> (u32, u32) {
+        (
+            u32::from(self.width_px / self.cols.max(1)),
+            u32::from(self.height_px / self.rows.max(1)),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SizePolicy {
     /// The lease holder's size. Default once a pane is shared.

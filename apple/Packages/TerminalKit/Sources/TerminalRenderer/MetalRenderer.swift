@@ -17,7 +17,7 @@ final class GPUContext: Sendable {
     let bgColorPipeline: MTLRenderPipelineState
     let cellBgPipeline: MTLRenderPipelineState
     let cellTextPipeline: MTLRenderPipelineState
-    /// Inline images (Ghostty's `image` pipeline): placements drawn above the text.
+    /// Images (Ghostty's `image` pipeline): kitty graphics in their layers, inline placements.
     let imagePipeline: MTLRenderPipelineState
     /// Runtime shader compile time, reported by the demo and the bench.
     let shaderCompileSeconds: Double
@@ -90,6 +90,8 @@ final class MetalRenderer {
         var bgCells: MTLBuffer?
         var text: MTLBuffer?
         var images: MTLBuffer?
+        var imagesBelowBackground: MTLBuffer?
+        var imagesBelowText: MTLBuffer?
         var gutter: MTLBuffer?
     }
 
@@ -112,10 +114,13 @@ final class MetalRenderer {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// Encodes and commits one frame into `target`, presenting `drawable` if given.
+    /// Encodes and commits one frame into `target`, presenting `drawable` if given. Images
+    /// draw in Ghostty's layers: `belowBackground` over the background color and under cell
+    /// backgrounds, `belowText` under the text, `images` above it, each in the order given.
     /// `onGPUComplete` receives the GPU execution time in seconds.
     func draw(
         _ frame: FrameContents, uniforms: Uniforms, fonts: FontGrid, to target: MTLTexture, present drawable: CAMetalDrawable?,
+        belowBackground: [ImageDraw] = [], belowText: [ImageDraw] = [],
         images: [ImageDraw] = [], imageClip: MTLScissorRect? = nil,
         gutter: [ImageDraw] = [], gutterClip: MTLScissorRect? = nil,
         onGPUComplete: @escaping @Sendable (Double) -> Void
@@ -145,11 +150,13 @@ final class MetalRenderer {
         encoder.setRenderPipelineState(gpu.bgColorPipeline)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        drawImages(belowBackground, into: &frames[frameIndex].imagesBelowBackground, clip: imageClip, uniforms: &uniforms, encoder: encoder)
 
         // 2. Cell backgrounds: full-screen fragment shader indexing the flat bg_cells buffer.
         encoder.setRenderPipelineState(gpu.cellBgPipeline)
         encoder.setFragmentBuffer(bgCells, offset: 0, index: 2)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        drawImages(belowText, into: &frames[frameIndex].imagesBelowText, clip: imageClip, uniforms: &uniforms, encoder: encoder)
 
         // 3. Text, decorations and cursor: one instanced quad (triangle strip) per glyph.
         if !frame.text.isEmpty {
@@ -162,18 +169,8 @@ final class MetalRenderer {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: frame.text.count)
         }
 
-        // 4. Inline images above the text (kitty's "above text" layer), clipped to the grid.
-        if !images.isEmpty, let buffer = upload(images.map(\.vertex), into: &frames[frameIndex].images) {
-            encoder.setRenderPipelineState(gpu.imagePipeline)
-            if let imageClip { encoder.setScissorRect(imageClip) }
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-            for (index, image) in images.enumerated() {
-                encoder.setVertexBuffer(buffer, offset: index * MemoryLayout<ImageVertex>.stride, index: 0)
-                encoder.setFragmentTexture(image.texture, index: 0)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
-            }
-        }
+        // 4. Images above the text, clipped to the grid.
+        drawImages(images, into: &frames[frameIndex].images, clip: imageClip, uniforms: &uniforms, encoder: encoder)
 
         // 5. Gutter stripes (shell command marks) in the left padding, through the image
         //    pipeline with 1×1 textures, clipped to the padding beside the grid's rows.
@@ -208,6 +205,23 @@ final class MetalRenderer {
         } else {
             commands.present(drawable)
             commands.commit()
+        }
+    }
+
+    /// One quad per image through the image pipeline; leaves the scissor set to `clip`.
+    private func drawImages(
+        _ images: [ImageDraw], into slot: inout MTLBuffer?, clip: MTLScissorRect?, uniforms: inout Uniforms,
+        encoder: MTLRenderCommandEncoder
+    ) {
+        guard !images.isEmpty, let buffer = upload(images.map(\.vertex), into: &slot) else { return }
+        encoder.setRenderPipelineState(gpu.imagePipeline)
+        if let clip { encoder.setScissorRect(clip) }
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        for (index, image) in images.enumerated() {
+            encoder.setVertexBuffer(buffer, offset: index * MemoryLayout<ImageVertex>.stride, index: 0)
+            encoder.setFragmentTexture(image.texture, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
         }
     }
 

@@ -42,6 +42,8 @@ data-encoding = "2.11.1"
 zeroize = "1.8"
 getrandom = "0.4.3"
 zstd = { version = "0.14.3", default-features = false }
+# Decodes PNG images programs send with the kitty graphics protocol (crates/ghostty-vt).
+png = "0.18"
 qrcode = { version = "0.14.1", default-features = false }
 clap = { version = "4.6.7", features = ["derive"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

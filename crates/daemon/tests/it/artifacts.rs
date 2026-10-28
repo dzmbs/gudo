@@ -854,7 +854,7 @@ async fn caps_refuse_oversized_blobs_and_batches() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Excalidraw scenes, inline placements, kitty capture, import
+// Excalidraw scenes, inline placements, import
 // ---------------------------------------------------------------------------------------------
 
 fn exel(id: &str, version: u64, nonce: u32, x: f32, label: &str) -> client_core::proto::ExElement {
@@ -1063,7 +1063,7 @@ async fn excalidraw_scenes_reconcile_between_clients_and_export() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn inline_placements_follow_output_survive_reattach_and_capture_kitty_images() {
+async fn inline_placements_follow_output_and_survive_reattach() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
     let mut a = Drawer::new(TestClient::connect(
@@ -1149,46 +1149,11 @@ async fn inline_placements_follow_output_survive_reattach_and_capture_kitty_imag
     })
     .await;
 
-    // A program in the pane prints a PNG with the kitty graphics protocol: the daemon keeps
-    // it as an image artifact placed at the cursor row.
     let png = drawing::encode_png(&drawing::Rgba {
         width: 36,
         height: 36,
         data: vec![120; 36 * 36 * 4],
     });
-    let b64 = data_encoding::BASE64.encode(&png);
-    a.c.type_line(
-        pane,
-        &format!("printf '\\033_Ga=T,f=100,C=1,q=2,c=4,r=2;{b64}\\033\\\\\\n\\nKITTY-DONE\\n'"),
-    );
-    a.c.wait_text(pane, "KITTY-DONE").await;
-    let u = late
-        .wait("kitty placement", |u| {
-            placed(u, |x| {
-                x.source == client_core::proto::PlacementSource::Kitty
-            })
-        })
-        .await;
-    let ArtifactUpdate::Event(e) = u else {
-        unreachable!()
-    };
-    let ArtifactEvent::Placed(k) = *e else {
-        unreachable!()
-    };
-    assert_eq!((k.cols, k.rows), (4, 2));
-    assert_eq!(k.image.width, 36);
-    let (_, bytes) = late.c.client.blob_download(k.image.hash).await.unwrap();
-    assert_eq!(bytes, png);
-    let kinds: Vec<ArtifactKind> =
-        a.c.client
-            .artifacts(session)
-            .await
-            .unwrap()
-            .iter()
-            .map(|i| i.kind)
-            .collect();
-    assert!(kinds.contains(&ArtifactKind::Image));
-
     // A dropped .excalidraw file becomes an inline diagram; so does a dropped photo.
     let flow = include_bytes!("../../../drawing/tests/fixtures/flow.excalidraw");
     let d =
@@ -1208,7 +1173,16 @@ async fn inline_placements_follow_output_survive_reattach_and_capture_kitty_imag
             .import_to_pane(pane, "photo.png".into(), png.clone())
             .await
             .unwrap();
-    assert_eq!(photo.image.hash, k.image.hash);
+    assert_eq!(photo.image.width, 36);
+    let kinds: Vec<ArtifactKind> =
+        a.c.client
+            .artifacts(session)
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.kind)
+            .collect();
+    assert!(kinds.contains(&ArtifactKind::Image));
 
     // Clearing the screen and scrollback detaches what was placed on the cleared rows.
     a.c.type_line(pane, "printf '\\033[H\\033[2J\\033[3J'");

@@ -9,8 +9,10 @@ publish.workspace = true
 
 [dependencies]
 ghostty-vt-sys.workspace = true
+png.workspace = true
 
 [dev-dependencies]
+data-encoding.workspace = true
 zstd.workspace = true
 
 [lints]

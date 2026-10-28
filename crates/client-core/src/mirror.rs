@@ -1,7 +1,7 @@
 //! Per-pane client state: the resume point, the history cursor and an optional libghostty-vt
 //! mirror.
 
-use ghostty_vt::{StreamingRestore, Terminal, TextRegion};
+use ghostty_vt::{KittyImage, KittyPlacement, StreamingRestore, Terminal, TextRegion};
 use proto::{PaneSize, SnapGen};
 
 /// The mirror's terminal: still taking history pages, or complete.
@@ -148,8 +148,8 @@ impl Mirror {
 
     pub fn resize(&mut self, size: PaneSize) {
         let result = match &mut self.vt {
-            Some(Vt::Restoring(r)) => r.resize(size.cols, size.rows),
-            Some(Vt::Done(t)) => t.resize(size.cols, size.rows),
+            Some(Vt::Restoring(r)) => r.resize(size.cols, size.rows, size.cell_px()),
+            Some(Vt::Done(t)) => t.resize(size.cols, size.rows, size.cell_px()),
             None => Ok(()),
         };
         if let Err(e) = result {
@@ -171,6 +171,17 @@ impl Mirror {
 
     pub fn vt(&self) -> Option<String> {
         self.terminal()?.vt(TextRegion::Active).ok()
+    }
+
+    pub fn images(&self) -> Option<Vec<(KittyPlacement, Option<KittyImage>)>> {
+        let terminal = self.terminal()?;
+        Some(
+            terminal
+                .kitty_placements()
+                .into_iter()
+                .map(|p| (p, terminal.kitty_image(p.image_id)))
+                .collect(),
+        )
     }
 
     pub fn snapshot(&self) -> Option<Vec<u8>> {

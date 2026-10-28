@@ -980,7 +980,10 @@ impl Core {
             cmd,
             size,
             self.cfg.ring_capacity,
-            self.cfg.scrollback_bytes,
+            crate::pane::VtLimits {
+                scrollback_bytes: self.cfg.scrollback_bytes,
+                image_storage_bytes: self.cfg.image_storage_bytes,
+            },
         )
         .map_err(|e| (OpError::SpawnFailed, e.to_string()))?;
         let record = PaneRecord {
@@ -1294,13 +1297,6 @@ async fn pane_task(
                     }
                     VtEvent::Osc(osc) => handle_osc(&core, &entry, osc),
                     VtEvent::Command(update) => handle_command(&core, &entry, update),
-                    VtEvent::KittyImage { key, png, col, cols, rows } => {
-                        let core = Arc::clone(&core);
-                        // Hashing and writing the blob stays off the pane's event loop.
-                        tokio::task::spawn_blocking(move || {
-                            crate::art::place::kitty_image(&core, id, key, &png, (col, cols, rows));
-                        });
-                    }
                 }
             }
             changed = echo.changed() => {

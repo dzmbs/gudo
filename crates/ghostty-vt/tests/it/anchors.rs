@@ -56,10 +56,10 @@ fn anchor_follows_reflow_on_resize() {
     t.write(b"abcdefghijklmnopqrstuvwxyz0123\r\nafter\r\n");
     let y = find(&t, "after").unwrap();
     let pin = t.pin_at(Point { y, x: 0 }).unwrap();
-    t.resize(10, 10).unwrap();
+    t.resize(10, 10, (8, 16)).unwrap();
     let now = t.pin_point(pin).unwrap();
     assert_eq!(row_text(&t, now.y), "after", "after narrowing");
-    t.resize(80, 10).unwrap();
+    t.resize(80, 10, (8, 16)).unwrap();
     let now = t.pin_point(pin).unwrap();
     assert_eq!(row_text(&t, now.y), "after", "after widening");
 }
@@ -149,7 +149,7 @@ fn daemon_and_client_agree() {
     let pb = b.pin_at(Point { y, x: 0 }).unwrap();
     for t in [&mut a, &mut b] {
         t.write(&script[4000..]);
-        t.resize(33, 12).unwrap();
+        t.resize(33, 12, (8, 16)).unwrap();
         t.write(b"tail\r\n");
     }
     let (qa, qb) = (a.pin_point(pa).unwrap(), b.pin_point(pb).unwrap());

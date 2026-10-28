@@ -201,7 +201,7 @@ mirror_enum! {
     PlacementSource = PlacementSource {
         /// A person placed or imported it.
         User,
-        /// A program in the pane printed it with the kitty graphics protocol.
+        /// Made by older daemons from kitty graphics output; no longer produced.
         Kitty,
     }
 }
