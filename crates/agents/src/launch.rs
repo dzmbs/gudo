@@ -94,7 +94,7 @@ pub fn pane_env(ctx: &LaunchContext) -> Vec<(String, OsString)> {
 }
 
 /// Returns the name agents know the daemon's MCP server by (docs/DAEMON.md §7.12):
-/// [`brand::PRODUCT_NAME`] made a bare identifier, plus `_drawings`.
+/// [`brand::PRODUCT_NAME`] made a bare identifier.
 ///
 /// It is valid both as a Claude Code server name (its tools appear as `mcp__<name>__<tool>`)
 /// and as a bare TOML key in Codex's `mcp_servers.<name>`.
@@ -102,18 +102,23 @@ pub fn pane_env(ctx: &LaunchContext) -> Vec<(String, OsString)> {
 /// # Examples
 ///
 /// ```
-/// assert_eq!(agents::mcp_server_name(), "unnamed_drawings");
+/// assert_eq!(agents::mcp_server_name(), "unnamed");
 /// ```
 pub fn mcp_server_name() -> String {
-    let product: String = brand::PRODUCT_NAME
+    brand::PRODUCT_NAME
         .chars()
         .map(|c| match c {
             'a'..='z' | '0'..='9' => c,
             'A'..='Z' => c.to_ascii_lowercase(),
             _ => '_',
         })
-        .collect();
-    format!("{product}_drawings")
+        .collect()
+}
+
+/// The name earlier builds registered the server under, when it only served drawings; a user
+/// registration under it is removed when registering again.
+pub fn legacy_mcp_server_name() -> String {
+    format!("{}_drawings", mcp_server_name())
 }
 
 /// The MCP server's terminal tools that act (run, type, open, close): an agent's own permission
@@ -217,7 +222,8 @@ mod tests {
 
     #[test]
     fn mcp_server_runs_the_shim_for_this_pane() {
-        assert_eq!(mcp_server_name(), "unnamed_drawings");
+        assert_eq!(mcp_server_name(), "unnamed");
+        assert_eq!(legacy_mcp_server_name(), "unnamed_drawings");
         assert_eq!(
             mcp_args(&test_context()),
             ["mcp", "--state", "/state", "--pane", "p_9f2"]

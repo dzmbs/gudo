@@ -6,7 +6,7 @@ description: Use the browser pane beside this terminal in the Unnamed app (iPad,
 # Browser beside the terminal
 
 The terminal runs inside an app the user watches. The `browser_*` tools (MCP server
-`unnamed_drawings`) drive a real page shown beside this terminal there. Without MCP, the same
+`unnamed`) drive a real page shown beside this terminal there. Without MCP, the same
 verbs work from the shell: `un-hook browser <verb> [json | key=value …]`.
 
 ## How to work

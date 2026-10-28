@@ -1991,7 +1991,9 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
 - **MCP.** Every tool has an `outputSchema` and returns `structuredContent` (typed values for
   code-mode harnesses) plus text that leads with a summary and then the output verbatim.
   Annotations mark the read-only tools; `agents::ACTING_TOOLS` are the ones Claude's permission
-  prompt asks about.
+  prompt asks about. The server is `unnamed` (`agents::mcp_server_name`); registering with
+  an agent removes a registration under the old `unnamed_drawings` first. Other harnesses add
+  it by hand, e.g. pi: `pi mcp add unnamed -- un-hook mcp` from a pane.
 
 ## 10. Known gaps / follow-ups
 
