@@ -127,6 +127,8 @@ pub(crate) struct MetaState {
     pub last_hint: Option<(EchoHint, Prediction)>,
     /// The password prompt on the cursor row while input is hidden (`askpass::detect`).
     pub secret_prompt: Option<String>,
+    /// The program's own last OSC 7501 report (or `status_set`), whatever the program.
+    pub program: Option<agents::ProgramStatus>,
 }
 
 pub(crate) struct PaneEntry {
@@ -1350,6 +1352,11 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
             core.agent_event(id, event);
         }
         Osc::ProgramStatus(body) => {
+            // Reports about sub-records (`id=`) belong to the agent integrations below.
+            if let Some(report) = agents::ProgramStatus::parse(&body).filter(|r| r.id.is_none()) {
+                lock(&entry.meta).program =
+                    (report.state != agents::ProgramState::Clear).then_some(report);
+            }
             let event = lock(&entry.agent)
                 .as_mut()
                 .and_then(|rt| rt.program_status(&body));

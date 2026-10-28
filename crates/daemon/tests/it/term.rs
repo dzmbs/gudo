@@ -227,3 +227,64 @@ impl Caller {
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn any_program_reports_its_status_and_agents_wait_for_it() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |c| c.shell = Some(zsh)).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let me = user.attach_and_follow().await;
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: me.0.to_string(),
+    };
+
+    // A worker (any program, no agent integration) says it is blocked on a question.
+    let run = agent
+        .ok(
+            "cmd_run",
+            json!({ "command": "printf '\\e]7501;state=blocked:kind=question:app=pi\\e\\\\'" }),
+        )
+        .await;
+    let worker = run["pane"].as_str().unwrap().to_owned();
+    let list = agent.ok("pane_list", json!({})).await;
+    let pane = list["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == worker)
+        .unwrap();
+    assert_eq!(pane["status"]["state"], "blocked", "{pane}");
+    assert_eq!(pane["status"]["kind"], "question");
+    assert_eq!(pane["status"]["app"], "pi");
+
+    // Then finishes while the orchestrator waits for it.
+    agent
+        .ok("pane_send", json!({ "pane": worker, "text": "sleep 0.3; printf '\\e]7501;state=done:app=pi\\e\\\\'", "submit": true }))
+        .await;
+    let waited = agent
+        .ok(
+            "pane_wait",
+            json!({ "pane": worker, "status": ["done", "error"], "timeoutMs": 5000 }),
+        )
+        .await;
+    assert_eq!(waited["status"], "status", "{waited}");
+    assert_eq!(waited["programStatus"]["state"], "done");
+
+    // An agent that cannot print OSC 7501 reports through the tool.
+    agent
+        .ok(
+            "status_set",
+            json!({ "state": "working", "message": "Running tests", "progress": 40 }),
+        )
+        .await;
+    let who = agent.ok("whoami", json!({})).await;
+    assert_eq!(who["pane"]["status"]["message"], "Running tests", "{who}");
+    agent.ok("status_set", json!({ "state": "clear" })).await;
+    assert!(agent.ok("whoami", json!({})).await["pane"]["status"].is_null());
+}

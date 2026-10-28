@@ -1972,7 +1972,7 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   `hook.token`), so a pane's programs cannot act as another pane. `hook.token` itself, which only
   the state directory holds, speaks for any pane. Every hook-socket caller is checked this way.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
-  `pane_wait`, `pane_send`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
+  `pane_wait`, `pane_send`, `status_set`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
 - **Rules.** Read any pane of the caller's session; type into, run in and close only the panes it
   created (or that those created), never its own; nothing it opens takes the user's focus;
   input is refused while the program asks for a password (echo off, canonical).
@@ -1984,6 +1984,10 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   OSC 133 mark to the exit code and the command's own output. Shells without integration report
   `status: unknown` after the output settles. Waits default to 30 s and stop at 240 s with
   `status: timeout`, never an error.
+- **Status.** Any program's last OSC 7501 report about itself (no `id=`) is the pane's
+  `status`, whatever the program; panes without one show their agent integration's state.
+  `pane_wait {status: [...]}` waits for it, and `status_set` reports it for agents that cannot
+  print the sequence.
 - **MCP.** Every tool has an `outputSchema` and returns `structuredContent` (typed values for
   code-mode harnesses) plus text that leads with a summary and then the output verbatim.
   Annotations mark the read-only tools; `agents::ACTING_TOOLS` are the ones Claude's permission

@@ -73,8 +73,23 @@ fn pane_schema() -> Value {
             "foreground": { "type": ["object", "null"], "properties": { "pid": { "type": "integer" }, "name": { "type": "string" } } },
             "lastCommand": { "anyOf": [command_schema(), { "type": "null" }] },
             "cursor": { "type": "string" },
+            "status": status_schema(),
         },
         "required": ["id", "kind", "isSelf", "createdByYou", "scopes", "atPrompt", "altScreen", "cursor"],
+    })
+}
+
+fn status_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "description": "What the program says it is doing (OSC 7501, or an agent integration).",
+        "properties": {
+            "state": { "type": "string", "enum": ["idle", "working", "done", "blocked", "error"] },
+            "kind": { "type": ["string", "null"], "enum": ["permission", "question", "auth", null] },
+            "app": { "type": ["string", "null"] },
+            "message": { "type": ["string", "null"] },
+            "progress": { "type": ["integer", "null"] },
+        },
     })
 }
 
@@ -182,7 +197,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_wait",
             title: "Wait for a terminal pane",
-            description: "Wait until a terminal pane prints a line matching a regex (returns the line and its groups, e.g. a server's port), its shell is back at the prompt, it has been quiet for a while, or a command exits. Only output after `since` (default: now) counts. Times out with status timeout, not an error.",
+            description: "Wait until a terminal pane prints a line matching a regex (returns the line and its groups, e.g. a server's port), its shell is back at the prompt, it has been quiet for a while, a command exits, or its program reports a status (an agent blocked or done). Only output after `since` (default: now) counts. Times out with status timeout, not an error.",
             input: object(
                 json!({
                     "pane": pane_ref("Default: this pane."),
@@ -191,6 +206,7 @@ fn tools_list() -> Vec<Tool> {
                     "prompt": { "type": "boolean", "description": "Until the shell is back at its prompt." },
                     "quietMs": { "type": "integer", "description": "Until no output for this long." },
                     "exit": { "type": "integer", "description": "Until this command id exits." },
+                    "status": { "type": "array", "items": { "type": "string", "enum": ["idle", "working", "done", "blocked", "error"] }, "description": "Until the program reports one of these (e.g. an agent blocked or done)." },
                     "timeoutMs": timeout,
                     "maxBytes": max_bytes,
                 }),
@@ -199,7 +215,8 @@ fn tools_list() -> Vec<Tool> {
             output: json!({
                 "type": "object",
                 "properties": {
-                    "status": { "type": "string", "enum": ["matched", "prompt", "exited", "quiet", "closed", "timeout"] },
+                    "status": { "type": "string", "enum": ["matched", "prompt", "exited", "quiet", "status", "closed", "timeout"] },
+                    "programStatus": status_schema(),
                     "match": { "type": "object", "properties": { "line": { "type": "string" }, "groups": { "type": "array", "items": { "type": ["string", "null"] } } } },
                     "command": { "anyOf": [command_schema(), { "type": "null" }] },
                     "output": output_schema(),
@@ -285,6 +302,24 @@ fn tools_list() -> Vec<Tool> {
             }),
             read_only: false,
             destructive: true,
+            idempotent: true,
+        },
+        Tool {
+            name: "status_set",
+            title: "Report your status",
+            description: "Report what you are doing on your own terminal pane, as the user and other agents see it: working (with a message and progress), blocked on a permission, question or auth, done, error, idle, or clear. The same as printing OSC 7501.",
+            input: object(
+                json!({
+                    "state": { "type": "string", "enum": ["working", "blocked", "done", "error", "idle", "clear"] },
+                    "kind": { "type": "string", "enum": ["permission", "question", "auth"], "description": "What a blocked agent needs." },
+                    "message": { "type": "string" },
+                    "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+                }),
+                &["state"],
+            ),
+            output: json!({ "type": "object", "properties": { "status": status_schema() }, "required": ["status"] }),
+            read_only: false,
+            destructive: false,
             idempotent: true,
         },
     ]
@@ -415,7 +450,8 @@ mod tests {
         // The ones that act are the ones agents ask the user about.
         let acting: Vec<_> = tools_list()
             .into_iter()
-            .filter(|t| !t.read_only)
+            // Reporting its own status touches nothing else.
+            .filter(|t| !t.read_only && t.name != "status_set")
             .map(|t| t.name)
             .collect();
         assert_eq!(acting, agents::ACTING_TOOLS);
