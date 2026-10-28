@@ -10,8 +10,8 @@ use tokio::sync::oneshot;
 use crate::bytes::Bytes;
 use crate::types::{
     AgentKind, AttachVia, Axis, CommandList, CommandMark, CommandOutput, EchoHint, KeyEvent,
-    LayoutOp, Links, MouseEvent, OpErrorCode, OpOutcome, PaneMeta, PaneSize, RpcError, SearchPage,
-    SearchQuery, SessionLayout, SessionSummary,
+    LayoutOp, Links, MouseEvent, OpErrorCode, OpOutcome, PaneMeta, PaneSize, ProgramReport,
+    RpcError, SearchPage, SearchQuery, SessionLayout, SessionSummary,
 };
 use crate::ws_types::{ForwardInfo, ForwardTarget, WorkspaceError};
 use crate::{on_runtime, runtime};
@@ -156,6 +156,14 @@ pub enum ClientEvent {
     PaneClosed {
         /// The pane.
         pane_id: u64,
+    },
+    /// What the program in a pane reports about itself (`ConnectOptions.program_status`);
+    /// `None` once cleared, and for every known pane when the connection drops.
+    ProgramStatus {
+        /// The pane.
+        pane_id: u64,
+        /// The report.
+        status: Option<ProgramReport>,
     },
     /// Raw output to feed the pane's VT, continuing from the previous event.
     PaneBytes {
@@ -325,6 +333,10 @@ impl From<client_core::ClientEvent> for ClientEvent {
             },
             E::PaneMeta { meta } => Self::PaneMeta { meta: meta.into() },
             E::PaneClosed { pane_id } => Self::PaneClosed { pane_id: pane_id.0 },
+            E::ProgramStatus { pane_id, status } => Self::ProgramStatus {
+                pane_id: pane_id.0,
+                status: status.map(Into::into),
+            },
             E::PaneBytes { pane_id, seq, data } => Self::PaneBytes {
                 pane_id: pane_id.0,
                 seq,
@@ -543,6 +555,9 @@ pub struct ConnectOptions {
     /// (`BrowserListener`).
     #[uniffi(default = false)]
     pub browser: bool,
+    /// Show what any program in a pane reports about itself (`ClientEvent::ProgramStatus`).
+    #[uniffi(default = false)]
+    pub program_status: bool,
 }
 
 impl From<ConnectOptions> for client_core::ConnectOptions {
@@ -553,6 +568,7 @@ impl From<ConnectOptions> for client_core::ConnectOptions {
             relay_auth_token: o.relay_auth_token.filter(|t| !t.is_empty()),
             askpass: o.askpass,
             browser: o.browser,
+            program_status: o.program_status,
         }
     }
 }
@@ -802,6 +818,11 @@ impl DaemonClient {
             .decide(RequestId(request_id), OptionId(option_id));
     }
 
+    /// What the program in a pane last reported about itself, if anything.
+    pub fn program_status(&self, pane_id: u64) -> Option<ProgramReport> {
+        self.inner.program_status(PaneId(pane_id)).map(Into::into)
+    }
+
     /// Visible text of a followed pane (needs the Rust mirror).
     pub fn pane_text(&self, pane_id: u64) -> Option<String> {
         self.inner.pane_text(PaneId(pane_id))
@@ -980,12 +1001,13 @@ mod tests {
             relay_auth_token: Some("secret".into()),
             askpass: true,
             browser: true,
+            program_status: true,
         };
         let core = client_core::ConnectOptions::from(options);
         assert_eq!(core.relay_ca_der, vec![vec![0x30, 0x82]]);
         assert_eq!(core.relay_urls, vec!["https://relay.example.com"]);
         assert_eq!(core.relay_auth_token.as_deref(), Some("secret"));
-        assert!(core.askpass && core.browser);
+        assert!(core.askpass && core.browser && core.program_status);
         // An empty token field means no token.
         let core = client_core::ConnectOptions::from(ConnectOptions {
             relay_auth_token: Some(String::new()),
@@ -993,5 +1015,48 @@ mod tests {
         });
         assert_eq!(core.relay_auth_token, None);
         assert!(core.relay_urls.is_empty());
+    }
+
+    #[test]
+    fn program_status_reaches_swift_whole_and_cleared() {
+        let report = proto::ProgramReport {
+            state: proto::ProgramState::Blocked,
+            kind: Some(proto::ProgramKind::Question),
+            app: Some("pi".into()),
+            message: Some("Which framework?".into()),
+            progress: Some(40),
+        };
+        let event = ClientEvent::from(client_core::ClientEvent::ProgramStatus {
+            pane_id: PaneId(7),
+            status: Some(report),
+        });
+        let ClientEvent::ProgramStatus {
+            pane_id: 7,
+            status: Some(status),
+        } = event
+        else {
+            panic!("{event:?}");
+        };
+        assert_eq!(
+            status,
+            ProgramReport {
+                state: crate::types::ProgramState::Blocked,
+                kind: Some(crate::types::ProgramKind::Question),
+                app: Some("pi".into()),
+                message: Some("Which framework?".into()),
+                progress: Some(40),
+            }
+        );
+        let cleared = ClientEvent::from(client_core::ClientEvent::ProgramStatus {
+            pane_id: PaneId(7),
+            status: None,
+        });
+        assert!(matches!(
+            cleared,
+            ClientEvent::ProgramStatus {
+                pane_id: 7,
+                status: None
+            }
+        ));
     }
 }

@@ -14,6 +14,7 @@ mod multiplayer;
 mod multiplayer_mp2;
 mod notify;
 mod presence;
+mod program_status;
 mod pull;
 mod relays;
 mod repos;

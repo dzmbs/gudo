@@ -71,6 +71,9 @@ pub(crate) enum Event {
     },
     /// A pane's foreground program, or a watched pane's prompt state, changed.
     Assist(proto::AssistPush),
+    /// What the program in a pane reports about itself changed (read it with
+    /// `Core::program_report`).
+    ProgramStatus(PaneId),
     /// A native password prompt opened or closed, or a detected one changed (`askpass`).
     Askpass(proto::AskpassPush),
     /// The repository snapshot changed (read it from `ws.repos`).
@@ -150,6 +153,30 @@ impl PaneEntry {
             .map_or(0, |d| d.as_millis() as u64);
         started <= at.0
     }
+}
+
+/// A report as clients see it; `None` for `Clear`.
+fn program_report(status: &agents::ProgramStatus) -> Option<proto::ProgramReport> {
+    use agents::{ProgramKind as K, ProgramState as S};
+    let state = match status.state {
+        S::Idle => proto::ProgramState::Idle,
+        S::Working => proto::ProgramState::Working,
+        S::Done => proto::ProgramState::Done,
+        S::Blocked => proto::ProgramState::Blocked,
+        S::Error => proto::ProgramState::Error,
+        S::Clear => return None,
+    };
+    Some(proto::ProgramReport {
+        state,
+        kind: status.kind.map(|k| match k {
+            K::Permission => proto::ProgramKind::Permission,
+            K::Question => proto::ProgramKind::Question,
+            K::Auth => proto::ProgramKind::Auth,
+        }),
+        app: status.app.clone(),
+        message: status.msg.clone(),
+        progress: status.progress,
+    })
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -481,6 +508,26 @@ impl Core {
             size_policy: SizePolicy::LastInput,
             sized_by: meta.sized_by.map(|(_, p)| p),
         })
+    }
+
+    /// What the program in pane `id` last reported about itself, as clients see it.
+    pub fn program_report(&self, id: PaneId) -> Option<proto::ProgramReport> {
+        let entry = self.pane(id)?;
+        lock(&entry.meta).program.as_ref().and_then(program_report)
+    }
+
+    /// Records the program's own top-level report (`Clear` removes it) and tells clients
+    /// when what they see changes.
+    pub fn set_program(&self, entry: &PaneEntry, status: agents::ProgramStatus) {
+        let status = (status.state != agents::ProgramState::Clear).then_some(status);
+        let mut meta = lock(&entry.meta);
+        let changed = meta.program.as_ref().and_then(program_report)
+            != status.as_ref().and_then(program_report);
+        meta.program = status;
+        drop(meta);
+        if changed {
+            self.emit(Event::ProgramStatus(entry.pane.id));
+        }
     }
 
     pub fn echo_hint(&self, id: PaneId) -> Option<EchoHintAt> {
@@ -1354,8 +1401,7 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
         Osc::ProgramStatus(body) => {
             // Reports about sub-records (`id=`) belong to the agent integrations below.
             if let Some(report) = agents::ProgramStatus::parse(&body).filter(|r| r.id.is_none()) {
-                lock(&entry.meta).program =
-                    (report.state != agents::ProgramState::Clear).then_some(report);
+                core.set_program(entry, report);
             }
             let event = lock(&entry.agent)
                 .as_mut()

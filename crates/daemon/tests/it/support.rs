@@ -92,6 +92,8 @@ pub struct TestClient {
     browser_events: UnboundedReceiver<client_core::proto::BrowserPush>,
     /// Browser pushes received so far (connections made with `browser: true`).
     pub browser: Vec<client_core::proto::BrowserPush>,
+    /// `ClientEvent::ProgramStatus` pushes, in order (connections with `program_status`).
+    pub programs: Vec<(PaneId, Option<client_core::proto::ProgramReport>)>,
 }
 
 impl TestClient {
@@ -130,6 +132,17 @@ impl TestClient {
         config.relay = RelayMode::Disabled;
         let options = client_core::ConnectOptions {
             browser: true,
+            ..client_core::ConnectOptions::default()
+        };
+        Self::connect_with(ticket, config, options)
+    }
+
+    /// A client that shows programs' own status (`ConnectOptions::program_status`).
+    pub fn connect_program_status(ticket: &str, key: Vec<u8>) -> Self {
+        let mut config = ClientConfig::new(key);
+        config.relay = RelayMode::Disabled;
+        let options = client_core::ConnectOptions {
+            program_status: true,
             ..client_core::ConnectOptions::default()
         };
         Self::connect_with(ticket, config, options)
@@ -192,6 +205,7 @@ impl TestClient {
             askpass: Vec::new(),
             browser_events,
             browser: Vec::new(),
+            programs: Vec::new(),
         }
     }
 
@@ -236,6 +250,9 @@ impl TestClient {
             ClientEvent::AttachFailed { message, .. } => self.attach_failed.push(message),
             ClientEvent::DaemonInfo { info } => self.infos.push(info),
             ClientEvent::Incompatible { reason } => self.incompatible.push(reason),
+            ClientEvent::ProgramStatus { pane_id, status } => {
+                self.programs.push((pane_id, status));
+            }
             _ => {}
         }
     }

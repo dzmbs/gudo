@@ -207,6 +207,12 @@ Agent state stays in `PaneMeta.agent` (`.blocked(requestId:summary:options:)`), 
 events in `ClientEvent.agentEvent(paneId:json:)`, decisions by anyone in
 `MultiplayerEvent.decided`.
 
+What any program in a pane says about itself (OSC 7501 or `status_set`: pi, opencode, scripts)
+arrives as `ClientEvent.programStatus(paneId:status:)` with `ConnectOptions.programStatus` on;
+`DaemonClient.programStatus(paneId:)` returns the latest `ProgramReport` (state, kind, app,
+message, progress). `nil` once cleared, and for every known pane when the connection drops. A
+blocked report has nothing to decide; the app lets `PaneMeta.agent` win where both exist.
+
 
 Principal, device and grant ids are lowercase hex strings. Errors: `MultiplayerError`
 (`forbidden`, `notFound`, `invalid`, `conflict`, `failed`, `disconnected`).

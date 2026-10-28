@@ -142,6 +142,9 @@ pub struct ConnectOptions {
     /// Open URLs programs in a pane ask for and run agents' browser tools: announce
     /// `Caps::BROWSER` (see [`BrowserListener`]).
     pub browser: bool,
+    /// Show what any program in a pane reports about itself: announce
+    /// `Caps::PROGRAM_STATUS`, so the daemon sends [`ClientEvent::ProgramStatus`].
+    pub program_status: bool,
 }
 
 /// Errors from the client API.
@@ -230,6 +233,15 @@ pub enum ClientEvent {
     PaneClosed {
         /// The pane.
         pane_id: PaneId,
+    },
+    /// What the program in a pane reports about itself (OSC 7501 or `status_set`), with
+    /// [`ConnectOptions::program_status`]. `None` once cleared, and for every known pane when
+    /// the connection drops. Also kept: [`Client::program_status`].
+    ProgramStatus {
+        /// The pane.
+        pane_id: PaneId,
+        /// The report.
+        status: Option<proto::ProgramReport>,
     },
     /// Raw output to feed the pane's VT, in order, continuing from the previous event.
     PaneBytes {
@@ -455,6 +467,8 @@ pub(crate) struct Inner {
     pub browser: browser::BrowserState,
     /// Approval extras in flight, open requests' extras, auto-approve rules.
     pub approvals: approvals::ApprovalState,
+    /// Each pane's last program report.
+    pub programs: Mutex<HashMap<PaneId, proto::ProgramReport>>,
     /// What the daemon said about itself on the last connection.
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
     /// The last connection was for an upgrade only.
@@ -637,6 +651,7 @@ impl Client {
             askpass: askpass::AskpassState::default(),
             browser: browser::BrowserState::default(),
             approvals: approvals::ApprovalState::default(),
+            programs: Mutex::new(HashMap::new()),
             daemon_info: Mutex::new(None),
             incompatible: Mutex::new(false),
         });
@@ -855,6 +870,12 @@ impl Client {
             grants::sign_approval(&key, self.inner.ticket.daemon_id, &mut decide);
         }
         self.inner.send(ClientCtl::Decide(decide));
+    }
+
+    /// What the program in `pane_id` last reported about itself, if anything (with
+    /// [`ConnectOptions::program_status`]).
+    pub fn program_status(&self, pane_id: PaneId) -> Option<proto::ProgramReport> {
+        lock(&self.inner.programs).get(&pane_id).cloned()
     }
 
     /// Plain text of a followed pane's visible screen, from the VT mirror.

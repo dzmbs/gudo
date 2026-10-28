@@ -227,6 +227,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 inner.assist.fail_pending();
                 inner.askpass.fail_pending();
                 inner.approvals.fail_pending();
+                forget_programs(&inner);
                 inner.emit(ClientEvent::Disconnected { reason });
                 if *lock(&inner.paused) {
                     continue;
@@ -352,6 +353,11 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             }
             | if inner.options.browser {
                 Caps::BROWSER
+            } else {
+                Caps::EMPTY
+            }
+            | if inner.options.program_status {
+                Caps::PROGRAM_STATUS
             } else {
                 Caps::EMPTY
             }
@@ -652,8 +658,18 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             } => ClientEvent::AttachFailed { code, message },
             ServerCtl::LayoutChanged(layout) => ClientEvent::Layout { layout },
             ServerCtl::PaneMeta(meta) => ClientEvent::PaneMeta { meta },
+            ServerCtl::ProgramStatus { pane_id, status } => {
+                let mut programs = lock(&inner.programs);
+                match &status {
+                    Some(report) => programs.insert(pane_id, report.clone()),
+                    None => programs.remove(&pane_id),
+                };
+                drop(programs);
+                ClientEvent::ProgramStatus { pane_id, status }
+            }
             ServerCtl::PaneClosed { pane_id } => {
                 lock(&inner.mirrors).remove(&pane_id);
+                lock(&inner.programs).remove(&pane_id);
                 lock(&inner.wanted).subscribed.retain(|&p| p != pane_id);
                 ClientEvent::PaneClosed { pane_id }
             }
@@ -708,6 +724,20 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             }
         };
         inner.emit(event);
+    }
+}
+
+/// The connection dropped: reports may change unseen until the daemon sends them again.
+fn forget_programs(inner: &Inner) {
+    let panes: Vec<PaneId> = lock(&inner.programs)
+        .drain()
+        .map(|(pane, _)| pane)
+        .collect();
+    for pane_id in panes {
+        inner.emit(ClientEvent::ProgramStatus {
+            pane_id,
+            status: None,
+        });
     }
 }
 

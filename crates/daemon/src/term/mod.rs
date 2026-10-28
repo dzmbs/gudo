@@ -1043,17 +1043,15 @@ impl Ctx {
             .transpose()?
             .filter(|_| state == agents::ProgramState::Blocked);
         let (_, entry) = self.resolve(None)?;
-        lock(&entry.meta).program =
-            (state != agents::ProgramState::Clear).then(|| agents::ProgramStatus {
-                state,
+        self.core.set_program(
+            &entry,
+            agents::ProgramStatus {
                 kind,
-                id: None,
-                app: None,
                 progress: a.progress.map(|p| p.min(100)),
-                title: None,
                 msg: a.message,
-                seq: None,
-            });
+                ..agents::ProgramStatus::new(state)
+            },
+        );
         Ok(json!({ "status": status(&self.core, self.caller, &entry) }))
     }
 
