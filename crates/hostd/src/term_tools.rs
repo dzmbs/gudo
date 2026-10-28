@@ -93,6 +93,32 @@ fn status_schema() -> Value {
     })
 }
 
+fn agent_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "pane": { "type": "string" },
+            "kind": { "type": ["string", "null"] },
+            "state": { "type": "string", "enum": ["starting", "idle", "working", "done", "blocked", "error", "exited"] },
+            "status": status_schema(),
+            "turns": { "type": "integer", "description": "Turns finished so far." },
+        },
+        "required": ["pane", "state", "turns"],
+    })
+}
+
+fn result_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "properties": {
+            "outcome": { "type": "string", "enum": ["completed", "cancelled", "failed"] },
+            "message": { "type": ["string", "null"], "description": "Its final message (or error)." },
+            "endedAt": { "type": "integer" },
+            "transcriptPath": { "type": ["string", "null"], "description": "The full transcript on the host." },
+        },
+    })
+}
+
 fn tools_list() -> Vec<Tool> {
     let object = |properties: Value, required: &[&str]| json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false });
     let timeout = json!({ "type": "integer", "description": "Give up after this long (default 30000, at most 240000); the result says timeout and the work goes on." });
@@ -143,7 +169,7 @@ fn tools_list() -> Vec<Tool> {
                     "command": { "type": "string" },
                     "pane": pane_ref("A pane you created; default: a new one."),
                     "cwd": { "type": "string", "description": "Folder to run in." },
-                    "timeoutMs": timeout,
+                    "timeoutMs": timeout.clone(),
                     "maxBytes": max_bytes,
                 }),
                 &["command"],
@@ -207,7 +233,7 @@ fn tools_list() -> Vec<Tool> {
                     "quietMs": { "type": "integer", "description": "Until no output for this long." },
                     "exit": { "type": "integer", "description": "Until this command id exits." },
                     "status": { "type": "array", "items": { "type": "string", "enum": ["idle", "working", "done", "blocked", "error"] }, "description": "Until the program reports one of these (e.g. an agent blocked or done)." },
-                    "timeoutMs": timeout,
+                    "timeoutMs": timeout.clone(),
                     "maxBytes": max_bytes,
                 }),
                 &[],
@@ -302,6 +328,92 @@ fn tools_list() -> Vec<Tool> {
             }),
             read_only: false,
             destructive: true,
+            idempotent: true,
+        },
+        Tool {
+            name: "agent_spawn",
+            title: "Start a worker agent",
+            description: "Start a coding agent (claude or codex) as a worker in a new terminal pane beside you, without taking the user's focus, and optionally give it its first prompt once it is ready. The user watches it in the app. Follow it with agent_wait and agent_result.",
+            input: object(
+                json!({
+                    "kind": { "type": "string", "enum": ["claude", "codex"] },
+                    "prompt": { "type": "string", "description": "Its first task." },
+                    "cwd": { "type": "string" },
+                    "of": pane_ref("Open beside this pane; default yours."),
+                    "direction": { "type": "string", "enum": ["right", "down"], "default": "right" },
+                    "timeoutMs": { "type": "integer", "description": "How long to wait for it to be ready for the prompt (default 60000)." },
+                }),
+                &["kind"],
+            ),
+            output: json!({ "type": "object", "properties": { "agent": agent_schema() }, "required": ["agent"] }),
+            read_only: false,
+            destructive: false,
+            idempotent: false,
+        },
+        Tool {
+            name: "agent_prompt",
+            title: "Prompt a worker agent",
+            description: "Send a prompt to a worker agent you started (in its terminal pane), once it is idle, and optionally wait for that turn to finish and get its final answer. Refused while it works or waits on the user.",
+            input: object(
+                json!({
+                    "pane": pane_ref("The worker's pane."),
+                    "text": { "type": "string" },
+                    "wait": { "type": "boolean", "description": "Wait for the turn to finish and return its answer." },
+                    "timeoutMs": timeout.clone(),
+                }),
+                &["pane", "text"],
+            ),
+            output: json!({
+                "type": "object",
+                "properties": {
+                    "delivered": { "type": "boolean" },
+                    "status": { "type": "string", "enum": ["finished", "blocked", "exited", "timeout"] },
+                    "agent": agent_schema(),
+                    "result": result_schema(),
+                },
+                "required": ["delivered", "agent"],
+            }),
+            read_only: false,
+            destructive: false,
+            idempotent: false,
+        },
+        Tool {
+            name: "agent_wait",
+            title: "Wait for worker agents",
+            description: "Wait until worker agents in their terminal panes reach a state: by default until any of them is idle, done, blocked on the user, failed or exited (`all` waits for every one). Returns each agent's state.",
+            input: object(
+                json!({
+                    "panes": { "type": "array", "items": { "type": "string" } },
+                    "until": { "type": "array", "items": { "type": "string", "enum": ["idle", "working", "done", "blocked", "error", "exited"] } },
+                    "all": { "type": "boolean" },
+                    "timeoutMs": timeout.clone(),
+                }),
+                &["panes"],
+            ),
+            output: json!({
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "enum": ["ok", "timeout"] },
+                    "agents": { "type": "array", "items": agent_schema() },
+                },
+                "required": ["status", "agents"],
+            }),
+            read_only: true,
+            destructive: false,
+            idempotent: true,
+        },
+        Tool {
+            name: "agent_result",
+            title: "Read a worker agent's answer",
+            description: "Get a worker agent's last answer, from the agent itself rather than its terminal pane's screen: how its last turn ended, its final message, and its transcript file.",
+            input: object(json!({ "pane": pane_ref("The worker's pane.") }), &["pane"]),
+            output: json!({
+                "type": "object",
+                "properties": { "agent": agent_schema(), "result": result_schema() },
+                "required": ["agent"],
+            }),
+            read_only: true,
+            destructive: false,
             idempotent: true,
         },
         Tool {

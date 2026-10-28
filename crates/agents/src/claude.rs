@@ -821,6 +821,30 @@ mod tests {
     }
 
     #[test]
+    fn screen_detects_the_folder_trust_dialog() {
+        let screen = "\
+────────────────────────────────────────
+ Accessing workspace:
+
+ /Users/me/src/app
+
+ Quick safety check: Is this a project you created or one you trust? (Like your
+ own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel";
+        let (state, rule, visible) = screen_state(screen, "");
+        assert_eq!(state, AgentState::Blocked);
+        assert_eq!(rule.as_deref(), Some("trust_directory"));
+        assert!(visible);
+    }
+
+    #[test]
     fn screen_detects_the_idle_prompt() {
         let screen = "\
 ⏺ Done. All tests pass.

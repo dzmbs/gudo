@@ -121,14 +121,17 @@ pub fn legacy_mcp_server_name() -> String {
     format!("{}_drawings", mcp_server_name())
 }
 
-/// The MCP server's terminal tools that act (run, type, open, close): an agent's own permission
-/// prompt asks before each, as it does for its shell tool. The rest only read.
+/// The MCP server's terminal tools that act (run, type, open, close, start and prompt agents):
+/// an agent's own permission prompt asks before each, as it does for its shell tool. The rest
+/// only read.
 pub const ACTING_TOOLS: &[&str] = &[
     "cmd_run",
     "pane_send",
     "pane_split",
     "tab_new",
     "pane_close",
+    "agent_spawn",
+    "agent_prompt",
 ];
 
 /// Returns the hook shim's arguments that run the MCP server for this pane:

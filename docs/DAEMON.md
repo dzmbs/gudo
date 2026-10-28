@@ -1972,7 +1972,7 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   `hook.token`), so a pane's programs cannot act as another pane. `hook.token` itself, which only
   the state directory holds, speaks for any pane. Every hook-socket caller is checked this way.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
-  `pane_wait`, `pane_send`, `status_set`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
+  `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
 - **Rules.** Read any pane of the caller's session; type into, run in and close only the panes it
   created (or that those created), never its own; nothing it opens takes the user's focus;
   input is refused while the program asks for a password (echo off, canonical).
@@ -1988,6 +1988,12 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   `status`, whatever the program; panes without one show their agent integration's state.
   `pane_wait {status: [...]}` waits for it, and `status_set` reports it for agents that cannot
   print the sequence.
+- **Workers.** `agent_spawn` starts Claude or Codex in a pane beside the caller (owned, no
+  focus) and gives it its first prompt once it is idle and its screen has settled; a worker on
+  a dialog (folder trust, an approval) is reported blocked instead. `agent_prompt` refuses a
+  working or blocked worker and can wait for that turn's end; `agent_wait` waits for states
+  across workers; `agent_result` returns the last turn's outcome and final message (from the
+  agent's hooks, up to 16k characters) with its transcript path.
 - **MCP.** Every tool has an `outputSchema` and returns `structuredContent` (typed values for
   code-mode harnesses) plus text that leads with a summary and then the output verbatim.
   Annotations mark the read-only tools; `agents::ACTING_TOOLS` are the ones Claude's permission

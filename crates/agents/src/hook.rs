@@ -9,7 +9,9 @@ use crate::event::{Subagent, SubagentId};
 use crate::signal::SessionUpdate;
 
 const MAX_SUMMARY_CHARS: usize = 200;
-const MAX_MESSAGE_CHARS: usize = 500;
+/// Generous: the last message is an agent's answer, which an orchestrating agent reads in full.
+/// Notifications cut it shorter where they are made.
+const MAX_MESSAGE_CHARS: usize = 16 * 1024;
 const MAX_DETAIL_STRING_CHARS: usize = 1024;
 const MAX_DETAIL_DEPTH: usize = 6;
 const MAX_DETAIL_ITEMS: usize = 32;

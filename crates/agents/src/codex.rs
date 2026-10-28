@@ -338,7 +338,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join(".codex")).unwrap();
         let config = home.path().join(".codex/config.toml");
-        std::fs::write(&config, "[mcp_servers.unnamed_drawings_x]\ncommand = \"x\"\n").unwrap();
+        std::fs::write(
+            &config,
+            "[mcp_servers.unnamed_drawings_x]\ncommand = \"x\"\n",
+        )
+        .unwrap();
         assert!(!Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
         std::fs::write(&config, "[mcp_servers.unnamed_drawings]\ncommand = \"x\"\n").unwrap();
         assert!(Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
