@@ -180,6 +180,7 @@ nonisolated public final class SharedPaneBackend: Sendable {
                 guard state.taps.isEmpty, !state.terminated else { return (false, handover) }
                 if park, state.started, !state.exited, let seed {
                     let parked = Terminal(cols: 80, rows: 24) { [backend] in backend.write($0) }
+                    parked.answersQueries = !backend.hostAnswersQueries
                     for event in seed() { Self.apply(event, to: parked) }
                     state.parked = parked
                     return (false, nil)
@@ -212,7 +213,8 @@ nonisolated public final class SharedPaneBackend: Sendable {
         case .output(let data): data.withUnsafeBytes { terminal.write($0) }
         case .snapshot(let data): try? terminal.restore(snapshot: data)
         case .history(let data, _): _ = try? terminal.appendHistory(data)
-        case .resized(let cols, let rows): terminal.resize(cols: cols, rows: rows, cellWidth: 1, cellHeight: 1)
+        case .resized(let cols, let rows, let cellWidth, let cellHeight):
+            terminal.resize(cols: cols, rows: rows, cellWidth: max(cellWidth, 1), cellHeight: max(cellHeight, 1))
         case .connection, .exited: break
         }
     }
@@ -253,6 +255,7 @@ nonisolated public final class SharedPaneBackend: Sendable {
         }
 
         var sizeFollowsStream: Bool { shared.backend.sizeFollowsStream }
+        var hostAnswersQueries: Bool { shared.backend.hostAnswersQueries }
         func requestHistory() -> Bool { shared.backend.requestHistory() }
         func terminate() { shared.remove(id, park: false) }
         func detach() { shared.remove(id, park: true) }

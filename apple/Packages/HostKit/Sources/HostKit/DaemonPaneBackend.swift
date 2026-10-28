@@ -266,7 +266,7 @@ nonisolated final class PaneRouter: Sendable {
             guard current == snapshotSeq else { return true }
             deliver(pane, .history(data, done: done))
         case .paneResized(let pane, _, let size):
-            deliver(pane, .resized(cols: size.cols, rows: size.rows))
+            deliver(pane, .resized(size))
         case .inputAck(let pane, _, let atSeq):
             acknowledge(pane, atSeq: atSeq)
         case .echoHint(let hint):
@@ -411,6 +411,8 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
     public let pane: PaneId
     /// The daemon reports every PTY resize in the stream (`PaneResized`).
     public var sizeFollowsStream: Bool { true }
+    /// The daemon's VT answers queries (docs/DAEMON.md "Threading model").
+    public var hostAnswersQueries: Bool { true }
     let client: any DaemonClientAPI
     let router: PaneRouter
     /// This window's tap on the pane's stream.
@@ -485,5 +487,14 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap 
         } else if let handover {
             client.resize(paneId: pane.rawValue, size: handover)
         }
+    }
+}
+
+nonisolated extension PaneEvent {
+    /// A remote resize to `size`, with the cell size every VT of the pane uses.
+    static func resized(_ size: PaneSize) -> PaneEvent {
+        .resized(
+            cols: size.cols, rows: size.rows,
+            cellWidth: UInt32(size.widthPx / max(size.cols, 1)), cellHeight: UInt32(size.heightPx / max(size.rows, 1)))
     }
 }

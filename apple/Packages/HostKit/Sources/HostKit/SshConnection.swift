@@ -142,7 +142,7 @@ nonisolated public final class SshPaneBackend: PaneBackend, PredictionFeed {
             case .paneBytes(_, _, let data):
                 events(.output(data))
                 self?.predict(self?.echo.output(data) ?? [])
-            case .paneResized(_, _, let size): events(.resized(cols: size.cols, rows: size.rows))
+            case .paneResized(_, _, let size): events(.resized(size))
             case .connected: events(.connection(.live))
             case .disconnected(let reason), .refused(let reason): events(.connection(.stale(reason: reason)))
             case .paneClosed: events(.exited)

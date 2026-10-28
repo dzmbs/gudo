@@ -645,8 +645,8 @@ pub struct ExcalidrawScene {
 pub enum PlacementSource {
     /// A person finished drawing on the pane, or placed / imported an artifact.
     User,
-    /// A program in the pane printed it with the kitty graphics protocol (for example
-    /// `un draw show`); the daemon kept the image so it survives snapshots and resumes.
+    /// No longer made: kitty graphics images live in the VTs now (docs/DAEMON.md §7.10). Kept
+    /// so placements stored or sent by older daemons still decode.
     Kitty,
 }
 

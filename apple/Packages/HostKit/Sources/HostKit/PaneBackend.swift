@@ -37,6 +37,9 @@ nonisolated public protocol PaneBackend: Sendable {
     /// changed size), never from the view's layout: output in flight was produced at the old
     /// size, and a shell's redraw at the wrong size wipes its prompt line. Local PTYs: false.
     var sizeFollowsStream: Bool { get }
+    /// A VT on the host answers the program's queries (the daemon's): the pane's own terminal
+    /// must not answer them again. False where the pane's terminal is the only one (SSH, local).
+    var hostAnswersQueries: Bool { get }
 }
 
 nonisolated extension PaneBackend {
@@ -64,6 +67,8 @@ nonisolated extension PaneBackend {
     public func requestHistory() -> Bool { false }
 
     public var sizeFollowsStream: Bool { false }
+
+    public var hostAnswersQueries: Bool { false }
 
     public func foreground() -> PaneForeground? { nil }
 }
@@ -103,6 +108,7 @@ nonisolated public struct PaneForeground: Equatable, Sendable {
 
 /// Everything a backend tells its pane, in stream order.
 nonisolated public enum PaneEvent: Sendable, Equatable {
+
     /// Raw output for the VT.
     case output(Data)
     /// Replace the VT with this Ghostty snapshot's READY section (resume after a gap, first
@@ -110,8 +116,9 @@ nonisolated public enum PaneEvent: Sendable, Equatable {
     case snapshot(Data)
     /// Older scrollback records for the last snapshot; `done` when there is no more.
     case history(Data, done: Bool)
-    /// The remote PTY changed size at this point of the stream.
-    case resized(cols: UInt16, rows: UInt16)
+    /// The remote PTY changed size at this point of the stream, with the cell size in pixels
+    /// its host lays kitty images out in (0 when unknown).
+    case resized(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32)
     /// Whether the pane is live, or showing stale content while its connection recovers
     /// (dimmed, never blank: 04-mobile-ux C3, R12).
     case connection(PaneConnection)
