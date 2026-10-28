@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 /// Writes `data` to `path` atomically: a temporary file in the same directory, `fsync`, rename,
 /// then `fsync` of the directory, so a crash leaves either the old or the new contents.
@@ -42,6 +43,10 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 /// mints its startup ticket or consumes another one loses a secret, and its ticket is refused.
 /// Waits for the lock; it goes when `update` returns.
 pub(crate) fn with_lock<T>(path: &Path, update: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    // The file lock alone may not exclude this process's own threads: on NFS and SMB, flock
+    // falls back to per-process record locks.
+    static THREADS: Mutex<()> = Mutex::new(());
+    let _threads = THREADS.lock().unwrap_or_else(PoisonError::into_inner);
     let lock = OpenOptions::new()
         .write(true)
         .create(true)
