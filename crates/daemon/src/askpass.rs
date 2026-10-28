@@ -173,7 +173,7 @@ impl Askpass {
     }
 
     /// Variables every pane gets while askpass is on.
-    pub fn pane_env(&self, core: &Core) -> Vec<(String, std::ffi::OsString)> {
+    pub fn pane_env(&self, core: &Core, pane: PaneId) -> Vec<(String, std::ffi::OsString)> {
         let Some(helper) = &self.helper else {
             return Vec::new();
         };
@@ -185,7 +185,7 @@ impl Askpass {
             ("GIT_ASKPASS".into(), helper.clone().into()),
             (brand::env_var("ASKPASS"), helper.clone().into()),
             (brand::env_var("SOCK"), hooks.socket().to_owned().into()),
-            (brand::env_var("TOKEN"), hooks.token().into()),
+            (brand::env_var("TOKEN"), hooks.pane_token(pane).into()),
             (
                 brand::env_var("ENDPOINT_FILE"),
                 hooks.endpoint_file().to_owned().into(),
@@ -274,7 +274,7 @@ pub(crate) async fn serve(
     peer_uid: Option<u32>,
     mut rest: impl AsyncRead + Unpin,
 ) -> HelperReply {
-    if call.token != core.hooks.token() {
+    if !core.hooks.verify(&call.token, &call.pane) {
         tracing::warn!("askpass call with a bad token");
         return HelperReply::Terminal;
     }

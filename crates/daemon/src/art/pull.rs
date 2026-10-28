@@ -163,7 +163,7 @@ pub struct PullExport {
 
 /// Answers one pull call.
 pub(crate) async fn serve(core: &Arc<Core>, call: PullCall) -> PullReply {
-    if call.token != core.hooks.token() {
+    if !core.hooks.verify(&call.token, &call.pane) {
         tracing::warn!("pull call with a bad token");
         return PullReply::Error("bad token".into());
     }

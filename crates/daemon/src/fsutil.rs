@@ -74,6 +74,11 @@ pub(crate) fn random<const N: usize>() -> [u8; N] {
     buf
 }
 
+/// Compares secrets in time that depends only on their lengths.
+pub(crate) fn constant_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
 /// Lowercase hex.
 pub(crate) fn hex(bytes: &[u8]) -> String {
     data_encoding::HEXLOWER.encode(bytes)

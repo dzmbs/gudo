@@ -179,6 +179,7 @@ pub(crate) struct Core {
     pub art: crate::art::Art,
     /// Input assistance: foreground programs, prompt watches, history, completion caches.
     pub assist: crate::assist::Assist,
+    pub(crate) term: crate::term::Term,
     /// Self upgrade: one at a time, and the restart it asks the host process for.
     pub upgrade: crate::upgrade::Upgrade,
     /// Native password prompts: the helper, open prompts, connections that may answer.
@@ -219,6 +220,7 @@ impl Core {
             mp,
             art: crate::art::Art::open(&cfg.state_dir, cfg.artifacts),
             assist: crate::assist::Assist::new(&cfg),
+            term: crate::term::Term::default(),
             upgrade: crate::upgrade::Upgrade::default(),
             askpass: crate::askpass::Askpass::install(
                 &cfg.askpass,
@@ -939,9 +941,9 @@ impl Core {
         cmd.env(brand::env_var("PANE_ID"), id.0.to_string());
         for (k, v) in self
             .askpass
-            .pane_env(self)
+            .pane_env(self, id)
             .into_iter()
-            .chain(self.browser.pane_env(self))
+            .chain(self.browser.pane_env(self, id))
         {
             cmd.env(k, v);
         }

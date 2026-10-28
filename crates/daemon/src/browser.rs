@@ -123,7 +123,7 @@ impl Browser {
     }
 
     /// `BROWSER`, and the hook socket the helper needs.
-    pub fn pane_env(&self, core: &Core) -> Vec<(String, std::ffi::OsString)> {
+    pub fn pane_env(&self, core: &Core, pane: PaneId) -> Vec<(String, std::ffi::OsString)> {
         let Some(helper) = &self.helper else {
             return Vec::new();
         };
@@ -131,7 +131,7 @@ impl Browser {
         vec![
             ("BROWSER".into(), helper.clone().into()),
             (brand::env_var("SOCK"), hooks.socket().to_owned().into()),
-            (brand::env_var("TOKEN"), hooks.token().into()),
+            (brand::env_var("TOKEN"), hooks.pane_token(pane).into()),
             (
                 brand::env_var("ENDPOINT_FILE"),
                 hooks.endpoint_file().to_owned().into(),
@@ -196,7 +196,7 @@ pub(crate) async fn serve(
     peer_uid: Option<u32>,
     mut rest: impl AsyncRead + Unpin,
 ) -> BrowserReply {
-    if call.token != core.hooks.token() {
+    if !core.hooks.verify(&call.token, &call.pane) {
         tracing::warn!("browser call with a bad token");
         return BrowserReply::Error("bad token".into());
     }
