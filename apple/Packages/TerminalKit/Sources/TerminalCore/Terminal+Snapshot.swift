@@ -13,8 +13,9 @@ extension Terminal {
     }
 
     /// Replaces the whole terminal state (screens, modes, cursor, unfinished parser input) with
-    /// a Ghostty snapshot's READY section. Scrollback older than READY can then be added with
-    /// `appendHistory(_:)`. Callbacks and colors of this `Terminal` carry over; the size is the
+    /// a Ghostty snapshot's READY section, and the pixels of the images in view that the daemon
+    /// sends after it. Scrollback older than READY (and other images' pixels) can then be added
+    /// with `appendHistory(_:)`. Callbacks and colors of this `Terminal` carry over; the size is the
     /// snapshot's (the remote PTY's).
     public func restore(snapshot ready: UnsafeRawBufferPointer) throws(SnapshotError) {
         let restore = SnapshotRestore(ready: ready)
@@ -30,6 +31,11 @@ extension Terminal {
             terminal = handle
             restoreState = restore
             ghostty_terminal_free(old)
+            // Image pixels that came with the screen; a bad record ends the restore, not the screen.
+            if restore.push(Data()).code != GHOSTTY_SUCCESS {
+                restore.free()
+                restoreState = nil
+            }
         }
     }
 
@@ -146,6 +152,9 @@ final class SnapshotRestore {
         guard ghostty_snapshot_decoder_new(nil, &decoder, reader) == GHOSTTY_SUCCESS else { return }
         var yes = true
         ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY, &yes)
+        _ = KittyGraphics.installPNGDecoder
+        var images = KittyGraphics.storageLimit
+        ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT, &images)
         self.decoder = decoder
     }
 
@@ -159,8 +168,9 @@ final class SnapshotRestore {
     }
 
     /// Adds records and decodes every page they complete (see `StreamingRestore::push`). A page
-    /// or an image's pixels is decoded once the record after it is here: the decoder reads on
-    /// to see whether placements follow, and running out of bytes there ends the snapshot.
+    /// is decoded once the record after it is here: the decoder reads on to see whether
+    /// placements follow, and running out of bytes there ends the snapshot. Image pixels are
+    /// attached as soon as their record is complete.
     func push(_ records: Data) -> (code: GhosttyResult, pages: Int) {
         guard let decoder, !finished else { return (GHOSTTY_SUCCESS, 0) }
         let consumed = source.position
@@ -189,7 +199,7 @@ final class SnapshotRestore {
                 return (GHOSTTY_SUCCESS, pages)
             case Self.tagPage, Self.tagImagePayload:
                 let records = tag == Self.tagPage && pending.dropFirst().first == Self.tagPagePlacements ? 2 : 1
-                guard pending.count > records else { return (GHOSTTY_SUCCESS, pages) }
+                guard tag == Self.tagImagePayload || pending.count > records else { return (GHOSTTY_SUCCESS, pages) }
                 let code = ghostty_snapshot_decoder_next(decoder)
                 guard code == GHOSTTY_SUCCESS else { return (code == GHOSTTY_NO_VALUE ? GHOSTTY_INVALID_VALUE : code, pages) }
                 if tag == Self.tagPage { pages += 1 }
@@ -208,8 +218,9 @@ final class SnapshotRestore {
         decoder = nil
     }
 
-    /// Length of the READY prefix of a complete snapshot: through the READY record (tests).
-    static func readyLength(of snapshot: Data) -> Int? {
+    /// Length of the prefix the daemon sends to show the screen: through the READY record, plus
+    /// the image pixel records right after it unless `withImages` is false (tests).
+    static func readyLength(of snapshot: Data, withImages: Bool = true) -> Int? {
         let bytes = [UInt8](snapshot)
         // "GHOSTSNP", format version u16, then records.
         guard bytes.starts(with: Array("GHOSTSNP".utf8)) else { return nil }
@@ -218,17 +229,25 @@ final class SnapshotRestore {
             let tag = UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
             let length = (0..<4).reduce(0) { $0 | Int(bytes[offset + 2 + $1]) << (8 * $1) }
             offset += headerLength + length
-            if tag == tagReady { return offset }
+            guard tag == tagReady else { continue }
+            while withImages, offset + headerLength <= bytes.count {
+                let tag = UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
+                let length = (0..<4).reduce(0) { $0 | Int(bytes[offset + 2 + $1]) << (8 * $1) }
+                guard tag == tagImagePayload, offset + headerLength + length <= bytes.count else { break }
+                offset += headerLength + length
+            }
+            return offset
         }
         return nil
     }
 }
 
 extension Terminal {
-    /// Splits a complete snapshot into its READY prefix and the history records after it, the
-    /// way the daemon sends them (tests and diagnostics).
-    public static func splitSnapshot(_ snapshot: Data) -> (ready: Data, history: Data)? {
-        guard let length = SnapshotRestore.readyLength(of: snapshot) else { return nil }
+    /// Splits a complete snapshot into the prefix that shows the screen and the records after
+    /// it, the way the daemon sends them; without `images`, the pixels of the images in view
+    /// stay with the history (tests and diagnostics).
+    public static func splitSnapshot(_ snapshot: Data, images: Bool = true) -> (ready: Data, history: Data)? {
+        guard let length = SnapshotRestore.readyLength(of: snapshot, withImages: images) else { return nil }
         return (snapshot.prefix(length), snapshot.dropFirst(length))
     }
 }

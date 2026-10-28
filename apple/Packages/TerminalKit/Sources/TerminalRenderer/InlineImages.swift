@@ -4,7 +4,7 @@ import Foundation
 import Metal
 import simd
 
-/// An image drawn over the grid like a kitty graphics placement (docs/DAEMON.md §7.10): it
+/// An image the host draws over the grid, such as a drawing placed inline (docs/DAEMON.md §7.10): it
 /// covers `cols × rows` cells from column `col` of viewport row `row` (negative when its top
 /// has scrolled above the viewport), in the layer above the text. The host resolves `row`
 /// each frame from a pinned row, so the image scrolls with the output.
@@ -31,6 +31,12 @@ public struct InlineImagePixels: Sendable {
     public let width: Int
     public let height: Int
     let rgba: Data
+
+    init(width: Int, height: Int, rgba: Data) {
+        self.width = width
+        self.height = height
+        self.rgba = rgba
+    }
 
     /// Decodes `image` into 8-bit RGBA with straight alpha (the image shader premultiplies).
     public init?(image: CGImage, maxSide: Int = 4096) {
