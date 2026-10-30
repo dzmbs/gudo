@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ed25519-dalek.workspace = true
 getrandom.workspace = true
 proto.workspace = true
 ring.workspace = true

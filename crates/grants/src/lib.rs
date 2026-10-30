@@ -55,7 +55,7 @@ use proto::{
     Actor, DaemonId, Decide, DeviceId, Grant, GrantChain, GrantId, GrantLink, PrincipalId, Roles,
     Scope, UnixMillis,
 };
-use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
+use ring::signature::{Ed25519KeyPair, KeyPair};
 
 /// The longest chain the daemon accepts (root included).
 pub const MAX_DEPTH: usize = 8;
@@ -111,10 +111,25 @@ impl DeviceKey {
 }
 
 /// Whether `sig` is `device`'s Ed25519 signature over `msg`.
+///
+/// Strict: small-order keys and non-canonical points are refused. With a small-order key,
+/// one signature verifies for any message, so a grant or approval "signed" by one would
+/// prove nothing.
 pub fn verify_signature(device: DeviceId, msg: &[u8], sig: &[u8]) -> bool {
-    UnparsedPublicKey::new(&ED25519, device.0)
-        .verify(msg, sig)
+    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(&device.0) else {
+        return false;
+    };
+    let Ok(sig) = <[u8; 64]>::try_from(sig) else {
+        return false;
+    };
+    key.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(&sig))
         .is_ok()
+}
+
+/// Whether `device` is a usable Ed25519 public key: a valid point not of small order. A
+/// small-order key "signs" with forgeable signatures, so no one holds it in any real sense.
+pub fn is_strong_key(device: DeviceId) -> bool {
+    ed25519_dalek::VerifyingKey::from_bytes(&device.0).is_ok_and(|k| !k.is_weak())
 }
 
 /// SHA-256 over the concatenation of `parts`.
@@ -559,6 +574,50 @@ mod tests {
         let sig = ours.sign(b"hello");
         assert!(verify_signature(ours.device_id(), b"hello", &sig));
         assert!(!verify_signature(ours.device_id(), b"hellO", &sig));
+    }
+
+    /// The identity point as a key with R = identity, S = 0 satisfies the plain verification
+    /// equation for every message.
+    #[test]
+    fn small_order_keys_prove_nothing() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut sig = [0u8; 64];
+        sig[0] = 1;
+        let weak = DeviceId(identity);
+        assert!(!verify_signature(weak, b"anything", &sig));
+        assert!(!verify_signature(weak, b"anything else", &sig));
+        assert!(!is_strong_key(weak));
+        assert!(is_strong_key(DeviceKey::generate().device_id()));
+
+        // Nor can a chain be rooted in or pass through such a key.
+        let daemon = DaemonId([9; 32]);
+        let grant = Grant {
+            v: Grant::VERSION,
+            grant_id: GrantId([1; 16]),
+            daemon_id: daemon,
+            issuer: weak,
+            roles: Roles::OWNER,
+            scope: Scope::Daemon,
+            issued_at: UnixMillis(0),
+            expires: None,
+            max_uses: None,
+            bind: None,
+            delegate: true,
+            label: String::new(),
+        };
+        let chain = GrantChain {
+            links: vec![GrantLink {
+                grant,
+                sig: sig.to_vec(),
+            }],
+        };
+        let auth = SimpleAuthority::new([weak]);
+        let presenter = DeviceKey::generate().device_id();
+        assert_eq!(
+            verify(&chain, daemon, presenter, UnixMillis(1), &auth),
+            Err(GrantError::BadSignature(0))
+        );
     }
 
     #[test]

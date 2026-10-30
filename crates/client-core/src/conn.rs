@@ -341,7 +341,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | if crate::mp::is_guest(inner) {
                 Caps::EMPTY
             } else {
-                Caps::KNOCK
+                Caps::KNOCK | Caps::DEVICE_ALERTS
             }
             | Caps::APPROVALS
             | Caps::WORKFLOWS
@@ -816,7 +816,7 @@ fn apply_output(
             snap_gen,
             raw_len,
             data,
-        } => match zstd::bulk::decompress(&data, raw_len as usize) {
+        } => match inflate(&data, raw_len) {
             Ok(raw) => snapshot_event(inner, pane_id, seq, snap_gen, raw, keep_vt),
             Err(e) => {
                 tracing::warn!(%pane_id, "bad snapshot: {e}");
@@ -847,6 +847,23 @@ fn apply_output(
     inner.emit(event);
 }
 
+/// The most a snapshot or history page may inflate to. Far above any real one (a READY
+/// section is a few hundred KB, a page at most 2 MiB), far below what a phone can spare.
+const MAX_INFLATED: u32 = 64 << 20;
+
+/// Decompresses one zstd frame the daemon says inflates to `raw_len` bytes. A guest dials
+/// other people's daemons, so a length (and a bomb) from one is refused past
+/// [`MAX_INFLATED`] rather than allocated.
+fn inflate(data: &[u8], raw_len: u32) -> std::io::Result<Vec<u8>> {
+    if raw_len > MAX_INFLATED {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{raw_len} bytes decompressed is over the {MAX_INFLATED} limit"),
+        ));
+    }
+    zstd::bulk::decompress(data, raw_len as usize)
+}
+
 fn apply_bulk(inner: &Inner, msg: Bulk) {
     let event = match msg {
         Bulk::HistoryPage {
@@ -859,7 +876,7 @@ fn apply_bulk(inner: &Inner, msg: Bulk) {
             data,
             ..
         } => {
-            let records = match zstd::bulk::decompress(&data, raw_len as usize) {
+            let records = match inflate(&data, raw_len) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(%pane_id, "bad history page: {e}");
@@ -1016,6 +1033,19 @@ mod tests {
 
     use super::*;
     use crate::ConnectOptions;
+
+    /// A small frame that inflates to more than the limit is refused, whatever length it
+    /// claims, and an honest one still decodes.
+    #[test]
+    fn inflating_is_bounded() {
+        let bomb = zstd::bulk::compress(&vec![0u8; (MAX_INFLATED as usize) + 1], 3).unwrap();
+        assert!(bomb.len() < 64 << 10);
+        assert!(inflate(&bomb, MAX_INFLATED + 1).is_err());
+        assert!(inflate(&bomb, u32::MAX).is_err());
+        assert!(inflate(&bomb, MAX_INFLATED).is_err());
+        let small = zstd::bulk::compress(b"hello", 3).unwrap();
+        assert_eq!(inflate(&small, 5).unwrap(), b"hello");
+    }
 
     const HOME: &str = "https://home.example.net/";
     const OWN: &str = "https://relay.example.com/";
