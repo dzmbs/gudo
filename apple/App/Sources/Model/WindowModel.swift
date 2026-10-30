@@ -989,9 +989,9 @@ enum LaunchOptions {
     static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["UNNAMED_MOCK"] != nil
     /// Hosting unit tests: no windows of its own, never active.
     static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-    static let screen: String? = UserDefaults.standard.string(forKey: "screen")
+    static let screen: String? = LaunchArguments().string(forKey: "screen")
     /// Every host header and the Inbox show a fixed usage report (`FakeUsageFeed`): UI tests.
-    static let fakeUsage = UserDefaults.standard.bool(forKey: "fakeUsage")
+    static let fakeUsage = LaunchArguments().bool(forKey: "fakeUsage")
     /// Whether this device offers a local shell: always on the Mac; on iPhone and iPad only the
     /// echo stand-in, so only for UI tests (`-localEcho YES`), `-mock` and design fixtures. A real
     /// iOS install starts on the welcome and Hosts screens, never in a fake shell.
@@ -999,7 +999,7 @@ enum LaunchOptions {
         #if os(macOS)
         true
         #else
-        mock || screen != nil || UserDefaults.standard.bool(forKey: "localEcho")
+        mock || screen != nil || LaunchArguments().bool(forKey: "localEcho")
         #endif
     }
 }

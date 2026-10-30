@@ -351,7 +351,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             } else {
                 Caps::EMPTY
             }
-            | if inner.options.browser {
+            | if crate::browser::announces(&inner.options, crate::mp::is_guest(inner)) {
                 Caps::BROWSER
             } else {
                 Caps::EMPTY
@@ -623,7 +623,8 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
         let Some(msg) = inner.askpass.dispatch(msg) else {
             continue;
         };
-        let Some(msg) = inner.browser.dispatch(msg) else {
+        let browser = crate::browser::announces(&inner.options, crate::mp::is_guest(&inner));
+        let Some(msg) = inner.browser.dispatch(msg, browser) else {
             continue;
         };
         let Some(msg) = inner.approvals.dispatch(msg) else {

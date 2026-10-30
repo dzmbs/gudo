@@ -200,13 +200,13 @@ struct WindowContent: View {
                     restore()
                 }
                 // `-openHost <name or id>`: open that saved host (screenshots, manual checks).
-                if let wanted = UserDefaults.standard.string(forKey: "openHost"),
+                if let wanted = LaunchArguments().string(forKey: "openHost"),
                    let record = app.hosts.records.first(where: { $0.id == wanted || $0.name == wanted })
                 {
                     model.show(.host(record.id))
                 }
                 // `-destination hosts|inbox`: open on that screen (screenshots of live data).
-                switch UserDefaults.standard.string(forKey: "destination") {
+                switch LaunchArguments().string(forKey: "destination") {
                 case "hosts": model.destination = .hosts
                 case "inbox": model.destination = .inbox
                 default: break
@@ -214,7 +214,7 @@ struct WindowContent: View {
                 #if DEBUG
                 // `-continueActivity <json>`: continue a Handoff payload as if another device sent it.
                 // (Base64 of the JSON: a launch argument that looks like a plist is parsed as one.)
-                if let text = UserDefaults.standard.string(forKey: "continueActivity"),
+                if let text = LaunchArguments().string(forKey: "continueActivity"),
                    let json = Data(base64Encoded: text) ?? text.data(using: .utf8),
                    let payload = try? JSONDecoder().decode(HandoffPayload.self, from: json)
                 {
@@ -340,7 +340,7 @@ struct WindowContent: View {
     private var shouldRestore: Bool {
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "restoreLastTarget") != nil { return defaults.bool(forKey: "restoreLastTarget") }
-        return LaunchOptions.screen == nil && !LaunchOptions.mock && defaults.string(forKey: "dogfood") == nil
+        return LaunchOptions.screen == nil && !LaunchOptions.mock && LaunchArguments().string(forKey: "dogfood") == nil
     }
 
     /// The window's open hosts and focused tab: the scene's own storage, else what the last

@@ -109,13 +109,22 @@ impl From<client_core::push::ActionError> for PushActionError {
 }
 
 /// The device's X25519 sealing key pair (one per device; keep the secret in the Keychain
-/// group shared with the NSE, `AfterFirstUnlock`).
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+/// group shared with the NSE, `AfterFirstUnlock`). `Debug` leaves the secret out.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PushSealKey {
     /// 32-byte secret (for `open_push_notification`).
     pub secret: Bytes,
     /// 32-byte public key (for `PushRegistration.seal_key`).
     pub public_key: Bytes,
+}
+
+impl std::fmt::Debug for PushSealKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushSealKey")
+            .field("secret", &"<redacted>")
+            .field("public_key", &self.public_key)
+            .finish()
+    }
 }
 
 /// A fresh X25519 sealing key pair.
@@ -207,8 +216,8 @@ pub enum PushKind {
     Command,
 }
 
-/// The decision an approval notification offers.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+/// The decision an approval notification offers. `Debug` leaves the token out.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PushActionOffer {
     /// The action token, base64url; `push_action_token` decodes it for `send_push_action`.
     pub token: String,
@@ -218,6 +227,17 @@ pub struct PushActionOffer {
     pub deny: String,
     /// Expiry, Unix ms.
     pub expires_ms: u64,
+}
+
+impl std::fmt::Debug for PushActionOffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushActionOffer")
+            .field("token", &"<redacted>")
+            .field("approve", &self.approve)
+            .field("deny", &self.deny)
+            .field("expires_ms", &self.expires_ms)
+            .finish()
+    }
 }
 
 /// A decrypted, signature-checked notification. The caller must still check `daemon` is a

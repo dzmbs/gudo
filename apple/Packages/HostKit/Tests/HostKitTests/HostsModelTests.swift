@@ -120,6 +120,29 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(try permissions(directory.appending(path: "device-key")) == 0o600)
     }
 
+    /// A permissive umask (0: everything world-writable) still leaves the folder and every
+    /// secret owner-only, including a folder another process made first.
+    @Test func fileSecretsAreOwnerOnlyUnderAnOpenUmask() throws {
+        let parent = temporaryDirectory()
+        let directory = parent.appending(path: "a/b/secrets")
+        let previous = umask(0)
+        defer { umask(previous) }
+        let store = FileSecretStore(directory: directory)
+        try store.set("s3cret", for: "device-key")
+        try FileManager.default.createDirectory(at: parent.appending(path: "planted"), withIntermediateDirectories: true)
+        let planted = FileSecretStore(directory: parent.appending(path: "planted"))
+        try planted.set("s3cret", for: "device-key")
+        func permissions(_ url: URL) throws -> Int {
+            try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int ?? -1
+        }
+        for folder in [directory, parent.appending(path: "planted")] {
+            #expect(try permissions(folder) == 0o700, "\(folder.path)")
+            #expect(try permissions(folder.appending(path: "device-key")) == 0o600)
+            // No stray copies (an atomic write's temporary file) left readable beside it.
+            #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["device-key"])
+        }
+    }
+
     @Test func fileSecretsMoveIntoTheKeychainAndLeaveNoFiles() throws {
         let files = FileSecretStore(directory: temporaryDirectory())
         try files.set("ticket-a", for: "host.A.ticket")
