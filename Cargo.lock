@@ -1745,6 +1745,7 @@ dependencies = [
 name = "grants"
 version = "0.0.0"
 dependencies = [
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "iroh",
  "proptest",
@@ -3661,6 +3662,7 @@ dependencies = [
  "brand",
  "data-encoding",
  "postcard",
+ "proptest",
  "serde",
  "zeroize",
 ]

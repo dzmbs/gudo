@@ -863,6 +863,12 @@ pub enum MultiplayerEvent {
     },
     /// This connection's grant was revoked; the daemon closes it.
     Revoked,
+    /// Another owner device just paired with the host (owner devices only): say so, so a
+    /// pairing the owner did not make is noticed and revoked.
+    DevicePaired {
+        /// The new device.
+        device: DeviceInfo,
+    },
     /// Someone knocked, or a knock changed (owner devices): replace any entry with its id.
     KnockAdded {
         /// The knock.
@@ -940,6 +946,9 @@ impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
                 by: by.into(),
             },
             E::Revoked => Self::Revoked,
+            E::DevicePaired { device } => Self::DevicePaired {
+                device: device.into(),
+            },
             E::Knock {
                 update: proto::KnockUpdate::Added(knock),
             } => Self::KnockAdded {

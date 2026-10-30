@@ -80,6 +80,8 @@ pub(crate) enum Event {
     Repos,
     /// A knock arrived or ended (owner devices hear it).
     Knock(proto::KnockUpdate),
+    /// An owner device paired.
+    DevicePaired(proto::DeviceInfo),
     /// A session's approval policy changed.
     ApprovalPolicy(SessionId, proto::ApprovalPolicy),
     /// An open approval request's votes or claim changed.
@@ -198,7 +200,7 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(crate) struct Core {
     pub cfg: Config,
     pub epoch: SessionEpoch,
-    pub identity: Identity,
+    pub identity: Arc<Identity>,
     pub layout: Mutex<Layout>,
     panes: Mutex<HashMap<PaneId, Arc<PaneEntry>>>,
     pub events: broadcast::Sender<Event>,
@@ -235,7 +237,7 @@ pub(crate) struct Core {
 impl Core {
     pub fn new(
         cfg: Config,
-        identity: Identity,
+        identity: Arc<Identity>,
         layout: Layout,
         hooks: HookServer,
         shell: Option<ShellIntegration>,

@@ -168,6 +168,9 @@ pub struct Config {
     pub push: PushConfig,
     /// A pane's control lease moves to someone who asked for it once the holder has not typed
     pub lease_idle: Duration,
+    /// How long a new connection has to complete the QUIC handshake and send its `Hello`.
+    /// Anyone can connect with a fresh key, so a silent one must not hold a slot for long.
+    pub hello_timeout: Duration,
     pub presence: PresenceTimes,
     /// Command history for completion and the line editor (`[history]` in `config.toml`).
     pub history: crate::assist::HistoryConfig,
@@ -307,6 +310,7 @@ impl Config {
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
+            hello_timeout: Duration::from_secs(10),
             presence: PresenceTimes::default(),
             artifacts: ArtifactLimits::default(),
             askpass: AskpassConfig::default(),

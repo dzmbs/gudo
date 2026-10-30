@@ -85,6 +85,12 @@ pub enum MultiplayerEvent {
     },
     /// This connection's grant was revoked; the daemon closes it.
     Revoked,
+    /// Another owner device just paired with the host (owner devices only). Show it: a
+    /// pairing the owner did not make is revoked from the device list.
+    DevicePaired {
+        /// The new device.
+        device: DeviceInfo,
+    },
     /// Someone knocked, or a knock ended (owner devices only). The current list is
     /// [`Client::pending_knocks`].
     Knock {
@@ -235,6 +241,7 @@ impl MpState {
             }
             ServerCtl::Peers(push) => (self.peers.apply(push)?, None),
             msg @ ServerCtl::Revoked { .. } => (MultiplayerEvent::Revoked, Some(msg)),
+            ServerCtl::DevicePaired(device) => (MultiplayerEvent::DevicePaired { device }, None),
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();

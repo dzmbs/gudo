@@ -684,6 +684,9 @@ pub enum ServerCtl {
         /// The report; `None` once cleared or when the pane has none.
         status: Option<crate::program::ProgramReport>,
     },
+    /// A new owner device just paired, to owner devices with [`Caps::DEVICE_ALERTS`], so a
+    /// pairing the owner did not make (a phished ticket) is noticed and can be revoked.
+    DevicePaired(crate::mp::DeviceInfo),
 }
 
 /// A successful [`ClientCtl::Attach`].

@@ -15,8 +15,8 @@ pub(crate) mod prompt;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use grants::{Authority, DeviceKey, GrantError, GrantSpec};
@@ -36,7 +36,7 @@ pub(crate) use presence::Mailbox;
 
 use crate::core::{ConnId, Core, Event, lock};
 use crate::fsutil::{hex, read_optional, unhex, write_atomic};
-use crate::identity::now_millis;
+use crate::identity::{Identity, now_millis};
 
 const STORE_FILE: &str = "grants.json";
 /// How long a guest admitted from a knock keeps access unless the owner says otherwise
@@ -57,6 +57,8 @@ pub(crate) struct Authz {
     pub scope: Scope,
     /// Every link of the presented chain, root first (empty for owner devices).
     pub grant_ids: Vec<GrantId>,
+    /// Who signed each link, root first (empty for owner devices).
+    pub issuers: Vec<DeviceId>,
     pub expires: Option<UnixMillis>,
     pub name: String,
     /// How much scrollback it sees (the invite's terms).
@@ -74,6 +76,7 @@ impl Authz {
             roles: Roles::OWNER,
             scope: Scope::Daemon,
             grant_ids: Vec::new(),
+            issuers: Vec::new(),
             expires: None,
             name: "owner".into(),
             history: History::Full,
@@ -149,21 +152,21 @@ struct GuestRecord {
 }
 
 impl Store {
-    fn load(path: &Path) -> Self {
-        match read_optional(path) {
-            Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                // Never silently forget revocations: refuse to start with an unreadable file
-                // is harsh, so keep a copy aside and log loudly.
-                tracing::error!("{}: {e}; moved aside", path.display());
-                let _ = std::fs::rename(path, path.with_extension("json.bad"));
-                Self::default()
-            }),
-            Ok(None) => Self::default(),
-            Err(e) => {
-                tracing::error!("{}: {e}", path.display());
-                Self::default()
-            }
-        }
+    /// Reads the store. An unreadable or malformed file is an error, never an empty store:
+    /// that would forget every revocation and use count, and readmit whoever they kept out.
+    fn load(path: &Path) -> std::io::Result<Self> {
+        let Some(bytes) = read_optional(path)? else {
+            return Ok(Self::default());
+        };
+        serde_json::from_slice(&bytes).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{}: {e}; fix or remove it (removing it forgets revocations)",
+                    path.display()
+                ),
+            )
+        })
     }
 
     fn save(&self, path: &Path) {
@@ -318,6 +321,8 @@ pub(crate) struct Knocker {
     pub name: String,
     /// Every link of the presented chain, root first.
     pub grant_ids: Vec<GrantId>,
+    /// Who signed each link, root first.
+    pub issuers: Vec<DeviceId>,
     pub roles: Roles,
     pub scope: Scope,
     pub expires: Option<UnixMillis>,
@@ -327,6 +332,7 @@ pub(crate) struct Knocker {
 struct PendingKnock {
     knock: Knock,
     grant_ids: Vec<GrantId>,
+    issuers: Vec<DeviceId>,
     expires: Option<UnixMillis>,
     ctl: mpsc::UnboundedSender<ServerCtl>,
     conn: iroh::endpoint::Connection,
@@ -334,6 +340,8 @@ struct PendingKnock {
 
 /// Multiplayer state owned by the core.
 pub(crate) struct Mp {
+    /// Which owner devices may root a grant chain.
+    identity: Arc<Identity>,
     store_path: PathBuf,
     store: Mutex<Store>,
     live: Mutex<HashMap<ConnId, Live>>,
@@ -352,12 +360,14 @@ pub(crate) struct Mp {
 impl Mp {
     pub fn open(
         state_dir: &Path,
+        identity: Arc<Identity>,
         lease_idle: Duration,
         times: crate::config::PresenceTimes,
     ) -> std::io::Result<Self> {
         let store_path = state_dir.join(STORE_FILE);
         Ok(Self {
-            store: Mutex::new(Store::load(&store_path)),
+            identity,
+            store: Mutex::new(Store::load(&store_path)?),
             store_path,
             live: Mutex::new(HashMap::new()),
             leases: Mutex::new(HashMap::new()),
@@ -429,6 +439,7 @@ impl Mp {
             }
         };
         let device_hex = hex(&device.0);
+        let issuers: Vec<DeviceId> = chain.links.iter().map(|l| l.grant.issuer).collect();
         let leaf = &verified.leaf;
         let terms = store.terms(&verified.ids);
         let admitted = store
@@ -444,6 +455,7 @@ impl Mp {
                 actor,
                 name: leaf.label.clone(),
                 grant_ids: verified.ids,
+                issuers,
                 roles: verified.roles,
                 scope: verified.scope,
                 expires: verified.expires,
@@ -492,6 +504,7 @@ impl Mp {
             roles: verified.roles,
             scope: verified.scope,
             grant_ids: verified.ids,
+            issuers,
             expires: verified.expires,
             name,
             history: terms.history,
@@ -514,14 +527,30 @@ impl Mp {
         Ok(Redeemed::Joined(authz))
     }
 
-    /// Whether `authz` is still in force: unexpired, no link or device revoked.
+    /// Whether `authz` is still in force: unexpired, no link, signer or device revoked, and
+    /// its root still trusted (an owner device unpaired, even by `hostd unpair`, takes the
+    /// connection and every invite it signed with it).
     pub fn still_valid(&self, authz: &Authz) -> bool {
         if authz.expires.is_some_and(|e| e.0 <= now_millis()) {
             return false;
         }
+        let trusted = if authz.grant_ids.is_empty() {
+            self.identity.is_owner_device(authz.actor.device)
+        } else {
+            self.chain_trusted(&authz.issuers)
+        };
         let store = lock(&self.store);
-        !store.device_revoked(authz.actor.device)
+        trusted
+            && !store.device_revoked(authz.actor.device)
             && !authz.grant_ids.iter().any(|&g| store.grant_revoked(g))
+            && !authz.issuers.iter().any(|&d| store.device_revoked(d))
+    }
+
+    /// Whether a chain signed by `issuers` (root first) still has a trusted root.
+    fn chain_trusted(&self, issuers: &[DeviceId]) -> bool {
+        issuers.first().is_some_and(|&root| {
+            root == self.identity.daemon_device() || self.identity.is_owner_device(root)
+        })
     }
 
     // --- participants -----------------------------------------------------------------------
@@ -1057,6 +1086,7 @@ impl Mp {
             PendingKnock {
                 knock: knock.clone(),
                 grant_ids: knocker.grant_ids,
+                issuers: knocker.issuers,
                 expires: knocker.expires,
                 ctl,
                 conn,
@@ -1155,11 +1185,13 @@ impl Mp {
             .ok_or_else(|| MpError::NotFound("that knock is no longer waiting".into()))?;
         let knock = &pending.knock;
         let now = UnixMillis(now_millis());
-        let invite_valid = pending.expires.is_none_or(|e| e > now) && {
-            let store = lock(&self.store);
-            !pending.grant_ids.iter().any(|&g| store.grant_revoked(g))
-                && !store.device_revoked(knock.actor.device)
-        };
+        let invite_valid =
+            pending.expires.is_none_or(|e| e > now) && self.chain_trusted(&pending.issuers) && {
+                let store = lock(&self.store);
+                !pending.grant_ids.iter().any(|&g| store.grant_revoked(g))
+                    && !pending.issuers.iter().any(|&d| store.device_revoked(d))
+                    && !store.device_revoked(knock.actor.device)
+            };
         let (answer, outcome, response) = match admit {
             Some(admit) if invite_valid => {
                 let (chain, info) = self.admit(core, knock, admit, now)?;
@@ -1255,7 +1287,9 @@ impl Mp {
                 .iter()
                 .filter(|(_, k)| {
                     k.expires.is_some_and(|e| e.0 <= now)
+                        || !self.chain_trusted(&k.issuers)
                         || k.grant_ids.iter().any(|&g| store.grant_revoked(g))
+                        || k.issuers.iter().any(|&d| store.device_revoked(d))
                         || store.device_revoked(k.knock.actor.device)
                 })
                 .map(|(id, _)| *id)

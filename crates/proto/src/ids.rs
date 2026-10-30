@@ -302,6 +302,9 @@ bitset! {
         /// Wants `ServerCtl::ProgramStatus`: what any program in a visible pane reports
         /// about itself (see `proto::program`).
         PROGRAM_STATUS = 15;
+        /// On an owner device, wants `ServerCtl::DevicePaired` whenever another owner
+        /// device pairs.
+        DEVICE_ALERTS = 16;
     }
 }
 
