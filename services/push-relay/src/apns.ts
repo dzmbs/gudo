@@ -92,7 +92,7 @@ export function buildApnsRequest(env: Env, cap: Cap, req: RelayRequest, nowMs = 
     headers["apns-push-type"] = "alert";
     headers["apns-topic"] = env.APNS_TOPIC;
     headers["apns-priority"] = urgent ? "10" : "5";
-    // An approval is pointless after its action token expires (an hour).
+    // An alert held back longer is stale (an approval's action token lasts 15 minutes).
     headers["apns-expiration"] = String(now + 3600);
     payload = {
       aps: {

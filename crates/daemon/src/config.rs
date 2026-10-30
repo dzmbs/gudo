@@ -56,7 +56,8 @@ pub struct PushConfig {
     /// How long an attention item must stay unseen before it is pushed (`push.delay_ms`). A
     /// client focusing the pane in that window, or a newer item for the same pane, cancels it.
     pub delay: Duration,
-    /// Lifetime of the Approve / Deny token in an approval notification.
+    /// Lifetime of the Approve / Deny token in an approval notification: short, so a
+    /// notification left on a lock screen cannot approve a request much later.
     pub action_ttl: Duration,
     /// Delivery attempts per push (transient failures only).
     pub attempts: u32,
@@ -80,7 +81,7 @@ impl Default for PushConfig {
             enabled: true,
             relay_url: brand::PUSH_RELAY_URL.to_owned(),
             delay: Duration::from_secs(3),
-            action_ttl: Duration::from_secs(60 * 60),
+            action_ttl: Duration::from_secs(15 * 60),
             attempts: 5,
             backoff: Duration::from_secs(1),
             live_activity: true,
