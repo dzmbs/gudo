@@ -37,7 +37,7 @@ if [ "$sum" != "$PW_SOURCES_SHA" ]; then
 fi
 
 cd "$work"
-if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund; else npm install --ignore-scripts --no-audit --no-fund; fi
 node build.mjs
 
 # agent.js beside them is ours, not built.

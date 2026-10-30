@@ -1,0 +1,9 @@
+# Reviewed false positives (docs/security/supply-chain.md): RFC 6455's sample WebSocket key, a
+# truncated test PEM, Swift parameter names, and Excalidraw's public web config in its bundle.
+5bc02443275d288d5d980555057e65b2eb634c25:crates/daemon/src/ws/editor_proxy/http_tests.rs:generic-api-key:473
+90f5d380888faf83b39731a0e8fffd685c72bb75:apple/Packages/HostKit/Tests/HostKitTests/RelaySettingsTests.swift:private-key:61
+f2b84d6892f67206b59a3eb9d6b5ed86efe9d40c:apple/Packages/PushCrypto/Sources/PushCrypto/PushCrypto.swift:generic-api-key:32
+f2b84d6892f67206b59a3eb9d6b5ed86efe9d40c:apple/Packages/PushCrypto/Sources/PushCrypto/PushCrypto.swift:generic-api-key:75
+404ddfa0ee16b6126567a9c684662167b3e3a382:apple/App/Resources/Excalidraw/canvas.js:gcp-api-key:9
+9f268c4cecc3752a659edfb301eebdeabceff3e8:apple/App/Resources/Excalidraw/canvas.js:gcp-api-key:9
+e3775e62d3fee0f05c256fcdd070d211dbbf5d8b:apple/App/Resources/Excalidraw/canvas.js:gcp-api-key:9
