@@ -99,7 +99,15 @@ async fn printed_text_cannot_pose_as_an_agent() {
     let mut watcher =
         TestClient::connect_program_status(&ticket(&daemon), ClientConfig::generate_key());
     let pane = watcher.attach_and_follow().await;
-    for app in ["claude-code", "codex"] {
+    // Clients show any spelling of an agent's name with that agent's mark.
+    for app in [
+        "claude-code",
+        "codex",
+        "claude",
+        "Claude-Code",
+        "CODEX",
+        "codex-cli",
+    ] {
         watcher.type_line(
             pane,
             &format!(r"printf '\033]7501;state=blocked:kind=permission:app={app}\033\\'"),

@@ -296,7 +296,7 @@ fn question_blocker(tool_input: &Value) -> Blocker {
     blocker.summary = tool_input
         .pointer("/questions/0/question")
         .and_then(Value::as_str)
-        .map(|q| hook::truncate(q, 200));
+        .map(hook::summary);
     blocker.detail = Some(hook::bounded_detail(tool_input));
     // Free-text and option answers need screen parsing; v1 offers "open terminal".
     blocker.answer_paths = vec![AnswerPath::Keystrokes];

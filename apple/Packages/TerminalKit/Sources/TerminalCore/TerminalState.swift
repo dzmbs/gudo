@@ -1,3 +1,4 @@
+import Foundation
 import GhosttyVt
 
 /// The terminal modes the host's input handling depends on, read in one locked call.
@@ -33,11 +34,46 @@ public struct GridPoint: Hashable, Sendable, Comparable {
 }
 
 extension Terminal {
-    /// OSC 0/2 title; "" when none was set.
-    public var title: String { string(GHOSTTY_TERMINAL_DATA_TITLE) }
+    /// OSC 0/2 title as it prints, cleaned as the daemon cleans titles (any program sets it,
+    /// and it reaches tabs, window titles and notifications); "" when none was set.
+    public var title: String { Self.printable(string(GHOSTTY_TERMINAL_DATA_TITLE), max: 512) }
 
-    /// OSC 7 working directory (usually a `file://host/path` URL); "" when none was set.
-    public var pwd: String { string(GHOSTTY_TERMINAL_DATA_PWD) }
+    /// OSC 7 working directory (usually a `file://host/path` URL); "" when none was set or
+    /// when it, or the path it encodes, holds characters that do not print.
+    public var pwd: String {
+        let pwd = string(GHOSTTY_TERMINAL_DATA_PWD)
+        let decoded = pwd.removingPercentEncoding ?? pwd
+        return Self.isPrintable(pwd) && Self.isPrintable(decoded) ? pwd : ""
+    }
+
+    /// `text` with control and format characters (bidi controls, zero-width and tag
+    /// characters) dropped, whitespace runs collapsed to one space, at most `max` characters.
+    static func printable(_ text: String, max: Int) -> String {
+        var out = String.UnicodeScalarView()
+        var count = 0
+        var space = false
+        for scalar in text.unicodeScalars where scalar.properties.generalCategory != .format {
+            if scalar.properties.generalCategory == .control || scalar.properties.isWhitespace {
+                space = !out.isEmpty
+                continue
+            }
+            if count == max {
+                out.append("…")
+                break
+            }
+            if space {
+                out.append(" ")
+                space = false
+            }
+            out.append(scalar)
+            count += 1
+        }
+        return String(out)
+    }
+
+    private static func isPrintable(_ text: String) -> Bool {
+        !text.unicodeScalars.contains { [.control, .format].contains($0.properties.generalCategory) }
+    }
 
     private func string(_ data: GhosttyTerminalData) -> String {
         withHandle { t in

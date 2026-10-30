@@ -335,28 +335,40 @@ pub fn clean_prompt_text(text: &str, max: usize) -> String {
     out
 }
 
-/// Whether `c` is a Unicode format character that can disguise text: bidi controls,
-/// zero-width characters, the BOM, the soft hyphen, and tag characters (invisible to people,
-/// read by language models as ASCII).
+/// Whether `c` prints as nothing yet can disguise or carry text: bidi controls, zero-width
+/// characters, the BOM, the soft hyphen, tag characters and variation selectors (invisible to
+/// people, readable by language models), fillers and other invisible format marks.
 ///
 /// # Examples
 ///
 /// ```
 /// assert!(proto::is_invisible_format('\u{202e}'));
 /// assert!(proto::is_invisible_format('\u{e0041}'));
+/// assert!(proto::is_invisible_format('\u{e0100}'));
 /// assert!(!proto::is_invisible_format('a'));
 /// ```
 pub fn is_invisible_format(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
+            | '\u{034F}'
             | '\u{061C}'
-            | '\u{180E}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
             | '\u{200B}'..='\u{200F}'
             | '\u{202A}'..='\u{202E}'
             | '\u{2060}'..='\u{2069}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
             | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
             | '\u{E0000}'..='\u{E007F}'
+            | '\u{E0100}'..='\u{E01EF}'
     )
 }
 

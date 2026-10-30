@@ -9,6 +9,7 @@ mod browser;
 mod codex;
 mod e2e;
 mod history;
+mod hostile_output;
 mod installs;
 mod kitty;
 mod multiplayer;
