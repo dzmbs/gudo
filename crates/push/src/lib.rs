@@ -533,11 +533,30 @@ pub struct ActionToken {
     pub item: u64,
     /// After this the daemon refuses the token.
     pub expires: UnixMillis,
+    /// [`request_subject`] of the request as the notification showed it. The daemon recomputes
+    /// it before applying a decision, so the answer only ever lands on that exact request.
+    pub subject: [u8; 32],
 }
 
 impl ActionToken {
     /// The format version this crate writes.
-    pub const VERSION: u16 = 1;
+    pub const VERSION: u16 = 2;
+}
+
+/// A digest of what an approval asks: the agent's own request id, the tool and the summary
+/// shown to the user. Length-prefixed, so no two different requests share an encoding.
+pub fn request_subject(agent_request: &str, tool: Option<&str>, summary: &str) -> [u8; 32] {
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    ctx.update(b"push-request-subject/v1\0");
+    ctx.update(&[u8::from(tool.is_some())]);
+    for part in [agent_request, tool.unwrap_or(""), summary] {
+        ctx.update(&(part.len() as u64).to_le_bytes());
+        ctx.update(part.as_bytes());
+    }
+    ctx.finish()
+        .as_ref()
+        .try_into()
+        .expect("SHA-256 is 32 bytes")
 }
 
 /// The device's answer to an action.
@@ -642,6 +661,7 @@ mod tests {
             deny: Some(OptionId(2)),
             item: 3,
             expires: UnixMillis(2_000),
+            subject: request_subject("toolu_1", Some("Bash"), "make deploy"),
         }
     }
 
@@ -663,6 +683,24 @@ mod tests {
         assert!(verify_token(&public, &forged, UnixMillis(1_000)).is_err());
         let other = ed25519_public(&[6; 32]);
         assert!(verify_token(&other, &bytes, UnixMillis(1_000)).is_err());
+    }
+
+    #[test]
+    fn request_subjects_tell_requests_apart() {
+        let a = request_subject("toolu_1", Some("Bash"), "rm -rf build");
+        assert_eq!(a, request_subject("toolu_1", Some("Bash"), "rm -rf build"));
+        assert_ne!(a, request_subject("toolu_2", Some("Bash"), "rm -rf build"));
+        assert_ne!(a, request_subject("toolu_1", Some("Bash"), "rm -rf /"));
+        assert_ne!(a, request_subject("toolu_1", None, "rm -rf build"));
+        // Moving text between fields changes the digest.
+        assert_ne!(
+            request_subject("ab", Some("c"), ""),
+            request_subject("a", Some("bc"), "")
+        );
+        assert_ne!(
+            request_subject("x", Some(""), "s"),
+            request_subject("x", None, "s")
+        );
     }
 
     #[test]

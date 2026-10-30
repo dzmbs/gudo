@@ -34,6 +34,11 @@ public struct ServiceExtensionCore: Sendable {
         let paired = pairedDaemons()
         return PushContent.decrypt(content, deviceKey: deviceKey()) { paired.contains($0.lowercased()) }
     }
+
+    /// What to deliver when time runs out: the relay's text, none of its other `userInfo`.
+    public static func placeholder(_ content: UNNotificationContent) -> UNNotificationContent {
+        PushContent.placeholder(content)
+    }
 }
 
 /// What the app shares with its extensions when it has the push entitlement: the device's

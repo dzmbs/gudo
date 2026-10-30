@@ -5,7 +5,8 @@ import vectors from "../../../crates/push/tests/vectors/push-v1.json";
 import { buildApnsRequest, providerJwt, resetJwt } from "../src/apns";
 import { openCap, sealCap } from "../src/cap";
 import { b64url, concat, hex, unb64url, utf8 } from "../src/encoding";
-import { DAEMON_BUCKET } from "../src/limiter";
+import { MAX_BODY, addressKey } from "../src/index";
+import { ALERT_TOKEN_BUCKET, DAEMON_BUCKET } from "../src/limiter";
 import type { Env } from "../src/env";
 import { type RelayRequest, parseRequest, verifySignature } from "../src/request";
 
@@ -14,7 +15,8 @@ const env = cfEnv as unknown as Env & { TEST_APNS_PUBLIC_KEY: string };
 const worker = (cfExports as unknown as { default: { fetch(r: Request): Promise<Response> } })
   .default;
 
-const TOKEN = "a1".repeat(32);
+/** A fresh device per test: rate-limit state outlives a test. */
+let TOKEN = "";
 
 /** A stand-in daemon: an Ed25519 key, like the daemon's iroh key. */
 async function daemon() {
@@ -41,8 +43,11 @@ async function register(
   d: Daemon,
   extra: Record<string, unknown> = {},
 ): Promise<{ cap: string; expires: number }> {
+  // A fresh client address each time, so tests stay clear of the per-address limit.
+  const [a, b, c] = crypto.getRandomValues(new Uint8Array(3));
   const res = await call("/v1/register", {
     method: "POST",
+    headers: { "cf-connecting-ip": `10.${a}.${b}.${c}` },
     body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id, ...extra }),
   });
   expect(res.status).toBe(200);
@@ -85,6 +90,7 @@ let apnsCalls: ApnsCall[];
 let apnsReply: () => Response;
 
 beforeEach(() => {
+  TOKEN = hex(crypto.getRandomValues(new Uint8Array(32)));
   resetJwt();
   apnsCalls = [];
   apnsReply = () => new Response(null, { status: 200, headers: { "apns-id": "id-1" } });
@@ -245,9 +251,9 @@ describe("push relay", () => {
     }
     expect(limited, "the bucket ran out").toBeDefined();
     expect(Number(limited!.headers.get("retry-after"))).toBeGreaterThan(0);
-    // Another daemon is unaffected.
+    // Another daemon (pushing to another device) is unaffected.
     const e = await daemon();
-    const { cap: capE } = await register(e);
+    const { cap: capE } = await register(e, { token: "b2".repeat(32) });
     expect((await call("/v1/push", await signed(e, { cap: capE }))).status).toBe(200);
   });
 
@@ -329,6 +335,98 @@ describe("push relay", () => {
       ).status;
     }
     expect(status).toBe(429);
+  });
+
+  it("counts a whole IPv6 /64 as one client", async () => {
+    const d = await daemon();
+    let status = 200;
+    for (let i = 0; i < 25 && status === 200; i++) {
+      status = (
+        await call("/v1/register", {
+          method: "POST",
+          headers: { "cf-connecting-ip": `2001:db8:1:2::${(i + 1).toString(16)}` },
+          body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id }),
+        })
+      ).status;
+    }
+    expect(status).toBe(429);
+    expect(addressKey("2001:db8:1:2::1")).toBe(addressKey("2001:0db8:0001:0002:ffff:0:0:9"));
+    expect(addressKey("2001:db8:1:3::1")).not.toBe(addressKey("2001:db8:1:2::1"));
+    expect(addressKey("::1")).toBe("0:0:0:0::/64");
+    expect(addressKey("203.0.113.9")).toBe("203.0.113.9");
+  });
+
+  it("does not let a request with a future timestamp be replayed later", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const start = Date.now();
+    const once = await signed(d, { cap, ts: start + 4 * 60 * 1000 });
+    expect((await call("/v1/push", once)).status).toBe(200);
+    // Six minutes on, the request's own timestamp is still within the accepted skew.
+    vi.spyOn(Date, "now").mockReturnValue(start + 6 * 60 * 1000);
+    expect((await call("/v1/push", once)).status).toBe(409);
+    expect(apnsCalls).toHaveLength(1);
+  });
+
+  it("limits pushes per device token across daemons", async () => {
+    // Anyone who learns a device's APNs token can bind it to daemons of their own; the
+    // device still gets no more than its own budget.
+    let limited: Response | undefined;
+    for (let i = 0; i < ALERT_TOKEN_BUCKET.capacity + 1 && !limited; i++) {
+      const d = await daemon();
+      const { cap } = await register(d);
+      const res = await call("/v1/push", await signed(d, { cap, category: "done" }));
+      if (res.status === 429) limited = res;
+      else expect(res.status).toBe(200);
+    }
+    expect(limited, "the device's bucket ran out").toBeDefined();
+    expect(await limited!.json()).toEqual({ error: "too many pushes to this device" });
+    expect(apnsCalls).toHaveLength(ALERT_TOKEN_BUCKET.capacity);
+  });
+
+  it("refuses oversized bodies without reading them whole", async () => {
+    const big = "x".repeat(MAX_BODY + 1);
+    expect((await call("/v1/register", { method: "POST", body: big })).status).toBe(413);
+    // No content-length: a streamed body is cut off at the limit.
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        c.enqueue(new Uint8Array(4096));
+      },
+    });
+    const res = await call("/v1/push", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    expect(res.status).toBe(413);
+  });
+
+  it("refuses header injection and loose types", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    for (const bad of [
+      { collapse: "a\r\nx-evil: 1" },
+      { collapse: "not hex" },
+      { urgent: "yes" },
+      { ts: Date.now() + 0.5 },
+      { stale: -1 },
+      { category: ["approval"] },
+    ] as unknown as Partial<RelayRequest>[]) {
+      expect((await call("/v1/push", await signed(d, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect(
+      (await call("/v1/register", { method: "POST", body: JSON.stringify({ token: "abc", env: "production", daemon: d.id }) }))
+        .status,
+    ).toBe(400);
+    expect(apnsCalls).toHaveLength(0);
+  });
+
+  it("sends security headers and no CORS on every answer", async () => {
+    for (const res of [
+      await call("/healthz"),
+      await call("/v1/push", { method: "POST", body: "{" }),
+      await call("/v1/push", { method: "OPTIONS", headers: { origin: "https://evil.test" } }),
+    ]) {
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    }
   });
 });
 

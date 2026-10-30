@@ -55,6 +55,7 @@ fn vectors() -> Value {
         deny: Some(OptionId(2)),
         item: 42,
         expires: UnixMillis(1_760_000_600_000),
+        subject: push::request_subject("toolu_01", Some("Bash"), "cargo publish"),
     };
     let token_bytes = push::issue_token(&DAEMON_SEED, &token);
     let offer = ActionOffer {

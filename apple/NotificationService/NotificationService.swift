@@ -20,7 +20,7 @@ final class NotificationService: UNNotificationServiceExtension {
     }
 
     override func serviceExtensionTimeWillExpire() {
-        // Out of time: deliver the relay's placeholder.
-        if let contentHandler, let original { contentHandler(original) }
+        // Out of time: deliver the relay's placeholder, without anything else it sent.
+        if let contentHandler, let original { contentHandler(ServiceExtensionCore.placeholder(original)) }
     }
 }

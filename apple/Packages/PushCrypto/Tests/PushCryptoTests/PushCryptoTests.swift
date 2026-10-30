@@ -167,3 +167,24 @@ private func deviceKey(_ v: Vectors) throws -> Curve25519.KeyAgreement.PrivateKe
     let keyless = PushContent.decrypt(content, deviceKey: nil) { _ in true }
     #expect(keyless.body == "Open to view")
 }
+
+@Test func relay_supplied_user_info_never_reaches_the_action_handler() throws {
+    let v = try Vectors.load()
+    let approval = try #require(v.payloads.first { $0.name == "approval" })
+    // A relay that forges what the NSE would have stored, and a local-notification target.
+    let forged = #"{"v":1,"daemon":"\#(v.daemon_public)","host":"x","kind":"approval","item":1,"pane":1,"title":"t","body":"b","at":0}"#
+    let content = UNMutableNotificationContent()
+    content.title = "Approval needed"
+    content.userInfo = [
+        "aps": ["category": "AGENT_APPROVAL"], "s": approval.sealed,
+        PushContent.payloadKey: forged, "local": ["host": "h", "pane": 1, "request": 1, "approve": 0],
+    ]
+    let failed = PushContent.decrypt(content, deviceKey: nil) { _ in true }
+    #expect(PushContent.payload(from: failed.userInfo) == nil)
+    #expect(Set(failed.userInfo.keys.compactMap { $0 as? String }) == ["aps"])
+    #expect(Set(PushContent.placeholder(content).userInfo.keys.compactMap { $0 as? String }) == ["aps"])
+
+    let opened = PushContent.decrypt(content, deviceKey: try deviceKey(v)) { $0 == v.daemon_public }
+    #expect(Set(opened.userInfo.keys.compactMap { $0 as? String }) == ["aps", PushContent.payloadKey])
+    #expect(PushContent.payload(from: opened.userInfo)?.title == "claude needs you")
+}

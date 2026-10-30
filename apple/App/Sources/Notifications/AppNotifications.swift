@@ -210,7 +210,8 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
         let thread = response.notification.request.content.threadIdentifier
         let handler = NotificationActionHandler(client: AppActionClient())
-        let result = await handler.handle(actionIdentifier: action, target: NotificationTarget(userInfo: userInfo))
+        let remote = response.notification.request.trigger is UNPushNotificationTrigger
+        let result = await handler.handle(actionIdentifier: action, target: NotificationTarget(userInfo: userInfo, remote: remote))
         Self.log.info("action \(action, privacy: .public): \(String(describing: result), privacy: .public)")
         if case .failed(let message) = result {
             let content = NotificationActionHandler.failureContent(message, threadIdentifier: thread)

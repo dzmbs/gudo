@@ -115,7 +115,18 @@ pub(crate) fn new_uuid() -> String {
     )
 }
 
-static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
+/// Wire request ids start at a random point each run: an answer that outlives the daemon (a
+/// lock-screen action token, a stale approval card) must not land on a new run's request that
+/// happens to reuse its id.
+static NEXT_REQUEST: std::sync::LazyLock<AtomicU64> =
+    std::sync::LazyLock::new(|| AtomicU64::new(first_request_id()));
+
+/// A random id in `[2^32, 2^52)`: far from any earlier run's, and exact as a JSON number.
+fn first_request_id() -> u64 {
+    let mut b = [0; 8];
+    getrandom::fill(&mut b).expect("the OS random source is available");
+    (1 << 32) + u64::from_le_bytes(b) % ((1 << 52) - (1 << 32))
+}
 
 /// A dialog's approving and refusing options, with labels (for push notification actions).
 #[derive(Debug, Clone, PartialEq, Eq)]

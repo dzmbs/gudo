@@ -32,8 +32,8 @@ public struct NotificationActionHandler: Sendable {
         self.client = client
     }
 
-    public func handle(actionIdentifier: String, userInfo: [AnyHashable: Any]) async -> NotificationActionResult {
-        await handle(actionIdentifier: actionIdentifier, target: NotificationTarget(userInfo: userInfo))
+    public func handle(actionIdentifier: String, userInfo: [AnyHashable: Any], remote: Bool) async -> NotificationActionResult {
+        await handle(actionIdentifier: actionIdentifier, target: NotificationTarget(userInfo: userInfo, remote: remote))
     }
 
     /// The same, with the target already read from `userInfo` (which is not `Sendable`).
