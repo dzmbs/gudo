@@ -48,9 +48,10 @@ export class RateLimiter extends DurableObject {
     nonceUntil = now + NONCE_TTL_MS,
   ): Promise<Verdict> {
     const storage = this.ctx.storage;
-    if (nonce !== null) {
-      const seen = await storage.get<number>(`n:${nonce}`);
-      if (seen !== undefined && seen >= now) return { ok: false, reason: "replay" };
+    // Any remembered nonce is a replay: comparing its expiry with `now` would let one through
+    // when the clock moves between the caller's skew check and this call.
+    if (nonce !== null && (await storage.get<number>(`n:${nonce}`)) !== undefined) {
+      return { ok: false, reason: "replay" };
     }
     const state = (await storage.get<State>("bucket")) ?? { tokens: bucket.capacity, at: now };
     const tokens = Math.min(bucket.capacity, state.tokens + ((now - state.at) / 1000) * bucket.refill);
