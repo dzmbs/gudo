@@ -1,0 +1,81 @@
+# cargo-deny policy (docs/security/supply-chain.md). Run: `cargo deny check`.
+
+[graph]
+# Every target we ship: the app (iOS, macOS) and the daemon (macOS, Linux musl).
+targets = [
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-musl",
+    "x86_64-unknown-linux-musl",
+]
+all-features = false
+
+[advisories]
+# Unmaintained crates are reported for the whole graph; yanked versions fail.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # Marvin (RSA PKCS#1 v1.5 decryption timing). russh only signs with imported RSA client
+    # keys and verifies RSA host keys; it never decrypts, which is what the attack needs.
+    { id = "RUSTSEC-2023-0071", reason = "russh uses RSA for signatures only, no decryption" },
+    # Unmaintained but build-time only (code generators), never in a shipped binary.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time dependency of uniffi_bindgen" },
+    { id = "RUSTSEC-2024-0436", reason = "paste: proc-macro of netlink-packet-core (iroh)" },
+]
+
+[licenses]
+# Permissive licences only. Copyleft (GPL, LGPL, AGPL) is never linked: anything not listed
+# here fails, including crates with no licence metadata.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+exceptions = [
+    # File-level copyleft: we ship UniFFI's files unmodified, which MPL-2.0 allows.
+    { allow = ["MPL-2.0"], crate = "uniffi" },
+    { allow = ["MPL-2.0"], crate = "uniffi_bindgen" },
+    { allow = ["MPL-2.0"], crate = "uniffi_core" },
+    { allow = ["MPL-2.0"], crate = "uniffi_internal_macros" },
+    { allow = ["MPL-2.0"], crate = "uniffi_macros" },
+    { allow = ["MPL-2.0"], crate = "uniffi_meta" },
+    { allow = ["MPL-2.0"], crate = "uniffi_pipeline" },
+    { allow = ["MPL-2.0"], crate = "uniffi_udl" },
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Crates that would pull in a second TLS or crypto stack, or OpenSSL.
+deny = [
+    { crate = "openssl", reason = "ring is the single crypto provider" },
+    { crate = "openssl-sys", reason = "ring is the single crypto provider" },
+    { crate = "aws-lc-rs", reason = "ring is the single crypto provider" },
+    { crate = "aws-lc-sys", reason = "ring is the single crypto provider" },
+    { crate = "native-tls", reason = "rustls is the single TLS stack" },
+]
+
+[sources]
+# crates.io only: no git dependencies, no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

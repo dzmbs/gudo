@@ -1,0 +1,83 @@
+# Supply-chain and code checks (docs/security/supply-chain.md).
+#
+# Every action is pinned to a full commit SHA (a moved tag cannot change what runs), the token
+# is read-only, checkouts keep no credentials, and nothing runs on `pull_request_target`.
+# Tools are pinned by version and, when downloaded, by SHA-256.
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # New advisories against unchanged dependencies.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (whole history)
+        env:
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -fsSL --proto '=https' -o "$RUNNER_TEMP/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v$VERSION/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner .
+      - name: invisible Unicode
+        run: python3 -I scripts/check-invisible-unicode.py
+
+  rust:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+      - name: toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: vendor/ghostty is the pinned release
+        run: test "$(git -C vendor/ghostty rev-parse HEAD)" = 83fb95624b0439ee660c2679b43b38c8b63769cd
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo deny (advisories, licences, bans, sources)
+        run: |
+          cargo install --locked cargo-deny --version 0.20.2
+          cargo deny --locked check
+
+  push-relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: services/push-relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # Lifecycle scripts are how npm worms (Shai-Hulud) run; nothing here needs them.
+      - run: npm ci --ignore-scripts --no-fund
+      - run: npm audit --audit-level=moderate
+      - run: npm test
