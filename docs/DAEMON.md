@@ -407,7 +407,9 @@ Every path in a request (files, git, worktrees, editor folders, Unix forward tar
 absolute or `~/…`, contain no `..`, and resolve inside an allowed root: `$HOME` plus
 `files.allow`. The existing ancestors are checked through their real paths, so a symlink out of
 the root is refused (`~/link-to-/etc/passwd` → `Denied`); a final symlink is listed and deleted
-as the link itself, while reads and writes follow it and check the target too. Optional
+as the link itself, while reads and writes follow it and check the target too. The daemon's
+state dir (keys, tokens, grants, audit log) is refused even inside a root, and written files
+never get setuid/setgid/sticky bits from a client. Optional
 `<state_dir>/config.toml`:
 
 ```toml
@@ -559,7 +561,7 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
     `<state>/vscode/server/<commit>/` (`latest` names the newest). The service is asked at most
     hourly, when a server starts; offline, the newest one here is used. The one before stays (it
     may still run); older ones are removed.
-  - Launch: `bin/code-server --host 127.0.0.1 --port <free> --connection-token <random 128-bit>
+  - Launch: `bin/code-server --host 127.0.0.1 --port <free> --connection-token-file <file holding a random 128-bit token>
     --accept-server-license-terms --reconnection-grace-time 172800` in the folder. Server data in
     `~/.vscode-server`, as under serve-web (extensions and settings carry over).
   - Licence: the same acceptance serve-web needs (the Server licence, accepted in the app); the
@@ -575,7 +577,8 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   there) only with the licence accepted. One server per folder, reused
   (the app's editor panes, several at once, are one server each, each behind its own compressing proxy sharing one
   asset cache; why not one server per host: APP-ARCHITECTURE §20 "Daemon"); bound to `127.0.0.1` on a
-  free port with a random 128-bit `--connection-token`; own process group, killed on
+  free port with a random 128-bit token read from a 0600 file (`--connection-token-file`, never
+  argv: other users can read the process list); own process group, killed on
   `EditorStop` and daemon shutdown; logs in `<state>/editors/`. Returns port, token and
   `url_path` (`/?tkn=…&folder=…`; the server answers with the token cookie and a redirect).
   The returned port is the **compressing proxy's** (below), not the server's; the app forwards
@@ -663,7 +666,7 @@ no editor picker; VS Code is the editor and must just work).
   `171645ce…`, darwin-x64 `76062c1a…`. curl, else wget; hash checked; the tarball has no
   top-level directory, so it unpacks into `<state>/editors/vscodium-reh-web-<platform>-<version>/`
   (atomic rename). `editor.vscodium` points at an existing one instead.
-- `bin/codium-server --host 127.0.0.1 --port <free> --connection-token <random 128-bit>
+- `bin/codium-server --host 127.0.0.1 --port <free> --connection-token-file <file holding a random 128-bit token>
   --telemetry-level off` in the folder. Same flags and token semantics as openvscode-server
   (`?tkn=` → `vscode-tkn` cookie + 302; no token → 403; `--without-connection-token` exists and
   is never used). Its `product.json` has an empty `serverLicense` and `serverLicensePrompt`, so
@@ -713,6 +716,13 @@ no editor picker; VS Code is the editor and must just work).
 - Git CLI only, `LC_ALL=C`, `GIT_OPTIONAL_LOCKS=0`, `core.quotePath=false`. Status from
   `status --porcelain=v2 --branch -z` (branch, oid, upstream, ahead/behind, staged/unstaged per
   path, renames with their old path, unmerged, untracked).
+- A `.git` can come from anywhere (an unpacked archive), so its own config never runs a program
+  when the daemon looks: every call gets `core.fsmonitor=false`, `gc.auto=0`,
+  `maintenance.auto=false`, a pager and editor that do nothing, hooks off (`core.hooksPath=
+  /dev/null`, except `push`, which the person asked for), and the clean/smudge/process filters
+  the repository's local config defines emptied (Git LFS's own excepted); porcelain diffs pass
+  `--no-ext-diff --no-textconv`. `gh` gets fsmonitor and hooks off through `GIT_CONFIG_*`. The
+  throwaway index lives in a fresh 0700 temporary directory.
 - Every diff is between two **trees**. The worktree is turned into a tree with a throwaway copy
   of the index (`GIT_INDEX_FILE=tmp git add -A && git write-tree`): untracked, non-ignored
   files are included and the user's index and stash are never touched (tested). Bases: `Head`
@@ -1615,9 +1625,11 @@ in no session, an unknown format or an export over 8 MiB is an `error`. Exports 
 `width`/`height` are the image's or the last preview's. Formats are the `PULL_FORMATS` table
 (name, `ExportFormat`, MIME, binary); a row there is all a new format needs.
 
-The server finds the socket in `<state>/hook.endpoint` (re-read per call) and the token in
-`<state>/hook.token`, never in argv. Without `--state` it uses `UN_ENDPOINT_FILE`/`UN_SOCK` and
-`UN_TOKEN`, else the default state dir; without `--pane`, `UN_PANE_ID`.
+The server finds the socket in `<state>/hook.endpoint` (re-read per call). Its token is the
+pane's own `UN_TOKEN` (from its environment, or the agent's when Codex trimmed it) when that
+environment's `UN_PANE_ID` is the pane asked for; only otherwise `<state>/hook.token`; never
+argv. Without `--state` it uses `UN_ENDPOINT_FILE`/`UN_SOCK` and `UN_TOKEN`, else the default
+state dir; without `--pane`, `UN_PANE_ID`.
 
 **Agents the daemon launches** get it with no change to the user's config. The server name is
 `<product>_drawings` (`agents::mcp_server_name`, valid for both). Claude: `--mcp-config
@@ -1959,10 +1971,12 @@ can answer (`-S` left alone). Goldens: `proto/tests/golden_askpass.rs`.
 
 Panes get `BROWSER=<state>/browser/un-open`, a script running `un-hook open-url "$@"`. The shim
 sends a `BrowserCall` (`{"browser":{"open":{"url":…}}}`) on the hook socket; the daemon pushes
-`ServerCtl::Browser(Open)` to one connection with `Caps::BROWSER` that shows the pane's session
-and may drive it (the one that last sized the pane, else the newest) and answers `"opened"`
-(exit 0), or `"no_app"`: the shim then runs `open` / `xdg-open` (with `BROWSER` cleared) when
-there is a display, else exits 1 so the program prints its URL. Only `http(s)` URLs pass.
+`ServerCtl::Browser(Open)` to one of the owner's connections with `Caps::BROWSER` that shows the
+pane's session (the one that last sized the pane, else the newest; never a guest's, whose
+browser holds the guest's own sign-ins) and answers `"opened"` (exit 0), or `"no_app"`: the
+shim then runs `open` / `xdg-open` (with `BROWSER` cleared) when there is a display, else exits
+1 so the program prints its URL. Only `http(s)` URLs pass, in the app and to the system opener
+(which would also launch apps and run `file://` scripts).
 
 This is how `claude /login` works from a phone: Claude Code hands `BROWSER` the URL whose
 `redirect_uri` is its callback server on the host's `127.0.0.1:<random>`. The app sees that
@@ -2007,7 +2021,11 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
 
 - **Identity.** `UN_TOKEN` in a pane is that pane's own token (an HMAC of its id under
   `hook.token`), so a pane's programs cannot act as another pane. `hook.token` itself, which only
-  the state directory holds, speaks for any pane. Every hook-socket caller is checked this way.
+  the state directory holds, speaks for any pane. Every hook-socket caller is checked this way,
+  and the socket (0600, in the 0700 state dir or a fresh 0700 temporary dir) refuses peers of
+  another uid, or of unknown uid, before reading a byte.
+- **Limits.** One agent, with every worker it started, may have 32 panes open at once; a wait
+  holds at most 1 MiB of output.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
   `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
 - **Rules.** Read any pane of the caller's session; type into, run in and close only the panes it

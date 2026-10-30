@@ -29,11 +29,34 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, WsError> {
     git_env(dir, args, &[])
 }
 
+/// Settings that keep a repository's own config from running programs when the daemon looks
+/// at it: a `.git` directory can come from anywhere (an unpacked archive), and its config
+/// may name an fsmonitor, hooks or automatic maintenance that would run as the user.
+const SAFE_CONFIG: &[&str] = &[
+    "core.fsmonitor=false",
+    "gc.auto=0",
+    "maintenance.auto=false",
+    "core.pager=cat",
+    "core.editor=true",
+];
+
+/// Subcommands the person asked for that keep the repository's hooks (`pre-push`).
+const HOOKED: &[&str] = &["push"];
+
 fn command(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(dir)
-        .args(["-c", "core.quotePath=false", "-c", "color.ui=false"])
-        .args(args)
+        .args(["-c", "core.quotePath=false", "-c", "color.ui=false"]);
+    for setting in SAFE_CONFIG {
+        cmd.args(["-c", setting]);
+    }
+    if !args.first().is_some_and(|a| HOOKED.contains(a)) {
+        cmd.args(["-c", "core.hooksPath=/dev/null"]);
+    }
+    for setting in neutralised_filters(dir) {
+        cmd.arg("-c").arg(setting);
+    }
+    cmd.args(args)
         // Status must not take the index lock behind the user's back.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -43,6 +66,47 @@ fn command(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Command {
         cmd.env(k, v);
     }
     cmd
+}
+
+/// Git LFS's own filter commands, as `git lfs install --local` writes them.
+const LFS_FILTERS: &[&str] = &[
+    "git-lfs clean -- %f",
+    "git-lfs smudge -- %f",
+    "git-lfs filter-process",
+];
+
+/// `-c` overrides emptying the clean/smudge/process filters the repository's own config
+/// defines (status and diff run them on changed files), Git LFS's excepted. Filters in the
+/// user's global config are theirs and stay.
+fn neutralised_filters(dir: &Path) -> Vec<String> {
+    let Ok(out) = Command::new("git")
+        .current_dir(dir)
+        .args(["config", "--local", "--null", "--get-regexp"])
+        .arg(r"^filter\..*\.(clean|smudge|process)$")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    overrides_for(&out.stdout)
+}
+
+/// The overrides for `git config --null --get-regexp` output (`key\nvalue\0`…).
+fn overrides_for(listing: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in listing.split(|&b| b == 0).filter(|e| !e.is_empty()) {
+        let entry = String::from_utf8_lossy(entry);
+        let (key, value) = entry.split_once('\n').unwrap_or((&entry, ""));
+        if !LFS_FILTERS.contains(&value.trim()) {
+            out.push(format!("{key}="));
+            if let Some(name) = key.rsplit_once('.').map(|(name, _)| name) {
+                out.push(format!("{name}.required=false"));
+            }
+        }
+    }
+    out.dedup();
+    out
 }
 
 fn git_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<Vec<u8>, WsError> {
@@ -243,24 +307,24 @@ impl TempIndex {
         } else {
             root.join(index)
         };
-        let tmp = std::env::temp_dir().join(format!(
-            "{}-index-{}",
-            brand::DIR_NAME,
-            crate::fsutil::hex(&crate::fsutil::random::<8>())
-        ));
+        // In a private directory: the index lists the repository's paths and hashes.
+        let dir = crate::fsutil::create_private_temp_dir(&format!("{}-index", brand::DIR_NAME))
+            .map_err(|e| WsError::Failed(e.to_string()))?;
+        let tmp = Self(dir.join("index"));
         // Starting from the real index keeps its stat cache, so unchanged files are not
         // re-hashed.
         if index.exists() {
-            std::fs::copy(&index, &tmp).map_err(|e| WsError::Failed(e.to_string()))?;
+            std::fs::copy(&index, &tmp.0).map_err(|e| WsError::Failed(e.to_string()))?;
         }
-        Ok(Self(tmp))
+        Ok(tmp)
     }
 }
 
 impl Drop for TempIndex {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("lock"));
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -548,6 +612,75 @@ fn parse_hunk_header(line: &[u8]) -> Option<Hunk> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `.git` from an unpacked archive whose config runs programs: looking at it (status,
+    /// a worktree snapshot) must run none of them.
+    #[test]
+    fn a_repositorys_own_config_runs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let marker = dir.path().join("ran");
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .current_dir(&repo)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        std::fs::create_dir(&repo).unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        run(&["add", "a.txt"]);
+        run(&["commit", "-qm", "one"]);
+        let script = dir.path().join("evil.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho \"$0 $*\" >> '{}'\ncat\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let evil = script.to_string_lossy().into_owned();
+        run(&["config", "core.fsmonitor", &evil]);
+        run(&["config", "filter.x.clean", &evil]);
+        run(&["config", "filter.x.smudge", &evil]);
+        run(&["config", "filter.x.required", "true"]);
+        let hooks = repo.join(".git/hooks");
+        for hook in [
+            "post-index-change",
+            "reference-transaction",
+            "post-checkout",
+        ] {
+            std::fs::copy(&script, hooks.join(hook)).unwrap();
+        }
+        std::fs::write(repo.join(".gitattributes"), "* filter=x\n").unwrap();
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        std::fs::write(repo.join("b.txt"), "new\n").unwrap();
+
+        let s = status(&repo).unwrap();
+        assert!(!s.files.is_empty());
+        let _ = worktree_tree(&repo);
+        assert!(
+            !marker.exists(),
+            "ran: {}",
+            std::fs::read_to_string(&marker).unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn lfs_filters_stay_and_others_are_emptied() {
+        let listing = b"filter.lfs.clean\ngit-lfs clean -- %f\0filter.lfs.process\ngit-lfs filter-process\0filter.x.smudge\nsh -c evil\0";
+        assert_eq!(
+            overrides_for(listing),
+            ["filter.x.smudge=", "filter.x.required=false"]
+        );
+    }
 
     #[test]
     fn parses_porcelain_v2() {

@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -584,11 +585,7 @@ impl HookServer {
         let mut socket = state_dir.join("hook.sock");
         // sun_path is 104 bytes on macOS, 108 on Linux.
         if socket.as_os_str().len() > 100 {
-            socket = std::env::temp_dir().join(format!(
-                "{}-{}.sock",
-                brand::DIR_NAME,
-                fsutil::hex(&fsutil::random::<6>())
-            ));
+            socket = fsutil::create_private_temp_dir(brand::DIR_NAME)?.join("hook.sock");
         }
         Ok(Self {
             endpoint_file: state_dir.join("hook.endpoint"),
@@ -632,6 +629,8 @@ impl HookServer {
         let hooks = &core.hooks;
         let _ = std::fs::remove_file(&hooks.socket);
         let listener = UnixListener::bind(&hooks.socket)?;
+        // Only this user may connect: the directory is private too, and every peer is checked.
+        std::fs::set_permissions(&hooks.socket, std::fs::Permissions::from_mode(0o600))?;
         std::fs::write(
             &hooks.endpoint_file,
             hooks.socket.as_os_str().as_encoded_bytes(),
@@ -642,6 +641,11 @@ impl HookServer {
                 let Ok((stream, _)) = listener.accept().await else {
                     continue;
                 };
+                let peer = stream.peer_cred().ok().map(|c| c.uid());
+                if !same_user(peer) {
+                    tracing::warn!(uid = ?peer, "refused a hook connection from another user");
+                    continue;
+                }
                 let core = Arc::clone(&core);
                 tokio::spawn(async move {
                     if let Err(e) = serve_hook(&core, stream).await {
@@ -713,9 +717,23 @@ impl HookServer {
         &self.socket
     }
 
+    /// Removes the socket, and the private directory made for it outside the state dir.
+    pub fn remove_socket(&self) {
+        let _ = std::fs::remove_file(&self.socket);
+        if let Some(dir) = self.socket.parent().filter(|d| *d != self.state_dir) {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+
     pub fn endpoint_file(&self) -> &Path {
         &self.endpoint_file
     }
+}
+
+/// Whether a hook-socket peer runs as this daemon's user; an unknown peer does not.
+fn same_user(peer_uid: Option<u32>) -> bool {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    peer_uid == Some(unsafe { libc::getuid() })
 }
 
 async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
@@ -863,6 +881,28 @@ mod tests {
             name: program.into(),
             argv: vec![program.into()],
         }
+    }
+
+    #[test]
+    fn only_this_user_may_use_the_hook_socket() {
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let me = unsafe { libc::getuid() };
+        assert!(same_user(Some(me)));
+        assert!(!same_user(Some(me + 1)));
+        assert!(!same_user(None), "a peer of unknown uid is refused");
+    }
+
+    #[test]
+    fn a_long_state_dir_puts_the_socket_in_a_private_dir() {
+        let base = tempfile::tempdir().unwrap();
+        let deep = base.path().join("x".repeat(60)).join("y".repeat(60));
+        std::fs::create_dir_all(&deep).unwrap();
+        let hooks = HookServer::new(&deep, "/bin/true".into()).unwrap();
+        let dir = hooks.socket().parent().unwrap().to_owned();
+        assert!(!dir.starts_with(&deep));
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
     }
 
     #[test]

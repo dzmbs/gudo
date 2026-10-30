@@ -2,8 +2,8 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
@@ -61,6 +61,27 @@ pub(crate) fn with_lock<T>(path: &Path, update: impl FnOnce() -> io::Result<T>) 
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+}
+
+/// Creates a new directory, mode 0700, with an unguessable name under the temporary
+/// directory. Creation fails rather than reuse anything already there, so another user on a
+/// shared `/tmp` can neither pre-create it nor redirect it with a symlink.
+pub(crate) fn create_private_temp_dir(prefix: &str) -> io::Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", hex(&random::<12>())));
+    fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    Ok(dir)
+}
+
+/// Creates a new file, mode 0600, with an unguessable name under the temporary directory
+/// (`<prefix>-<random>.<ext>`). It never follows or replaces an existing path.
+pub fn create_private_temp_file(prefix: &str, ext: &str) -> io::Result<(PathBuf, File)> {
+    let path = std::env::temp_dir().join(format!("{prefix}-{}.{ext}", hex(&random::<12>())));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    Ok((path, file))
 }
 
 /// Reads a file, mapping "not found" to `None`.

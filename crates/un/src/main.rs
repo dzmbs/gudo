@@ -28,7 +28,7 @@
 //! ```
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -291,23 +291,34 @@ async fn knock(cli: &Cli, invite: &str, name: Option<String>) -> Result<String> 
 }
 
 fn device_key() -> Result<Vec<u8>> {
-    use std::os::unix::fs::OpenOptionsExt;
     let path = config_dir().join("un.key");
     if let Ok(key) = std::fs::read(&path)
         && key.len() == 32
     {
         return Ok(key);
     }
-    std::fs::create_dir_all(config_dir())?;
     let key = ClientConfig::generate_key();
+    write_private(&path, &key)?;
+    Ok(key)
+}
+
+/// Writes a credential (the device key, a ticket, an invite) readable by this user only, in a
+/// directory only this user can enter.
+fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let dir = path.parent().context("no parent directory")?;
+    std::fs::create_dir_all(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    let tmp = path.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
     std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
-        .open(&path)?
-        .write_all(&key)?;
-    Ok(key)
+        .open(&tmp)?
+        .write_all(data)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 /// How to dial: a pairing ticket (owner device) or an invite (guest).
@@ -525,8 +536,7 @@ async fn run(cli: Cli) -> Result<()> {
         ticket
             .parse::<client_core::proto::Ticket>()
             .context("not a pairing ticket")?;
-        std::fs::create_dir_all(config_dir())?;
-        std::fs::write(config_dir().join("un.ticket"), ticket)?;
+        write_private(&config_dir().join("un.ticket"), ticket.as_bytes())?;
         let cli = Cli {
             ticket: Some(ticket.clone()),
             ..cli
@@ -543,8 +553,7 @@ async fn run(cli: Cli) -> Result<()> {
         } else {
             invite.clone()
         };
-        std::fs::create_dir_all(config_dir())?;
-        std::fs::write(config_dir().join("un.invite"), invite)?;
+        write_private(&config_dir().join("un.invite"), invite.as_bytes())?;
         let cli = Cli {
             ticket: None,
             invite: Some(invite.clone()),

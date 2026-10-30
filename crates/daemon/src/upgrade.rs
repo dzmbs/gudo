@@ -202,10 +202,11 @@ impl Staged {
             |n| n.to_string_lossy().into_owned(),
         );
         let path = dir.join(format!(".{name}.upgrade-{}", std::process::id()));
+        // A leftover of a crashed attempt goes; whatever else sits there is never followed.
+        let _ = fs::remove_file(&path);
         let file = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o755)
             .open(&path)?;
         Ok((Self { path, kept: false }, file))

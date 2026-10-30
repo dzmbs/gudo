@@ -14,18 +14,37 @@ use proto::WsError;
 pub(crate) struct Policy {
     home: PathBuf,
     roots: Vec<PathBuf>,
+    /// Inside a root but never served: the daemon's state (keys, tokens, grants, audit log).
+    denied: Vec<PathBuf>,
 }
 
 impl Policy {
     pub fn new(home: &Path, extra: &[PathBuf]) -> Self {
         let roots = std::iter::once(home)
             .chain(extra.iter().map(PathBuf::as_path))
-            .map(|r| r.canonicalize().unwrap_or_else(|_| r.to_owned()))
+            .map(canonical)
             .collect();
         Self {
             home: home.to_owned(),
             roots,
+            denied: Vec::new(),
         }
+    }
+
+    /// Also refuses `dir` and everything under it, unless it holds a whole root (that would
+    /// refuse everything).
+    pub fn deny(mut self, dir: &Path) -> Self {
+        let dir = canonical(dir);
+        if !self.roots.iter().any(|r| r.starts_with(&dir)) {
+            self.denied.push(dir);
+        }
+        self
+    }
+
+    /// Whether the real path `real` may be served.
+    fn allows(&self, real: &Path) -> bool {
+        self.roots.iter().any(|r| real.starts_with(r))
+            && !self.denied.iter().any(|d| real.starts_with(d))
     }
 
     pub fn home(&self) -> &Path {
@@ -63,7 +82,7 @@ impl Policy {
             (Some(parent), Some(name)) => real_prefix(parent).join(name),
             _ => path.clone(),
         };
-        if self.roots.iter().any(|r| real.starts_with(r)) {
+        if self.allows(&real) {
             Ok(path)
         } else {
             Err(WsError::Denied(format!(
@@ -78,7 +97,7 @@ impl Policy {
     pub fn resolve_followed(&self, raw: &str) -> Result<PathBuf, WsError> {
         let path = self.resolve(raw)?;
         match path.canonicalize() {
-            Ok(real) if self.roots.iter().any(|r| real.starts_with(r)) => Ok(path),
+            Ok(real) if self.allows(&real) => Ok(path),
             Ok(real) => Err(WsError::Denied(format!(
                 "{} points outside the allowed directories ({})",
                 path.display(),
@@ -87,6 +106,10 @@ impl Policy {
             Err(_) => Ok(path),
         }
     }
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
 /// `path` with its longest existing prefix replaced by that prefix's canonical form.
@@ -164,5 +187,40 @@ mod tests {
             policy.resolve_followed("~/escape"),
             Err(WsError::Denied(_))
         ));
+    }
+
+    #[test]
+    fn the_state_dir_is_never_served() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join(".local/state/un");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("hook.token"), "secret").unwrap();
+        std::os::unix::fs::symlink(&state, home.path().join("st")).unwrap();
+        let policy = Policy::new(home.path(), &[]).deny(&state);
+        for path in [
+            "~/.local/state/un/hook.token",
+            "~/.local/state/un",
+            "~/.local/state/un/new-file",
+            "~/st/hook.token",
+        ] {
+            assert!(
+                matches!(policy.resolve_followed(path), Err(WsError::Denied(_))),
+                "{path}"
+            );
+        }
+        // A link to it may be listed, not followed.
+        assert!(matches!(
+            policy.resolve_followed("~/st"),
+            Err(WsError::Denied(_))
+        ));
+        assert!(policy.resolve("~/.local/state/other").is_ok());
+        // A state dir holding a whole root does not refuse everything.
+        std::fs::create_dir(state.join("home")).unwrap();
+        let policy = Policy::new(&state.join("home"), &[]).deny(&state);
+        assert!(
+            policy
+                .resolve(&state.join("home/x").to_string_lossy())
+                .is_ok()
+        );
     }
 }

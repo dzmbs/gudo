@@ -147,7 +147,16 @@ fn read_git(root: &Path) -> Result<GitBits, WsError> {
     };
     let numstat = git(
         root,
-        &["diff", "--numstat", "-z", "--no-renames", &base, "--"],
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--numstat",
+            "-z",
+            "--no-renames",
+            &base,
+            "--",
+        ],
     )?;
     for record in numstat.split(|&b| b == 0) {
         let mut fields = record.split(|&b| b == b'\t');

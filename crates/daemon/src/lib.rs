@@ -81,6 +81,7 @@ pub use browser::{
 };
 pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state_dir};
 pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
+pub use fsutil::create_private_temp_file;
 pub use identity::{
     EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
 };
@@ -254,7 +255,7 @@ impl Daemon {
             .map(|(id, _)| id)
             .collect();
         self.core.kill_panes(&panes);
-        let _ = std::fs::remove_file(self.core.hooks.socket());
+        self.core.hooks.remove_socket();
     }
 }
 

@@ -190,7 +190,33 @@ async fn accept(listener: TcpListener, shared: Arc<Shared>) {
     }
 }
 
+/// Whether a `Host` header names this machine's loopback. Anything else is a page that
+/// rebound its own name to 127.0.0.1 (DNS rebinding) and must not reach the editor.
+fn loopback_host(host: Option<&HeaderValue>) -> bool {
+    let Some(host) = host.and_then(|h| h.to_str().ok()) else {
+        return false;
+    };
+    let name = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+    };
+    let name = name.to_ascii_lowercase();
+    name == "localhost"
+        || name.ends_with(".localhost")
+        || name == "::1"
+        || name
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 async fn handle(shared: &Arc<Shared>, req: Request<Incoming>) -> Response<ProxyBody> {
+    if !loopback_host(req.headers().get(header::HOST)) {
+        let mut resp = Response::new(ProxyBody::Full(Some(Bytes::from_static(
+            b"editor proxy: not a loopback host\n",
+        ))));
+        *resp.status_mut() = StatusCode::FORBIDDEN;
+        return resp;
+    }
     match proxy(shared, req).await {
         Ok(resp) => resp,
         Err(e) => {

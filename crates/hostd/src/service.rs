@@ -17,6 +17,31 @@ fn exe() -> Result<PathBuf> {
         .context("locating this executable")
 }
 
+/// `path` as one quoted systemd `ExecStart` word: spaces, quotes, `%` specifiers and `$`
+/// expansion would otherwise change the command.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn systemd_word(path: &Path) -> Result<String> {
+    let s = path.to_str().context("the path is not UTF-8")?;
+    if s.chars().any(char::is_control) {
+        bail!("{s:?} has control characters");
+    }
+    let escaped = s
+        .replace('\\', r"\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%")
+        .replace('$', "$$");
+    Ok(format!("\"{escaped}\""))
+}
+
+/// `path` as XML text for the property list.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn xml_text(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn run(cmd: &mut Command) -> Result<()> {
     let status = cmd.status().with_context(|| format!("running {cmd:?}"))?;
     if !status.success() {
@@ -55,8 +80,8 @@ pub fn install(state_dir: &Path) -> Result<()> {
          [Install]\n\
          WantedBy=default.target\n",
         name = brand::PRODUCT_NAME,
-        exe = exe()?.display(),
-        state = state_dir.display(),
+        exe = systemd_word(&exe()?)?,
+        state = systemd_word(state_dir)?,
     );
     std::fs::create_dir_all(path.parent().expect("unit path has a parent"))?;
     std::fs::write(&path, unit)?;
@@ -128,9 +153,9 @@ pub fn install(state_dir: &Path) -> Result<()> {
 </plist>
 "#,
         label = brand::SERVICE_LABEL,
-        exe = exe()?.display(),
-        state = state_dir.display(),
-        logs = logs.display(),
+        exe = xml_text(&exe()?),
+        state = xml_text(state_dir),
+        logs = xml_text(&logs),
     );
     std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;
     std::fs::write(&path, plist)?;
@@ -159,4 +184,30 @@ pub fn uninstall() -> Result<()> {
     }
     println!("removed {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_paths_stay_one_literal_word() {
+        assert_eq!(
+            systemd_word(Path::new("/home/a b/bin/un")).unwrap(),
+            r#""/home/a b/bin/un""#
+        );
+        assert_eq!(
+            systemd_word(Path::new(r#"/x/%h$HOME"q\"#)).unwrap(),
+            r#""/x/%%h$$HOME\"q\\""#
+        );
+        assert!(systemd_word(Path::new("/x\nExecStartPre=/bin/evil")).is_err());
+    }
+
+    #[test]
+    fn plist_paths_are_xml_text() {
+        assert_eq!(
+            xml_text(Path::new("/Users/a&b/<x>")),
+            "/Users/a&amp;b/&lt;x&gt;"
+        );
+    }
 }

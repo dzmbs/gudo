@@ -417,7 +417,12 @@ impl PendingWrite {
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(keep_mode.or(target.mode).unwrap_or(0o666))
+            // A new file never gets setuid, setgid or sticky bits from a client.
+            .mode(
+                keep_mode
+                    .or(target.mode.map(|m| m & 0o777))
+                    .unwrap_or(0o666),
+            )
             .open(&tmp)
             .map_err(|e| io_error(&tmp, &e))?;
         let stat = existing.as_ref().map(|m| stat_from(&path, m));
@@ -709,6 +714,19 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 1, "temporary files left: {names:?}");
+    }
+
+    #[test]
+    fn a_client_cannot_create_setuid_files() {
+        let home = tempfile::tempdir().unwrap();
+        let policy = Policy::new(home.path(), &[]);
+        let file = home.path().join("tool");
+        let mut t = target(&file);
+        t.mode = Some(0o4755);
+        write_small(&policy, &t, b"#!/bin/sh\n").unwrap();
+        let mode = fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7000, 0, "{mode:o}");
+        assert_eq!(mode & 0o100, 0o100, "the executable bit is kept: {mode:o}");
     }
 
     #[test]
