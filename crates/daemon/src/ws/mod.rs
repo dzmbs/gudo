@@ -474,7 +474,13 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
         Some(code) => format!("failed ({code})"),
         None => "finished".to_owned(),
     };
-    let command = mark.command.clone().unwrap_or_else(|| "command".into());
+    // The command line comes from the shell's OSC 133 report: any program can forge it.
+    let command = mark
+        .command
+        .as_deref()
+        .map(|c| proto::clean_prompt_text(c, COMMAND_CHARS))
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| "command".into());
     let last_line = core
         .pane(mark.pane_id)
         .and_then(|entry| entry.pane.command_output(None, Some(mark.command_id)).ok())
@@ -496,11 +502,16 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
 
 /// Longest last line put in a notification body, in characters.
 const LAST_LINE_CHARS: usize = 120;
+/// Longest command put in a notification title, in characters.
+const COMMAND_CHARS: usize = 80;
 
 /// The last line of output with something on it, trimmed and cut to [`LAST_LINE_CHARS`].
 fn last_output_line(text: &str) -> Option<String> {
     let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
-    let line: String = line.chars().filter(|c| !c.is_control()).collect();
+    let line: String = line
+        .chars()
+        .filter(|&c| !c.is_control() && !proto::is_invisible_format(c))
+        .collect();
     if line.chars().count() > LAST_LINE_CHARS {
         let cut: String = line.chars().take(LAST_LINE_CHARS - 1).collect();
         Some(format!("{}…", cut.trim_end()))
@@ -607,6 +618,10 @@ mod tests {
         );
         assert_eq!(last_output_line("\n \n"), None);
         assert_eq!(last_output_line("\tok\t").as_deref(), Some("ok"));
+        assert_eq!(
+            last_output_line("tests \u{202e}deliaf\u{202c} ok").as_deref(),
+            Some("tests deliaf ok")
+        );
         let long = "x".repeat(300);
         let cut = last_output_line(&long).unwrap();
         assert_eq!(cut.chars().count(), LAST_LINE_CHARS);

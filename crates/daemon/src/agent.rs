@@ -79,6 +79,14 @@ pub(crate) fn adapter(kind: AgentKind) -> Box<dyn AgentAdapter + Send + Sync> {
     }
 }
 
+/// Whether a program-status report names one of our agent integrations (`claude-code`,
+/// `codex`). Outside a pane running that agent it is printed text posing as the agent.
+pub(crate) fn names_an_agent(report: &agents::ProgramStatus) -> bool {
+    [AgentKind::Claude, AgentKind::Codex]
+        .into_iter()
+        .any(|k| report.app.as_deref() == Some(adapter(k).program_status_app()))
+}
+
 /// The command that runs `kind`, looked up on `PATH`.
 pub(crate) fn program(kind: AgentKind) -> &'static str {
     match kind {
@@ -836,6 +844,15 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_app_names_are_recognised() {
+        let report = |body| agents::ProgramStatus::parse(body).unwrap();
+        assert!(names_an_agent(&report("state=blocked:app=claude-code")));
+        assert!(names_an_agent(&report("state=working:app=codex")));
+        assert!(!names_an_agent(&report("state=working:app=terraform")));
+        assert!(!names_an_agent(&report("state=working")));
+    }
 
     fn runtime() -> AgentRuntime {
         AgentRuntime::new(

@@ -89,3 +89,33 @@ async fn any_programs_status_reaches_clients_that_ask() {
         .await;
     assert!(plain.programs.is_empty(), "{:?}", plain.programs);
 }
+
+/// Printed text (`cat` of a hostile file) cannot pose as one of our agents asking for
+/// permission in a pane where that agent is not running.
+#[tokio::test(flavor = "multi_thread")]
+async fn printed_text_cannot_pose_as_an_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut watcher =
+        TestClient::connect_program_status(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = watcher.attach_and_follow().await;
+    for app in ["claude-code", "codex"] {
+        watcher.type_line(
+            pane,
+            &format!(r"printf '\033]7501;state=blocked:kind=permission:app={app}\033\\'"),
+        );
+    }
+    // Then a report of its own, on the same ordered stream.
+    watcher.type_line(pane, r"printf '\033]7501;state=working:app=make\033\\'");
+    watcher
+        .until("the make report", |c| {
+            last(c, pane).flatten().and_then(|r| r.app).as_deref() == Some("make")
+        })
+        .await;
+    let apps: Vec<_> = watcher
+        .programs
+        .iter()
+        .filter_map(|(_, r)| r.as_ref()?.app.clone())
+        .collect();
+    assert_eq!(apps, ["make"]);
+}
