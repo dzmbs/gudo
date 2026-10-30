@@ -37,7 +37,11 @@ their hash with every build.
    and `cargo xtask build-hostd-linux` (the Linux daemons that "Install helper" uploads).
    `build-hostd-macos` builds `aarch64-apple-darwin` only. For an Intel slice, build
    `x86_64-apple-darwin` too and `lipo` the two, or limit the app to `ARCHS = arm64`.
-2. Make a "Developer ID Application" certificate (Xcode ▸ Settings ▸ Accounts ▸ Manage
+2. Check the supply chain on the commit you release (docs/security/supply-chain.md):
+   `git submodule status` shows `vendor/ghostty` at the pinned tag with no `+`, `cargo deny
+   check` passes, and the build starts from a clean checkout so every binary comes from this
+   source.
+3. Make a "Developer ID Application" certificate (Xcode ▸ Settings ▸ Accounts ▸ Manage
    Certificates) and note the team ID.
 
 ## Archive and export
@@ -77,6 +81,14 @@ app=build/release/export/unnamed.app
 codesign --verify --deep --strict --verbose=2 "$app"
 codesign -dv --entitlements - "$app"                       # flags=0x10000(runtime), TeamIdentifier set, no get-task-allow
 codesign -dv "$app/Contents/MacOS/unnamed-hostd"           # runtime, same team, identifier <bundle id>.hostd
+```
+
+The entitlements must hold no `com.apple.security.cs.*` exception (JIT, unsigned executable
+memory, dyld environment variables, disabled library validation): each one lets injected code
+run inside the hardened app.
+
+```sh
+codesign -d --entitlements - --xml "$app" | grep -c 'com.apple.security.cs\.'   # 0
 ```
 
 The helper must carry the same team and the runtime flag. If an export signed the app again
