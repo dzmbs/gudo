@@ -77,15 +77,22 @@ Needs: a VPS with a public IPv4 (and ideally IPv6), a DNS name, ports **80/tcp, 
    ```sh
    mkdir -p ~/iroh-relay && cd ~/iroh-relay
    # copy services/iroh-relay/{docker-compose.yml,iroh-relay.toml} from this repo here
-   openssl rand -base64 32   # a token
-   $EDITOR iroh-relay.toml   # hostname, contact email, access.shared_token = ["<token>"]
-   docker compose up -d
+   echo "IROH_RELAY_ACCESS_TOKEN=$(openssl rand -base64 32)" > .env && chmod 600 .env
+   $EDITOR iroh-relay.toml   # hostname, contact email
+   docker compose up -d      # refuses to start without the token in .env
    docker compose logs -f    # watch the Let's Encrypt certificate arrive
    curl -fsS https://relay.example.com/healthz
    ```
 
    The image tag must match the iroh version the app and daemon use (`iroh = "1.3.0"` in
-   `Cargo.toml` → `n0computer/iroh-relay:v1.3.0`); bump them together.
+   `Cargo.toml` → `n0computer/iroh-relay:v1.3.0`); bump them together. For production, pin
+   the digest too (`image: n0computer/iroh-relay:v1.3.0@sha256:…`, from `docker pull`).
+
+   The container runs as an unprivileged user with no capabilities, a read-only root
+   filesystem (only the certificate volume is writable), `no-new-privileges`, and memory,
+   CPU, process and log-size limits; a one-shot `relay-data-owner` service hands the volume to
+   that user. Metrics listen on the container's loopback only. Publish nothing but 80, 443/tcp
+   and 7842/udp, and keep the host firewall closed otherwise.
 3. On each host, `<state>/config.toml`:
 
    ```toml
@@ -102,7 +109,11 @@ Needs: a VPS with a public IPv4 (and ideally IPv6), a DNS name, ports **80/tcp, 
 Access control options (`iroh-relay.toml` `access`): `"everyone"` (open relay; not
 recommended), `allowlist = [endpoint ids]`, `denylist`, `http` (a callback URL answering `true`)
 and `shared_token` (above). The token is sent as `Authorization: Bearer` by both the daemon and
-the app (`RelayMap::with_auth_token`).
+the app (`RelayMap::with_auth_token`). Never run `"everyone"` on the internet: an open relay
+is a free, anonymous bandwidth proxy for anyone. The token travels in pairing tickets, so
+every device you pair can use the relay; rotate it (new `.env`, daemon config, pair
+again) if a ticket leaks. Access control covers relaying only; QUIC address discovery on UDP
+7842 answers anyone (it only reports the caller's own address).
 
 Without Docker: `cargo install iroh-relay --version 1.3.0 --features server` and run
 `iroh-relay --config-path iroh-relay.toml` under systemd. For a quick LAN experiment,

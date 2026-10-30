@@ -34,7 +34,7 @@ relay learns an APNs token (inside a capability it issued itself), ciphertext, t
    → `{"cap": "v1.…", "expires": <unix s>}`. The capability is
    `AES-256-GCM(PUSH_CAP_KEY, {t: token, e: env, d: daemon, k: kind, x: expiry})`: stateless
    (no database), bound to one daemon, valid 180 days (`CAP_TTL_DAYS`). Registration is
-   rate-limited per client IP (20/hour).
+   rate-limited per client IP (20/hour; IPv6 per /64).
 3. Over the existing connection: `Client::push_register(PushRegistration { cap, seal_key,
    relay_url, prefs, activity_cap })`. The daemon keeps it per **device** in
    `<state>/push.json` (0600). It never sees the APNs token. `PushPrefs` picks kinds
@@ -97,11 +97,16 @@ decision signatures, a signed relay request (the Worker verifies it) and RFC 918
 
 ## 5. Approve / Deny from the lock screen
 
-An approval notification carries `action.token`: `postcard(ActionToken { daemon, device,
-pane, request, approve option, deny option, item, expires }) || Ed25519(daemon,
-"push-action-token/v1\0" || postcard)`. It is bound to the one device the payload was sealed
-for and expires after an hour (`push.action_ttl`). The daemon verifies it with its own key, so
-it keeps no token state; the agent request itself accepts only the first decision.
+An approval notification carries `action.token`: `postcard(ActionToken { v: 2, daemon,
+device, pane, request, approve option, deny option, item, expires, subject }) ||
+Ed25519(daemon, "push-action-token/v1\0" || postcard)`. It is bound to the one device the
+payload was sealed for and expires after an hour (`push.action_ttl`). `subject` is
+`push::request_subject` (SHA-256 over the agent's own request id, the tool and the summary the
+notification showed); before applying a decision the daemon recomputes it for the open request
+and checks the pane, so a stale or replayed token can never decide another or newer request.
+Wire request ids also start at a random point each daemon run. The daemon verifies tokens
+with its own key, so it keeps no token state; the agent request itself accepts only the first
+decision.
 
 The app registers categories with `UNNotificationAction`s `APPROVE` and `DENY` using
 `.authenticationRequired` (Face ID / passcode before the handler runs; DENY also
@@ -254,9 +259,20 @@ free account; APNs registration activates only with `PUSH_ENTITLEMENT = YES` and
   (tokens are daemon-signed and bound to a device; decisions need the device key over an
   authenticated iroh connection).
 - A daemon request needs the daemon's signature, a capability bound to that daemon, a
-  timestamp within 5 minutes and a fresh nonce (kept per daemon in a Durable Object); 30
-  burst / 300 per 15 min per daemon.
-- `/v1/register` is unauthenticated (anyone who knows an APNs token could bind it to their own
-  daemon). APNs tokens are not public; App Attest on registration is the hardening step if
-  abuse appears.
+  timestamp within 5 minutes and a fresh nonce (kept per daemon in a Durable Object until the
+  request's own timestamp leaves the window); 30 burst / 300 per 15 min per daemon. Each
+  device token also has its own budget across all daemons (alerts: 30 burst / 300 an hour;
+  Live Activity tokens: 60 burst / one per 3 s).
+- The NSE keeps only `aps` and the payload it opened and verified in `userInfo`; the action
+  handler reads a local-notification target only from local notifications. So nothing a
+  sender adds to a push can choose what Approve decides.
+- `/v1/register` is unauthenticated: anyone who learns a device's APNs token can bind it to a
+  daemon of their own and send it the relay's placeholder alerts (never readable content and
+  never a working Approve), within the per-token budget. Signing the registration with the
+  device key does not help: the relay cannot tell whose device key it is. Real fixes, in
+  order: App Attest on `/v1/register` (needs the paid account and a device), or proving
+  possession of the token by delivering the capability in a background push. See
+  docs/security/services.md.
+- The relay sees the client IP at registration and daemon IPs on push; it does not log them
+  (no invocation logs, no `console.log`).
   are not built.
