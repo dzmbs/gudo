@@ -611,7 +611,7 @@ shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`
 theme, each from the same picker; the system's appearance writes `theme` (`Views/ThemePair.swift`).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
-from the real profiles). Notifications. About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
+from the real profiles). Notifications. Privacy & Security: App Lock ("Require Face ID", the grace period) and saved passwords; locked, every window shows the app icon, "<App> Is Locked" and one primary Unlock on the theme base (`Security/AppLockScreen.swift`, 1Password and banking apps). About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
 top, the pane's title once in the titlebar, a grouped form beside it, min 720 × 480); iOS: one grouped form. Both on the
 theme's chrome. Values reach the renderer through `TerminalAppearance`
 (`TerminalAppearance.fromPreferences()`).

@@ -81,6 +81,8 @@ extension WindowModel {
             HostSignIn.start(url, port: port, path: path, hostId: hostId, in: self)
         case .pastedCode:
             showInBrowser(url)
+            // The host's own store: its sign-in never rides on the user's sessions.
+            browserHost = hostId
             browserSignInPane = (hostId, pane)
         }
     }

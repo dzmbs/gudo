@@ -10,6 +10,7 @@ import UIKit
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         AppNotifications.shared.install()
+        AppLockCovers.shared.install()
         AgentLiveActivities.shared.install()
         AgentsLiveActivity.shared.install()
         #if PUSH_YES
@@ -71,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppLockCovers.shared.install()
         #if PUSH_YES
         NSApplication.shared.registerForRemoteNotifications()
         #endif
