@@ -46,6 +46,7 @@ zstd.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 client-core.workspace = true
 iroh-relay.workspace = true
 data-encoding.workspace = true

@@ -309,7 +309,7 @@ pub fn clean_prompt_text(text: &str, max: usize) -> String {
     let mut space = false;
     let mut count = 0;
     for c in text.chars() {
-        if is_format(c) {
+        if is_invisible_format(c) {
             continue;
         }
         if c.is_whitespace() || c.is_control() {
@@ -335,9 +335,18 @@ pub fn clean_prompt_text(text: &str, max: usize) -> String {
     out
 }
 
-/// Unicode format characters that can disguise text: bidi controls, zero-width characters,
-/// the BOM and the soft hyphen.
-fn is_format(c: char) -> bool {
+/// Whether `c` is a Unicode format character that can disguise text: bidi controls,
+/// zero-width characters, the BOM, the soft hyphen, and tag characters (invisible to people,
+/// read by language models as ASCII).
+///
+/// # Examples
+///
+/// ```
+/// assert!(proto::is_invisible_format('\u{202e}'));
+/// assert!(proto::is_invisible_format('\u{e0041}'));
+/// assert!(!proto::is_invisible_format('a'));
+/// ```
+pub fn is_invisible_format(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
@@ -347,6 +356,7 @@ fn is_format(c: char) -> bool {
             | '\u{202A}'..='\u{202E}'
             | '\u{2060}'..='\u{2069}'
             | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E007F}'
     )
 }
 

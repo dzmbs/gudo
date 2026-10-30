@@ -1418,8 +1418,13 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
             core.agent_event(id, event);
         }
         Osc::ProgramStatus(body) => {
-            // Reports about sub-records (`id=`) belong to the agent integrations below.
-            if let Some(report) = agents::ProgramStatus::parse(&body).filter(|r| r.id.is_none()) {
+            // Reports about sub-records (`id=`) belong to the agent integrations below. Any
+            // printed text can claim to be an agent: only a pane running one may.
+            let has_agent = lock(&entry.agent).is_some();
+            if let Some(report) = agents::ProgramStatus::parse(&body)
+                .filter(|r| r.id.is_none())
+                .filter(|r| has_agent || !crate::agent::names_an_agent(r))
+            {
                 core.set_program(entry, report);
             }
             let event = lock(&entry.agent)

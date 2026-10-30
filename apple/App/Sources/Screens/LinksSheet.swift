@@ -1,5 +1,6 @@
 import DesignSystem
 import SwiftUI
+import TerminalCore
 #if canImport(UIKit)
 import UIKit
 #else
@@ -245,7 +246,23 @@ extension WindowModel {
     func open(_ link: DetectedLink) {
         switch link.kind {
         case .url:
-            Task { await openURL(link.resolved) }
+            guard let url = URL(string: link.resolved) else { return }
+            if url.isFileURL {
+                return open(DetectedLink(kind: .path, text: link.text, line: link.line, target: url.path))
+            }
+            let follow = { [weak self] in
+                if url.scheme == "http" || url.scheme == "https" {
+                    Task { await self?.openURL(link.resolved) }
+                } else {
+                    PaneLinks.openExternally(url)
+                }
+            }
+            // The list shows the printed text: an OSC 8 target may name another place.
+            switch LinkSafety.action(for: url, shown: link.text) {
+            case .refuse: return
+            case .open: follow()
+            case .confirm: PaneLinks.confirmOpen(url, from: nil, then: follow)
+            }
         case .path:
             let numbers = PathParts(link.text).numbers
             let path = link.target ?? PathParts(link.text).directory + PathParts(link.text).name
@@ -253,7 +270,13 @@ extension WindowModel {
                 openEditor(path: path, line: link.targetLine ?? numbers.line, column: link.targetColumn ?? numbers.column)
             } else {
                 #if os(macOS)
-                NSWorkspace.shared.open(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+                // Opening an app, script or `.webloc` would run it: those are shown in the Finder.
+                let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+                if LinkSafety.opensInDefaultApp(url) {
+                    NSWorkspace.shared.open(url)
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
                 #endif
             }
         }

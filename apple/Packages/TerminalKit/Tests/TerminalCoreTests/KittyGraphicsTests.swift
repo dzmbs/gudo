@@ -126,6 +126,16 @@ import UniformTypeIdentifiers
         #expect(String(decoding: replies.withLock { $0 }, as: UTF8.self) == "\u{1b}_Gi=31;OK\u{1b}\\")
     }
 
+    /// A small PNG that decodes past the image storage is refused before it is decoded, as the
+    /// daemon refuses it: hostile output cannot make the app allocate gigabytes.
+    @Test func oversizedPNGsAreRefused() throws {
+        let big = try png(width: 4_200, height: 4_200, pixel: [0, 0, 0, 255])
+        #expect(big.count < 1 << 20)
+        #expect(big.withUnsafeBytes { KittyGraphics.decodePNG($0) } == nil)
+        let fits = try png(width: 4_000, height: 4_000, pixel: [0, 0, 0, 255])
+        #expect(fits.withUnsafeBytes { KittyGraphics.decodePNG($0) }?.0 == 4_000)
+    }
+
     private func png(width: Int, height: Int, pixel: [UInt8]) throws -> [UInt8] {
         let pixels = Data(rgba(width, height, pixel))
         let image = try #require(CGImage(

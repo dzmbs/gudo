@@ -25,14 +25,25 @@ public enum KittyGraphics {
         ghostty_sys_set(GHOSTTY_SYS_OPT_DECODE_PNG, unsafeBitCast(decode, to: UnsafeRawPointer.self))
     }()
 
+    /// The daemon's rule (`png_fits` in `ghostty-vt`), so a mirror keeps the images the host
+    /// keeps: sides within 10000 pixels and RGBA within the image storage, checked before
+    /// decoding so a few compressed bytes cannot ask for gigabytes.
+    static func pngFits(width: Int, height: Int) -> Bool {
+        (1...10_000).contains(width) && (1...10_000).contains(height) && UInt64(width * height * 4) <= storageLimit
+    }
+
     /// Decodes a PNG to 8-bit straight-alpha RGBA, as Ghostty stores images.
     static func decodePNG(_ png: UnsafeRawBufferPointer) -> (UInt32, UInt32, [UInt8])? {
         guard let source = CGImageSourceCreateWithData(Data(png) as CFData, nil),
               CGImageSourceGetType(source).map({ $0 as String == "public.png" }) == true,
+              let header = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let claimedWidth = header[kCGImagePropertyPixelWidth] as? Int,
+              let claimedHeight = header[kCGImagePropertyPixelHeight] as? Int,
+              pngFits(width: claimedWidth, height: claimedHeight),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
         let width = image.width, height = image.height
-        guard width > 0, height > 0 else { return nil }
+        guard width > 0, height > 0, pngFits(width: width, height: height) else { return nil }
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         let decoded = pixels.withUnsafeMutableBytes { raw -> Bool in
             guard let context = CGContext(

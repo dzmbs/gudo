@@ -67,6 +67,17 @@ final class BrowserReplayTests: XCTestCase {
         let file = try ReplayStore.bundle(hostile, events: [], keyframes: [("../../escape.jpg", Data([1]))])
         let opened = try store.importBundle(file)
         XCTAssertNil(opened.actions[0].keyframe)
+        // Claiming to be a recording of one of this device's panes does not attach it there.
+        var claimed = session()
+        (claimed.id, claimed.hostId, claimed.paneId) = (UUID(), "host", 7)
+        let raw = try JSONSerialization.jsonObject(with: ReplayStore.bundle(claimed, events: [], keyframes: [])) as! [String: Any]
+        var forged = raw
+        var body = raw["session"] as! [String: Any]
+        (body["hostId"], body["paneId"]) = ("host", 7)
+        forged["session"] = body
+        let posing = try store.importBundle(JSONSerialization.data(withJSONObject: forged))
+        XCTAssertNil(posing.hostId)
+        XCTAssertTrue(store.sessions(hostId: "host", paneId: 7).isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.deletingLastPathComponent().appending(path: "escape.jpg").path))
     }
 

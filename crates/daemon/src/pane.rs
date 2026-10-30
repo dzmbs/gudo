@@ -938,3 +938,93 @@ pub(crate) fn win_size(size: PaneSize) -> WinSize {
         pixel_height: size.height_px,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
+    use super::*;
+
+    fn terminal() -> (Terminal, Arc<Mutex<Vec<u8>>>) {
+        let size = with_pixels(PaneSize {
+            cols: 80,
+            rows: 24,
+            width_px: 0,
+            height_px: 0,
+        });
+        let limits = VtLimits {
+            scrollback_bytes: 1 << 20,
+            image_storage_bytes: ghostty_vt::KITTY_IMAGE_STORAGE_LIMIT,
+        };
+        let mut term = new_terminal(size, limits).unwrap();
+        let replies = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&replies);
+        term.set_reply_sink(Box::new(move |b| lock(&sink).extend_from_slice(b)))
+            .unwrap();
+        (term, replies)
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02X}")).collect()
+    }
+
+    /// Program output must never get its own bytes typed back into the shell (title report,
+    /// DECRQSS and XTGETTCAP echoes, clipboard reads, kitty error text, screen checksums).
+    #[test]
+    fn queries_never_echo_program_data() {
+        let (mut term, replies) = terminal();
+        let mark = "MARK;touch /tmp/pwned";
+        let path = STANDARD.encode(format!("/tmp/{mark}"));
+        let hostile = [
+            format!("\x1b]2;{mark}\x07\x1b[21t\x1b[20t"),
+            format!("\x1bP$q{mark}\x1b\\"),
+            format!("\x1bP+q{}\x1b\\", hex(mark.as_bytes())),
+            "\x1b]52;c;?\x07\x1b]52;p;?\x1b\\".to_owned(),
+            format!("\x1b_Gi=9,a=q,t=f;{path}\x1b\\"),
+            format!("\x1b_Gi=9,a=t,t=d,f=999;{path}\x1b\\"),
+            "\x1b[1;1;1;1;24;80*y".to_owned(),
+            "\x05".to_owned(),
+            // Answered, so the sink is live.
+            "\x1b[5n".to_owned(),
+        ];
+        for seq in hostile {
+            term.write(seq.as_bytes());
+        }
+        let replies = String::from_utf8_lossy(&lock(&replies)).into_owned();
+        assert!(replies.ends_with("\x1b[0n"), "{replies:?}");
+        assert!(!replies.contains("MARK"), "{replies:?}");
+        assert!(!replies.contains(&hex(b"MARK")), "{replies:?}");
+        assert!(!replies.contains(['\r', '\n']), "{replies:?}");
+        assert!(
+            !replies.contains("!~"),
+            "screen checksum answered: {replies:?}"
+        );
+    }
+
+    /// Kitty graphics may not read or delete the host's files: file and temporary-file
+    /// transmissions are refused, whatever the path.
+    #[test]
+    fn kitty_graphics_cannot_touch_host_files() {
+        let (mut term, _) = terminal();
+        let dir = tempfile::tempdir().unwrap();
+        let pixel = [0xffu8, 0, 0, 0xff];
+        let file = dir.path().join("secret");
+        std::fs::write(&file, pixel).unwrap();
+        let temp = dir.path().join("tty-graphics-protocol-1");
+        std::fs::write(&temp, pixel).unwrap();
+        for (id, medium, path) in [(1, 'f', &file), (2, 't', &temp)] {
+            let path = STANDARD.encode(path.to_str().unwrap());
+            term.write(format!("\x1b_Ga=t,t={medium},f=32,s=1,v=1,i={id};{path}\x1b\\").as_bytes());
+            assert!(
+                term.kitty_image(id).is_none(),
+                "t={medium} loaded a host file"
+            );
+        }
+        assert!(temp.exists(), "t=t deleted a host file");
+        // Inline pixels still load.
+        let data = STANDARD.encode(pixel);
+        term.write(format!("\x1b_Ga=t,f=32,s=1,v=1,i=3;{data}\x1b\\").as_bytes());
+        assert!(term.kitty_image(3).is_some());
+    }
+}

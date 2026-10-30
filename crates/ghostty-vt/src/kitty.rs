@@ -316,11 +316,24 @@ unsafe extern "C" fn decode_png(
     true
 }
 
+/// Whether a PNG of `width` × `height` may be decoded: within libghostty-vt's 10000-pixel
+/// side and, as RGBA, within the default image storage, so a few compressed bytes cannot ask
+/// for gigabytes. The app's decoder applies the same rule, so both sides keep the same images.
+fn png_fits(width: u32, height: u32) -> bool {
+    width <= 10_000
+        && height <= 10_000
+        && u64::from(width) * u64::from(height) * 4 <= KITTY_IMAGE_STORAGE_LIMIT
+}
+
 /// Decodes a PNG to 8-bit straight-alpha RGBA.
 fn png_to_rgba(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(png));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
+    let (width, height) = reader.info().size();
+    if !png_fits(width, height) {
+        return None;
+    }
     let mut buf = vec![0; reader.output_buffer_size()?];
     let frame = reader.next_frame(&mut buf).ok()?;
     buf.truncate(frame.buffer_size());
@@ -370,6 +383,25 @@ mod tests {
         let gray = png(1, 1, png::ColorType::GrayscaleAlpha, &[9, 128]);
         assert_eq!(png_to_rgba(&gray), Some((1, 1, vec![9, 9, 9, 128])));
         assert_eq!(png_to_rgba(b"not a png"), None);
+    }
+
+    /// A tiny PNG whose header claims a huge grey image is refused before anything is
+    /// allocated for it: as RGBA it would not fit the image storage anyway.
+    #[test]
+    fn oversized_pngs_are_refused() {
+        let side = 5_000;
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, side, side);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_compression(png::Compression::Fast);
+        encoder
+            .write_header()
+            .and_then(|mut w| w.write_image_data(&vec![0; (side * side) as usize]))
+            .unwrap();
+        assert!(out.len() < 1 << 20, "{}", out.len());
+        assert_eq!(png_to_rgba(&out), None);
+        assert!(png_fits(4_096, 4_096));
+        assert!(!png_fits(10_001, 1));
     }
 
     #[test]

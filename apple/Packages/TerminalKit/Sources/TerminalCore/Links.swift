@@ -20,18 +20,22 @@ public struct TerminalLink: Equatable, Sendable {
     public var column: Int?
     /// Came from OSC 8, not from the text.
     public var isHyperlink: Bool
+    /// What the screen shows for it: the printed text, or an OSC 8 link's cells, which the
+    /// program chooses freely and may name another place than `target`.
+    public var label: String
     /// The cells it covers on the row asked about (viewport coordinates), for hover underlines.
     public var row: Int
     public var columns: ClosedRange<Int>
 
     public init(kind: Kind, text: String, target: String, line: Int? = nil, column: Int? = nil, isHyperlink: Bool = false,
-                row: Int = 0, columns: ClosedRange<Int> = 0...0) {
+                label: String? = nil, row: Int = 0, columns: ClosedRange<Int> = 0...0) {
         self.kind = kind
         self.text = text
         self.target = target
         self.line = line
         self.column = column
         self.isHyperlink = isHyperlink
+        self.label = label ?? text
         self.row = row
         self.columns = columns
     }
@@ -86,7 +90,12 @@ public enum LinkDetector {
             text = trimURL(text)
             guard text.count > 3, let range = characterRange(line, NSRange(location: result.range.location, length: (text as NSString).length)) else { continue }
             taken.insert(integersIn: result.range.location..<result.range.location + (text as NSString).length)
-            out.append(Match(kind: .url, range: range, text: text, target: text))
+            // A printed `file://` URL is a path, opened the way paths are.
+            if let url = URL(string: text), url.isFileURL {
+                out.append(Match(kind: .path, range: range, text: text, target: url.path))
+            } else {
+                out.append(Match(kind: .url, range: range, text: text, target: text))
+            }
         }
         for result in path.matches(in: line, range: full) {
             guard !taken.intersects(integersIn: result.range.location..<NSMaxRange(result.range)) else { continue }
@@ -153,11 +162,14 @@ extension Terminal {
                 // The run of cells on this row that carry the same URI.
                 let row = cells.filter { $0.point.y == top + point.y && Self.hyperlinkAt(t, $0.point) == uri }
                 let columns = (row.map(\.point.x).min() ?? point.x)...(row.map(\.point.x).max() ?? point.x)
+                let label = cells.filter { Self.hyperlinkAt(t, $0.point) == uri }.map(\.text).joined()
                 if let url = URL(string: uri), url.isFileURL {
                     let suffix = url.fragment.flatMap { Int($0.drop { !$0.isNumber }) }
-                    return TerminalLink(kind: .path, text: uri, target: url.path, line: suffix, isHyperlink: true, row: point.y, columns: columns)
+                    return TerminalLink(
+                        kind: .path, text: uri, target: url.path, line: suffix, isHyperlink: true, label: label, row: point.y,
+                        columns: columns)
                 }
-                return TerminalLink(kind: .url, text: uri, target: uri, isHyperlink: true, row: point.y, columns: columns)
+                return TerminalLink(kind: .url, text: uri, target: uri, isHyperlink: true, label: label, row: point.y, columns: columns)
             }
             let screen = GridPoint(x: point.x, y: top + point.y)
             guard let index = cells.firstIndex(where: { $0.point == screen }) else { return nil }

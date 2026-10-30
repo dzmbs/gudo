@@ -999,7 +999,7 @@ impl Ctx {
             // Each condition is checked against the state after the newest output.
             let mut text = None;
             if let Some(re) = &re {
-                let rendered = output::render(&bytes, cols);
+                let rendered = output::visible(&output::render(&bytes, cols));
                 if let Some(found) = rendered.lines().find_map(|l| {
                     re.captures(l).map(|c| {
                         (

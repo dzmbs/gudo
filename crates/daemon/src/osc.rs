@@ -8,6 +8,8 @@
 /// Longest OSC body kept. Agent reports and titles are far shorter; OSC 52 clipboard writes
 /// are longer and are not ours to read.
 const MAX_BODY: usize = 8 * 1024;
+/// Longest title kept, in characters.
+const MAX_TITLE_CHARS: usize = 512;
 
 /// A recognised OSC.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,8 +97,18 @@ impl OscScanner {
         };
         let (code, rest) = body.split_once(';').unwrap_or((body, ""));
         let osc = match code {
-            "0" | "2" => Osc::Title(rest.to_owned()),
-            "7" => Osc::Cwd(file_url_path(rest)),
+            "0" | "2" => Osc::Title(proto::clean_prompt_text(rest, MAX_TITLE_CHARS)),
+            "7" => {
+                // Only an absolute path that prints as it is.
+                let path = file_url_path(rest);
+                let plain = path
+                    .chars()
+                    .all(|c| !c.is_control() && !proto::is_invisible_format(c));
+                if !path.starts_with('/') || !plain {
+                    return;
+                }
+                Osc::Cwd(path)
+            }
             "9" => Osc::Notify(rest.to_owned()),
             "7501" => Osc::ProgramStatus(rest.to_owned()),
             _ => return,
@@ -166,6 +178,18 @@ mod tests {
                 Osc::ProgramStatus("working".into()),
                 Osc::Cwd("/Users/a%20b".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn titles_and_directories_print_as_they_are() {
+        let got = scan(&[
+            "\x1b]2;Build\u{202e}gnissap\u{202c} ok\x07".as_bytes(),
+            b"\x1b]7;file://h/tmp/a%0Ab\x07\x1b]7;rm -rf ~\x07\x1b]7;file://h/ok\x07",
+        ]);
+        assert_eq!(
+            got,
+            [Osc::Title("Buildgnissap ok".into()), Osc::Cwd("/ok".into())]
         );
     }
 

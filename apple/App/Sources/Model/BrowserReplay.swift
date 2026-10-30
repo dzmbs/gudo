@@ -276,6 +276,8 @@ final class ReplayStore {
     nonisolated static func bundle(_ session: ReplaySession, events: [Substring], keyframes: [(String, Data)]) throws -> Data {
         var exported = session
         exported.imported = false
+        // Which host, pane and page recorded it means nothing on another device.
+        (exported.hostId, exported.paneId, exported.page) = (nil, nil, nil)
         var out = Data(#"{"format":"unreplay","version":1,"session":"#.utf8)
         out += try encoder.encode(exported)
         out += Data(#","events":["#.utf8)
@@ -301,6 +303,8 @@ final class ReplayStore {
         var session = try Self.decoder.decode(ReplaySession.self, from: JSONSerialization.data(withJSONObject: raw))
         if self.session(session.id) != nil { return self.session(session.id)! }
         session.imported = true
+        // A file must not pass itself off as a recording of one of this device's panes.
+        (session.hostId, session.paneId, session.page) = (nil, nil, nil)
         let frames = object["keyframes"] as? [String: String] ?? [:]
         for index in session.actions.indices {
             guard let name = session.actions[index].keyframe else { continue }
