@@ -12,7 +12,7 @@ struct BrowserSheet: View {
         Group {
             if let url = model.browserURL {
                 BrowserView(
-                    initialURL: url, dataStore: DevServerRouting.shared.store(forHost: model.browserHost),
+                    initialURL: url, dataStore: DevServerRouting.shared.dataStore(forHost: model.browserHost),
                     routedHost: model.browserHost.map { (id: $0, name: model.ports.hostName) },
                     intercept: model.browserSignInPane == nil ? nil : { [model] in model.pastedSignInCode($0) },
                     onDone: { withAnimation(DS.Motion.snappy) { model.browserURL = nil } }, doneTitle: "Ports")
