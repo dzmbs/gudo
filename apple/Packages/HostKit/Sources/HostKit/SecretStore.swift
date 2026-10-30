@@ -33,14 +33,20 @@ nonisolated public struct SecretStoreError: Error, Equatable, CustomStringConver
 /// The Keychain (data-protection keychain), generic passwords under one service, readable
 /// after the first unlock and never migrated to another device
 /// (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`). With an access group the items are
-/// shared with the app's extensions that hold the same group.
+/// shared with the app's extensions that hold the same group. Items never sync to iCloud.
+///
+/// `dataProtection: false` is the Mac's login keychain instead, for a Developer ID build
+/// without a provisioning profile: its items are readable by this app's signature only (other
+/// apps make the system ask the user).
 nonisolated public final class KeychainStore: SecretStore {
     public let service: String
     public let accessGroup: String?
+    public let dataProtection: Bool
 
-    public init(service: String, accessGroup: String? = nil) {
+    public init(service: String, accessGroup: String? = nil, dataProtection: Bool = true) {
         self.service = service
         self.accessGroup = accessGroup
+        self.dataProtection = dataProtection
     }
 
     private func query(_ key: String) -> [String: Any] {
@@ -48,10 +54,16 @@ nonisolated public final class KeychainStore: SecretStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
-            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrSynchronizable as String: false,
         ]
+        if dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         return query
+    }
+
+    private var accessibility: [String: Any] {
+        // The login keychain has no accessibility classes; it locks with the user's session.
+        dataProtection ? [kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly] : [:]
     }
 
     public func data(for key: String) throws -> Data? {
@@ -66,10 +78,8 @@ nonisolated public final class KeychainStore: SecretStore {
     }
 
     public func set(_ data: Data, for key: String) throws {
-        let update: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
+        var update: [String: Any] = [kSecValueData as String: data]
+        update.merge(accessibility) { $1 }
         var status = SecItemUpdate(query(key) as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
             var add = query(key)
@@ -129,6 +139,8 @@ nonisolated public final class FileSecretStore: SecretStore {
         try lock.withLock { _ in
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            // Also a folder made before (or by someone else): owner-only.
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
             #if os(iOS)
             try data.write(to: url(key), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             #else
@@ -142,6 +154,16 @@ nonisolated public final class FileSecretStore: SecretStore {
         try lock.withLock { _ in
             let url = url(key)
             if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    /// The stored keys (file names: keys made only of letters, digits, `-` and `.` are their
+    /// own file names).
+    public func keys() -> [String] {
+        lock.withLock { _ in
+            ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+                .filter { !$0.hasPrefix(".") }
+                .sorted()
         }
     }
 }
@@ -158,13 +180,55 @@ nonisolated public final class MemorySecretStore: SecretStore {
 }
 
 nonisolated public enum SecretStores {
-    /// The app's store: the Keychain when this build may use it, else owner-only files in
-    /// Application Support (logged once).
+    /// The app's store: the data-protection Keychain when this build may use it; on a Mac
+    /// signed by a team without one (Developer ID, no provisioning profile), the login
+    /// keychain; else owner-only files in Application Support (ad-hoc builds, whose signature
+    /// changes with every build, would make the login keychain ask each time). Secrets an
+    /// earlier build left in those files move into the Keychain.
     public static func appDefault(service: String, fallbackDirectory: URL) -> any SecretStore {
-        let keychain = KeychainStore(service: service)
-        if keychain.isUsable() { return keychain }
-        Logger(subsystem: Log.subsystem, category: "secrets").warning(
-            "Keychain unavailable to this build; secrets go to \(fallbackDirectory.path, privacy: .public)")
-        return FileSecretStore(directory: fallbackDirectory)
+        let log = Logger(subsystem: Log.subsystem, category: "secrets")
+        let files = FileSecretStore(directory: fallbackDirectory)
+        var candidates = [KeychainStore(service: service)]
+        #if os(macOS)
+        if CodeSignature.teamIdentifier != nil { candidates.append(KeychainStore(service: service, dataProtection: false)) }
+        #endif
+        if let keychain = candidates.first(where: { $0.isUsable() }) {
+            do {
+                try migrate(from: files, to: keychain)
+            } catch {
+                log.error("moving file secrets into the Keychain failed: \(String(describing: error), privacy: .public)")
+            }
+            return keychain
+        }
+        log.warning("Keychain unavailable to this build; secrets go to owner-only files")
+        return files
+    }
+
+    /// Moves every secret from `files` into `store` (an item already in `store` wins), then
+    /// deletes the files.
+    public static func migrate(from files: FileSecretStore, to store: any SecretStore) throws {
+        for key in files.keys() {
+            if let data = try files.data(for: key), try store.data(for: key) == nil {
+                try store.set(data, for: key)
+            }
+            try files.remove(key)
+        }
     }
 }
+
+#if os(macOS)
+/// This process's code signature.
+nonisolated enum CodeSignature {
+    /// The signing team (nil when ad-hoc signed).
+    static let teamIdentifier: String? = {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess
+        else { return nil }
+        return (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
+    }()
+}
+#endif

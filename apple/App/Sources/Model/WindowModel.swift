@@ -137,6 +137,8 @@ final class WindowModel {
     /// The Add Host sheet's starting mode and destination (quick connect pre-fills SSH).
     var pairingMode = PairingSheet.Mode.ssh
     var pairingDestination = ""
+    /// The ticket the Add Host sheet starts with (a pairing link opened from elsewhere).
+    var pairingTicket = ""
     /// The invite link the Join sheet starts with (a `<scheme>://join/…` deep link).
     var joinInvite = ""
     /// Every host this window shows at once (sidebar groups, the unified tab order).
@@ -409,11 +411,48 @@ final class WindowModel {
 
     // MARK: Actions
 
-    /// Add Host, optionally straight into SSH with a destination typed elsewhere.
-    func addHost(mode: PairingSheet.Mode = .ssh, destination: String = "") {
+    /// Add Host, optionally straight into SSH with a destination typed elsewhere, or into a
+    /// pairing ticket from a link.
+    func addHost(mode: PairingSheet.Mode = .ssh, destination: String = "", ticket: String = "") {
         pairingMode = mode
         pairingDestination = destination
+        pairingTicket = ticket
         sheet = .pairing
+    }
+
+    /// A link or file the system opened the app with. Any app or web page can open one, so a
+    /// link only shows what it is about; pairing and joining are always the user's tap.
+    func openLink(_ url: URL) {
+        // A `.unreplay` file opens in Session Replay.
+        if url.isFileURL, url.pathExtension.lowercased() == ReplayStore.fileExtension {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let session = try ReplayStore.shared.importBundle(Data(contentsOf: url))
+                showReplays(.session(session.id))
+            } catch {
+                toasts.show(Toast("Couldn't open the replay: \(error.localizedDescription)", systemImage: "exclamationmark.triangle.fill", style: .failure))
+            }
+            return
+        }
+        // `<scheme>://inbox`: the agents Live Activity opens the Inbox (every host's agents).
+        if url.host() == "inbox" {
+            destination = .inbox
+            return
+        }
+        if AppLinks.isInvite(url) {
+            joinInvite = url.absoluteString
+            sheet = .join
+            return
+        }
+        if let (host, pane) = AppLinks.openTarget(url) {
+            AppNotifications.openPane(hostId: host, pane: pane)
+            return
+        }
+        // Add Host with the ticket and which host it is for.
+        if PairingTicket(url: url) != nil {
+            addHost(mode: .ticket, ticket: url.absoluteString)
+        }
     }
 
     /// Retry from the reconnect card and banners.

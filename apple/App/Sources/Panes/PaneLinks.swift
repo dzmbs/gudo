@@ -53,7 +53,7 @@ enum PaneLinks {
                 Task { await window.openURL(link.target) }
             } else if url.scheme == "http" || url.scheme == "https" {
                 openWebLink(url, window: window, from: pane)
-            } else {
+            } else if !workspace.isRemote || HostLinks.mayOpenExternally(url) {
                 // mailto:, ssh:, …: whatever the system opens them with.
                 openExternally(url)
             }

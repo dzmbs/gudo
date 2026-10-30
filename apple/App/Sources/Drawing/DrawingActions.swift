@@ -244,7 +244,7 @@ extension PaneDrawing {
                 _ = try await client.sendToAgent(paneId: destination.pane, artifactId: nil, version: nil, png: png)
             }
             window?.reveal(host: destination.hostId, pane: destination.pane)
-            CanvasWebView.log.info("drawing sent to \(destination.agent.rawValue, privacy: .public) pane \(destination.pane) on \(destination.hostName, privacy: .public)")
+            CanvasWebView.log.info("drawing sent to \(destination.agent.rawValue, privacy: .public) pane \(destination.pane) on \(destination.hostName, privacy: .private)")
             return .sent(destination.agent.title)
         case .start(let kind):
             try await startAgent(kind, artifactId: artifactId, png: png)

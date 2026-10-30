@@ -368,7 +368,7 @@ public final class MultiplayerSession {
             me = info
             isRevoked = false
             hasRoster = false
-            Self.log.info("joined as \(info.name, privacy: .public) roles=\(roleWords(info.roles), privacy: .public)")
+            Self.log.info("joined as \(info.name, privacy: .private) roles=\(roleWords(info.roles), privacy: .public)")
         case .participants(let list):
             announceArrivals(from: participants, to: list)
             participants = list
@@ -420,7 +420,7 @@ public final class MultiplayerSession {
                 knocks[index] = knock
             } else {
                 knocks.append(knock)
-                Self.log.info("knock \(knock.knockId) from \(knock.name, privacy: .public)")
+                Self.log.info("knock \(knock.knockId) from \(knock.name, privacy: .private)")
                 onKnockArrived?(knock)
             }
         case .knockGone(let knockId, _, _):

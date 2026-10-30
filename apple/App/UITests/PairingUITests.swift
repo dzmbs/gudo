@@ -114,6 +114,11 @@ final class PairingUITests: XCTestCase {
         // The system may ask before handing its own link to the app.
         let open = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Open"]
         if open.waitForExistence(timeout: 4) { open.tap() }
+        // A link never pairs by itself: Add Host shows the ticket's host to confirm.
+        XCTAssertTrue(element(app, "pairing-ticket-host").waitForExistence(timeout: 10), "the link's host is shown")
+        let pair = element(app, "pairing-confirm")
+        XCTAssertTrue(pair.isEnabled)
+        pair.tap()
         assertShellAnswers(app, "linked")
         shot(app, "pairing-deep-link-connected")
     }

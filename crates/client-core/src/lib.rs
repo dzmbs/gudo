@@ -86,8 +86,8 @@ pub enum RelayMode {
     Disabled,
 }
 
-/// Client settings.
-#[derive(Debug, Clone)]
+/// Client settings. `Debug` leaves the device key out.
+#[derive(Clone)]
 pub struct ClientConfig {
     /// The device's Ed25519 secret key (32 bytes). Keep it in the Keychain; it identifies the
     /// device to every daemon it pairs with.
@@ -101,6 +101,17 @@ pub struct ClientConfig {
     /// Ask for the repository snapshot ([`WorkspaceEvent::Repos`]): the daemon then watches
     /// the panes' repositories while this client is connected.
     pub repo_status: bool,
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("secret_key", &"<redacted>")
+            .field("relay", &self.relay)
+            .field("mirror_vt", &self.mirror_vt)
+            .field("repo_status", &self.repo_status)
+            .finish()
+    }
 }
 
 impl ClientConfig {
@@ -123,8 +134,8 @@ impl ClientConfig {
 }
 
 /// Connection settings beyond [`ClientConfig`] (kept separate so that struct stays as the
-/// FFI layer builds it).
-#[derive(Debug, Clone, Default)]
+/// FFI layer builds it). `Debug` leaves the relay token out.
+#[derive(Clone, Default)]
 pub struct ConnectOptions {
     /// Extra CA certificates (DER) to trust for the daemon's self-hosted relays, e.g. a
     /// private CA. The usual web roots stay trusted.
@@ -145,6 +156,22 @@ pub struct ConnectOptions {
     /// Show what any program in a pane reports about itself: announce
     /// `Caps::PROGRAM_STATUS`, so the daemon sends [`ClientEvent::ProgramStatus`].
     pub program_status: bool,
+}
+
+impl std::fmt::Debug for ConnectOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectOptions")
+            .field("relay_ca_der", &self.relay_ca_der.len())
+            .field("relay_urls", &self.relay_urls)
+            .field(
+                "relay_auth_token",
+                &self.relay_auth_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("askpass", &self.askpass)
+            .field("browser", &self.browser)
+            .field("program_status", &self.program_status)
+            .finish()
+    }
 }
 
 /// Errors from the client API.
@@ -1039,4 +1066,23 @@ pub(crate) fn device_id(config: &ClientConfig) -> proto::DeviceId {
         .try_into()
         .expect("checked in connect");
     proto::DeviceId(*iroh::SecretKey::from_bytes(&key).public().as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_output_leaves_secrets_out() {
+        let config = ClientConfig::new(vec![0xAB; 32]);
+        let text = format!("{config:?}");
+        assert!(!text.contains("171"), "device key bytes in {text}");
+        let options = ConnectOptions {
+            relay_auth_token: Some("relay-token-value".into()),
+            ..ConnectOptions::default()
+        };
+        let text = format!("{options:?}");
+        assert!(!text.contains("relay-token-value"), "relay token in {text}");
+        assert!(text.contains("<redacted>"));
+    }
 }

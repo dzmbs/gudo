@@ -306,40 +306,7 @@ struct WindowContent: View {
         }
         #endif
         #endif
-        // A `.unreplay` file opens in Session Replay.
-        if url.isFileURL, url.pathExtension.lowercased() == ReplayStore.fileExtension {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let session = try ReplayStore.shared.importBundle(Data(contentsOf: url))
-                model.showReplays(.session(session.id))
-            } catch {
-                model.toasts.show(Toast("Couldn't open the replay: \(error.localizedDescription)", systemImage: "exclamationmark.triangle.fill", style: .failure))
-            }
-            return
-        }
-        // `<scheme>://inbox`: the agents Live Activity opens the Inbox (every host's agents).
-        if url.host() == "inbox" {
-            model.destination = .inbox
-            return
-        }
-        // An invite opens the Join sheet: joining is always the user's tap.
-        if AppLinks.isInvite(url) {
-            model.joinInvite = url.absoluteString
-            model.sheet = .join
-            return
-        }
-        if let (host, pane) = AppLinks.openTarget(url) {
-            AppNotifications.openPane(hostId: host, pane: pane)
-            return
-        }
-        Task {
-            if let target = await app.handle(url: url) {
-                model.show(target)
-                model.destination = .terminal
-                model.toasts.show(Toast("Paired with \(model.hostName)", systemImage: "checkmark.circle.fill", style: .success))
-            }
-        }
+        model.openLink(url)
     }
 
     #if DEBUG && os(iOS)
@@ -358,7 +325,7 @@ struct WindowContent: View {
 
     /// Another device's window (Handoff), or a tab dragged out of another window here.
     private func continueActivity(_ payload: HandoffPayload) {
-        AppModel.log.info("continue \(payload.kind.rawValue, privacy: .public) \(payload.hostName, privacy: .public) from \(payload.device, privacy: .public)")
+        AppModel.log.info("continue \(payload.kind.rawValue, privacy: .public) \(payload.hostName, privacy: .private) from \(payload.device, privacy: .private)")
         model.continue(payload)
     }
 

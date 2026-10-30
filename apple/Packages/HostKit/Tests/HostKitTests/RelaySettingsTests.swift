@@ -83,6 +83,8 @@ let secondCA = """
         let automatic = RelaySettings()
         #expect(automatic.clientRelay() == .default)
         #expect(automatic.connectOptions(askpass: true) == ConnectOptions(relayCaDer: [], relayUrls: [], relayAuthToken: nil, askpass: true, browser: true, programStatus: true))
+        // Someone else's host never drives this device's browser.
+        #expect(automatic.connectOptions(askpass: true, guest: true).browser == false)
         // The launch configuration's `.disabled` (tests) still holds.
         #expect(automatic.clientRelay(base: .disabled) == .disabled)
 

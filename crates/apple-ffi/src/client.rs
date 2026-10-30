@@ -59,8 +59,8 @@ pub enum RelayMode {
     Disabled,
 }
 
-/// [`DaemonClient`] settings.
-#[derive(Debug, Clone, uniffi::Record)]
+/// [`DaemonClient`] settings. `Debug` leaves the device key out.
+#[derive(Clone, uniffi::Record)]
 pub struct ClientConfig {
     /// The device's Ed25519 secret key (32 bytes, [`generate_device_key`]); keep it in the
     /// Keychain. It identifies this device to every daemon it pairs with.
@@ -76,6 +76,17 @@ pub struct ClientConfig {
     /// panes' repositories while this client is connected.
     #[uniffi(default = true)]
     pub repo_status: bool,
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("secret_key", &"<redacted>")
+            .field("relay", &self.relay)
+            .field("mirror_vt", &self.mirror_vt)
+            .field("repo_status", &self.repo_status)
+            .finish()
+    }
 }
 
 /// A fresh random 32-byte device key for [`ClientConfig::secret_key`].
@@ -531,8 +542,8 @@ pub struct DaemonClient {
     pub(crate) tap: Arc<Tap>,
 }
 
-/// Connection settings beyond [`ClientConfig`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+/// Connection settings beyond [`ClientConfig`]. `Debug` leaves the relay token out.
+#[derive(Clone, Default, PartialEq, Eq, uniffi::Record)]
 pub struct ConnectOptions {
     /// Extra CA certificates (DER) to trust for the daemon's self-hosted relays (a private
     /// CA; docs/RELAYS.md). The usual web roots stay trusted. Which relays to use comes from
@@ -558,6 +569,12 @@ pub struct ConnectOptions {
     /// Show what any program in a pane reports about itself (`ClientEvent::ProgramStatus`).
     #[uniffi(default = false)]
     pub program_status: bool,
+}
+
+impl std::fmt::Debug for ConnectOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        client_core::ConnectOptions::from(self.clone()).fmt(f)
+    }
 }
 
 impl From<ConnectOptions> for client_core::ConnectOptions {
@@ -1015,6 +1032,26 @@ mod tests {
         });
         assert_eq!(core.relay_auth_token, None);
         assert!(core.relay_urls.is_empty());
+    }
+
+    #[test]
+    fn debug_output_leaves_secrets_out() {
+        let config = ClientConfig {
+            secret_key: vec![0xAB; 32].into(),
+            relay: RelayMode::Default,
+            mirror_vt: true,
+            repo_status: true,
+        };
+        assert!(!format!("{config:?}").contains("171"));
+        let options = ConnectOptions {
+            relay_auth_token: Some("relay-token-value".into()),
+            ..ConnectOptions::default()
+        };
+        assert!(!format!("{options:?}").contains("relay-token-value"));
+        let key = crate::ssh_api::generate_ed25519_key("test".into()).unwrap();
+        let text = format!("{key:?}");
+        assert!(!text.contains("PRIVATE KEY"), "private key in {text}");
+        assert!(text.contains(&key.fingerprint));
     }
 
     #[test]

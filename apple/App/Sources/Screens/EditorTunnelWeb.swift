@@ -87,10 +87,16 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         guard let url = navigationAction.request.url, let scheme = url.scheme?.lowercased() else { return .allow }
         if ["http", "https", "about", "blob", "data"].contains(scheme) { return .allow }
-        // vscode:, mailto:, tel: … belong to other apps.
-        Self.openExternally(url)
+        // vscode:, mailto:, tel: belong to other apps; the workbench and its extensions' web
+        // views are web content, so they get these and nothing else (never `file:`, never this
+        // app's own links).
+        if navigationAction.targetFrame?.isMainFrame ?? true, Self.externalSchemes.contains(scheme) {
+            Self.openExternally(url)
+        }
         return .cancel
     }
+
+    static let externalSchemes: Set<String> = ["vscode", "vscode-insiders", "mailto", "tel"]
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if webView === self.webView { isLoading = true }

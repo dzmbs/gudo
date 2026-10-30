@@ -31,6 +31,23 @@ notarization refuses any build that has it.
 that constraint follows the team, so updates keep the login item. Ad-hoc builds change
 their hash with every build.
 
+### Where the Mac app keeps secrets
+
+The device key, pairing tickets, SSH keys and saved passwords go to the Keychain
+(`SecretStores.appDefault`, HostKit):
+
+1. The data-protection keychain, the same as on iOS. A Mac app may use it only when it has an
+   `application-identifier` entitlement, which comes from a provisioning profile. A Developer
+   ID build gets one through a "Developer ID" provisioning profile with a `keychain-access-groups`
+   entitlement. This is the preferred setup for a release.
+2. Without a profile but signed by a team (Developer ID), the login keychain. Its items are
+   tied to the app's signature, so another app that asks makes macOS prompt the user.
+3. An ad-hoc build only (each build has a new signature, so the login keychain would prompt on
+   every launch): owner-only files (`0600` in a `0700` folder) in Application Support.
+
+Secrets a previous build left in those files move into the Keychain on the next launch of a
+build that can use it.
+
 ## Before a release
 
 1. Build the Rust parts: `cargo xtask build-xcframework`, `cargo xtask build-hostd-macos`

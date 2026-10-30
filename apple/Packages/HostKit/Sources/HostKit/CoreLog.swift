@@ -16,10 +16,10 @@ nonisolated public enum CoreLog {
 
         func log(level: LogLevel, target: String, message: String) {
             switch level {
-            case .error: logger.error("\(target, privacy: .public): \(message, privacy: .public)")
-            case .warn: logger.warning("\(target, privacy: .public): \(message, privacy: .public)")
-            case .info: logger.info("\(target, privacy: .public): \(message, privacy: .public)")
-            case .debug, .trace: logger.debug("\(target, privacy: .public): \(message, privacy: .public)")
+            case .error: logger.error("\(target, privacy: .public): \(message, privacy: .private)")
+            case .warn: logger.warning("\(target, privacy: .public): \(message, privacy: .private)")
+            case .info: logger.info("\(target, privacy: .public): \(message, privacy: .private)")
+            case .debug, .trace: logger.debug("\(target, privacy: .public): \(message, privacy: .private)")
             }
         }
     }

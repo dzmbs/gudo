@@ -230,7 +230,7 @@ public final class HostsModel {
         let key = try deviceKey ?? DeviceIdentity.load(from: secrets)
         deviceKey = key
         let config = clientConfig(key)
-        let options = relaySettings.connectOptions(askpass: true)
+        let options = relaySettings.connectOptions(askpass: true, guest: true)
         return { invite, listener in
             try DaemonClient.joinWith(invite: invite, config: config, options: options, listener: listener)
         }
@@ -249,9 +249,10 @@ public final class HostsModel {
             || settings.connectOptions(askpass: true) != relaySettings.connectOptions(askpass: true)
         relaySettings = settings
         guard changed else { return }
-        let relay = settings.clientRelay(base: configuration.relay), options = settings.connectOptions(askpass: true)
+        let relay = settings.clientRelay(base: configuration.relay)
         for case let daemon as DaemonConnection in connections.values {
-            daemon.setRelays(relay, options: options)
+            let guest = record(daemon.hostId)?.isGuest == true
+            daemon.setRelays(relay, options: settings.connectOptions(askpass: true, guest: guest))
         }
     }
 
@@ -350,7 +351,7 @@ public final class HostsModel {
         let name = source == .placeholder ? MachineName.display(info.hostname) : nil
         guard record.machine != machine || record.nameSource != source || name != nil else { return }
         if let name {
-            Self.log.info("naming host=\(id, privacy: .public) \(name, privacy: .public) (was \(record.name, privacy: .public))")
+            Self.log.info("naming host=\(id, privacy: .public) \(name, privacy: .private) (was \(record.name, privacy: .private))")
         }
         update(id) {
             $0.machine = machine

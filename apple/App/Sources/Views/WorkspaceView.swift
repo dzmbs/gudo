@@ -801,7 +801,7 @@ private struct SheetContent: View {
     @ViewBuilder private var content: some View {
         switch route {
         case .pairing:
-            PairingSheet(directory: model.hosts, live: LaunchOptions.mock ? nil : model.app.hosts, initialMode: model.pairingMode, destination: model.pairingDestination)
+            PairingSheet(directory: model.hosts, live: LaunchOptions.mock ? nil : model.app.hosts, initialMode: model.pairingMode, destination: model.pairingDestination, ticket: model.pairingTicket)
         case .launchAgent, .links, .diff, .files, .browser, .editor:
             ToolSheet(route: route)
         case .invite:

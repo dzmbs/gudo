@@ -538,7 +538,7 @@ struct ActiveLinksSection: View {
     private func copy(_ info: GrantInfo) {
         Task {
             guard let link = await session.link(for: info) else { return }
-            Pasteboard.copy(link)
+            Pasteboard.copySecret(link)
             withAnimation(DS.Motion.indicator) { copied = info.grant.grantId }
             try? await Task.sleep(for: .milliseconds(1500))
             withAnimation(DS.Motion.indicator) { if copied == info.grant.grantId { copied = nil } }

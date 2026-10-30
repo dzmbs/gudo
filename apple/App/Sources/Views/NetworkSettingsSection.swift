@@ -192,7 +192,7 @@ private struct CertificatesSection: View {
         #if DEBUG
         // `-testRelayCertificate <path>` (UI tests): the Files picker cannot be driven from a
         // test, so Import reads this file as if it had been picked.
-        if let path = UserDefaults.standard.string(forKey: "testRelayCertificate") {
+        if let path = LaunchArguments().string(forKey: "testRelayCertificate") {
             importFiles([URL(fileURLWithPath: path)])
             return
         }
