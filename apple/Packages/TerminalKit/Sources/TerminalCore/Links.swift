@@ -21,7 +21,8 @@ public struct TerminalLink: Equatable, Sendable {
     /// Came from OSC 8, not from the text.
     public var isHyperlink: Bool
     /// What the screen shows for it: the printed text, or an OSC 8 link's cells, which the
-    /// program chooses freely and may name another place than `target`.
+    /// program chooses freely and may name another place than `target`. Cells nobody can read
+    /// (concealed, or in their background colour) are left out.
     public var label: String
     /// The cells it covers on the row asked about (viewport coordinates), for hover underlines.
     public var row: Int
@@ -162,7 +163,7 @@ extension Terminal {
                 // The run of cells on this row that carry the same URI.
                 let row = cells.filter { $0.point.y == top + point.y && Self.hyperlinkAt(t, $0.point) == uri }
                 let columns = (row.map(\.point.x).min() ?? point.x)...(row.map(\.point.x).max() ?? point.x)
-                let label = cells.filter { Self.hyperlinkAt(t, $0.point) == uri }.map(\.text).joined()
+                let label = Self.seenText(t, cells.filter { Self.hyperlinkAt(t, $0.point) == uri })
                 if let url = URL(string: uri), url.isFileURL {
                     let suffix = url.fragment.flatMap { Int($0.drop { !$0.isNumber }) }
                     return TerminalLink(
@@ -179,7 +180,8 @@ extension Terminal {
             let onRow = cells[match.range].filter { $0.point.y == screen.y }.map(\.point.x)
             return TerminalLink(
                 kind: match.kind, text: match.text, target: match.target, line: match.line, column: match.column,
-                row: point.y, columns: (onRow.min() ?? point.x)...(onRow.max() ?? point.x))
+                label: Self.seenText(t, Array(cells[match.range])), row: point.y,
+                columns: (onRow.min() ?? point.x)...(onRow.max() ?? point.x))
         }
     }
 
@@ -233,5 +235,49 @@ extension Terminal {
 
     private static func hyperlinkAt(_ t: GhosttyTerminal, _ point: GridPoint) -> String? {
         gridRef(t, point, GHOSTTY_POINT_TAG_SCREEN).flatMap(hyperlinkURI)
+    }
+
+    /// The cells' text a person could read: concealed (SGR 8) cells and cells drawn in their own
+    /// background colour are left out, so they cannot make a longer address look seen.
+    private static func seenText(_ t: GhosttyTerminal, _ cells: [LineCell]) -> String {
+        let colors = CellColors(t)
+        return cells.filter { cell in
+            guard var ref = gridRef(t, cell.point, GHOSTTY_POINT_TAG_SCREEN) else { return true }
+            var style = GhosttyStyle()
+            style.size = MemoryLayout<GhosttyStyle>.size
+            guard ghostty_grid_ref_style(&ref, &style) == GHOSTTY_SUCCESS else { return true }
+            return !style.invisible && !colors.blend(style)
+        }.map(\.text).joined()
+    }
+}
+
+/// A terminal's colours, to tell when a cell's text is drawn in its background colour.
+private struct CellColors {
+    var foreground: GhosttyColorRgb?
+    var background: GhosttyColorRgb?
+    var palette: [GhosttyColorRgb]?
+
+    init(_ t: GhosttyTerminal) {
+        var fg = GhosttyColorRgb(), bg = GhosttyColorRgb()
+        if ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND, &fg) == GHOSTTY_SUCCESS { foreground = fg }
+        if ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, &bg) == GHOSTTY_SUCCESS { background = bg }
+        var colors = [GhosttyColorRgb](repeating: GhosttyColorRgb(), count: 256)
+        let got = colors.withUnsafeMutableBufferPointer { ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE, $0.baseAddress) }
+        if got == GHOSTTY_SUCCESS { palette = colors }
+    }
+
+    /// Whether text and background come out (nearly) the same colour.
+    func blend(_ style: GhosttyStyle) -> Bool {
+        guard let fg = resolve(style.fg_color, foreground), let bg = resolve(style.bg_color, background) else { return false }
+        let diff = [(fg.r, bg.r), (fg.g, bg.g), (fg.b, bg.b)].map { abs(Int($0) - Int($1)) }.max() ?? 0
+        return diff <= 8
+    }
+
+    private func resolve(_ color: GhosttyStyleColor, _ fallback: GhosttyColorRgb?) -> GhosttyColorRgb? {
+        switch color.tag {
+        case GHOSTTY_STYLE_COLOR_PALETTE: palette?[Int(color.value.palette)]
+        case GHOSTTY_STYLE_COLOR_RGB: color.value.rgb
+        default: fallback
+        }
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TerminalCore
 
@@ -85,5 +86,47 @@ import Testing
         let link = try #require(terminal.link(atViewport: GridPoint(x: 6, y: 0)))
         #expect(link.columns == 5...13)
         #expect(link.line == 3)
+    }
+}
+
+/// A link's label is what a person could read on screen, so hidden cells cannot make another
+/// address look seen (LinkSafety opens only a seen address without asking).
+@Suite struct LinkLabelTests {
+    private func link(_ output: String) throws -> TerminalLink {
+        let terminal = Terminal(cols: 80, rows: 3) { _ in }
+        terminal.write(Array(output.utf8))
+        return try #require(terminal.link(atViewport: GridPoint(x: 3, y: 0)))
+    }
+
+    private func action(_ link: TerminalLink) -> LinkSafety.Action {
+        LinkSafety.action(for: URL(string: link.target)!, shown: link.label)
+    }
+
+    @Test func hyperlinkLabelIsItsCells() throws {
+        let link = try link("\u{1b}]8;;https://evil.example/\u{1b}\\https://github.com/\u{1b}]8;;\u{1b}\\")
+        #expect(link.label == "https://github.com/")
+        #expect(action(link) == .confirm)
+    }
+
+    @Test func hiddenCellsAreNotPartOfWhatWasSeen() throws {
+        let tails = [
+            "\u{1b}[8m.evil.example/x\u{1b}[28m",  // concealed
+            "\u{1b}[38;5;1;48;5;1m.evil.example/x\u{1b}[0m",  // same palette colour
+            "\u{1b}[38;2;9;9;9;48;2;9;9;9m.evil.example/x\u{1b}[0m",  // same RGB
+            "\u{1b}[38;2;9;9;10;48;2;9;9;9m.evil.example/x\u{1b}[0m",  // all but the same
+            "\u{1b}]11;rgb:10/20/30\u{1b}\\\u{1b}[38;2;16;32;48m.evil.example/x\u{1b}[0m",  // the background's colour
+            "\u{1b}[7;38;5;4;48;5;4m.evil.example/x\u{1b}[0m",  // inverse of one colour
+        ]
+        for tail in tails {
+            let printed = try link("https://github.com" + tail + " ok")
+            #expect(printed.target == "https://github.com.evil.example/x", "\(tail.debugDescription)")
+            #expect(printed.label == "https://github.com", "\(tail.debugDescription)")
+            #expect(action(printed) == .confirm, "\(tail.debugDescription)")
+            let osc8 = try link("\u{1b}]8;;https://github.com.evil.example/x\u{1b}\\https://github.com" + tail + "\u{1b}]8;;\u{1b}\\")
+            #expect(action(osc8) == .confirm, "\(tail.debugDescription)")
+        }
+        // Coloured links are seen.
+        #expect(action(try link("\u{1b}[34mhttps://github.com/x\u{1b}[0m")) == .open)
+        #expect(action(try link("\u{1b}[44mhttps://github.com/x\u{1b}[0m")) == .open)
     }
 }
