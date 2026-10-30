@@ -42,26 +42,29 @@ export function parseRequest(body: Uint8Array): RelayRequest | string {
   } catch {
     return "body is not JSON";
   }
-  if (typeof r !== "object" || r === null) return "body is not an object";
+  if (typeof r !== "object" || r === null || Array.isArray(r)) return "body is not an object";
   if (r.v !== 1) return "unsupported version";
   if (typeof r.daemon !== "string" || !unhex(r.daemon, 32)) return "bad daemon key";
   if (typeof r.cap !== "string" || r.cap.length > 4096) return "bad cap";
   if (typeof r.sealed !== "string" || !unb64url(r.sealed)) return "bad sealed payload";
   if (r.sealed.length > MAX_SEALED) return "sealed payload too large";
-  if (typeof r.ts !== "number" || !Number.isFinite(r.ts)) return "bad ts";
+  if (!Number.isSafeInteger(r.ts) || r.ts < 0) return "bad ts";
   if (typeof r.nonce !== "string" || !/^[0-9a-f]{16,64}$/.test(r.nonce)) return "bad nonce";
-  if (r.collapse !== undefined && (typeof r.collapse !== "string" || r.collapse.length > 64))
+  // Goes into an HTTP header: the daemon's hex digest, never free text.
+  if (r.collapse !== undefined && (typeof r.collapse !== "string" || !/^[0-9a-f]{1,64}$/.test(r.collapse)))
     return "bad collapse id";
   if (r.push_type === "alert") {
-    if (!r.category || !CATEGORIES.has(r.category)) return "alerts need a category";
+    if (typeof r.category !== "string" || !CATEGORIES.has(r.category)) return "alerts need a category";
   } else if (r.push_type === "live_activity") {
-    if (!r.event || !EVENTS.has(r.event)) return "live activities need an event";
+    if (typeof r.event !== "string" || !EVENTS.has(r.event)) return "live activities need an event";
   } else {
     return "bad push_type";
   }
   for (const k of ["stale", "dismiss"] as const) {
-    if (r[k] !== undefined && typeof r[k] !== "number") return `bad ${k}`;
+    const t = r[k];
+    if (t !== undefined && (!Number.isSafeInteger(t) || t < 0)) return `bad ${k}`;
   }
+  if (r.urgent !== undefined && typeof r.urgent !== "boolean") return "bad urgent";
   return r;
 }
 

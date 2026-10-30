@@ -9,7 +9,12 @@
   "workers_dev": false,
   // Owner: set your zone and hostname (must match `brand::PUSH_RELAY_URL`), then deploy.
   "routes": [{ "pattern": "push.unnamed.dev", "custom_domain": true }],
-  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  // Errors only: invocation logs would keep every caller's address and request metadata.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "logs": { "enabled": true, "invocation_logs": false }
+  },
   "vars": {
     // Owner: fill in from the Apple Developer account (Keys → the APNs key).
     "APNS_TEAM_ID": "TEAMID0000",
