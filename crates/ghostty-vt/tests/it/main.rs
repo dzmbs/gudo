@@ -3,6 +3,7 @@
 
 mod anchors;
 mod continuation;
+mod corrupt;
 mod forget;
 mod size;
 
