@@ -944,6 +944,7 @@ impl Mp {
         for &d in &devices_hit {
             core.identity.unpair(d);
         }
+        crate::notifier::drop_revoked(core);
         let disconnected = self.kick_invalid();
         let detail = format!(
             "revoked {} grant(s) {}, {} device(s) {}; {disconnected} connection(s) closed",

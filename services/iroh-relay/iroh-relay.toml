@@ -11,9 +11,10 @@ metrics_bind_addr = "127.0.0.1:9090"
 
 # Only devices and daemons that know the token may relay. Put the same token in the daemon's
 # config.toml ([relay] auth_token); pairing tickets carry it to the app.
-# IROH_RELAY_ACCESS_TOKEN (required by docker-compose.yml) replaces this placeholder; without
-# Docker, replace it with `openssl rand -base64 32`.
-access.shared_token = ["REPLACE-WITH-A-RANDOM-TOKEN"]
+# IROH_RELAY_ACCESS_TOKEN (required by docker-compose.yml) replaces this list; without Docker,
+# put `openssl rand -base64 32` here. Left empty, the relay refuses to start rather than run
+# with a token everyone can read in this file.
+access.shared_token = [""]
 
 [tls]
 cert_mode = "LetsEncrypt"

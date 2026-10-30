@@ -47,21 +47,24 @@ export class RateLimiter extends DurableObject {
     now: number,
     nonceUntil = now + NONCE_TTL_MS,
   ): Promise<Verdict> {
-    const storage = this.ctx.storage;
+    // Synchronous storage up to the verdict: an `await` in between lets concurrent copies of a
+    // request all pass the nonce check (and all take from the same tokens).
+    const kv = this.ctx.storage.kv;
     // Any remembered nonce is a replay: comparing its expiry with `now` would let one through
     // when the clock moves between the caller's skew check and this call.
-    if (nonce !== null && (await storage.get<number>(`n:${nonce}`)) !== undefined) {
+    if (nonce !== null && kv.get<number>(`n:${nonce}`) !== undefined) {
       return { ok: false, reason: "replay" };
     }
-    const state = (await storage.get<State>("bucket")) ?? { tokens: bucket.capacity, at: now };
+    const state = kv.get<State>("bucket") ?? { tokens: bucket.capacity, at: now };
     const tokens = Math.min(bucket.capacity, state.tokens + ((now - state.at) / 1000) * bucket.refill);
     if (tokens < 1) {
-      await storage.put("bucket", { tokens, at: now });
+      kv.put("bucket", { tokens, at: now });
       return { ok: false, reason: "rate", retryAfter: Math.ceil((1 - tokens) / bucket.refill) };
     }
-    await storage.put("bucket", { tokens: tokens - 1, at: now });
+    kv.put("bucket", { tokens: tokens - 1, at: now });
     if (nonce !== null) {
-      await storage.put(`n:${nonce}`, nonceUntil);
+      kv.put(`n:${nonce}`, nonceUntil);
+      const storage = this.ctx.storage;
       if ((await storage.getAlarm()) === null) await storage.setAlarm(nonceUntil);
     }
     return { ok: true };
@@ -70,11 +73,12 @@ export class RateLimiter extends DurableObject {
   /** Forgets expired nonces. */
   async alarm(): Promise<void> {
     const now = Date.now();
-    const nonces = await this.ctx.storage.list<number>({ prefix: "n:" });
-    const expired = [...nonces].filter(([, until]) => until < now).map(([k]) => k);
-    for (let i = 0; i < expired.length; i += 128) {
-      await this.ctx.storage.delete(expired.slice(i, i + 128));
+    const kv = this.ctx.storage.kv;
+    let kept = 0;
+    for (const [key, until] of [...kv.list<number>({ prefix: "n:" })]) {
+      if (until < now) kv.delete(key);
+      else kept++;
     }
-    if (nonces.size > expired.length) await this.ctx.storage.setAlarm(now + NONCE_TTL_MS);
+    if (kept > 0) await this.ctx.storage.setAlarm(now + NONCE_TTL_MS);
   }
 }

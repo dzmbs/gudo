@@ -1018,3 +1018,134 @@ async fn local_dev_relay_live_activity() {
     drop(a);
     daemon.shutdown().await;
 }
+
+/// An agent turn in `pane` starts and finishes (a "done" attention item).
+async fn finish_turn(daemon: &Daemon, state: &Path, pane: PaneId) {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let prompt = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "UserPromptSubmit", "prompt": "go",
+    });
+    let stop = serde_json::json!({
+        "session_id": "s", "cwd": home, "hook_event_name": "Stop",
+        "last_assistant_message": "secret result",
+    });
+    hook(daemon, state, pane, "UserPromptSubmit", prompt).await;
+    hook(daemon, state, pane, "Stop", stop).await;
+}
+
+/// A lost or stolen device is revoked: it must not keep receiving sealed prompts.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoked_device_gets_no_more_pushes() {
+    let state = tempfile::tempdir().unwrap();
+    let mut relay = FakeRelay::start().await;
+    let daemon = start(state.path(), &relay, 200).await;
+    let a = device(&ticket(&daemon), "cap-a", PushPrefs::default()).await;
+    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let (_shown, hidden) = two_panes(&mut b).await;
+    a.client.client.set_view(None, vec![]);
+    finish_turn(&daemon, state.path(), hidden).await;
+    let before = verify(&relay.next("push before revoking").await, &daemon);
+    assert_eq!(before.cap, "cap-a");
+
+    let a_device = proto::DeviceId(device_id(&a.key).try_into().unwrap());
+    b.client
+        .revoke(client_core::proto::RevokeTarget::Device(a_device))
+        .await
+        .unwrap();
+    let store = std::fs::read_to_string(state.path().join("push.json")).unwrap();
+    assert!(!store.contains(&push::hex(&a_device.0)), "{store}");
+    finish_turn(&daemon, state.path(), hidden).await;
+    relay
+        .quiet(Duration::from_millis(1500), "the device was revoked")
+        .await;
+    drop((a, b));
+    daemon.shutdown().await;
+}
+
+/// Lock-screen action tokens that are forged, foreign, expired, retargeted or outlived their
+/// daemon decide nothing; the waiting agent stays blocked.
+#[tokio::test(flavor = "multi_thread")]
+async fn action_tokens_decide_only_their_own_live_request() {
+    let state = tempfile::tempdir().unwrap();
+    let mut relay = FakeRelay::start().await;
+    let daemon = start(state.path(), &relay, 200).await;
+    let ticket_a = ticket(&daemon);
+    let a = device(&ticket_a, "cap-a", PushPrefs::default()).await;
+    let mut b = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let (shown, hidden) = two_panes(&mut b).await;
+    a.client.client.set_view(None, vec![]);
+    let mut payload: serde_json::Value = serde_json::from_str(PERMISSION).unwrap();
+    payload["cwd"] = "/".into();
+    let waiting = hook(&daemon, state.path(), hidden, "PermissionRequest", payload).await;
+    let pushed = verify(&relay.next("approval push").await, &daemon);
+    let note = client_core::push::open_notification(&a.seal_secret, &pushed.sealed).unwrap();
+    let token = client_core::push::token_bytes(&note.action.unwrap()).unwrap();
+    let seed: [u8; 32] = std::fs::read(state.path().join("daemon.key"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let real = push::verify_token(&daemon.daemon_id().0, &token, proto::UnixMillis(0)).unwrap();
+    let key = a.key.clone();
+    let act = async |ticket: &str, token: Vec<u8>| {
+        send_action(
+            ticket,
+            options(&key),
+            ConnectOptions::default(),
+            token,
+            Decision::Approve,
+            Duration::from_secs(10),
+        )
+        .await
+    };
+    let refused = |r: &Result<proto::Decided, ActionError>, denied: bool| match r {
+        Err(ActionError::Rejected(WsError::Denied(_))) => denied,
+        Err(ActionError::Rejected(WsError::NotFound(_))) => !denied,
+        _ => false,
+    };
+    let sign = |t: &push::ActionToken| push::issue_token(&seed, t);
+
+    // Signed by another daemon, naming this one.
+    let r = act(&ticket_a, push::issue_token(&[9; 32], &real)).await;
+    assert!(refused(&r, true), "foreign signer: {r:?}");
+    let expired = push::ActionToken {
+        expires: proto::UnixMillis(1),
+        ..real.clone()
+    };
+    let r = act(&ticket_a, sign(&expired)).await;
+    assert!(refused(&r, true), "expired: {r:?}");
+    let old = push::ActionToken {
+        v: 1,
+        ..real.clone()
+    };
+    let r = act(&ticket_a, sign(&old)).await;
+    assert!(refused(&r, true), "old version: {r:?}");
+    let r = act(&ticket_a, token[..token.len() - 1].to_vec()).await;
+    assert!(refused(&r, true), "truncated: {r:?}");
+    let mut flipped = token.clone();
+    flipped[10] ^= 1;
+    let r = act(&ticket_a, flipped).await;
+    assert!(refused(&r, true), "flipped: {r:?}");
+    // Daemon-signed, but for the other pane, or another request id.
+    let other_pane = push::ActionToken {
+        pane: shown,
+        ..real.clone()
+    };
+    let r = act(&ticket_a, sign(&other_pane)).await;
+    assert!(refused(&r, false), "other pane: {r:?}");
+    let other_request = push::ActionToken {
+        request: proto::RequestId(real.request.0 + 1),
+        ..real.clone()
+    };
+    let r = act(&ticket_a, sign(&other_request)).await;
+    assert!(refused(&r, false), "other request: {r:?}");
+    assert!(!waiting.is_finished(), "the agent is still waiting");
+
+    // The daemon restarts: the token decides nothing on the new run.
+    daemon.shutdown().await;
+    drop(waiting);
+    let daemon = start(state.path(), &relay, 200).await;
+    let r = act(&ticket(&daemon), token).await;
+    assert!(refused(&r, false), "after restart: {r:?}");
+    drop((a, b));
+    daemon.shutdown().await;
+}

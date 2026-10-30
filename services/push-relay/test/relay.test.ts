@@ -1,3 +1,4 @@
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { env as cfEnv, exports as cfExports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -388,13 +389,24 @@ describe("push relay", () => {
     const big = "x".repeat(MAX_BODY + 1);
     expect((await call("/v1/register", { method: "POST", body: big })).status).toBe(413);
     // No content-length: a streamed body is cut off at the limit.
-    const stream = new ReadableStream<Uint8Array>({
-      pull(c) {
-        c.enqueue(new Uint8Array(4096));
-      },
-    });
-    const res = await call("/v1/push", { method: "POST", body: stream, duplex: "half" } as RequestInit);
-    expect(res.status).toBe(413);
+    const chunks = (n: number) => {
+      const pulled = { count: 0 };
+      const body = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (pulled.count++ === n) c.close();
+          else c.enqueue(new Uint8Array(4096));
+        },
+      });
+      return { pulled, init: { method: "POST", body, duplex: "half" } as RequestInit };
+    };
+    const streamed = chunks(4);
+    expect((await call("/v1/push", streamed.init)).status).toBe(413);
+    // A declared length over the limit is refused before reading anything.
+    const declared = chunks(4);
+    const init = { ...declared.init, headers: { "content-length": String(4 * 4096) } };
+    expect((await call("/v1/push", init)).status).toBe(413);
+    // (The runtime may read ahead one chunk; reading to the limit takes three.)
+    expect(declared.pulled.count).toBeLessThan(3);
   });
 
   it("refuses header injection and loose types", async () => {
@@ -475,13 +487,25 @@ describe("attacks on the relay", () => {
   it("lets exactly one of many concurrent copies of a request through", async () => {
     const d = await daemon();
     const { cap } = await register(d);
-    const once = await signed(d, { cap });
-    const statuses = await Promise.all(
-      Array.from({ length: 8 }, () => call("/v1/push", once).then((r) => r.status)),
+    for (let round = 0; round < 10; round++) {
+      const once = await signed(d, { cap, category: "done" });
+      const statuses = await Promise.all(
+        Array.from({ length: 16 }, () => call("/v1/push", once).then((r) => r.status)),
+      );
+      expect(statuses.filter((s) => s === 200), `round ${round}`).toHaveLength(1);
+      expect(statuses.filter((s) => s === 409)).toHaveLength(15);
+    }
+    expect(apnsCalls).toHaveLength(10);
+  });
+
+  it("does not let concurrent requests overdraw a bucket", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const requests = await Promise.all(
+      Array.from({ length: DAEMON_BUCKET.capacity + 10 }, () => signed(d, { cap, category: "done" })),
     );
-    expect(statuses.filter((s) => s === 200)).toHaveLength(1);
-    expect(statuses.filter((s) => s === 409)).toHaveLength(7);
-    expect(apnsCalls).toHaveLength(1);
+    const statuses = await Promise.all(requests.map((r) => call("/v1/push", r).then((x) => x.status)));
+    expect(statuses.filter((s) => s === 200)).toHaveLength(DAEMON_BUCKET.capacity);
   });
 
   it("refuses a replay while the clock crosses the edge of the skew window", async () => {
@@ -494,6 +518,20 @@ describe("attacks on the relay", () => {
     // lookup.
     let calls = 0;
     vi.spyOn(Date, "now").mockImplementation(() => (calls++ === 0 ? ts + TTL : ts + TTL + 1));
+    expect((await call("/v1/push", once)).status).toBe(409);
+    expect(apnsCalls).toHaveLength(1);
+  });
+
+  it("keeps a future-dated nonce through cleanup until its request goes stale", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const start = Date.now();
+    const once = await signed(d, { cap, ts: start + TTL - 1000 });
+    expect((await call("/v1/push", once)).status).toBe(200);
+    // Seven minutes on, the cleanup alarm runs; the request is still inside the skew window.
+    vi.spyOn(Date, "now").mockReturnValue(start + 7 * 60 * 1000);
+    const limiter = env.LIMITER.get(env.LIMITER.idFromName(`daemon:${d.id}`));
+    expect(await runDurableObjectAlarm(limiter)).toBe(true);
     expect((await call("/v1/push", once)).status).toBe(409);
     expect(apnsCalls).toHaveLength(1);
   });

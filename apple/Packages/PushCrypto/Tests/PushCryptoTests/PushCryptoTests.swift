@@ -185,6 +185,13 @@ private func deviceKey(_ v: Vectors) throws -> Curve25519.KeyAgreement.PrivateKe
     #expect(Set(PushContent.placeholder(content).userInfo.keys.compactMap { $0 as? String }) == ["aps"])
 
     let opened = PushContent.decrypt(content, deviceKey: try deviceKey(v)) { $0 == v.daemon_public }
-    #expect(Set(opened.userInfo.keys.compactMap { $0 as? String }) == ["aps", PushContent.payloadKey])
+    #expect(Set(opened.userInfo.keys.compactMap { $0 as? String }) == ["aps", PushContent.payloadKey, PushContent.signatureKey])
     #expect(PushContent.payload(from: opened.userInfo)?.title == "claude needs you")
+
+    // A push that skips the extension (no `mutable-content`) delivers the relay's `userInfo`
+    // as is: the forged payload, unsigned or with a signature over other bytes, is not read.
+    #expect(PushContent.payload(from: content.userInfo) == nil)
+    var resigned = content.userInfo
+    resigned[PushContent.signatureKey] = opened.userInfo[PushContent.signatureKey]
+    #expect(PushContent.payload(from: resigned) == nil)
 }

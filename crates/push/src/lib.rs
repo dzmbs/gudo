@@ -760,6 +760,51 @@ mod tests {
     }
 
     #[test]
+    fn sealed_payloads_resist_truncation_versions_and_domain_swaps() {
+        let (secret, public) = x25519_keypair();
+        let seed = [1; 32];
+        let sealed = seal(&public, &seed, b"{}").unwrap();
+        // Fresh ephemeral key per payload: the same message never repeats a key or ciphertext.
+        let again = seal(&public, &seed, b"{}").unwrap();
+        assert_ne!(sealed[..43], again[..43]);
+        assert_ne!(sealed, again);
+
+        let raw = unb64(&sealed).unwrap();
+        for cut in [1, hpke::TAG_LEN, raw.len() - hpke::KEY_LEN] {
+            assert!(
+                open(&secret, &b64(&raw[..raw.len() - cut])).is_err(),
+                "cut {cut}"
+            );
+        }
+        assert!(open(&secret, &b64(&raw[..hpke::KEY_LEN])).is_err());
+
+        let envelope = |version: u8, domain: &[u8], json: &[u8], sig_len: usize| {
+            let sig = ed25519_sign(&seed, domain, json);
+            let plain = [&[version][..], &sig[..sig_len], json].concat();
+            let (enc, ct) = hpke::seal(&public, SEAL_INFO, b"", &plain).unwrap();
+            b64(&[enc.as_slice(), &ct].concat())
+        };
+        let json = br#"{"v":1}"#;
+        assert!(matches!(
+            open(&secret, &envelope(2, PAYLOAD_DOMAIN, json, 64)),
+            Err(PushError::Malformed)
+        ));
+        assert!(matches!(
+            open(&secret, &envelope(1, PAYLOAD_DOMAIN, b"", 63)),
+            Err(PushError::Malformed)
+        ));
+        // A signature the daemon made for another purpose does not verify as a payload.
+        for domain in [REQUEST_DOMAIN, TOKEN_DOMAIN, DECISION_DOMAIN] {
+            let opened = open(&secret, &envelope(1, domain, json, 64)).unwrap();
+            assert!(opened.verify(&ed25519_public(&seed)).is_err());
+        }
+        open(&secret, &envelope(1, PAYLOAD_DOMAIN, json, 64))
+            .unwrap()
+            .verify(&ed25519_public(&seed))
+            .unwrap();
+    }
+
+    #[test]
     fn wrong_device_or_daemon_fails() {
         let (secret, public) = x25519_keypair();
         let (other, _) = x25519_keypair();

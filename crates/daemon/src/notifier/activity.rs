@@ -279,7 +279,7 @@ async fn evaluate(core: &Arc<Core>) -> Option<Instant> {
     let summary = summarize(core);
     let now = Instant::now();
     let mut next: Option<Instant> = None;
-    for reg in core.push.registrations() {
+    for reg in super::targets(core) {
         let can_start = reg.activity_cap.is_some();
         let running = reg.activity_update_cap.is_some();
         if !can_start && !running {
