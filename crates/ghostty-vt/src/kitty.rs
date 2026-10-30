@@ -16,6 +16,11 @@ use crate::{Error, Terminal};
 /// still places.
 pub const KITTY_IMAGE_STORAGE_LIMIT: u64 = 64 << 20;
 
+/// Largest PNG width or height decoded, as libghostty-vt caps raw images.
+const MAX_PNG_DIMENSION: u32 = 10_000;
+/// Most bytes one PNG may decode to, as libghostty-vt caps its own PNG allocations.
+const MAX_PNG_DECODED: usize = 400 << 20;
+
 /// Pixel layout of a stored image. Stored images are always decoded and uncompressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageFormat {
@@ -295,7 +300,8 @@ unsafe extern "C" fn decode_png(
     }
     // SAFETY: libghostty-vt passes `len` readable bytes at `data` for the call.
     let png = unsafe { slice::from_raw_parts(data, len) };
-    let Some((width, height, rgba)) = png_to_rgba(png) else {
+    // A panic must not unwind into C (that aborts); a malformed image is just refused.
+    let Ok(Some((width, height, rgba))) = std::panic::catch_unwind(|| png_to_rgba(png)) else {
         return false;
     };
     // SAFETY: the allocator is the one libghostty-vt passed for this buffer, which it frees.
@@ -316,12 +322,22 @@ unsafe extern "C" fn decode_png(
     true
 }
 
-/// Decodes a PNG to 8-bit straight-alpha RGBA.
+/// Decodes a PNG to 8-bit straight-alpha RGBA, refusing images over libghostty-vt's limits
+/// before allocating for them: the header alone can claim petabytes.
 fn png_to_rgba(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(png));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()?];
+    let (width, height) = reader.info().size();
+    let size = reader.output_buffer_size()?;
+    let rgba_size = usize::try_from(u64::from(width) * u64::from(height) * 4).ok()?;
+    if width > MAX_PNG_DIMENSION
+        || height > MAX_PNG_DIMENSION
+        || size.max(rgba_size) > MAX_PNG_DECODED
+    {
+        return None;
+    }
+    let mut buf = vec![0; size];
     let frame = reader.next_frame(&mut buf).ok()?;
     buf.truncate(frame.buffer_size());
     let rgba = match frame.color_type {
@@ -370,6 +386,72 @@ mod tests {
         let gray = png(1, 1, png::ColorType::GrayscaleAlpha, &[9, 128]);
         assert_eq!(png_to_rgba(&gray), Some((1, 1, vec![9, 9, 9, 128])));
         assert_eq!(png_to_rgba(b"not a png"), None);
+    }
+
+    /// A PNG claiming `width`×`height` RGBA at 16 bits whose pixel data is an empty stream.
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            let start = out.len();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            let crc = out[start..].iter().fold(!0u32, |mut crc, &byte| {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+                }
+                crc
+            });
+            out.extend_from_slice(&(!crc).to_be_bytes());
+        }
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = [0; 13];
+        ihdr[..4].copy_from_slice(&width.to_be_bytes());
+        ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+        ihdr[8..10].copy_from_slice(&[16, 6]);
+        chunk(&mut out, b"IHDR", &ihdr);
+        chunk(
+            &mut out,
+            b"IDAT",
+            &[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+        );
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn oversized_pngs_are_refused_before_allocating() {
+        // A few bytes of program output must not make the decoder reserve petabytes (which
+        // aborts the process) or hundreds of megabytes per image.
+        assert_eq!(png_to_rgba(&png_header(1 << 24, 1 << 24)), None);
+        assert_eq!(png_to_rgba(&png_header(MAX_PNG_DIMENSION + 1, 1)), None);
+        let wide = png(
+            MAX_PNG_DIMENSION + 1,
+            1,
+            png::ColorType::Grayscale,
+            &[0; 10_001],
+        );
+        assert_eq!(png_to_rgba(&wide), None);
+        let edge = png(
+            MAX_PNG_DIMENSION,
+            1,
+            png::ColorType::Grayscale,
+            &[7; 10_000],
+        );
+        assert_eq!(
+            png_to_rgba(&edge).map(|(w, h, p)| (w, h, p.len())),
+            Some((10_000, 1, 40_000))
+        );
+    }
+
+    #[test]
+    fn programs_cannot_crash_the_terminal_with_a_png_header() -> Result<(), Error> {
+        let mut terminal = Terminal::new(20, 6)?;
+        let b64 = data_encoding::BASE64.encode(&png_header(1 << 24, 1 << 24));
+        terminal.write(format!("\x1b_Ga=T,f=100,i=5,q=2;{b64}\x1b\\").as_bytes());
+        assert_eq!(terminal.kitty_image(5), None);
+        terminal.write(b"still here");
+        Ok(())
     }
 
     #[test]
