@@ -3,8 +3,9 @@
 //! the browser pane beside its terminal in the app (`browser_tools`).
 //!
 //! JSON-RPC 2.0, one message per line. Each tool call becomes one [`PullCall`] on the daemon's
-//! hook socket. The socket comes from `<state>/hook.endpoint` and the token from
-//! `<state>/hook.token` (never from the command line); without `--state` the pane's
+//! hook socket. The socket comes from `<state>/hook.endpoint`; the token is the pane's own
+//! (`UN_TOKEN` of the pane's environment, ours or the agent's), and only without one
+//! `<state>/hook.token` (never from the command line). Without `--state` the pane's
 //! environment (`UN_ENDPOINT_FILE` / `UN_SOCK`, `UN_TOKEN`) is used, then the default state
 //! directory. The pane is `--pane`, else `UN_PANE_ID`.
 
@@ -510,6 +511,19 @@ enum Token {
     Value(String),
 }
 
+/// The pane's own token (`UN_TOKEN`) when the environment belongs to `pane`. It speaks for
+/// that pane only, so the server holds the daemon's `hook.token` only as a last resort.
+fn own_token(
+    pane: &str,
+    env_pane: Option<&str>,
+    env_token: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    (env_pane == Some(pane))
+        .then(env_token)
+        .flatten()
+        .filter(|t| !t.is_empty())
+}
+
 /// The daemon's hook socket.
 #[derive(Debug)]
 pub struct SocketBackend {
@@ -545,14 +559,20 @@ impl SocketBackend {
             );
         }
         let env = |name: &str| std::env::var(brand::env_var(name)).ok();
+        // Under Codex, which starts servers with a short environment allowlist, the pane's
+        // variables are the agent's (an ancestor's).
+        let pane_env =
+            |name: &str| env(name).or_else(|| daemon::inherited_env_var(&brand::env_var(name)));
+        let env_pane = pane_env("PANE_ID");
         let pane = pane
-            .or_else(|| env("PANE_ID"))
-            // Under Codex, which starts servers with a short environment allowlist.
-            .or_else(|| daemon::inherited_env_var(&brand::env_var("PANE_ID")))
+            .or_else(|| env_pane.clone())
             .ok_or("no pane: pass --pane <id> (the pane's UN_PANE_ID)")?;
+        let own = own_token(&pane, env_pane.as_deref(), || pane_env("TOKEN"));
         let from_state = |dir: PathBuf| Self {
             endpoint: Endpoint::File(dir.join("hook.endpoint")),
-            token: Token::File(dir.join("hook.token")),
+            token: own
+                .clone()
+                .map_or_else(|| Token::File(dir.join("hook.token")), Token::Value),
             pane: pane.clone(),
         };
         if let Some(dir) = state {
@@ -977,5 +997,15 @@ mod tests {
         assert!(matches!(&b.token, Token::File(f) if f == &PathBuf::from("/s t/hook.token")));
         assert!(SocketBackend::from_args(&["--bogus".into()]).is_err());
         assert!(SocketBackend::from_args(&["--pane".into()]).is_err());
+    }
+
+    #[test]
+    fn the_panes_own_token_is_preferred_over_the_daemons() {
+        let tok = || Some("pane-token".to_owned());
+        assert_eq!(own_token("12", Some("12"), tok), Some("pane-token".into()));
+        // Another pane's environment cannot speak for this one.
+        assert_eq!(own_token("12", Some("13"), tok), None);
+        assert_eq!(own_token("12", None, tok), None);
+        assert_eq!(own_token("12", Some("12"), || Some(String::new())), None);
     }
 }

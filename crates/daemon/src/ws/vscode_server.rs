@@ -59,13 +59,14 @@ fn latest(root: &Path) -> Option<PathBuf> {
     entry(&dir).is_file().then_some(dir)
 }
 
-/// The command that serves on `127.0.0.1:port` with `token`, from the server in `dir`.
-pub(crate) fn command(dir: &Path, port: u16, token: &str) -> Command {
+/// The command that serves on `127.0.0.1:port` with the token in `token_file`, from the
+/// server in `dir`.
+pub(crate) fn command(dir: &Path, port: u16, token_file: &Path) -> Command {
     let mut cmd = Command::new(entry(dir));
     cmd.args(["--host", "127.0.0.1", "--port"])
         .arg(port.to_string())
-        .arg("--connection-token")
-        .arg(token)
+        .arg("--connection-token-file")
+        .arg(token_file)
         .arg("--accept-server-license-terms")
         .arg("--reconnection-grace-time")
         .arg(RECONNECTION_GRACE.as_secs().to_string());

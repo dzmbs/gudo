@@ -603,7 +603,7 @@ args = sys.argv[1:]
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "args.txt"), "w") as f:
     f.write(" ".join(args))
 port = int(args[args.index("--port") + 1])
-token = args[args.index("--connection-token") + 1]
+token = open(args[args.index("--connection-token-file") + 1]).read().strip()
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200 if ("tkn=" + token) in self.path else 403)

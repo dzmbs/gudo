@@ -292,6 +292,28 @@ fn app_js() -> String {
     format!("/stable-{COMMIT}/static/app.js")
 }
 
+/// DNS rebinding: a page whose name now resolves to 127.0.0.1 sends its own name as `Host`.
+#[tokio::test]
+async fn refuses_hosts_that_are_not_loopback() {
+    let f = fixture().await;
+    let port = f.proxy.port();
+    let mut tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    tcp.write_all(b"GET /tiny.css HTTP/1.1\r\nHost: evil.example:80\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tcp.read_to_end(&mut raw).await.unwrap();
+    assert!(
+        raw.starts_with(b"HTTP/1.1 403"),
+        "{}",
+        String::from_utf8_lossy(&raw)
+    );
+    let hits = f.hits.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(hits, 0, "the editor server was never asked");
+    let r = request(port, "GET", "/tiny.css", &[]).await;
+    assert!(r.head.starts_with("HTTP/1.1 200"), "{}", r.head);
+}
+
 #[tokio::test]
 async fn compresses_chunked_bodies_with_the_accepted_coding() {
     let f = fixture().await;
@@ -319,7 +341,7 @@ async fn streams_instead_of_buffering() {
     let mut tcp = TcpStream::connect(("127.0.0.1", f.proxy.port()))
         .await
         .unwrap();
-    tcp.write_all(b"GET /slow.js HTTP/1.1\r\nHost: x\r\nAccept-Encoding: br\r\n\r\n")
+    tcp.write_all(b"GET /slow.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: br\r\n\r\n")
         .await
         .unwrap();
     // The upstream holds its second half back for 1.5 s; the first half's compressed bytes
@@ -469,7 +491,7 @@ async fn websocket_upgrades_pass_through() {
         .await
         .unwrap();
     tcp.write_all(
-        b"GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+        b"GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
           Accept-Encoding: br\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
           Sec-WebSocket-Version: 13\r\n\r\n",
     )
@@ -506,8 +528,8 @@ async fn keeps_connections_alive_across_requests() {
         .unwrap();
     // Two requests on one connection, the second after a compressed one.
     tcp.write_all(
-        b"GET /slow.js HTTP/1.1\r\nHost: x\r\nAccept-Encoding: br\r\n\r\n\
-          GET /tiny.css HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        b"GET /slow.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: br\r\n\r\n\
+          GET /tiny.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
     )
     .await
     .unwrap();

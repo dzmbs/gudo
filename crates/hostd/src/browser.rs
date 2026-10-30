@@ -52,6 +52,15 @@ pub fn open_url(args: &[String]) -> i32 {
 /// The system's opener, when there is a screen to open on. `BROWSER` is cleared for it so
 /// `xdg-open` cannot hand the URL back to us.
 fn system_open(url: &str) -> bool {
+    // `open`/`xdg-open` also launch apps and run files (`file:///…/x.command`), and a URL
+    // here can come from anything a program read.
+    if !is_web_url(url) {
+        eprintln!(
+            "{}: not opening {url:?}: only http and https URLs",
+            brand::HOOK_BIN
+        );
+        return false;
+    }
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -66,4 +75,36 @@ fn system_open(url: &str) -> bool {
         .stdin(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// An `http`/`https` URL with a host and no control characters.
+fn is_web_url(url: &str) -> bool {
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    let rest = if lower.starts_with("https://") {
+        &url[8..]
+    } else if lower.starts_with("http://") {
+        &url[7..]
+    } else {
+        return false;
+    };
+    !rest.is_empty() && !rest.starts_with('/') && !url.chars().any(char::is_control)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_system_opener_gets_web_urls_only() {
+        assert!(is_web_url("https://claude.ai/oauth?x=1"));
+        assert!(is_web_url("HTTP://localhost:3000/"));
+        assert!(!is_web_url("file:///Users/me/Downloads/run.command"));
+        assert!(!is_web_url("/Applications/Calculator.app"));
+        assert!(!is_web_url(
+            "x-apple.systempreferences:com.apple.preference"
+        ));
+        assert!(!is_web_url("http:///etc/passwd"));
+        assert!(!is_web_url("https://x/\n--args"));
+        assert!(!is_web_url("-a"));
+    }
 }

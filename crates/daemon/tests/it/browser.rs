@@ -138,3 +138,51 @@ async fn urls_and_tool_calls_reach_the_app_showing_the_pane() {
     .await;
     assert!(plain.browser.is_empty());
 }
+
+/// A guest's browser holds the guest's own sign-ins: the host's programs (or a guest typing in
+/// a shared pane) must never drive or read it, so URLs and tools reach the owner's devices only.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_driving_guest_never_gets_the_hosts_browser_calls() {
+    use client_core::grants::GrantSpec;
+    use client_core::now_millis;
+    use client_core::proto::{Roles, Scope, UnixMillis};
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let socket = daemon.hook_socket().to_owned();
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let mut spec = GrantSpec::new(Roles::DRIVER, Scope::Daemon);
+    spec.label = "bob".into();
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .create_invite(spec, "bob".into())
+        .await
+        .unwrap();
+    let mut bob = TestClient::join_browser(&invite.to_string(), ClientConfig::generate_key());
+    bob.client.attach(None);
+    bob.until("guest layout", |c| c.layout.is_some()).await;
+    bob.follow(pane).await;
+
+    let open = BrowserAsk::Open {
+        url: "https://example.com/".into(),
+    };
+    let reply = answer(send(&socket, &call(dir.path(), pane, open.clone())).await).await;
+    assert_eq!(reply, BrowserReply::NoApp);
+    let tool = BrowserAsk::Tool {
+        name: "browser_get_text".into(),
+        args: serde_json::json!({}),
+    };
+    let reply = answer(send(&socket, &call(dir.path(), pane, tool)).await).await;
+    assert_eq!(reply, BrowserReply::NoApp);
+
+    // The owner's own browser device gets them.
+    let mut app = TestClient::connect_browser(&ticket(&daemon), ClientConfig::generate_key());
+    assert_eq!(app.attach_and_follow().await, pane);
+    let reply = answer(send(&socket, &call(dir.path(), pane, open)).await).await;
+    assert_eq!(reply, BrowserReply::Opened);
+    app.until("the URL", |c| !c.browser.is_empty()).await;
+    bob.until("settled", |_| true).await;
+    assert!(bob.browser.is_empty(), "{:?}", bob.browser);
+}

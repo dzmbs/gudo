@@ -7,9 +7,8 @@
 //! references, targets `{"type":"ref","ref":"ref_3"}` or `{"type":"coordinate","x":…,"y":…}`
 //! in viewport pixels of `browser_screenshot`, and actions that answer with what changed.
 
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use daemon::{BrowserAsk, BrowserReply};
 use serde_json::{Value, json};
@@ -500,13 +499,17 @@ fn result(json: &str, save: bool) -> Value {
     json!({ "content": content })
 }
 
-fn save_text(text: &str) -> io::Result<PathBuf> {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    let path = std::env::temp_dir().join(format!("{}-snapshot-{stamp}.txt", brand::CLI_BIN));
-    std::fs::write(&path, text)?;
+/// Page content is private: a new 0600 file with an unguessable name, never one planted in a
+/// shared temporary directory.
+fn save_private(prefix: &str, ext: &str, data: &[u8]) -> io::Result<PathBuf> {
+    let (path, mut file) =
+        daemon::create_private_temp_file(&format!("{}-{prefix}", brand::CLI_BIN), ext)?;
+    file.write_all(data)?;
     Ok(path)
+}
+
+fn save_text(text: &str) -> io::Result<PathBuf> {
+    save_private("snapshot", "txt", text.as_bytes())
 }
 
 /// `un-hook browser <verb> [json | key=value …]`: the same tools from a shell (Codex, scripts).
@@ -594,12 +597,7 @@ fn save_image(item: &Value) -> io::Result<PathBuf> {
     } else {
         "jpg"
     };
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    let path = std::env::temp_dir().join(format!("{}-screenshot-{stamp}.{ext}", brand::CLI_BIN));
-    std::fs::write(&path, data)?;
-    Ok(path)
+    save_private("screenshot", ext, &data)
 }
 
 fn usage() -> String {
@@ -652,6 +650,22 @@ mod tests {
             v,
             json!({ "target": { "type": "ref", "ref": "ref_4" }, "paths": ["a.png", "7"] })
         );
+    }
+
+    #[test]
+    fn saved_pages_are_private_and_unguessable() {
+        use std::os::unix::fs::PermissionsExt;
+        let a = save_text("secret page").unwrap();
+        let b = save_text("secret page").unwrap();
+        assert_ne!(
+            a, b,
+            "two saves in the same millisecond must not share a name"
+        );
+        let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "secret page");
+        let _ = std::fs::remove_file(a);
+        let _ = std::fs::remove_file(b);
     }
 
     #[test]

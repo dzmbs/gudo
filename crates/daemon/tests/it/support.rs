@@ -161,6 +161,19 @@ impl TestClient {
         Self::wrap(client, events)
     }
 
+    /// A guest joining with an invite, offering to open URLs and run browser tools.
+    pub fn join_browser(invite: &str, key: Vec<u8>) -> Self {
+        let (listener, events) = EventQueue::channel();
+        let mut config = ClientConfig::new(key);
+        config.relay = RelayMode::Disabled;
+        let options = client_core::ConnectOptions {
+            browser: true,
+            ..client_core::ConnectOptions::default()
+        };
+        let client = Client::join_with(invite, config, options, listener).expect("client starts");
+        Self::wrap(client, events)
+    }
+
     /// A guest joining with an invite.
     pub fn join(invite: &str, key: Vec<u8>) -> Self {
         let (listener, events) = EventQueue::channel();

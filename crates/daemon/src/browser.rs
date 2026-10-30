@@ -9,8 +9,9 @@
 //!   pushes [`BrowserPush::Call`] to the same connection and holds the line until the app's
 //!   `ClientCtl::BrowserResult`, [`CALL_TIMEOUT`], the caller hanging up or the app leaving.
 //!
-//! A pane's browser connection is one with [`Caps::BROWSER`] attached to the pane's session
-//! that may drive it: the one that last sized the pane (the device in use), else the newest.
+//! A pane's browser connection is one of the owner's with [`Caps::BROWSER`] attached to the
+//! pane's session: the one that last sized the pane (the device in use), else the newest.
+//! Guests never get one, whatever their role.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -175,7 +176,9 @@ impl Core {
             .filter(|(conn, authz)| {
                 self.attached_session(*conn) == Some(session)
                     && self.mp.still_valid(authz)
-                    && policy::check(self, authz, Need::Drive, Target::Pane(pane)).is_ok()
+                    // The owner's devices only: a guest's browser holds the guest's sign-ins,
+                    // which the host's programs must not drive or read.
+                    && policy::check(self, authz, Need::Own, Target::Pane(pane)).is_ok()
             })
             .map(|(conn, _)| conn)
             .collect();

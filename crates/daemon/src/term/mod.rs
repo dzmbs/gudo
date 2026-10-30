@@ -41,6 +41,10 @@ const PROMPT_WAIT: Duration = Duration::from_secs(10);
 /// no integration.
 const START_WAIT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(50);
+/// Live panes one agent, with all the workers it started, may have opened at once.
+const MAX_OPEN_PANES: usize = 32;
+/// Output a wait holds at most (the pane's ring is 1 MiB).
+const WAIT_KEEP: usize = 1 << 20;
 
 /// What the shim sends on the hook socket: one JSON line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +150,26 @@ impl Term {
             }
         }
         false
+    }
+
+    /// How many live panes the agent at the top of `caller`'s chain of creators has opened,
+    /// through any of its workers.
+    fn opened_by_tree(&self, caller: PaneId, live: impl Fn(PaneId) -> bool) -> usize {
+        let creators = lock(&self.creators);
+        let top = |mut at: PaneId| {
+            for _ in 0..=creators.len() {
+                match creators.get(&at) {
+                    Some(&creator) => at = creator,
+                    None => break,
+                }
+            }
+            at
+        };
+        let root = top(caller);
+        creators
+            .keys()
+            .filter(|&&p| live(p) && top(p) == root)
+            .count()
     }
 
     fn created(&self, caller: PaneId, pane: PaneId) {
@@ -530,6 +554,23 @@ impl Ctx {
         )
     }
 
+    /// Refuses a new pane once the caller's agent (with all its workers) has
+    /// [`MAX_OPEN_PANES`] open: a looping or misled agent must not exhaust the host.
+    fn may_open(&self) -> Result<()> {
+        let open = self
+            .core
+            .term
+            .opened_by_tree(self.caller, |p| self.core.pane(p).is_some());
+        if open < MAX_OPEN_PANES {
+            return Ok(());
+        }
+        Err(ToolError::new(
+            ErrorCode::Forbidden,
+            format!("{open} panes you opened are still open"),
+        )
+        .hint("close panes you no longer need with pane_close"))
+    }
+
     // --- discovery --------------------------------------------------------------------------
 
     fn pane_info(&self, id: PaneId, entry: &PaneEntry) -> Value {
@@ -674,6 +715,7 @@ impl Ctx {
         launch: PaneLaunch,
         focus: bool,
     ) -> Result<PaneId> {
+        self.may_open()?;
         let focused = self.focused_in_tab_of(of);
         let axis = match direction {
             Direction::Right => Axis::Horizontal,
@@ -699,6 +741,7 @@ impl Ctx {
 
     async fn tab_new(&self, a: TabArgs) -> Result<Value> {
         let session = self.session().ok_or_else(closed)?;
+        self.may_open()?;
         let before = lock(&self.core.layout)
             .snapshot(session)
             .and_then(|l| l.active_tab);
@@ -1049,6 +1092,10 @@ impl Ctx {
             match tokio::time::timeout(TICK.min(deadline - now), sub.recv()).await {
                 Ok(Ok(chunk)) => {
                     bytes.extend_from_slice(&chunk.data);
+                    // A flood of output over a long wait keeps only its newest part.
+                    if bytes.len() > WAIT_KEEP {
+                        bytes.drain(..bytes.len() - WAIT_KEEP / 2);
+                    }
                     last_output = Instant::now();
                 }
                 Ok(Err(_)) => tokio::time::sleep(TICK).await,
@@ -1530,6 +1577,26 @@ fn letter_key(c: char) -> Option<ghostty_vt::Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workers_count_against_the_agent_that_started_them() {
+        let term = Term::default();
+        let (lead, worker, other) = (PaneId(1), PaneId(2), PaneId(50));
+        term.created(lead, worker);
+        for p in 3..10 {
+            term.created(worker, PaneId(p));
+        }
+        term.created(other, PaneId(51));
+        let live = |p: PaneId| p != PaneId(9);
+        // The worker and its seven panes, one of them closed.
+        assert_eq!(term.opened_by_tree(lead, live), 7);
+        assert_eq!(
+            term.opened_by_tree(worker, live),
+            7,
+            "a worker cannot reset the count"
+        );
+        assert_eq!(term.opened_by_tree(other, live), 1);
+    }
 
     #[test]
     fn keys_parse_with_modifiers() {

@@ -18,6 +18,7 @@ mod askpass;
 mod service;
 
 use std::fs::OpenOptions;
+use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -175,12 +176,21 @@ fn run(
             hex(&daemon.daemon_id().0)
         );
         if daemon.paired_devices() == 0 {
-            daemon.wait_online(Duration::from_secs(5)).await;
-            eprintln!(
-                "No devices paired yet. Scan this with the app, or run `{} pair` later:",
-                brand::DAEMON_BIN
-            );
-            print_ticket(&daemon.pairing_link(daemon::PAIRING_TTL)?);
+            // A ticket makes its holder an owner: only to a person at a terminal, never into
+            // a service's log file or journal, which others may read.
+            if std::io::stderr().is_terminal() {
+                daemon.wait_online(Duration::from_secs(5)).await;
+                eprintln!(
+                    "No devices paired yet. Scan this with the app, or run `{} pair` later:",
+                    brand::DAEMON_BIN
+                );
+                print_ticket(&daemon.pairing_link(daemon::PAIRING_TTL)?);
+            } else {
+                eprintln!(
+                    "No devices paired yet: run `{} pair` to pair one.",
+                    brand::DAEMON_BIN
+                );
+            }
         }
         let restart = tokio::select! {
             signal = wait_for_signal() => {

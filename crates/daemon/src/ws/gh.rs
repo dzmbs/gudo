@@ -82,6 +82,12 @@ fn run(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> Result<O
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
+        // The git `gh` runs gets the same guard as ours against the repository's own config.
+        .env("GIT_CONFIG_COUNT", "2")
+        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_0", "false")
+        .env("GIT_CONFIG_KEY_1", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_1", "/dev/null")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

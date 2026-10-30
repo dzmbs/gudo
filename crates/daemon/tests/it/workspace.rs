@@ -1101,7 +1101,7 @@ args = sys.argv[1:]
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "args.txt"), "w") as f:
     f.write(" ".join(args))
 port = int(args[args.index("--port") + 1])
-token = args[args.index("--connection-token") + 1]
+token = open(args[args.index("--connection-token-file") + 1]).read().strip()
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         ok = ("tkn=" + token) in self.path
@@ -1198,7 +1198,7 @@ async fn editor_servers_launch_per_folder_and_open_files() {
     let args = std::fs::read_to_string(ovs.join("bin/args.txt")).unwrap();
     assert!(args.contains("--host 127.0.0.1"), "{args}");
     assert!(
-        args.contains(&format!("--connection-token {}", e.token)),
+        args.contains("--connection-token-file ") && !args.contains(&e.token),
         "{args}"
     );
     // Reused for the same folder.
@@ -1259,7 +1259,7 @@ const FAKE_STATIC_EDITOR: &str = r#"#!/usr/bin/env python3
 import http.server, sys
 args = sys.argv[1:]
 port = int(args[args.index("--port") + 1])
-token = args[args.index("--connection-token") + 1]
+token = open(args[args.index("--connection-token-file") + 1]).read().strip()
 JS = "".join("export function f%d(x) { return x * %d; }\n" % (i, i) for i in range(5000)).encode()
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -1518,7 +1518,7 @@ async fn vscodium_launches_without_a_licence_and_as_the_default() {
     let args = std::fs::read_to_string(codium.join("bin/args.txt")).unwrap();
     assert!(args.contains("--host 127.0.0.1"), "{args}");
     assert!(
-        args.contains(&format!("--connection-token {}", ea.token)),
+        args.contains("--connection-token-file ") && !args.contains(&ea.token),
         "{args}"
     );
     assert!(args.contains("--telemetry-level off"), "{args}");

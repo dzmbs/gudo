@@ -339,6 +339,12 @@ impl Editors {
         };
         let port = free_port()?;
         let token = token();
+        let log_dir = cfg.state_dir.join("editors");
+        // From a private file, never the command line: other users of the host can read the
+        // process list and reach the server on the shared loopback.
+        let token_file = log_dir.join(format!("{port}.token"));
+        fsutil::write_atomic(&token_file, token.as_bytes())
+            .map_err(|e| WsError::Failed(e.to_string()))?;
         let mut cmd = match kind {
             EditorKind::VsCode => {
                 let code = code.ok_or_else(|| {
@@ -365,13 +371,13 @@ impl Editors {
                         .ok()
                 };
                 match direct {
-                    Some(dir) => vscode_server::command(&dir, port, &token),
+                    Some(dir) => vscode_server::command(&dir, port, &token_file),
                     None => {
                         let mut cmd = Command::new(code);
                         cmd.args(["serve-web", "--host", "127.0.0.1", "--port"])
                             .arg(port.to_string())
-                            .arg("--connection-token")
-                            .arg(&token)
+                            .arg("--connection-token-file")
+                            .arg(&token_file)
                             .arg("--accept-server-license-terms");
                         cmd
                     }
@@ -382,8 +388,8 @@ impl Editors {
                 let mut cmd = Command::new(openvscode_bin(&dir));
                 cmd.args(["--host", "127.0.0.1", "--port"])
                     .arg(port.to_string())
-                    .arg("--connection-token")
-                    .arg(&token)
+                    .arg("--connection-token-file")
+                    .arg(&token_file)
                     .args(["--telemetry-level", "off"]);
                 cmd
             }
@@ -394,14 +400,12 @@ impl Editors {
                 let mut cmd = Command::new(vscodium_bin(&dir));
                 cmd.args(["--host", "127.0.0.1", "--port"])
                     .arg(port.to_string())
-                    .arg("--connection-token")
-                    .arg(&token)
+                    .arg("--connection-token-file")
+                    .arg(&token_file)
                     .args(["--telemetry-level", "off"]);
                 cmd
             }
         };
-        let log_dir = cfg.state_dir.join("editors");
-        std::fs::create_dir_all(&log_dir).map_err(|e| WsError::Failed(e.to_string()))?;
         let log_path = log_dir.join(format!("{kind:?}-{port}.log").to_lowercase());
         let log = std::fs::File::create(&log_path).map_err(|e| WsError::Failed(e.to_string()))?;
         let log_err = log

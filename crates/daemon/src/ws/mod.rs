@@ -66,7 +66,7 @@ impl Ws {
     pub fn new(cfg: &Config, events: tokio::sync::broadcast::Sender<Event>) -> Self {
         let home = cfg.home();
         Self {
-            policy: Policy::new(&home, &cfg.fs_allow),
+            policy: Policy::new(&home, &cfg.fs_allow).deny(&cfg.state_dir),
             ports: ports::Ports::new(),
             attention: Attention::default(),
             turns: turns::Turns::new(),
