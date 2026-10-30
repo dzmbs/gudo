@@ -55,7 +55,7 @@ struct EditorLicence {
 nonisolated enum TunnelWeb {
     static let origin = "https://vscode.dev"
 
-    static func url(_ webURL: String, base: String? = UserDefaults.standard.string(forKey: "testTunnelWebBase")) -> URL? {
+    static func url(_ webURL: String, base: String? = LaunchArguments().string(forKey: "testTunnelWebBase")) -> URL? {
         guard let base, !base.isEmpty, webURL.hasPrefix(origin) else { return URL(string: webURL) }
         return URL(string: base + webURL.dropFirst(origin.count))
     }

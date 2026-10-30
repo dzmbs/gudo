@@ -959,7 +959,7 @@ final class PaneDrawing: NSObject {
                     hub.noteLocal(placement, replacing: nil)
                 }
             } catch {
-                CanvasWebView.log.error("import \(name, privacy: .public): \(String(describing: error), privacy: .public)")
+                CanvasWebView.log.error("import \(name, privacy: .private): \(String(describing: error), privacy: .public)")
             }
         }
     }

@@ -415,8 +415,8 @@ impl SshConfigFile {
 // Keys
 // ---------------------------------------------------------------------------------------------
 
-/// A new key pair for the Keychain.
-#[derive(Debug, Clone, uniffi::Record)]
+/// A new key pair for the Keychain. `Debug` leaves the private key out.
+#[derive(Clone, uniffi::Record)]
 pub struct GeneratedSshKey {
     /// The unencrypted OpenSSH private key (PEM text as bytes); store it in the Keychain and
     /// pass it back as [`SshAuth::KeyData`].
@@ -425,6 +425,16 @@ pub struct GeneratedSshKey {
     pub public_key: String,
     /// `SHA256:…`.
     pub fingerprint: String,
+}
+
+impl std::fmt::Debug for GeneratedSshKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeneratedSshKey")
+            .field("private_key", &"<redacted>")
+            .field("public_key", &self.public_key)
+            .field("fingerprint", &self.fingerprint)
+            .finish()
+    }
 }
 
 /// Generates an Ed25519 key pair.

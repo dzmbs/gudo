@@ -353,7 +353,7 @@ final class LiveEditorSource: EditorSource {
                 pendingURL = url
             }
         } catch {
-            log.error("editor open \(path, privacy: .public): \(String(describing: error), privacy: .public)")
+            log.error("editor open \(path, privacy: .private): \(String(describing: error), privacy: .public)")
         }
     }
 

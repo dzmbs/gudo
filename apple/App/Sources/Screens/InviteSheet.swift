@@ -5,6 +5,7 @@ import HostKit
 import PaneLayout
 import SwiftUI
 import UnnamedCore
+import UniformTypeIdentifiers
 #if canImport(UIKit)
 import UIKit
 #else
@@ -543,7 +544,7 @@ private struct InviteResult: View {
     }
 
     private func copy() {
-        Pasteboard.copy(invite.link)
+        Pasteboard.copySecret(invite.link)
         withAnimation(DS.Motion.indicator) { copied = true }
         Task {
             try? await Task.sleep(for: .milliseconds(1500))
@@ -662,12 +663,31 @@ struct QRCodeView: View {
 }
 
 enum Pasteboard {
+    /// How long a copied invite link stays on the clipboard.
+    static let secretLifetime: TimeInterval = 10 * 60
+
     static func copy(_ text: String) {
         #if canImport(UIKit)
         UIPasteboard.general.string = text
         #else
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+
+    /// Text that grants access (an invite link): it leaves the clipboard after a while, and
+    /// clipboard managers that honour the convention don't keep it in their history.
+    static func copySecret(_ text: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.setItems(
+            [[UTType.utf8PlainText.identifier: text]], options: [.expirationDate: Date.now.addingTimeInterval(secretLifetime)])
+        #else
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(text, forType: .string)
+        // nspasteboard.org markers: clipboard managers leave it out of their history.
+        board.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        board.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
         #endif
     }
 }

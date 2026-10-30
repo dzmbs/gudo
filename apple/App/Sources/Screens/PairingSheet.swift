@@ -54,11 +54,16 @@ struct PairingSheet: View {
 
     private enum Field { case destination, password, ticket }
 
-    init(directory: any HostDirectory, live: HostsModel?, initialMode: Mode = .ssh, destination: String = "") {
+    /// A ticket from a pairing link: shown with its host for the user to confirm.
+    let linkTicket: String
+
+    init(directory: any HostDirectory, live: HostsModel?, initialMode: Mode = .ssh, destination: String = "", ticket: String = "") {
         self.directory = directory
         self.live = live
-        _mode = State(initialValue: Mode.available.contains(initialMode) ? initialMode : .ssh)
+        linkTicket = ticket
+        _mode = State(initialValue: ticket.isEmpty ? (Mode.available.contains(initialMode) ? initialMode : .ssh) : .ticket)
         _destination = State(initialValue: destination)
+        _ticket = State(initialValue: ticket)
         _flow = State(initialValue: live.map { hosts in
             let flow = JustSSHFlow(hosts: hosts)
             // A key the app already holds beats a password prompt.
@@ -113,6 +118,13 @@ struct PairingSheet: View {
             .onChange(of: mode) {
                 error = nil
                 focusField()
+            }
+            // Another link while the sheet is up replaces what it shows.
+            .onChange(of: linkTicket) { _, new in
+                guard !new.isEmpty else { return }
+                ticket = new
+                error = nil
+                mode = .ticket
             }
             .sensoryFeedback(DS.Haptic.success, trigger: pairedCount)
             .fileImporter(isPresented: $importingKey, allowedContentTypes: [.data, .plainText, .item]) { result in
@@ -242,11 +254,38 @@ struct PairingSheet: View {
             Button("Paste", systemImage: "doc.on.clipboard", action: paste)
             #endif
             if let parsed = try? PairingTicket(ticket) {
+                ticketHost(parsed)
                 ticketRelay(parsed)
             }
         } footer: {
-            footer(default: Text("Run \(Text(verbatim: "\(Brand.name) pair").font(DS.Font.literalSmall)) on the host to print a ticket and its QR code. Tickets expire after 10 minutes."))
+            if !linkTicket.isEmpty, ticket == linkTicket {
+                footer(default: Text("A link opened this ticket. Pair only with a host you set up: it will see what you type in its terminals and can show you web pages."))
+            } else {
+                footer(default: Text("Run \(Text(verbatim: "\(Brand.name) pair").font(DS.Font.literalSmall)) on the host to print a ticket and its QR code. Tickets expire after 10 minutes."))
+            }
         }
+    }
+
+    /// Which host the ticket is for: the host already paired with it, or its key's start
+    /// (what `<brand> pair` prints on the host).
+    private func ticketHost(_ parsed: PairingTicket) -> some View {
+        let known = live?.records.first { $0.daemonId == parsed.info.daemonId }
+        return LabeledContent {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(known?.name ?? "New host")
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(verbatim: PairingTicket.keyFingerprint(parsed.info.daemonId))
+                    .font(DS.Font.literalSmall)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .lineLimit(1)
+            }
+        } label: {
+            Text("Host")
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("pairing-ticket-host")
     }
 
     /// Which relay the host will be reached through: the ticket's choice, or this device's
@@ -286,9 +325,11 @@ struct PairingSheet: View {
 
     @ViewBuilder private var scanSection: some View {
         Section {
+            // A code shows its ticket and host to confirm, as a pasted ticket or a link does:
+            // anyone can print a QR code.
             Viewfinder(scanning: live != nil && !isBusy) { payload in
-                ticket = payload
-                pair(payload)
+                ticket = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+                mode = .ticket
             }
             .frame(maxWidth: 320)
             .frame(maxWidth: .infinity)
@@ -296,7 +337,7 @@ struct PairingSheet: View {
             .listRowInsets(EdgeInsets())
         } footer: {
             footer(default: Text(Viewfinder.hasCamera || live == nil
-                ? "Pairing starts as soon as the code is in view. The host shows its code with \(Text(verbatim: "\(Brand.name) pair").font(DS.Font.literalSmall))."
+                ? "Point the camera at the code, then check the host and pair. The host shows its code with \(Text(verbatim: "\(Brand.name) pair").font(DS.Font.literalSmall))."
                 : "This device has no camera for scanning. Paste the ticket instead, or open the pairing link on this device."))
         }
     }

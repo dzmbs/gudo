@@ -47,6 +47,14 @@ nonisolated public struct PairingTicket: Sendable, Equatable {
         "Host \(info.daemonId.prefix(8))"
     }
 
+    /// The start of a daemon id in groups of four (`3f2a 91c0 …`), to compare with the
+    /// `daemon id` the host's `status` prints.
+    public static func keyFingerprint(_ daemonId: String) -> String {
+        let head = Array(daemonId.lowercased().prefix(16))
+        let groups = stride(from: 0, to: head.count, by: 4).map { String(head[$0..<min($0 + 4, head.count)]) }
+        return groups.joined(separator: " ") + (daemonId.count > 16 ? " …" : "")
+    }
+
     public var isExpired: Bool {
         Date(timeIntervalSince1970: Double(info.expiresUnixMs) / 1000) < Date()
     }

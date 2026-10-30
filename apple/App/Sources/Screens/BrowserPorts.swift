@@ -277,6 +277,9 @@ extension WindowModel {
             await openPort(detected)
             return
         }
+        // A remote pane's link is the host's: a `file:` URL would show this device's file to
+        // the host's agent beside it.
+        if workspace?.isRemote == true, !HostLinks.mayOpen(url) { return }
         openPage(url, hostId: nil)
     }
 

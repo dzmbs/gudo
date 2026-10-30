@@ -46,7 +46,7 @@ final class AppModel {
 
     private init() {
         CoreLog.install()
-        let defaults = UserDefaults.standard
+        let defaults = LaunchArguments()
         // Tests and tooling keep hosts and secrets in a folder of their own (`AppData`): they
         // never touch the user's hosts or Keychain.
         let isolated = AppData.isolatedDirectory
@@ -201,19 +201,6 @@ final class AppModel {
         #endif
     }
 
-    // MARK: Pairing entry points
-
-    /// A pairing deep link (`<scheme>://pair/<ticket>`): pair and return the host to show.
-    func handle(url: URL) async -> WorkspaceTarget? {
-        guard let ticket = PairingTicket(url: url) else { return nil }
-        do {
-            return .host(try await hosts.pair(ticket))
-        } catch {
-            lastError = error.localizedDescription
-            return nil
-        }
-    }
-
     // MARK: Test hooks (launch arguments; used by UI tests and the real-host runs)
 
     /// `-testTicket <ticket>`: pair and show that host. `-testSSH user@host[:port]` with
@@ -226,7 +213,7 @@ final class AppModel {
         // (two windows restored at launch must not pair the same ticket twice).
         guard !launchHooksRan else { return [] }
         launchHooksRan = true
-        let defaults = UserDefaults.standard
+        let defaults = LaunchArguments()
         if let list = defaults.string(forKey: "testTickets"), !list.isEmpty {
             let tickets = list.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
             let names = (defaults.string(forKey: "testTicketNames") ?? "").split(separator: ",").map(String.init)
@@ -248,7 +235,7 @@ final class AppModel {
     @ObservationIgnored private var launchHooksRan = false
 
     private func runSingleLaunchHook() async -> WorkspaceTarget? {
-        let defaults = UserDefaults.standard
+        let defaults = LaunchArguments()
         // `-testSSHConfig <path>`: read that ssh_config as Hosts → Import would (UI tests; the
         // simulator's pasteboard and file picker cannot be driven reliably).
         if let path = defaults.string(forKey: "testSSHConfig"),

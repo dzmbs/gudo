@@ -7,7 +7,7 @@ import WebKit
 /// docs/DAEMON.md §7.11: Swift → JS `window.canvas.<fn>(json)`, JS → Swift messages on
 /// `window.webkit.messageHandlers.canvas`.
 @MainActor
-final class CanvasWebView: NSObject, WKScriptMessageHandler {
+final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// `<brand>-canvas://bundle/index.html`: pages load from the app bundle, never the network.
     static let scheme: String = {
         let brand = Brand.name.lowercased().filter { $0.isLetter || $0.isNumber }
@@ -36,6 +36,7 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler {
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         controller.add(WeakMessageHandler(self), name: "canvas")
+        webView.navigationDelegate = self
         #if DEBUG
         webView.isInspectable = true
         #endif
@@ -117,7 +118,8 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        guard Self.isOwnPage(message.frameInfo), let body = message.body as? [String: Any], let type = body["type"] as? String
+        else { return }
         switch type {
         case "ready":
             isReady = true
@@ -134,6 +136,32 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler {
             break
         }
         onMessage?(body)
+    }
+
+    /// Only the bundled page speaks for the drawing: frames inside it (a scene's embedded
+    /// video or site) can post to the handler too.
+    static func isOwnPage(_ frame: WKFrameInfo) -> Bool {
+        frame.isMainFrame && frame.securityOrigin.protocol == scheme
+    }
+
+    /// Whether the canvas may load a navigation: its own bundle, and web frames inside it (a
+    /// scene's embeds). The page itself never leaves the bundle; a link opens in the browser.
+    static func policy(for url: URL?, mainFrame: Bool) -> WKNavigationActionPolicy {
+        let scheme = url?.scheme?.lowercased() ?? ""
+        if scheme == Self.scheme || scheme == "about" || scheme == "blob" || scheme == "data" { return .allow }
+        if !mainFrame, scheme == "http" || scheme == "https" { return .allow }
+        return .cancel
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
+        let mainFrame = action.targetFrame?.isMainFrame ?? true
+        let policy = Self.policy(for: action.request.url, mainFrame: mainFrame)
+        if policy == .cancel, mainFrame, action.navigationType == .linkActivated, let url = action.request.url,
+           HostLinks.mayOpen(url)
+        {
+            TunnelBrowser.openExternally(url)
+        }
+        return policy
     }
 
     func tearDown() {

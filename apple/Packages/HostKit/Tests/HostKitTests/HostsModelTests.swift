@@ -103,6 +103,38 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(try store.data(for: "host.x/../ticket") == nil)
     }
 
+    @Test func daemonIdFingerprintIsGroupedAndShort() {
+        #expect(PairingTicket.keyFingerprint(String(repeating: "AB12", count: 16)) == "ab12 ab12 ab12 ab12 …")
+        #expect(PairingTicket.keyFingerprint("abcdef") == "abcd ef")
+    }
+
+    @Test func fileSecretsAreOwnerOnly() throws {
+        let directory = temporaryDirectory().appending(path: "secrets")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        let store = FileSecretStore(directory: directory)
+        try store.set("s3cret", for: "device-key")
+        func permissions(_ url: URL) throws -> Int {
+            try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int ?? -1
+        }
+        #expect(try permissions(directory) == 0o700)
+        #expect(try permissions(directory.appending(path: "device-key")) == 0o600)
+    }
+
+    @Test func fileSecretsMoveIntoTheKeychainAndLeaveNoFiles() throws {
+        let files = FileSecretStore(directory: temporaryDirectory())
+        try files.set("ticket-a", for: "host.A.ticket")
+        try files.set("old-key", for: "device-key")
+        let keychain = MemorySecretStore()
+        try keychain.set("current-key", for: "device-key")
+
+        try SecretStores.migrate(from: files, to: keychain)
+
+        #expect(try keychain.string(for: "host.A.ticket") == "ticket-a")
+        // What the Keychain already holds wins.
+        #expect(try keychain.string(for: "device-key") == "current-key")
+        #expect(files.keys().isEmpty)
+    }
+
     @Test func keysGenerateImportAndAuthenticate() throws {
         let secrets = MemorySecretStore()
         let directory = temporaryDirectory()
