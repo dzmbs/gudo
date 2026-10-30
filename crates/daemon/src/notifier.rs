@@ -243,6 +243,17 @@ pub(crate) fn status(core: &Core, device: DeviceId) -> PushStatus {
     }
 }
 
+/// The pane and [`push::request_subject`] of request `id` while its agent waits on it.
+fn open_subject(core: &Core, id: proto::RequestId) -> Option<(proto::PaneId, [u8; 32])> {
+    let (pane, facts) = core.request_facts(id, None)?;
+    let subject = push::request_subject(
+        &facts.request.to_string(),
+        facts.tool.as_deref(),
+        &facts.summary,
+    );
+    Some((pane, subject))
+}
+
 /// `PushAction`: applies Approve / Deny from a notification.
 pub(crate) fn action(
     core: &Core,
@@ -258,6 +269,12 @@ pub(crate) fn action(
     if token.device != actor.device {
         return Err(WsError::Denied(
             "the action token is for another device".into(),
+        ));
+    }
+    // Only the exact request the notification showed: same pane, same call, same content.
+    if open_subject(core, token.request) != Some((token.pane, token.subject)) {
+        return Err(WsError::NotFound(
+            "the agent is no longer waiting for this".into(),
         ));
     }
     let decision = if req.approve {
@@ -483,7 +500,7 @@ fn notification(
                 ..
             },
             Some(b),
-        ) => {
+        ) => open_subject(core, *request).map(|(_, subject)| {
             let expires = UnixMillis(now_millis() + core.cfg.push.action_ttl.as_millis() as u64);
             let token = push::ActionToken {
                 v: push::ActionToken::VERSION,
@@ -495,8 +512,9 @@ fn notification(
                 deny: b.deny.as_ref().map(|(id, _)| *id),
                 item: item.id,
                 expires,
+                subject,
             };
-            Some(push::ActionOffer {
+            push::ActionOffer {
                 token: push::b64(&push::issue_token(&seed, &token)),
                 approve: b
                     .approve
@@ -504,8 +522,8 @@ fn notification(
                     .map_or_else(String::new, |(_, l)| l.clone()),
                 deny: b.deny.as_ref().map_or_else(String::new, |(_, l)| l.clone()),
                 expires: expires.0,
-            })
-        }
+            }
+        }),
         _ => None,
     };
     push::Notification {

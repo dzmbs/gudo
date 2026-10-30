@@ -73,7 +73,7 @@ private func placeholder(_ sealed: String) -> UNMutableNotificationContent {
             // The handler reads the opened payload back; the sealed blob is gone.
             #expect(out.userInfo[PushContent.sealedKey] == nil)
             #expect(PushContent.payload(from: out.userInfo) == expected)
-            #expect(NotificationTarget(userInfo: out.userInfo) == .push(expected))
+            #expect(NotificationTarget(userInfo: out.userInfo, remote: true) == .push(expected))
         }
     }
 
@@ -157,8 +157,8 @@ private final class FakeClient: NotificationActionClient {
         let client = FakeClient()
         let handler = NotificationActionHandler(client: client)
         let info = LocalNotifications.content(for: note).userInfo
-        #expect(await handler.handle(actionIdentifier: PushAction.approve, userInfo: info) == .decided(approve: true))
-        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info) == .decided(approve: false))
+        #expect(await handler.handle(actionIdentifier: PushAction.approve, userInfo: info, remote: false) == .decided(approve: true))
+        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info, remote: false) == .decided(approve: false))
         #expect(client.recorded == [
             .decide(host: "h1", pane: 7, request: 31, option: 1),
             .decide(host: "h1", pane: 7, request: 31, option: 3),
@@ -169,9 +169,9 @@ private final class FakeClient: NotificationActionClient {
         let client = FakeClient()
         let handler = NotificationActionHandler(client: client)
         let info = LocalNotifications.content(for: note).userInfo
-        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info) == .opened)
-        #expect(await handler.handle(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: info) == .opened)
-        #expect(await handler.handle(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: info) == .ignored)
+        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info, remote: false) == .opened)
+        #expect(await handler.handle(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: info, remote: false) == .opened)
+        #expect(await handler.handle(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: info, remote: false) == .ignored)
         #expect(client.recorded == [.open(host: "h1", daemon: nil, pane: 7), .open(host: "h1", daemon: nil, pane: 7)])
     }
 
@@ -187,8 +187,8 @@ private final class FakeClient: NotificationActionClient {
         let info: [AnyHashable: Any] = [PushContent.payloadKey: String(decoding: json, as: UTF8.self)]
         let client = FakeClient()
         let handler = NotificationActionHandler(client: client)
-        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info) == .decided(approve: false))
-        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info) == .opened)
+        #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info, remote: true) == .decided(approve: false))
+        #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info, remote: true) == .opened)
         #expect(client.recorded == [.push(daemon: "ab", token: token, approve: false), .open(host: nil, daemon: "ab", pane: 7)])
     }
 
@@ -200,26 +200,40 @@ private final class FakeClient: NotificationActionClient {
         let approval = try #require(vectors.payloads.first { $0.name == "approval" })
         let opened = nse.process(placeholder(approval.sealed))
         let client = FakeClient()
-        let result = await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: opened.userInfo)
+        let result = await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: opened.userInfo, remote: true)
         #expect(result == .failed("This request expired. Open it to answer."))
         #expect(client.recorded.isEmpty)
 
         // The host refuses (already decided elsewhere).
         let refusing = FakeClient(fail: true)
         let info = LocalNotifications.content(for: note).userInfo
-        #expect(await NotificationActionHandler(client: refusing).handle(actionIdentifier: PushAction.approve, userInfo: info)
+        #expect(await NotificationActionHandler(client: refusing).handle(actionIdentifier: PushAction.approve, userInfo: info, remote: false)
             == .failed("rejected: already decided"))
         // A blocked item without options cannot be approved in place.
         var blocked = note
         blocked.kind = .approval(requestId: 5, approve: nil, deny: nil)
         let none = await NotificationActionHandler(client: client).handle(
-            actionIdentifier: PushAction.approve, userInfo: LocalNotifications.content(for: blocked).userInfo)
+            actionIdentifier: PushAction.approve, userInfo: LocalNotifications.content(for: blocked).userInfo, remote: false)
         #expect(none == .failed("This request has no approve option."))
+    }
+
+    @Test func aPushCannotPoseAsALocalApproval() async throws {
+        // Whoever can push to this device (the relay, or anyone holding a capability) sends a
+        // local notification's target, hoping an Approve tap decides that request.
+        let forged = LocalNotifications.content(for: note).userInfo
+        let client = FakeClient()
+        #expect(await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: forged, remote: true) == .ignored)
+        #expect(client.recorded.isEmpty)
+        // Even if the extension timed out and delivered the push as it came.
+        let content = placeholder("AAAA")
+        content.userInfo = content.userInfo.merging(forged) { a, _ in a }
+        let delivered = ServiceExtensionCore.placeholder(content)
+        #expect(NotificationTarget(userInfo: delivered.userInfo, remote: false) == nil)
     }
 
     @Test func unknownPayloadsAreIgnored() async {
         let client = FakeClient()
-        #expect(await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: ["x": 1]) == .ignored)
+        #expect(await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: ["x": 1], remote: true) == .ignored)
         #expect(client.recorded.isEmpty)
     }
 }

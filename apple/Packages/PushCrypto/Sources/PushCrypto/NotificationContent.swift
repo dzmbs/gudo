@@ -18,6 +18,9 @@ import UserNotifications
 /// placeholder alert. On success the title, subtitle (host), body, category, thread and
 /// interruption level come from the decrypted payload, and `userInfo["push"]` holds the
 /// decrypted JSON for the action handler. On any failure the placeholder stays.
+///
+/// Everything else in a push's `userInfo` came from the relay and is dropped, success or not:
+/// the action handler must only ever see a payload this device opened and verified.
 public enum PushContent {
     /// `userInfo` key of the sealed payload.
     public static let sealedKey = "s"
@@ -35,9 +38,21 @@ public enum PushContent {
             let note = try? opened.notification(),
             isPairedDaemon(note.daemon),
             let mutable = content.mutableCopy() as? UNMutableNotificationContent
-        else { return content }
+        else { return placeholder(content) }
         apply(note, json: opened.json, to: mutable)
         return mutable
+    }
+
+    /// The relay's placeholder with only its `aps` kept: what to show when the payload cannot
+    /// be opened (or the extension runs out of time).
+    public static func placeholder(_ content: UNNotificationContent) -> UNNotificationContent {
+        guard let mutable = content.mutableCopy() as? UNMutableNotificationContent else { return content }
+        mutable.userInfo = trusted(content.userInfo)
+        return mutable
+    }
+
+    static func trusted(_ userInfo: [AnyHashable: Any]) -> [AnyHashable: Any] {
+        userInfo["aps"].map { ["aps": $0] } ?? [:]
     }
 
     /// Fills `content` from a decrypted notification.
@@ -58,8 +73,7 @@ public enum PushContent {
         case .done, .failed, .command:
             content.interruptionLevel = .active
         }
-        var info = content.userInfo
-        info.removeValue(forKey: sealedKey)
+        var info = trusted(content.userInfo)
         info[payloadKey] = String(decoding: json, as: UTF8.self)
         content.userInfo = info
     }
