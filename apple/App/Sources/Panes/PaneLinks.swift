@@ -16,9 +16,12 @@ import AppKit
 ///   address on a port it listens on) opens in the in-app browser, through a forward when the
 ///   pane is on a remote host, so it shows what the host serves.
 /// - A path opens in the editor at its `:line:col` (a host's pane), or in the Mac's default app
-///   (this Mac's pane).
+///   (this Mac's pane; anything that would run is shown in the Finder instead).
 /// - Any other URL: the Mac's default browser; on iPad and iPhone, Safari or the in-app browser
 ///   as the user chose the first time (Settings ▸ Terminal ▸ Links).
+///
+/// Before any of that, `LinkSafety` decides: a web address the user could see opens; one
+/// hidden behind an OSC 8 label, or any other scheme, asks first; script and data URLs never.
 @MainActor
 enum PaneLinks {
     static func attach(to pane: Pane, workspace: Workspace) {
@@ -46,17 +49,54 @@ enum PaneLinks {
                 kind: .path, text: link.text, line: 0, target: path, targetLine: link.line, targetColumn: link.column))
         case .url:
             guard let url = URL(string: link.target) else { return }
-            if workspace.isRemote, let hostId = workspace.hostId, let signIn = SignInLink(url) {
-                // A sign-in for a program on the host (`codex login`'s URL, Claude's printed one).
-                window.signIn(url, signIn, hostId: hostId, pane: pane.id.rawValue)
-            } else if window.isDevServerURL(url) {
-                Task { await window.openURL(link.target) }
-            } else if url.scheme == "http" || url.scheme == "https" {
-                openWebLink(url, window: window, from: pane)
-            } else {
-                // mailto:, ssh:, …: whatever the system opens them with.
-                openExternally(url)
+            #if os(macOS)
+            // The hover preview shows an OSC 8 link's target before the ⌘-click.
+            let shown = link.isHyperlink ? link.target : link.label
+            #else
+            let shown = link.label
+            #endif
+            switch LinkSafety.action(for: url, shown: shown) {
+            case .refuse: return
+            case .open: follow(url, from: pane, in: workspace, window: window)
+            case .confirm: confirmOpen(url, from: pane) { follow(url, from: pane, in: workspace, window: window) }
             }
+        }
+    }
+
+    /// Output from any program, file or host can print a link, so one whose address the user
+    /// could not see first, or that would start another app, asks before it opens.
+    static func confirmOpen(_ url: URL, from pane: Pane?, then open: @escaping () -> Void) {
+        let title = "Open This Link?"
+        let message = LinkSafety.display(url) + "\n\nA program in the terminal printed this link."
+        #if os(macOS)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { open() }
+        #else
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Open", style: .default) { _ in open() })
+        var presenter = pane?.view.window?.rootViewController
+            ?? UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
+        while let next = presenter?.presentedViewController { presenter = next }
+        presenter?.present(alert, animated: true)
+        #endif
+    }
+
+    private static func follow(_ url: URL, from pane: Pane, in workspace: Workspace, window: WindowModel) {
+        if workspace.isRemote, let hostId = workspace.hostId, let signIn = SignInLink(url) {
+            // A sign-in for a program on the host (`codex login`'s URL, Claude's printed one).
+            window.signIn(url, signIn, hostId: hostId, pane: pane.id.rawValue)
+        } else if window.isDevServerURL(url) {
+            Task { await window.openURL(url.absoluteString) }
+        } else if url.scheme == "http" || url.scheme == "https" {
+            openWebLink(url, window: window, from: pane)
+        } else {
+            // mailto:, ssh:, …: whatever the system opens them with (after confirmOpen).
+            openExternally(url)
         }
     }
 
