@@ -13,6 +13,8 @@ png.workspace = true
 
 [dev-dependencies]
 data-encoding.workspace = true
+flate2.workspace = true
+libc.workspace = true
 zstd.workspace = true
 
 [lints]

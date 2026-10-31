@@ -1681,7 +1681,9 @@ name = "ghostty-vt"
 version = "0.0.0"
 dependencies = [
  "data-encoding",
+ "flate2",
  "ghostty-vt-sys",
+ "libc",
  "png",
  "zstd",
 ]

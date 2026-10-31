@@ -136,14 +136,42 @@ import UniformTypeIdentifiers
         #expect(fits.withUnsafeBytes { KittyGraphics.decodePNG($0) }?.0 == 4_000)
     }
 
+    /// `f=100` means PNG: ImageIO would decode whatever format the bytes really are, so JPEG,
+    /// GIF and TIFF sent as PNG are refused, as the daemon's PNG-only decoder refuses them.
+    @Test func otherImageFormatsPosingAsPNGAreRefused() throws {
+        for type in [UTType.jpeg, .gif, .tiff, .bmp] {
+            let image = try encoded(width: 2, height: 2, pixel: [255, 0, 0, 255], as: type)
+            #expect(image.withUnsafeBytes { KittyGraphics.decodePNG($0) } == nil, "\(type)")
+            let t = terminal()
+            t.write(apc("a=T,f=100,i=8,q=2", image))
+            #expect(t.kittyImage(id: 8) == nil, "\(type)")
+        }
+    }
+
+    /// A header that claims more than the storage holds is refused from the header alone, even
+    /// when the pixel data behind it is missing or the chunk CRCs are wrong.
+    @Test func headersClaimingHugeImagesAreRefused() throws {
+        var forged = try png(width: 1, height: 1, pixel: [0, 0, 0, 255])
+        // IHDR width and height sit at bytes 16..<24; the CRC is left stale.
+        forged.replaceSubrange(16..<24, with: [0, 0, 0x27, 0x10, 0, 0, 0x27, 0x10])
+        #expect(forged.withUnsafeBytes { KittyGraphics.decodePNG($0) } == nil)
+        let t = terminal()
+        t.write(apc("a=T,f=100,i=9,q=2", forged))
+        #expect(t.kittyImage(id: 9) == nil)
+    }
+
     private func png(width: Int, height: Int, pixel: [UInt8]) throws -> [UInt8] {
+        try encoded(width: width, height: height, pixel: pixel, as: .png)
+    }
+
+    private func encoded(width: Int, height: Int, pixel: [UInt8], as type: UTType) throws -> [UInt8] {
         let pixels = Data(rgba(width, height, pixel))
         let image = try #require(CGImage(
             width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
             provider: CGDataProvider(data: pixels as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
         let out = NSMutableData()
-        let destination = try #require(CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil))
+        let destination = try #require(CGImageDestinationCreateWithData(out, type.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(destination, image, nil)
         #expect(CGImageDestinationFinalize(destination))
         return [UInt8](out as Data)
