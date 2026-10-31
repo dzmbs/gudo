@@ -12,6 +12,8 @@ import { b64url, utf8 } from "./encoding";
 import type { Category, RelayRequest } from "./request";
 
 const JWT_LIFETIME_MS = 40 * 60 * 1000;
+/** How long APNs may hold an approval: the lifetime of its action token (crates/daemon config). */
+export const APPROVAL_TTL_S = 15 * 60;
 let cached: { jwt: string; at: number; keyId: string } | null = null;
 
 /** Drops the cached JWT (after APNs rejects it). */
@@ -92,8 +94,9 @@ export function buildApnsRequest(env: Env, cap: Cap, req: RelayRequest, nowMs = 
     headers["apns-push-type"] = "alert";
     headers["apns-topic"] = env.APNS_TOPIC;
     headers["apns-priority"] = urgent ? "10" : "5";
-    // An alert held back longer is stale (an approval's action token lasts 15 minutes).
-    headers["apns-expiration"] = String(now + 3600);
+    // APNs stops holding an alert once it is stale: an approval when its action token expires
+    // (the daemon's default `push.action_ttl`), anything else after an hour.
+    headers["apns-expiration"] = String(now + (category === "approval" ? APPROVAL_TTL_S : 3600));
     payload = {
       aps: {
         alert: PLACEHOLDER[category],
