@@ -31,7 +31,18 @@ case "${1:-start}" in
     exit 1
     ;;
   stop)
-    [[ -f "$state/pid" ]] && kill "$(cat "$state/pid")" 2>/dev/null || true
+    # The daemon, then any of its shells still running once it is gone.
+    if [[ -f "$state/pid" ]]; then
+      pid="$(cat "$state/pid")"
+      shells="$(pgrep -P "$pid" 2>/dev/null || true)"
+      kill "$pid" 2>/dev/null || true
+      for _ in $(seq 1 50); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -9 "$pid" 2>/dev/null || true
+      if [[ -n $shells ]]; then kill -HUP $shells 2>/dev/null || true; fi
+    fi
     rm -f "$state/pid"
     ;;
 esac

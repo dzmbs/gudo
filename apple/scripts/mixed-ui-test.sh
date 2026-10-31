@@ -19,14 +19,15 @@ ticket_b="$(daemon "${PORT_B:-47422}" start "$b")"
 # Tickets are one-time: a second pair for the other test that pairs.
 ticket_a2="$(daemon "${PORT_A:-47421}" start "$a")"
 ticket_b2="$(daemon "${PORT_B:-47422}" start "$b")"
-trap 'daemon "${PORT_A:-47421}" stop "$a"; daemon "${PORT_B:-47422}" stop "$b"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon "${PORT_A:-47421}" stop "$a"; daemon "${PORT_B:-47422}" stop "$b"'
 
 log="$root/xcodebuild.log"
 markers="$root/markers"
 mkdir -p "$markers"
 TEST_RUNNER_PAIR_TICKET_A="$ticket_a" TEST_RUNNER_PAIR_TICKET_B="$ticket_b" \
   TEST_RUNNER_PAIR_TICKET_A2="$ticket_a2" TEST_RUNNER_PAIR_TICKET_B2="$ticket_b2" TEST_RUNNER_MARKER_DIR="$markers" \
-  xcodebuild -project "$apple/App.xcodeproj" \
+  xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" \
   -scheme App -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$apple/build/DerivedData" \
   -only-testing:"AppUITests/MixedTabsUITests${ONLY:+/$ONLY}" test >"$log" 2>&1 &
 test_pid=$!

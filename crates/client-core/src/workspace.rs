@@ -333,14 +333,15 @@ impl Client {
     /// Agent plan usage on the host now, and its changes as [`WorkspaceEvent::AgentUsage`]
     /// until [`Client::usage_unwatch`]. Only for daemons offering
     /// [`DaemonFeatures::AGENT_USAGE`](proto::DaemonFeatures::AGENT_USAGE); older ones drop a
-    /// connection that sends it. `api_fallback` lets the daemon ask the providers' usage
-    /// endpoints with the host's own sign-in when the tools' local data says nothing.
+    /// connection that sends it.
     ///
     /// # Errors
     ///
     /// The daemon's [`WsError`] (owners only).
-    pub async fn usage_watch(&self, api_fallback: bool) -> Result<AgentUsageReport, WsError> {
-        let req = WorkspaceRequest::UsageWatch(proto::UsageWatch { api_fallback });
+    pub async fn usage_watch(&self) -> Result<AgentUsageReport, WsError> {
+        let req = WorkspaceRequest::UsageWatch(proto::UsageWatch {
+            api_fallback: false,
+        });
         expect!(self.workspace(req).await?, WorkspaceResponse::AgentUsage(r) => r)
     }
 

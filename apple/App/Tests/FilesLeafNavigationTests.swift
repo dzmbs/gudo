@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import PaneLayout
 import SwiftUI
 import XCTest
 @testable import App
@@ -16,6 +17,8 @@ final class FilesLeafNavigationTests: XCTestCase {
     private var model: WindowModel!
     private var window: NSWindow!
     private var navigator: FilesNavigator!
+    /// The tab this test opened: closed again, so the shared local workspace is left as found.
+    private var openedTab: (workspace: Workspace, tab: TabId)?
     private let root = MockFileSource().root
 
     override func setUp() async throws {
@@ -30,8 +33,10 @@ final class FilesLeafNavigationTests: XCTestCase {
         window.orderFrontRegardless()
         for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
         let workspace = try XCTUnwrap(model.workspace)
-        for tab in workspace.session.tabs { workspace.apply(.closeTab(tab.id)) }
+        // A tab of its own: the local workspace is shared by every test in the process.
+        let before = Set(workspace.session.tabs.map(\.id))
         workspace.apply(.newTab)
+        openedTab = workspace.session.tabs.first { !before.contains($0.id) }.map { (workspace, $0.id) }
         for _ in 0..<20 where workspace.focusedPane == nil { await pump(0.1) }
         let member = model.openToolLeaf(.files)
         await pump(1.5)
@@ -41,6 +46,7 @@ final class FilesLeafNavigationTests: XCTestCase {
     override func tearDown() async throws {
         guard let model else { return }
         for tab in model.composites.tabs { model.closeMixedTab(tab.id) }
+        if let openedTab { openedTab.workspace.apply(.closeTab(openedTab.tab)) }
         await pump(0.5)
         window?.close()
         model.close()

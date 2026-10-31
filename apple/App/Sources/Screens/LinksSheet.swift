@@ -284,14 +284,14 @@ extension WindowModel {
 
     /// Types text into the focused pane (as a paste: no newline, nothing runs).
     func insertInTerminal(_ text: String) {
-        guard let workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else { return }
+        guard let workspace, let id = workspace.focusedPane, let pane = workspace.pane(id) else { return }
         let quoted = text.contains(" ") ? "'\(text)'" : text
         pane.backend.paste(quoted)
     }
 
     /// `cd` into a directory in the focused pane.
     func revealInTerminal(_ directory: String) {
-        guard let workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else { return }
+        guard let workspace, let id = workspace.focusedPane, let pane = workspace.pane(id) else { return }
         let escaped = directory.replacingOccurrences(of: "'", with: "'\\''")
         Data("cd '\(escaped)'\r".utf8).withUnsafeBytes { pane.backend.write($0) }
         sheet = nil

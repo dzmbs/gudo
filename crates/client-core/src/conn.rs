@@ -28,6 +28,13 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// must not be redialled in a tight loop).
 const STABLE_FOR: Duration = Duration::from_secs(5);
 const ACK_INTERVAL: Duration = Duration::from_millis(5);
+/// How long [`Client::probe`](crate::Client::probe) waits for its pong on a link that has
+/// gone quiet: a live peer's QUIC stack acknowledges the ping at once, even when the daemon is
+/// busy.
+pub const PROBE_DEADLINE: Duration = Duration::from_secs(3);
+/// How long it waits on a link that still carries packets but answers slowly (a congested
+/// mobile network) before calling it dead.
+pub const PROBE_SLOW_DEADLINE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConnError {
@@ -160,6 +167,13 @@ pub(crate) fn endpoint_builder(
             Endpoint::builder(presets::Minimal).relay_mode(iroh::RelayMode::Custom(map))
         }
     };
+    let idle = iroh::endpoint::IdleTimeout::try_from(proto::IDLE_TIMEOUT).map_err(net)?;
+    builder = builder.transport_config(
+        iroh::endpoint::QuicTransportConfig::builder()
+            .keep_alive_interval(proto::KEEP_ALIVE)
+            .max_idle_timeout(Some(idle))
+            .build(),
+    );
     if !options.relay_ca_der.is_empty() {
         let roots = options
             .relay_ca_der
@@ -618,6 +632,35 @@ async fn write_ctl(
     "ctl writer closed".into()
 }
 
+/// Pings the daemon on `conn` and closes `conn` if the answer does not come back in time
+/// (see [`Client::probe`](crate::Client::probe)).
+pub(crate) async fn probe(inner: Arc<Inner>, conn: Connection) {
+    let nonce = inner.next_ping.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut pongs = inner.pong.subscribe();
+    let received = |conn: &Connection| conn.stats().udp_rx.datagrams;
+    let before = received(&conn);
+    inner.send(ClientCtl::Ping { nonce });
+    let mut answered =
+        std::pin::pin!(async move { pongs.wait_for(|&last| last >= nonce).await.is_ok() });
+    let alive = match tokio::time::timeout(PROBE_DEADLINE, &mut answered).await {
+        Ok(alive) => alive,
+        // Packets arrived meanwhile: the link is slow, not gone.
+        Err(_) if received(&conn) > before => {
+            tokio::time::timeout(PROBE_SLOW_DEADLINE - PROBE_DEADLINE, answered)
+                .await
+                .unwrap_or(false)
+        }
+        Err(_) => false,
+    };
+    let current = lock(&inner.connection)
+        .as_ref()
+        .is_some_and(|c| c.stable_id() == conn.stable_id());
+    if !alive && current && conn.close_reason().is_none() {
+        tracing::info!("no answer to a ping: dropping the connection");
+        conn.close(0u32.into(), b"no answer");
+    }
+}
+
 async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
     loop {
         let msg = match recv::<ServerCtl>(&mut rx).await {
@@ -650,6 +693,14 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             continue;
         };
         let event = match msg {
+            ServerCtl::Pong { nonce } => {
+                inner.pong.send_if_modified(|last| {
+                    let newer = nonce > *last;
+                    *last = (*last).max(nonce);
+                    newer
+                });
+                continue;
+            }
             ServerCtl::Sessions { sessions } => ClientEvent::Sessions { sessions },
             ServerCtl::Attached { session_id } => {
                 lock(&inner.wanted).session = Some(session_id);

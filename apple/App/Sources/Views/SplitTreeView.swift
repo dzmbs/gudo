@@ -373,7 +373,7 @@ struct PaneSlot: View {
                 MultiplayerPaneOverlay(workspace: workspace, pane: id, isFocused: focused)
                 AskpassPaneOverlay(workspace: workspace, pane: id)
                 if model.isSearchShown && focused {
-                    PaneSearchBar(model: model, pane: workspace.panes[id])
+                    PaneSearchBar(model: model, pane: workspace.pane(id))
                 }
             }
             .hostLinkOverlay(groupId: workspace.groupId, enabled: namesHost)
@@ -393,7 +393,7 @@ struct PaneSlot: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let pane = workspace.panes[id] {
+        if let pane = workspace.pane(id) {
             // One host per pane: without the id, switching between two single-pane tabs reuses
             // the representable (same structural identity), so its container keeps showing,
             // and its first responder keeps typing into, the previous tab's pane.

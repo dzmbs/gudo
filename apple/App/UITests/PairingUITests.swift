@@ -24,6 +24,8 @@ final class PairingUITests: XCTestCase {
             "-hostsDirectory", hosts ?? NSTemporaryDirectory() + "pairing-\(UUID().uuidString)",
             "-restoreLastTarget", "NO", "-resetWindows", "YES", "-sidebarShown", "YES",
             "-keyBar.lineEditor", "<false/>",
+            // Pairing asks for notification permission; a system alert would cover the test.
+            "-notificationPrompt", "NO",
         ] + extra
         app.launch()
         return app

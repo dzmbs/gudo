@@ -67,6 +67,9 @@ args=(-ApplePersistenceIgnoreState YES -dogfood $scenario -dogfoodOut $out)
 args+=($app_args)
 print "running ${scenario:t} → $out"
 set +e
+# Interrupted or not, the app and the log follower stop with the script.
+trap 'kill ${pid:-} ${tailer:-} 2>/dev/null; pkill -P $$ tail 2>/dev/null; true' EXIT
+trap 'exit 130' INT TERM
 # The app's stderr (progress lines start with "dogfood:") goes to app.log; follow it meanwhile.
 $binary $args 2> $out/app.log &
 pid=$!

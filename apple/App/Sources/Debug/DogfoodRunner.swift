@@ -576,7 +576,7 @@ final class DogfoodRunner {
             return (actual == text, "pasteboard \"\(actual)\", expected \"\(text)\"")
         }
         if let first = step["firstResponderIsFocusedPane"] as? Bool {
-            let pane = workspace.focusedPane.flatMap { workspace.panes[$0] }
+            let pane = workspace.focusedPane.flatMap { workspace.pane($0) }
             let actual = pane.map { $0.view.window?.firstResponder === $0.view } ?? false
             return (actual == first, "first responder is focused pane: \(actual)")
         }
@@ -618,7 +618,7 @@ final class DogfoodRunner {
 
     // MARK: Helpers
 
-    private var focusedPaneOrNil: Pane? { workspace.focusedPane.flatMap { workspace.panes[$0] } }
+    private var focusedPaneOrNil: Pane? { workspace.focusedPane.flatMap { workspace.pane($0) } }
 
     private func resolvePane(_ step: [String: Any]) throws -> Pane {
         if let index = step["pane"] as? Int {

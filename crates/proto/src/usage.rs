@@ -7,9 +7,8 @@
 //! [`WorkspaceRequest::UsageUnwatch`](crate::WorkspaceRequest::UsageUnwatch) stops the pushes.
 //!
 //! The daemon reads what the tools themselves wrote on the host (Codex's session rollouts,
-//! Claude Code's status-line input) and only asks the providers' usage endpoints with the
-//! host's own sign-in when a watching client opted in ([`UsageWatch::api_fallback`]).
-//! Credentials never leave the host; only the numbers below do.
+//! Claude Code's status-line input) and runs their documented usage commands. It never reads
+//! the tools' sign-ins or calls the providers' undocumented usage endpoints.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,8 +18,8 @@ use crate::layout::AgentKind;
 /// How a client watches agent usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageWatch {
-    /// Also ask the providers' usage endpoints with the host's own Claude / Codex sign-in when
-    /// the tools' local data says nothing. Those endpoints are undocumented; the user opts in.
+    /// Unused: kept for wire compatibility. Clients send `false`; daemons ignore it (they used
+    /// to ask the providers' undocumented usage endpoints with the host's sign-in when set).
     pub api_fallback: bool,
 }
 
@@ -77,6 +76,6 @@ pub enum UsageSource {
     /// The tool's own documented command: `claude -p /usage` (stream-json `usage_report`),
     /// `codex app-server` (`account/rateLimits/read`).
     Cli,
-    /// The provider's usage endpoint, asked with the host's sign-in (opt-in fallback).
+    /// Unused: kept for wire compatibility (older daemons' undocumented-endpoint fallback).
     Api,
 }

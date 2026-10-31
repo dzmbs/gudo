@@ -1,5 +1,6 @@
 //! client-core against a real daemon (relays off, loopback), and against an SSH host.
 
+mod liveness;
 mod redial;
 mod ssh_host;
 mod streams;

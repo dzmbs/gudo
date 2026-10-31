@@ -15,7 +15,8 @@ state="$(mktemp -d "${TMPDIR:-/tmp}/un-git-mac.XXXXXX")"
 export PORT="${PORT:-47615}"
 daemon() { PORT="$PORT" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
-trap 'daemon stop; rm -rf "$state"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon stop; rm -rf "$state"'
 
 rm -f "$out"
 "$app/Contents/MacOS/$(basename "$app" .app)" -window-theme "$appearance" -ApplePersistenceIgnoreState YES \

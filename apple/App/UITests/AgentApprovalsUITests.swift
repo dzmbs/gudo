@@ -19,7 +19,8 @@ final class AgentApprovalsUITests: XCTestCase {
         let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
         try XCTSkipIf(ticket.isEmpty, "no daemon ticket (run apple/scripts/w3-ui-test.sh)")
         app = XCUIApplication()
-        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-noAutoFocus", "YES"]
+        // This test answers from a notification: pairing asks for permission as for a user.
+        app.launchArguments += ["-testTicket", ticket, "-testRelay", "disabled", "-noAutoFocus", "YES", "-notificationPrompt", "YES"]
         app.launch()
         let pane = panes.firstMatch
         if !pane.waitForExistence(timeout: 30) {
@@ -27,6 +28,8 @@ final class AgentApprovalsUITests: XCTestCase {
             app.launch()
         }
         XCTAssertTrue(pane.waitForExistence(timeout: 30), "a daemon pane appears")
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
+        if allow.waitForExistence(timeout: 5) { allow.tap() }
     }
 
     private var panes: XCUIElementQuery {
@@ -126,7 +129,7 @@ final class AgentApprovalsUITests: XCTestCase {
         startAgent("slowly ask permission")
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        // A fresh install asks for permission with the first notification.
+        // A fresh install asked for permission right after pairing; allow it if it still shows.
         let allow = springboard.buttons["Allow"]
         let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Approval needed'")).firstMatch
         let deadline = Date().addingTimeInterval(30)

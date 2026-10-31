@@ -23,7 +23,7 @@ struct ToolSheet: View {
             .onDisappear {
                 guard !model.editorHasKeys, model.sheet == nil, let workspace = model.workspace,
                       let id = workspace.focusedPane else { return }
-                _ = workspace.panes[id]?.view.becomeFirstResponder()
+                _ = workspace.pane(id)?.view.becomeFirstResponder()
             }
             #endif
     }

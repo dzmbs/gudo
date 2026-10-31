@@ -819,7 +819,7 @@ final class WindowModel {
             let start = ContinuousClock.now
             while !Task.isCancelled, ContinuousClock.now - start < .seconds(40) {
                 let settled = ContinuousClock.now - start > .seconds(3)
-                if let paneDrawing = PaneDrawing.of(pane), self?.workspace?.panes[pane] != nil,
+                if let paneDrawing = PaneDrawing.of(pane), self?.workspace?.pane(pane) != nil,
                    paneDrawing.continueDrawing(drawing, settled: settled)
                 {
                     self?.continuedDrawing = "\(drawing.canvas ? "canvas" : "draw"):\(drawing.artifact)"
@@ -1057,6 +1057,15 @@ enum LaunchOptions {
     static let screen: String? = LaunchArguments().string(forKey: "screen")
     /// Every host header and the Inbox show a fixed usage report (`FakeUsageFeed`): UI tests.
     static let fakeUsage = LaunchArguments().bool(forKey: "fakeUsage")
+    /// Whether pairing a host asks for notification permission. `-notificationPrompt NO` turns
+    /// it off; runs with the UI tests' pairing hooks (`-testTicket`, `-testTickets`, `-testSSH`)
+    /// leave it off unless `-notificationPrompt YES`, so a system alert never covers a test.
+    static var asksNotificationPermission: Bool {
+        let arguments = LaunchArguments()
+        if arguments.string(forKey: "notificationPrompt") != nil { return arguments.bool(forKey: "notificationPrompt") }
+        let testHooks = ["testTicket", "testTickets", "testSSH"].contains { arguments.string(forKey: $0) != nil }
+        return !testHooks && !mock && !isTesting
+    }
     /// Whether this device offers a local shell: always on the Mac; on iPhone and iPad only the
     /// echo stand-in, so only for UI tests (`-localEcho YES`), `-mock` and design fixtures. A real
     /// iOS install starts on the welcome and Hosts screens, never in a fake shell.

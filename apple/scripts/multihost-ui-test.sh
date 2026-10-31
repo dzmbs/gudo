@@ -17,13 +17,14 @@ daemon() { local port=$1; shift; PORT=$port SHELL_ARGS= "$apple/scripts/local-da
 
 ticket_a="$(daemon "${PORT_A:-47021}" start "$a")"
 ticket_b="$(daemon "${PORT_B:-47022}" start "$b")"
-trap 'daemon "${PORT_A:-47021}" stop "$a"; daemon "${PORT_B:-47022}" stop "$b"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon "${PORT_A:-47021}" stop "$a"; daemon "${PORT_B:-47022}" stop "$b"'
 
 log="$root/xcodebuild.log"
 markers="$root/markers"
 mkdir -p "$markers"
 TEST_RUNNER_PAIR_TICKET_A="$ticket_a" TEST_RUNNER_PAIR_TICKET_B="$ticket_b" TEST_RUNNER_MARKER_DIR="$markers" \
-  xcodebuild -project "$apple/App.xcodeproj" \
+  xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" \
   -scheme App -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$apple/build/DerivedData" \
   -only-testing:AppUITests/MultiHostUITests test >"$log" 2>&1 &
 test_pid=$!

@@ -101,6 +101,29 @@ import UnnamedCore
         #expect(!sink.output.contains("late"))
     }
 
+    /// A link that still says it is up gets checked: when typing gets no ack within a second,
+    /// and when the app comes back to the foreground. An acknowledged keystroke checks nothing.
+    @Test func aLinkThatLooksUpIsProbed() async throws {
+        let (connection, client) = try makeConnection()
+        let backend = try connection.makeBackend(for: PaneId(3))
+        backend.start(events: EventSink().handler)
+        client().send(.connected(epoch: 1, resumed: false))
+        client().send(.layout(layout: sampleLayout(revision: 9)))
+        try await eventually("live") { connection.status.isLive }
+
+        Array("a".utf8).withUnsafeBytes { backend.write($0) }
+        client().send(.inputAck(paneId: 3, inputSeq: 1, atSeq: 1))
+        try await Task.sleep(for: .milliseconds(1300))
+        #expect(!client().calls.contains(.probe), "an acknowledged keystroke")
+
+        Array("b".utf8).withUnsafeBytes { backend.write($0) }
+        try await eventually("a keystroke without an ack probes", timeout: .seconds(3)) { client().calls.contains(.probe) }
+
+        client().clear()
+        connection.foreground()
+        #expect(client().calls == [.probe], "back in front: probed, not redialled")
+    }
+
     /// Never blank, never silently dead: a drop dims the pane and the status says why; the
     /// reconnect brings it back; background suspends and foreground resumes (R5, R10).
     @Test func dropReconnectSuspendResume() async throws {

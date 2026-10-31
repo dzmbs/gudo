@@ -19,7 +19,8 @@ export PORT="${PORT:-47614}"
 
 daemon() { PORT="$PORT" "$apple/scripts/w3-daemon.sh" "$1" "$state"; }
 ticket="$(daemon start)"
-trap 'daemon stop; rm -rf "$state"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'daemon stop; rm -rf "$state"'
 
 only=()
 if [[ $# -gt 0 ]]; then
@@ -32,7 +33,7 @@ log="$state/xcodebuild.log"
 results="${GIT_RESULTS:-$state/Git.xcresult}"
 rm -rf "$results"
 status=0
-TEST_RUNNER_PAIR_TICKET="$ticket" TEST_RUNNER_GIT_FIXTURES="$state" xcodebuild \
+TEST_RUNNER_PAIR_TICKET="$ticket" TEST_RUNNER_GIT_FIXTURES="$state" xcodebuild -collect-test-diagnostics never \
   -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$apple/build/DerivedData" \
   -resultBundlePath "$results" "${only[@]}" test >"$log" 2>&1 || status=$?

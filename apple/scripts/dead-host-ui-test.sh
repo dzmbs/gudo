@@ -19,10 +19,11 @@ port="${PORT:-$((47700 + RANDOM % 100 * 2))}"
 log="${TMPDIR:-/tmp}/dead-host-ui-test.log"
 : >"$log"
 
-trap 'PORT=$port "$apple/scripts/local-daemon.sh" stop "$first"; PORT=$((port + 1)) "$apple/scripts/local-daemon.sh" stop "$second"; rm -rf "$first" "$second"' EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit 'PORT=$port "$apple/scripts/local-daemon.sh" stop "$first"; PORT=$((port + 1)) "$apple/scripts/local-daemon.sh" stop "$second"; rm -rf "$first" "$second"'
 
 run() {  # run <test> <env assignment>
-  env "$2" xcodebuild -project "$apple/App.xcodeproj" -scheme App \
+  env "$2" xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" -scheme App \
     -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "${DERIVED_DATA:-$apple/build/DerivedData}" \
     -only-testing:"AppUITests/DeadHostPairingUITests/$1" test >>"$log" 2>&1
 }

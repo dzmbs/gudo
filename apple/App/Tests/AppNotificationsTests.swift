@@ -1,4 +1,6 @@
+import NotifyKit
 import UnnamedCore
+import UserNotifications
 import XCTest
 @testable import App
 
@@ -31,5 +33,40 @@ final class AppNotificationsTests: XCTestCase {
         let start = ContinuousClock.now
         await AppNotifications.settle(limit: .milliseconds(200)) { false }
         XCTAssertGreaterThanOrEqual(ContinuousClock.now - start, .milliseconds(200), "gives up after the limit")
+    }
+
+    // MARK: Permission
+
+    private final class FakeAuthorizer: NotificationAuthorizing, @unchecked Sendable {
+        var current: UNAuthorizationStatus = .notDetermined
+        var requests = 0
+        func status() async -> UNAuthorizationStatus { current }
+        func request() async -> Bool {
+            requests += 1
+            current = .authorized
+            return true
+        }
+    }
+
+    /// Permission is asked right after pairing, once; a note firing while the app is away
+    /// never asks (it would come out of nowhere), it just is not posted.
+    func testPermissionIsAskedAfterPairingNeverWhenANoteFires() async {
+        let notifications = AppNotifications.shared
+        let saved = (notifications.authorizer, notifications.appIsActive)
+        defer { (notifications.authorizer, notifications.appIsActive) = saved }
+        let authorizer = FakeAuthorizer()
+        notifications.authorizer = authorizer
+        notifications.appIsActive = false
+
+        let note = AttentionNote(hostId: "h", hostName: "studio", itemId: 1, paneId: 2, kind: .done, title: "", body: "", agent: "Claude Code")
+        await notifications.post(note)
+        XCTAssertEqual(authorizer.requests, 0, "a note while away does not ask")
+
+        await notifications.askAfterPairing(allowed: false)
+        XCTAssertEqual(authorizer.requests, 0, "-notificationPrompt NO")
+        await notifications.askAfterPairing(allowed: true)
+        XCTAssertEqual(authorizer.requests, 1, "asked after the first pairing")
+        await notifications.askAfterPairing(allowed: true)
+        XCTAssertEqual(authorizer.requests, 1, "asked once")
     }
 }

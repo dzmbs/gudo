@@ -363,13 +363,25 @@ fn endpoint_builder(core: &Core) -> Result<iroh::endpoint::Builder, StartError> 
     };
     let builder = builder
         .secret_key(core.identity.secret.clone())
-        .alpns(vec![proto::ALPN.to_vec()]);
+        .alpns(vec![proto::ALPN.to_vec()])
+        .transport_config(transport_config());
     // A fixed `--bind` replaces the default sockets; `bind_addr` per family does the same.
     Ok(if core.cfg.bind.is_some() {
         builder.clear_ip_transports()
     } else {
         builder
     })
+}
+
+/// Keep-alive and idle timeout shared with the clients ([`proto::IDLE_TIMEOUT`]): a client that
+/// vanished stops holding its attachment within seconds.
+fn transport_config() -> iroh::endpoint::QuicTransportConfig {
+    let idle = iroh::endpoint::IdleTimeout::try_from(proto::IDLE_TIMEOUT)
+        .expect("the idle timeout fits QUIC's varint");
+    iroh::endpoint::QuicTransportConfig::builder()
+        .keep_alive_interval(proto::KEEP_ALIVE)
+        .max_idle_timeout(Some(idle))
+        .build()
 }
 
 /// The certificates in a PEM file.

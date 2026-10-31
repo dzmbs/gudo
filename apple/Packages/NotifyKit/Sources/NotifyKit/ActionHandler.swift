@@ -12,6 +12,8 @@ public protocol NotificationActionClient: Sendable {
     func sendPushAction(daemonId: String, token: Data, approve: Bool) async throws
     /// Brings the pane forward (the app is foregrounded by the `.foreground` action).
     func open(hostId: String?, daemonId: String?, paneId: UInt64) async
+    /// Marks an answered item seen on every device, so the badge and the Inbox drop it.
+    func markSeen(hostId: String?, daemonId: String?, itemId: UInt64) async
 }
 
 /// The outcome of one tap, for logs, tests and a follow-up notification on failure.
@@ -44,11 +46,12 @@ public struct NotificationActionHandler: Sendable {
             let approve = actionIdentifier == PushAction.approve
             do {
                 switch target {
-                case .local(let host, let pane, _, let request, let approveOption, let denyOption):
+                case .local(let host, let pane, let item, let request, let approveOption, let denyOption):
                     guard let request, let option = approve ? approveOption : denyOption else {
                         return .failed("This request has no \(approve ? "approve" : "deny") option.")
                     }
                     try await client.decide(hostId: host, paneId: pane, requestId: request, optionId: option)
+                    await client.markSeen(hostId: host, daemonId: nil, itemId: item)
                 case .push(let note):
                     guard let offer = note.action, let token = offer.tokenData else {
                         return .failed("This notification cannot be answered from here.")
@@ -57,6 +60,7 @@ public struct NotificationActionHandler: Sendable {
                         return .failed("This request expired. Open it to answer.")
                     }
                     try await client.sendPushAction(daemonId: note.daemon, token: token, approve: approve)
+                    await client.markSeen(hostId: nil, daemonId: note.daemon, itemId: note.item)
                 }
                 return .decided(approve: approve)
             } catch {

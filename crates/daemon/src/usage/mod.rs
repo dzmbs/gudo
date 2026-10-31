@@ -8,13 +8,11 @@
 //!    ([`claude`]). Used while younger than [`LOCAL_FRESH`].
 //! 2. **The tools' documented commands** ([`cli`]): `claude -p /usage`, `codex app-server`.
 //!    At most once per [`UsageConfig::cli_refresh`] per agent.
-//! 3. **The providers' usage endpoints** with the host's own sign-in ([`api`]). Undocumented;
-//!    only when a watching client opted in, at most once per [`UsageConfig::api_refresh`].
 //!
-//! When every source fails the last local data stays (with its age), else the agent is listed
-//! with the reason and no windows. Credentials never leave the host.
+//! The daemon never reads the tools' sign-in tokens and never calls the providers' undocumented
+//! usage endpoints. When every source fails the last local data stays (with its age), else the
+//! agent is listed with the reason and no windows.
 
-pub(crate) mod api;
 pub(crate) mod claude;
 pub(crate) mod cli;
 pub(crate) mod codex;
@@ -41,14 +39,8 @@ pub struct UsageConfig {
     pub refresh: Duration,
     /// Shortest time between two runs of one tool's usage command.
     pub cli_refresh: Duration,
-    /// Shortest time between two calls to one usage endpoint.
-    pub api_refresh: Duration,
     /// Run the tools' usage commands at all.
     pub cli: bool,
-    /// Claude's usage endpoint.
-    pub claude_url: String,
-    /// Codex's usage endpoint.
-    pub codex_url: String,
 }
 
 impl Default for UsageConfig {
@@ -56,10 +48,7 @@ impl Default for UsageConfig {
         Self {
             refresh: Duration::from_secs(60),
             cli_refresh: Duration::from_secs(5 * 60),
-            api_refresh: Duration::from_secs(5 * 60),
             cli: true,
-            claude_url: api::CLAUDE_URL.to_owned(),
-            codex_url: api::CODEX_URL.to_owned(),
         }
     }
 }
@@ -122,13 +111,6 @@ impl Paths {
 struct Watcher {
     ctl: mpsc::UnboundedSender<ServerCtl>,
     push: bool,
-    api: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Tier {
-    Cli,
-    Api,
 }
 
 #[derive(Default)]
@@ -140,13 +122,13 @@ struct State {
     pushed: Option<AgentUsageReport>,
     pushed_at: Option<Instant>,
     ticking: bool,
-    /// Commands or endpoints are being asked in the background.
+    /// Commands are being run in the background.
     asking: bool,
     /// Where refreshes send what is due to be asked.
-    asker: Option<mpsc::UnboundedSender<Vec<(Tier, AgentKind)>>>,
+    asker: Option<mpsc::UnboundedSender<Vec<AgentKind>>>,
     claude_line: Option<AgentUsage>,
-    /// The last answer of each command or endpoint, and when it came.
-    asked: HashMap<(Tier, AgentKind), (Instant, Result<AgentUsage, String>)>,
+    /// The last answer of each tool's command, and when it came.
+    asked: HashMap<AgentKind, (Instant, Result<AgentUsage, String>)>,
 }
 
 /// The usage hub: one per daemon.
@@ -174,35 +156,31 @@ impl Usage {
     }
 
     /// Starts (or updates) a connection's watch and answers with the report, refreshed when
-    /// older than the refresh interval.
+    /// older than the refresh interval. `UsageWatch::api_fallback` is ignored: it stays on the
+    /// wire for compatibility only.
     pub async fn watch(
         self: &Arc<Self>,
         ctl: &mpsc::UnboundedSender<ServerCtl>,
         caps: Caps,
-        opts: UsageWatch,
+        _opts: UsageWatch,
     ) -> AgentUsageReport {
-        let (start_ticker, api_turned_on) = {
+        let start_ticker = {
             let mut st = lock(&self.state);
-            let had_api = st.watchers.iter().any(|w| w.api);
             st.watchers
                 .retain(|w| !w.ctl.is_closed() && !w.ctl.same_channel(ctl));
             st.watchers.push(Watcher {
                 ctl: ctl.clone(),
                 push: caps.contains(Caps::AGENT_USAGE),
-                api: opts.api_fallback,
             });
             if st.asker.is_none() {
                 st.asker = Some(self.spawn_asker());
             }
-            (
-                !std::mem::replace(&mut st.ticking, true),
-                opts.api_fallback && !had_api,
-            )
+            !std::mem::replace(&mut st.ticking, true)
         };
         if start_ticker {
             self.spawn_ticker();
         }
-        self.refresh(api_turned_on).await;
+        self.refresh(false).await;
         lock(&self.state).report.clone()
     }
 
@@ -232,7 +210,7 @@ impl Usage {
                     return;
                 }
             }
-            // The plan is not in the status line; keep what a command or endpoint said.
+            // The plan is not in the status line; keep what a command said.
             usage.plan = st
                 .report
                 .agents
@@ -279,12 +257,12 @@ impl Usage {
     /// Re-reads the sources when the report is older than the refresh interval (or always,
     /// with `due`), then pushes a changed report.
     ///
-    /// The files are read at once; the tools' commands and the endpoints (seconds) answer from
-    /// their last result, and when that is due they run in the background, which refreshes
-    /// and pushes again when they are done.
+    /// The files are read at once; the tools' commands (seconds) answer from their last
+    /// result, and when that is due they run in the background, which refreshes and pushes
+    /// again when they are done.
     async fn refresh(&self, due: bool) {
         let _one = self.refreshing.lock().await;
-        let (api_wanted, claude_line) = {
+        let claude_line = {
             let st = lock(&self.state);
             let fresh = st.refreshed.is_some_and(|t| {
                 t.elapsed() < self.cfg.refresh.saturating_sub(Duration::from_millis(500))
@@ -292,7 +270,7 @@ impl Usage {
             if fresh && !due {
                 return;
             }
-            (st.watchers.iter().any(|w| w.api), st.claude_line.clone())
+            st.claude_line.clone()
         };
         let paths = self.paths.clone();
         let local = tokio::task::spawn_blocking(move || Local::read(&paths))
@@ -319,17 +297,10 @@ impl Usage {
             if fresh {
                 chosen = local_usage.clone();
             }
-            let tiers = [
-                (Tier::Cli, self.cfg.cli && installed),
-                (Tier::Api, api_wanted),
-            ];
-            for (tier, wanted) in tiers {
-                if chosen.is_some() || !wanted {
-                    continue;
-                }
-                let (last, due) = self.cached(tier, agent);
+            if chosen.is_none() && self.cfg.cli && installed {
+                let (last, due) = self.cached(agent);
                 if due {
-                    asks.push((tier, agent));
+                    asks.push(agent);
                     pending |= last.is_none();
                 }
                 match last {
@@ -342,15 +313,14 @@ impl Usage {
                 (Some(c), Some(l)) if is_newer(&l, &c) => l,
                 (Some(c), _) => c,
                 (None, Some(l)) => l,
-                (None, None) => unknown(agent, &errors, api_wanted, pending),
+                (None, None) => unknown(agent, &errors, pending),
             };
             if usage.plan.is_none() {
                 // A plan named by an earlier answer still holds.
                 usage.plan = lock(&self.state)
                     .asked
-                    .iter()
-                    .filter(|((_, a), _)| *a == agent)
-                    .find_map(|(_, (_, r))| r.as_ref().ok()?.plan.clone());
+                    .get(&agent)
+                    .and_then(|(_, r)| r.as_ref().ok()?.plan.clone());
             }
             agents.push(usage);
         }
@@ -371,16 +341,16 @@ impl Usage {
         }
     }
 
-    /// The background task that runs the commands and calls the endpoints a refresh found
-    /// due, one batch at a time, then refreshes with their answers.
-    fn spawn_asker(self: &Arc<Self>) -> mpsc::UnboundedSender<Vec<(Tier, AgentKind)>> {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<(Tier, AgentKind)>>();
+    /// The background task that runs the commands a refresh found due, one batch at a time,
+    /// then refreshes with their answers.
+    fn spawn_asker(self: &Arc<Self>) -> mpsc::UnboundedSender<Vec<AgentKind>> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<AgentKind>>();
         let hub = Arc::downgrade(self);
         tokio::spawn(async move {
             while let Some(batch) = rx.recv().await {
                 let Some(hub) = hub.upgrade() else { return };
-                for (tier, agent) in batch {
-                    hub.ask(tier, agent).await;
+                for agent in batch {
+                    hub.ask(agent).await;
                 }
                 lock(&hub.state).asking = false;
                 hub.refresh(true).await;
@@ -389,36 +359,24 @@ impl Usage {
         tx
     }
 
-    /// The last answer of a command or endpoint, and whether it is due to be asked again.
-    fn cached(&self, tier: Tier, agent: AgentKind) -> (Option<Result<AgentUsage, String>>, bool) {
-        let every = match tier {
-            Tier::Cli => self.cfg.cli_refresh,
-            Tier::Api => self.cfg.api_refresh,
-        };
-        match lock(&self.state).asked.get(&(tier, agent)) {
-            Some((at, result)) => (Some(result.clone()), at.elapsed() >= every),
+    /// The last answer of a tool's command, and whether it is due to be asked again.
+    fn cached(&self, agent: AgentKind) -> (Option<Result<AgentUsage, String>>, bool) {
+        match lock(&self.state).asked.get(&agent) {
+            Some((at, result)) => (Some(result.clone()), at.elapsed() >= self.cfg.cli_refresh),
             None => (None, true),
         }
     }
 
-    /// Runs the tool's command or calls the endpoint for `agent` and keeps the answer.
-    async fn ask(&self, tier: Tier, agent: AgentKind) {
-        let result = match tier {
-            Tier::Cli => match self.paths.cli_env(agent) {
-                None => Err(format!(
-                    "{} is not on the PATH",
-                    crate::agent::program(agent)
-                )),
-                Some(env) => match agent {
-                    AgentKind::Claude => cli::claude(&env).await,
-                    AgentKind::Codex => cli::codex(&env).await,
-                },
-            },
-            Tier::Api => match agent {
-                AgentKind::Claude => {
-                    api::claude(&self.cfg.claude_url, &self.paths.claude_dir).await
-                }
-                AgentKind::Codex => api::codex(&self.cfg.codex_url, &self.paths.codex_home).await,
+    /// Runs the tool's usage command for `agent` and keeps the answer.
+    async fn ask(&self, agent: AgentKind) {
+        let result = match self.paths.cli_env(agent) {
+            None => Err(format!(
+                "{} is not on the PATH",
+                crate::agent::program(agent)
+            )),
+            Some(env) => match agent {
+                AgentKind::Claude => cli::claude(&env).await,
+                AgentKind::Codex => cli::codex(&env).await,
             },
         };
         if let Err(e) = &result {
@@ -426,7 +384,7 @@ impl Usage {
         }
         lock(&self.state)
             .asked
-            .insert((tier, agent), (Instant::now(), result));
+            .insert(agent, (Instant::now(), result));
     }
 
     /// Sends `report` to the watchers that take pushes, when it differs from the last one
@@ -466,7 +424,7 @@ impl Local {
 }
 
 /// An agent with nothing known, and why.
-fn unknown(agent: AgentKind, errors: &[String], api_wanted: bool, pending: bool) -> AgentUsage {
+fn unknown(agent: AgentKind, errors: &[String], pending: bool) -> AgentUsage {
     if pending {
         return AgentUsage {
             agent,
@@ -487,9 +445,6 @@ fn unknown(agent: AgentKind, errors: &[String], api_wanted: bool, pending: bool)
         if !note.ends_with('.') {
             note.push('.');
         }
-    }
-    if !api_wanted {
-        note.push_str(" Check Usage with Your Sign-In in Settings › Agents may help.");
     }
     AgentUsage {
         agent,
@@ -633,17 +588,17 @@ mod tests {
 
     #[test]
     fn unknown_says_why() {
-        let u = unknown(AgentKind::Codex, &[], false, false);
+        let u = unknown(AgentKind::Codex, &[], false);
         assert_eq!(u.source, UsageSource::Unknown);
-        assert!(u.note.unwrap().contains("Settings › Agents"));
-        let u = unknown(
-            AgentKind::Claude,
-            &["the sign-in was refused (401)".into()],
-            true,
-            false,
-        );
+        assert!(u.note.unwrap().contains("signed in with ChatGPT"));
+        let u = unknown(AgentKind::Claude, &["claude exited with 1".into()], false);
         let note = u.note.unwrap();
-        assert!(note.contains("The sign-in was refused (401)."), "{note}");
-        assert!(!note.contains("Settings"));
+        assert!(note.contains("Claude exited with 1."), "{note}");
+        // No pointer to a sign-in fallback: there is none.
+        assert!(!note.contains("Settings"), "{note}");
+        assert_eq!(
+            unknown(AgentKind::Claude, &[], true).note.as_deref(),
+            Some("Checking…")
+        );
     }
 }

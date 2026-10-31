@@ -14,7 +14,7 @@ nonisolated final class FakeClient: DaemonClientAPI {
     enum Call: Equatable {
         case attach(UInt64?), op(UnnamedCore.LayoutOp), subscribe(UInt64), unsubscribe(UInt64)
         case setView(UInt64?, [UInt64]), resize(UInt64, PaneSize), input(UInt64, Data), paste(UInt64, String)
-        case fetchHistory(UInt64), decide(UInt64, UInt32), reconnect, suspend
+        case fetchHistory(UInt64), decide(UInt64, UInt32), reconnect, suspend, probe
     }
 
     let listener: any ClientEventListener
@@ -50,6 +50,10 @@ nonisolated final class FakeClient: DaemonClientAPI {
     func reconnect() { record(.reconnect) }
     func suspend() { record(.suspend) }
     func paneText(paneId: UInt64) -> String? { nil }
+}
+
+extension FakeClient: LivenessClient {
+    func probe() { record(.probe) }
 }
 
 /// Collects a backend's events.

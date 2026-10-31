@@ -76,7 +76,9 @@ public final class WindowLayoutStore: LayoutStore {
     }
 
     public func apply(_ op: LayoutOp) {
-        let current = session
+        // Composed only by the ops that read it: a burst of renames (naming a host's new tabs)
+        // must not compose the whole session once per tab.
+        var current: Session { session }
         switch op {
         case .focus(let pane):
             guard let tab = current.tab(containing: pane) else { return }
