@@ -639,10 +639,21 @@ impl HookServer {
             hooks.socket.as_os_str().as_encoded_bytes(),
         )?;
         let core = Arc::clone(core);
+        let slots = Arc::new(tokio::sync::Semaphore::new(MAX_HOOK_CONNECTIONS));
         Ok(tokio::spawn(async move {
             loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    continue;
+                // Past the limit, new connections wait in the socket's backlog.
+                let Ok(slot) = Arc::clone(&slots).acquire_owned().await else {
+                    return;
+                };
+                let stream = match listener.accept().await {
+                    Ok((stream, _)) => stream,
+                    Err(e) => {
+                        // Out of descriptors, typically: retrying at once would spin.
+                        tracing::warn!("accepting a hook connection: {e}");
+                        tokio::time::sleep(ACCEPT_BACKOFF).await;
+                        continue;
+                    }
                 };
                 let peer = stream.peer_cred().ok().map(|c| c.uid());
                 if !same_user(peer) {
@@ -654,6 +665,7 @@ impl HookServer {
                     if let Err(e) = serve_hook(&core, stream).await {
                         tracing::debug!("hook connection: {e}");
                     }
+                    drop(slot);
                 });
             }
         }))
@@ -739,12 +751,21 @@ fn same_user(peer_uid: Option<u32>) -> bool {
     peer_uid == Some(unsafe { libc::getuid() })
 }
 
+/// Hook-socket connections served at once (an agent's held approval keeps one open).
+const MAX_HOOK_CONNECTIONS: usize = 512;
+/// Pause after a failed `accept`.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+/// How long a hook connection may take to send its request line.
+const HOOK_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
     let peer_uid = stream.peer_cred().ok().map(|c| c.uid());
     let (read, mut write) = stream.into_split();
     let mut line = String::new();
     let mut reader = BufReader::new(AsyncReadExt::take(read, MAX_REQUEST as u64));
-    reader.read_line(&mut line).await?;
+    tokio::time::timeout(HOOK_REQUEST_TIMEOUT, reader.read_line(&mut line))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "no request"))??;
     // The askpass helper shares the socket (docs/DAEMON.md §9).
     if let Ok(call) = serde_json::from_str::<crate::askpass::AskpassCall>(&line) {
         let reply = crate::askpass::serve(core, call, peer_uid, reader).await;

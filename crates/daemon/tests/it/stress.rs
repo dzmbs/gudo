@@ -212,6 +212,31 @@ async fn a_process_ignoring_hangup_dies_with_its_pane() {
     }
 }
 
+/// Connections to the hook socket that never send a request used to be held forever; enough
+/// of them used up the daemon's descriptors. They are closed, and hooks keep working.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn idle_hook_connections_are_closed() {
+    use tokio::io::AsyncReadExt;
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = support::start(dir.path()).await;
+    let mut idle = Vec::new();
+    for _ in 0..50 {
+        idle.push(
+            tokio::net::UnixStream::connect(daemon.hook_socket())
+                .await
+                .unwrap(),
+        );
+    }
+    for mut stream in idle {
+        let mut buf = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(20), stream.read(&mut buf)).await;
+        assert!(
+            matches!(read, Ok(Ok(0) | Err(_))),
+            "an idle connection stayed open"
+        );
+    }
+}
+
 /// A program setting its title in a tight loop used to push every title to every client. The
 /// pushes are coalesced, and the last title always arrives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
