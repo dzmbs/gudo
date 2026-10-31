@@ -780,8 +780,16 @@ impl Client {
     }
 
     /// Sends input to a pane. Queued while disconnected and delivered after reconnecting.
+    /// Input larger than one frame allows is sent in 1 MiB pieces.
     pub fn send_input(&self, pane_id: PaneId, data: Vec<u8>) {
-        self.send_payload(pane_id, InputPayload::Bytes(data));
+        const PIECE: usize = 1 << 20;
+        if data.len() <= PIECE {
+            self.send_payload(pane_id, InputPayload::Bytes(data));
+            return;
+        }
+        for piece in data.chunks(PIECE) {
+            self.send_payload(pane_id, InputPayload::Bytes(piece.to_vec()));
+        }
     }
 
     /// Sends a key event; the daemon encodes it for the program's current keyboard modes
@@ -799,8 +807,25 @@ impl Client {
     /// Pastes text: bracketed if the program enabled bracketed paste, with control bytes that
     /// could end the paste early replaced. Confirming a multi-line paste is up to the caller
     /// (see `ghostty_vt::paste_is_safe`).
+    ///
+    /// A paste larger than one input frame allows goes as consecutive pastes of at most
+    /// 1 MiB each, cut at character boundaries; the program receives the same text.
     pub fn send_paste(&self, pane_id: PaneId, text: String) {
-        self.send_payload(pane_id, InputPayload::Paste(text));
+        const PIECE: usize = 1 << 20;
+        if text.len() <= PIECE {
+            self.send_payload(pane_id, InputPayload::Paste(text));
+            return;
+        }
+        let mut rest = text.as_str();
+        while !rest.is_empty() {
+            let mut end = rest.len().min(PIECE);
+            while !rest.is_char_boundary(end) {
+                end -= 1;
+            }
+            let (piece, tail) = rest.split_at(end);
+            self.send_payload(pane_id, InputPayload::Paste(piece.to_owned()));
+            rest = tail;
+        }
     }
 
     fn send_payload(&self, pane_id: PaneId, payload: InputPayload) {

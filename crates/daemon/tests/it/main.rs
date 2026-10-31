@@ -26,6 +26,7 @@ mod reopen;
 mod repos;
 mod security;
 mod shell;
+mod stress;
 mod support;
 mod term;
 mod terminal;

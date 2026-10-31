@@ -41,6 +41,7 @@ mod fsutil;
 mod identity;
 mod input;
 mod layout;
+mod limits;
 mod mp;
 mod net;
 mod notifier;
@@ -123,6 +124,7 @@ impl Daemon {
     ///
     /// Returns [`StartError`] if the state directory is unusable or the endpoint cannot bind.
     pub async fn start(mut config: Config) -> Result<Self, StartError> {
+        limits::raise_fd_limit();
         config.apply_user_file()?;
         let identity = Arc::new(Identity::load_or_create(&config.state_dir)?);
         let (layout, records, closed) = persist::load(&config.state_dir)?
