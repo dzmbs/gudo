@@ -6043,6 +6043,7 @@ dependencies = [
  "camino",
  "flate2",
  "proto",
+ "serde_json",
  "uniffi_bindgen",
 ]
 
