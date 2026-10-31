@@ -217,4 +217,9 @@ with the fix removed or weakened, its test fails.
   - Look-alike and `user@` hosts: `confirmationsNameTheRealHost`.
 - **Replay import/export.** `BrowserReplayTests`.
 
-Not validated here: the image decode-bomb checks. A separate branch still works on them.
+- **Image bombs.** `KittyGraphicsTests`: JPEG, GIF, TIFF and BMP sent as `f=100` are refused,
+  as is a PNG header claiming 10000×10000, through the real terminal.
+  - **Open.** `ghostty-vt/tests/image_bombs.rs` is ignored until fixed. A ~380 KiB zlib
+    payload (`o=z`), or chunks that never end, make libghostty-vt hold up to 400 MB per load,
+    whatever the storage limit. The fix belongs in libghostty-vt: bound each load by the image
+    storage limit.
