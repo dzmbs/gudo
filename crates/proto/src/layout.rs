@@ -347,6 +347,17 @@ pub enum LayoutOp {
         /// Beside which pane, or `None` for its own place.
         beside: Option<crate::float::DockTarget>,
     },
+    /// Moves a pane (out of a window too) along one whole edge of a tab's tiled panes,
+    /// focused; a tab left without panes closes. Needs
+    /// [`DaemonFeatures::FLOATS`](crate::DaemonFeatures::FLOATS).
+    MovePaneToEdge {
+        /// The pane to move.
+        pane_id: PaneId,
+        /// The tab (in the same session).
+        tab_id: TabId,
+        /// Which edge.
+        side: Direction,
+    },
 }
 
 /// The result of a [`LayoutOp`], in [`ServerCtl::OpResult`](crate::ServerCtl::OpResult).

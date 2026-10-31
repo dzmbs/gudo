@@ -964,6 +964,63 @@ impl Layout {
         Ok(self.sessions[si].id)
     }
 
+    /// Moves `pane` along the whole `side` edge of `tab`'s tiled panes (same session),
+    /// focused; its old tab closes when it was its only pane.
+    pub fn move_pane_to_edge(
+        &mut self,
+        pane: PaneId,
+        tab: TabId,
+        side: Direction,
+    ) -> OpResult<SessionId> {
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        let (target_si, _) = self.locate_tab(tab).ok_or(OpError::NotFound)?;
+        if si != target_si {
+            return Err(OpError::Invalid);
+        }
+        let source = self.sessions[si].tabs[ti].tab_id;
+        if source == tab && self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
+            return Ok(self.sessions[si].id);
+        }
+        self.sessions[si].release(pane);
+        if self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
+            self.take_tab(si, ti);
+        } else {
+            detach_leaf(&mut self.sessions[si].tabs[ti], pane);
+        }
+        let s = &mut self.sessions[si];
+        let t = s
+            .tabs
+            .iter_mut()
+            .find(|t| t.tab_id == tab)
+            .expect("the tab is in this session");
+        let (axis, before) = match side {
+            Direction::Left => (Axis::Horizontal, true),
+            Direction::Right => (Axis::Horizontal, false),
+            Direction::Up => (Axis::Vertical, true),
+            Direction::Down => (Axis::Vertical, false),
+        };
+        let rest = std::mem::replace(&mut t.root, LayoutNode::Leaf(pane));
+        let (first, second) = if before {
+            (LayoutNode::Leaf(pane), rest)
+        } else {
+            (rest, LayoutNode::Leaf(pane))
+        };
+        // A third of the edge: the pane joins the tab's panes rather than halving them.
+        let ratio = if before { 1.0 / 3.0 } else { 2.0 / 3.0 };
+        t.root = LayoutNode::Split {
+            axis,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+        t.focused = pane;
+        t.zoomed = None;
+        s.active_tab = Some(tab);
+        s.tidy_floats();
+        s.revision += 1;
+        Ok(s.id)
+    }
+
     pub fn floats(&self, session: SessionId) -> Option<SessionFloats> {
         self.session(session).map(Session::to_floats)
     }
@@ -1927,6 +1984,35 @@ mod tests {
         l.split(p2, Axis::Vertical, g).unwrap();
         l.break_pane(g).unwrap();
         assert_eq!(windows(&l, s), [vec![p2]]);
+        check_floats(&l);
+    }
+
+    #[test]
+    fn panes_move_to_a_whole_edge_of_the_tiled_panes() {
+        let mut l = Layout::default();
+        let (s, t, [p1, p2, p3]) = three(&mut l);
+        let f = l.alloc_pane();
+        l.new_float(p1, f, None, false, CloseWhen::Never).unwrap();
+        l.move_pane_to_edge(f, t, Direction::Down).unwrap();
+        assert!(windows(&l, s).is_empty(), "out of its window");
+        let root = l.snapshot(s).unwrap().tabs[0].root.clone();
+        let LayoutNode::Split {
+            axis: Axis::Vertical,
+            second,
+            ..
+        } = &root
+        else {
+            panic!("{root:?}")
+        };
+        assert_eq!(**second, LayoutNode::Leaf(f));
+        assert_eq!(tiled_leaves(&l, s), [p1, p2, p3, f]);
+        l.move_pane_to_edge(p3, t, Direction::Left).unwrap();
+        assert_eq!(tiled_leaves(&l, s)[0], p3);
+        assert_eq!(l.focused_pane(s), Some(p3));
+        assert_eq!(
+            l.move_pane_to_edge(p3, TabId(99), Direction::Left),
+            Err(OpError::NotFound)
+        );
         check_floats(&l);
     }
 

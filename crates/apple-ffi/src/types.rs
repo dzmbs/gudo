@@ -478,6 +478,15 @@ pub enum LayoutOp {
         /// Which side of `target`.
         side: Direction,
     },
+    /// Moves a pane along one whole edge of a tab's tiled panes (daemons with `floats`).
+    MovePaneToEdge {
+        /// The pane.
+        pane_id: u64,
+        /// The tab.
+        tab_id: u64,
+        /// Which edge.
+        side: Direction,
+    },
 }
 
 /// Where a floating window sits, in fractions of its tab (`0,0` top left).
@@ -722,6 +731,15 @@ impl From<LayoutOp> for proto::LayoutOp {
                     pane_id: PaneId(t),
                     side: side.into(),
                 }),
+            },
+            LayoutOp::MovePaneToEdge {
+                pane_id,
+                tab_id,
+                side,
+            } => Self::MovePaneToEdge {
+                pane_id: PaneId(pane_id),
+                tab_id: TabId(tab_id),
+                side: side.into(),
             },
         }
     }

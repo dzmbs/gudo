@@ -925,6 +925,13 @@ impl Core {
                 .simple(self.session_of_pane(pane_id), |l| {
                     l.dock_pane(pane_id, beside).map(drop)
                 })?,
+            LayoutOp::MovePaneToEdge {
+                pane_id,
+                tab_id,
+                side,
+            } => self.simple(self.session_of_pane(pane_id), |l| {
+                l.move_pane_to_edge(pane_id, tab_id, side).map(drop)
+            })?,
         };
         Ok(outcome)
     }

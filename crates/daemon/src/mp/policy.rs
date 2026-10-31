@@ -136,9 +136,9 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
         }
         // A new float, and docking (which can move a window into another tab), change the
         // session's tree like a split; moving, chipping and pinning arrange one tab.
-        O::NewFloat { pane_id, .. } | O::DockPane { pane_id, .. } => {
-            (Need::Drive, Target::SessionOf(*pane_id))
-        }
+        O::NewFloat { pane_id, .. }
+        | O::DockPane { pane_id, .. }
+        | O::MovePaneToEdge { pane_id, .. } => (Need::Drive, Target::SessionOf(*pane_id)),
         O::FloatPane { pane_id, .. } | O::SetFloat { pane_id, .. } => {
             (Need::Drive, Target::TabOf(*pane_id))
         }
