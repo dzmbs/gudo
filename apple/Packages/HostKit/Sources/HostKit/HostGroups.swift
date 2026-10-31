@@ -186,20 +186,44 @@ public final class HostGroups {
     /// Suggestions the user dismissed (their shared roots).
     public var dismissedSuggestions: Set<String> = []
 
+    /// Projects made from nothing (New Project) that no tab has joined yet. They live in the
+    /// window until the first tab joins, then on that tab's host like any other.
+    public var emptyProjects: [ProjectInfo] = []
+
+    /// This run of the app: tab ids of this device and plain-SSH hosts start over with each
+    /// run, so their memberships are only restored within the run that made them.
+    nonisolated public static let launch = UUID().uuidString
+
     /// What a window saves of its projects.
     public struct ProjectsState: Codable, Equatable, Sendable {
         public var windowProjects: [String: HostProjects]
         public var collapsed: [String]
         public var dismissed: [String]
+        public var empty: [ProjectInfo]?
+        /// The run that saved it (`HostGroups.launch`).
+        public var launch: String?
     }
 
     public var projectsState: ProjectsState {
-        get { ProjectsState(windowProjects: windowProjects, collapsed: collapsedProjects.sorted(), dismissed: dismissedSuggestions.sorted()) }
+        get {
+            ProjectsState(
+                windowProjects: windowProjects, collapsed: collapsedProjects.sorted(), dismissed: dismissedSuggestions.sorted(),
+                empty: emptyProjects, launch: Self.launch)
+        }
         set {
-            windowProjects = newValue.windowProjects
+            // A tab id of another run names some other tab now: its memberships would put new
+            // tabs into old projects.
+            windowProjects = newValue.launch == Self.launch ? newValue.windowProjects : newValue.windowProjects.filter { outlivesTheApp($0.key) }
             collapsedProjects = Set(newValue.collapsed)
             dismissedSuggestions = Set(newValue.dismissed)
+            emptyProjects = newValue.empty ?? []
         }
+    }
+
+    /// Whether a host's tabs keep their ids across runs of the app: a daemon's (it keeps them)
+    /// and the window's own (restored with it); not this device's or a plain-SSH host's.
+    private func outlivesTheApp(_ host: String) -> Bool {
+        host == Self.mixedId || hosts.record(host)?.kind == .daemon
     }
 
     /// Every project in the window, merged across hosts.
@@ -209,9 +233,66 @@ public final class HostGroups {
 
     public func project(of ref: TabRef) -> Project? { projects.first { $0.tabs.contains(ref) } }
 
+    /// The project called `name` (ignoring case), if one is.
+    public func project(named name: String) -> Project? {
+        projects.first { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }
+    }
+
+    /// `base`, made unique among the window's projects (`except` may keep its own name).
+    public func uniqueProjectName(_ base: String, except id: String? = nil) -> String {
+        ProjectNaming.unique(base, taken: projects.filter { $0.id != id }.map(\.name))
+    }
+
     private func projects(in groups: [HostGroup]) -> [Project] {
         let (sources, existing) = projectSources(groups)
-        return ProjectMerge.merge(sources, existing: existing)
+        let merged = ProjectMerge.merge(sources, existing: existing)
+        let ids = Set(merged.map(\.id))
+        let empty = emptyProjects.filter { !ids.contains($0.id) }.map { Project(info: $0, tabs: []) }
+        guard !empty.isEmpty else { return merged }
+        return (merged + empty).sorted { $0.info.order != $1.info.order ? $0.info.order < $1.info.order : $0.id < $1.id }
+    }
+
+    /// A new project with no tabs (New Project), after the others. Returns its id.
+    @discardableResult
+    public func createEmptyProject(name: String? = nil, now: Date = .now) -> String {
+        let planner = planner(now: now)
+        let info = ProjectInfo(
+            id: UUID().uuidString, name: uniqueProjectName(name ?? ProjectNaming.fallback), color: planner.nextColor,
+            order: planner.nextOrder, updated: planner.now)
+        emptyProjects.append(info)
+        return info.id
+    }
+
+    /// Renames or recolours a project, wherever it lives. A name another project has gets a
+    /// number, so two projects never read the same.
+    public func updateProject(_ id: String, name: String? = nil, color: Int? = nil) {
+        let name = name.map { uniqueProjectName($0, except: id) }
+        if let index = emptyProjects.firstIndex(where: { $0.id == id }) {
+            if let name { emptyProjects[index].name = String(name.prefix(ProjectInfo.maxNameLength)) }
+            if let color { emptyProjects[index].color = color }
+            return
+        }
+        apply(planner().update(id, name: name, color: color))
+    }
+
+    /// Ungroups a project's tabs (an empty project just goes).
+    public func ungroupProject(_ id: String) {
+        emptyProjects.removeAll { $0.id == id }
+        apply(planner().ungroup(id))
+    }
+
+    /// Moves a project among the projects.
+    public func moveProject(_ id: String, to index: Int) {
+        let planner = planner()
+        apply(planner.moveProject(id, to: index))
+        // Empty projects have no host to keep their order: set it here.
+        var order = planner.projects.filter { $0.id != id }
+        if let moving = planner.project(id) { order.insert(moving, at: min(max(index, 0), order.count)) }
+        for (i, project) in order.enumerated() {
+            if let e = emptyProjects.firstIndex(where: { $0.id == project.id }) {
+                emptyProjects[e].order = Int64(i) * ProjectPlanner.rankStep
+            }
+        }
     }
 
     /// Each host's projects (its daemon's, else the window's copy) and every tab that exists.
@@ -238,9 +319,9 @@ public final class HostGroups {
     /// A planner over the window's current projects.
     public func planner(now: Date = .now) -> ProjectPlanner {
         let groups = groups
-        let (sources, existing) = projectSources(groups)
+        let (sources, _) = projectSources(groups)
         return ProjectPlanner(
-            projects: ProjectMerge.merge(sources, existing: existing), sources: sources,
+            projects: projects(in: groups), sources: sources,
             now: UInt64(max(0, now.timeIntervalSince1970 * 1000)))
     }
 
@@ -252,6 +333,14 @@ public final class HostGroups {
                 store.apply(change)
             } else {
                 copies[host, default: windowProjects[host] ?? HostProjects()].apply(change)
+            }
+        }
+        defer {
+            // A project made from nothing lives on its tabs' hosts once one has joined.
+            if !emptyProjects.isEmpty {
+                let (sources, existing) = projectSources(groups)
+                let held = Set(ProjectMerge.merge(sources, existing: existing).map(\.id))
+                emptyProjects.removeAll { held.contains($0.id) }
             }
         }
         guard !copies.isEmpty else { return }
@@ -278,8 +367,33 @@ public final class HostGroups {
             + groups.map { SidebarSection(.host($0.id), rows: looseTabs(of: $0, grouped: grouped)) }
     }
 
-    /// Carries out a drop. `name` names a new project made of two tabs.
-    public func commit(_ drop: SidebarDrop, name: (TabRef, TabRef) -> String) {
+    /// What dropping `ref` onto `target` groups them into: the target's project, else the
+    /// project already named for the folder they share (`name`), else nil (a new project).
+    public func groupTarget(_ ref: TabRef, onto target: TabRef, name: (TabRef, TabRef) -> String?) -> Project? {
+        project(of: target) ?? name(target, ref).flatMap(project(named:))
+    }
+
+    /// Tabs grouped on purpose (a drop, a suggestion) under the folder they share: into the
+    /// project of that name when there is one (the same work: one project for it), else a new
+    /// one named for it (or "New Project"). Returns the id of a project it made.
+    @discardableResult
+    public func groupTabs(_ refs: [TabRef], name: String?) -> String? {
+        guard !refs.isEmpty else { return nil }
+        if let name, let existing = project(named: name) {
+            for ref in refs where !existing.tabs.contains(ref) {
+                apply(planner().move(ref, into: existing.id, at: .max))
+            }
+            return nil
+        }
+        let id = UUID().uuidString
+        apply(planner().create(refs, name: uniqueProjectName(name ?? ProjectNaming.fallback), id: id))
+        return id
+    }
+
+    /// Carries out a drop. `name` names the folder two tabs share (nil: none). Returns the id
+    /// of a project the drop made.
+    @discardableResult
+    public func commit(_ drop: SidebarDrop, name: (TabRef, TabRef) -> String?) -> String? {
         let planner = planner()
         switch drop {
         case .group(let ref, let target):
@@ -287,14 +401,14 @@ public final class HostGroups {
                 let index = (project.tabs.filter { $0 != ref }.firstIndex(of: target) ?? project.tabs.count) + 1
                 apply(planner.move(ref, into: project.id, at: index))
             } else {
-                apply(planner.create([target, ref], name: name(target, ref)))
+                return groupTabs([target, ref], name: name(target, ref))
             }
         case .insert(let ref, .project(let id), let index):
             apply(planner.move(ref, into: id, at: index))
         case .insert(let ref, .window, _):
             apply(planner.remove(ref))
         case .insert(let ref, .host(let host), let index):
-            guard ref.hostId == host, let group = group(host) else { return }
+            guard ref.hostId == host, let group = group(host) else { return nil }
             apply(planner.remove(ref))
             var loose = sections.first { $0.container == .host(host) }?.rows.filter { $0 != ref } ?? []
             loose.insert(ref, at: min(max(index, 0), loose.count))
@@ -304,6 +418,7 @@ public final class HostGroups {
                 store.apply(.moveTab(ref.tab, to: to))
             }
         }
+        return nil
     }
 
     /// Moves a tab one row up (-1) or down (+1) within its section (⌃⌘↑ / ⌃⌘↓).
@@ -313,7 +428,7 @@ public final class HostGroups {
         else { return }
         let to = index + offset
         guard section.rows.indices.contains(to) else { return }
-        commit(.insert(ref, into: section.container, at: to), name: { _, _ in "" })
+        commit(.insert(ref, into: section.container, at: to), name: { _, _ in nil })
     }
 
     /// The layout a host's tabs live in.
@@ -321,6 +436,49 @@ public final class HostGroups {
         if host == Self.localId { return local?.layout }
         guard let connection = hosts.connection(host), connection.isReady else { return nil }
         return connection.layoutStore
+    }
+
+    /// A tab asked for in a project (its +, ⌘T from one of its tabs): the next tab `host` makes
+    /// joins `project` at `index`.
+    public struct PendingJoin: Sendable {
+        public var host: String
+        public var project: String
+        public var index: Int
+        public var known: Set<TabId>
+        public var until: Date
+    }
+
+    @ObservationIgnored public private(set) var pendingJoins: [PendingJoin] = []
+
+    /// Notes that the next tab `host` makes belongs in `project` (call before asking for it).
+    public func expectNewTab(on host: String, joining project: String, at index: Int = .max, now: Date = .now) {
+        let known = Set(group(host)?.tabs.map(\.id) ?? [])
+        pendingJoins.append(PendingJoin(host: host, project: project, index: index, known: known, until: now.addingTimeInterval(10)))
+    }
+
+    /// Puts tabs that arrived for a pending join into their project. Returns the tabs joined.
+    @discardableResult
+    public func claimNewTabs(now: Date = .now) -> [TabRef] {
+        let pending = pendingJoins.filter { $0.until >= now && project($0.project) != nil }
+        var waiting: [PendingJoin] = []
+        var joined: [TabRef] = []
+        for join in pending {
+            guard let group = group(join.host) else {
+                waiting.append(join)
+                continue
+            }
+            let fresh = group.tabs.map(\.id).filter { !join.known.contains($0) && !joined.contains(group.ref($0)) }
+            // The host selects the tab it made; another device's new tab would not be selected.
+            guard let tab = fresh.first(where: { $0 == group.activeTabId }) ?? fresh.first else {
+                waiting.append(join)
+                continue
+            }
+            let ref = group.ref(tab)
+            apply(planner().move(ref, into: join.project, at: join.index))
+            joined.append(ref)
+        }
+        pendingJoins = waiting
+        return joined
     }
 
     public func toggleCollapsed(project id: String) {
@@ -374,6 +532,8 @@ public final class HostGroups {
         openHosts.removeAll { $0 == id }
         failures[id] = nil
         collapsed.remove(id)
+        // A plain-SSH host's next connection numbers its tabs afresh.
+        if !outlivesTheApp(id) { windowProjects[id] = nil }
         if !isOpenElsewhere(id) { hosts.disconnect(id) }
     }
 

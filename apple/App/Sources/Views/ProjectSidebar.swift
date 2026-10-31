@@ -13,9 +13,13 @@ import UniformTypeIdentifiers
 /// sits in a project or under its host.
 enum SidebarItem: Identifiable, Hashable {
     case projectHeader(String)
+    /// An empty project's one line: where its tabs will go.
+    case projectEmpty(String)
     case row(TabRef, SidebarContainer)
     case windowHeader(WindowTabKind)
     case suggestion(ProjectSuggestion)
+    /// The one-time line teaching drag-onto-tab grouping, before the first project.
+    case projectsIntro
     case hostHeader(String)
     /// A daemon's loose tabs grouped by repository (drawn as one block).
     case hostRepos(String)
@@ -25,9 +29,11 @@ enum SidebarItem: Identifiable, Hashable {
     var id: String {
         switch self {
         case .projectHeader(let id): "project/\(id)"
+        case .projectEmpty(let id): "project-empty/\(id)"
         case .row(let ref, _): "tab/\(ref)"
         case .windowHeader(let kind): "window/\(kind.rawValue)"
         case .suggestion(let suggestion): "suggestion/\(suggestion.key)"
+        case .projectsIntro: "projects-intro"
         case .hostHeader(let id): "host/\(id)"
         case .hostRepos(let id): "repos/\(id)"
         case .hostPlaceholder(let id): "placeholder/\(id)"
@@ -109,7 +115,9 @@ final class SidebarGeometry {
 
 extension WindowModel {
     /// The list's items with `drop` and `projectMove` shown as if done.
-    func sidebarItems(drop: SidebarDrop?, projectMove: (id: String, index: Int)?) -> (items: [SidebarItem], sections: [SidebarSection]) {
+    func sidebarItems(
+        drop: SidebarDrop?, projectMove: (id: String, index: Int)?, showsIntro: Bool = false
+    ) -> (items: [SidebarItem], sections: [SidebarSection]) {
         let hostGroups = groups.groups
         var sections = groups.sections
         if let drop { sections = drop.applied(to: sections) }
@@ -125,10 +133,17 @@ extension WindowModel {
         for project in projects {
             items.append(.projectHeader(project.id))
             if !self.groups.collapsedProjects.contains(project.id) {
-                items += rows(.project(project.id)).map { .row($0, .project(project.id)) }
+                let members = rows(.project(project.id))
+                items += members.map { .row($0, .project(project.id)) }
+                if members.isEmpty { items.append(.projectEmpty(project.id)) }
             }
         }
-        items += projectSuggestions.prefix(2).map(SidebarItem.suggestion)
+        let suggestions = projectSuggestions.prefix(2)
+        items += suggestions.map(SidebarItem.suggestion)
+        // Before the first project, once, while there is something to group.
+        if showsIntro, projects.isEmpty, suggestions.isEmpty, groups.tabs.count >= 2 {
+            items.append(.projectsIntro)
+        }
         let window = rows(.window)
         for kind in WindowTabKind.allCases {
             let refs = window.filter { ref in composites.tab(ref.tab).map(WindowTabKind.init) == kind }
@@ -158,11 +173,12 @@ extension WindowModel {
 struct SidebarTabList: View {
     @Environment(WindowModel.self) private var model
     @State private var geometry = SidebarGeometry()
+    @AppStorage(ProjectsIntroRow.dismissedKey) private var introDismissed = false
     private static let space = "sidebar-list"
 
     var body: some View {
         let drag = model.sidebarDrag
-        let (items, sections) = model.sidebarItems(drop: drag.plan, projectMove: drag.projectMove)
+        let (items, sections) = model.sidebarItems(drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed)
         let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { a, _ in a })
         let _ = geometry.record(items, sections)
         VStack(alignment: .leading, spacing: 0) {
@@ -175,6 +191,10 @@ struct SidebarTabList: View {
         .animation(DS.Motion.reorder, value: items)
         .onDrop(of: [.text], delegate: SidebarDropDelegate(model: model, drag: drag, geometry: geometry))
         .environment(drag)
+        // Taught once: the first project, however made, retires the hint for good.
+        .onChange(of: model.projects.isEmpty, initial: true) { _, empty in
+            if !empty, !introDismissed { introDismissed = true }
+        }
     }
 }
 
@@ -195,12 +215,16 @@ private struct SidebarItemView: View {
         switch item {
         case .projectHeader(let id):
             if let project = model.groups.project(id) { ProjectHeader(project: project) }
+        case .projectEmpty(let id):
+            if let project = model.groups.project(id) { ProjectEmptyRow(project: project) }
         case .row(let ref, let container):
             SidebarTabRow(ref: ref, container: container, number: numbers[ref] ?? 0)
         case .windowHeader(let kind):
             WindowTabsHeader(kind: kind)
         case .suggestion(let suggestion):
             SuggestionRow(suggestion: suggestion)
+        case .projectsIntro:
+            ProjectsIntroRow()
         case .hostHeader(let id):
             if let group = model.groups.group(id) { HostGroupHeaderItem(group: group) }
         case .hostRepos(let id):
@@ -225,8 +249,25 @@ private struct SidebarTabRow: View {
     var body: some View {
         let project: Project? = if case .project(let id) = container { model.groups.project(id) } else { nil }
         let isGroupTarget = drag.isGroupTarget(ref)
+        let joined = model.joinedTab == ref
         let tint: ChromeStyle = model.groups.project(of: ref).map { DS.Palette.project($0.color) } ?? DS.Palette.accent
         content(showsHost: project != nil && model.groups.groups.count > 1)
+            // What the drop will do, said quietly where the row's trailing glyphs sit.
+            .overlay(alignment: .trailing) {
+                if isGroupTarget, let dragged = drag.dragging {
+                    Text(model.groupLabel(dragged, onto: ref))
+                        .font(DS.Font.meta.weight(.medium))
+                        .foregroundStyle(tint)
+                        .lineLimit(1)
+                        .padding(.horizontal, DS.Space.s)
+                        .padding(.vertical, 2)
+                        .background(DS.Palette.sidebar, in: .capsule)
+                        .overlay(Capsule().fill(tint.opacity(0.14)))
+                        .padding(.trailing, DS.Space.l)
+                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .trailing)))
+                        .accessibilityHidden(true)
+                }
+            }
             .overlay(alignment: .leading) {
                 if let project {
                     // Rows touch, so the threads of a project's rows read as one line.
@@ -240,7 +281,7 @@ private struct SidebarTabRow: View {
             // "Will group": the row lights in the project's colour (the accent for a loose one).
             .background {
                 RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .fill(tint.opacity(isGroupTarget ? 0.16 : 0))
+                    .fill(tint.opacity(isGroupTarget ? 0.16 : joined ? 0.12 : 0))
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(tint.opacity(isGroupTarget ? 0.7 : 0), lineWidth: 1.5))
                     .padding(.horizontal, DS.Space.s)
             }
@@ -350,7 +391,7 @@ private struct SidebarDropDelegate: DropDelegate {
                 let fraction = frame.height > 0 ? (point.y - frame.minY) / frame.height : 0.5
                 next = SidebarDrop.plan(dragging: ref, over: target, at: fraction, in: geometry.section(container)) ?? next
             }
-        case .projectHeader(let id):
+        case .projectHeader(let id), .projectEmpty(let id):
             let rows = geometry.section(.project(id)).rows
             if !rows.contains(ref) { next = .insert(ref, into: .project(id), at: rows.count) }
             if model.groups.collapsedProjects.contains(id) { springTarget = id }
@@ -362,7 +403,7 @@ private struct SidebarDropDelegate: DropDelegate {
             if ref.hostId == HostGroups.mixedId, !geometry.section(.window).rows.contains(ref) {
                 next = .insert(ref, into: .window, at: 0)
             }
-        case .suggestion, .hostAgents:
+        case .suggestion, .projectsIntro, .hostAgents:
             break
         }
         if next != drag.plan {
@@ -386,7 +427,7 @@ private struct SidebarDropDelegate: DropDelegate {
 
     private func updateProjectMove(_ id: String, over item: SidebarItem) {
         let target: String? = switch item {
-        case .projectHeader(let other): other
+        case .projectHeader(let other), .projectEmpty(let other): other
         case .row(_, .project(let other)): other
         default: nil
         }
@@ -410,6 +451,7 @@ private struct ProjectHeader: View {
     @State private var hovered = false
     @State private var renaming = false
     @State private var draft = ""
+    @State private var selection: TextSelection?
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -422,15 +464,7 @@ private struct ProjectHeader: View {
                 .frame(width: 8, height: 8)
                 .frame(minWidth: 16)
             if renaming {
-                TextField("Name", text: $draft)
-                    .textFieldStyle(.plain)
-                    .font(DS.Font.section)
-                    .focused($fieldFocused)
-                    .onSubmit(finishRename)
-                    #if os(macOS)
-                    .onExitCommand { renaming = false }
-                    #endif
-                    .onChange(of: fieldFocused) { _, focused in if !focused { finishRename() } }
+                nameField
             } else {
                 Text(project.name)
                     .font(DS.Font.section)
@@ -439,7 +473,7 @@ private struct ProjectHeader: View {
                     .layoutPriority(-1)
             }
             Spacer(minLength: DS.Space.xs)
-            if collapsed {
+            if collapsed, !project.tabs.isEmpty {
                 Text("\(project.tabs.count)")
                     .font(DS.Font.meta)
                     .foregroundStyle(DS.Palette.textTertiary)
@@ -461,6 +495,10 @@ private struct ProjectHeader: View {
                 .fill(DS.Palette.project(project.color).opacity(dropping ? 0.14 : 0))
                 .padding(.horizontal, DS.Space.s)
                 .padding(.top, DS.Space.s)
+        }
+        // The name field of a project just made opens at once, its name selected.
+        .onChange(of: model.namingProject, initial: true) { _, id in
+            if id == project.id { startRename() }
         }
         .contentShape(.rect)
         .onTapGesture { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) } }
@@ -490,16 +528,34 @@ private struct ProjectHeader: View {
         #endif
     }
 
-    private func startRename() {
-        draft = project.name
-        renaming = true
-        fieldFocused = true
+    private var nameField: some View {
+        TextField("Project Name", text: $draft, selection: $selection)
+            .textFieldStyle(.plain)
+            .font(DS.Font.section)
+            .foregroundStyle(DS.Palette.text)
+            .focused($fieldFocused)
+            .onSubmit { finishRename() }
+            #if os(macOS)
+            .onExitCommand { finishRename(keep: true) }
+            #endif
+            .onChange(of: fieldFocused) { _, focused in if !focused { finishRename() } }
+            .accessibilityIdentifier("project-name-field")
     }
 
-    private func finishRename() {
+    private func startRename() {
+        draft = project.name
+        selection = TextSelection(range: draft.startIndex..<draft.endIndex)
+        renaming = true
+        // Once the field exists.
+        Task { @MainActor in fieldFocused = true }
+    }
+
+    /// Return or leaving the field keeps what was typed; Escape keeps the name it had.
+    private func finishRename(keep: Bool = false) {
         guard renaming else { return }
         renaming = false
-        model.renameProject(project.id, to: draft)
+        if model.namingProject == project.id { model.namingProject = nil }
+        if !keep { model.renameProject(project.id, to: draft) }
     }
 }
 
@@ -531,10 +587,16 @@ private struct ProjectMenu: View {
             withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) }
         }
         Divider()
-        Button("Ungroup", systemImage: "rectangle.stack.badge.minus") {
-            withAnimation(DS.Motion.reorder) { model.ungroupProject(project.id) }
+        if project.tabs.isEmpty {
+            Button("Delete Project", systemImage: "trash") {
+                withAnimation(DS.Motion.reorder) { model.ungroupProject(project.id) }
+            }
+        } else {
+            Button("Ungroup", systemImage: "rectangle.stack.badge.minus") {
+                withAnimation(DS.Motion.reorder) { model.ungroupProject(project.id) }
+            }
+            Button("Close All Tabs", systemImage: "xmark.square", role: .destructive) { model.closeProject(project.id) }
         }
-        Button("Close All Tabs", systemImage: "xmark.square", role: .destructive) { model.closeProject(project.id) }
     }
 }
 
@@ -582,7 +644,9 @@ private struct SuggestionRow: View {
                         .font(.caption)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .frame(width: 16)
-                    Text("Group \(suggestion.tabs.count) tabs in \(Text(suggestion.name).foregroundStyle(DS.Palette.textSecondary))")
+                    // Tabs of a folder that already has a project join it.
+                    let joins = model.existingProject(for: suggestion) != nil
+                    Text("\(joins ? "Add" : "Group") \(suggestion.tabs.count) tabs \(joins ? "to" : "in") \(Text(suggestion.name).foregroundStyle(DS.Palette.textSecondary))")
                         .font(DS.Font.sidebarSubtitle)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .lineLimit(1)
@@ -600,6 +664,85 @@ private struct SuggestionRow: View {
         .sidebarRow(selected: false)
         .padding(.top, DS.Space.xs)
         .accessibilityIdentifier("project-suggestion-\(suggestion.name)")
+    }
+}
+
+/// An empty project's line under its header: where its tabs go, and a tap makes one.
+private struct ProjectEmptyRow: View {
+    let project: Project
+    @Environment(WindowModel.self) private var model
+    @Environment(SidebarDragState.self) private var drag
+
+    var body: some View {
+        let dropping = { if case .insert(_, .project(let id), _)? = drag.plan { id == project.id } else { false } }()
+        Button {
+            model.newTab(inProject: project.id)
+        } label: {
+            HStack(spacing: DS.Space.gap10) {
+                Image(systemName: "plus")
+                    .font(.caption)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .frame(width: 16)
+                Text(dropping ? "Drop to add" : "Drag tabs here or press +")
+                    .font(DS.Font.sidebarSubtitle)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+            }
+            .sidebarRow(selected: false)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(DS.Palette.project(project.color).opacity(0.5))
+                .frame(width: 2)
+                .padding(.leading, DS.Space.s + 2)
+                .accessibilityHidden(true)
+        }
+        .animation(DS.Motion.quick, value: dropping)
+        .accessibilityLabel("No tabs in \(project.name). New Terminal")
+        .accessibilityIdentifier("project-empty-\(project.name)")
+    }
+}
+
+/// Taught once, before the first project: tabs group by dropping one onto another. Gone for
+/// good when dismissed or once any project exists.
+struct ProjectsIntroRow: View {
+    static let dismissedKey = "projects.introDismissed"
+    @AppStorage(dismissedKey) private var dismissed = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DS.Space.gap10) {
+            Image(systemName: "square.stack")
+                .font(.caption)
+                .foregroundStyle(DS.Palette.accent)
+                .frame(width: 16)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Group tabs into projects")
+                    .font(DS.Font.sidebarSubtitle.weight(.semibold))
+                    .foregroundStyle(DS.Palette.textSecondary)
+                Text("Drop a tab onto another tab, from any host.")
+                    .font(DS.Font.sidebarSubtitle)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Button("Close", systemImage: "xmark") { withAnimation(DS.Motion.snappy) { dismissed = true } }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(DS.Palette.textTertiary)
+                .help("Don't show again")
+                .accessibilityIdentifier("projects-intro-close")
+        }
+        .padding(.horizontal, DS.Space.m)
+        .padding(.vertical, DS.Space.s)
+        .background(DS.Palette.ink.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.Radius.control))
+        .padding(.horizontal, DS.Space.s)
+        .padding(.top, DS.Space.s)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("projects-intro")
     }
 }
 

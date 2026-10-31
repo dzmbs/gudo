@@ -1018,7 +1018,34 @@ folder").
 **Model.** A project is a named, coloured group of tabs: `ProjectInfo` (id, name, colour index,
 order, updated) and per tab a `Membership` (project id, rank). Any tab can join: a daemon tab, a
 tab on this device or a plain-SSH host, a window tab (mixed, VS Code, browser). A project exists
-while it has tabs (Chrome); there is no empty project to tend.
+while it has tabs (Chrome), except one made from nothing (New Project): it waits empty in the
+window (`HostGroups.emptyProjects`, saved with it) until its first tab joins, then lives on that
+tab's host like any other.
+
+**Only made on purpose.** A project is made by New Project (⌃⌘N, Safari's New Empty Tab Group;
+File menu, the + menu, the Mac sidebar's footer and empty-space menu, the palette), New Project
+from Tab, a drop onto a tab, or a suggestion's tap; never by anything else. A new terminal joins
+one only when asked for from it: its header's + or New Terminal, or ⌘T while one of its tabs is
+current (it lands right after that tab; `HostGroups.expectNewTab` / `claimNewTabs` take the
+next tab that host makes, a daemon's a round trip later). The joined row lights in the project's
+colour a moment and a collapsed project opens, so the join shows. A host's +, ⌥⌘T and the
+palette's New Tab on Host make loose tabs. Restores never make one either: tab ids of this device
+and of plain-SSH hosts start over each run, so the window keeps their memberships only within the
+run that made them (`ProjectsState.launch`), and a plain-SSH host closed in the window drops
+them (its next connection numbers tabs afresh). Before, a relaunch's first two terminals took the
+ids of an earlier run's grouped tabs and appeared as a project of their own.
+
+**Names.** The repository root the tabs share (the daemon's repositories; on the Mac a `.git`
+above a local tab's folder), else their folder, else "New Project" (`ProjectNaming`). Home and
+every folder above it never name one (the host's own home where known, and `/Users/x`,
+`/home/x`, `/root`… anywhere); OSC 7 directories are read as paths in both `file://` and
+Ghostty's `kitty-shell-cwd://` form (read as a URL, a shell in home once named projects after
+the user). Two projects never share a name: tabs grouped under a folder that already has a
+project join it (one project for the same work; the drop label and the suggestion say "Add to
+app"), and an explicit New Project or a rename to a taken name gets the next number ("app 2").
+A project just made opens its name for typing at once, selected (Finder's New Folder, Safari's
+New Tab Group); Return or leaving keeps it, Escape keeps the name it had. On iPhone an alert
+asks for it.
 
 **Sidebar.** Projects lead (after Agents, Hosts and Needs you), in their order, each a header
 (colour dot, name, tab count when collapsed, + New Terminal) over its tabs in rank order, with a
@@ -1034,22 +1061,29 @@ state colours (`ProjectColor`), so they sit in any theme.
 
 **Gestures.** Drag a tab's row:
 - onto the middle of another row: that row lights in the project's colour (the accent for a loose
-  row; "will group", unlike the insertion gap) and dropping groups them: into the row's project,
-  or a new project named after the shared repository or directory, else "Project N";
+  row; "will group", unlike the insertion gap) with a quiet label saying what the drop does
+  ("Group", "Add to app"), and dropping groups them: into the row's project, or the project
+  named for their shared folder, else a new one (see Names);
 - onto the top or bottom of a row: the rows slide apart and the gap is where it lands; within a
   host section it is a reorder on the host, within a project a new rank, from a host section into
   a project it joins, from a project onto its host's section it leaves (a tab can only land in
   its own host's section: tabs live on their host; anywhere on another host's row groups);
-- onto a project's header: joins at the end (the header lights); a collapsed project springs open
-  after 0.6 s; onto its host's header: leaves its project.
+- onto a project's header or an empty project's "Drag tabs here or press +" line: joins at the
+  end (the header lights); a collapsed project springs open after 0.6 s; onto its host's header:
+  leaves its project.
 Drag a project's header to reorder projects. Menus (sidebar row, strip, compact switcher, Tab
 menu): New Project from Tab, Move to Project ▸, Remove from Project; a project's header: Rename…
-(in place), Colour ▸, New Terminal, Collapse, Ungroup, Close All Tabs. Keyboard: ⌃⇧⌘↑ / ⌃⇧⌘↓
+(in place), Colour ▸, New Terminal, Collapse, Ungroup, Close All Tabs (Delete Project for an
+empty one). Keyboard: ⌃⇧⌘↑ / ⌃⇧⌘↓
 (Tab ▸ Move Tab Up / Down; ⌃⌘arrows already move dividers, Ghostty) move the current tab within
 its section; VoiceOver has Move Up / Move Down on each row. Suggestion: when two or more loose
 tabs share a repository root (the daemon's repositories) or working directory, one quiet row
 offers "Group 3 tabs in app" (one tap; dismissible, remembered per window; never automatic;
-home folders do not count).
+home folders do not count). Before the first project, while there are two tabs to group and no
+suggestion, one small card teaches the gesture ("Group tabs into projects · Drop a tab onto
+another tab, from any host."); its × or any first project retires it for good. Colours are
+handed out far apart in hue (`ProjectInfo.colorOrder`: blue, orange, green, purple…) and are
+the theme's hues barely softened, so neighbouring projects never look alike.
 
 **Persistence and sync.** Daemon tabs keep their membership on the daemon (`LayoutOp::
 SetTabProject` / `PutProject` / `RemoveProject`, pushed as `ServerCtl::Projects` to clients with
@@ -1060,7 +1094,7 @@ stamped after the copy it replaces, so two edits in one millisecond or a host's 
 lose one), ties broken by name. A rename, recolour or reorder of projects goes to every host
 holding a member. Tabs without a daemon that keeps them (this device, plain SSH, window tabs,
 older daemons) keep their membership with the window (`@SceneStorage("projects")`, JSON, and the
-app's last copy), as their tabs do. Guests: the daemon sends `Projects` only to connections with
+app's last copy), as their tabs do (this device's and plain SSH's only within one run, above). Guests: the daemon sends `Projects` only to connections with
 the owner role and refuses the ops for any other role, so a guest sees plain tabs and never the
 owner's grouping. Collapsed projects are per window.
 
@@ -1082,16 +1116,19 @@ on screen does not change, nothing moves twice, and the row fades into its gap.
 
 **iPad, iPhone, Mac.** The sidebar is the same on iPad, a foldable's open screen and the Mac
 (drag with a long press on touch). The compact switcher lists each project as a menu section
-("app · 2 hosts") before the window's and the hosts' loose tabs, with the project items in the
-tab's menu.
+("app · 2 hosts") before the window's and the hosts' loose tabs, each ending in New Terminal in
+it, with the project items in the tab's menu and New Project in the + menu.
 
 Tests: HostKit `ProjectModelTests` (definitions, last writer wins, merge across hosts, planner
 for every gesture, suggestions), `SidebarDropTests` (edges, middle, other hosts, plans applied
 to sections, loose order → session index), `ProjectStoreTests` (an old echo after an optimistic
 move, a refused move, project changes shown at once and reconciled), `HostGroupsProjectTests`
 (drops end to end, ⌘ order, a preview equals what the commit leaves, rename/recolour/reorder),
+`ProjectNamingTests` (home and above, OSC 7 forms, repository roots, unique names),
+`ProjectCreationTests` (new tabs, restores and reconnects never make or fill one; ⌘T/+ joins;
+same-named grouping joins; empty projects),
 `DaemonIntegrationTests.projectsComeBackFromTheDaemon` (a real daemon keeps them for the next
 connection); App `ProjectSidebarTests` (the list while dragging is the list after the drop,
-grouping, keys); snapshots `MacSnapshotTests.testProjects` (frame sequences of a reorder, a drop,
+grouping, ⌘T in and out of a project, New Project, the drop label, keys); snapshots `MacSnapshotTests.testProjects` (frame sequences of a reorder, a drop,
 "will group", a row joining another project) and `TouchSnapshotTests`; daemon and proto tests in
 DAEMON.md.

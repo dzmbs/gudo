@@ -42,6 +42,14 @@ struct WorkspaceSidebar: View {
             .padding(.bottom, DS.Space.l)
             .animation(DS.Motion.snappy, value: model.groups.collapsed)
         }
+        #if os(macOS)
+        // A right-click on the sidebar's empty space (rows keep their own menus).
+        .contextMenu {
+            Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") {
+                withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+            }
+        }
+        #endif
         .scrollIndicators(.never)
         .environment(swipe)
         // A row's swipe actions close when the list scrolls (Mail).
@@ -791,6 +799,18 @@ private struct SidebarFooter: View {
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
+            // Where Notes, Reminders and Music put their New Folder / Add List.
+            Button {
+                withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+            } label: {
+                Label(WorkspaceAction.newProject.title, systemImage: "plus")
+                    .labelStyle(.titleAndIcon)
+                    .font(DS.Font.sidebarSubtitle)
+            }
+            .buttonStyle(.bar)
+            .foregroundStyle(DS.Palette.textSecondary)
+            .help("New Project (⌃⌘N)")
+            .accessibilityIdentifier("sidebar-new-project")
             Spacer()
             Button("Settings", systemImage: "gearshape") {
                 #if os(macOS)
@@ -805,6 +825,8 @@ private struct SidebarFooter: View {
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
+        // Rows scroll under it: the sidebar's own background, never see-through text.
+        .chromeBackground(DS.Palette.sidebar)
     }
 }
 
@@ -852,6 +874,7 @@ struct CompactTerminalView: View {
         .chromeContent()
         // The bar is the window's base: the terminal's own background under Match Terminal.
         .chromeBackground(DS.Palette.base)
+        .modifier(ProjectNamingAlert())
     }
 
     private var bar: some View {
@@ -882,8 +905,11 @@ struct CompactTerminalView: View {
         return Menu {
             // Projects first, as in the sidebar: one section each, its tabs from any host.
             ForEach(projects) { project in
-                Section("\(project.name) · \(project.hosts.count > 1 ? "\(project.hosts.count) hosts" : model.groupName(project.hosts.first ?? ""))") {
+                Section(project.tabs.isEmpty ? project.name
+                    : "\(project.name) · \(project.hosts.count > 1 ? "\(project.hosts.count) hosts" : model.groupName(project.hosts.first ?? ""))")
+                {
                     ForEach(project.tabs, id: \.self) { ref in switcherItem(ref) }
+                    Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id) }
                 }
             }
             if !windowTabs.isEmpty {
@@ -987,6 +1013,25 @@ struct CompactTerminalView: View {
             Label("Panes", systemImage: "rectangle.split.2x1")
         }
         .menuIndicator(.hidden)
+    }
+}
+
+/// iPhone: a project just made is named in an alert (the switcher is a menu, with no room to
+/// type), as tabs are renamed.
+private struct ProjectNamingAlert: ViewModifier {
+    @Environment(WindowModel.self) private var model
+    @State private var draft = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Name Project", isPresented: Binding(get: { model.namingProject != nil }, set: { if !$0 { model.namingProject = nil } })) {
+                TextField("Project Name", text: $draft)
+                Button("Done") { if let id = model.namingProject { model.renameProject(id, to: draft) } }
+                Button("Cancel", role: .cancel) {}
+            }
+            .onChange(of: model.namingProject, initial: true) { _, id in
+                draft = id.flatMap { model.groups.project($0)?.name } ?? ""
+            }
     }
 }
 

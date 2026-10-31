@@ -88,5 +88,66 @@ final class TouchSnapshotTests: XCTestCase {
         model.close()
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
+
+    /// Making projects on touch: the first-run hint, New Project named in place, what a drop
+    /// says it will do, the window after a terminal joined from its project.
+    func testProjectsUX() async throws {
+        let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = theme
+        arguments[ProjectsIntroRow.dismissedKey] = false
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        defer {
+            arguments[ProjectsIntroRow.dismissedKey] = nil
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let model = WindowModel(app: .shared)
+        model.start()
+        for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
+        model.isSidebarShown = true
+        DesignFixtures.projectHosts(model)
+
+        let sidebar = UIWindow(windowScene: scene)
+        sidebar.frame = CGRect(x: 0, y: 0, width: SidebarWidth.standard + 40, height: min(scene.screen.bounds.height, 900))
+        sidebar.rootViewController = UIHostingController(rootView: WorkspaceSidebar()
+            .environment(model)
+            .environment(\.horizontalSizeClass, .regular)
+            .chromeTheme(ThemeCatalog.theme(named: theme), windowTheme: .auto))
+        sidebar.isHidden = false
+        await pump(1.5)
+        try capture(sidebar, "projects-intro")
+
+        func ref(_ host: String, _ name: String) -> TabRef? {
+            guard let group = model.groups.group(host), let tab = group.tabs.first(where: { $0.title == name }) else { return nil }
+            return group.ref(tab.id)
+        }
+        let app = try [XCTUnwrap(ref("fixture-studio", "api-server")), XCTUnwrap(ref("fixture-hetzner", "web"))]
+        model.newProject(from: app, name: "acme-app", naming: false)
+        withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+        await pump(1)
+        try capture(sidebar, "projects-new")
+        model.namingProject = nil
+
+        let drag = model.sidebarDrag
+        let logs = try XCTUnwrap(ref("fixture-studio", "logs"))
+        drag.dragging = logs
+        withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: app[1]) }
+        await pump(0.6)
+        try capture(sidebar, "projects-drop-add")
+        let deploy = try XCTUnwrap(ref("fixture-hetzner", "deploy"))
+        withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: deploy) }
+        await pump(0.6)
+        try capture(sidebar, "projects-drop-group")
+        withAnimation(DS.Motion.reorder) { drag.reset() }
+
+        model.focus(app[0])
+        model.newTab()
+        await pump(0.9)
+        try capture(sidebar, "projects-joined")
+        sidebar.isHidden = true
+        model.close()
+    }
 }
 #endif

@@ -74,6 +74,7 @@ enum DesignFixtures {
         switch screen {
         case "hosts": model.destination = .hosts
         case "projects": projects(model)
+        case "project-hosts": projectHosts(model)
         case "inbox": model.destination = .inbox
         case "palette": model.isPaletteShown = true
         case "host-switcher":
@@ -182,6 +183,19 @@ enum DesignFixtures {
     /// Two daemons and a plain-SSH host beside this device, their tabs in two projects that
     /// span hosts, a few left loose.
     static func projects(_ model: WindowModel) {
+        projectHosts(model)
+        func ref(_ host: String, _ name: String) -> TabRef? {
+            guard let group = model.groups.group(host), let tab = group.tabs.first(where: { $0.title == name }) else { return nil }
+            return group.ref(tab.id)
+        }
+        let app = [ref("fixture-studio", "api-server"), ref("fixture-hetzner", "web"), ref("fixture-studio", "claude")].compactMap(\.self)
+        let infra = [ref("fixture-hetzner", "deploy"), ref("fixture-box", "htop")].compactMap(\.self)
+        model.newProject(from: app, name: "acme-app", naming: false)
+        model.newProject(from: infra, name: "infra", naming: false)
+    }
+
+    /// The projects fixture's hosts, before any project.
+    static func projectHosts(_ model: WindowModel) {
         let hosts: [(HostRecord, [String])] = [
             (HostRecord(id: "fixture-studio", name: "studio", kind: .daemon, daemonId: "fixture-a"), ["api-server", "claude", "logs"]),
             (HostRecord(id: "fixture-hetzner", name: "hetzner", kind: .daemon, daemonId: "fixture-b"), ["web", "db-migrate", "deploy"]),
@@ -191,14 +205,6 @@ enum DesignFixtures {
             model.app.hosts.attachPreview(record, connection: PreviewConnection(tabs: tabs))
             try? model.groups.open(record.id)
         }
-        func ref(_ host: String, _ name: String) -> TabRef? {
-            guard let group = model.groups.group(host), let tab = group.tabs.first(where: { $0.title == name }) else { return nil }
-            return group.ref(tab.id)
-        }
-        let app = [ref("fixture-studio", "api-server"), ref("fixture-hetzner", "web"), ref("fixture-studio", "claude")].compactMap(\.self)
-        let infra = [ref("fixture-hetzner", "deploy"), ref("fixture-box", "htop")].compactMap(\.self)
-        model.newProject(from: app, name: "acme-app")
-        model.newProject(from: infra, name: "infra")
     }
 
     private static func splits(_ workspace: Workspace) {

@@ -1,9 +1,13 @@
+import DesignSystem
 import Foundation
 import HostKit
 import PaneLayout
+import SwiftUI
 
 // Projects in a window (docs/APP-ARCHITECTURE.md §23): what the sidebar's gestures, menus and
-// keys do. The model is `HostGroups`' (merged across hosts, routed per host).
+// keys do. The model is `HostGroups`' (merged across hosts, routed per host). A project is only
+// ever made by an explicit ask: New Project, New Project from Tab, a drop onto a tab, a
+// suggestion's tap. A new terminal joins one only when asked for from it (its +, ⌘T in it).
 
 extension WindowModel {
     var projects: [Project] { groups.projects }
@@ -17,7 +21,16 @@ extension WindowModel {
         return workspace(ofGroup: ref.hostId)?.title(of: tab) ?? tab.title ?? "Shell"
     }
 
-    /// The repository root a tab works in (the daemon's repositories), else its directory.
+    /// The host's home folder, where known (this Mac's own).
+    private func home(of host: String) -> String? {
+        #if os(macOS)
+        if host == HostGroups.localId || app.hosts.record(host)?.isThisDevice == true { return NSHomeDirectory() }
+        #endif
+        return nil
+    }
+
+    /// The repository root a tab works in (the daemon's repositories, or a `.git` above a local
+    /// tab's folder), else its folder; nil for a home folder or above, which says nothing.
     func projectRoot(of ref: TabRef) -> String? {
         #if os(iOS)
         // This device runs no real shell here: its tabs' folders say nothing about the work.
@@ -26,29 +39,54 @@ extension WindowModel {
         guard ref.hostId != HostGroups.mixedId, let group = groups.group(ref.hostId),
               let tab = group.tabs.first(where: { $0.id == ref.tab })
         else { return nil }
+        let home = home(of: ref.hostId)
         if let sidebar = groups.repoSidebar(for: group),
-           let repo = sidebar.repos.first(where: { $0.worktrees.contains { $0.tabs.contains(ref.tab) } })
+           let repo = sidebar.repos.first(where: { $0.worktrees.contains { $0.tabs.contains(ref.tab) } }),
+           !ProjectNaming.isHomeOrAbove(repo.id, home: home)
         {
             return repo.id
         }
-        return workspace(ofGroup: ref.hostId)?.absoluteDirectory(of: tab)
-    }
-
-    /// A new project's name: the folder its tabs share, else "Project N".
-    func projectName(for refs: [TabRef]) -> String {
-        let roots = Set(refs.map(projectRoot(of:)))
-        if roots.count == 1, let root = roots.first ?? nil,
-           let name = ProjectSuggestion.find([(refs[0], root), (refs[0], root)]).first?.name
+        guard let directory = workspace(ofGroup: ref.hostId)?.absoluteDirectory(of: tab),
+              !ProjectNaming.isHomeOrAbove(directory, home: home)
+        else { return nil }
+        #if os(macOS)
+        if ref.hostId == HostGroups.localId,
+           let root = ProjectNaming.gitRoot(of: directory, home: home, exists: { FileManager.default.fileExists(atPath: $0) })
         {
-            return name
+            return root
         }
-        let taken = Set(projects.map(\.name))
-        return (1...).lazy.map { "Project \($0)" }.first { !taken.contains($0) }!
+        #endif
+        return directory
     }
 
-    func newProject(from refs: [TabRef], name: String? = nil) {
+    /// The name of the folder `refs` all work in (repository root first), else nil.
+    func projectName(for refs: [TabRef]) -> String? {
+        ProjectNaming.sharedName(refs.map(projectRoot(of:)))
+    }
+
+    /// New Project from Tab: a new project of `refs`, named for their folder (else "New
+    /// Project", never a name another project has), its name then typed in place.
+    func newProject(from refs: [TabRef], name: String? = nil, naming: Bool = true) {
         guard !refs.isEmpty else { return }
-        groups.apply(groups.planner().create(refs, name: name ?? projectName(for: refs)))
+        let id = UUID().uuidString
+        let name = groups.uniqueProjectName(name ?? projectName(for: refs) ?? ProjectNaming.fallback)
+        groups.apply(groups.planner().create(refs, name: name, id: id))
+        if naming { startNaming(id) }
+    }
+
+    /// New Project (⌃⌘N): an empty project, its name typed in place; tabs are dragged in or
+    /// made with its +.
+    func newEmptyProject() {
+        let id = groups.createEmptyProject()
+        if widthBucket != .compact { isSidebarShown = true }
+        startNaming(id)
+    }
+
+    /// The name field of a project just made opens focused, its name selected (Finder's New
+    /// Folder, Safari's New Tab Group).
+    func startNaming(_ id: String) {
+        groups.collapsedProjects.remove(id)
+        namingProject = id
     }
 
     func move(_ ref: TabRef, toProject id: String) {
@@ -62,20 +100,20 @@ extension WindowModel {
 
     func renameProject(_ id: String, to name: String) {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        groups.apply(groups.planner().update(id, name: name))
+        guard !name.isEmpty, name != groups.project(id)?.name else { return }
+        groups.updateProject(id, name: name)
     }
 
     func setProjectColor(_ id: String, _ color: Int) {
-        groups.apply(groups.planner().update(id, color: color))
+        groups.updateProject(id, color: color)
     }
 
     func ungroupProject(_ id: String) {
-        groups.apply(groups.planner().ungroup(id))
+        groups.ungroupProject(id)
     }
 
     func moveProject(_ id: String, to index: Int) {
-        groups.apply(groups.planner().moveProject(id, to: index))
+        groups.moveProject(id, to: index)
     }
 
     /// Closes every tab of a project (the project goes with its last tab).
@@ -90,23 +128,51 @@ extension WindowModel {
         }
     }
 
-    /// A new terminal in a project: on the host of its current (else first) tab, joining once
-    /// the host has made it.
+    /// A new terminal in a project (its +, ⌘T from one of its tabs): on the current tab's host
+    /// when that tab is in the project (joining right after it), else on the host of its first
+    /// tab (else the window's), at its end.
     func newTab(inProject id: String) {
         guard let project = groups.project(id) else { return }
-        let current = currentTab.flatMap { project.tabs.contains($0) && $0.hostId != HostGroups.mixedId ? $0.hostId : nil }
-        guard let host = current ?? project.tabs.first(where: { $0.hostId != HostGroups.mixedId })?.hostId else { return }
-        let before = Set(groups.group(host)?.tabs.map(\.id) ?? [])
+        let current = currentTab.flatMap { project.tabs.contains($0) && $0.hostId != HostGroups.mixedId ? $0 : nil }
+        let preferred = current?.hostId ?? project.tabs.first(where: { $0.hostId != HostGroups.mixedId })?.hostId
+        guard let host = groups.newTabHost(preferred: preferred ?? currentGroupId) else {
+            newTab(onGroup: preferred ?? currentGroupId)
+            return
+        }
+        let index = current.flatMap { project.tabs.firstIndex(of: $0) }.map { $0 + 1 } ?? .max
+        groups.expectNewTab(on: host, joining: id, at: index)
         newTab(onGroup: host)
-        Task { [weak self] in
-            for _ in 0..<50 {
-                guard let self else { return }
-                if let new = groups.group(host)?.tabs.first(where: { !before.contains($0.id) }) {
-                    move(TabRef(hostId: host, tab: new.id), toProject: id)
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(100))
+        claimJoinedTabs()
+    }
+
+    /// Joins tabs that arrived for a project's + or ⌘T, and keeps watching while any is due
+    /// (a daemon makes its tab a round trip later).
+    private func claimJoinedTabs() {
+        let joined = withAnimation(DS.Motion.reorder) { groups.claimNewTabs() }
+        for ref in joined {
+            if let project = groups.project(of: ref) { groups.collapsedProjects.remove(project.id) }
+            flashJoined(ref)
+        }
+        guard !groups.pendingJoins.isEmpty, !followsJoins else { return }
+        followsJoins = true
+        withObservationTracking {
+            for join in groups.pendingJoins { _ = groups.group(join.host)?.tabs }
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isClosed else { return }
+                followsJoins = false
+                claimJoinedTabs()
             }
+        }
+    }
+
+    /// The row of a tab that joined a project lights in its colour a moment, so the join shows.
+    private func flashJoined(_ ref: TabRef) {
+        joinedTab = ref
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard let self, joinedTab == ref else { return }
+            withAnimation(DS.Motion.overlay) { joinedTab = nil }
         }
     }
 
@@ -123,16 +189,29 @@ extension WindowModel {
         return ProjectSuggestion.find(loose.map { ($0, projectRoot(of: $0)) }, dismissed: groups.dismissedSuggestions)
     }
 
+    /// The project a suggestion's tabs would join (one already named for their folder).
+    func existingProject(for suggestion: ProjectSuggestion) -> Project? {
+        groups.project(named: suggestion.name)
+    }
+
     func accept(_ suggestion: ProjectSuggestion) {
-        newProject(from: suggestion.tabs, name: suggestion.name)
+        if let id = groups.groupTabs(suggestion.tabs, name: suggestion.name) { startNaming(id) }
     }
 
     func dismiss(_ suggestion: ProjectSuggestion) {
         groups.dismissedSuggestions.insert(suggestion.key)
     }
 
+    /// What dropping `ref` onto `target` will do, in a word or two: "Add to app" or "Group".
+    func groupLabel(_ ref: TabRef, onto target: TabRef) -> String {
+        groups.groupTarget(ref, onto: target) { [unowned self] a, b in projectName(for: [a, b]) }
+            .map { "Add to \($0.name)" } ?? "Group"
+    }
+
     /// Carries out a sidebar drop.
     func commit(_ drop: SidebarDrop) {
-        groups.commit(drop) { [unowned self] a, b in projectName(for: [a, b]) }
+        if let made = groups.commit(drop, name: { [unowned self] a, b in projectName(for: [a, b]) }) {
+            startNaming(made)
+        }
     }
 }
