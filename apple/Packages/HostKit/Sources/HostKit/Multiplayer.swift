@@ -238,6 +238,16 @@ public final class MultiplayerSession {
     @ObservationIgnored var onInputGate: ((InputGate) -> Void)?
     /// Called once per new knock (not for renames), for a notification.
     @ObservationIgnored public var onKnockArrived: ((Knock) -> Void)?
+    /// Called when another owner device pairs with the host, for a notification.
+    @ObservationIgnored public var onDevicePaired: ((DeviceInfo) -> Void)?
+    /// Owner devices that paired while this session ran, by key, with when.
+    public private(set) var freshPairings: [String: Date] = [:]
+    /// What the host says the owner must know while it stands (re-sent on every connection).
+    public private(set) var hostAlerts: [HostAlert] = []
+    /// Called for every host alert push, repeats included (the app notifies once per alert).
+    @ObservationIgnored public var onHostAlert: ((HostAlert) -> Void)?
+    /// Alerts already announced in this run, so a reconnect does not toast again.
+    @ObservationIgnored private var announcedAlerts: Set<String> = []
 
     @ObservationIgnored private var client: (any MultiplayerClientAPI)?
     @ObservationIgnored private var pump: Task<Void, Never>?
@@ -293,6 +303,8 @@ public final class MultiplayerSession {
             case revoked
             /// Another device paired with this host (the new device's key).
             case devicePaired(String)
+            /// The host reported something the owner must act on.
+            case hostAlert(title: String)
             /// People came or went (by person, not device).
             case arrived([String])
             case left([String])
@@ -418,8 +430,25 @@ public final class MultiplayerSession {
             isRevoked = true
             post(.revoked, "Your access to this host was revoked", failure: true)
         case .devicePaired(let device):
+            // The daemon tells every other owner device; this one never needs telling.
+            guard device.device != me?.actor.device else { break }
             Self.log.info("device paired \(device.device.prefix(12), privacy: .public)")
-            post(.devicePaired(device.device), "A new device paired with this host. Not you? Remove it under Devices.", failure: false)
+            freshPairings[device.device] = device.pairedAt
+            if let index = devices.firstIndex(where: { $0.device == device.device }) {
+                devices[index] = device
+            } else {
+                devices.append(device)
+            }
+            post(.devicePaired(device.device), "\(displayName(of: device)) paired with this host. Not you? Remove it in Devices.", failure: false)
+            onDevicePaired?(device)
+        case .hostAlert(let alert):
+            hostAlerts.removeAll { $0.key == alert.key }
+            hostAlerts.insert(alert, at: 0)
+            if announcedAlerts.insert(alert.key).inserted {
+                Self.log.info("host alert \(String(describing: alert.kind), privacy: .public)")
+                post(.hostAlert(title: alert.title), alert.title, failure: true)
+            }
+            onHostAlert?(alert)
         case .knockAdded(let knock):
             if let index = knocks.firstIndex(where: { $0.knockId == knock.knockId }) {
                 knocks[index] = knock
@@ -452,7 +481,7 @@ public final class MultiplayerSession {
         refreshGate()
         followByDefault()
         switch event {
-        case .joined, .participants: if isOwner { refreshSharing() }
+        case .joined, .participants, .devicePaired: if isOwner { refreshSharing() }
         default: break
         }
     }
@@ -812,6 +841,57 @@ public final class MultiplayerSession {
         await revoke(.device(device: person.actor.device))
     }
 
+    // MARK: Devices
+
+    /// Whether `device` is the one this session runs on.
+    public func isThisDevice(_ device: DeviceInfo) -> Bool {
+        device.device == me?.actor.device
+    }
+
+    /// The daemon refuses to unpair the device asking, and a revoked one is gone already.
+    public func canRemove(_ device: DeviceInfo) -> Bool {
+        !isThisDevice(device) && !device.revoked
+    }
+
+    /// What to call a device: the name it gave, else what kind it is.
+    public func displayName(of device: DeviceInfo) -> String {
+        let name = device.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Paired devices are "owner" on the host until they say their name.
+        if !name.isEmpty, name != "owner" { return name }
+        if let kind = peers.values.first(where: { $0.actor.device == device.device })?.device.title { return kind }
+        return device.kind == .owner ? "Unnamed device" : "Guest"
+    }
+
+    /// Owner devices: ones paired while this session ran first (newest first), then this
+    /// device, then the rest by pairing time, newest first; removed ones last.
+    public var ownerDevices: [DeviceInfo] {
+        let fresh = freshPairings, mine = me?.actor.device
+        return devices.filter { $0.kind == .owner }.sorted { a, b in
+            func rank(_ d: DeviceInfo) -> Int { d.revoked ? 3 : fresh[d.device] != nil ? 0 : d.device == mine ? 1 : 2 }
+            let (ra, rb) = (rank(a), rank(b))
+            return ra != rb ? ra < rb : a.firstSeenMs > b.firstSeenMs
+        }
+    }
+
+    /// Guest devices: connected first, then newest first; removed ones last.
+    public var guestDevices: [DeviceInfo] {
+        devices.filter { $0.kind == .guest }.sorted { a, b in
+            func rank(_ d: DeviceInfo) -> Int { d.revoked ? 2 : d.connected > 0 ? 0 : 1 }
+            let (ra, rb) = (rank(a), rank(b))
+            return ra != rb ? ra < rb : a.firstSeenMs > b.firstSeenMs
+        }
+    }
+
+    /// Unpairs a device (an owner device is signed out and its invites stop working; a guest
+    /// is disconnected and kept out). Never this device.
+    @discardableResult
+    public func removeDevice(_ device: DeviceInfo) async -> RevokeResult? {
+        guard canRemove(device) else { return nil }
+        let result = await revoke(.device(device: device.device))
+        if result != nil { freshPairings[device.device] = nil }
+        return result
+    }
+
     /// Revokes and refreshes. Returns what it hit.
     @discardableResult
     public func revoke(_ target: RevokeTarget) async -> RevokeResult? {
@@ -1029,7 +1109,10 @@ public final class MultiplayerSession {
 
     /// Seeds owner data for previews.
     public func seed(grants: [GrantInfo] = [], devices: [DeviceInfo] = [], audit: AuditPage? = nil, invites: [CreatedInvite] = [], leaseRequests: [LeaseRequest] = [],
-                     knocks: [Knock] = [], approvalPolicy: ApprovalPolicy = .standard, approvalStatuses: [ApprovalStatus] = []) {
+                     knocks: [Knock] = [], approvalPolicy: ApprovalPolicy = .standard, approvalStatuses: [ApprovalStatus] = [],
+                     hostAlerts: [HostAlert] = [], freshPairings: [String: Date] = [:]) {
+        self.hostAlerts = hostAlerts
+        self.freshPairings = freshPairings
         self.grants = grants
         self.devices = devices
         self.auditPage = audit
@@ -1038,6 +1121,31 @@ public final class MultiplayerSession {
         self.knocks = knocks
         self.approvalPolicy = approvalPolicy
         self.approvalStatuses = Dictionary(approvalStatuses.map { ($0.requestId, $0) }, uniquingKeysWith: { $1 })
+    }
+}
+
+nonisolated public extension DeviceInfo {
+    /// When it paired (owner) or first joined (guest).
+    var pairedAt: Date {
+        firstSeenMs > 0 ? Date(timeIntervalSince1970: Double(firstSeenMs) / 1000) : .now
+    }
+}
+
+nonisolated public extension HostAlert {
+    /// Identifies one alert across connections and launches.
+    var key: String { "\(kind)/\(atMs)" }
+}
+
+nonisolated public extension DeviceClass {
+    /// "iPhone", "iPad", "Mac", "Terminal", or nil when the device did not say.
+    var title: String? {
+        switch self {
+        case .phone: "iPhone"
+        case .tablet: "iPad"
+        case .desktop: "Mac"
+        case .terminal: "Terminal"
+        case .unknown: nil
+        }
     }
 }
 

@@ -171,6 +171,8 @@ struct WindowContent: View {
             .handlesExternalEvents(preferring: [WindowContent.urlScheme], allowing: ["*"])
             #if os(iOS)
             .background { SceneReader(model: model) }
+            #else
+            .modifier(SettingsLinkOpener())
             #endif
             .onDisappear { model.close() }
             .task {

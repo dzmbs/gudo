@@ -79,6 +79,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            .onAppear(perform: followLink)
+            .onChange(of: SettingsLink.shared.pending) { followLink() }
             .toolbar {
                 // The title starts over the form, not over the sidebar: the traffic lights take
                 // the sidebar's first 78 pt.
@@ -127,6 +129,21 @@ struct SettingsView: View {
                 }
             }
         }
+        .onAppear(perform: followLink)
+        .onChange(of: SettingsLink.shared.pending) { followLink() }
+        #endif
+    }
+
+    /// Shows the page a notification or toast asked for.
+    private func followLink() {
+        guard let page = SettingsLink.shared.pending else { return }
+        SettingsLink.shared.pending = nil
+        query = ""
+        #if os(macOS)
+        navigation.pane = page.pane
+        navigation.path = [page]
+        #else
+        path = [page]
         #endif
     }
 
@@ -148,6 +165,7 @@ struct SettingsView: View {
             AgentToolsSection().chromeRows()
             GitSettingsSection().chromeRows()
             NetworkSettingsSection().chromeRows()
+            DevicesSettingsSection().chromeRows()
             AboutSection().chromeRows()
         }
     }
@@ -180,6 +198,7 @@ struct SettingsView: View {
         case .agents: AgentsSettingsSection(); AgentToolsSection()
         case .git: GitSettingsSection()
         case .network: NetworkSettingsSection()
+        case .devices: DevicesSettingsSection()
         case .thisMac: ThisMacSettingsSection()
         case .about: AboutSection()
         }
@@ -190,7 +209,52 @@ struct SettingsView: View {
 /// Pages pushed onto the Settings stack by value.
 enum SettingsPage: Hashable {
     case theme, lightTheme, darkTheme, keyBarProfiles, acknowledgements
+    /// A host's paired devices and guests.
+    case hostDevices(String)
+
+    #if os(macOS)
+    /// The pane it is pushed over.
+    var pane: SettingsPane {
+        switch self {
+        case .theme, .lightTheme, .darkTheme: .appearance
+        case .keyBarProfiles: .keyboard
+        case .acknowledgements: .about
+        case .hostDevices: .devices
+        }
+    }
+    #endif
 }
+
+/// Asks Settings to show a page: from a notification, a toast or another window.
+@MainActor
+@Observable
+final class SettingsLink {
+    static let shared = SettingsLink()
+    /// The page to show; Settings takes it when it appears or is already open.
+    var pending: SettingsPage?
+    /// Bumped to have a window bring the Mac Settings window forward.
+    private(set) var openRequests = 0
+
+    func open(_ page: SettingsPage) {
+        pending = page
+        #if os(macOS)
+        openRequests += 1
+        #else
+        ActiveWindow.model?.sheet = .settings
+        #endif
+    }
+}
+
+#if os(macOS)
+/// Opens the Settings window when `SettingsLink` asks (only a view can call `openSettings`).
+struct SettingsLinkOpener: ViewModifier {
+    @Environment(\.openSettings) private var openSettings
+
+    func body(content: Content) -> some View {
+        content.onChange(of: SettingsLink.shared.openRequests) { openSettings() }
+    }
+}
+#endif
 
 /// A pushed page.
 private struct SettingsPageView: View {
@@ -210,6 +274,7 @@ private struct SettingsPageView: View {
                 KeyBarProfilesView()
                 #endif
             case .acknowledgements: AcknowledgementsView()
+            case .hostDevices(let id): HostDevicesView(hostId: id)
             }
         }
         #if os(macOS)
@@ -239,7 +304,7 @@ final class SettingsNavigation {
 #if os(macOS)
 /// The Mac Settings window's panes, in its sidebar.
 nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case appearance, terminal, keyboard, browser, notifications, agents, git, network, thisMac, about
+    case appearance, terminal, keyboard, browser, notifications, agents, git, network, devices, thisMac, about
     var id: String { rawValue }
 
     var title: String {
@@ -253,6 +318,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .browser: "Browser"
         case .git: "Git"
         case .network: "Network"
+        case .devices: "Devices"
         case .thisMac: "This Mac"
         case .about: "About"
         }
@@ -269,6 +335,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .browser: "globe"
         case .git: "arrow.triangle.branch"
         case .network: "network"
+        case .devices: "laptopcomputer.and.iphone"
         case .thisMac: "laptopcomputer"
         case .about: "info.circle"
         }

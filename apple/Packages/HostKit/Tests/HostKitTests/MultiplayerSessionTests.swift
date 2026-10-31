@@ -24,6 +24,7 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         var inviter: String?
         var grants: [GrantInfo] = []
         var linkRequests: [String] = []
+        var devices: [DeviceInfo] = []
     }
     let state = Mutex(State())
 
@@ -49,7 +50,7 @@ nonisolated final class FakeMultiplayerClient: MultiplayerClientAPI {
         state.withLock { $0.linkRequests.append(grantId) }
         return "unnamed://join/again-\(grantId)"
     }
-    func listDevices() async throws -> [DeviceInfo] { [] }
+    func listDevices() async throws -> [DeviceInfo] { state.withLock { $0.devices } }
     func revoke(target: RevokeTarget) async throws -> RevokeResult {
         state.withLock { $0.revoked.append(target) }
         return RevokeResult(grants: [], devices: [], disconnected: 1)

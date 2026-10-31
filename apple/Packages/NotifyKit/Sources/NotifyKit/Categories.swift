@@ -35,6 +35,7 @@ public enum NotificationCategories {
                 hiddenPreviewsBodyPlaceholder: "An agent is waiting for you", options: []),
             UNNotificationCategory(identifier: agentDone, actions: [open], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: commandDone, actions: [open], intentIdentifiers: [], options: []),
+            DeviceNotifications.notificationCategory,
         ]
     }
 }

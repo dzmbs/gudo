@@ -33,6 +33,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     private var unseen: [String: UInt32] = [:]
     private var authorization: UNAuthorizationStatus?
     private var installed = false
+    private lazy var security = HostSecurityNotifier { [weak self] in await self?.ensureAuthorized() ?? false }
 
     /// Registers categories and the delegate (before launch finishes, so actions on a cold
     /// start reach the handler) and starts following the hosts' attention feeds.
@@ -79,6 +80,16 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
             }
             daemon.multiplayer.onKnockArrived = { [weak self] knock in
                 Task { await self?.postKnock(knock, hostId: id) }
+            }
+            daemon.multiplayer.onDevicePaired = { [weak self, weak daemon] device in
+                guard let self, let daemon else { return }
+                let hostName = hosts.record(id)?.name ?? "your host"
+                Task { await self.security.post(device, hostId: id, hostName: hostName, session: daemon.multiplayer) }
+            }
+            daemon.multiplayer.onHostAlert = { [weak self] alert in
+                guard let self else { return }
+                let hostName = hosts.record(id)?.name ?? "Your host"
+                Task { await self.security.post(alert, hostId: id, hostName: hostName) }
             }
             subscriptions[id] = (identity, token)
         }
@@ -206,6 +217,12 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         if userInfo[Self.knockHostKey] is String {
             await MainActor.run { ActiveWindow.model?.destination = .inbox }
+            return
+        }
+        if let host = DeviceNotifications.hostId(from: userInfo) {
+            if action != UNNotificationDismissActionIdentifier {
+                await MainActor.run { SettingsLink.shared.open(.hostDevices(host)) }
+            }
             return
         }
         let thread = response.notification.request.content.threadIdentifier

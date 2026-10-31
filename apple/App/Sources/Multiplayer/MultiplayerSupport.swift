@@ -79,15 +79,7 @@ extension UnnamedCore.Peer {
     }
 
     /// "iPad", "Mac", … or nil when the device did not say.
-    var deviceName: String? {
-        switch device {
-        case .phone: "iPhone"
-        case .tablet: "iPad"
-        case .desktop: "Mac"
-        case .terminal: "Terminal"
-        case .unknown: nil
-        }
-    }
+    var deviceName: String? { device.title }
 }
 
 extension MultiplayerSession.Notice {
@@ -98,6 +90,7 @@ extension MultiplayerSession.Notice {
         case .viewOnly, .inputRejected: "eye"
         case .revoked: "person.crop.circle.badge.xmark"
         case .devicePaired: "lock.shield"
+        case .hostAlert: "exclamationmark.shield"
         case .alreadyDecided: "checkmark.seal"
         case .forbidden, .failed: "exclamationmark.triangle.fill"
         case .arrived: "person.crop.circle.badge.plus"
@@ -171,7 +164,9 @@ nonisolated enum MockMultiplayer {
                      leaseRequests: UserDefaults.standard.bool(forKey: "mockLeaseRequest")
                         ? [.init(paneId: 3, by: mira, name: "Mira Holt")] : [],
                      knocks: UserDefaults.standard.bool(forKey: "mockKnock") ? [knock] : [],
-                     approvalPolicy: ApprovalPolicy(mode: .twoPerson, maxRisk: .edits))
+                     approvalPolicy: ApprovalPolicy(mode: .twoPerson, maxRisk: .edits),
+                     hostAlerts: UserDefaults.standard.bool(forKey: "mockHostAlert") ? [hostAlert] : [],
+                     freshPairings: showsPairing ? [pairedNow.device: pairedNow.pairedAt] : [:])
         // `-mockFollow YES`: this device follows Mira (the follow pill).
         if UserDefaults.standard.bool(forKey: "mockFollow") { session.follow(mira.principal) }
         return session
@@ -209,8 +204,25 @@ nonisolated enum MockMultiplayer {
         grant("g1", "Old laptop", [.viewer, .driver], .daemon, expires: now - 86_400_000, uses: 1, bound: 1, revoked: true, issuedAgo: 9 * 86_400_000),
     ]
 
-    static let devices: [DeviceInfo] = [
+    /// `-mockDevicePaired YES`: an iPhone paired a minute ago (the highlighted row, the notice).
+    static let pairedNow = DeviceInfo(
+        device: "c7".padding(toLength: 64, withPad: "4", startingAt: 0), principal: owner.principal, kind: .owner,
+        name: "Alex’s iPhone", firstSeenMs: now - 60_000, grantId: nil, revoked: false, connected: 1)
+    static var showsPairing: Bool { UserDefaults.standard.bool(forKey: "mockDevicePaired") }
+
+    /// `-mockHostAlert YES`: the host lost its grant store.
+    static let hostAlert = HostAlert(
+        kind: .grantStoreReset, atMs: now - 7_200_000, title: "Earlier invites stopped working",
+        body: "The host couldn't read its invite records and set them aside. Links shared before now are refused; send new invites.")
+
+    static var devices: [DeviceInfo] {
+        (showsPairing ? [pairedNow] : []) + baseDevices
+    }
+
+    static let baseDevices: [DeviceInfo] = [
         DeviceInfo(device: owner.device, principal: owner.principal, kind: .owner, name: "Alex’s iPad", firstSeenMs: now - 40 * 86_400_000, grantId: nil, revoked: false, connected: 1),
+        DeviceInfo(device: "b3".padding(toLength: 64, withPad: "9", startingAt: 0), principal: owner.principal, kind: .owner, name: "Alex’s MacBook Pro", firstSeenMs: now - 12 * 86_400_000, grantId: nil, revoked: false, connected: 0),
+        DeviceInfo(device: "d1".padding(toLength: 64, withPad: "2", startingAt: 0), principal: owner.principal, kind: .owner, name: "owner", firstSeenMs: now - 63 * 86_400_000, grantId: nil, revoked: false, connected: 0),
         DeviceInfo(device: mira.device, principal: mira.principal, kind: .guest, name: "Mira Holt", firstSeenMs: now - 1_800_000, grantId: "g2", revoked: false, connected: 1),
         DeviceInfo(device: jon.device, principal: jon.principal, kind: .guest, name: "Jon Oyelaran", firstSeenMs: now - 900_000, grantId: "g3", revoked: false, connected: 1),
     ]
