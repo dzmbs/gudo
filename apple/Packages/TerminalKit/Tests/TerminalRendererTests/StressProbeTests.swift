@@ -194,6 +194,15 @@ struct StressProbeTests {
         try await pauseForInspection()
     }
 
+    /// With UNNAMED_STRESS_SAMPLE=<file>, samples this process for a few seconds in the background.
+    func startSampling() {
+        guard let file = ProcessInfo.processInfo.environment["UNNAMED_STRESS_SAMPLE"] else { return }
+        let sample = Process()
+        sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+        sample.arguments = ["\(getpid())", "5", "-file", file]
+        try? sample.run()
+    }
+
     /// With UNNAMED_STRESS_PAUSE=<file>, writes the pid there and waits for `leaks`/`vmmap`.
     func pauseForInspection() async throws {
         guard let pidFile = ProcessInfo.processInfo.environment["UNNAMED_STRESS_PAUSE"] else { return }
@@ -233,6 +242,35 @@ struct StressProbeTests {
         send(id: 999, w: 8000, h: 2000)
         print("PROBE kitty 8000x2000 (64 MB): frame \(worst), textures \(surface.kittyTextures.count), footprint +\((footprint() - start) >> 20) MB")
         try await pauseForInspection()
+    }
+
+    /// Scrollback search with a full 10 MB scrollback of matches, during a flood.
+    @Test func probeSearchDuringFlood() throws {
+        let terminal = Terminal(cols: 160, rows: 50) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 13)
+        surface.layout(size: CGSize(width: 1400, height: 900), scale: 2)
+        let line = Array((String(repeating: "the needle e ", count: 12) + "\r\n").utf8)
+        var block: [UInt8] = []
+        for _ in 0..<1000 { block += line }
+        for _ in 0..<120 { terminal.write(block) }  // ~19 MB through a 10 MB scrollback
+        surface.renderIfDirty()
+        let t0 = CACurrentMediaTime()
+        surface.setSearch("e")
+        let setCost = CACurrentMediaTime() - t0
+        var worst = 0.0
+        var frames = 0
+        startSampling()
+        let start = CACurrentMediaTime()
+        while CACurrentMediaTime() - start < 8 {
+            terminal.write(Array(line.prefix(80)) + Array("\r\n".utf8))
+            surface.outputArrived()
+            let f0 = CACurrentMediaTime()
+            surface.renderIfDirty()
+            if frames % 10 == 0 { _ = surface.selectMatch(.next) }
+            worst = max(worst, CACurrentMediaTime() - f0)
+            frames += 1
+        }
+        print("PROBE search during flood: setSearch \(setCost)s, worst frame \(worst)s over \(frames) frames, status \(String(describing: surface.search?.status))")
     }
 }
 
