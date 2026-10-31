@@ -21,8 +21,13 @@ const READ_BUDGET: usize = 1024 * 1024;
 const ACTIVE_POLL: Duration = Duration::from_millis(25);
 /// ...for this long...
 const ACTIVE_WINDOW: Duration = Duration::from_millis(500);
-/// ...and then this often until the next activity.
+/// ...then this often...
 const IDLE_POLL: Duration = Duration::from_secs(1);
+/// ...for this long, and then not at all until the next activity or an explicit refresh
+/// ([`PtyActor::refresh_echo`](super::PtyActor::refresh_echo)). Programs change modes around
+/// their own output or the user's input, both of which re-check at once: a quiet terminal
+/// costs no wakeups.
+const IDLE_WINDOW: Duration = Duration::from_secs(30);
 
 /// The write end of the self-pipe that interrupts the I/O thread's `poll`.
 pub(super) struct Waker(OwnedFd);
@@ -90,11 +95,7 @@ impl IoLoop {
             }
             self.refresh_echo();
 
-            let timeout = if last_activity.elapsed() < ACTIVE_WINDOW {
-                ACTIVE_POLL
-            } else {
-                IDLE_POLL
-            };
+            let timeout = poll_interval(last_activity.elapsed());
             let ready = match self.poll(timeout) {
                 Ok(ready) => ready,
                 Err(err) => {
@@ -209,7 +210,7 @@ impl IoLoop {
         });
     }
 
-    fn poll(&self, timeout: Duration) -> rustix::io::Result<Ready> {
+    fn poll(&self, timeout: Option<Duration>) -> rustix::io::Result<Ready> {
         let mut master_events = PollFlags::IN;
         if !self.pending.is_empty() {
             master_events |= PollFlags::OUT;
@@ -218,8 +219,9 @@ impl IoLoop {
             PollFd::new(&*self.master, master_events),
             PollFd::new(&self.wake, PollFlags::IN),
         ];
-        let timeout = Timespec::try_from(timeout).expect("constant timeouts fit in a timespec");
-        match rustix::event::poll(&mut fds, Some(&timeout)) {
+        let timeout =
+            timeout.map(|t| Timespec::try_from(t).expect("constant timeouts fit in a timespec"));
+        match rustix::event::poll(&mut fds, timeout.as_ref()) {
             Ok(_) => {}
             Err(Errno::INTR) => return Ok(Ready::default()),
             Err(err) => return Err(err),
@@ -234,6 +236,18 @@ impl IoLoop {
             hangup: master.intersects(PollFlags::HUP | PollFlags::ERR),
             wake: !fds[1].revents().is_empty(),
         })
+    }
+}
+
+/// How long to wait for I/O before re-reading the echo flags, by time since activity; `None`
+/// waits for I/O or a wake.
+fn poll_interval(since_activity: Duration) -> Option<Duration> {
+    if since_activity < ACTIVE_WINDOW {
+        Some(ACTIVE_POLL)
+    } else if since_activity < IDLE_WINDOW {
+        Some(IDLE_POLL)
+    } else {
+        None
     }
 }
 

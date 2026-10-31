@@ -252,9 +252,14 @@ async fn probe(port: u16) -> PortKind {
 pub(crate) async fn run(core: Arc<Core>) {
     let interval = core.cfg.port_scan_interval;
     loop {
-        let _ = tokio::time::timeout(interval, core.ws.ports.trigger.notified()).await;
         if core.connected_clients() == 0 {
-            continue;
+            // A connecting client triggers a scan.
+            core.ws.ports.trigger.notified().await;
+            if core.connected_clients() == 0 {
+                continue;
+            }
+        } else {
+            let _ = tokio::time::timeout(interval, core.ws.ports.trigger.notified()).await;
         }
         // Let a burst of triggers (a server printing several lines) settle.
         tokio::time::sleep(Duration::from_millis(50)).await;

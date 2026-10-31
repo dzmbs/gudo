@@ -2,9 +2,9 @@
 //! (D3), persistent history (D4), completion (D5), file search for `@` mentions (D7) and the
 //! options of a blocked agent (D9).
 //!
-//! One task ([`run`]) samples every pane's foreground process group every
-//! [`foreground::SAMPLE`] and, for panes some connection watches, re-reads the prompt state
-//! whenever output arrived, pushing changes. Requests are answered by [`handle`]; the policy
+//! One task ([`run`]) samples the foreground process group of every pane in an attached
+//! session every [`foreground::SAMPLE`] and, for panes some connection watches, re-reads the
+//! prompt state whenever output arrived, pushing changes; with no client connected it sleeps. Requests are answered by [`handle`]; the policy
 //! check happens in the connection before it.
 
 pub(crate) mod blocked;
@@ -106,10 +106,22 @@ impl Assist {
     }
 
     /// The pane's reported foreground program.
-    pub fn foreground(&self, pane: PaneId) -> Option<Foreground> {
+    fn reported(&self, pane: PaneId) -> Option<Foreground> {
         lock(&self.foreground)
             .get(&pane)
             .and_then(|t| t.current().cloned())
+    }
+
+    /// The pane's foreground program: the reported one, else read now (panes no client sees
+    /// are not sampled).
+    pub fn foreground(&self, entry: &PaneEntry) -> Option<Foreground> {
+        self.reported(entry.pane.id).or_else(|| {
+            entry
+                .pane
+                .pty()
+                .foreground_process()
+                .map(|p| foreground::foreground(entry.pane.id, p))
+        })
     }
 }
 
@@ -133,8 +145,8 @@ fn shell_kind(name: &str) -> ShellKind {
 
 /// The shell at the pane's prompt: the foreground program when it is a shell, else the
 /// configured shell.
-fn pane_shell(core: &Core, pane: PaneId) -> ShellKind {
-    match core.assist.foreground(pane) {
+fn pane_shell(core: &Core, entry: &PaneEntry) -> ShellKind {
+    match core.assist.foreground(entry) {
         Some(fg) if fg.profile == ProgramProfile::Shell => shell_kind(&fg.name),
         _ => shell_kind(&core.cfg.shell().to_string_lossy()),
     }
@@ -184,18 +196,12 @@ fn state_of(pane: PaneId, snap: &LineSnapshot, shell: ShellKind) -> PromptState 
 /// The pane's prompt state now.
 pub(crate) fn prompt_state(core: &Core, entry: &PaneEntry) -> PromptState {
     let snap = entry.pane.line_snapshot();
-    state_of(entry.pane.id, &snap, pane_shell(core, entry.pane.id))
+    state_of(entry.pane.id, &snap, pane_shell(core, entry))
 }
 
 fn pane_assist(core: &Core, entry: &PaneEntry) -> PaneAssist {
     PaneAssist {
-        foreground: core.assist.foreground(entry.pane.id).or_else(|| {
-            entry
-                .pane
-                .pty()
-                .foreground_process()
-                .map(|p| foreground::foreground(entry.pane.id, p))
-        }),
+        foreground: core.assist.foreground(entry),
         prompt: prompt_state(core, entry),
     }
 }
@@ -215,29 +221,88 @@ pub(crate) fn command_finished(core: &Core, entry: &PaneEntry, mark: &CommandMar
     );
 }
 
-/// Samples foregrounds and refreshes watched prompts until the daemon stops.
+/// Samples foregrounds and refreshes watched prompts until the daemon stops. Both are only
+/// for clients: with none connected the task sleeps until one arrives.
 pub(crate) async fn run(core: Arc<Core>) {
-    let mut tick = tokio::time::interval(PROMPT_TICK);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_sample: Option<Instant> = None;
+    let mut reads = ProcessReads::default();
     loop {
-        tick.tick().await;
+        if core.connected_clients() == 0 {
+            // Stale programs must not be reported to the next client as current.
+            lock(&core.assist.foreground).clear();
+            reads.clear();
+            let arrived = core.client_arrived.notified();
+            tokio::pin!(arrived);
+            arrived.as_mut().enable();
+            if core.connected_clients() == 0 {
+                arrived.await;
+            }
+            last_sample = None;
+            continue;
+        }
+        let watched = !lock(&core.assist.watchers).is_empty();
+        tokio::time::sleep(if watched {
+            PROMPT_TICK
+        } else {
+            foreground::SAMPLE
+        })
+        .await;
         if last_sample.is_none_or(|t| t.elapsed() >= foreground::SAMPLE) {
             last_sample = Some(Instant::now());
-            sample_foregrounds(&core);
+            sample_foregrounds(&core, &mut reads);
         }
-        refresh_prompts(&core);
+        if watched {
+            refresh_prompts(&core);
+        }
     }
 }
 
-fn sample_foregrounds(core: &Core) {
+/// The last process read per pane, reused while its foreground group stays the same: the
+/// group id is one syscall, the name and arguments are several plus an allocation.
+#[derive(Default)]
+struct ProcessReads(HashMap<PaneId, (u32, Instant, Option<pty::ForegroundProcess>)>);
+
+impl ProcessReads {
+    /// How long a read stands for an unchanged group (a program may `exec` in place).
+    const REUSE: Duration = Duration::from_secs(1);
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    fn read(
+        &mut self,
+        id: PaneId,
+        entry: &PaneEntry,
+        now: Instant,
+    ) -> Option<pty::ForegroundProcess> {
+        let pty = entry.pane.pty();
+        let Some(pgid) = pty.foreground_pgid() else {
+            self.0.remove(&id);
+            return None;
+        };
+        if let Some((seen, at, process)) = self.0.get(&id)
+            && *seen == pgid
+            && now.duration_since(*at) < Self::REUSE
+        {
+            return process.clone();
+        }
+        let process = pty::ForegroundProcess::of(pgid);
+        self.0.insert(id, (pgid, now, process.clone()));
+        process
+    }
+}
+
+/// Samples the foreground of the panes clients can see (their attached sessions).
+fn sample_foregrounds(core: &Core, reads: &mut ProcessReads) {
+    let now = Instant::now();
     // The process lookups happen before the trackers are locked.
     let samples: Vec<(PaneId, Option<pty::ForegroundProcess>)> = core
-        .pane_entries()
+        .attached_panes()
         .into_iter()
-        .map(|(id, entry)| (id, entry.pane.pty().foreground_process()))
+        .map(|(id, entry)| (id, reads.read(id, &entry, now)))
         .collect();
-    let now = Instant::now();
+    reads.0.retain(|p, _| samples.iter().any(|(id, _)| id == p));
     let mut changed = Vec::new();
     {
         let mut trackers = lock(&core.assist.foreground);
@@ -403,7 +468,7 @@ async fn submit_line(
 ) -> Result<AssistResponse, AssistError> {
     let entry = pane_entry(core, req.pane_id)?;
     let snap = entry.pane.line_snapshot();
-    let state = state_of(req.pane_id, &snap, pane_shell(core, req.pane_id));
+    let state = state_of(req.pane_id, &snap, pane_shell(core, &entry));
     // Sampled now, not the debounced report: a program started a moment ago owns the line.
     let shell_in_front = entry
         .pane

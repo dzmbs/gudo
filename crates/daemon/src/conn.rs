@@ -410,7 +410,10 @@ async fn serve_knock(
         _ => {}
     }
     let id = match core.mp.knock(&core, knocker, ctl.clone(), conn.clone()) {
-        Ok(id) => id,
+        Ok(id) => {
+            core.client_arrived.notify_waiters();
+            id
+        }
         Err(reason) => {
             let _ = ctl.send(ServerCtl::Refused { reason });
             drop(ctl);
@@ -1902,6 +1905,10 @@ impl Client {
                 let pane_id = pane_id.filter(|&p| self.pane_allowed(p));
                 if let Some(pane) = pane_id {
                     crate::ws::pane_focused(&self.core, pane);
+                    // A quiet terminal stopped polling its modes: fresh ones before typing.
+                    if let Some(entry) = self.core.pane(pane) {
+                        entry.pane.pty().refresh_echo();
+                    }
                 }
                 lock(&self.state).focus = pane_id;
                 self.core.mp.set_focus(&self.core, self.id, pane_id);
@@ -2608,6 +2615,7 @@ impl Client {
             return;
         };
         let pane = Arc::clone(&entry.pane);
+        pane.pty().refresh_echo();
         let viewer = self.viewer(pane_id);
         // A since-join guest never resumes from before its view opened: the ring would
         // replay output it must not see.

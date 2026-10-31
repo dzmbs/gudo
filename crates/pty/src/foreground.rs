@@ -67,11 +67,16 @@ pub(crate) fn foreground_process(
     master: impl AsFd,
     session_leader: u32,
 ) -> Option<ForegroundProcess> {
-    let pgid = match rustix::termios::tcgetpgrp(master) {
-        Ok(pid) => pid.as_raw_nonzero().get() as u32,
-        Err(_) => imp::terminal_pgid_of(session_leader)?,
-    };
-    ForegroundProcess::of(pgid)
+    ForegroundProcess::of(foreground_pgid(master, session_leader)?)
+}
+
+/// The foreground process group id of the terminal behind `master` (see
+/// [`foreground_process`]).
+pub(crate) fn foreground_pgid(master: impl AsFd, session_leader: u32) -> Option<u32> {
+    match rustix::termios::tcgetpgrp(master) {
+        Ok(pid) => Some(pid.as_raw_nonzero().get() as u32),
+        Err(_) => imp::terminal_pgid_of(session_leader),
+    }
 }
 
 #[cfg(test)]

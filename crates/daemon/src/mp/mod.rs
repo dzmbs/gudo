@@ -1741,6 +1741,20 @@ pub(crate) async fn run(core: std::sync::Arc<Core>) {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut ticks: u64 = 0;
     loop {
+        // Leases, presence and grant checks concern connections; with none there is nothing to
+        // do but the occasional view prune.
+        if core.connected_clients() == 0 && lock(&core.mp.knocks).is_empty() {
+            let arrived = core.client_arrived.notified();
+            tokio::pin!(arrived);
+            arrived.as_mut().enable();
+            if core.connected_clients() == 0 && lock(&core.mp.knocks).is_empty() {
+                tokio::select! {
+                    () = arrived => {}
+                    () = tokio::time::sleep(Duration::from_secs(60)) => prune_views(&core),
+                }
+                continue;
+            }
+        }
         interval.tick().await;
         core.mp.tick(&core);
         ticks += 1;

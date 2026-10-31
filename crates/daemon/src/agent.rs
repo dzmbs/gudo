@@ -818,6 +818,7 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
             && let Some(kind) = agent_kind(&request.agent)
         {
             *agent = Some(AgentRuntime::new(kind, pane_id, adapter(kind), false));
+            entry.agent_attached.notify_one();
         }
         let Some(rt) = agent.as_mut() else {
             return HookResponse::default();
