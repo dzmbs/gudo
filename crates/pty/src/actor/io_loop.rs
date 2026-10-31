@@ -17,6 +17,13 @@ use crate::termios::EchoState;
 const READ_BUF: usize = 64 * 1024;
 /// Most bytes read per loop iteration, so a flooding child cannot starve input.
 const READ_BUDGET: usize = 1024 * 1024;
+/// A macOS PTY hands out at most ~1 KiB per read, so a flooding child leaves the master empty
+/// between reads for a moment. After a full read, retry this many times before going back to
+/// `poll`: most gaps close within a few retries, which saves a sleep and a wakeup per KiB
+/// (Ghostty's `bridge_spin_max`, src/termio/Exec.zig).
+const BRIDGE_RETRIES: u32 = 16;
+/// A read at least this big suggests more is coming.
+const FULL_READ: usize = 1024;
 /// After output or input, re-check the echo flags this often...
 const ACTIVE_POLL: Duration = Duration::from_millis(25);
 /// ...for this long...
@@ -172,6 +179,8 @@ impl IoLoop {
 
     fn read_output(&mut self, buf: &mut [u8], hangup: bool) -> ReadOutcome {
         let mut total = 0;
+        let mut last = 0;
+        let mut retries = 0;
         while total < READ_BUDGET {
             match rustix::io::read(&*self.master, &mut *buf) {
                 // Linux reports a closed slave as EIO, macOS as a 0-byte read.
@@ -179,9 +188,15 @@ impl IoLoop {
                 Ok(n) => {
                     self.publish(&buf[..n]);
                     total += n;
+                    last = n;
+                    retries = 0;
                 }
                 Err(Errno::INTR) => {}
                 Err(Errno::AGAIN) if hangup && total == 0 => return ReadOutcome::Eof,
+                Err(Errno::AGAIN) if last >= FULL_READ && retries < BRIDGE_RETRIES => {
+                    retries += 1;
+                    std::hint::spin_loop();
+                }
                 Err(Errno::AGAIN) => break,
                 Err(err) => {
                     tracing::warn!(%err, "pty read failed; closing");
