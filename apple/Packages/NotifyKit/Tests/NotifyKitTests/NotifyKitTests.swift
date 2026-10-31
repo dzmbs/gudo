@@ -318,7 +318,8 @@ private final class FakeClient: NotificationActionClient {
         #expect(approval?.actions[1].options.contains(.destructive) == true)
         #expect(approval?.actions[2].options.contains(.foreground) == true)
         #expect(categories["AGENT_BLOCKED"]?.actions.map(\.identifier) == ["OPEN"])
-        #expect(categories.keys.sorted() == ["AGENT_APPROVAL", "AGENT_BLOCKED", "AGENT_DONE", "COMMAND_DONE"])
+        #expect(categories[DeviceNotifications.category]?.actions.map(\.identifier) == [DeviceNotifications.reviewAction])
+        #expect(categories.keys.sorted() == ["AGENT_APPROVAL", "AGENT_BLOCKED", "AGENT_DONE", "COMMAND_DONE", DeviceNotifications.category])
     }
 }
 
