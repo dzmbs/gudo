@@ -91,6 +91,12 @@ pub enum MultiplayerEvent {
         /// The new device.
         device: DeviceInfo,
     },
+    /// The host's access control needs its owner (owner devices only), e.g. its grant store
+    /// was reset. Sent on every connection while it stands: show each alert once.
+    HostAlert {
+        /// The alert.
+        alert: proto::HostAlert,
+    },
     /// Someone knocked, or a knock ended (owner devices only). The current list is
     /// [`Client::pending_knocks`].
     Knock {
@@ -242,6 +248,7 @@ impl MpState {
             ServerCtl::Peers(push) => (self.peers.apply(push)?, None),
             msg @ ServerCtl::Revoked { .. } => (MultiplayerEvent::Revoked, Some(msg)),
             ServerCtl::DevicePaired(device) => (MultiplayerEvent::DevicePaired { device }, None),
+            ServerCtl::HostAlert(alert) => (MultiplayerEvent::HostAlert { alert }, None),
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();

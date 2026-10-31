@@ -214,11 +214,17 @@ policy is always `LastInput` for now.
   takes effect on the next check: the 500 ms tick closes the device's connections and those
   of guests whose invites it signed (§6.2). `hostd devices` lists the allowlist.
 - A new pairing is announced to the other connected owner devices
-  (`ServerCtl::DevicePaired`, `Caps::DEVICE_ALERTS`), so a pairing from a phished ticket is
+  (`ServerCtl::DevicePaired`, `Caps::DEVICE_ALERTS`) once the new device says its name
+  (`SetName`, kept in `devices.json`) or after 3 s, so a pairing from a phished ticket is
   seen and can be revoked.
-- Before the `Hello`, a connection is a stranger: at most 128 at once (more are refused
-  before the QUIC handshake completes), and each has `hello_timeout` (10 s) from accept to
-  `Hello`. The daemon never reads 0-RTT data: it awaits the full handshake first. Device keys
+- Removal is recorded with its time (`unpaired.json`, under the `devices.json` lock). A chain
+  counts only if its root was signed after the removal of every device in it, so a removed
+  device's invites stay void; a fresh ticket pairs the device again, without them.
+- Before the `Hello`, a connection is counted against limits overall and per source address
+  (IPv6: per /64; `Config::pre_auth`): 1024 / 32 in the QUIC handshake, then 128 / 16 for
+  keys the daemon does not trust. Paired owner devices and guests bound to a live grant are
+  recognised by their proven key (or the key a relay names) and not counted. Each connection
+  has `hello_timeout` (10 s) for the handshake and again for its `Hello`. The daemon never reads 0-RTT data: it awaits the full handshake first. Device keys
   of small order (whose signatures anyone can forge) are refused. A refused peer's
   `DaemonInfo` carries no host name, OS name or build.
 
@@ -1053,8 +1059,8 @@ Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
   `Daemon` scope; every connection (owner or guest) is told who it is with
   `ServerCtl::Joined(JoinInfo)` right after `Welcome`, whose `roles` now reflect the grant and
   whose `panes` are filtered by scope.
-- State: `<state>/grants.json` (registered chains with their bound devices, revoked grants and
-  devices, guest devices). `RegisterGrant` (owner, or the grant's own issuer) records a chain
+- State: `<state>/grants.json` (registered chains with their bound devices, revoked grants,
+  guest removal times, guest devices). `RegisterGrant` (owner, or the grant's own issuer) records a chain
   before first use so it can be listed and revoked.
 
 ### 6.2 Live checks and revocation
@@ -1066,14 +1072,18 @@ Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
   the connection 150 ms later. A 500 ms tick also disconnects connections that stopped
   passing without traffic, so revoking or unpairing an owner device also closes the guests
   it invited.
-- `grants.json` that cannot be read stops the daemon from starting: starting empty would
-  forget every revocation and use count.
+- `grants.json` that cannot be read is moved aside (`grants.json.unreadable-<ms>`), and the
+  daemon starts with every chain signed until then void (`void_before`): owner devices keep
+  working, guests' old invites are refused, new invites work. Owner devices are told with
+  `ServerCtl::HostAlert` (`Caps::HOST_ALERTS`) on every connection, plus the log and audit.
 - Signatures (grants, approvals) are verified strictly (`ed25519-dalek` `verify_strict`):
   small-order keys and non-canonical points are refused.
 - `Revoke(Grant | Device | Principal)` (owner, daemon scope) records the revocation, unpairs a
   revoked owner device, closes every affected connection at once (descendant grants are
   covered because every link id is checked), and answers with what it hit. A device cannot
-  revoke itself. Re-dials are refused (`RefuseReason::Revoked`).
+  revoke itself. Re-dials are refused (`RefuseReason::Revoked`) until an owner device pairs
+  again with a fresh ticket, or a guest joins with an invite whose root is newer than the
+  revocation.
 - Not undone by revocation (as Amp's docs warn): processes a guest started and files it
   changed.
 

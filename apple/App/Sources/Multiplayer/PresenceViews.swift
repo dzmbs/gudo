@@ -449,7 +449,16 @@ struct MultiplayerWindowHooks: ViewModifier {
             .overlay(alignment: .bottom) { KnockOverlay(workspace: workspace) }
             .modifier(PresenceSyncModifier(workspace: workspace))
             .onChange(of: workspace.multiplayer?.notice) { _, notice in
-                if let notice, let session = workspace.multiplayer { model.toasts.show(PresenceNotices.toast(notice, in: session)) }
+                guard let notice, let session = workspace.multiplayer else { return }
+                var toast = PresenceNotices.toast(notice, in: session)
+                switch notice.kind {
+                case .devicePaired, .hostAlert:
+                    if let host = workspace.hostId {
+                        toast.action = Toast.Action("Review") { SettingsLink.shared.open(.hostDevices(host)) }
+                    }
+                default: break
+                }
+                model.toasts.show(toast)
             }
             // Per host: the window no longer rebuilds per workspace (multi-host sidebar).
             .task(id: "\(workspace.hostId ?? "")/\(workspace.multiplayer?.me?.name ?? "")") {

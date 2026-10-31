@@ -192,7 +192,7 @@ proptest! {
         );
         // Revoking any issuer's device does too.
         let mut b = auth(&owner);
-        b.revoked_devices.insert(chain.links[i].grant.issuer);
+        b.revoked_devices.insert(chain.links[i].grant.issuer, NOW);
         prop_assert_eq!(
             verify(&chain, DAEMON, presenter.device_id(), NOW, &b).unwrap_err(),
             GrantError::DeviceRevoked
@@ -326,4 +326,88 @@ proptest! {
             prop_assert!(grants::rule_matches(&m, "Bash", &input));
         }
     }
+}
+
+/// Ed25519 signatures are malleable without the `S < L` check: `S + L` satisfies the plain
+/// verification equation. Strict verification refuses it, so a grant has one signature.
+#[test]
+fn non_canonical_signatures_are_refused() {
+    const L: [u8; 32] = [
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+        0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+    ];
+    let key = DeviceKey::generate();
+    let sig = key.sign(b"grant");
+    assert!(grants::verify_signature(key.device_id(), b"grant", &sig));
+    let mut forged = sig.clone();
+    let mut carry = 0u16;
+    for (s, l) in forged[32..].iter_mut().zip(L) {
+        let sum = u16::from(*s) + u16::from(l) + carry;
+        *s = sum as u8;
+        carry = sum >> 8;
+    }
+    assert_eq!(carry, 0);
+    assert_ne!(forged, sig);
+    assert!(!grants::verify_signature(
+        key.device_id(),
+        b"grant",
+        &forged
+    ));
+    // Nor are short, long or all-zero signatures.
+    let long = [sig.clone(), vec![0]].concat();
+    assert!(!grants::verify_signature(
+        key.device_id(),
+        b"grant",
+        &sig[..63]
+    ));
+    assert!(!grants::verify_signature(key.device_id(), b"grant", &long));
+    assert!(!grants::verify_signature(
+        key.device_id(),
+        b"grant",
+        &[0; 64]
+    ));
+}
+
+/// A removed device voids every chain it is part of whose root predates the removal, as
+/// signer, holder or presenter; a root signed afterwards counts again. Forward-dating its own
+/// child link does not help a removed delegate: only the root's time counts.
+#[test]
+fn removal_voids_older_chains_only() {
+    let owner = DeviceKey::generate();
+    let delegate = DeviceKey::generate();
+    let third = DeviceKey::generate();
+    let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    spec.delegate = true;
+    spec.max_uses = None;
+    spec.bind = Some(delegate.device_id());
+    let root = issue(&owner, DAEMON, &spec, NOW);
+    let mut child = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    child.max_uses = None;
+    let future = UnixMillis(NOW.0 + 10_000_000);
+    let sub = attenuate(&root, &delegate, &child, future).unwrap();
+
+    let mut a = auth(&owner);
+    a.revoked_devices
+        .insert(delegate.device_id(), UnixMillis(NOW.0 + 1));
+    let later = UnixMillis(NOW.0 + 20_000_000);
+    assert_eq!(
+        verify(&root, DAEMON, delegate.device_id(), later, &a).unwrap_err(),
+        GrantError::DeviceRevoked
+    );
+    assert_eq!(
+        verify(&sub, DAEMON, third.device_id(), later, &a).unwrap_err(),
+        GrantError::DeviceRevoked
+    );
+    // The owner re-invites the delegate after the removal.
+    let again = issue(&owner, DAEMON, &spec, UnixMillis(NOW.0 + 2));
+    assert!(verify(&again, DAEMON, delegate.device_id(), later, &a).is_ok());
+
+    // A reset store voids every chain up to its time.
+    let mut b = auth(&owner);
+    b.void_before = Some(NOW);
+    assert_eq!(
+        verify(&root, DAEMON, delegate.device_id(), later, &b).unwrap_err(),
+        GrantError::Revoked(0)
+    );
+    assert!(verify(&again, DAEMON, delegate.device_id(), later, &b).is_ok());
 }

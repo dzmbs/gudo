@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, agents, agentTools, git, network, thisMac, about
+    case appearance, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, agents, agentTools, git, network, devices, thisMac, about
 
     var title: String {
         switch self {
@@ -45,6 +45,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .agentTools: "Agent Tools"
         case .git: "Git"
         case .network: "Network"
+        case .devices: "Devices"
         case .thisMac: "This Mac"
         case .about: "About"
         }
@@ -62,6 +63,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .agents, .agentTools: .agents
         case .git: .git
         case .network: .network
+        case .devices: .devices
         case .thisMac: .thisMac
         case .about: .about
         }
@@ -109,6 +111,7 @@ enum SettingsIndex {
             .init(id: "git-scripts", title: "Scripts", section: .git, synonyms: ["run", "command", "⌘r"]),
             .init(id: "relay-mode", title: "Relays", section: .network, synonyms: ["relay", "iroh", "self-hosted", "local only", "network"]),
             .init(id: "relay-ca", title: "Import Certificate", section: .network, synonyms: ["certificate", "ca", "private", "relay", "tls"]),
+            .init(id: "devices", title: "Paired Devices", section: .devices, synonyms: ["devices", "unpair", "remove", "sign out", "owner", "guests", "pairing", "security"]),
             .init(id: "version", title: "Version", section: .about, synonyms: ["build", "about"]),
             .init(id: "acknowledgements", title: "Acknowledgements", section: .about, synonyms: ["licenses", "licences", "credits", "open source"]),
         ]

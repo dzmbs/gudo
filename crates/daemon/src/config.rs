@@ -172,6 +172,8 @@ pub struct Config {
     /// How long a new connection has to complete the QUIC handshake and send its `Hello`.
     /// Anyone can connect with a fresh key, so a silent one must not hold a slot for long.
     pub hello_timeout: Duration,
+    /// How many connections may be open before their `Hello`.
+    pub pre_auth: crate::preauth::PreAuthLimits,
     pub presence: PresenceTimes,
     /// Command history for completion and the line editor (`[history]` in `config.toml`).
     pub history: crate::assist::HistoryConfig,
@@ -312,6 +314,7 @@ impl Config {
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
             hello_timeout: Duration::from_secs(10),
+            pre_auth: crate::preauth::PreAuthLimits::default(),
             presence: PresenceTimes::default(),
             artifacts: ArtifactLimits::default(),
             askpass: AskpassConfig::default(),

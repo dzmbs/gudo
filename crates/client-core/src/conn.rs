@@ -306,8 +306,12 @@ async fn dial(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError
                 *lock(&inner.paired) = true;
                 return Ok(live);
             }
-            Err(ConnError::Refused(proto::RefuseReason::InvalidGrant)) => {
-                last = ConnError::Refused(proto::RefuseReason::InvalidGrant);
+            // A removed device is refused as revoked, and may still pair again with a new
+            // ticket's secret.
+            Err(ConnError::Refused(
+                reason @ (proto::RefuseReason::InvalidGrant | proto::RefuseReason::Revoked),
+            )) => {
+                last = ConnError::Refused(reason);
             }
             Err(e) => return Err(e),
         }
@@ -341,7 +345,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | if crate::mp::is_guest(inner) {
                 Caps::EMPTY
             } else {
-                Caps::KNOCK | Caps::DEVICE_ALERTS
+                Caps::KNOCK | Caps::DEVICE_ALERTS | Caps::HOST_ALERTS
             }
             | Caps::APPROVALS
             | Caps::WORKFLOWS

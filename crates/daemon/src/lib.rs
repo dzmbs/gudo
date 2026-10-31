@@ -47,6 +47,7 @@ mod notifier;
 mod osc;
 mod pane;
 mod persist;
+mod preauth;
 mod procinfo;
 mod scan;
 mod shell;
@@ -86,6 +87,7 @@ pub use identity::{
     EndpointInfo, PAIRING_TTL, PairedDevice, endpoint_info, list_paired, mint_ticket,
     mint_ticket_text, paired_devices, unpair_device,
 };
+pub use preauth::PreAuthLimits;
 pub use procinfo::inherited_env_var;
 pub use term::{ErrorCode as TermErrorCode, TERM_VERSION, TermAsk, TermCall, TermReply, ToolError};
 pub use upgrade::prev_path as upgrade_prev_path;
@@ -426,15 +428,25 @@ fn endpoint_info_of(endpoint: &Endpoint, relays: &RelayMode) -> EndpointInfo {
     }
 }
 
-/// Connections at once that have not yet sent their `Hello` (the QUIC handshake included).
-/// Anyone may connect with a fresh key, so this bounds what strangers can hold open.
-const MAX_PENDING_CONNECTIONS: usize = 128;
+use proto::DeviceId;
 
 async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
-    let pending = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CONNECTIONS));
+    let gate = preauth::Gate::new(core.cfg.pre_auth);
     while let Some(incoming) = endpoint.accept().await {
-        let Ok(permit) = Arc::clone(&pending).try_acquire_owned() else {
-            tracing::debug!("refusing incoming connection: too many unauthenticated");
+        let (ip, named) = match incoming.remote_addr() {
+            iroh::endpoint::IncomingAddr::Ip(addr) => (Some(addr.ip()), None),
+            iroh::endpoint::IncomingAddr::Relay { endpoint_id, .. } => {
+                (None, Some(DeviceId(*endpoint_id.as_bytes())))
+            }
+            _ => (None, None),
+        };
+        // A relay names the peer's key up front; the handshake below still proves it.
+        let known = named.is_some_and(|d| core.mp.known_device(d));
+        let Some(slot) = gate.arrive(ip, known) else {
+            tracing::debug!(
+                ?ip,
+                "refusing incoming connection: too many unauthenticated"
+            );
             incoming.refuse();
             continue;
         };
@@ -450,7 +462,16 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
                 }
             };
             match conn {
-                Ok(Ok(conn)) => conn::serve(core, conn, permit).await,
+                Ok(Ok(conn)) => {
+                    let known = core.mp.known_device(DeviceId(*conn.remote_id().as_bytes()));
+                    match slot.authenticated(known) {
+                        Some(slot) => conn::serve(core, conn, slot).await,
+                        None => {
+                            tracing::debug!("closing connection: too many unauthenticated");
+                            conn.close(0u32.into(), b"busy");
+                        }
+                    }
+                }
                 Ok(Err(e)) => tracing::debug!("handshake failed: {e}"),
                 Err(_) => tracing::debug!("handshake timed out"),
             }

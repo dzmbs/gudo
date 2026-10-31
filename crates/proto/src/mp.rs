@@ -1011,3 +1011,26 @@ pub struct ApprovalStatus {
     /// Who claimed it.
     pub claimed_by: Option<ApprovalVote>,
 }
+
+/// Something about the host's access control its owner should know and act on. Sent to owner
+/// devices with [`Caps::HOST_ALERTS`](crate::Caps::HOST_ALERTS) when they connect, while it
+/// stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostAlert {
+    /// What happened.
+    pub kind: HostAlertKind,
+    /// When.
+    pub at: UnixMillis,
+    /// One line for a notification.
+    pub title: String,
+    /// What it means and what to do.
+    pub body: String,
+}
+
+/// Kinds of [`HostAlert`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HostAlertKind {
+    /// The grant store could not be read at startup. It was kept aside, and every invite
+    /// issued before then is refused, since its revocations and use counts are unknown.
+    GrantStoreReset,
+}

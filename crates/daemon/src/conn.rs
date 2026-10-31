@@ -14,7 +14,7 @@ use proto::{
     SubscribeMode, TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest, WorkspaceResponse,
     WsError,
 };
-use tokio::sync::{OwnedSemaphorePermit, broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 
 use crate::core::{ConnId, Core, Event, lock};
@@ -72,7 +72,7 @@ struct Client {
 
 /// Serves one accepted connection until it closes. `pending` is its slot among the
 /// connections not yet past the `Hello`; it is released once the `Hello` is in.
-pub(crate) async fn serve(core: Arc<Core>, conn: Connection, pending: OwnedSemaphorePermit) {
+pub(crate) async fn serve(core: Arc<Core>, conn: Connection, pending: crate::preauth::Slot) {
     let remote = conn.remote_id();
     match run(core, conn, pending).await {
         Ok(()) => tracing::debug!(%remote, "client left"),
@@ -106,7 +106,7 @@ async fn await_hello(
 async fn run(
     core: Arc<Core>,
     conn: Connection,
-    pending: OwnedSemaphorePermit,
+    pending: crate::preauth::Slot,
 ) -> Result<(), NetError> {
     let Some((mut ctl_tx, ctl_rx, hello)) = await_hello(&conn, core.cfg.hello_timeout).await?
     else {
@@ -175,6 +175,12 @@ async fn run(
         for knock in core.mp.knocks() {
             let _ = ctl.send(ServerCtl::Knock(proto::KnockUpdate::Added(knock)));
         }
+    }
+    if hello.caps.contains(Caps::HOST_ALERTS)
+        && is_owner(&core, &authz)
+        && let Some(alert) = core.mp.host_alert()
+    {
+        let _ = ctl.send(ServerCtl::HostAlert(alert));
     }
     let presence = hello.caps.contains(Caps::PRESENCE);
     core.mp
@@ -283,7 +289,7 @@ enum Admission {
 }
 
 /// Checks a `Hello`.
-fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, RefuseReason> {
+fn handshake(core: &Arc<Core>, hello: &Hello, device: DeviceId) -> Result<Admission, RefuseReason> {
     if hello.device_id != device {
         return Err(RefuseReason::DeviceMismatch);
     }
@@ -314,7 +320,8 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, 
                 Redeemed::Knock(knocker) => Admission::Knock(knocker),
             });
     }
-    if core.mp.device_revoked(device) {
+    // A removed device comes back only with a fresh pairing ticket.
+    if hello.grant.v != SignedGrant::PAIRING && core.mp.device_removed(device) {
         return Err(RefuseReason::Revoked);
     }
     let principal = core
@@ -323,25 +330,7 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, 
     let _ = WIRE_VERSION;
     let actor = Actor { principal, device };
     if hello.grant.v == SignedGrant::PAIRING {
-        core.mp.audit.append(
-            AuditKind::Paired,
-            crate::mp::AuditEntry {
-                actor: Some(actor),
-                detail: "paired a new owner device".into(),
-                ..crate::mp::AuditEntry::default()
-            },
-        );
-        // Every other owner device hears of it: a phished ticket must not pair unnoticed.
-        core.emit(Event::DevicePaired(proto::DeviceInfo {
-            device,
-            principal,
-            kind: proto::DeviceKind::Owner,
-            name: "owner".into(),
-            first_seen: proto::UnixMillis(crate::identity::now_millis()),
-            grant_id: None,
-            revoked: false,
-            connected: 1,
-        }));
+        core.mp.paired(core, actor);
     }
     Ok(Admission::Join(Authz::owner(actor), maintenance))
 }

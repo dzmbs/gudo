@@ -687,6 +687,9 @@ pub enum ServerCtl {
     /// A new owner device just paired, to owner devices with [`Caps::DEVICE_ALERTS`], so a
     /// pairing the owner did not make (a phished ticket) is noticed and can be revoked.
     DevicePaired(crate::mp::DeviceInfo),
+    /// The host's access control needs its owner, to owner devices with
+    /// [`Caps::HOST_ALERTS`].
+    HostAlert(crate::mp::HostAlert),
 }
 
 /// A successful [`ClientCtl::Attach`].

@@ -7,31 +7,17 @@ import UnnamedCore
 /// revocable. Revoking disconnects at once (DAEMON.md §6.2).
 struct GrantsView: View {
     let session: MultiplayerSession
-    @State private var confirm: Confirm?
+    var hostName = "this host"
+    @State private var confirm: GrantInfo?
+    @State private var removing: DeviceInfo?
     @State private var loaded = false
-
-    private enum Confirm: Identifiable {
-        case grant(GrantInfo)
-        case device(DeviceInfo)
-        var id: String {
-            switch self {
-            case .grant(let g): "g" + g.grant.grantId
-            case .device(let d): "d" + d.device
-            }
-        }
-        var name: String {
-            switch self {
-            case .grant(let g): g.grant.label.isEmpty ? "this invite" : g.grant.label
-            case .device(let d): d.name.isEmpty ? "this device" : d.name
-            }
-        }
-    }
 
     private var active: [GrantInfo] { session.grants.filter { !$0.revoked && !isExpired($0) }.sorted { $0.grant.issuedAtMs > $1.grant.issuedAtMs } }
     private var ended: [GrantInfo] { session.grants.filter { $0.revoked || isExpired($0) }.sorted { $0.grant.issuedAtMs > $1.grant.issuedAtMs } }
 
     var body: some View {
         List {
+            HostAlertsSection(session: session)
             Section {
                 if active.isEmpty {
                     Text(loaded ? "No active invites. Create one in Share Session." : "Loading invites…")
@@ -39,10 +25,10 @@ struct GrantsView: View {
                 }
                 ForEach(active, id: \.grant.grantId) { info in
                     GrantRow(info: info, session: session)
-                        .swipeActions { Button("Revoke", role: .destructive) { confirm = .grant(info) } }
+                        .swipeActions { Button("Revoke", role: .destructive) { confirm = info } }
                         .contextMenu {
                             Button("Copy Grant ID", systemImage: "doc.on.doc") { Pasteboard.copy(info.grant.grantId) }
-                            Button("Revoke…", systemImage: "xmark.circle", role: .destructive) { confirm = .grant(info) }
+                            Button("Revoke…", systemImage: "xmark.circle", role: .destructive) { confirm = info }
                         }
                 }
             } header: {
@@ -50,21 +36,7 @@ struct GrantsView: View {
             }
             .chromeRows()
 
-            Section {
-                ForEach(session.devices.sorted { ($0.kind == .owner ? 0 : 1, $1.firstSeenMs) < ($1.kind == .owner ? 0 : 1, $0.firstSeenMs) }, id: \.device) { device in
-                    DeviceRow(device: device, isMe: device.device == session.me?.actor.device)
-                        .swipeActions {
-                            if device.device != session.me?.actor.device && !device.revoked {
-                                Button("Revoke", role: .destructive) { confirm = .device(device) }
-                            }
-                        }
-                }
-            } header: {
-                SectionTitle("Devices", count: session.devices.count)
-            } footer: {
-                Text("Revoking an owner device unpairs it. Processes a guest started keep running.")
-            }
-            .chromeRows()
+            DevicesSections(session: session, hostName: hostName, removing: $removing)
 
             if !ended.isEmpty {
                 Section {
@@ -85,23 +57,17 @@ struct GrantsView: View {
             loaded = true
         }
         .confirmationDialog(
-            "Revoke \(confirm?.name ?? "")?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+            "Revoke \(confirm.map { $0.grant.label.isEmpty ? "this invite" : $0.grant.label } ?? "")?",
+            isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
             titleVisibility: .visible, presenting: confirm
-        ) { target in
+        ) { info in
             Button("Revoke", role: .destructive) {
-                Task {
-                    switch target {
-                    case .grant(let info): await session.revoke(.grant(grantId: info.grant.grantId))
-                    case .device(let device): await session.revoke(.device(device: device.device))
-                    }
-                }
+                Task { await session.revoke(.grant(grantId: info.grant.grantId)) }
             }
-        } message: { target in
-            switch target {
-            case .grant: Text("Everyone who joined with it, and anyone they invited, is disconnected now.")
-            case .device: Text("The device is disconnected now and cannot reconnect with any invite or pairing.")
-            }
+        } message: { _ in
+            Text("Everyone who joined with it, and anyone they invited, is disconnected now.")
         }
+        .modifier(RemoveDeviceDialog(session: session, hostName: hostName, device: $removing))
         .accessibilityIdentifier("grants-list")
     }
 
@@ -190,40 +156,6 @@ struct GrantRow: View {
         parts.append(grant.maxUses.map { used >= $0 ? "all \($0) used" : "\(used) of \($0) used, \($0 - used) left" } ?? "\(used) joined")
         if info.parent != nil { parts.append("delegated") }
         return parts.joined(separator: " · ")
-    }
-}
-
-private struct DeviceRow: View {
-    let device: DeviceInfo
-    let isMe: Bool
-
-    var body: some View {
-        HStack(spacing: DS.Space.m) {
-            Image(systemName: device.kind == .owner ? "laptopcomputer.and.iphone" : "person.crop.circle")
-                .foregroundStyle(DS.Palette.textSecondary)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(isMe ? "\(device.name) (this device)" : device.name.isEmpty ? "Device" : device.name)
-                    .font(DS.Font.rowTitle)
-                Text("\(device.kind == .owner ? "Owner" : "Guest") · first seen \(RelativeTime.string(ms: device.firstSeenMs) ?? "")")
-                    .font(DS.Font.rowSubtitle)
-                    .foregroundStyle(DS.Palette.textSecondary)
-                Text(groupedHex(device.device))
-                    .font(DS.Font.literalSmall)
-                    .foregroundStyle(DS.Palette.textTertiary)
-            }
-            Spacer()
-            if device.revoked {
-                Text("Revoked").font(DS.Font.badge).foregroundStyle(DS.Palette.error)
-            } else if device.connected > 0 {
-                HStack(spacing: 4) {
-                    Circle().fill(DS.Palette.done).frame(width: 7, height: 7)
-                    Text("Connected").font(DS.Font.meta).foregroundStyle(DS.Palette.textSecondary)
-                }
-            }
-        }
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
     }
 }
 

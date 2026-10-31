@@ -305,6 +305,8 @@ bitset! {
         /// On an owner device, wants `ServerCtl::DevicePaired` whenever another owner
         /// device pairs.
         DEVICE_ALERTS = 16;
+        /// On an owner device, wants `ServerCtl::HostAlert`.
+        HOST_ALERTS = 17;
     }
 }
 

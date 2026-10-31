@@ -59,14 +59,23 @@
   atomically: a temporary file, fsync, then rename. Each file is mode 0600, and the state
   directory is 0700. A test checks these modes.
 - **New pairings are announced.** Every other connected owner device gets
-  `ServerCtl::DevicePaired`, and the app shows "A new device paired with this host". This is
-  the defence against Signal- and WhatsApp-style linked-device phishing. Each pairing is also
-  recorded in the audit log.
+  `ServerCtl::DevicePaired` with the new device's name (it has 3 s to say it) and time. The app
+  shows a toast and a time-sensitive notification, "New device paired: <name>", that opens the
+  host's Devices screen in Settings. This is the defence against Signal- and WhatsApp-style
+  linked-device phishing. Each pairing is also recorded in the audit log. The name is chosen by
+  the new device, so it can lie; the time and the alert itself cannot be suppressed by it.
+- **Pairing links ask first.** A `…://pair/…` link only opens the Add Host sheet, which shows
+  the host and asks before pairing (`LinkSecurityTests`).
 
 ### Device lifecycle (lost phone)
 
-- **In the app:** Access → Devices → Remove (`Revoke(Device)`). This closes the device's
-  connections at once. Its later connection attempts are refused with `Revoked`.
+The model is Apple's and Signal's device list: removing a device signs it out and cancels
+everything it created, for good; it can come back only through a new pairing code the owner
+makes, and then without its old invites.
+
+- **In the app:** Settings → Devices (per host), or Access → Devices → Remove
+  (`Revoke(Device)`). This closes the device's connections at once. Its later connection
+  attempts on the old pairing are refused with `Revoked`.
 - **On the host:**
   - `unnamed-hostd devices` lists the owner devices.
   - `unnamed-hostd unpair <key prefix>` removes one.
@@ -78,6 +87,17 @@
     been revoked.
   - A thief therefore cannot keep access by inviting their own second key before the phone
     is removed.
+- **Removal times, not a block list.** Every removal is recorded with its time: owner devices
+  in `unpaired.json` (written with `devices.json`, under its lock, by the daemon and by
+  `hostd unpair`), guests in `grants.json`. A chain counts only if its root was signed after
+  the removal of every device in it (signer, holder or presenter). Only the root's time is
+  used: roots come from owner devices or the daemon, while a guest could date its own links
+  freely. So a removed device's old invites stay void even if it pairs again, and nothing
+  needs to be unblocked by hand.
+- **Coming back.** An owner device returns only with a fresh pairing ticket (the client falls
+  back to the ticket's secret when its device grant is refused as revoked). A revoked guest
+  returns only through an invite whose root was signed after the revocation, by an owner, the
+  daemon (a knock admission), or a delegate whose own grant is newer.
 - **No accidental return.** A pairing never brings back a device that was removed, because
   every change to `devices.json` is a locked read-modify-write of the file as it is now.
 
@@ -93,9 +113,15 @@
 - **Owner devices.** Each owner device is bound to one principal, and a claim of any other
   principal is refused.
 - **Input.** Input that carries another principal is rejected.
-- **Strangers.**
-  - At most 128 connections may be open before sending a `Hello`; more are refused.
-  - Each connection has 10 s from accept to `Hello`.
+- **Strangers.** Connections before their `Hello` are counted in two pools, overall and per
+  source (an IPv4 address, IPv4-mapped IPv6 included, or an IPv6 /64):
+  - in the QUIC handshake, key not yet known: 1024 overall, 32 per source;
+  - past the handshake with a key the daemon does not trust: 128 overall, 16 per source.
+  - Each connection has 10 s for the handshake and 10 s more for its `Hello`.
+- **Trusted devices skip the strangers' pool.** The TLS handshake proves the client's key
+  before the `Hello`, and a relay names it even before the handshake. A paired owner device,
+  or a guest bound to a grant it was not removed from since, is not counted, so strangers
+  filling the pool cannot lock the owner out.
 - **Refused peers.** A refused peer's `DaemonInfo` contains only versions. It has no host name,
   OS name or build.
 
@@ -121,9 +147,15 @@
 - **Knock invites.** Opening a knock invite only puts the knocker in a lobby until an owner
   answers. At most 8 knocks wait per invite, and a knock is dropped when its invite's chain
   stops being valid.
-- **The grant store fails closed.** If `grants.json` cannot be read, the daemon does not start,
-  so revocations and use counts are never silently forgotten (compare Teleport CVE-2025-49825
-  and Tailscale TS-2025-008).
+- **The grant store fails closed for guests, not for the owner.** If `grants.json` cannot be
+  read, the daemon still starts (refusing to start would lock the owner out of a remote
+  machine). The file is moved aside as `grants.json.unreadable-<time>`, never overwritten,
+  and every chain signed before that moment is void, since which were revoked or used up is
+  unknown (compare Teleport CVE-2025-49825 and Tailscale TS-2025-008). Owner devices work
+  normally, and new invites work. Owners are told: an error in the log, an audit record, and
+  `ServerCtl::HostAlert` on every owner connection, which the app shows as a banner on the
+  Devices screen and once as a notification. If the file cannot even be moved, the new state
+  is kept in memory only, so the damaged file is left as it is.
 - **Role enforcement.** Every `ctl`, input, workspace, assist, artifact, stream and multiplayer
   path goes through `policy::check` (docs/DAEMON.md §6.3). A matrix test tries every guest
   role against requests from across the table: prompt, files, upload, forward, editor, lease,
@@ -145,14 +177,13 @@
   - Our defences: a short time to live, single use, and an alert on the other devices.
   - Not defended: a host whose only device is the one being paired, since there is no other
     device to warn.
-  - App work still to do:
-    - Show the host name and key fingerprint and ask for confirmation before pairing from a
-      link. Today a `…://pair/` deep link pairs with no confirmation; invite links already
-      open a Join sheet.
-    - Show `devicePaired` in the Devices screen and in a notification, not only as a toast.
-- **Pre-`Hello` limit and relays.**
-  - Anyone who knows the daemon id can occupy the 128 pre-`Hello` slots, at a cost of about
-    one connection per slot every 10 s, and so delay an owner's reconnect.
+  - A pairing notification arrives only on owner devices that are connected (or connect
+    later and list devices). There is no push for it yet.
+- **Pre-`Hello` limits.**
+  - Trusted devices are not counted, but a direct connection from one still needs a
+    handshake slot. An attacker with many addresses (32+ IPv4 hosts or IPv6 /64s) holding
+    stalled handshakes can fill the handshake pool and delay a direct reconnect; through a
+    relay a trusted device skips it.
   - Traffic through a relay has no per-IP accounting.
   - Running our own relays with an auth token (`RelayMode::Custom`) narrows who can reach the
     daemon at all.
@@ -171,3 +202,40 @@
   - Link-preview bots cannot use them, since redeeming needs an iroh client.
 - **Disk access.** `daemon.key` sits in a 0700 directory but is not in the Keychain. Malware
   running as the same user can read it.
+
+## Validation
+
+unless noted, and each fix was mutation-checked: the guarded code was disabled and the test
+was confirmed to fail.
+
+| Attack | Test |
+|---|---|
+| Pairing secret raced by six devices; replay after use | `redteam::a_raced_pairing_ticket_pairs_one_device` |
+| Expired secret; wrong guesses cause no disk write | `identity::tests::expired_pairing_secrets_are_refused`, `wrong_pairing_secrets_cost_no_write` (unit) |
+| Removed owner device reconnecting on its old pairing | `access::a_removed_device_cannot_reconnect_on_its_old_pairing` |
+| Re-paired device's old invites (app removal, CLI unpair) | `access::a_removed_device_returns_only_by_a_new_ticket_and_without_its_invites`, `access::re_pairing_after_cli_unpair_does_not_revive_old_invites` |
+| Guest chain whose signer was unpaired or revoked | `security::unpairing_from_the_cli_closes_the_device_and_its_invites`, `security::revoking_an_owner_device_closes_the_guests_it_invited` |
+| Revoked guest reusing a multi-use link | `access::a_revoked_guest_returns_only_by_a_newer_invite` |
+| Delegate forward-dating its child link before removal | `props::removal_voids_older_chains_only` (unit) |
+| Chain rooted at a stranger's key | `redteam::a_chain_rooted_at_a_stranger_key_is_refused` |
+| Small-order key; non-canonical `S`; wrong-length signatures | `grants::tests::small_order_keys_prove_nothing`, `props::non_canonical_signatures_are_refused` (unit) |
+| Single-use invite raced by six devices | `redteam::a_raced_single_use_invite_admits_one_device` |
+| Invite used after expiry; guest inside at expiry | `redteam::an_expired_invite_admits_nobody_and_ends_its_sessions` |
+| Knock spam (12 knocks on one link) | `redteam::knock_spam_is_capped_per_invite` |
+| Silent connections; strangers filling the pre-`Hello` pool | `security::a_connection_that_never_says_hello_is_closed`, `access::a_paired_device_connects_while_strangers_fill_the_pre_hello_slots`, `preauth::tests::*` (unit, per-address and IPv4-mapped/IPv6 /64 accounting) |
+| Damaged `grants.json` | `access::a_damaged_grant_store_fails_closed_for_guests_only` |
+| Guest roles on `ctl`, workspace, bulk (upload), forwards and layout | `security::each_guest_role_gets_exactly_what_the_table_allows` |
+| Guest roles typing raw input (`input` stream) | `redteam::only_drivers_type_into_a_pane` |
+| zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |
+| Random and mangled bytes as every wire type, ticket and invite | `proto/tests/decode_untrusted.rs` (proptest) |
+
+Checked and not changed:
+
+- **Mixed-order keys** (an honest key plus a torsion point) are accepted as device keys. That
+  is not a forgery: whoever holds such a key holds a key, and fresh keys are free anyway.
+  Small-order keys, which nobody holds, are refused.
+- **The daemon inflates nothing a guest sends.** The only decompression on the daemon is the
+  owner's upgrade upload. On the client the only decompression of daemon data is snapshots
+  and history pages, both bounded.
+- **TLS with a small-order client key** cannot be produced in a test (no secret key exists for
+  one). The handshake check (`grants::is_strong_key`) is covered by the unit test only.

@@ -42,7 +42,7 @@
 //! # Ok::<(), grants::GrantError>(())
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 mod auto_approve;
 
@@ -341,10 +341,18 @@ pub trait Authority {
         false
     }
 
-    /// Whether `device` was revoked.
-    fn device_revoked(&self, device: DeviceId) -> bool {
+    /// When `device` was last revoked or unpaired. A chain it takes part in (as signer,
+    /// holder or presenter) counts only if its root was signed after that, so its old grants
+    /// stay void while a fresh invite (or pairing) can bring it back.
+    fn removed_at(&self, device: DeviceId) -> Option<UnixMillis> {
         let _ = device;
-        false
+        None
+    }
+
+    /// Chains whose root was signed at or before this are void (the record of revocations
+    /// before it was lost).
+    fn void_before(&self) -> Option<UnixMillis> {
+        None
     }
 }
 
@@ -357,8 +365,10 @@ pub struct SimpleAuthority {
     pub bindings: HashSet<(GrantId, DeviceId)>,
     /// Revoked grants.
     pub revoked: HashSet<GrantId>,
-    /// Revoked devices.
-    pub revoked_devices: HashSet<DeviceId>,
+    /// Revoked devices, with when.
+    pub revoked_devices: HashMap<DeviceId, UnixMillis>,
+    /// [`Authority::void_before`].
+    pub void_before: Option<UnixMillis>,
 }
 
 impl SimpleAuthority {
@@ -384,8 +394,12 @@ impl Authority for SimpleAuthority {
         self.revoked.contains(&grant)
     }
 
-    fn device_revoked(&self, device: DeviceId) -> bool {
-        self.revoked_devices.contains(&device)
+    fn removed_at(&self, device: DeviceId) -> Option<UnixMillis> {
+        self.revoked_devices.get(&device).copied()
+    }
+
+    fn void_before(&self) -> Option<UnixMillis> {
+        self.void_before
     }
 }
 
@@ -488,9 +502,6 @@ pub fn verify(
     if chain.links.len() > MAX_DEPTH {
         return Err(GrantError::TooDeep);
     }
-    if auth.device_revoked(presenter) {
-        return Err(GrantError::DeviceRevoked);
-    }
     let mut seen = HashSet::new();
     let mut roles = Roles::ALL;
     let mut expires: Option<UnixMillis> = None;
@@ -507,9 +518,6 @@ pub fn verify(
         }
         if !seen.insert(g.grant_id) {
             return Err(GrantError::Duplicate(i));
-        }
-        if auth.device_revoked(g.issuer) || g.bind.is_some_and(|b| auth.device_revoked(b)) {
-            return Err(GrantError::DeviceRevoked);
         }
         if auth.grant_revoked(g.grant_id) {
             return Err(GrantError::Revoked(i));
@@ -541,6 +549,7 @@ pub fn verify(
     if leaf.bind.is_some_and(|b| b != presenter) {
         return Err(GrantError::BoundElsewhere);
     }
+    check_removals(chain, presenter, auth)?;
     if roles == Roles::EMPTY {
         return Err(GrantError::Escalation(chain.links.len() - 1));
     }
@@ -551,6 +560,35 @@ pub fn verify(
         ids: chain.links.iter().map(|l| l.grant.grant_id).collect(),
         leaf: leaf.clone(),
     })
+}
+
+/// A chain is void if its root was signed no later than the removal of any device in it, or
+/// than [`Authority::void_before`]. Only the root's time counts: roots come from owner devices
+/// or the daemon, while a guest could date its own links freely.
+fn check_removals(
+    chain: &GrantChain,
+    presenter: DeviceId,
+    auth: &impl Authority,
+) -> Result<(), GrantError> {
+    let Some(root) = chain.links.first() else {
+        return Err(GrantError::Empty);
+    };
+    let signed = root.grant.issued_at;
+    if auth.void_before().is_some_and(|t| signed <= t) {
+        return Err(GrantError::Revoked(0));
+    }
+    let devices = chain
+        .links
+        .iter()
+        .flat_map(|l| [Some(l.grant.issuer), l.grant.bind])
+        .flatten()
+        .chain([presenter]);
+    for device in devices {
+        if auth.removed_at(device).is_some_and(|t| signed <= t) {
+            return Err(GrantError::DeviceRevoked);
+        }
+    }
+    Ok(())
 }
 
 /// The actor a guest device acts as.

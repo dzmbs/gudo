@@ -528,6 +528,39 @@ pub enum DeviceKind {
     Guest,
 }
 
+/// Something about a host's access control its owner should act on.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HostAlert {
+    /// What happened.
+    pub kind: HostAlertKind,
+    /// When, Unix ms; identifies the alert.
+    pub at_ms: u64,
+    /// One line for a notification.
+    pub title: String,
+    /// What it means and what to do.
+    pub body: String,
+}
+
+/// Kinds of [`HostAlert`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum HostAlertKind {
+    /// The grant store could not be read; earlier invites no longer work.
+    GrantStoreReset,
+}
+
+impl From<proto::HostAlert> for HostAlert {
+    fn from(a: proto::HostAlert) -> Self {
+        Self {
+            kind: match a.kind {
+                proto::HostAlertKind::GrantStoreReset => HostAlertKind::GrantStoreReset,
+            },
+            at_ms: a.at.0,
+            title: a.title,
+            body: a.body,
+        }
+    }
+}
+
 /// A device the daemon knows.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DeviceInfo {
@@ -878,6 +911,12 @@ pub enum MultiplayerEvent {
         /// The new device.
         device: DeviceInfo,
     },
+    /// The host's access control needs its owner (owner devices only). Sent on every
+    /// connection while it stands: notify once per `at_ms`.
+    HostAlert {
+        /// The alert.
+        alert: HostAlert,
+    },
     /// Someone knocked, or a knock changed (owner devices): replace any entry with its id.
     KnockAdded {
         /// The knock.
@@ -957,6 +996,9 @@ impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
             E::Revoked => Self::Revoked,
             E::DevicePaired { device } => Self::DevicePaired {
                 device: device.into(),
+            },
+            E::HostAlert { alert } => Self::HostAlert {
+                alert: alert.into(),
             },
             E::Knock {
                 update: proto::KnockUpdate::Added(knock),

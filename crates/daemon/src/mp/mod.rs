@@ -46,6 +46,9 @@ const KNOCK_ADMIT_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 const KNOCK_LINGER: Duration = Duration::from_secs(5);
 /// Pending knocks per invite, so a leaked knock link cannot flood the owner.
 const MAX_KNOCKS_PER_GRANT: usize = 8;
+/// How long a new owner device has to say its name before its pairing is announced without
+/// one.
+const PAIRING_NAME_WAIT: Duration = Duration::from_secs(3);
 /// Presence updates per connection are coalesced to at most one per this interval
 const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -59,6 +62,8 @@ pub(crate) struct Authz {
     pub grant_ids: Vec<GrantId>,
     /// Who signed each link, root first (empty for owner devices).
     pub issuers: Vec<DeviceId>,
+    /// When the chain's root was signed: a removal of any device in it after this voids it.
+    pub root_signed: UnixMillis,
     pub expires: Option<UnixMillis>,
     pub name: String,
     /// How much scrollback it sees (the invite's terms).
@@ -77,6 +82,7 @@ impl Authz {
             scope: Scope::Daemon,
             grant_ids: Vec::new(),
             issuers: Vec::new(),
+            root_signed: UnixMillis(0),
             expires: None,
             name: "owner".into(),
             history: History::Full,
@@ -117,13 +123,33 @@ struct Store {
     grants: Vec<StoredGrant>,
     #[serde(default)]
     revoked_grants: BTreeSet<String>,
+    /// The keys of `removed_devices`, as releases before removal times read them.
     #[serde(default)]
     revoked_devices: BTreeSet<String>,
+    /// When each revoked guest device was revoked, Unix ms, by device hex: chains it takes
+    /// part in count only if their root is newer (owner devices: `unpaired.json`).
+    #[serde(default)]
+    removed_devices: BTreeMap<String, u64>,
+    /// Chains whose root was signed at or before this are void: the store was found
+    /// unreadable then, and the revocations and use counts it held are unknown.
+    #[serde(default)]
+    void_before: Option<u64>,
+    /// The reset that set `void_before`, for the owner's alert.
+    #[serde(default)]
+    reset: Option<Reset>,
     #[serde(default)]
     guests: Vec<GuestRecord>,
     /// Approval policies by session id.
     #[serde(default)]
     policies: BTreeMap<u64, ApprovalPolicy>,
+}
+
+/// A grant store found unreadable at startup and replaced.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Reset {
+    at: u64,
+    /// Where the unreadable file was kept.
+    kept_as: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +175,9 @@ struct GuestRecord {
     name: String,
     grant: String,
     first_seen: u64,
+    /// When it last redeemed a grant.
+    #[serde(default)]
+    joined: u64,
 }
 
 impl Store {
@@ -158,18 +187,57 @@ impl Store {
         let Some(bytes) = read_optional(path)? else {
             return Ok(Self::default());
         };
-        serde_json::from_slice(&bytes).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "{}: {e}; fix or remove it (removing it forgets revocations)",
-                    path.display()
-                ),
-            )
-        })
+        let mut store: Self = serde_json::from_slice(&bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Revocations from before removal times were kept: void everything up to now.
+        let now = now_millis();
+        for device in std::mem::take(&mut store.revoked_devices) {
+            store.removed_devices.entry(device).or_insert(now);
+        }
+        Ok(store)
     }
 
-    fn save(&self, path: &Path) {
+    /// The store to start with when `path` cannot be read: the file is moved aside (never
+    /// overwritten), owner devices keep working, and every chain signed until now is void,
+    /// since which of them were revoked or used up is unknown. Returns whether the new store
+    /// may be saved (not if the file could not be moved).
+    fn reset(path: &Path, error: &std::io::Error) -> (Self, bool) {
+        let now = now_millis();
+        let kept = path.with_file_name(format!(
+            "{}.unreadable-{now}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(STORE_FILE)
+        ));
+        let moved = std::fs::rename(path, &kept);
+        match &moved {
+            Ok(()) => tracing::error!(
+                "{} is unreadable ({error}); kept it as {} and refusing every guest invite \
+                 issued until now",
+                path.display(),
+                kept.display()
+            ),
+            Err(e) => tracing::error!(
+                "{} is unreadable ({error}) and could not be moved aside ({e}); refusing \
+                 every guest invite issued until now, and leaving the file as it is",
+                path.display()
+            ),
+        }
+        let store = Self {
+            void_before: Some(now),
+            reset: Some(Reset {
+                at: now,
+                kept_as: if moved.is_ok() { kept } else { path.to_owned() }
+                    .display()
+                    .to_string(),
+            }),
+            ..Self::default()
+        };
+        (store, moved.is_ok())
+    }
+
+    fn save(&mut self, path: &Path) {
+        self.revoked_devices = self.removed_devices.keys().cloned().collect();
         let result = serde_json::to_vec_pretty(self)
             .map_err(std::io::Error::other)
             .and_then(|bytes| write_atomic(path, &bytes));
@@ -187,8 +255,10 @@ impl Store {
         self.revoked_grants.contains(&hex(&id.0))
     }
 
-    fn device_revoked(&self, device: DeviceId) -> bool {
-        self.revoked_devices.contains(&hex(&device.0))
+    fn guest_removed_at(&self, device: DeviceId) -> Option<UnixMillis> {
+        self.removed_devices
+            .get(&hex(&device.0))
+            .map(|&at| UnixMillis(at))
     }
 
     /// Records `chain`'s leaf if new; returns its record.
@@ -218,6 +288,15 @@ impl Store {
     fn chain_of(g: &StoredGrant) -> Option<GrantChain> {
         let bytes = unhex_vec(&g.chain)?;
         GrantChain::from_token(&bytes).ok()
+    }
+}
+
+/// An owner device's display name: what it called itself, or "owner" until it said.
+fn owner_name(name: String) -> String {
+    if name.is_empty() {
+        "owner".into()
+    } else {
+        name
     }
 }
 
@@ -254,9 +333,20 @@ impl Authority for DaemonAuthority<'_> {
         self.store.grant_revoked(grant)
     }
 
-    fn device_revoked(&self, device: DeviceId) -> bool {
-        self.store.device_revoked(device)
+    fn removed_at(&self, device: DeviceId) -> Option<UnixMillis> {
+        removed_at(&self.core.identity, self.store, device)
     }
+
+    fn void_before(&self) -> Option<UnixMillis> {
+        self.store.void_before.map(UnixMillis)
+    }
+}
+
+/// When `device` was last unpaired or revoked.
+fn removed_at(identity: &Identity, store: &Store, device: DeviceId) -> Option<UnixMillis> {
+    identity
+        .removed_at(device)
+        .max(store.guest_removed_at(device))
 }
 
 // --- live state --------------------------------------------------------------------------------
@@ -323,6 +413,7 @@ pub(crate) struct Knocker {
     pub grant_ids: Vec<GrantId>,
     /// Who signed each link, root first.
     pub issuers: Vec<DeviceId>,
+    pub root_signed: UnixMillis,
     pub roles: Roles,
     pub scope: Scope,
     pub expires: Option<UnixMillis>,
@@ -333,6 +424,7 @@ struct PendingKnock {
     knock: Knock,
     grant_ids: Vec<GrantId>,
     issuers: Vec<DeviceId>,
+    root_signed: UnixMillis,
     expires: Option<UnixMillis>,
     ctl: mpsc::UnboundedSender<ServerCtl>,
     conn: iroh::endpoint::Connection,
@@ -344,9 +436,13 @@ pub(crate) struct Mp {
     identity: Arc<Identity>,
     store_path: PathBuf,
     store: Mutex<Store>,
+    /// False while an unreadable store sits where it would be saved.
+    persist: bool,
     live: Mutex<HashMap<ConnId, Live>>,
     leases: Mutex<HashMap<PaneId, LeaseState>>,
     knocks: Mutex<BTreeMap<KnockId, PendingKnock>>,
+    /// Owner devices that just paired and were not announced yet, with when.
+    unannounced: Mutex<HashMap<DeviceId, (PrincipalId, UnixMillis)>>,
     next_knock: AtomicU64,
     /// Votes and claims of open approval requests.
     pub approvals: approvals::Approvals,
@@ -365,27 +461,156 @@ impl Mp {
         times: crate::config::PresenceTimes,
     ) -> std::io::Result<Self> {
         let store_path = state_dir.join(STORE_FILE);
+        let audit = Audit::open(state_dir)?;
+        let (mut store, persist) = match Store::load(&store_path) {
+            Ok(store) => (store, true),
+            Err(e) => {
+                let (store, persist) = Store::reset(&store_path, &e);
+                audit.append(
+                    AuditKind::Revoked,
+                    AuditEntry {
+                        detail: format!(
+                            "{STORE_FILE} was unreadable ({e}); every invite issued until now \
+                             is refused"
+                        ),
+                        ..AuditEntry::default()
+                    },
+                );
+                (store, persist)
+            }
+        };
+        if persist {
+            store.save(&store_path);
+        }
         Ok(Self {
             identity,
-            store: Mutex::new(Store::load(&store_path)?),
+            store: Mutex::new(store),
+            persist,
             store_path,
             live: Mutex::new(HashMap::new()),
             leases: Mutex::new(HashMap::new()),
             knocks: Mutex::new(BTreeMap::new()),
+            unannounced: Mutex::new(HashMap::new()),
             next_knock: AtomicU64::new(1),
             approvals: approvals::Approvals::default(),
-            audit: Audit::open(state_dir)?,
+            audit,
             lease_idle,
             times,
             peer_rev: AtomicU64::new(0),
         })
     }
 
-    // --- handshake --------------------------------------------------------------------------
+    fn save(&self, store: &mut Store) {
+        if self.persist {
+            store.save(&self.store_path);
+        }
+    }
 
-    /// Whether a paired device was revoked (pairing alone does not override a revocation).
-    pub fn device_revoked(&self, device: DeviceId) -> bool {
-        lock(&self.store).device_revoked(device)
+    /// A device just paired: audit it now, and announce it to the other owner devices once
+    /// it says its name (or after [`PAIRING_NAME_WAIT`]), so the alert can name it.
+    pub fn paired(&self, core: &Arc<Core>, actor: Actor) {
+        self.audit.append(
+            AuditKind::Paired,
+            AuditEntry {
+                actor: Some(actor),
+                detail: "paired a new owner device".into(),
+                ..AuditEntry::default()
+            },
+        );
+        lock(&self.unannounced).insert(actor.device, (actor.principal, UnixMillis(now_millis())));
+        let core = Arc::clone(core);
+        tokio::spawn(async move {
+            tokio::time::sleep(PAIRING_NAME_WAIT).await;
+            core.mp.announce_pairing(&core, actor.device);
+        });
+    }
+
+    /// Tells every other owner device that `device` paired, once: a phished ticket must not
+    /// pair unnoticed.
+    fn announce_pairing(&self, core: &Core, device: DeviceId) {
+        let Some((principal, at)) = lock(&self.unannounced).remove(&device) else {
+            return;
+        };
+        let name = self
+            .identity
+            .paired()
+            .into_iter()
+            .find(|o| o.device == device)
+            .map(|o| o.name)
+            .unwrap_or_default();
+        core.emit(Event::DevicePaired(DeviceInfo {
+            device,
+            principal,
+            kind: DeviceKind::Owner,
+            name: owner_name(name),
+            first_seen: at,
+            grant_id: None,
+            revoked: false,
+            connected: 1,
+        }));
+    }
+
+    /// Whether `device` is trusted already: a paired owner device, or a guest bound to a
+    /// grant it has not been removed from since.
+    pub fn known_device(&self, device: DeviceId) -> bool {
+        if self.identity.is_owner_device(device) {
+            return true;
+        }
+        let device_hex = hex(&device.0);
+        let store = lock(&self.store);
+        let removed = removed_at(&self.identity, &store, device);
+        store.grants.iter().any(|g| {
+            g.bound.contains(&device_hex)
+                && removed
+                    .is_none_or(|t| g.redeemed_at.get(&device_hex).is_some_and(|&at| at > t.0))
+        })
+    }
+
+    /// What owner devices should be told about the store when they connect.
+    pub fn host_alert(&self) -> Option<proto::HostAlert> {
+        let store = lock(&self.store);
+        let reset = store.reset.as_ref()?;
+        Some(proto::HostAlert {
+            kind: proto::HostAlertKind::GrantStoreReset,
+            at: UnixMillis(reset.at),
+            title: "Sharing was reset on this host".into(),
+            body: format!(
+                "The host could not read its list of invites, so every invite made before \
+                 then no longer works. Owner devices are not affected. Send new invites to \
+                 people who should still have access. The unreadable file was kept as {}.",
+                reset.kept_as
+            ),
+        })
+    }
+
+    /// Whether `device` was removed or revoked and is not paired now: it is told it was
+    /// revoked rather than that its grant is unknown.
+    pub fn device_removed(&self, device: DeviceId) -> bool {
+        !self.identity.is_owner_device(device)
+            && removed_at(&self.identity, &lock(&self.store), device).is_some()
+    }
+
+    /// Whether the chain `ids`, signed by `issuers` (root first, root signed at
+    /// `root_signed`) and presented by `presenter`, is still in force: unexpired, no link
+    /// revoked, its root still trusted, and no device in it removed since the root was
+    /// signed.
+    fn chain_live(
+        &self,
+        store: &Store,
+        ids: &[GrantId],
+        issuers: &[DeviceId],
+        root_signed: UnixMillis,
+        presenter: DeviceId,
+        expires: Option<UnixMillis>,
+    ) -> bool {
+        expires.is_none_or(|e| e.0 > now_millis())
+            && self.chain_trusted(issuers)
+            && store.void_before.is_none_or(|t| root_signed.0 > t)
+            && !ids.iter().any(|&g| store.grant_revoked(g))
+            && issuers
+                .iter()
+                .chain([&presenter])
+                .all(|&d| removed_at(&self.identity, store, d).is_none_or(|t| root_signed > t))
     }
 
     /// Verifies a presented grant chain for `device`, binding an unbound leaf on first use.
@@ -440,6 +665,7 @@ impl Mp {
         };
         let device_hex = hex(&device.0);
         let issuers: Vec<DeviceId> = chain.links.iter().map(|l| l.grant.issuer).collect();
+        let root_signed = chain.links[0].grant.issued_at;
         let leaf = &verified.leaf;
         let terms = store.terms(&verified.ids);
         let admitted = store
@@ -456,6 +682,7 @@ impl Mp {
                 name: leaf.label.clone(),
                 grant_ids: verified.ids,
                 issuers,
+                root_signed,
                 roles: verified.roles,
                 scope: verified.scope,
                 expires: verified.expires,
@@ -487,17 +714,19 @@ impl Mp {
         } else {
             leaf.label.clone()
         };
-        if !store.guests.iter().any(|g| g.device == device_hex) {
+        if let Some(g) = store.guests.iter_mut().find(|g| g.device == device_hex) {
+            g.grant = hex(&leaf.grant_id.0);
+            g.joined = now.0;
+        } else {
             store.guests.push(GuestRecord {
                 device: device_hex,
                 name: name.clone(),
                 grant: hex(&leaf.grant_id.0),
                 first_seen: now.0,
+                joined: now.0,
             });
-        } else if let Some(g) = store.guests.iter_mut().find(|g| g.device == device_hex) {
-            g.grant = hex(&leaf.grant_id.0);
         }
-        store.save(&self.store_path);
+        self.save(&mut store);
         drop(store);
         let authz = Authz {
             actor,
@@ -505,6 +734,7 @@ impl Mp {
             scope: verified.scope,
             grant_ids: verified.ids,
             issuers,
+            root_signed,
             expires: verified.expires,
             name,
             history: terms.history,
@@ -531,19 +761,17 @@ impl Mp {
     /// its root still trusted (an owner device unpaired, even by `hostd unpair`, takes the
     /// connection and every invite it signed with it).
     pub fn still_valid(&self, authz: &Authz) -> bool {
-        if authz.expires.is_some_and(|e| e.0 <= now_millis()) {
-            return false;
+        if authz.grant_ids.is_empty() {
+            return self.identity.is_owner_device(authz.actor.device);
         }
-        let trusted = if authz.grant_ids.is_empty() {
-            self.identity.is_owner_device(authz.actor.device)
-        } else {
-            self.chain_trusted(&authz.issuers)
-        };
-        let store = lock(&self.store);
-        trusted
-            && !store.device_revoked(authz.actor.device)
-            && !authz.grant_ids.iter().any(|&g| store.grant_revoked(g))
-            && !authz.issuers.iter().any(|&d| store.device_revoked(d))
+        self.chain_live(
+            &lock(&self.store),
+            &authz.grant_ids,
+            &authz.issuers,
+            authz.root_signed,
+            authz.actor.device,
+            authz.expires,
+        )
     }
 
     /// Whether a chain signed by `issuers` (root first) still has a trusted root.
@@ -688,8 +916,14 @@ impl Mp {
     }
 
     pub fn set_name(&self, core: &Core, id: ConnId, name: String) {
-        if let Some(l) = lock(&self.live).get_mut(&id) {
-            l.name = name.chars().take(64).collect();
+        let name: String = name.trim().chars().take(64).collect();
+        let owner_device = lock(&self.live).get_mut(&id).and_then(|l| {
+            l.name.clone_from(&name);
+            l.authz.grant_ids.is_empty().then_some(l.authz.actor.device)
+        });
+        if let Some(device) = owner_device.filter(|_| !name.is_empty()) {
+            self.identity.set_name(device, &name);
+            self.announce_pairing(core, device);
         }
         core.emit(Event::Participants);
     }
@@ -776,7 +1010,7 @@ impl Mp {
         let record = store.upsert(chain);
         record.terms = record.terms.strictest(terms);
         let terms = record.terms;
-        store.save(&self.store_path);
+        self.save(&mut store);
         let info = self.info(&store, chain);
         drop(store);
         let mut extra = String::new();
@@ -832,7 +1066,18 @@ impl Mp {
                 .links
                 .iter()
                 .any(|l| store.grant_revoked(l.grant.grant_id))
-                || store.device_revoked(leaf.issuer),
+                || !self.chain_live(
+                    store,
+                    &[],
+                    &chain
+                        .links
+                        .iter()
+                        .map(|l| l.grant.issuer)
+                        .collect::<Vec<_>>(),
+                    chain.links[0].grant.issued_at,
+                    leaf.issuer,
+                    None,
+                ),
             grant: leaf,
             bound,
         }
@@ -874,15 +1119,15 @@ impl Mp {
             .identity
             .paired()
             .into_iter()
-            .map(|(device, principal, at)| DeviceInfo {
-                device,
-                principal,
+            .map(|o| DeviceInfo {
+                device: o.device,
+                principal: o.principal,
                 kind: DeviceKind::Owner,
-                name: "owner".into(),
-                first_seen: at,
+                name: owner_name(o.name),
+                first_seen: o.paired_at,
                 grant_id: None,
-                revoked: store.device_revoked(device),
-                connected: connected(device),
+                revoked: false,
+                connected: connected(o.device),
             })
             .collect();
         out.extend(store.guests.iter().filter_map(|g| {
@@ -894,7 +1139,9 @@ impl Mp {
                 name: g.name.clone(),
                 first_seen: UnixMillis(g.first_seen),
                 grant_id: unhex(&g.grant).map(GrantId),
-                revoked: store.device_revoked(device),
+                revoked: store
+                    .guest_removed_at(device)
+                    .is_some_and(|t| g.joined <= t.0),
                 connected: connected(device),
             })
         }));
@@ -918,8 +1165,8 @@ impl Mp {
                     core.identity
                         .paired()
                         .into_iter()
-                        .filter(|(_, principal, _)| *principal == p)
-                        .map(|(d, _, _)| d),
+                        .filter(|o| o.principal == p)
+                        .map(|o| o.device),
                 );
                 let store = lock(&self.store);
                 devices_hit.extend(
@@ -965,13 +1212,15 @@ impl Mp {
                 store.revoked_grants.insert(hex(&g.0));
             }
             grants_hit.extend(descendants);
-            for d in &devices_hit {
-                store.revoked_devices.insert(hex(&d.0));
+            // An owner device is unpaired (`unpaired.json` keeps when); a guest's removal
+            // is kept here. Either way what it signed or joined with until now stays void.
+            let now = now_millis();
+            for &d in &devices_hit {
+                if !core.identity.unpair(d) {
+                    store.removed_devices.insert(hex(&d.0), now);
+                }
             }
-            store.save(&self.store_path);
-        }
-        for &d in &devices_hit {
-            core.identity.unpair(d);
+            self.save(&mut store);
         }
         crate::notifier::drop_revoked(core);
         let disconnected = self.kick_invalid();
@@ -1088,6 +1337,7 @@ impl Mp {
                 knock: knock.clone(),
                 grant_ids: knocker.grant_ids,
                 issuers: knocker.issuers,
+                root_signed: knocker.root_signed,
                 expires: knocker.expires,
                 ctl,
                 conn,
@@ -1186,13 +1436,14 @@ impl Mp {
             .ok_or_else(|| MpError::NotFound("that knock is no longer waiting".into()))?;
         let knock = &pending.knock;
         let now = UnixMillis(now_millis());
-        let invite_valid =
-            pending.expires.is_none_or(|e| e > now) && self.chain_trusted(&pending.issuers) && {
-                let store = lock(&self.store);
-                !pending.grant_ids.iter().any(|&g| store.grant_revoked(g))
-                    && !pending.issuers.iter().any(|&d| store.device_revoked(d))
-                    && !store.device_revoked(knock.actor.device)
-            };
+        let invite_valid = self.chain_live(
+            &lock(&self.store),
+            &pending.grant_ids,
+            &pending.issuers,
+            pending.root_signed,
+            knock.actor.device,
+            pending.expires,
+        );
         let (answer, outcome, response) = match admit {
             Some(admit) if invite_valid => {
                 let (chain, info) = self.admit(core, knock, admit, now)?;
@@ -1273,25 +1524,27 @@ impl Mp {
             knock: false,
             history: admit.history,
         };
-        store.save(&self.store_path);
+        self.save(&mut store);
         let info = self.info(&store, &chain);
         Ok((chain, info))
     }
 
     /// Knocks whose invite was revoked or expired: tell the knocker and drop them.
     fn drop_invalid_knocks(&self, core: &Core) {
-        let now = now_millis();
         let doomed: Vec<PendingKnock> = {
             let store = lock(&self.store);
             let mut knocks = lock(&self.knocks);
             let ids: Vec<KnockId> = knocks
                 .iter()
                 .filter(|(_, k)| {
-                    k.expires.is_some_and(|e| e.0 <= now)
-                        || !self.chain_trusted(&k.issuers)
-                        || k.grant_ids.iter().any(|&g| store.grant_revoked(g))
-                        || k.issuers.iter().any(|&d| store.device_revoked(d))
-                        || store.device_revoked(k.knock.actor.device)
+                    !self.chain_live(
+                        &store,
+                        &k.grant_ids,
+                        &k.issuers,
+                        k.root_signed,
+                        k.knock.actor.device,
+                        k.expires,
+                    )
                 })
                 .map(|(id, _)| *id)
                 .collect();
@@ -1341,7 +1594,7 @@ impl Mp {
             } else {
                 store.policies.insert(session.0, policy);
             }
-            store.save(&self.store_path);
+            self.save(&mut store);
         }
         self.audit.append(
             AuditKind::Policy,
@@ -1363,13 +1616,12 @@ impl Mp {
         if self.principal_connected(principal) {
             return true;
         }
-        let now = now_millis();
         let store = lock(&self.store);
         store.guests.iter().any(|g| {
             let Some(device) = unhex(&g.device).map(DeviceId) else {
                 return false;
             };
-            if grants::guest_principal(device) != principal || store.device_revoked(device) {
+            if grants::guest_principal(device) != principal {
                 return false;
             }
             store
@@ -1378,10 +1630,18 @@ impl Mp {
                 .filter(|s| s.bound.contains(&g.device))
                 .filter_map(Store::chain_of)
                 .any(|chain| {
-                    chain.links.iter().all(|l| {
-                        !store.grant_revoked(l.grant.grant_id)
-                            && l.grant.expires.is_none_or(|e| e.0 > now)
-                    })
+                    let ids: Vec<GrantId> = chain.links.iter().map(|l| l.grant.grant_id).collect();
+                    let issuers: Vec<DeviceId> =
+                        chain.links.iter().map(|l| l.grant.issuer).collect();
+                    let expires = chain.links.iter().filter_map(|l| l.grant.expires).min();
+                    self.chain_live(
+                        &store,
+                        &ids,
+                        &issuers,
+                        chain.links[0].grant.issued_at,
+                        device,
+                        expires,
+                    )
                 })
         })
     }

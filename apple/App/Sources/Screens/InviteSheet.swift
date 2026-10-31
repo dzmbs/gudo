@@ -50,7 +50,7 @@ struct InviteSheet: View {
             ShareRoot(workspace: workspace, session: session)
                 .navigationDestination(for: ShareRoute.self) { route in
                     switch route {
-                    case .grants: GrantsView(session: session)
+                    case .grants: GrantsView(session: session, hostName: DeviceHosts.name(workspace.hostId ?? "", hosts: AppModel.shared.hosts))
                     case .audit: AuditLogView(session: session)
                     }
                 }
