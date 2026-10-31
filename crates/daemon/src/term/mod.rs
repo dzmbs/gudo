@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use proto::{
-    AgentKind, Axis, CommandMark, InputPayload, KeyAction, KeyEvent, LayoutOp, OpOutcome, PaneId,
-    PaneLaunch, Seq, SessionId, TabId,
+    AgentKind, Axis, CloseWhen, CommandMark, DockTarget, FloatFrame, InputPayload, KeyAction,
+    KeyEvent, LayoutOp, OpOutcome, PaneId, PaneLaunch, Seq, SessionId, TabId,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -298,6 +298,126 @@ struct SplitArgs {
     agent: Option<AgentName>,
     #[serde(default)]
     focus: bool,
+    #[serde(default)]
+    float: bool,
+    #[serde(default)]
+    frame: Option<FrameArg>,
+    #[serde(default)]
+    close_when_done: bool,
+}
+
+/// A window's frame in fractions of its tab.
+#[derive(Deserialize, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+struct FrameArg {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl From<FrameArg> for FloatFrame {
+    fn from(f: FrameArg) -> Self {
+        Self {
+            x: f.x,
+            y: f.y,
+            w: f.w,
+            h: f.h,
+        }
+    }
+}
+
+/// How a new floating window opens.
+struct FloatOpts {
+    frame: Option<FloatFrame>,
+    close: CloseWhen,
+}
+
+/// How a pane opens: `None` for a split or tab, else as a floating window. A frame and
+/// closing only make sense on a float.
+fn float_opts(
+    float: bool,
+    frame: Option<FrameArg>,
+    close_when_done: bool,
+) -> Result<Option<FloatOpts>> {
+    if !float {
+        if frame.is_some() || close_when_done {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArgs,
+                "frame and closeWhenDone are for floating windows",
+            )
+            .hint("add float: true"));
+        }
+        return Ok(None);
+    }
+    let frame = frame.map(FloatFrame::from);
+    if frame.is_some_and(|f| f.clamped().is_none()) {
+        return Err(
+            ToolError::new(ErrorCode::InvalidArgs, "frame values must be numbers")
+                .hint("fractions of the tab, e.g. {x: 0.55, y: 0.05, w: 0.4, h: 0.5}"),
+        );
+    }
+    Ok(Some(FloatOpts {
+        frame,
+        close: if close_when_done {
+            CloseWhen::Done
+        } else {
+            CloseWhen::Never
+        },
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FloatPaneArgs {
+    pane: String,
+    #[serde(default)]
+    frame: Option<FrameArg>,
+    #[serde(default)]
+    pinned: Option<bool>,
+}
+
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "snake_case")]
+enum Side {
+    Left,
+    #[default]
+    Right,
+    Up,
+    Down,
+}
+
+impl From<Side> for proto::Direction {
+    fn from(s: Side) -> Self {
+        match s {
+            Side::Left => Self::Left,
+            Side::Right => Self::Right,
+            Side::Up => Self::Up,
+            Side::Down => Self::Down,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DockArgs {
+    pane: String,
+    #[serde(default)]
+    beside: Option<String>,
+    #[serde(default)]
+    side: Side,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MinimizeArgs {
+    pane: String,
+    #[serde(default = "yes")]
+    minimized: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -318,6 +438,12 @@ struct TabArgs {
     title: Option<String>,
     #[serde(default)]
     focus: bool,
+    #[serde(default)]
+    float: bool,
+    #[serde(default)]
+    frame: Option<FrameArg>,
+    #[serde(default)]
+    close_when_done: bool,
 }
 
 #[derive(Deserialize)]
@@ -406,6 +532,12 @@ struct SpawnArgs {
     direction: Direction,
     #[serde(default)]
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    float: bool,
+    #[serde(default)]
+    frame: Option<FrameArg>,
+    #[serde(default)]
+    close_when_done: bool,
 }
 
 #[derive(Deserialize)]
@@ -490,6 +622,26 @@ impl CommandInfo {
     }
 }
 
+/// A fraction as an agent wrote it: `0.55`, not the f32's `0.550000011920929`.
+fn tidy(v: f32) -> f64 {
+    (f64::from(v) * 1e4).round() / 1e4
+}
+
+/// The floating window holding `pane` as tools report it, `null` for a pane in place.
+fn float_info(core: &Core, pane: PaneId) -> Value {
+    let Some(w) = lock(&core.layout).window_of(pane) else {
+        return Value::Null;
+    };
+    json!({
+        "window": format!("w{}", w.id.0),
+        "panes": w.panes.iter().map(|&p| pane_ref(p)).collect::<Vec<_>>(),
+        "frame": { "x": tidy(w.frame.x), "y": tidy(w.frame.y), "w": tidy(w.frame.w), "h": tidy(w.frame.h) },
+        "minimized": w.minimized,
+        "pinned": w.pinned,
+        "closeWhenDone": w.close == CloseWhen::Done,
+    })
+}
+
 /// The pane's last agent turn as tools report it, `null` before the first.
 fn last_turn(entry: &PaneEntry) -> Value {
     let meta = lock(&entry.meta);
@@ -543,6 +695,10 @@ impl Ctx {
             "agent_prompt" => self.agent_prompt(args(value)?).await,
             "agent_wait" => self.agent_wait(args(value)?).await,
             "agent_result" => self.agent_result(args(value)?),
+            "pane_float" => self.pane_float(args(value)?),
+            "pane_dock" => self.pane_dock(args(value)?),
+            "pane_minimize" => self.pane_minimize(args(value)?),
+            "pane_raise" => self.pane_raise(args(value)?),
             other => Err(ToolError::new(
                 ErrorCode::NotFound,
                 format!("no tool {other}"),
@@ -672,6 +828,7 @@ impl Ctx {
             "lastCommand": last,
             "status": status(&self.core, id, entry),
             "cursor": output::cursor(entry.pane.head()),
+            "float": float_info(&self.core, id),
         })
     }
 
@@ -752,14 +909,48 @@ impl Ctx {
     async fn pane_split(&self, a: SplitArgs) -> Result<Value> {
         let (of, _) = self.resolve(a.of.as_deref())?;
         self.may_read(of)?;
-        let pane = self.split(
+        let float = float_opts(a.float, a.frame, a.close_when_done)?;
+        let pane = self.open(
             of,
             a.direction,
             Self::launch(a.command, a.agent, a.cwd),
             a.focus,
+            float,
         )?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
         Ok(json!({ "pane": self.pane_info(pane, &entry) }))
+    }
+
+    /// Opens a pane beside `of`: a split, or a floating window over its tab. A float takes
+    /// focus only when asked, in the same change, so the user's focus never flickers.
+    fn open(
+        &self,
+        of: PaneId,
+        direction: Direction,
+        launch: PaneLaunch,
+        focus: bool,
+        float: Option<FloatOpts>,
+    ) -> Result<PaneId> {
+        let Some(FloatOpts { frame, close }) = float else {
+            return self.split(of, direction, launch, focus);
+        };
+        self.may_open()?;
+        let pane = match self.core.apply_op(LayoutOp::NewFloat {
+            pane_id: of,
+            launch,
+            frame,
+            focus,
+            close,
+        }) {
+            OpOutcome::PaneCreated { pane_id } => pane_id,
+            OpOutcome::Failed { message, .. } => {
+                return Err(ToolError::new(ErrorCode::Failed, message)
+                    .hint("a tab holds at most 16 floating windows"));
+            }
+            other => return Err(ToolError::new(ErrorCode::Failed, format!("{other:?}"))),
+        };
+        self.core.term.created(self.caller, pane);
+        Ok(pane)
     }
 
     fn split(
@@ -795,6 +986,25 @@ impl Ctx {
 
     async fn tab_new(&self, a: TabArgs) -> Result<Value> {
         let session = self.session().ok_or_else(closed)?;
+        if let Some(float) = float_opts(a.float, a.frame, a.close_when_done)? {
+            // Over the caller's own tab instead of a tab of its own.
+            if a.title.is_some() {
+                return Err(ToolError::new(
+                    ErrorCode::InvalidArgs,
+                    "a floating window has no tab title",
+                ));
+            }
+            let pane = self.open(
+                self.caller,
+                Direction::Right,
+                Self::launch(a.command, None, a.cwd),
+                a.focus,
+                Some(float),
+            )?;
+            let tab = self.core.tab_of_pane(pane).map(tab_ref);
+            let entry = self.core.pane(pane).ok_or_else(closed)?;
+            return Ok(json!({ "tab": tab, "pane": self.pane_info(pane, &entry) }));
+        }
         self.may_open()?;
         let before = lock(&self.core.layout)
             .snapshot(session)
@@ -1273,7 +1483,8 @@ impl Ctx {
         let (of, _) = self.resolve(a.of.as_deref())?;
         self.may_read(of)?;
         let launch = Self::launch(None, Some(a.kind), a.cwd);
-        let pane = self.split(of, a.direction, launch, false)?;
+        let float = float_opts(a.float, a.frame, a.close_when_done)?;
+        let pane = self.open(of, a.direction, launch, false, float)?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
         if let Some(prompt) = a.prompt.filter(|p| !p.trim().is_empty()) {
             let deadline = Instant::now() + wait_for(a.timeout_ms.or(Some(60_000)));
@@ -1368,6 +1579,132 @@ impl Ctx {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    // --- floating windows -------------------------------------------------------------------
+
+    /// The window holding `pane`, which the caller must have created.
+    fn own_float(&self, pane: &str) -> Result<(PaneId, proto::FloatWindow)> {
+        let (pane, _) = self.resolve(Some(pane))?;
+        self.may_drive(pane)?;
+        let window = lock(&self.core.layout).window_of(pane).ok_or_else(|| {
+            ToolError::new(
+                ErrorCode::InvalidArgs,
+                format!("{} is not floating", pane_ref(pane)),
+            )
+            .hint("float it first with pane_float")
+        })?;
+        Ok((pane, window))
+    }
+
+    fn layout_op(&self, op: LayoutOp) -> Result<()> {
+        match self.core.apply_op(op) {
+            OpOutcome::Failed { message, .. } => Err(ToolError::new(ErrorCode::Failed, message)),
+            _ => Ok(()),
+        }
+    }
+
+    fn pane_result(&self, pane: PaneId) -> Result<Value> {
+        let entry = self.core.pane(pane).ok_or_else(closed)?;
+        Ok(json!({ "pane": self.pane_info(pane, &entry) }))
+    }
+
+    fn pane_float(&self, a: FloatPaneArgs) -> Result<Value> {
+        let (pane, _) = self.resolve(Some(&a.pane))?;
+        self.may_drive(pane)?;
+        let frame = a.frame.map(FloatFrame::from);
+        if frame.is_some_and(|f| f.clamped().is_none()) {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArgs,
+                "frame values must be numbers",
+            ));
+        }
+        self.layout_op(LayoutOp::FloatPane {
+            pane_id: pane,
+            frame,
+        })
+        .map_err(|e| {
+            e.hint("a tab keeps at least one pane in place; it holds at most 16 floating windows")
+        })?;
+        if a.pinned.is_some() {
+            self.layout_op(LayoutOp::SetFloat {
+                pane_id: pane,
+                frame: None,
+                minimized: None,
+                pinned: a.pinned,
+            })?;
+        }
+        self.pane_result(pane)
+    }
+
+    /// Docks the window, then gives the user back the focus docking moves.
+    fn pane_dock(&self, a: DockArgs) -> Result<Value> {
+        let (pane, _) = self.own_float(&a.pane)?;
+        let beside = match a.beside.as_deref() {
+            Some(b) => {
+                let (target, _) = self.resolve(Some(b))?;
+                self.may_read(target)?;
+                Some(DockTarget {
+                    pane_id: target,
+                    side: a.side.into(),
+                })
+            }
+            None => None,
+        };
+        let focused = self.user_focus();
+        self.layout_op(LayoutOp::DockPane {
+            pane_id: pane,
+            beside,
+        })
+        .map_err(|e| e.hint("dock beside a pane that is not floating"))?;
+        if let Some(focused) = focused.filter(|&f| f != pane) {
+            self.core.apply_op(LayoutOp::Focus { pane_id: focused });
+        }
+        self.pane_result(pane)
+    }
+
+    fn pane_minimize(&self, a: MinimizeArgs) -> Result<Value> {
+        let (pane, _) = self.own_float(&a.pane)?;
+        self.layout_op(LayoutOp::SetFloat {
+            pane_id: pane,
+            frame: None,
+            minimized: Some(a.minimized),
+            pinned: None,
+        })?;
+        self.pane_result(pane)
+    }
+
+    /// Brings the window to the front, out of the tray, without the keyboard: the user's
+    /// focus is theirs.
+    fn pane_raise(&self, a: PaneArg) -> Result<Value> {
+        let (pane, window) = self.own_float(&a.pane)?;
+        if window.minimized {
+            // Restoring raises it.
+            self.layout_op(LayoutOp::SetFloat {
+                pane_id: pane,
+                frame: None,
+                minimized: Some(false),
+                pinned: None,
+            })?;
+        } else if window.panes.len() == 1 {
+            self.layout_op(LayoutOp::FloatPane {
+                pane_id: pane,
+                frame: Some(window.frame),
+            })?;
+        }
+        self.pane_result(pane)
+    }
+
+    /// The pane with the user's focus: the focused pane of the session's tab on screen.
+    fn user_focus(&self) -> Option<PaneId> {
+        let session = self.session()?;
+        let layout = lock(&self.core.layout).snapshot(session)?;
+        let active = layout.active_tab?;
+        layout
+            .tabs
+            .iter()
+            .find(|t| t.tab_id == active)
+            .map(|t| t.focused)
     }
 
     fn agent_result(&self, a: PaneArg) -> Result<Value> {

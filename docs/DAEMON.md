@@ -2105,7 +2105,8 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
 - **Limits.** One agent, with every worker it started, may have 32 panes open at once; a wait
   holds at most 1 MiB of output.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
-  `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
+  `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`,
+  `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
 - **Rules.** Read any pane of the caller's session; type into, run in and close only the panes it
   created (or that those created), never its own; nothing it opens takes the user's focus;
   input is refused while the program asks for a password (echo off, canonical).
@@ -2126,6 +2127,24 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   pane in their scope that has one on joining; and for every pane of the session on attaching
   (`None` included, so a report cleared while they looked elsewhere goes). A blocked report is a
   status, never an approval request: approvals stay in `PaneMeta.agent`.
+- **Floating windows.** `pane_split`, `tab_new` and `agent_spawn` take `float: true` to open
+  the pane as a floating window over the tab (`tab_new`: over the caller's tab, no title), with
+  an optional `frame {x, y, w, h}` (fractions of the tab) and `closeWhenDone: true`: the daemon
+  closes the window 2.5 s after its work ends (an agent's turn, a done or error status, the first
+  command run in it), so a script can pop a window for a run's output and have it go when the run
+  is done; a worker's answer stays readable with `agent_result` after its window closed. Such a
+  window opens without the focus in the same change (`LayoutOp::NewFloat { focus: false }`), so
+  the user's focus never flickers. On panes the caller created: `pane_float {pane, frame?,
+  pinned?}` floats one (or moves its window; `pinned` shows it over every tab), `pane_dock {pane,
+  beside?, side?}` docks its window where it was or beside a pane (`side` left, right (default),
+  up or down) and gives the user's focus back, `pane_minimize {pane, minimized = true}` sends it
+  to the tab's tray or restores it, and `pane_raise {pane}` brings it to the front and out of the
+  tray. There is no tool that focuses a pane: the keyboard is the user's. Every pane listing
+  carries `float` (the window's id, panes, frame, `minimized`, `pinned`, `closeWhenDone`, or
+  `null`). From a shell, `un float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P]
+  -- <command…>` opens a shell in a window and runs the command in it (so its output stays to
+  read, and its end closes the window); `un float pane|move|dock|min|restore|pin|list` arrange
+  and list windows.
 - **Workers.** `agent_spawn` starts Claude or Codex in a pane beside the caller (owned, no
   focus) and gives it its first prompt once it is idle and its screen has settled; a worker on
   a dialog (folder trust, an approval) is reported blocked instead. `agent_prompt` refuses a
