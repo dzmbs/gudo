@@ -75,8 +75,12 @@ Now:
   - a `file:` URL, which its agent could then read through the browser tools;
   - another app's link;
   - our own pairing links.
+- Other addresses a host reports open only if they are web pages: a pull request's or CI
+  check's page, an editor sign-in page. A tunnel's editor page must be on vscode.dev, and its
+  desktop link must be a `vscode://vscode-remote/tunnel+…` link.
 - A guest connection (someone else's host) never announces the browser capability. If such a
-  host sends a browser request anyway, the app drops it.
+  host sends a browser request anyway, the Rust core drops it (it does the same for any
+  connection that did not announce the capability), and so does the app.
 - When a user clicks a terminal link from a host, a `file:` URL is not handed to the system.
   Links the in-app browser opens from a remote pane must be web pages.
 - There is no OSC 52: a host can neither read nor write the clipboard.
@@ -87,15 +91,17 @@ Now:
 - The VS Code web view hands only `vscode:`, `vscode-insiders:`, `mailto:` and `tel:` links to
   the system, and only from the main frame.
 - The Excalidraw canvas:
-  - never navigates away from its bundled scheme;
+  - never navigates its page away from its bundled scheme, not even to a `data:` or `blob:`
+    page (a shared drawing's link could otherwise replace it with a form);
   - opens clicked links in the system browser, and only web links;
   - accepts bridge messages only from its own main frame, so an embedded site in a shared scene
     cannot edit the drawing.
 
-**Tooling hooks.** Test hooks (`-testTrustHostKeys`, `-testBundledDaemons`, `-testTicket`,
-`-testTunnelWebBase`, …) are read from the launch arguments only, never from saved defaults.
-On the Mac, `defaults write` could otherwise turn off host key checks for good, or make the
-app install a different daemon on every host.
+**Tooling hooks.** Test and tooling hooks (`-testTrustHostKeys`, `-testBundledDaemons`,
+`-testTicket`, `-testTunnelWebBase`, `-screen`, `-typeOnStart`, `-seedAgent`, `-joinInvite`,
+`-browserProxy`, …) are read from the launch arguments only, never from saved defaults. On the
+Mac, `defaults write` could otherwise turn off host key checks for good, make the app install a
+different daemon on every host, or type a command into a paired host's terminal at launch.
 
 **SSH.**
 - Host keys are trust-on-first-use, with the fingerprint shown. A changed key raises a "Host
@@ -136,8 +142,10 @@ has) works like a password manager's or a bank's:
 **Logs and debug output.**
 - Rust core messages and user- or host-identifying fields (host names, device names, paths,
   invitee names) are logged `privacy: .private`.
-- `Debug` output of `ClientConfig`, `ConnectOptions` (client-core and FFI) and
-  `GeneratedSshKey` redacts the device key, the relay token and the private key.
+- `Debug` output of the FFI types that carry a secret leaves it out: `ClientConfig` (device
+  key), `ConnectOptions` (relay token; also in client-core), `GeneratedSshKey` (private key),
+  `PushSealKey`, `PushActionOffer` (action token), `CreatedInvite` (link),
+  `EditorInstance` (token) and `PushRegistration` (relay capabilities).
 - Askpass secrets in the core are zeroized (`proto::Secret`).
 
 **Pasteboard.** Copied invite links expire from the iOS clipboard after 10 minutes. On the Mac
@@ -182,3 +190,39 @@ collected data. Required-reason APIs are declared: UserDefaults `CA92.1`/`1C8F.1
   terminal opening Safari would), in the app's default store with vscode.dev's sign-in.
 - **Editor servers' stores** (per host and folder, for VS Code on the host) are not deleted
   when the host is removed; they hold only the server's connection token.
+- **Saved preferences on the Mac.** Tooling hooks ignore saved defaults, but real preferences
+  (themes, Git scripts, hosts to reopen) are still the user's files; a process running as the
+  user can change them.
+
+## Validation
+
+Each test runs the attack against the real code and fails if the defence is removed (checked
+by removing it).
+
+- `AppTests/ClientExploitTests` (macOS; also on an iOS simulator):
+  - `testNoFormOfLinkPairsOrJoins`: pairing links with odd casing, extra path segments,
+    query/fragment, duplicated parameters, percent-encoding, control characters, 1 MiB of
+    payload, `scheme:`/`scheme:///` forms, user info, `join` wrappers and `file:` URLs reach
+    Add Host or Join at most (showing the ticket a tap would pair) and add no host.
+  - `testAHostOpensWebPagesAndNothingElse`: `FILE:`, `file:///`, `x-apple.systempreferences:`,
+    `shortcuts://`, our own links, the canvas scheme, `javascript:`, `data:`, `blob:`, `smb:`,
+    `itms-services:` and host-less URLs are refused by `HostLinks`, `browser_navigate`, the
+    tunnel page and its desktop link; IDN web pages open; vscode.dev look-alikes don't.
+  - `testTheCanvasBridgeHearsOnlyItsOwnPage`: a frame inside the live canvas posts to the
+    bridge and is ignored; the page navigating to a site, `data:` or `file:` stays put.
+  - `testTheCanvasMainFrameStaysInItsBundle`, `testTheEditorWebViewHandsOnlyItsSchemesToTheSystem`.
+  - `testToolingHooksAreNeverReadFromSavedDefaults`: scans the app's sources; every tooling
+    hook and `test…` key is read through `LaunchArguments`.
+  - `testKeychainItemsStayOnThisDevice`: the stored item is `AfterFirstUnlockThisDeviceOnly`
+    and not synchronizable (skipped where the data-protection keychain is unusable: ad-hoc Mac
+    builds).
+  - `testCopiedInviteLinksAreConcealed` (macOS).
+- `AppTests/LinkSecurityTests`: a pairing link shows Add Host; invites open Join.
+- `HostKitTests`: `fileSecretsAreOwnerOnlyUnderAnOpenUmask` (umask 0, a folder made before),
+  `fileSecretsMoveIntoTheKeychainAndLeaveNoFiles`.
+- `client-core` `browser::tests`: a daemon pushing browser requests to a connection that did
+  not announce the capability (or to a guest) reaches nothing.
+- `apple-ffi` `debug_output_leaves_secrets_out`: every FFI type that carries a secret.
+- Manual: the hosted tests' unified log (`log stream`) holds none of the test tickets, invite
+  links or secrets; the four `PrivacyInfo.xcprivacy` files pass `plutil -lint` and land in their
+  bundles; the Rust core links no disk-space API.

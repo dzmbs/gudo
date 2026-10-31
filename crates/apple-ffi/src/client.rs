@@ -1052,6 +1052,57 @@ mod tests {
         let text = format!("{key:?}");
         assert!(!text.contains("PRIVATE KEY"), "private key in {text}");
         assert!(text.contains(&key.fingerprint));
+
+        let seal = crate::notify::PushSealKey {
+            secret: vec![0xAB; 32].into(),
+            public_key: vec![1; 32].into(),
+        };
+        let offer = crate::notify::PushActionOffer {
+            token: "action-token-value".into(),
+            approve: "Approve".into(),
+            deny: "Deny".into(),
+            expires_ms: 0,
+        };
+        let invite = crate::mp::CreatedInvite {
+            link: "unnamed://join/invite-secret".into(),
+            qr_payload: "UNNAMED://JOIN/INVITE-SECRET".into(),
+            grant_id: "g".into(),
+            expires_ms: None,
+        };
+        let editor = crate::ws_types::EditorInstance {
+            kind: crate::ws_types::EditorKind::VsCode,
+            folder: "/srv".into(),
+            port: 1,
+            token: "editor-token-value".into(),
+            url_path: "/?tkn=editor-token-value".into(),
+            pid: 1,
+            started_at_ms: 0,
+        };
+        let registration = crate::ws_types::PushRegistration {
+            cap: "relay-cap-value".into(),
+            seal_key: vec![1; 32].into(),
+            relay_url: None,
+            prefs: crate::ws_types::PushPrefs {
+                approvals: true,
+                blocked: true,
+                done: true,
+                failed: true,
+                commands: true,
+            },
+            activity_cap: Some("activity-cap-value".into()),
+        };
+        let text = format!("{seal:?} {offer:?} {invite:?} {editor:?} {registration:?}");
+        for secret in [
+            "171",
+            "action-token-value",
+            "invite-secret",
+            "INVITE-SECRET",
+            "editor-token-value",
+            "relay-cap-value",
+            "activity-cap-value",
+        ] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
     }
 
     #[test]

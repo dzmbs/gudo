@@ -46,17 +46,29 @@ pub(crate) struct BrowserState {
 }
 
 impl BrowserState {
-    /// Handles a browser push from `ctl`; returns the message back if it is not one.
-    pub(crate) fn dispatch(&self, msg: ServerCtl) -> Option<ServerCtl> {
+    /// Handles a browser push from `ctl`; returns the message back if it is not one. Pushes
+    /// on a connection that did not announce the capability are dropped: a daemon is not
+    /// trusted to honour it.
+    pub(crate) fn dispatch(&self, msg: ServerCtl, announced: bool) -> Option<ServerCtl> {
         let ServerCtl::Browser(push) = msg else {
             return Some(msg);
         };
+        if !announced {
+            tracing::warn!("browser push on a connection that did not ask for it; dropped");
+            return None;
+        }
         let listener = lock(&self.listener).clone();
         if let Some(l) = listener {
             l.on_browser_push(push);
         }
         None
     }
+}
+
+/// Whether a connection announces [`proto::Caps::BROWSER`]: only when asked, and never as a
+/// guest (someone else's host must not drive this device's browser).
+pub(crate) fn announces(options: &crate::ConnectOptions, guest: bool) -> bool {
+    options.browser && !guest
 }
 
 impl Client {
@@ -69,5 +81,41 @@ impl Client {
     pub fn answer_browser_call(&self, id: u64, result: Result<String, String>) {
         self.inner
             .send(proto::ClientCtl::BrowserResult { id, result });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proto::PaneId;
+
+    fn open() -> ServerCtl {
+        ServerCtl::Browser(BrowserPush::Open {
+            pane_id: PaneId(1),
+            url: "https://example.com/".into(),
+        })
+    }
+
+    #[test]
+    fn a_hostile_daemon_cannot_push_to_a_connection_that_did_not_ask() {
+        let state = BrowserState::default();
+        let (listener, mut pushes) = BrowserPushQueue::channel();
+        *lock(&state.listener) = Some(listener);
+
+        assert!(state.dispatch(open(), false).is_none());
+        assert!(pushes.try_recv().is_err(), "dropped, not delivered");
+        assert!(state.dispatch(open(), true).is_none());
+        assert!(pushes.try_recv().is_ok());
+    }
+
+    #[test]
+    fn guests_never_announce_the_browser() {
+        let asked = crate::ConnectOptions {
+            browser: true,
+            ..crate::ConnectOptions::default()
+        };
+        assert!(announces(&asked, false));
+        assert!(!announces(&asked, true));
+        assert!(!announces(&crate::ConnectOptions::default(), false));
     }
 }

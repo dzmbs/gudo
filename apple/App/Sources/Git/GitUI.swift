@@ -211,7 +211,8 @@ final class GitUI {
 
     /// Opens the pull request's page in the browser.
     func openOnGitHub(_ pr: PullRequest? = nil) {
-        guard let url = URL(string: (pr ?? self.pr)?.url ?? "") else { return }
+        // The host reports the address: only a web page goes to the system.
+        guard let url = URL(string: (pr ?? self.pr)?.url ?? ""), HostLinks.mayOpen(url) else { return }
         #if os(macOS)
         NSWorkspace.shared.open(url)
         #else

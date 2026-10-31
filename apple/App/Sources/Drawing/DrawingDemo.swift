@@ -16,7 +16,7 @@ enum DrawingDemo {
     private static var started = false
 
     static func run(on drawing: PaneDrawing) {
-        guard let mode = UserDefaults.standard.string(forKey: "drawingDemo"), !mode.isEmpty, !started else { return }
+        guard let mode = LaunchArguments().string(forKey: "drawingDemo"), !mode.isEmpty, !started else { return }
         started = true
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))

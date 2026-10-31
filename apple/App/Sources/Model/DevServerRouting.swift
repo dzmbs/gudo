@@ -23,7 +23,7 @@ import WebKit
 final class DevServerRouting {
     static let shared = DevServerRouting()
 
-    var isEnabled = UserDefaults.standard.string(forKey: "browserProxy") != "NO"
+    var isEnabled = LaunchArguments().string(forKey: "browserProxy") != "NO"
 
     private let router = LoopbackRouter()
     private var hosts: [String: HostRoute] = [:]

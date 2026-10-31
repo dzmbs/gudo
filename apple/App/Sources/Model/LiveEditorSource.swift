@@ -284,7 +284,8 @@ final class LiveEditorSource: EditorSource {
             if phase.url == nil { phase = .connectingTunnel }
         case .needsLogin(let login):
             // A late answer must not bring the code back once the tunnel runs.
-            guard tunnel?.opened == false, let url = URL(string: login.verificationUrl) else { return }
+            // The host names the page; only a web page opens.
+            guard tunnel?.opened == false, let url = URL(string: login.verificationUrl), HostLinks.mayOpen(url) else { return }
             phase = .signingIn(EditorDeviceCode(
                 account: login.provider == .gitHub ? .github : .microsoft, verificationURL: url, code: login.userCode))
         case .running:
@@ -307,7 +308,7 @@ final class LiveEditorSource: EditorSource {
             let opened = try await api.vscodeTunnelOpen(open: VsCodeTunnelOpen(
                 folder: folder == "~" ? nil : folder, path: path ?? folder,
                 line: line.map { UInt32($0) }, column: column.map { UInt32($0) }))
-            tunnelDesktopURI = URL(string: opened.desktopUri)
+            tunnelDesktopURI = TunnelWeb.desktopURI(opened.desktopUri)
             guard let url = TunnelWeb.url(opened.webUrl) else {
                 phase = .failed("The tunnel answered with an address this device cannot open.")
                 return

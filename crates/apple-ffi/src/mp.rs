@@ -789,8 +789,8 @@ pub struct InviteOptions {
     pub since_join: bool,
 }
 
-/// A created invite.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+/// A created invite. `Debug` leaves the link out: it is a bearer secret.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct CreatedInvite {
     /// The link (`unnamed://join/…`) to share.
     pub link: String,
@@ -801,6 +801,15 @@ pub struct CreatedInvite {
     pub grant_id: String,
     /// Expiry, Unix ms.
     pub expires_ms: Option<u64>,
+}
+
+impl std::fmt::Debug for CreatedInvite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreatedInvite")
+            .field("grant_id", &self.grant_id)
+            .field("expires_ms", &self.expires_ms)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A multiplayer push.

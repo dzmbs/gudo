@@ -1022,8 +1022,8 @@ impl From<EditorLaunch> for proto::EditorLaunch {
     }
 }
 
-/// A running editor server on the host's `127.0.0.1:port`.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+/// A running editor server on the host's `127.0.0.1:port`. `Debug` leaves the token out.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct EditorInstance {
     /// Which editor.
     pub kind: EditorKind,
@@ -1039,6 +1039,18 @@ pub struct EditorInstance {
     pub pid: u32,
     /// Start, Unix ms.
     pub started_at_ms: u64,
+}
+
+impl std::fmt::Debug for EditorInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorInstance")
+            .field("kind", &self.kind)
+            .field("folder", &self.folder)
+            .field("port", &self.port)
+            .field("pid", &self.pid)
+            .field("started_at_ms", &self.started_at_ms)
+            .finish_non_exhaustive()
+    }
 }
 
 impl From<proto::EditorInstance> for EditorInstance {
@@ -1365,8 +1377,8 @@ impl From<proto::PushPrefs> for PushPrefs {
     }
 }
 
-/// A device's push registration with one daemon.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+/// A device's push registration with one daemon. `Debug` leaves the capabilities out.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PushRegistration {
     /// The capability the push relay issued (`POST /v1/register`; see
     /// `push_relay_register_body`).
@@ -1381,6 +1393,16 @@ pub struct PushRegistration {
     /// A push-to-start capability for the agents Live Activity.
     #[uniffi(default = None)]
     pub activity_cap: Option<String>,
+}
+
+impl std::fmt::Debug for PushRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushRegistration")
+            .field("seal_key", &self.seal_key)
+            .field("relay_url", &self.relay_url)
+            .field("prefs", &self.prefs)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Push settings on the daemon and this device's registration.

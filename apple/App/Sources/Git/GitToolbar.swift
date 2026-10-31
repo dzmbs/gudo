@@ -224,7 +224,7 @@ private struct CheckRow: View {
         HStack(spacing: 6) {
             Image(systemName: check.status.kind.systemImage)
                 .foregroundStyle(check.status.kind.color)
-            if let url = check.url.flatMap(URL.init(string:)) {
+            if let url = check.url.flatMap(URL.init(string:)), HostLinks.mayOpen(url) {
                 Button(check.name) { openURL(url) }
                     .buttonStyle(.plain)
                     .help(check.workflow.map { "\($0) · \(check.name)" } ?? check.name)
