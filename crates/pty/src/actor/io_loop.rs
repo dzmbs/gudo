@@ -6,12 +6,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 use rustix::event::{PollFd, PollFlags, Timespec};
 use rustix::io::Errno;
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
-use super::{OutputHook, Shared};
+use super::{Input, OutputHook, Shared};
 use crate::termios::EchoState;
 
 const READ_BUF: usize = 64 * 1024;
@@ -65,17 +65,17 @@ enum ReadOutcome {
 pub(super) struct IoLoop {
     master: Arc<OwnedFd>,
     wake: OwnedFd,
-    input: mpsc::Receiver<Bytes>,
+    input: mpsc::Receiver<Input>,
     shared: Arc<Shared>,
     hook: Option<OutputHook>,
-    pending: VecDeque<Bytes>,
+    pending: VecDeque<Input>,
 }
 
 impl IoLoop {
     pub(super) fn new(
         master: Arc<OwnedFd>,
         wake: OwnedFd,
-        input: mpsc::Receiver<Bytes>,
+        input: mpsc::Receiver<Input>,
         shared: Arc<Shared>,
         hook: Option<OutputHook>,
     ) -> Self {
@@ -142,6 +142,7 @@ impl IoLoop {
         // Refuse further writes before announcing the end, so that anyone who has seen the end
         // also sees writes fail.
         self.input.close();
+        self.shared.input_budget.close();
         self.shared.output.send_modify(|state| state.closed = true);
     }
 
@@ -158,11 +159,12 @@ impl IoLoop {
 
     fn flush_input(&mut self) {
         while let Some(front) = self.pending.front_mut() {
-            match rustix::io::write(&*self.master, front) {
+            match rustix::io::write(&*self.master, &front.data) {
                 Ok(n) => {
-                    front.advance(n);
-                    if front.is_empty() {
-                        self.pending.pop_front();
+                    front.data.advance(n);
+                    if front.data.is_empty() {
+                        let done = self.pending.pop_front().expect("front exists");
+                        self.shared.input_budget.add_permits(done.permits as usize);
                     }
                 }
                 Err(Errno::INTR) => {}
@@ -170,7 +172,8 @@ impl IoLoop {
                 Err(err) => {
                     // Typically EIO once the child side is gone; output EOF follows.
                     tracing::debug!(%err, "pty write failed; dropping queued input");
-                    self.pending.clear();
+                    let permits: usize = self.pending.drain(..).map(|i| i.permits as usize).sum();
+                    self.shared.input_budget.add_permits(permits);
                     return;
                 }
             }

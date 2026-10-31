@@ -783,9 +783,17 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 .core
                 .apply_client_size(&entry, client.id, client.actor.principal, size, true);
         }
-        let Ok(at_seq) = entry.pane.write(bytes).await else {
-            client.send(reject(InputRejectReason::UnknownPane));
-            continue;
+        let at_seq = match entry.pane.write(bytes).await {
+            Ok(at_seq) => at_seq,
+            Err(crate::pane::InputError::Closed) => {
+                client.send(reject(InputRejectReason::UnknownPane));
+                continue;
+            }
+            Err(e @ crate::pane::InputError::Stalled) => {
+                tracing::debug!(pane = %input.pane_id, "input refused: {e}");
+                client.send(reject(InputRejectReason::Blocked));
+                continue;
+            }
         };
         lock(&entry.meta).typed_by = Some(client.id);
         client.core.mp.typed(&client.core, client.id, input.pane_id);

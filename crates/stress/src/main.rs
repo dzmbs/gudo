@@ -477,7 +477,7 @@ async fn latency(
             }
             Err(_) => lost += 1,
         }
-        if n % 50 == 0 {
+        if n.is_multiple_of(50) {
             conn.client.send_input(pane, b"\n".to_vec());
         }
         tokio::time::sleep(Duration::from_millis(interval_ms)).await;
@@ -558,7 +558,7 @@ async fn clients(
     }
     let mut errors = 0;
     while let Some(r) = tasks.join_next().await {
-        if let Ok(Err(e)) | Err(e @ _) = r.map_err(anyhow::Error::from) {
+        if let Ok(Err(e)) | Err(e) = r.map_err(anyhow::Error::from) {
             errors += 1;
             if errors < 5 {
                 println!("  client error: {e:#}");
@@ -697,7 +697,7 @@ async fn layout_storm(
                 1 => LayoutOp::Resize {
                     pane_id: pane,
                     axis: Axis::Horizontal,
-                    delta: if i % 2 == 0 { 0.05 } else { -0.05 },
+                    delta: if i.is_multiple_of(2) { 0.05 } else { -0.05 },
                 },
                 2 => LayoutOp::ToggleZoom { pane_id: pane },
                 3 => LayoutOp::RenameTab {

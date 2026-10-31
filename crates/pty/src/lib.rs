@@ -19,7 +19,7 @@ mod spawn;
 mod termios;
 
 pub use actor::{
-    Closed, OutputHook, PtyActor, RecvError, Signal, SignalError, SpawnOptions, Subscriber,
+    Closed, MAX_QUEUED_INPUT, OutputHook, PtyActor, RecvError, Signal, SignalError, SpawnOptions, Subscriber,
     TryWriteError,
 };
 pub use foreground::ForegroundProcess;

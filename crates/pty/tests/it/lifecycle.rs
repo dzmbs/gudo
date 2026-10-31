@@ -4,6 +4,25 @@ use pty::{RecvError, Seq, Signal, SignalError, SpawnOptions, WinSize};
 
 use crate::support::{read_to_end, read_until, spawn, spawn_with, within};
 
+/// A program that never reads its input used to let queued input grow without bound.
+#[tokio::test]
+async fn input_for_a_program_that_never_reads_is_bounded() {
+    let pty = spawn(&["/bin/sleep", "100"]);
+    let chunk = vec![b'x'; 64 * 1024];
+    let mut accepted = 0;
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while std::time::Instant::now() < end {
+        if pty.try_write(chunk.clone()).is_ok() {
+            accepted += chunk.len();
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        // What the kernel's tty buffer takes on top of the queue is small.
+        assert!(accepted <= 2 * pty::MAX_QUEUED_INPUT, "accepted {accepted} bytes");
+    }
+    assert!(accepted >= pty::MAX_QUEUED_INPUT / 2, "accepted only {accepted} bytes");
+}
+
 #[tokio::test]
 async fn echo_round_trip() {
     let pty = spawn(&["/bin/cat"]);

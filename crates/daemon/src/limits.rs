@@ -17,7 +17,7 @@ static INHERITED: OnceLock<Rlimit> = OnceLock::new();
 /// and systemd with 1024, which would cap a host at a few dozen or a few hundred panes.
 pub(crate) fn raise_fd_limit() {
     let current = getrlimit(Resource::Nofile);
-    let _ = INHERITED.set(current.clone());
+    let _ = INHERITED.set(current);
     let mut candidates = vec![current.maximum];
     if cfg!(target_os = "macos") {
         // macOS refuses an unlimited soft limit; this is the most one process may open.
@@ -44,7 +44,7 @@ pub(crate) fn raise_fd_limit() {
 pub(crate) fn restore_for_child() -> std::io::Result<()> {
     if let Some(limit) = INHERITED.get() {
         // `setrlimit` is a plain syscall: async-signal-safe.
-        setrlimit(Resource::Nofile, limit.clone())?;
+        setrlimit(Resource::Nofile, *limit)?;
     }
     Ok(())
 }

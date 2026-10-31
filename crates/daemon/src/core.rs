@@ -1441,7 +1441,7 @@ const META_INTERVAL: Duration = Duration::from_millis(50);
 async fn pane_task(
     core: Arc<Core>,
     entry: Arc<PaneEntry>,
-    mut vt_events: mpsc::UnboundedReceiver<VtEvent>,
+    mut vt_events: mpsc::Receiver<VtEvent>,
 ) {
     let id = entry.pane.id;
     let pane = Arc::clone(&entry.pane);
@@ -1485,19 +1485,31 @@ async fn pane_task(
                         crate::askpass::detect(&core, &entry);
                     }
                     VtEvent::Osc(osc) => {
-                        if handle_osc(&core, &entry, osc) && meta_due.is_none() {
-                            match meta_sent {
-                                Some(t) if t.elapsed() < META_INTERVAL => {
-                                    meta_due = Some((t + META_INTERVAL).into());
-                                }
-                                _ => {
-                                    meta_sent = Some(Instant::now());
-                                    core.emit(Event::PaneMeta(id));
-                                }
-                            }
-                        }
+                        handle_osc(&core, &entry, osc);
                     }
                     VtEvent::Command(update) => handle_command(&core, &entry, update),
+                }
+            }
+            () = pane.latest_meta().changed.notified() => {
+                active_until = Instant::now() + PANE_ACTIVE;
+                let latest = pane.latest_meta().take();
+                let mut changed = false;
+                if let Some(title) = latest.title {
+                    changed |= handle_osc(&core, &entry, Osc::Title(title));
+                }
+                if let Some(cwd) = latest.cwd {
+                    changed |= handle_osc(&core, &entry, Osc::Cwd(cwd));
+                }
+                if changed && meta_due.is_none() {
+                    match meta_sent {
+                        Some(t) if t.elapsed() < META_INTERVAL => {
+                            meta_due = Some((t + META_INTERVAL).into());
+                        }
+                        _ => {
+                            meta_sent = Some(Instant::now());
+                            core.emit(Event::PaneMeta(id));
+                        }
+                    }
                 }
             }
             () = sleep_until_some(meta_due) => {

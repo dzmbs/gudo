@@ -3,7 +3,7 @@
 # while one pane floods output and another floods title changes; measures the echo latency
 # of a fresh pane meanwhile.
 N=${1:-4}; SECS=${2:-40}
-G=$(dirname $0)/gen.py
+G=$(cd $(dirname $0) && pwd)/gen.py
 "$BIN/un-stress" spawn "exec yes" >/dev/null
 "$BIN/un-stress" spawn "exec python3 $G title 0" >/dev/null
 : >"$ROOT/tickets"

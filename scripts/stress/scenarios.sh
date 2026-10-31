@@ -19,6 +19,19 @@ case_churn() {
   RECOVER=2 D churn "$ST" churn --secs 8 --concurrency 16
 }
 
+case_floods() {
+  for spec in "yes 4" "urandom 3" "bigline 2" "unicode 2" "altscreen 2" "title 1" "osc7 1" \
+    "osc133 1" "notify 1" "osc7501 1" "osc52 1" "osc52big 1" "links 2" "kitty 1"; do
+    echo "== flood: $spec"
+    RECOVER=5 D flood "$W/s-flood.sh" ${=spec} ${FLOOD_SECS:-30}
+  done
+}
+
+case_slow() {
+  echo "== 4 clients that stop reading, next to a yes flood and a title flood"
+  RECOVER=5 D slow "$W/s-slow.sh" 4 90
+}
+
 for s in "$@"; do
   echo "######## $s"
   "case_$s"
