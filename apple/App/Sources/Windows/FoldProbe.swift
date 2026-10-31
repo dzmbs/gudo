@@ -12,16 +12,18 @@ struct FoldProbe: UIViewRepresentable {
     func makeUIView(context: Context) -> ProbeView {
         let view = ProbeView()
         view.isUserInteractionEnabled = false
-        view.onChange = { [weak model] hinge, division, active in
+        #if DEBUG
+        view.debugPostureObserver = DebugPostures.observe { [weak model] posture in model?.debugPosture = posture }
+        #endif
+        view.onChange = { [weak model] hinge, division, active, size in
             guard let model else { return }
             #if DEBUG
-            if model.debugPosture != nil { return }
+            if let posture = model.debugPosture {
+                model.updateFold(.simulated(posture, in: size))
+                return
+            }
             #endif
-            var next = model.fold
-            next.hinge = hinge
-            next.division = division
-            next.isDivisionActive = active
-            model.updateFold(next)
+            model.updateFold(FoldGeometry(hinge: hinge, division: division, isDivisionActive: active, windowSize: size))
         }
         return view
     }
@@ -51,13 +53,16 @@ struct FoldProbe: UIViewRepresentable {
             didSet { register() }
         }
         private weak var registered: UIWindow?
+        #if DEBUG
+        var debugPostureObserver: NSObjectProtocol?
+        #endif
 
         private func register() {
             if let registered, registered !== window { Self.layouts[ObjectIdentifier(registered)] = nil }
             registered = window
             if let window { Self.layouts[ObjectIdentifier(window)] = layout }
         }
-        var onChange: ((HingeReading?, CGRect?, Bool) -> Void)?
+        var onChange: ((HingeReading?, CGRect?, Bool, CGSize) -> Void)?
         private var hinge: HingeReading?
         private var installed = false
 
@@ -97,10 +102,43 @@ struct FoldProbe: UIViewRepresentable {
                     active = region.isActive
                 }
             }
-            onChange?(hinge, division, active)
+            onChange?(hinge, division, active, bounds.size)
         }
     }
 }
+
+#if DEBUG
+/// Folds the simulator from outside without a prompt: `xcrun simctl spawn <device> notifyutil -p
+/// dev.unnamed.debug.posture.<name>` (`real`: the device's own hinge). A URL would ask first.
+enum DebugPostures {
+    private static let prefix = "dev.unnamed.debug.posture."
+    private static let local = Notification.Name("DebugPosture")
+    nonisolated(unsafe) private static var installed = false
+
+    static func observe(_ apply: @escaping @MainActor (FoldPosture?) -> Void) -> NSObjectProtocol {
+        install()
+        return NotificationCenter.default.addObserver(forName: local, object: nil, queue: .main) { note in
+            let name = note.object as? String
+            MainActor.assumeIsolated { apply(name.flatMap(FoldPosture.init(rawValue:))) }
+        }
+    }
+
+    private static func install() {
+        guard !installed else { return }
+        installed = true
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        for name in FoldPosture.allCases.map(\.rawValue) + ["real"] {
+            CFNotificationCenterAddObserver(center, nil, { _, _, name, _, _ in
+                guard let name = name?.rawValue as String? else { return }
+                let posture = String(name.dropFirst(DebugPostures.prefix.count))
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: DebugPostures.local, object: posture)
+                }
+            }, (prefix + name) as CFString, nil, .deliverImmediately)
+        }
+    }
+}
+#endif
 
 @available(iOS 27.1, *)
 private extension HingeReading.Status {

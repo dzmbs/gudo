@@ -196,19 +196,10 @@ final class WindowModel {
     /// Two Columns: the user's choice for this window; nil follows the fold (on while the pages
     /// of an open foldable hold a tab each, `FoldLayout.pages`).
     var twoColumnsChoice: Bool?
-    /// The window's size (`WindowRoot` measures it).
-    var windowSize = CGSize.zero {
-        didSet {
-            #if DEBUG
-            if let debugPosture {
-                fold = .simulated(debugPosture, in: windowSize)
-                return
-            }
-            #endif
-            fold.windowSize = windowSize
-        }
-    }
-    /// The hinge and where the fold crosses this window (`FoldProbe`); no hinge off a foldable.
+    /// The window's size inside its safe area (`WindowRoot` measures it).
+    var windowSize = CGSize.zero
+    /// The hinge and where the fold crosses this window, in the whole window's points
+    /// (`FoldProbe`); no hinge off a foldable.
     var fold = FoldGeometry() {
         didSet {
             guard FoldLayout.plan(fold) != FoldLayout.plan(oldValue) else { return }
@@ -216,10 +207,10 @@ final class WindowModel {
         }
     }
     #if DEBUG
-    /// `-posture <name>` or `<scheme>://debug/posture/<name>`: a posture the simulator cannot
-    /// fold to (it moves the hinge only by hand), drawn over the window's real size.
+    /// `-posture <name>` or the `DebugPostures` notification: a posture the simulator cannot fold
+    /// to (it moves the hinge only by hand), drawn over the window's real size.
     var debugPosture: FoldPosture? = LaunchArguments().string(forKey: "posture").flatMap(FoldPosture.init(rawValue:)) {
-        didSet { updateFold(debugPosture.map { .simulated($0, in: windowSize) } ?? FoldGeometry(windowSize: windowSize)) }
+        didSet { updateFold(debugPosture.map { .simulated($0, in: fold.windowSize) } ?? FoldGeometry(windowSize: fold.windowSize)) }
     }
     #endif
     /// Two Columns: the tab in the column without focus, and which column has the current tab.

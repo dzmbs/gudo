@@ -312,12 +312,6 @@ struct WindowContent: View {
             model.debugWidth = value > 0 ? value : nil
             return
         }
-        // `<scheme>://debug/posture/<name>` (`real`: the device's own): fold the simulator, which
-        // moves its hinge only by hand.
-        if url.host() == "debug", url.pathComponents.count >= 3, url.pathComponents[1] == "posture" {
-            model.debugPosture = FoldPosture(rawValue: url.pathComponents[2])
-            return
-        }
         #if os(iOS)
         // `<scheme>://debug/front/<n>`: bring the n-th open window (in opening order) to the front.
         if url.host() == "debug", url.pathComponents.count >= 3, url.pathComponents[1] == "front",
