@@ -607,12 +607,15 @@ struct TwoColumnsView: View {
 
     var body: some View {
         if let columns = model.columns {
-            HStack(spacing: 0) {
+            // Across an open foldable's fold: one column per page, the crease between them.
+            FoldPages {
                 column(columns.left, isActive: model.currentColumnIsLeft)
                     .accessibilityIdentifier("column-left")
+            } divider: {
                 Rectangle()
                     .fill(theme.splitDivider)
                     .frame(width: DS.Size.dividerVisible)
+            } trailing: {
                 column(columns.right, isActive: !model.currentColumnIsLeft)
                     .accessibilityIdentifier("column-right")
             }

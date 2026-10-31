@@ -241,12 +241,23 @@ struct WindowContent: View {
                 // changes).
                 GeometryReader { proxy in
                     Color.clear.onChange(of: Double(proxy.size.width), initial: true) { _, width in widthChanged(width) }
-                        // Both sides: a foldable's open inner screen turns Two Columns on.
+                        // Both sides: where a fold crosses the window depends on its shape.
                         .onChange(of: proxy.size, initial: true) { _, size in
                             if model.windowSize != size { model.windowSize = size }
                         }
                 }
             }
+            // The hinge and the fold, in the window's own coordinates.
+            .background { FoldProbe(model: model).ignoresSafeArea() }
+            #if DEBUG
+            // What the fold made of the window, for UI tests.
+            .overlay(alignment: .topLeading) {
+                Color.clear.frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("fold-posture")
+                    .accessibilityValue("\(model.fold.posture.rawValue) \(model.foldLayout.name)")
+            }
+            #endif
             #if DEBUG
             .frame(maxWidth: model.debugWidth.map { CGFloat($0) } ?? .infinity, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -299,6 +310,12 @@ struct WindowContent: View {
         if url.host() == "debug", url.pathComponents.count >= 3, url.pathComponents[1] == "width" {
             let value = Double(url.pathComponents[2]) ?? 0
             model.debugWidth = value > 0 ? value : nil
+            return
+        }
+        // `<scheme>://debug/posture/<name>` (`real`: the device's own): fold the simulator, which
+        // moves its hinge only by hand.
+        if url.host() == "debug", url.pathComponents.count >= 3, url.pathComponents[1] == "posture" {
+            model.debugPosture = FoldPosture(rawValue: url.pathComponents[2])
             return
         }
         #if os(iOS)

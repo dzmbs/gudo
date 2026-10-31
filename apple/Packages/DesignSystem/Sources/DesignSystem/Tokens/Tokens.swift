@@ -136,6 +136,10 @@ public extension DS {
         /// A curve that ends on time, so the terminals' one reflow follows straight after.
         public static let sidebar = Animation.easeInOut(duration: sidebarDuration)
         public static let sidebarDuration = 0.25
+        /// The layout moving to a new fold (a book's pages parting, the deck rising): ends on time
+        /// so the terminals reflow once, straight after.
+        public static let fold = Animation.smooth(duration: foldDuration)
+        public static let foldDuration = 0.4
         /// How long the cols × rows overlay stays after the last resize (Ghostty
         /// `resize-overlay-duration` default 750 ms).
         public static let resizeOverlayDuration = Duration.milliseconds(750)

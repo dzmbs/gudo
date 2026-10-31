@@ -68,6 +68,8 @@ final class KeyBar: UIInputView {
             guard oldValue !== target else { return }
             lineEditor.terminal = target
             apply()
+            // Focus may have crossed a fold: the bar follows it to the other page.
+            setNeedsLayout()
         }
     }
 
@@ -128,6 +130,8 @@ final class KeyBar: UIInputView {
     private let arrowPad: CapsuleView
     private let band = BandView()
     private var bandHeight: NSLayoutConstraint!
+    private var columnLeading: NSLayoutConstraint!
+    private var columnTrailing: NSLayoutConstraint!
 
     private let capsuleA: CapsuleView
     private let capsuleB: CapsuleView
@@ -182,9 +186,11 @@ final class KeyBar: UIInputView {
         column.spacing = 0
         column.translatesAutoresizingMaskIntoConstraints = false
         addSubview(column)
+        columnLeading = column.leadingAnchor.constraint(equalTo: leadingAnchor)
+        columnTrailing = column.trailingAnchor.constraint(equalTo: trailingAnchor)
         NSLayoutConstraint.activate([
-            column.leadingAnchor.constraint(equalTo: leadingAnchor),
-            column.trailingAnchor.constraint(equalTo: trailingAnchor),
+            columnLeading,
+            columnTrailing,
             column.topAnchor.constraint(equalTo: topAnchor),
             column.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
@@ -257,9 +263,14 @@ final class KeyBar: UIInputView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func layoutSubviews() {
+        let page = foldPage()
+        if columnLeading.constant != page.minX || columnTrailing.constant != page.maxX - bounds.width {
+            columnLeading.constant = page.minX
+            columnTrailing.constant = page.maxX - bounds.width
+        }
         super.layoutSubviews()
         let next = CapsuleMetrics.for(
-            width: bounds.width,
+            width: page.width,
             compactHeight: traitCollection.verticalSizeClass == .compact,
             isPad: traitCollection.userInterfaceIdiom == .pad)
         if next != metrics {
@@ -267,6 +278,16 @@ final class KeyBar: UIInputView {
             applyMetrics()
         }
         layoutPanelCard()
+    }
+
+    /// The span the bar uses: all of it, or across an open foldable's fold only the page under
+    /// the focused terminal, so no key sits in the crease and the keys stay under the text they
+    /// type into (`FoldProbe.page(containing:)`).
+    private func foldPage() -> CGRect {
+        guard let target, let page = FoldProbe.page(containing: target), let screen = window?.screen else { return bounds }
+        let local = convert(page, from: screen.coordinateSpace)
+        let span = bounds.intersection(CGRect(x: local.minX, y: bounds.minY, width: local.width, height: bounds.height))
+        return span.width >= FoldLayout.minimumPage ? span : bounds
     }
 
     /// What runs in the focused pane; picks the key set.
