@@ -14,7 +14,7 @@ use proto::{
     SubscribeMode, TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest, WorkspaceResponse,
     WsError,
 };
-use tokio::sync::{OwnedSemaphorePermit, broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 
 use crate::core::{ConnId, Core, Event, lock};
@@ -72,7 +72,7 @@ struct Client {
 
 /// Serves one accepted connection until it closes. `pending` is its slot among the
 /// connections not yet past the `Hello`; it is released once the `Hello` is in.
-pub(crate) async fn serve(core: Arc<Core>, conn: Connection, pending: OwnedSemaphorePermit) {
+pub(crate) async fn serve(core: Arc<Core>, conn: Connection, pending: crate::preauth::Slot) {
     let remote = conn.remote_id();
     match run(core, conn, pending).await {
         Ok(()) => tracing::debug!(%remote, "client left"),
@@ -106,7 +106,7 @@ async fn await_hello(
 async fn run(
     core: Arc<Core>,
     conn: Connection,
-    pending: OwnedSemaphorePermit,
+    pending: crate::preauth::Slot,
 ) -> Result<(), NetError> {
     let Some((mut ctl_tx, ctl_rx, hello)) = await_hello(&conn, core.cfg.hello_timeout).await?
     else {

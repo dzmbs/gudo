@@ -19,6 +19,7 @@ mod program_status;
 mod pull;
 mod relays;
 mod repos;
+mod access;
 mod security;
 mod shell;
 mod support;

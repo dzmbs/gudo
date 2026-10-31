@@ -1,6 +1,6 @@
 //! Transport, pairing and grant hardening end to end: device removal reaches live
 //! connections and the invites a device signed, new pairings are announced, silent strangers
-//! are dropped, a damaged grant store fails closed, and every guest role is held to the
+//! are dropped, and every guest role is held to the
 //! enforcement table (docs/DAEMON.md §6.3).
 
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use client_core::proto::{
 };
 use client_core::{ClientConfig, MultiplayerEvent, now_millis};
 
-use crate::support::{TestClient, config, start, start_with, ticket};
+use crate::support::{TestClient, start, start_with, ticket};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -154,23 +154,6 @@ async fn a_connection_that_never_says_hello_is_closed() {
     assert!(start.elapsed() < Duration::from_secs(5));
     endpoint.close().await;
     daemon.shutdown().await;
-}
-
-/// A grant store that cannot be read stops the daemon instead of starting it with every
-/// revocation forgotten.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_damaged_grant_store_fails_closed() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("grants.json"), b"{ not json").unwrap();
-    let started = daemon::Daemon::start(config(dir.path())).await;
-    let Err(e) = started else {
-        panic!("the daemon started with a damaged grant store");
-    };
-    assert!(e.to_string().contains("grants.json"), "{e}");
-    assert!(
-        dir.path().join("grants.json").exists(),
-        "the file is kept for the owner"
-    );
 }
 
 /// What a guest role was refused for, if it was refused for its role.

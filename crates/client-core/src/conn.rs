@@ -306,8 +306,12 @@ async fn dial(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError
                 *lock(&inner.paired) = true;
                 return Ok(live);
             }
-            Err(ConnError::Refused(proto::RefuseReason::InvalidGrant)) => {
-                last = ConnError::Refused(proto::RefuseReason::InvalidGrant);
+            // A removed device is refused as revoked, and may still pair again with a new
+            // ticket's secret.
+            Err(ConnError::Refused(
+                reason @ (proto::RefuseReason::InvalidGrant | proto::RefuseReason::Revoked),
+            )) => {
+                last = ConnError::Refused(reason);
             }
             Err(e) => return Err(e),
         }

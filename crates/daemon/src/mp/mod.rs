@@ -544,6 +544,23 @@ impl Mp {
         }));
     }
 
+    /// Whether `device` is trusted already: a paired owner device, or a guest bound to a
+    /// grant it has not been removed from since.
+    pub fn known_device(&self, device: DeviceId) -> bool {
+        if self.identity.is_owner_device(device) {
+            return true;
+        }
+        let device_hex = hex(&device.0);
+        let store = lock(&self.store);
+        let removed = removed_at(&self.identity, &store, device);
+        store.grants.iter().any(|g| {
+            g.bound.contains(&device_hex)
+                && removed.is_none_or(|t| {
+                    g.redeemed_at.get(&device_hex).is_some_and(|&at| at > t.0)
+                })
+        })
+    }
+
     /// What owner devices should be told about the store when they connect.
     pub fn host_alert(&self) -> Option<proto::HostAlert> {
         let store = lock(&self.store);
