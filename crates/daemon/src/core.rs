@@ -1,6 +1,6 @@
 //! Daemon-wide state: the layout, the panes, the event bus, and the operations on them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
@@ -378,19 +378,29 @@ impl Core {
 
     /// The panes of every session some connection is attached to.
     pub fn attached_panes(&self) -> Vec<(PaneId, Arc<PaneEntry>)> {
-        let sessions: Vec<SessionId> = lock(&self.attached).values().copied().collect();
-        if sessions.is_empty() {
-            return Vec::new();
-        }
-        let entries = self.pane_entries();
-        let layout = lock(&self.layout);
-        entries
-            .into_iter()
-            .filter(|(id, _)| {
-                layout
-                    .session_of_pane(*id)
-                    .is_some_and(|s| sessions.contains(&s))
-            })
+        let mut sessions: Vec<SessionId> = lock(&self.attached).values().copied().collect();
+        sessions.sort_unstable();
+        sessions.dedup();
+        let ids: Vec<PaneId> = {
+            let layout = lock(&self.layout);
+            sessions
+                .iter()
+                .filter_map(|&s| layout.session(s))
+                .flat_map(|s| &s.tabs)
+                .flat_map(|t| crate::layout::leaves(&t.root))
+                .collect()
+        };
+        let panes = lock(&self.panes);
+        ids.into_iter()
+            .filter_map(|id| Some((id, Arc::clone(panes.get(&id)?))))
+            .collect()
+    }
+
+    /// Panes some connection shows (focused or visible).
+    pub fn viewed_panes(&self) -> HashSet<PaneId> {
+        lock(&self.views)
+            .values()
+            .flat_map(|(_, panes)| panes.iter().copied())
             .collect()
     }
 

@@ -2,8 +2,8 @@
 //! (D3), persistent history (D4), completion (D5), file search for `@` mentions (D7) and the
 //! options of a blocked agent (D9).
 //!
-//! One task ([`run`]) samples the foreground process group of every pane in an attached
-//! session every [`foreground::SAMPLE`] and, for panes some connection watches, re-reads the
+//! One task ([`run`]) samples the foreground process group of the panes clients show every
+//! [`foreground::SAMPLE`] (the rest of their sessions' panes ten times less often) and, for panes some connection watches, re-reads the
 //! prompt state whenever output arrived, pushing changes; with no client connected it sleeps. Requests are answered by [`handle`]; the policy
 //! check happens in the connection before it.
 
@@ -225,6 +225,7 @@ pub(crate) fn command_finished(core: &Core, entry: &PaneEntry, mark: &CommandMar
 /// for clients: with none connected the task sleeps until one arrives.
 pub(crate) async fn run(core: Arc<Core>) {
     let mut last_sample: Option<Instant> = None;
+    let mut samples = 0u32;
     let mut reads = ProcessReads::default();
     loop {
         if core.connected_clients() == 0 {
@@ -238,6 +239,7 @@ pub(crate) async fn run(core: Arc<Core>) {
                 arrived.await;
             }
             last_sample = None;
+            samples = 0;
             continue;
         }
         let watched = !lock(&core.assist.watchers).is_empty();
@@ -249,7 +251,9 @@ pub(crate) async fn run(core: Arc<Core>) {
         .await;
         if last_sample.is_none_or(|t| t.elapsed() >= foreground::SAMPLE) {
             last_sample = Some(Instant::now());
-            sample_foregrounds(&core, &mut reads);
+            samples += 1;
+            // The first sample after a client arrives covers every pane.
+            sample_foregrounds(&core, &mut reads, samples % ALL_PANES_EVERY == 1);
         }
         if watched {
             refresh_prompts(&core);
@@ -293,20 +297,31 @@ impl ProcessReads {
     }
 }
 
-/// Samples the foreground of the panes clients can see (their attached sessions).
-fn sample_foregrounds(core: &Core, reads: &mut ProcessReads) {
+/// Panes on screen are sampled every [`foreground::SAMPLE`] (the key bar follows them); the
+/// rest of the attached sessions' panes on every this many samples.
+const ALL_PANES_EVERY: u32 = 10;
+
+/// Samples the foreground of the panes clients show, or with `all` of every pane in an attached
+/// session.
+fn sample_foregrounds(core: &Core, reads: &mut ProcessReads, all: bool) {
     let now = Instant::now();
+    let attached = core.attached_panes();
+    let viewed = (!all).then(|| core.viewed_panes());
     // The process lookups happen before the trackers are locked.
-    let samples: Vec<(PaneId, Option<pty::ForegroundProcess>)> = core
-        .attached_panes()
-        .into_iter()
-        .map(|(id, entry)| (id, reads.read(id, &entry, now)))
+    let samples: Vec<(PaneId, Option<pty::ForegroundProcess>)> = attached
+        .iter()
+        .filter(|(id, _)| viewed.as_ref().is_none_or(|v| v.contains(id)))
+        .map(|(id, entry)| (*id, reads.read(*id, entry, now)))
         .collect();
-    reads.0.retain(|p, _| samples.iter().any(|(id, _)| id == p));
     let mut changed = Vec::new();
     {
         let mut trackers = lock(&core.assist.foreground);
-        trackers.retain(|p, _| samples.iter().any(|(id, _)| id == p));
+        if all {
+            reads
+                .0
+                .retain(|p, _| attached.iter().any(|(id, _)| id == p));
+            trackers.retain(|p, _| attached.iter().any(|(id, _)| id == p));
+        }
         for (id, process) in samples {
             if let Some(fg) = trackers.entry(id).or_default().sample(id, process, now) {
                 changed.push(fg);
