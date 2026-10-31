@@ -53,7 +53,9 @@ nonisolated public struct RelaySettings: Codable, Equatable, Sendable {
 
     /// `ConnectOptions` for every daemon connection: the private CAs, and the device's own
     /// relay in place of the ticket's. The app shows password prompts, opens URLs for the host
-    /// and shows what programs in panes report (`askpass`, `browser`, `programStatus`).
+    /// shows what programs in panes report and copies what they write to the clipboard in panes
+    /// this device typed into (`askpass`, `browser`, `programStatus`, `clipboard`). The core
+    /// never offers a guest connection password prompts.
     ///
     /// A guest (someone else's host) never gets `browser`: that host's programs and agents
     /// would open pages and drive this device's browser.
@@ -66,7 +68,8 @@ nonisolated public struct RelaySettings: Codable, Equatable, Sendable {
             relayAuthToken: relay != nil && !token.isEmpty ? token : nil,
             askpass: askpass,
             browser: askpass && !guest,
-            programStatus: askpass)
+            programStatus: askpass,
+            clipboard: askpass)
     }
 
     /// Which relay a host whose ticket says `ticket` is reached through, in words (the pairing

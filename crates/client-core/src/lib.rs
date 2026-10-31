@@ -156,6 +156,13 @@ pub struct ConnectOptions {
     /// Show what any program in a pane reports about itself: announce
     /// `Caps::PROGRAM_STATUS`, so the daemon sends [`ClientEvent::ProgramStatus`].
     pub program_status: bool,
+    /// Copy what programs write to the clipboard (OSC 52) in panes this device typed into
+    /// last: announce `Caps::CLIPBOARD`, so the daemon sends [`ClientEvent::Clipboard`].
+    pub clipboard: bool,
+    /// Capabilities announced on top of the ones above, whatever the rules for guests (tests
+    /// that play a client ignoring them).
+    #[doc(hidden)]
+    pub extra_caps: proto::Caps,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -170,7 +177,8 @@ impl std::fmt::Debug for ConnectOptions {
             .field("askpass", &self.askpass)
             .field("browser", &self.browser)
             .field("program_status", &self.program_status)
-            .finish()
+            .field("clipboard", &self.clipboard)
+            .finish_non_exhaustive()
     }
 }
 
@@ -275,6 +283,15 @@ pub enum ClientEvent {
     Projects {
         /// The session's projects, as far as this connection sees.
         projects: proto::SessionProjects,
+    },
+    /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it,
+    /// with [`ConnectOptions::clipboard`]. Put it on this device's clipboard, local only, and
+    /// say so.
+    Clipboard {
+        /// The pane.
+        pane_id: PaneId,
+        /// The text.
+        text: String,
     },
     /// Raw output to feed the pane's VT, in order, continuing from the previous event.
     PaneBytes {

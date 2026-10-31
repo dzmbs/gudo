@@ -2,8 +2,9 @@
 //! for a secret through the daemon's askpass helper, or printed a password prompt with echo
 //! off.
 //!
-//! Only connections made with [`ConnectOptions::askpass`](crate::ConnectOptions::askpass)
-//! receive them. Pushes go to an [`AskpassListener`] set with
+//! Only owner connections made with [`ConnectOptions::askpass`](crate::ConnectOptions::askpass)
+//! receive them: a guest never announces the capability, and pushes on a connection that did
+//! not announce it are dropped (someone else's host must not ask for this device's passwords). Pushes go to an [`AskpassListener`] set with
 //! [`Client::set_askpass_listener`]; the open prompts and detected prompts are also kept
 //! ([`Client::open_askpass`], [`Client::detected_prompt`]). Answers are
 //! [`Client::answer_askpass`], [`Client::cancel_askpass`] and [`Client::type_secret`].
@@ -30,6 +31,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum AskpassEvent {
     /// A program asks for a secret.
     Prompt(SecretPrompt),
+    /// A program asks for a secret while a guest holds the pane's lease: the guest may have
+    /// typed the command that asks.
+    PromptWhileGuestDrives {
+        /// The prompt.
+        prompt: SecretPrompt,
+        /// The guest's name.
+        guest: String,
+    },
     /// A prompt is over (answered here or elsewhere, cancelled, timed out, abandoned).
     Closed {
         /// The prompt.
@@ -87,12 +96,26 @@ pub(crate) struct AskpassState {
     pending: Mutex<HashMap<u64, Pending>>,
     listener: Mutex<Option<Arc<dyn AskpassListener>>>,
     open: Mutex<HashMap<AskpassId, SecretPrompt>>,
+    /// The guest driving the pane when an open prompt was asked.
+    guests: Mutex<HashMap<AskpassId, String>>,
     detected: Mutex<HashMap<PaneId, DetectedPrompt>>,
 }
 
+/// Whether a connection announces [`proto::Caps::ASKPASS`]: only when asked, and never as a
+/// guest.
+pub(crate) fn announces(options: &crate::ConnectOptions, guest: bool) -> bool {
+    options.askpass && !guest
+}
+
 impl AskpassState {
-    /// Handles an askpass message from `ctl`; returns it back if it is not one.
-    pub(crate) fn dispatch(&self, msg: ServerCtl) -> Option<ServerCtl> {
+    /// Handles an askpass message from `ctl`; returns it back if it is not one. Pushes on a
+    /// connection that did not announce the capability are dropped: a daemon is not trusted
+    /// to honour it.
+    pub(crate) fn dispatch(&self, msg: ServerCtl, announced: bool) -> Option<ServerCtl> {
+        if !announced && matches!(msg, ServerCtl::Askpass(_)) {
+            tracing::warn!("askpass push on a connection that did not ask for it; dropped");
+            return None;
+        }
         let event = match msg {
             ServerCtl::AskpassResult { req_id, result } => {
                 if let Some(tx) = lock(&self.pending).remove(&req_id) {
@@ -105,12 +128,18 @@ impl AskpassState {
                     lock(&self.open).insert(prompt.id, prompt.clone());
                     AskpassEvent::Prompt(prompt)
                 }
+                AskpassPush::PromptWhileGuestDrives { prompt, guest } => {
+                    lock(&self.open).insert(prompt.id, prompt.clone());
+                    lock(&self.guests).insert(prompt.id, guest.clone());
+                    AskpassEvent::PromptWhileGuestDrives { prompt, guest }
+                }
                 AskpassPush::Closed {
                     id,
                     pane_id,
                     reason,
                 } => {
                     lock(&self.open).remove(&id);
+                    lock(&self.guests).remove(&id);
                     AskpassEvent::Closed {
                         id,
                         pane_id,
@@ -151,6 +180,7 @@ impl AskpassState {
             let had = !open.is_empty() || !detected.is_empty();
             open.clear();
             detected.clear();
+            lock(&self.guests).clear();
             had
         };
         if had {
@@ -171,6 +201,11 @@ impl Client {
             lock(&self.inner.askpass.open).values().cloned().collect();
         open.sort_by_key(|p| p.id);
         open
+    }
+
+    /// The guest who was driving the pane when open prompt `id` was asked, if one was.
+    pub fn askpass_guest(&self, id: AskpassId) -> Option<String> {
+        lock(&self.inner.askpass.guests).get(&id).cloned()
     }
 
     /// The password prompt `pane` shows with echo off, if any.
@@ -237,5 +272,48 @@ impl Client {
             secret,
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proto::{SecretSource, UnixMillis};
+
+    fn prompt() -> ServerCtl {
+        ServerCtl::Askpass(AskpassPush::Prompt(SecretPrompt {
+            id: AskpassId(1),
+            pane_id: PaneId(1),
+            source: SecretSource::Sudo,
+            prompt: "Password:".into(),
+            program: "sudo ls".into(),
+            echo: false,
+            retry: false,
+            expires_at: UnixMillis(0),
+        }))
+    }
+
+    #[test]
+    fn a_hostile_daemon_cannot_ask_a_connection_that_did_not_offer() {
+        let state = AskpassState::default();
+        let (listener, mut events) = AskpassEventQueue::channel();
+        *lock(&state.listener) = Some(listener);
+
+        assert!(state.dispatch(prompt(), false).is_none());
+        assert!(events.try_recv().is_err(), "dropped, not shown");
+        assert!(lock(&state.open).is_empty());
+        assert!(state.dispatch(prompt(), true).is_none());
+        assert!(matches!(events.try_recv(), Ok(AskpassEvent::Prompt(_))));
+    }
+
+    #[test]
+    fn guests_never_offer_to_answer_password_prompts() {
+        let asked = crate::ConnectOptions {
+            askpass: true,
+            ..crate::ConnectOptions::default()
+        };
+        assert!(announces(&asked, false));
+        assert!(!announces(&asked, true));
+        assert!(!announces(&crate::ConnectOptions::default(), false));
     }
 }

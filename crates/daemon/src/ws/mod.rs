@@ -15,6 +15,7 @@ pub(crate) mod ports;
 pub(crate) mod repo;
 mod repo_ops;
 mod review;
+pub(crate) mod trust;
 pub(crate) mod tunnel;
 pub(crate) mod turns;
 mod vscode_server;
@@ -54,6 +55,8 @@ pub(crate) struct Ws {
     pub worktrees: worktree::Worktrees,
     /// The git-native workspace: repositories of panes, pull requests, scripts.
     pub repos: repo::Repos,
+    /// Which repositories' setup and teardown commands the owner trusts.
+    pub hook_trust: trust::HookTrust,
     worktree_root: PathBuf,
     pub usage: Arc<crate::usage::Usage>,
     /// Workflow files (`proto::workflow`).
@@ -75,6 +78,7 @@ impl Ws {
             workflows: Arc::new(workflows::Workflows::new(events)),
             worktrees: worktree::Worktrees::load(&cfg.state_dir, cfg.worktree_port_base),
             repos: repo::Repos::new(),
+            hook_trust: trust::HookTrust::load(&cfg.state_dir),
             worktree_root: cfg
                 .worktree_root
                 .clone()
@@ -99,6 +103,8 @@ pub(crate) struct ConnCtx {
     pub actor: proto::Actor,
     /// The client's optional features (`Caps::AGENT_USAGE` takes usage pushes).
     pub caps: proto::Caps,
+    /// A paired owner device, not a guest (whatever roles a guest's grant names).
+    pub owner: bool,
 }
 
 /// Runs `f` on the blocking pool.
@@ -249,7 +255,8 @@ pub(crate) async fn handle(
             let path = policy.resolve(&path)?;
             let core2 = Arc::clone(core);
             blocking(move || {
-                let (_, hooks) = repo::read_config(&path, None);
+                let main = repo_ops::main_of(&path).ok();
+                let hooks = repo::runnable_hooks(&core2, &path, main.as_deref());
                 core2
                     .ws
                     .worktrees
@@ -395,7 +402,15 @@ pub(crate) async fn handle(
         | R::WorktreeRestore { .. }
         | R::WorktreeSettings(_)
         | R::TaskCreate(_)
-        | R::ScriptRun(_) => {
+        | R::ScriptRun(_)
+        | R::RepoHooks(_) => {
+            let root = ws.worktree_root.clone();
+            repo_ops::handle(core, &policy, &root, req).await
+        }
+        R::RepoTrust { .. } if !conn.owner => Err(WsError::Denied(
+            "only the host's owner can trust a repository's commands".into(),
+        )),
+        R::RepoTrust { .. } => {
             let root = ws.worktree_root.clone();
             repo_ops::handle(core, &policy, &root, req).await
         }

@@ -348,3 +348,36 @@ pub struct ScriptRun {
     /// Shell command line.
     pub command: String,
 }
+
+/// Whose setup and teardown commands [`WorkspaceRequest::RepoHooks`](crate::WorkspaceRequest::RepoHooks)
+/// asks about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepoHooksFor {
+    /// The worktree a [`TaskCreate`] with these fields would make.
+    NewTask {
+        /// Any directory inside the repository.
+        repo: String,
+        /// Commit or branch to start from; `HEAD` when `None`.
+        base: Option<String>,
+    },
+    /// An existing worktree (its teardown, before archive or delete).
+    Worktree {
+        /// The worktree.
+        path: String,
+    },
+}
+
+/// A repository's setup and teardown commands and whether the owner trusts them. The daemon
+/// runs them only when trusted: trust is kept per repository (its main worktree) and
+/// [`hash`](Self::hash), so changed commands are asked about again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoHooksTrust {
+    /// The repository (main worktree), as [`WorkspaceRequest::RepoTrust`](crate::WorkspaceRequest::RepoTrust) takes it.
+    pub repo: String,
+    /// The commands; both `None` when there is nothing to trust.
+    pub hooks: RepoHooks,
+    /// SHA-256 of the commands, hex.
+    pub hash: String,
+    /// The owner trusts exactly these commands (always true without commands).
+    pub trusted: bool,
+}

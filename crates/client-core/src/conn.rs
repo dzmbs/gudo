@@ -351,8 +351,8 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | Caps::WORKFLOWS
             | Caps::PRESENCE
             | Caps::PROJECTS
-            | if inner.options.askpass {
-                Caps::ASKPASS
+            | if crate::askpass::announces(&inner.options, crate::mp::is_guest(inner)) {
+                Caps::ASKPASS | Caps::ASKPASS_DRIVER
             } else {
                 Caps::EMPTY
             }
@@ -370,7 +370,13 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
                 Caps::REPO_STATUS
             } else {
                 Caps::EMPTY
-            },
+            }
+            | if inner.options.clipboard {
+                Caps::CLIPBOARD
+            } else {
+                Caps::EMPTY
+            }
+            | inner.options.extra_caps,
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
     };
@@ -625,7 +631,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
         let Some(msg) = inner.assist.dispatch(msg) else {
             continue;
         };
-        let Some(msg) = inner.askpass.dispatch(msg) else {
+        let askpass = crate::askpass::announces(&inner.options, crate::mp::is_guest(&inner))
+            || inner.options.extra_caps.contains(Caps::ASKPASS);
+        let Some(msg) = inner.askpass.dispatch(msg, askpass) else {
             continue;
         };
         let browser = crate::browser::announces(&inner.options, crate::mp::is_guest(&inner));
@@ -674,6 +682,10 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
                 ClientEvent::ProgramStatus { pane_id, status }
             }
             ServerCtl::Projects(projects) => ClientEvent::Projects { projects },
+            // Only what this connection asked for; a daemon is not trusted to honour it.
+            ServerCtl::Clipboard { pane_id, text } if inner.options.clipboard => {
+                ClientEvent::Clipboard { pane_id, text }
+            }
             ServerCtl::PaneClosed { pane_id } => {
                 lock(&inner.mirrors).remove(&pane_id);
                 lock(&inner.programs).remove(&pane_id);

@@ -48,6 +48,27 @@ browser holds the guest's own sign-ins, which the host's programs must not drive
 no app takes a URL, the system opener gets `http(s)` URLs only. `open`/`xdg-open` would also
 launch apps and run `file://…/x.command` (compare mcp-remote CVE-2025-6514).
 
+Browser tool calls are refused while a guest holds the pane's lease. Anything the guest types
+can use the pane's token, and the tools drive the owner's signed-in browser.
+
+**Password prompts (askpass).** Prompts go to the owner's devices only, never a guest's: a
+host that is not the guest's own must not ask for the guest's passwords. The daemon checks
+this when it pushes a prompt, when it counts who could answer, and when an answer or cancel
+arrives. The client also never offers the capability on a guest connection, and drops prompts
+a host sends there anyway. While a guest holds the pane's lease, the owner's sheet says "Asked
+while bob is driving", and the saved password is not offered with one tap: the guest may have
+typed the command that asks.
+
+**Repository commands.** A repository's `.unnamed.json` `setup` and `teardown` run only once
+the owner trusts them, like VS Code's workspace trust or `direnv allow`. Trust is kept per
+repository (its main worktree) and SHA-256 of both commands, in `<state>/repo-trust.json`. New
+or changed commands do not run. The app first asks "Run Setup Commands for repo?" (or
+Teardown, before archive or delete) and lists every command. Declining opens the task, or
+archives the worktree, without them. A new task asks about the file committed at its base,
+which is the file the new worktree gets. Only an owner device can trust: a guest, even one
+holding the owner role, is refused, and the commands do not run for it. Daemon-run teardowns
+(auto-delete of merged worktrees) follow the same rule.
+
 **Terminal tools.** The pane ids in calls are typed integers, and no shell is built from tool
 arguments: `cmd_run` types into a pane the agent owns, which is its purpose. One agent,
 together with every worker it starts, may have at most 32 panes open. A wait holds at most
@@ -120,10 +141,14 @@ SHA-256, must run here and report this OS and CPU, and is then swapped in atomic
   daemon offers, not what a shell can do. Prompters reach the same through the agent, subject
   to its approvals.
 - **Askpass phishing by a guest.** A Driver guest can run `un-askpass "[sudo] password:"` in a
-  shared pane. The owner's app then shows a native password sheet, and the answer goes to the
-  guest's process. The sheet names the program, but it cannot say who typed the command.
-- **Repository scripts.** `.unnamed.json` `setup`/`teardown`/`scripts` are repository content.
-  New Task runs `setup` without asking first.
+  shared pane. The owner's sheet now says the guest is driving, and offers no one-tap saved
+  password, but the owner can still type one. A guest who released the lease or left before
+  the program asked (a delayed `sleep 60; sudo …`) is not named.
+- **Repository scripts.** The `scripts` menu entries of `.unnamed.json` run only when the user
+  picks one, without a trust prompt. The menu shows the script's name, which need not match its
+  command.
+- **Trust is the same user's file.** `repo-trust.json` is in the state directory: a process
+  running as the user can add a hash to it.
 - **Pushing from a hostile `.git`.** `push` keeps the repository's hooks and network config
   (`core.sshCommand`, credential helpers), because the person asked for it.
 - **Global filters stay.** Filters defined in the user's global git config are left alone.
@@ -138,22 +163,22 @@ SHA-256, must run here and report this OS and CPU, and is then swapped in atomic
 - **No signature on upgrades.** An upgrade is trusted because the owner's device sent it. There
   is no release signature to check yet.
 
+## Decisions
 
-1. **Browser for guests.** Browser calls now reach the owner's devices only. Should a guest
-   ever be able to opt in, for example for a shared `claude /login`?
-2. **Askpass and guests.** Should askpass prompts be suppressed, or carry a warning, while a
-   guest holds the pane's lease? Should a guest-held pane route askpass to the guest only?
-3. **Repository setup scripts.** Trust-on-first-use for `.unnamed.json` commands: show the
-   command and record a hash per repository before the first run. This needs a small app
-   change.
-4. **Headless pairing.** With a service install, the first ticket now comes only from
+Made:
+
+- **Browser for guests.** Browser calls reach the owner's devices only, with no opt-in, and
+  tool calls are refused while a guest holds the pane's lease.
+- **Askpass and guests.** Prompts never reach a guest's device. While a guest holds the lease
+  the owner's prompt names them.
+- **Repository commands.** Trust-on-first-use for `setup` and `teardown`, per repository and
+  hash, granted from the app by the owner only.
+- **Pane limit.** 32 panes per agent tree stays a constant.
+
+Open:
+
+1. **Headless pairing.** With a service install, the first ticket now comes only from
    `unnamed-hostd pair`; it is no longer printed into the log.
-5. **Pane limit.** The limit of 32 panes per agent tree is a constant. It may need to be a
-   setting for large agent fleets.
-6. **Host browser and guests.** A Driver guest in a pane can call the browser tools with the
-   pane's token, and they reach the owner's in-app browser with the owner's sign-ins. This
-   follows from "Driver means code execution", but it reaches the owner's device, not only
-   the host. Should browser calls be refused while a guest holds the pane's lease?
 
 ## Validation
 
@@ -184,7 +209,18 @@ Each test runs the attack against the real code (real git, real sockets, a real 
 - `term::an_agent_runs_waits_reads_and_stays_in_its_lane` (it): term tools with another
   pane's token, and driving a pane the caller did not open.
 - `browser::a_driving_guest_never_gets_the_hosts_browser_calls` (it): browser calls never
-  reach a guest's device.
+  reach a guest's device, and once the guest types in the pane, a tool call is refused.
+- `askpass::guests_never_see_prompts_and_the_owner_is_told_who_drives` (it): a viewer and a
+  driver guest whose clients offer to answer anyway get no prompt, and their answers and
+  cancels are refused. Once the driver types, the owner's prompt names them. The client side:
+  `client-core askpass::tests` (pushes on a connection that did not offer are dropped, guests
+  never offer), `apple-ffi askpass::tests`, `AppTests/SecretEntryTests`
+  `testAPromptAskedWhileAGuestDrivesSaysSoAndOffersNoSavedPassword`.
+- `repos::repository_commands_run_only_once_the_owner_trusts_them` (it): untrusted setup and
+  teardown do not run (task and archive go ahead), a guest with the owner role cannot trust,
+  trusted commands run, and changed committed commands are untrusted again.
+  `ws::trust::tests::only_the_trusted_commands_of_that_repository_run`: per repository, per
+  command, kept across restarts.
 - `agent::tests::only_this_user_may_use_the_hook_socket`: the peer-uid check, unit level (a
   second uid is not available to the tests); `a_long_state_dir_puts_the_socket_in_a_private_dir`.
 - `pty foreground::tests::a_terminal_with_no_program_has_no_foreground`: macOS reports a

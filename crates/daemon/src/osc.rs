@@ -1,13 +1,14 @@
 //! A streaming OSC extractor for the facts the daemon tracks outside libghostty-vt: titles,
-//! working directory and agent reports. Shell-integration marks (OSC 133) come from
+//! working directory, agent reports and clipboard writes (OSC 52). Shell-integration marks (OSC 133) come from
 //! libghostty-vt itself, with cursor positions (see `commands`).
 //!
 //! It only recognises `ESC ] … (BEL | ESC \)`; everything else passes through untouched (the
 //! VT parser sees every byte regardless). Bodies longer than [`MAX_BODY`] are dropped.
 
-/// Longest OSC body kept. Agent reports and titles are far shorter; OSC 52 clipboard writes
-/// are longer and are not ours to read.
+/// Longest OSC body kept. Agent reports and titles are far shorter.
 const MAX_BODY: usize = 8 * 1024;
+/// Longest OSC 52 body kept: `52;<targets>;` and the base64 of the largest clipboard write.
+const MAX_CLIPBOARD_BODY: usize = 64 + proto::MAX_CLIPBOARD_BYTES.div_ceil(3) * 4;
 /// Longest title kept, in characters.
 const MAX_TITLE_CHARS: usize = 512;
 
@@ -22,6 +23,8 @@ pub(crate) enum Osc {
     Notify(String),
     /// OSC 7501 body after `7501;` (program status).
     ProgramStatus(String),
+    /// OSC 52: text a program puts on the clipboard. Reads (`?`) are never recognised.
+    Clipboard(String),
 }
 
 #[derive(Debug, Default)]
@@ -81,7 +84,12 @@ impl OscScanner {
     }
 
     fn push(&mut self, b: u8) {
-        if self.body.len() < MAX_BODY {
+        let max = if self.body.starts_with(b"52;") {
+            MAX_CLIPBOARD_BODY
+        } else {
+            MAX_BODY
+        };
+        if self.body.len() < max {
             self.body.push(b);
         } else {
             self.overflow = true;
@@ -104,10 +112,34 @@ impl OscScanner {
             },
             "9" => Osc::Notify(rest.to_owned()),
             "7501" => Osc::ProgramStatus(rest.to_owned()),
+            "52" => match clipboard_text(rest) {
+                Some(text) => Osc::Clipboard(text),
+                None => return,
+            },
             _ => return,
         };
         emit(osc);
     }
+}
+
+/// The text of an OSC 52 write, `<targets>;<base64>`: UTF-8 of at most
+/// [`proto::MAX_CLIPBOARD_BYTES`]. A query (`?`) asks to read the clipboard and is never
+/// answered; an empty, oversized or undecodable payload changes nothing.
+fn clipboard_text(rest: &str) -> Option<String> {
+    let (targets, data) = rest.split_once(';')?;
+    if !targets.bytes().all(|b| b"cpqs01234567".contains(&b)) || data == "?" {
+        return None;
+    }
+    // Some programs wrap long base64 lines; padding is optional.
+    let data: Vec<u8> = data.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let bytes = data_encoding::BASE64
+        .decode(&data)
+        .or_else(|_| data_encoding::BASE64_NOPAD.decode(&data))
+        .ok()?;
+    if bytes.len() > proto::MAX_CLIPBOARD_BYTES {
+        return None;
+    }
+    String::from_utf8(bytes).ok().filter(|t| !t.is_empty())
 }
 
 /// The directory an OSC 7 URL names, if it is an absolute path that prints as it is: any
@@ -194,6 +226,41 @@ mod tests {
             got,
             [Osc::Title("Buildgnissap ok".into()), Osc::Cwd("/ok".into())]
         );
+    }
+
+    #[test]
+    fn clipboard_writes_are_recognised_and_reads_never() {
+        let b64 = |s: &str| data_encoding::BASE64.encode(s.as_bytes());
+        let write = format!("\x1b]52;c;{}\x07", b64("yanked line"));
+        assert_eq!(
+            scan(&[write.as_bytes()]),
+            [Osc::Clipboard("yanked line".into())]
+        );
+        // tmux sends no target; long payloads may be wrapped and unpadded.
+        let wrapped = format!("\x1b]52;;{}\x1b\\", "eWFu\na2Vk");
+        assert_eq!(
+            scan(&[wrapped.as_bytes()]),
+            [Osc::Clipboard("yanked".into())]
+        );
+        // A read, an empty write, junk and a write past the limit do nothing.
+        for body in [
+            "52;c;?".to_owned(),
+            "52;c;".to_owned(),
+            "52;c;!!!".to_owned(),
+            "52;x;aGk=".to_owned(),
+            format!("52;c;{}", b64(&"x".repeat(proto::MAX_CLIPBOARD_BYTES + 1))),
+        ] {
+            let seq = format!("\x1b]{body}\x07");
+            assert!(
+                scan(&[seq.as_bytes()]).is_empty(),
+                "{}",
+                &body[..body.len().min(20)]
+            );
+        }
+        // The largest allowed write gets through.
+        let big = "y".repeat(proto::MAX_CLIPBOARD_BYTES);
+        let seq = format!("\x1b]52;c;{}\x07", b64(&big));
+        assert_eq!(scan(&[seq.as_bytes()]), [Osc::Clipboard(big)]);
     }
 
     #[test]

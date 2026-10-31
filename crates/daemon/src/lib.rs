@@ -89,6 +89,7 @@ pub use identity::{
 };
 pub use preauth::PreAuthLimits;
 pub use procinfo::inherited_env_var;
+pub use term::SOURCE_SHARED as TERM_SOURCE_SHARED;
 pub use term::{ErrorCode as TermErrorCode, TERM_VERSION, TermAsk, TermCall, TermReply, ToolError};
 pub use upgrade::prev_path as upgrade_prev_path;
 pub use usage::UsageConfig;

@@ -310,6 +310,12 @@ bitset! {
         /// Wants `ServerCtl::Projects` after each `ServerCtl::LayoutChanged` (sent only
         /// with the owner role; see `proto::project`).
         PROJECTS = 18;
+        /// Copies what programs write to the clipboard (OSC 52) in panes this connection
+        /// typed into last: wants `ServerCtl::Clipboard`.
+        CLIPBOARD = 19;
+        /// Understands `AskpassPush::PromptWhileGuestDrives` (a password prompt asked while
+        /// a guest holds the pane's lease).
+        ASKPASS_DRIVER = 20;
     }
 }
 
@@ -352,5 +358,8 @@ bitset! {
         /// Applies `LayoutOp::SetTabProject`, `PutProject` and `RemoveProject`, and pushes
         /// `ServerCtl::Projects` to clients with `Caps::PROJECTS`.
         PROJECTS = 13;
+        /// Runs a repository's setup and teardown commands only once the owner trusts them,
+        /// and answers `WorkspaceRequest::RepoHooks` / `RepoTrust`.
+        REPO_TRUST = 14;
     }
 }

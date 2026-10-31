@@ -95,6 +95,12 @@ pub(crate) enum Event {
         conn: ConnId,
         push: proto::BrowserPush,
     },
+    /// A program wrote to the clipboard (OSC 52): for `conn` only.
+    Clipboard {
+        conn: ConnId,
+        pane_id: PaneId,
+        text: Arc<str>,
+    },
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -128,6 +134,8 @@ pub(crate) struct MetaState {
     pub exit: Option<i32>,
     /// The connection whose size the PTY has, and its principal.
     pub sized_by: Option<(ConnId, PrincipalId)>,
+    /// The connection that typed into the pane last; `None` once an agent typed, or it left.
+    pub typed_by: Option<ConnId>,
     pub at_prompt: bool,
     pub last_hint: Option<(EchoHint, Prediction)>,
     /// The password prompt on the cursor row while input is hidden (`askpass::detect`).
@@ -389,6 +397,9 @@ impl Core {
             let mut meta = lock(&entry.meta);
             if meta.sized_by.is_some_and(|(c, _)| c == conn) {
                 meta.sized_by = None;
+            }
+            if meta.typed_by == Some(conn) {
+                meta.typed_by = None;
             }
         }
     }
@@ -1471,6 +1482,18 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
                 core.mark_dirty();
             }
             core.emit(Event::PaneMeta(id));
+        }
+        Osc::Clipboard(text) => {
+            // Only the device that typed into the pane last copies (vim's `y`, tmux's copy
+            // mode): never another participant's, and nobody's after an agent typed.
+            let typed_by = lock(&entry.meta).typed_by;
+            if let Some(conn) = typed_by {
+                core.emit(Event::Clipboard {
+                    conn,
+                    pane_id: id,
+                    text: text.into(),
+                });
+            }
         }
         Osc::Notify(body) => {
             let event = lock(&entry.agent).as_mut().and_then(|rt| rt.osc9(&body));

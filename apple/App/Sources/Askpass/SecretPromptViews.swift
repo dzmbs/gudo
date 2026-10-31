@@ -107,6 +107,12 @@ struct SecretPromptCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
             header
+            if let notice = entry.copy.guestNotice {
+                Label(notice, systemImage: "person.2.fill")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(DS.Palette.attention)
+                    .accessibilityIdentifier("askpass-guest-driving")
+            }
             field
             if let message = statusMessage {
                 Label(message.text, systemImage: message.symbol)

@@ -15,9 +15,9 @@
 //!
 //! Requests travel as [`ClientCtl::Askpass`](crate::ClientCtl::Askpass) and are answered by
 //! [`ServerCtl::AskpassResult`](crate::ServerCtl::AskpassResult); pushes are
-//! [`ServerCtl::Askpass`](crate::ServerCtl::Askpass). Both go only to connections that
-//! announced [`Caps::ASKPASS`](crate::Caps::ASKPASS) and hold Driver (or Owner) on the pane:
-//! guests who can only watch never see the prompt text.
+//! [`ServerCtl::Askpass`](crate::ServerCtl::Askpass). Pushes go only to owner devices that
+//! announced [`Caps::ASKPASS`](crate::Caps::ASKPASS); guests never see a prompt, whatever their
+//! role, and their answers are refused.
 //!
 //! Secrets travel as [`Secret`], whose `Debug` output is redacted and whose bytes are zeroed
 //! when it is dropped. The daemon never logs or stores them.
@@ -188,6 +188,15 @@ pub enum AskpassPush {
     DetectedGone {
         /// The pane.
         pane_id: PaneId,
+    },
+    /// A new prompt asked while a guest holds the pane's lease: the guest may have typed the
+    /// command that asks. Sent instead of [`AskpassPush::Prompt`] to clients with
+    /// [`Caps::ASKPASS_DRIVER`](crate::Caps::ASKPASS_DRIVER).
+    PromptWhileGuestDrives {
+        /// The prompt.
+        prompt: SecretPrompt,
+        /// The guest's name.
+        guest: String,
     },
 }
 

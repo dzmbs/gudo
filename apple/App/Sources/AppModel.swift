@@ -83,6 +83,7 @@ final class AppModel {
         localLayout = LaunchOptions.hasLocalShell && !helperServesMac
             ? LocalLayoutStore() : LocalLayoutStore(session: Session(tabs: [], activeTabId: nil))
         hosts.onBrowserPush = { [weak self] id, push in self?.browserPush(id, push) }
+        hosts.onClipboard = { [weak self] id, pane, text in self?.clipboardWrite(id, pane, text) }
         #if os(macOS)
         helper?.onReady = { [weak self] id in self?.thisDeviceReady(id) }
         helper?.onUnavailable = { [weak self] in self?.thisDeviceUnavailable() }

@@ -1,17 +1,17 @@
 //! Native password prompts end to end (docs/DAEMON.md §9): the askpass helper's requests on
 //! the hook socket (a fake helper here; `crates/hostd/tests/askpass.rs` runs the real one),
-//! prompts pushed only to connections that asked and may drive the pane, first answer wins,
-//! guests who only watch never see them, timeouts, abandoned and orphaned prompts, and
+//! prompts pushed only to owner devices that asked, first answer wins, guests never see them
+//! (and the owner is told when a guest drives), timeouts, abandoned and orphaned prompts, and
 //! detected terminal password prompts answered with `TypeSecret`.
 
 use std::path::Path;
 use std::time::Duration;
 
 use client_core::proto::{
-    AskpassError, AskpassId, CloseReason, PaneId, Roles, Scope, Secret, SecretPrompt, SecretSource,
-    UnixMillis,
+    AskpassError, AskpassId, Caps, CloseReason, PaneId, Roles, Scope, Secret, SecretPrompt,
+    SecretSource, UnixMillis,
 };
-use client_core::{AskpassEvent, ClientConfig, now_millis};
+use client_core::{AskpassEvent, ClientConfig, ConnectOptions, now_millis};
 use daemon::{ASKPASS_VERSION, AskpassCall, HelperQuery, HelperReply};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -203,7 +203,7 @@ async fn askpass_prompt_goes_to_the_app_and_the_first_answer_wins() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn guests_who_only_watch_never_see_prompts_and_cannot_answer() {
+async fn guests_never_see_prompts_and_the_owner_is_told_who_drives() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
     let socket = daemon.hook_socket().to_owned();
@@ -226,36 +226,40 @@ async fn guests_who_only_watch_never_see_prompts_and_cannot_answer() {
         .create_invite(spec(Roles::DRIVER, "bob"), "bob".into())
         .await
         .unwrap();
-    let mut carol =
-        TestClient::join_askpass(&viewer_invite.to_string(), ClientConfig::generate_key());
+    // Both guests offer to show prompts anyway, as a client ignoring the rule would.
+    let insist = ConnectOptions {
+        askpass: true,
+        extra_caps: Caps::ASKPASS | Caps::ASKPASS_DRIVER,
+        ..ConnectOptions::default()
+    };
+    let mut carol = TestClient::join_options(&viewer_invite.to_string(), insist.clone());
     carol.client.attach(None);
     carol.until("guest layout", |c| c.layout.is_some()).await;
     carol.follow(pane).await;
-    let mut bob =
-        TestClient::join_askpass(&driver_invite.to_string(), ClientConfig::generate_key());
+    let mut bob = TestClient::join_options(&driver_invite.to_string(), insist);
     bob.client.attach(None);
     bob.until("guest layout", |c| c.layout.is_some()).await;
     bob.follow(pane).await;
 
     let task = spawn_helper(&socket, call(dir.path(), pane, "Password:", "sudo -A id"));
     owner.until("prompt", |c| !prompts(c).is_empty()).await;
-    bob.until("driver sees it", |c| !prompts(c).is_empty())
-        .await;
     let p = prompts(&owner)[0].clone();
 
-    // The viewer is told nothing, and guessing the id gets it nowhere.
-    assert_eq!(
-        carol
-            .client
-            .answer_askpass(p.id, Secret::new(b"guess".to_vec()))
-            .await
-            .map_err(|e| matches!(e, AskpassError::Denied(_))),
-        Err(true)
-    );
-    assert!(matches!(
-        carol.client.cancel_askpass(p.id).await,
-        Err(AskpassError::Denied(_))
-    ));
+    // No guest is told, whatever its role, and guessing the id gets it nowhere: a host that
+    // is not theirs must never ask for their passwords.
+    for guest in [&carol, &bob] {
+        assert!(matches!(
+            guest
+                .client
+                .answer_askpass(p.id, Secret::new(b"guess".to_vec()))
+                .await,
+            Err(AskpassError::Denied(_))
+        ));
+        assert!(matches!(
+            guest.client.cancel_askpass(p.id).await,
+            Err(AskpassError::Denied(_))
+        ));
+    }
     assert!(matches!(
         carol
             .client
@@ -263,17 +267,34 @@ async fn guests_who_only_watch_never_see_prompts_and_cannot_answer() {
             .await,
         Err(AskpassError::Denied(_))
     ));
-
-    bob.client
-        .answer_askpass(p.id, Secret::new(b"from-bob".to_vec()))
+    owner
+        .client
+        .answer_askpass(p.id, Secret::new(b"from-owner".to_vec()))
         .await
         .unwrap();
-    assert_eq!(answer_of(&reply(task).await), Some("from-bob"));
+    assert_eq!(answer_of(&reply(task).await), Some("from-owner"));
+
+    // Bob drives the pane: the next prompt tells the owner, since bob may have typed the
+    // command that asks.
+    bob.type_line(pane, "echo bob-drives");
+    bob.wait_text(pane, "bob-drives").await;
+    let task = spawn_helper(&socket, call(dir.path(), pane, "Password:", "sudo -A id"));
     owner
-        .until("closed for the owner", |c| closed(c, p.id).is_some())
+        .until("the prompt names bob", |c| {
+            c.askpass.iter().any(|e| {
+                matches!(e, AskpassEvent::PromptWhileGuestDrives { guest, .. } if guest == "bob")
+            })
+        })
         .await;
+    let id = owner.client.open_askpass()[0].id;
+    assert_eq!(owner.client.askpass_guest(id).as_deref(), Some("bob"));
+    owner.client.cancel_askpass(id).await.unwrap();
+    assert!(matches!(reply(task).await, HelperReply::Cancelled));
+
     carol.until("settled", |_| true).await;
+    bob.until("settled", |_| true).await;
     assert!(carol.askpass.is_empty(), "viewer got {:?}", carol.askpass);
+    assert!(bob.askpass.is_empty(), "driver got {:?}", bob.askpass);
 }
 
 #[tokio::test(flavor = "multi_thread")]

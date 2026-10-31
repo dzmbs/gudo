@@ -185,4 +185,26 @@ async fn a_driving_guest_never_gets_the_hosts_browser_calls() {
     app.until("the URL", |c| !c.browser.is_empty()).await;
     bob.until("settled", |_| true).await;
     assert!(bob.browser.is_empty(), "{:?}", bob.browser);
+
+    // Once the guest drives the pane, a tool call made with the pane's token (anything bob
+    // types could make one) is refused: it would drive the owner's signed-in browser.
+    bob.type_line(pane, "echo bob-drives");
+    bob.wait_text(pane, "bob-drives").await;
+    let tool = BrowserAsk::Tool {
+        name: "browser_get_text".into(),
+        args: serde_json::json!({}),
+    };
+    let reply = answer(send(&socket, &call(dir.path(), pane, tool)).await).await;
+    assert!(
+        matches!(&reply, BrowserReply::Error(why) if why.contains("bob is driving")),
+        "{reply:?}"
+    );
+    app.until("settled", |_| true).await;
+    assert!(
+        !app.browser
+            .iter()
+            .any(|p| matches!(p, BrowserPush::Call { .. })),
+        "{:?}",
+        app.browser
+    );
 }

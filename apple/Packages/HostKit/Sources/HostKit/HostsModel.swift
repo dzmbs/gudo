@@ -85,6 +85,9 @@ public final class HostsModel {
     @ObservationIgnored var knocker: Knocker?
     /// A URL a host's pane opened, or a browser tool its agent called (the host's id).
     @ObservationIgnored public var onBrowserPush: ((String, BrowserPush) -> Void)?
+    /// A program in a pane of a host copied text (OSC 52) after this device typed into it:
+    /// the host, the pane and the text.
+    @ObservationIgnored public var onClipboard: ((String, PaneId, String) -> Void)?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
     public init(secrets: any SecretStore, repository: HostRepository, configuration: Configuration = .init()) {
@@ -192,6 +195,7 @@ public final class HostsModel {
         connection.onAttached = { [weak self] session in self?.update(record.id) { $0.sessionId = session } }
         connection.onDaemonInfo = { [weak self] info in self?.daemonReported(record.id, info) }
         connection.browser.onPush = { [weak self] push in self?.onBrowserPush?(record.id, push) }
+        connection.onClipboard = { [weak self] pane, text in self?.onClipboard?(record.id, pane, text) }
         connections[record.id] = connection
         do {
             try connection.connect()

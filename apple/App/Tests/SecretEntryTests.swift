@@ -101,6 +101,23 @@ final class SecretEntryTests: XCTestCase {
         XCTAssertTrue(client.state.withLock { $0.answers.isEmpty })
     }
 
+    /// A guest held the pane's lease when the program asked: the card says who is driving, and
+    /// the saved password is not one tap away (the guest's command may be what asks).
+    func testAPromptAskedWhileAGuestDrivesSaysSoAndOffersNoSavedPassword() {
+        let (session, _) = setUpSession()
+        let vault = MemoryAskpassVault()
+        var asked = prompt()
+        asked.guestDriving = "bob"
+        let entry = SecretEntry(target: .askpass(asked), hostId: "h", session: session, vault: vault, vaultAvailable: true)
+        try? vault.save("pw", for: entry.key)
+        let again = SecretEntry(target: .askpass(asked), hostId: "h", session: session, vault: vault, vaultAvailable: true)
+        XCTAssertEqual(again.copy.guestNotice, "Asked while bob is driving")
+        XCTAssertFalse(again.hasSaved)
+        let owner = SecretEntry(target: .askpass(prompt()), hostId: "h", session: session, vault: vault, vaultAvailable: true)
+        XCTAssertNil(owner.copy.guestNotice)
+        XCTAssertTrue(owner.hasSaved)
+    }
+
     func testQuestionsAreNotSecretAndNeverRemembered() {
         let (session, _) = setUpSession()
         let entry = SecretEntry(target: .askpass(prompt(echo: true)), hostId: "h", session: session,

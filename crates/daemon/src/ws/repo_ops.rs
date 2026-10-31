@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use proto::{
-    LayoutOp, OpOutcome, PaneLaunch, PrState, PullRequest, WorkspaceRequest, WorkspaceResponse,
-    WorktreeCreate, WorktreeInfo, WsError,
+    LayoutOp, OpOutcome, PaneLaunch, PrState, PullRequest, RepoHooks, RepoHooksFor, RepoHooksTrust,
+    WorkspaceRequest, WorkspaceResponse, WorktreeCreate, WorktreeInfo, WsError,
 };
 
 use super::git::{self, git};
 use super::paths::Policy;
-use super::{blocking, existing_dir, gh, repo};
+use super::{blocking, existing_dir, gh, repo, trust};
 use crate::core::Core;
 
 fn gh_path(core: &Core) -> Result<PathBuf, WsError> {
@@ -94,7 +94,21 @@ fn branch_exists(repo: &Path, branch: &str) -> bool {
     .is_ok()
 }
 
-fn main_of(dir: &Path) -> Result<PathBuf, WsError> {
+/// The hooks a task's new worktree from `base` in `root` will have: the config file committed
+/// at `base`, else the main worktree's (as [`repo::read_config`] falls back).
+fn new_task_hooks(root: &Path, main: &Path, base: Option<&str>) -> Result<RepoHooks, WsError> {
+    let base = base.unwrap_or("HEAD");
+    if base.starts_with('-') {
+        return Err(WsError::Invalid(format!("bad base {base:?}")));
+    }
+    let object = format!("{base}:{}", repo::config_file_name());
+    Ok(match git(root, &["cat-file", "blob", &object]) {
+        Ok(bytes) => repo::parse_config(&bytes, &object).1,
+        Err(_) => repo::read_config(main, None).1,
+    })
+}
+
+pub(crate) fn main_of(dir: &Path) -> Result<PathBuf, WsError> {
     let out = git(dir, &["worktree", "list", "--porcelain", "-z"])?;
     super::worktree::parse_list(&out)
         .into_iter()
@@ -252,7 +266,7 @@ pub(crate) async fn handle(
             let core2 = Arc::clone(core);
             blocking(move || {
                 let main = main_of(&path).ok();
-                let (_, hooks) = repo::read_config(&path, main.as_deref());
+                let hooks = repo::runnable_hooks(&core2, &path, main.as_deref());
                 core2.ws.worktrees.archive(
                     &path,
                     force,
@@ -317,7 +331,7 @@ pub(crate) async fn handle(
                     &root,
                 )?;
                 let main = main_of(Path::new(&info.path)).ok();
-                let (_, hooks) = repo::read_config(Path::new(&info.path), main.as_deref());
+                let hooks = repo::runnable_hooks(&core2, Path::new(&info.path), main.as_deref());
                 Ok((info, hooks))
             })
             .await?;
@@ -382,6 +396,42 @@ pub(crate) async fn handle(
                     }))
                 }
             }
+        }
+        R::RepoHooks(of) => {
+            let core2 = Arc::clone(core);
+            let policy = policy.clone();
+            blocking(move || {
+                let (main, hooks) = match of {
+                    RepoHooksFor::NewTask { repo, base } => {
+                        let root = git::toplevel(&existing_dir(&policy, &repo)?)?;
+                        let main = main_of(&root)?;
+                        (main.clone(), new_task_hooks(&root, &main, base.as_deref())?)
+                    }
+                    RepoHooksFor::Worktree { path } => {
+                        let dir = existing_dir(&policy, &path)?;
+                        let main = main_of(&dir)?;
+                        (main.clone(), repo::read_config(&dir, Some(&main)).1)
+                    }
+                };
+                let main = main.canonicalize().unwrap_or(main);
+                Ok(A::RepoHooks(RepoHooksTrust {
+                    repo: main.to_string_lossy().into_owned(),
+                    hash: trust::hash(&hooks),
+                    trusted: core2.ws.hook_trust.trusted(&main, &hooks),
+                    hooks,
+                }))
+            })
+            .await
+        }
+        R::RepoTrust { repo, hash } => {
+            let dir = existing_dir(policy, &repo)?;
+            let main = blocking(move || main_of(&dir)).await?;
+            if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(WsError::Invalid("not a command hash".into()));
+            }
+            tracing::info!(repo = %main.display(), "repository commands trusted");
+            core.ws.hook_trust.trust(&main, &hash.to_ascii_lowercase());
+            Ok(A::Done)
         }
         other => Err(WsError::Invalid(format!(
             "not a repository request: {other:?}"

@@ -22,8 +22,9 @@ use proto::{
     WorkspaceRequest, WorkspaceResponse, WorktreeCreate, WorktreeInfo, WriteTarget, WsError,
 };
 use proto::{
-    ArchivedWorktree, PrCheckout, PrCreate, PrMerge, PullRequest, RepoSnapshot, ScriptRun,
-    TaskCreate, TaskCreated, Workflow, WorkflowList, WorkflowSave, WorktreeSettings,
+    ArchivedWorktree, PrCheckout, PrCreate, PrMerge, PullRequest, RepoHooksFor, RepoHooksTrust,
+    RepoSnapshot, ScriptRun, TaskCreate, TaskCreated, Workflow, WorkflowList, WorkflowSave,
+    WorktreeSettings,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -738,6 +739,20 @@ impl Client {
     ) -> Result<WorktreeSettings, WsError> {
         expect!(self.workspace(WorkspaceRequest::WorktreeSettings(set)).await?,
             WorkspaceResponse::WorktreeSettings(s) => s)
+    }
+
+    /// A repository's setup and teardown commands and whether the owner trusts them (only
+    /// trusted ones run).
+    pub async fn repo_hooks(&self, of: RepoHooksFor) -> Result<RepoHooksTrust, WsError> {
+        expect!(self.workspace(WorkspaceRequest::RepoHooks(of)).await?,
+            WorkspaceResponse::RepoHooks(t) => t)
+    }
+
+    /// Trusts a repository's commands (`RepoHooksTrust::repo` and `hash`): they run from now
+    /// on until they change. Owner devices only.
+    pub async fn repo_trust(&self, repo: String, hash: String) -> Result<(), WsError> {
+        expect!(self.workspace(WorkspaceRequest::RepoTrust { repo, hash }).await?,
+            WorkspaceResponse::Done => ())
     }
 
     /// A new task: worktree, branch, and a tab with a shell or agent in it.

@@ -260,6 +260,41 @@ pub struct TaskCreate {
     pub prompt: Option<String>,
 }
 
+/// A repository's setup and teardown commands and whether the owner trusts them. Only
+/// trusted commands run; changed ones are asked about again.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RepoHooksTrust {
+    /// The repository (main worktree); pass it to [`DaemonClient::repo_trust`].
+    pub repo: String,
+    /// Run in a new task's first pane.
+    pub setup: Option<String>,
+    /// Run before a worktree is archived or deleted.
+    pub teardown: Option<String>,
+    /// Pass it to [`DaemonClient::repo_trust`]: exactly these commands.
+    pub hash: String,
+    /// The owner trusts them (also when there are none).
+    pub trusted: bool,
+}
+
+impl From<proto::RepoHooksTrust> for RepoHooksTrust {
+    fn from(t: proto::RepoHooksTrust) -> Self {
+        Self {
+            repo: t.repo,
+            setup: t.hooks.setup,
+            teardown: t.hooks.teardown,
+            hash: t.hash,
+            trusted: t.trusted,
+        }
+    }
+}
+
+impl RepoHooksTrust {
+    /// Whether there is anything to ask about: commands the owner has not trusted.
+    fn needs_asking(&self) -> bool {
+        !self.trusted && (self.setup.is_some() || self.teardown.is_some())
+    }
+}
+
 /// What [`DaemonClient::task_create`] made.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct TaskCreated {
@@ -411,6 +446,25 @@ impl From<proto::ArchivedWorktree> for ArchivedWorktree {
             saved_changes: a.saved_changes,
             archived_at_ms: a.archived_at.0,
         }
+    }
+}
+
+impl DaemonClient {
+    async fn repo_hooks(
+        &self,
+        of: proto::RepoHooksFor,
+    ) -> Result<Option<RepoHooksTrust>, WorkspaceError> {
+        let offered = self
+            .inner
+            .daemon_info()
+            .is_some_and(|i| i.features.contains(proto::DaemonFeatures::REPO_TRUST));
+        if !offered {
+            return Ok(None);
+        }
+        let trust: proto::RepoHooksTrust = self
+            .ws_call(|c| async move { c.repo_hooks(of).await })
+            .await?;
+        Ok(Some(RepoHooksTrust::from(trust)).filter(RepoHooksTrust::needs_asking))
     }
 }
 
@@ -593,6 +647,48 @@ impl DaemonClient {
             }
         }
         Ok(out)
+    }
+
+    /// The setup and teardown commands a new task in `repo` from `base` would run, and whether
+    /// they are trusted. `None` from daemons that run them without asking (no
+    /// `DaemonFeatures::REPO_TRUST`).
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WorkspaceError`].
+    pub async fn repo_hooks_for_task(
+        &self,
+        repo: String,
+        base: Option<String>,
+    ) -> Result<Option<RepoHooksTrust>, WorkspaceError> {
+        self.repo_hooks(proto::RepoHooksFor::NewTask { repo, base })
+            .await
+    }
+
+    /// The teardown (and setup) commands of the worktree at `path`, and whether they are
+    /// trusted, before archiving or deleting it. `None` as for
+    /// [`repo_hooks_for_task`](Self::repo_hooks_for_task).
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WorkspaceError`].
+    pub async fn repo_hooks_for_worktree(
+        &self,
+        path: String,
+    ) -> Result<Option<RepoHooksTrust>, WorkspaceError> {
+        self.repo_hooks(proto::RepoHooksFor::Worktree { path })
+            .await
+    }
+
+    /// Trusts a repository's commands ([`RepoHooksTrust::repo`] and [`RepoHooksTrust::hash`]):
+    /// they run from now on, until they change. Owner devices only.
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WorkspaceError`] (`Denied` for a guest).
+    pub async fn repo_trust(&self, repo: String, hash: String) -> Result<(), WorkspaceError> {
+        self.ws_call(|c| async move { c.repo_trust(repo, hash).await })
+            .await
     }
 
     /// Runs a command in a new tab in `cwd` (it stays a shell afterwards); the new pane.

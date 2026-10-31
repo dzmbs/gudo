@@ -558,6 +558,16 @@ fn notification(
     }
 }
 
+/// Lock-screen Approve only for what the notification shows in full: an approval whose summary
+/// was cut (`…`, here or by the agent's adapter) goes out with Open only, and the app shows
+/// the whole request.
+fn open_only(note: &mut push::Notification) {
+    if note.kind == push::Kind::Approval {
+        note.kind = push::Kind::Blocked;
+        note.action = None;
+    }
+}
+
 async fn send(
     core: &Core,
     reg: &Registration,
@@ -571,6 +581,9 @@ async fn send(
         .ok_or_else(|| SendError::Failed("bad sealing key on file".into()))?;
     let seed = core.identity.secret.to_bytes();
     let mut note = notification(core, device, item, kind, buttons, host);
+    if note.body.ends_with('…') {
+        open_only(&mut note);
+    }
     let sealed = loop {
         let json = serde_json::to_vec(&note).map_err(|e| SendError::Failed(e.to_string()))?;
         match push::seal(&seal_key, &seed, &json) {
@@ -579,10 +592,12 @@ async fn send(
             Err(push::PushError::TooLarge(_)) if note.body.len() > 64 => {
                 let keep = note.body.chars().count() / 2;
                 note.body = note.body.chars().take(keep).collect::<String>() + "…";
+                open_only(&mut note);
             }
             Err(e) => return Err(SendError::Failed(format!("sealing: {e}"))),
         }
     };
+    let kind = note.kind;
     let collapse = push::collapse_id(&seed, item.pane_id, kind.category());
     let attempts = core.cfg.push.attempts;
     post(core, reg, attempts, || push::RelayRequest {

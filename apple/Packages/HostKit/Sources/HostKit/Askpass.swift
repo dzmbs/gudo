@@ -167,6 +167,9 @@ nonisolated public struct AskpassCopy: Equatable, Sendable {
     public var symbol: String
     /// The answer is not secret (a yes/no question).
     public var echo: Bool
+    /// "Asked while bob is driving": a guest held the pane's lease and may have typed the
+    /// command that asks.
+    public var guestNotice: String?
 
     public init(prompt: SecretPrompt) {
         let lower = prompt.prompt.lowercased()
@@ -182,6 +185,7 @@ nonisolated public struct AskpassCopy: Equatable, Sendable {
         fieldLabel = prompt.prompt.isEmpty ? "Password:" : prompt.prompt
         kind = program
         echo = prompt.echo
+        guestNotice = prompt.guestDriving.map { "Asked while \($0) is driving" }
         symbol = switch prompt.source {
         case .sudo: "lock.shield"
         case .ssh: "key"
@@ -197,6 +201,7 @@ nonisolated public struct AskpassCopy: Equatable, Sendable {
         kind = "terminal"
         symbol = "key.horizontal"
         echo = false
+        guestNotice = nil
     }
 }
 

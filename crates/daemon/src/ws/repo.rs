@@ -88,13 +88,27 @@ pub(crate) fn read_config(root: &Path, main: Option<&Path>) -> (Vec<RepoScript>,
     let Some(file) = file else {
         return (Vec::new(), RepoHooks::default());
     };
-    let parsed: ConfigFile = match std::fs::read(&file).ok().and_then(|b| {
-        serde_json::from_slice(&b)
-            .map_err(|e| tracing::info!("{}: {e}", file.display()))
-            .ok()
-    }) {
-        Some(c) => c,
-        None => return (Vec::new(), RepoHooks::default()),
+    match std::fs::read(&file) {
+        Ok(bytes) => parse_config(&bytes, &file.display().to_string()),
+        Err(_) => (Vec::new(), RepoHooks::default()),
+    }
+}
+
+/// The hooks of the worktree at `root` that may run: only commands the owner trusts in its
+/// repository (`main`, the main worktree), see [`super::trust`].
+pub(crate) fn runnable_hooks(core: &Core, root: &Path, main: Option<&Path>) -> RepoHooks {
+    let (_, hooks) = read_config(root, main);
+    core.ws.hook_trust.runnable(main.unwrap_or(root), hooks)
+}
+
+/// Scripts and hooks from a config file's contents (`what` names it in the log).
+pub(crate) fn parse_config(bytes: &[u8], what: &str) -> (Vec<RepoScript>, RepoHooks) {
+    let parsed: ConfigFile = match serde_json::from_slice(bytes) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::info!("{what}: {e}");
+            return (Vec::new(), RepoHooks::default());
+        }
     };
     let nonempty = |s: Option<String>| s.filter(|s| !s.trim().is_empty());
     let scripts = parsed
@@ -1098,7 +1112,7 @@ async fn sweep(core: &Arc<Core>, t: &mut Tracker) {
                 return Ok(false);
             }
             let main = list_worktrees(&path).ok().map(|(m, _)| m);
-            let (_, hooks) = read_config(&path, main.as_deref());
+            let hooks = runnable_hooks(&core2, &path, main.as_deref());
             core2
                 .ws
                 .worktrees

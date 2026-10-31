@@ -594,3 +594,55 @@ async fn raw(socket: &Path, call: Value) -> String {
     BufReader::new(stream).read_line(&mut answer).await.unwrap();
     answer
 }
+
+/// Text in a pane a multiplayer guest can type into may be the guest's, not the user's: every
+/// read says so, so the agent does not take it as the user's words.
+#[tokio::test(flavor = "multi_thread")]
+async fn reads_of_a_pane_a_guest_can_type_into_say_so() {
+    use client_core::grants::GrantSpec;
+    use client_core::proto::{Roles, Scope, UnixMillis};
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |_| {}).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let me = user.attach_and_follow().await;
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: me.0.to_string(),
+    };
+    let source = |v: &Value| {
+        v["output"]["source"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let plain = source(&agent.ok("pane_read", json!({})).await);
+    assert!(!plain.contains("guest"), "{plain}");
+
+    let join = |roles, name: &'static str| {
+        let mut spec = GrantSpec::new(roles, Scope::Daemon);
+        spec.label = name.into();
+        spec.expires = Some(UnixMillis(client_core::now_millis().0 + 3_600_000));
+        let client = &user.client;
+        async move {
+            let invite = client.create_invite(spec, name.into()).await.unwrap();
+            let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+            guest.client.attach(None);
+            guest.until("guest layout", |c| c.layout.is_some()).await;
+            guest
+        }
+    };
+    // A viewer cannot type: nothing changes.
+    let _carol = join(Roles::VIEWER, "carol").await;
+    assert_eq!(source(&agent.ok("pane_read", json!({})).await), plain);
+
+    // A driver can: reads and waits are marked.
+    let _bob = join(Roles::DRIVER, "bob").await;
+    let read = agent.ok("pane_read", json!({})).await;
+    assert_eq!(source(&read), daemon::TERM_SOURCE_SHARED, "{read}");
+    let waited = agent
+        .ok("pane_wait", json!({ "quietMs": 100, "timeoutMs": 2000 }))
+        .await;
+    assert_eq!(source(&waited), daemon::TERM_SOURCE_SHARED, "{waited}");
+}

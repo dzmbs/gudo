@@ -293,6 +293,19 @@ private final class FakeClient: NotificationActionClient {
         #expect(LocalNotifications.identifier(hostId: "h1", paneId: 2) == "pane.h1.2")
     }
 
+    /// What a cut summary hides could be anything: no Approve from the lock screen, Open only.
+    @Test func aCutApprovalSummaryIsOpenOnly() {
+        let cut = AttentionNote(
+            hostId: "h1", hostName: "studio", itemId: 1, paneId: 2,
+            kind: .approval(requestId: 3, approve: .init(id: 1, label: "Yes"), deny: .init(id: 2, label: "No")),
+            title: "", body: "npm test xxxxxxxx…", agent: "Claude Code")
+        let content = LocalNotifications.content(for: cut)
+        #expect(content.categoryIdentifier == "AGENT_BLOCKED")
+        let local = content.userInfo[LocalNotifications.localKey] as? [String: Any]
+        #expect(local?["approve"] == nil)
+        #expect(local?["request"] == nil)
+    }
+
     @Test func prefsGateKindsAndForeground() {
         var prefs = NotificationPrefs()
         let note = AttentionNote(hostId: "h", hostName: "s", itemId: 1, paneId: 1, kind: .done, title: "t", body: "b")

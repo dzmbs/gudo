@@ -85,15 +85,30 @@ final class TunnelBrowser: NSObject, WKUIDelegate, WKNavigationDelegate {
     // MARK: WKNavigationDelegate
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        guard let url = navigationAction.request.url, let scheme = url.scheme?.lowercased() else { return .allow }
-        if ["http", "https", "about", "blob", "data"].contains(scheme) { return .allow }
-        // vscode:, mailto:, tel: belong to other apps; the workbench and its extensions' web
-        // views are web content, so they get these and nothing else (never `file:`, never this
-        // app's own links).
-        if navigationAction.targetFrame?.isMainFrame ?? true, Self.externalSchemes.contains(scheme) {
-            Self.openExternally(url)
+        let url = navigationAction.request.url
+        switch Self.decision(for: url, mainFrame: navigationAction.targetFrame?.isMainFrame ?? true) {
+        case .allow: return .allow
+        case .cancel: return .cancel
+        case .openExternally:
+            if let url { Self.openExternally(url) }
+            return .cancel
         }
-        return .cancel
+    }
+
+    enum NavigationDecision: Equatable {
+        case allow
+        case cancel
+        /// Cancel, and hand the link to the app that owns its scheme.
+        case openExternally
+    }
+
+    /// Web content loads in place. vscode:, mailto:, tel: belong to other apps; the workbench
+    /// and its extensions' web views are web content, so only their main frame may hand these
+    /// over, and nothing else (never `file:`, never this app's own links).
+    static func decision(for url: URL?, mainFrame: Bool) -> NavigationDecision {
+        guard let scheme = url?.scheme?.lowercased() else { return .allow }
+        if ["http", "https", "about", "blob", "data"].contains(scheme) { return .allow }
+        return mainFrame && externalSchemes.contains(scheme) ? .openExternally : .cancel
     }
 
     static let externalSchemes: Set<String> = ["vscode", "vscode-insiders", "mailto", "tel"]

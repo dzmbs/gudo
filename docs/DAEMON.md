@@ -932,6 +932,14 @@ to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests op
   "tint", "default"}]}`. Setup runs first in the new task's pane, echoed dimmed (`› pnpm i`),
   before the shell or the agent. Teardown runs (`sh -c`, ≤ 5 min) before archive or delete; a
   failing teardown stops them unless forced.
+- **Trust** (`ws/trust.rs`, `DaemonFeatures::REPO_TRUST`): setup and teardown run only when
+  the owner trusts exactly them, kept per repository (main worktree) and SHA-256 of both in
+  `<state>/repo-trust.json`; otherwise the task, archive, delete or auto-delete goes ahead
+  without them (`TaskCreated.setup` is `None`). `RepoHooks(NewTask{repo, base} |
+  Worktree{path})` → `RepoHooks{repo, hooks, hash, trusted}` reads what would run (a new task:
+  the file committed at `base`, else the main worktree's); `RepoTrust{repo, hash}` (owner
+  devices only, never a guest's grant) trusts it. The app asks "Run Setup Commands for repo?"
+  before a task and "Run Teardown Commands…" before archive or delete.
 - **Archive keeps refs**: refused with `Conflict` when the worktree has changes unless `force`.
   The commit goes to `refs/unnamed/archived/<id>/head` and, with changes, a commit of the whole
   working tree (untracked files included, the user's index untouched) to `…/changes`; then the
@@ -1959,10 +1967,13 @@ instead of the user typing blind into the terminal. Two sources, one wire (`Caps
   default 300: `TimedOut`, the program gets no answer), the helper's connection closing
   (Ctrl-C: `Abandoned`), or nobody able to answer for 10 s (`MovedToTerminal`, the helper asks
   on the terminal). Every connection's sheet closes with that `Closed`.
-- **Who sees it.** Connections that announced `Caps::ASKPASS` (the app; `client-core` with
-  `ConnectOptions::askpass`), are attached to the pane's session and hold Driver or Owner on the
-  pane. Guests who only watch never get the prompt text, and their `Answer`/`Cancel` are
-  `Denied`. Open prompts are sent again on attach (same ids), so a reconnecting app keeps its
+- **Who sees it.** Owner devices that announced `Caps::ASKPASS` (the app; `client-core` with
+  `ConnectOptions::askpass`) and are attached to the pane's session. Guests never get the
+  prompt, whatever their role (a host that is not theirs must not ask for their passwords), and
+  their `Answer`/`Cancel` are `Denied`; `client-core` never announces the capability on a guest
+  connection. While a guest holds the pane's lease, clients with `Caps::ASKPASS_DRIVER` get
+  `PromptWhileGuestDrives{prompt, guest}` instead of `Prompt`, and the app says "Asked while
+  bob is driving". Open prompts are sent again on attach (same ids), so a reconnecting app keeps its
   sheet. The first `Answer` wins; later ones get `Gone`.
 - **Secrets.** `proto::Secret` redacts its `Debug` output and zeroes its bytes on drop; the
   helper's reply buffer, the JSON line and the helper's stdout buffer are zeroed after use. The
@@ -2002,8 +2013,9 @@ Programs that read passwords in raw mode (most TUIs, `pinentry-curses`) are not 
 
 `tests/it/askpass.rs` (fake helper on the hook socket): the prompt reaches two askpass clients
 and not a plain one, first answer wins and the other sees `Answered`, a late answer is `Gone`,
-retry flag, cancel, control characters refused, yes/no questions; a viewer guest is never told
-and is `Denied` while a driver guest answers; timeout, abandoned (helper hangs up), bad token;
+retry flag, cancel, control characters refused, yes/no questions; viewer and driver guests are
+never told (even offering the capability) and are `Denied`, and the owner's prompt names a
+driving guest; timeout, abandoned (helper hangs up), bad token;
 no app → `"terminal"` and `--available` false, the app leaving mid-prompt → `"terminal"`
 after the grace; a program that turns echo off and prints `Password:` gets `Detected`,
 `TypeSecret` reaches it without echo, `NotHidden` at a shell prompt, a client attaching late is
