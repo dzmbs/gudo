@@ -961,6 +961,7 @@ impl Core {
                 self.ws.forget_pane(*id);
                 self.mp.forget_pane(*id);
                 entry.pane.hang_up();
+                kill_if_lingering(Arc::clone(&entry.pane));
                 self.emit(Event::PaneClosed(*id));
             }
         }
@@ -1463,6 +1464,27 @@ fn refresh_hint(core: &Core, entry: &PaneEntry) {
             prediction,
         }));
     }
+}
+
+/// How long a closed pane's process may outlive its hangup before it is killed.
+const HANGUP_GRACE: Duration = Duration::from_secs(3);
+
+/// Kills a closed pane's process group if it is still running after [`HANGUP_GRACE`]: a
+/// program that ignores SIGHUP (`nohup`, `trap '' HUP`) would otherwise run on unseen, holding
+/// the pane's threads, for as long as the daemon runs.
+fn kill_if_lingering(pane: Arc<Pane>) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn(async move {
+        if tokio::time::timeout(HANGUP_GRACE, pane.pty().wait())
+            .await
+            .is_err()
+        {
+            tracing::debug!(pane = %pane.id, "process ignored the hangup; killing it");
+            let _ = pane.pty().signal_group(pty::Signal::Kill);
+        }
+    });
 }
 
 /// Connections one device may hold at once: the app and its extensions, with room to spare.

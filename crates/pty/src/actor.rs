@@ -480,6 +480,22 @@ impl PtyActor {
         Ok(())
     }
 
+    /// Sends `signal` to the child's process group: the child leads its own session and group,
+    /// so this reaches what it runs in the foreground of that group too.
+    ///
+    /// # Errors
+    ///
+    /// As for [`signal`](Self::signal).
+    pub fn signal_group(&self, signal: Signal) -> Result<(), SignalError> {
+        let reaped = self.process.reaped();
+        if *reaped {
+            return Err(SignalError::Exited);
+        }
+        rustix::process::kill_process_group(self.process.pid, signal.into())
+            .map_err(io::Error::from)?;
+        Ok(())
+    }
+
     /// Waits for the child to exit and returns its status.
     ///
     /// # Errors

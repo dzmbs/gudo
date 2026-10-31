@@ -163,6 +163,55 @@ async fn a_device_keeps_a_bounded_number_of_connections() {
     assert!(conns[20].1.close_reason().is_none(), "the newest stays");
 }
 
+/// A program that ignores SIGHUP used to outlive its closed pane forever, with the pane's
+/// wait thread. It is killed after a short grace period.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_process_ignoring_hangup_dies_with_its_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = support::start(dir.path()).await;
+    let mut c = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
+    c.attach_and_follow().await;
+    let session = c.layout.as_ref().unwrap().session_id;
+    let marker = format!("{}", 900_000 + std::process::id() % 99_999);
+    let OpOutcome::TabCreated { pane_id, .. } = c
+        .op(LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch: PaneLaunch::Command {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!("trap '' HUP; exec sleep {marker}"),
+                ],
+                cwd: None,
+            },
+        })
+        .await
+    else {
+        panic!("no tab")
+    };
+    let running = || {
+        std::process::Command::new("pgrep")
+            .args(["-f", &format!("sleep {marker}")])
+            .output()
+            .is_ok_and(|o| !o.stdout.is_empty())
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !running() {
+        assert!(Instant::now() < deadline, "the program never started");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    c.op(LayoutOp::ClosePane { pane_id }).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while running() {
+        assert!(
+            Instant::now() < deadline,
+            "still running after its pane closed"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// A program setting its title in a tight loop used to push every title to every client. The
 /// pushes are coalesced, and the last title always arrives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
