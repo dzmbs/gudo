@@ -465,7 +465,10 @@ private struct DirectoryListing: View {
             Button("Move to Trash", systemImage: "trash", role: .destructive) { trashing = entry }
         }
         .swipeActions(edge: .trailing) {
-            Button("Trash", systemImage: "trash", role: .destructive) { trashing = entry }
+            // Red, not `.destructive`: that role drops the row before the user confirms, and the
+            // list then deletes it twice (a UICollectionView exception).
+            Button("Trash", systemImage: "trash") { trashing = entry }
+                .tint(.red)
             Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
                 .tint(.gray)
         }

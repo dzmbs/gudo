@@ -377,7 +377,7 @@ private struct SidebarDropDelegate: DropDelegate {
     let drag: SidebarDragState
     let geometry: SidebarGeometry
 
-    func validateDrop(info: DropInfo) -> Bool { model.draggedTab != nil || drag.draggedProject != nil }
+    func validateDrop(info: DropInfo) -> Bool { info.isTabDrag && (model.draggedTab != nil || drag.draggedProject != nil) }
 
     func dropEntered(info: DropInfo) {
         drag.dragging = drag.draggedProject == nil ? model.draggedTab : nil
@@ -540,7 +540,7 @@ private struct ProjectHeader: View {
         .onDrag {
             drag.draggedProject = project.id
             model.draggedTab = nil
-            return NSItemProvider(object: "project:\(project.id)" as NSString)
+            return TabDrag.provider(forProject: project.id, in: model)
         } preview: {
             DragLiftPreview(title: project.name, systemImage: "circle.fill")
         }

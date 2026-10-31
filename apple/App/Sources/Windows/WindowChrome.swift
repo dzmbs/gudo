@@ -2,6 +2,7 @@ import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Handoff (docs/APP-ARCHITECTURE.md "Windows"): every window advertises what it shows (host,
 /// tab, pane) as an `NSUserActivity`, and continues activities from the owner's other devices
@@ -83,16 +84,14 @@ struct SceneReader: UIViewRepresentable {
 /// A tab row or chip as a drag: its reference as text (reordering within the host) and, on
 /// iPad, the window activity, so dropping it outside the window opens it in a new window.
 enum TabDrag {
-    /// Marks the drag as a tab's, so a terminal under it does not paste its text.
+    /// Marks the drag as a tab's or a project's: a terminal under it does not paste its text,
+    /// and the sidebar and panes take only drags that carry it.
     static let typeIdentifier = "dev.unnamed.tab"
+    static let contentType = UTType(exportedAs: typeIdentifier)
 
     @MainActor
     static func provider(for ref: TabRef, in model: WindowModel) -> NSItemProvider {
-        let provider = NSItemProvider(object: ref.description as NSString)
-        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) { done in
-            done(Data(ref.description.utf8), nil)
-            return nil
-        }
+        let provider = marked(ref.description, in: model)
         #if os(iOS)
         if let workspace = model.workspace(ofGroup: ref.hostId), let tab = workspace.session.tabs.first(where: { $0.id == ref.tab }) {
             let record = ref.hostId == HostGroups.localId ? nil : model.app.hosts.record(ref.hostId)
@@ -110,6 +109,33 @@ enum TabDrag {
         #endif
         return provider
     }
+
+    /// A project header's drag.
+    @MainActor
+    static func provider(forProject id: String, in model: WindowModel) -> NSItemProvider {
+        marked("project:\(id)", in: model)
+    }
+
+    /// The text with the marker. A drag starting here also ends whatever drag another window
+    /// still remembers (SwiftUI reports no end for one let go where nothing takes it).
+    @MainActor
+    private static func marked(_ text: String, in model: WindowModel) -> NSItemProvider {
+        for window in model.app.openWindows where window !== model {
+            window.draggedTab = nil
+            window.sidebarDrag.draggedProject = nil
+        }
+        let provider = NSItemProvider(object: text as NSString)
+        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) { done in
+            done(Data(text.utf8), nil)
+            return nil
+        }
+        return provider
+    }
+}
+
+extension DropInfo {
+    /// The drag is a tab's or a project's from this app, not text from elsewhere.
+    var isTabDrag: Bool { hasItemsConforming(to: [TabDrag.contentType]) }
 }
 
 extension View {
