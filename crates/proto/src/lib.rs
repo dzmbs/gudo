@@ -60,6 +60,8 @@
 //!   [`ServerCtl::ProgramStatus`] to clients with [`Caps::PROGRAM_STATUS`]; see [`program`].
 //! - Projects (named, coloured groups of tabs) are pushed as [`ServerCtl::Projects`] to owner
 //!   clients with [`Caps::PROJECTS`], changed with layout ops; see [`project`].
+//! - Floating panes (cards over a tab's split tree) are pushed as [`ServerCtl::Floats`] to
+//!   clients with [`Caps::FLOATS`], changed with layout ops; see [`float`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -85,6 +87,7 @@ pub mod artifact;
 pub mod askpass;
 pub mod assist;
 pub mod browser;
+pub mod float;
 pub mod frame;
 mod ids;
 pub mod info;
@@ -106,6 +109,7 @@ pub use artifact::*;
 pub use askpass::*;
 pub use assist::*;
 pub use browser::*;
+pub use float::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};
 pub use ids::{
     Actor, Caps, DaemonFeatures, DaemonId, DeviceId, GrantId, InputSeq, OptionId, PaneId,

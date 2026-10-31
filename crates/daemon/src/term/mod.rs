@@ -131,10 +131,15 @@ impl ToolError {
 
 type Result<T> = std::result::Result<T, ToolError>;
 
+/// Results of agents whose floats closed when they finished, kept for `agent_result`.
+const KEPT_RESULTS: usize = 64;
+
 /// Which pane created which, for ownership.
 #[derive(Default)]
 pub(crate) struct Term {
     creators: Mutex<HashMap<PaneId, PaneId>>,
+    /// The last turn of panes closed because their work was done, newest last.
+    results: Mutex<std::collections::VecDeque<(PaneId, Value)>>,
 }
 
 impl Term {
@@ -179,6 +184,31 @@ impl Term {
 
     pub fn forget(&self, pane: PaneId) {
         lock(&self.creators).remove(&pane);
+    }
+
+    /// Keeps `pane`'s last turn before the daemon closes it for being done, so whoever
+    /// started it can still ask for the result.
+    pub fn finished(&self, core: &Core, pane: PaneId) {
+        let Some(entry) = core.pane(pane) else {
+            return;
+        };
+        let turn = last_turn(&entry);
+        if turn.is_null() {
+            return;
+        }
+        let mut results = lock(&self.results);
+        if results.len() == KEPT_RESULTS {
+            results.pop_front();
+        }
+        results.push_back((pane, turn));
+    }
+
+    fn kept_result(&self, pane: PaneId) -> Option<Value> {
+        lock(&self.results)
+            .iter()
+            .rev()
+            .find(|(p, _)| *p == pane)
+            .map(|(_, v)| v.clone())
     }
 }
 
@@ -458,6 +488,24 @@ impl CommandInfo {
             duration_ms: mark.finished.map(|f| f.duration_ms),
         }
     }
+}
+
+/// The pane's last agent turn as tools report it, `null` before the first.
+fn last_turn(entry: &PaneEntry) -> Value {
+    let meta = lock(&entry.meta);
+    let Some(turn) = &meta.last_turn else {
+        return Value::Null;
+    };
+    json!({
+        "outcome": match turn.outcome {
+            agents::TurnOutcome::Completed => "completed",
+            agents::TurnOutcome::Cancelled => "cancelled",
+            agents::TurnOutcome::Failed => "failed",
+        },
+        "message": turn.message,
+        "endedAt": turn.at.0,
+        "transcriptPath": turn.transcript.as_ref().map(|p| p.to_string_lossy()),
+    })
 }
 
 fn pane_ref(id: PaneId) -> String {
@@ -1323,26 +1371,26 @@ impl Ctx {
     }
 
     fn agent_result(&self, a: PaneArg) -> Result<Value> {
-        let (pane, entry) = self.resolve(Some(&a.pane))?;
+        let (pane, entry) = match self.resolve(Some(&a.pane)) {
+            Ok(found) => found,
+            Err(e) => {
+                // A float that closed when its run ended leaves its result to whoever opened it.
+                let kept = PaneId(a.pane.trim_start_matches('p').parse().unwrap_or(0));
+                return match self.core.term.kept_result(kept) {
+                    Some(result) if self.core.term.owns(self.caller, kept) => Ok(json!({
+                        "agent": { "pane": pane_ref(kept), "state": "exited" },
+                        "result": result,
+                    })),
+                    _ => Err(e),
+                };
+            }
+        };
         self.may_read(pane)?;
         Ok(json!({ "agent": self.agent_info(pane, &entry), "result": self.last_turn(&entry) }))
     }
 
     fn last_turn(&self, entry: &PaneEntry) -> Value {
-        let meta = lock(&entry.meta);
-        let Some(turn) = &meta.last_turn else {
-            return Value::Null;
-        };
-        json!({
-            "outcome": match turn.outcome {
-                agents::TurnOutcome::Completed => "completed",
-                agents::TurnOutcome::Cancelled => "cancelled",
-                agents::TurnOutcome::Failed => "failed",
-            },
-            "message": turn.message,
-            "endedAt": turn.at.0,
-            "transcriptPath": turn.transcript.as_ref().map(|p| p.to_string_lossy()),
-        })
+        last_turn(entry)
     }
 
     /// Reports the caller's own status, as OSC 7501 would, for agents that cannot print it.

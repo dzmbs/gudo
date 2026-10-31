@@ -45,6 +45,25 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   when its last tab leaves, closes or merges away; a broken-out pane's new tab is ungrouped.
   Owner-only (§6.3). Clients with `Caps::PROJECTS` and the owner role get `ServerCtl::Projects`
   (same revision) right after every `LayoutChanged`, cut down to the tabs their scope shows.
+- Floating windows (offered as `DaemonFeatures::FLOATS`; `proto::float`): cards over a tab that
+  hold one or more panes, split like a tab. A window's panes stay one subtree of the tab's tree,
+  so the tree is unchanged on the wire and clients without `Caps::FLOATS` keep showing them as
+  splits; the tab's tiled layout is the tree without its windows. Each session keeps its windows
+  back to front (`FloatWindow { id, panes, frame, z, minimized, pinned, close }`, frames in
+  fractions of the tab, clamped inside it), persisted in `layout.json`. `NewFloat` opens a pane
+  in a new window (in the tree right of the whole tab; focused only when asked; frames cascade
+  so none hides another exactly); `FloatPane` floats a tiled pane where it is, tears a pane out
+  of a shared window, or moves a one-pane window; `SetFloat` moves, sends to the tray, restores
+  (raising) or pins it over every tab of the session; `DockPane` docks the whole window, splits
+  and all, where it is or beside a tiled pane of the session. Panes join a window by any split
+  or move beside one of its panes and leave by a move beside a tiled pane. Focusing a pane of a
+  window raises it and brings it back from the tray; directional focus stays within the focused
+  pane's layer. A tab always keeps a tiled pane: floating the last one is `Invalid`, and when it
+  closes the frontmost window docks. A window opened with `close: Done` closes 2.5 s after its
+  work ends (the agent's turn, a done or failed OSC 7501 report, or a finished command), and
+  keeps an agent's result for `agent_result`. Clients with `Caps::FLOATS` get
+  `ServerCtl::Floats` (same revision) right after every `LayoutChanged`, cut down to their
+  scope (a tab-scoped guest sees its tab's windows, a pane-scoped one none).
 - The daemon is the source of truth. Every change bumps the session's `revision` and is
   view is the truth"). A client applies a layout only if its revision is not older than the
   one it has. `OpResult` is sent after the requesting client's `LayoutChanged`.
@@ -1133,6 +1152,8 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Op`: `ClosePane`, `CloseTab`, `CloseSession` | **owner** | in scope |
 | `Op`: `SetTabProject` | **owner** | tab in scope |
 | `Op`: `PutProject`, `RemoveProject` | **owner** | session in scope |
+| `Op`: `NewFloat`, `DockPane` | driver | the pane's whole session in scope |
+| `Op`: `FloatPane`, `SetFloat` | driver | the pane's tab in scope |
 | `Op`: `CreateSession`; `Attach` that would create a session | **owner** | daemon |
 | `Workspace`: `ListPorts`, `AttentionList`, `AttentionSeen` | any role | answers filtered to scope |
 | `Workspace`: `ListTurns`, `TurnDiff` | prompter, driver or approver | pane in scope |

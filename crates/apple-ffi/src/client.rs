@@ -182,6 +182,11 @@ pub enum ClientEvent {
         /// The projects.
         projects: crate::types::DaemonProjects,
     },
+    /// A session's floating windows, after each `layout` from daemons with `floats`.
+    Floats {
+        /// The windows.
+        floats: crate::types::DaemonFloats,
+    },
     /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it
     /// (`ConnectOptions.clipboard`): put it on this device's clipboard, local only, and say
     /// so. Programs can never read the clipboard.
@@ -369,6 +374,9 @@ impl From<client_core::ClientEvent> for ClientEvent {
             },
             E::Projects { projects } => Self::Projects {
                 projects: projects.into(),
+            },
+            E::Floats { floats } => Self::Floats {
+                floats: floats.into(),
             },
             E::PaneBytes { pane_id, seq, data } => Self::PaneBytes {
                 pane_id: pane_id.0,

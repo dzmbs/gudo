@@ -436,6 +436,135 @@ pub enum LayoutOp {
         /// The project.
         project_id: String,
     },
+    /// Opens a pane in a new floating window over `pane_id`'s tab (daemons with `floats`).
+    NewFloat {
+        /// A pane of the tab.
+        pane_id: u64,
+        /// What it runs.
+        launch: PaneLaunch,
+        /// Where it sits; `nil` for a free spot.
+        frame: Option<FloatFrame>,
+        /// Whether it takes focus.
+        focus: bool,
+        /// Closes itself once its run is done.
+        close_when_done: bool,
+    },
+    /// Floats a tiled pane, tears a pane out of a shared window, or moves a one-pane window
+    /// (daemons with `floats`).
+    FloatPane {
+        /// The pane.
+        pane_id: u64,
+        /// Where it sits; `nil` keeps it or picks a free spot.
+        frame: Option<FloatFrame>,
+    },
+    /// Changes the window holding `pane_id`; `nil` fields stay (daemons with `floats`).
+    SetFloat {
+        /// A pane of the window.
+        pane_id: u64,
+        /// New frame.
+        frame: Option<FloatFrame>,
+        /// In the tray, or restored.
+        minimized: Option<bool>,
+        /// Shown over every tab.
+        pinned: Option<bool>,
+    },
+    /// Docks the window holding `pane_id`, where it is or beside `target` on `side`
+    /// (daemons with `floats`).
+    DockPane {
+        /// A pane of the window.
+        pane_id: u64,
+        /// The tiled pane it docks beside, or `nil` for its own place.
+        target: Option<u64>,
+        /// Which side of `target`.
+        side: Direction,
+    },
+}
+
+/// Where a floating window sits, in fractions of its tab (`0,0` top left).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct FloatFrame {
+    /// Left edge.
+    pub x: f32,
+    /// Top edge.
+    pub y: f32,
+    /// Width.
+    pub w: f32,
+    /// Height.
+    pub h: f32,
+}
+
+impl From<FloatFrame> for proto::FloatFrame {
+    fn from(f: FloatFrame) -> Self {
+        Self {
+            x: f.x,
+            y: f.y,
+            w: f.w,
+            h: f.h,
+        }
+    }
+}
+
+impl From<proto::FloatFrame> for FloatFrame {
+    fn from(f: proto::FloatFrame) -> Self {
+        Self {
+            x: f.x,
+            y: f.y,
+            w: f.w,
+            h: f.h,
+        }
+    }
+}
+
+/// A floating window over a tab.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DaemonFloat {
+    /// The window, unique within its session.
+    pub id: u64,
+    /// Its panes, a subtree of the tab's tree.
+    pub panes: Vec<u64>,
+    /// Where it sits.
+    pub frame: FloatFrame,
+    /// Stacking order; higher is in front.
+    pub z: u32,
+    /// In the tray.
+    pub minimized: bool,
+    /// Shown over every tab of the session.
+    pub pinned: bool,
+    /// Closes itself once its run is done.
+    pub close_when_done: bool,
+}
+
+/// A session's floating windows, back to front.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DaemonFloats {
+    /// The session.
+    pub session_id: u64,
+    /// The session layout revision these belong to.
+    pub revision: u64,
+    /// The windows.
+    pub floats: Vec<DaemonFloat>,
+}
+
+impl From<proto::SessionFloats> for DaemonFloats {
+    fn from(f: proto::SessionFloats) -> Self {
+        Self {
+            session_id: f.session_id.0,
+            revision: f.revision,
+            floats: f
+                .floats
+                .into_iter()
+                .map(|w| DaemonFloat {
+                    id: w.id.0,
+                    panes: w.panes.into_iter().map(|p| p.0).collect(),
+                    frame: w.frame.into(),
+                    z: w.z,
+                    minimized: w.minimized,
+                    pinned: w.pinned,
+                    close_when_done: w.close == proto::CloseWhen::Done,
+                })
+                .collect(),
+        }
+    }
 }
 
 impl From<LayoutOp> for proto::LayoutOp {
@@ -550,6 +679,49 @@ impl From<LayoutOp> for proto::LayoutOp {
             } => Self::RemoveProject {
                 session_id: SessionId(session_id),
                 project: project_id,
+            },
+            LayoutOp::NewFloat {
+                pane_id,
+                launch,
+                frame,
+                focus,
+                close_when_done,
+            } => Self::NewFloat {
+                pane_id: PaneId(pane_id),
+                launch: launch.into(),
+                frame: frame.map(Into::into),
+                focus,
+                close: if close_when_done {
+                    proto::CloseWhen::Done
+                } else {
+                    proto::CloseWhen::Never
+                },
+            },
+            LayoutOp::FloatPane { pane_id, frame } => Self::FloatPane {
+                pane_id: PaneId(pane_id),
+                frame: frame.map(Into::into),
+            },
+            LayoutOp::SetFloat {
+                pane_id,
+                frame,
+                minimized,
+                pinned,
+            } => Self::SetFloat {
+                pane_id: PaneId(pane_id),
+                frame: frame.map(Into::into),
+                minimized,
+                pinned,
+            },
+            LayoutOp::DockPane {
+                pane_id,
+                target,
+                side,
+            } => Self::DockPane {
+                pane_id: PaneId(pane_id),
+                beside: target.map(|t| proto::DockTarget {
+                    pane_id: PaneId(t),
+                    side: side.into(),
+                }),
             },
         }
     }

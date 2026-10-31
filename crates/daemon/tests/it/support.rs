@@ -98,6 +98,8 @@ pub struct TestClient {
     pub programs: Vec<(PaneId, Option<client_core::proto::ProgramReport>)>,
     /// `ClientEvent::Projects` pushes, in order.
     pub projects: Vec<client_core::proto::SessionProjects>,
+    /// `ClientEvent::Floats` pushes, in order.
+    pub floats: Vec<client_core::proto::SessionFloats>,
     /// `ClientEvent::Clipboard` writes (connections with `clipboard`).
     pub clipboard: Vec<(PaneId, String)>,
 }
@@ -223,6 +225,7 @@ impl TestClient {
             browser: Vec::new(),
             programs: Vec::new(),
             projects: Vec::new(),
+            floats: Vec::new(),
             clipboard: Vec::new(),
         }
     }
@@ -273,6 +276,7 @@ impl TestClient {
                 self.programs.push((pane_id, status));
             }
             ClientEvent::Projects { projects } => self.projects.push(projects),
+            ClientEvent::Floats { floats } => self.floats.push(floats),
             ClientEvent::Clipboard { pane_id, text } => self.clipboard.push((pane_id, text)),
             _ => {}
         }

@@ -9,6 +9,7 @@ mod assist;
 mod browser;
 mod codex;
 mod e2e;
+mod floats;
 mod history;
 mod hostile_output;
 mod installs;

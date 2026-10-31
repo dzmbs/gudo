@@ -706,6 +706,9 @@ pub enum ServerCtl {
         /// The text, at most [`MAX_CLIPBOARD_BYTES`] of UTF-8.
         text: String,
     },
+    /// A session's floating panes, right after each [`ServerCtl::LayoutChanged`], to clients
+    /// with [`Caps::FLOATS`], cut down to the panes they see (see [`crate::float`]).
+    Floats(crate::float::SessionFloats),
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.

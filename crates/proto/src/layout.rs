@@ -299,6 +299,54 @@ pub enum LayoutOp {
         /// The project's id.
         project: String,
     },
+    /// Opens a pane in a new floating window over `pane_id`'s tab. In the tree it goes right
+    /// of the whole tab, where it docks to and where clients without floats show it. Answers
+    /// `PaneCreated`. Needs [`DaemonFeatures::FLOATS`](crate::DaemonFeatures::FLOATS).
+    NewFloat {
+        /// The pane it opens beside.
+        pane_id: PaneId,
+        /// What it runs.
+        launch: PaneLaunch,
+        /// Where it sits; `None` for a free spot.
+        frame: Option<crate::float::FloatFrame>,
+        /// Whether it takes focus. Agents' floats never do.
+        focus: bool,
+        /// When the daemon closes it by itself.
+        close: crate::float::CloseWhen,
+    },
+    /// Floats a tiled pane in a window of its own, raised in front; tears a pane out of a
+    /// window it shares into one of its own; or moves a window that is only this pane to
+    /// `frame`. A tab's last tiled pane stays (`Invalid`). Panes move into a window with
+    /// [`MovePane`](LayoutOp::MovePane) beside one of its panes. Needs
+    /// [`DaemonFeatures::FLOATS`](crate::DaemonFeatures::FLOATS).
+    FloatPane {
+        /// The pane.
+        pane_id: PaneId,
+        /// Where it sits; `None` keeps a float's frame or picks a free spot.
+        frame: Option<crate::float::FloatFrame>,
+    },
+    /// Changes the floating window holding `pane_id`; `None` fields stay. Needs
+    /// [`DaemonFeatures::FLOATS`](crate::DaemonFeatures::FLOATS).
+    SetFloat {
+        /// A pane of the window.
+        pane_id: PaneId,
+        /// New frame.
+        frame: Option<crate::float::FloatFrame>,
+        /// Shown as a chip, or restored (restoring raises it).
+        minimized: Option<bool>,
+        /// Shown over every tab of its session.
+        pinned: Option<bool>,
+    },
+    /// Docks the floating window holding `pane_id` back into its tab's tree, keeping its
+    /// splits: where it is, or beside a tiled pane of the same session (moving it into that
+    /// pane's tab). Focuses `pane_id`. Needs
+    /// [`DaemonFeatures::FLOATS`](crate::DaemonFeatures::FLOATS).
+    DockPane {
+        /// A pane of the window.
+        pane_id: PaneId,
+        /// Beside which pane, or `None` for its own place.
+        beside: Option<crate::float::DockTarget>,
+    },
 }
 
 /// The result of a [`LayoutOp`], in [`ServerCtl::OpResult`](crate::ServerCtl::OpResult).

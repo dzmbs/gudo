@@ -273,6 +273,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::AGENT_INSTALLS
         | DaemonFeatures::PANE_MOVES
         | DaemonFeatures::PROJECTS
+        | DaemonFeatures::FLOATS
         | DaemonFeatures::BROWSER
         | DaemonFeatures::AGENT_MCP
         | DaemonFeatures::PRESENCE
@@ -825,6 +826,11 @@ impl Client {
             && let Some(projects) = self.core.projects_for(session, self.authz.scope)
         {
             self.send(ServerCtl::Projects(projects));
+        }
+        if self.caps.contains(Caps::FLOATS)
+            && let Some(floats) = self.core.floats_for(session, self.authz.scope)
+        {
+            self.send(ServerCtl::Floats(floats));
         }
     }
 

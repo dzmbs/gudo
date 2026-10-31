@@ -316,6 +316,9 @@ bitset! {
         /// Understands `AskpassPush::PromptWhileGuestDrives` (a password prompt asked while
         /// a guest holds the pane's lease).
         ASKPASS_DRIVER = 20;
+        /// Shows floating panes: wants `ServerCtl::Floats` after each
+        /// `ServerCtl::LayoutChanged` (see `proto::float`).
+        FLOATS = 21;
     }
 }
 
@@ -361,5 +364,8 @@ bitset! {
         /// Runs a repository's setup and teardown commands only once the owner trusts them,
         /// and answers `WorkspaceRequest::RepoHooks` / `RepoTrust`.
         REPO_TRUST = 14;
+        /// Applies `LayoutOp::NewFloat`, `FloatPane`, `SetFloat` and `DockPane`, and pushes
+        /// `ServerCtl::Floats` to clients with `Caps::FLOATS`.
+        FLOATS = 15;
     }
 }
