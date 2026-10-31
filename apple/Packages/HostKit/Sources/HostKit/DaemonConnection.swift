@@ -154,9 +154,17 @@ public final class DaemonConnection: HostConnection {
         events = continuation
         let router = router
         let listener = ClosureListener { event in
-            router.route(event)
-            if case .paneBytes = event { return }
-            continuation.yield(event)
+            guard router.route(event) else {
+                continuation.yield(event)
+                return
+            }
+            // Pane-stream events are applied here; the main actor only notes the first paint,
+            // so snapshots and history pages are not queued for it.
+            switch event {
+            case .paneSnapshot(let pane, let seq, _): continuation.yield(.paneSnapshot(paneId: pane, seq: seq, data: Data()))
+            case .paneResized: continuation.yield(event)
+            default: break
+            }
         }
         status = .connecting(.dialing)
         dials += 1
@@ -262,6 +270,10 @@ public final class DaemonConnection: HostConnection {
         browser.detach()
         pump?.cancel()
         events?.finish()
+        // Pane backends still on screen hold the client: stop it rather than only letting go,
+        // or it keeps streaming and redialling for panes of a host the user disconnected.
+        client?.suspend()
+        router.broadcast(.stale(reason: "Disconnected"))
         client = nil
         status = .idle
     }

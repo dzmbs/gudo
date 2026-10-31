@@ -61,7 +61,13 @@ nonisolated final class LocalDaemon {
         self.process = process
     }
 
+    /// Sends `signal` to the daemon (SIGSTOP/SIGCONT: a host that freezes and comes back).
+    func send(_ signal: Int32) {
+        if let pid = process?.processIdentifier { Darwin.kill(pid, signal) }
+    }
+
     func kill() {
+        send(SIGCONT)  // a stopped daemon would never see the SIGTERM
         process?.terminate()
         process?.waitUntilExit()
         process = nil
