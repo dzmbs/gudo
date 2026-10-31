@@ -679,6 +679,10 @@ impl Core {
                 let session = lock(&self.layout)
                     .session_of_pane(pane_id)
                     .ok_or(fail(OpError::NotFound))?;
+                lock(&self.layout).check_split(pane_id).map_err(|e| {
+                    let max = crate::layout::MAX_SPLIT_DEPTH;
+                    (e, format!("too many nested splits (at most {max})"))
+                })?;
                 let cwd_hint = self.pane(pane_id).and_then(|e| lock(&e.meta).cwd.clone());
                 let new = lock(&self.layout).alloc_pane();
                 self.spawn_pane(new, launch, cwd_hint, false)?;
@@ -971,6 +975,13 @@ impl Core {
                 return Ok(());
             }
         };
+        let max = crate::limits::max_panes();
+        if lock(&self.panes).len() >= max {
+            return Err((
+                OpError::SpawnFailed,
+                format!("too many panes: this host's file descriptor limit allows {max}"),
+            ));
+        }
         let cwd = launch_cwd
             .or(cwd_hint)
             .filter(|c| std::path::Path::new(c).is_dir())
@@ -1103,6 +1114,13 @@ impl Core {
             cmd.env(brand::env_var("WORKTREE"), &wt.path);
         }
         cmd.current_dir(&cwd);
+        // SAFETY: runs between fork and exec and only calls `setrlimit`.
+        unsafe {
+            std::os::unix::process::CommandExt::pre_exec(
+                &mut cmd,
+                crate::limits::restore_for_child,
+            );
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env(brand::env_var("PANE_ID"), id.0.to_string());

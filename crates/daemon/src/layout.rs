@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 
 /// Smallest share either side of a split may have.
 const MIN_RATIO: f32 = 0.05;
+/// Most splits between a tab's root and any pane. Past a few levels a pane is too small to use,
+/// and the saved layout must stay well inside `serde_json`'s nesting limit (128), or the next
+/// start could not read it back.
+pub(crate) const MAX_SPLIT_DEPTH: usize = 16;
 
 /// One session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -365,8 +369,20 @@ impl Layout {
         Ok(())
     }
 
+    /// Fails with [`OpError::Invalid`] if splitting `pane` would nest deeper than
+    /// [`MAX_SPLIT_DEPTH`], so callers can refuse before starting the new pane's process.
+    pub fn check_split(&self, pane: PaneId) -> OpResult<()> {
+        let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
+        let depth = leaf_depth(&self.sessions[si].tabs[ti].root, pane).unwrap_or(0);
+        if depth + 1 > MAX_SPLIT_DEPTH {
+            return Err(OpError::Invalid);
+        }
+        Ok(())
+    }
+
     /// Splits `pane`, putting `new` after it, and focuses `new`.
     pub fn split(&mut self, pane: PaneId, axis: Axis, new: PaneId) -> OpResult<SessionId> {
+        self.check_split(pane)?;
         let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
         let s = &mut self.sessions[si];
         let tab = &mut s.tabs[ti];
@@ -489,6 +505,7 @@ impl Layout {
         if pane == target || si != target_si {
             return Err(OpError::Invalid);
         }
+        self.check_insert(target, &LayoutNode::Leaf(pane))?;
         if self.sessions[si].tabs[ti].root == LayoutNode::Leaf(pane) {
             self.take_tab(si, ti);
         } else {
@@ -511,9 +528,21 @@ impl Layout {
         if si != target_si || ti == target_ti {
             return Err(OpError::Invalid);
         }
+        self.check_insert(target, &self.sessions[si].tabs[ti].root)?;
         let merged = self.take_tab(si, ti);
         self.insert_beside(si, target, merged.root, side, merged.focused);
         Ok(self.sessions[si].id)
+    }
+
+    /// Fails if putting `node` beside `target` would nest deeper than [`MAX_SPLIT_DEPTH`].
+    /// Measured before `node` leaves its place, so it can only overestimate.
+    fn check_insert(&self, target: PaneId, node: &LayoutNode) -> OpResult<()> {
+        let (si, ti) = self.locate(target).ok_or(OpError::NotFound)?;
+        let at = leaf_depth(&self.sessions[si].tabs[ti].root, target).unwrap_or(0);
+        if at + 1 + depth(node) > MAX_SPLIT_DEPTH {
+            return Err(OpError::Invalid);
+        }
+        Ok(())
     }
 
     /// Removes a tab whose panes live on elsewhere in the session (so it is not the last).
@@ -662,6 +691,24 @@ pub(crate) fn leaves(node: &LayoutNode) -> Box<dyn Iterator<Item = PaneId> + '_>
     match node {
         LayoutNode::Leaf(p) => Box::new(std::iter::once(*p)),
         LayoutNode::Split { first, second, .. } => Box::new(leaves(first).chain(leaves(second))),
+    }
+}
+
+/// Splits on the longest path from `node` to a leaf.
+fn depth(node: &LayoutNode) -> usize {
+    match node {
+        LayoutNode::Leaf(_) => 0,
+        LayoutNode::Split { first, second, .. } => 1 + depth(first).max(depth(second)),
+    }
+}
+
+/// Splits between `node` and the leaf `pane`, if it is in the tree.
+fn leaf_depth(node: &LayoutNode, pane: PaneId) -> Option<usize> {
+    match node {
+        LayoutNode::Leaf(p) => (*p == pane).then_some(0),
+        LayoutNode::Split { first, second, .. } => leaf_depth(first, pane)
+            .or_else(|| leaf_depth(second, pane))
+            .map(|d| d + 1),
     }
 }
 
@@ -1015,6 +1062,34 @@ mod tests {
         );
         assert_eq!(l.merge_tab(t1, p1, Direction::Down), Err(OpError::Invalid));
         assert_eq!(l.all_panes().len(), 4, "no pane was dropped");
+    }
+
+    /// A layout nested to the limit still loads from its saved form, and nothing nests past it.
+    #[test]
+    fn nesting_is_capped_so_saved_layouts_load() {
+        let mut l = Layout::default();
+        let (s, _, mut pane) = session_with(&mut l);
+        for _ in 0..MAX_SPLIT_DEPTH {
+            let new = l.alloc_pane();
+            l.split(pane, Axis::Horizontal, new).unwrap();
+            pane = new;
+        }
+        let new = l.alloc_pane();
+        assert_eq!(l.check_split(pane), Err(OpError::Invalid));
+        assert_eq!(l.split(pane, Axis::Vertical, new), Err(OpError::Invalid));
+
+        // Moving or merging a tree beside the deepest pane is refused too.
+        let p = l.alloc_pane();
+        let t2 = l.new_tab(s, String::new(), p).unwrap();
+        let q = l.alloc_pane();
+        l.split(p, Axis::Vertical, q).unwrap();
+        assert_eq!(l.move_pane(q, pane, Direction::Down), Err(OpError::Invalid));
+        assert_eq!(l.merge_tab(t2, pane, Direction::Down), Err(OpError::Invalid));
+
+        let saved = crate::persist::Saved::new(l.clone(), Default::default());
+        let json = serde_json::to_vec(&saved).unwrap();
+        let back: crate::persist::Saved = serde_json::from_slice(&json).unwrap();
+        assert_eq!(back.into_parts().0.all_panes().len(), l.all_panes().len());
     }
 
     fn project(id: &str, updated: u64) -> Project {
