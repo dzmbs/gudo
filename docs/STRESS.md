@@ -100,10 +100,35 @@ Timings *loaded* (load average 500–650). Memory, fds and threads are reliable.
 | Disconnecting or re-pairing a host while its panes are on screen | the client kept streaming and redialling | **Broke, fixed** (`close()` suspends the client) |
 | 200 pane open/close and 100 connect/disconnect rounds | 13.5 → 13.7 MB / 21 fds; `leaks`: 0 | Survived |
 
+### iOS lifecycle (own iPad Pro 13" simulator, iOS 27.0, local release daemon)
+
+`apple/scripts/lifecycle-stress.sh [cycles]` creates the simulator and the daemon, runs `LifecycleStressUITests`, sends a
+real memory warning every second (`notifyutil -p dev.unnamed.debug.memorywarning`, a DEBUG hook that calls UIKit's own
+memory-warning path), samples the app's footprint every second, lists crash reports, and deletes the simulator.
+
+| Scenario | Peaks | Outcome |
+|---|---|---|
+| A pane flooding (`while :; do seq 1 100000; done`) among 7 splits: 10 background/foreground cycles, 20 rotations, ~57 memory warnings | footprint 115 MB peak, 102 MB at the end | Survived: the pane takes input and draws its text afterwards (checked on pixels) |
+| Same, 40 cycles, 80 rotations, ~149 memory warnings (4 min) | 116 MB peak, 104 MB at the end, flat across cycles | Survived; no crash reports |
+
 Known limits (client): a frozen host shows "connected" for up to ~30 s (iroh's idle timeout). The client terminal parses
 13–36 MB/s, so a faster pane is shown through snapshots rather than byte for byte.
 
+### More ways to run
+
+- SwiftUI churn (from `apple/`): `TEST_RUNNER_UNNAMED_MOCK=1 xcodebuild -project App.xcodeproj -scheme App -destination
+  'platform=macOS,arch=arm64' test -only-testing:AppTests/AppStressTests`. `TEST_RUNNER_STRESS=1` runs the full sizes
+  (500 tabs, 50 projects, 10 s), and `TEST_RUNNER_STRESS_TABS` / `_SECONDS` override them.
+- Client and connection: `cargo test -p client-core --test it` (`streams.rs`, `redial.rs`). Then
+  `cd apple/Packages/HostKit && UN_STRESS=1 UN_HOSTD_BIN=<release unnamed-hostd> swift test --no-parallel --filter
+  'ClientStressTests|ConnectionChurnTests'`; `UN_STRESS=heavy` runs the long variants.
+- iOS lifecycle: `UN_HOSTD_BIN=<unnamed-hostd> apple/scripts/lifecycle-stress.sh 40`.
+
 ### Not tested (App and renderer)
+
+- iPad multi-window with many scenes, and scene connect/disconnect (XCUITest cannot open scenes). App Lock lock/unlock cycles.
+- Network-level drops (SIGSTOP and kill stood in for them).
+- Release-build numbers for the SwiftUI runs (the Release test build fails to link `FilesProviderKitTests`).
 
 - On-device runs (iPhone/iPad hardware, real jetsam limits, ProMotion pacing). Everything ran in-process or in simulators.
 - The display-link path end to end with real windows on the Mac (the Mac app is never launched in the foreground). The render
