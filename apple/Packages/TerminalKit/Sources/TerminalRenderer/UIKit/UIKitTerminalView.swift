@@ -106,6 +106,10 @@ public final class TerminalView: UIView {
         self.surface = surface
         super.init(frame: .zero)
         layer.addSublayer(surface.layer)
+        surface.onLayerReplaced = { [weak self] old, new in
+            old.removeFromSuperlayer()
+            self?.layer.insertSublayer(new, at: 0)
+        }
         backgroundColor = surface.backgroundColor.map(UIColor.init(cgColor:)) ?? .black
         isMultipleTouchEnabled = true
         // Off screen until it is the key window's focused terminal: a hollow, steady cursor.
@@ -176,6 +180,17 @@ public final class TerminalView: UIView {
         for name in [UIScene.didActivateNotification, UIScene.willDeactivateNotification] {
             focusObservers.append(center.addObserver(forName: name, object: newWindow.windowScene, queue: .main, using: update))
         }
+        // A backgrounded scene draws nothing: give back the GPU memory until it returns.
+        focusObservers.append(center.addObserver(
+            forName: UIScene.didEnterBackgroundNotification, object: newWindow.windowScene, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.surface.releaseGPUResources() }
+        })
+        focusObservers.append(center.addObserver(
+            forName: UIScene.willEnterForegroundNotification, object: newWindow.windowScene, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.surface.setNeedsRender() }
+        })
     }
 
     override public func didMoveToWindow() {
@@ -183,6 +198,7 @@ public final class TerminalView: UIView {
         updateFocus()
         guard window != nil else {
             surface.stopDisplayLink()
+            surface.releaseGPUResources()
             stopMomentum()
             return
         }

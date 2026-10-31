@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreText
 import Foundation
+import Metal
 
 /// Cell geometry in pixels, computed like Ghostty's `font/Metrics.zig` `calc`.
 struct CellMetrics: Equatable {
@@ -71,6 +72,9 @@ final class FontGrid {
     /// Written by rasterization; the renderer drains their pending uploads each frame.
     var grayscale = Atlas(format: .grayscale)
     var color = Atlas(format: .color)
+    /// The atlases on the GPU, kept current by the renderer before each frame.
+    var grayscaleTexture: MTLTexture?
+    var colorTexture: MTLTexture?
 
     private var faces: [CTFont]
     private var faceIndexByName: [String: Int] = [:]
@@ -110,6 +114,24 @@ final class FontGrid {
         .boldItalic: "JetBrainsMonoNerdFont-BoldItalic",
     ]
 
+    private struct WeakGrid {
+        weak var grid: FontGrid?
+    }
+
+    /// Grids in use by font and pixel size.
+    @MainActor private static var live: [String: WeakGrid] = [:]
+
+    /// The grid for a font and size, shared by every surface that uses them: glyphs are
+    /// rasterized, packed and uploaded once instead of once per pane. Freed with its last user.
+    @MainActor static func shared(pixelSize: CGFloat, family: String? = nil) -> FontGrid {
+        let key = "\(family ?? "")|\(pixelSize)"
+        if let grid = live[key]?.grid { return grid }
+        live = live.filter { $0.value.grid != nil }
+        let grid = FontGrid(pixelSize: pixelSize, family: family)
+        live[key] = WeakGrid(grid: grid)
+        return grid
+    }
+
     /// - Parameters:
     ///   - pixelSize: font size in device pixels (points x display scale).
     ///   - family: a font family installed on the system, or nil for the bundled JetBrains Mono
@@ -122,8 +144,8 @@ final class FontGrid {
         metrics = Self.computeMetrics(faces[FontStyle.regular.rawValue])
     }
 
-    /// The bundled faces' descriptors, read from disk once: every new pane (a split) creates
-    /// its own grid, and reading and parsing four font files each time stalled it.
+    /// The bundled faces' descriptors, read from disk once: every new font size creates its
+    /// own grid, and reading and parsing four font files each time stalled it.
     /// Immutable once made; CoreText descriptors are thread-safe.
     nonisolated(unsafe) private static let bundledDescriptors: [CTFontDescriptor] = FontStyle.allCases.map { style in
         guard let url = Bundle.module.url(forResource: fontFiles[style], withExtension: "ttf", subdirectory: "Fonts"),
