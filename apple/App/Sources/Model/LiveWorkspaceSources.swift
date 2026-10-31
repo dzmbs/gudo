@@ -222,19 +222,46 @@ final class LiveAgentFeed: AgentFeed {
     }
 
     var items: [AgentItem] {
-        var result: [AgentItem] = []
-        for (hostId, hostName, daemon) in daemons {
-            result += Self.items(
+        let sources = daemons.map { hostId, hostName, daemon in
+            Source(
                 hostId: hostId, hostName: hostName, meta: daemon.meta.all, programs: daemon.programs.all,
-                attention: daemon.existingWorkspace?.attention ?? [], answered: answered
+                attention: daemon.existingWorkspace?.attention ?? [])
+        }
+        let key = ItemsKey(sources: sources, answered: answered, dismissed: dismissed)
+        // The Inbox, the sidebar's badge and the toasts all read the feed in one render; unchanged
+        // inputs compare by identity, so only the first read builds it.
+        if let cached, cached.key == key { return cached.items }
+        var result: [AgentItem] = []
+        for source in sources {
+            result += Self.items(
+                hostId: source.hostId, hostName: source.hostName, meta: source.meta, programs: source.programs,
+                attention: source.attention, answered: answered
             ).filter { dismissed[$0.id] != $0.state }
         }
-        return result.map { item in
+        let items = result.map { item in
             var item = item
             item.since = entered(item.id, item.state, at: item.since)
             return item
         }.sorted { ($0.state.urgency, $1.since) < ($1.state.urgency, $0.since) }
+        cached = (key, items)
+        return items
     }
+
+    private struct Source: Equatable {
+        var hostId: String
+        var hostName: String
+        var meta: [PaneId: PaneMeta]
+        var programs: [PaneId: ProgramReport]
+        var attention: [AttentionItem]
+    }
+
+    private struct ItemsKey: Equatable {
+        var sources: [Source]
+        var answered: [AgentItem.ID: UInt64]
+        var dismissed: [AgentItem.ID: DesignSystem.AgentState]
+    }
+
+    @ObservationIgnored private var cached: (key: ItemsKey, items: [AgentItem])?
 
     /// A directory's last component, "~" for a home directory (not the user's name).
     static func folder(_ path: String) -> String {
@@ -542,19 +569,19 @@ final class LiveAgentFeed: AgentFeed {
         _ = try await daemon.workspace.client().prompt(paneId: pane, text: prompt, submit: true)
     }
 
+    /// The item's host and pane, read from its id ("host/pane", history "host/a<attention>"):
+    /// every Inbox row asks, so it must not rebuild the whole feed (that made a render
+    /// O(items²)).
     private func target(_ id: AgentItem.ID) throws -> (DaemonConnection, UInt64) {
-        guard let item = items.first(where: { $0.id == id }) ?? historyItem(id),
-              let hostId = item.hostId, let pane = item.paneId,
-              let daemon = hosts.connection(hostId) as? DaemonConnection
+        guard let slash = id.lastIndex(of: "/"),
+              let daemon = hosts.connection(String(id[..<slash])) as? DaemonConnection
         else { throw HostError.notConnected }
-        return (daemon, pane)
-    }
-
-    private func historyItem(_ id: AgentItem.ID) -> AgentItem? {
-        let parts = id.split(separator: "/")
-        guard parts.count == 2, let raw = UInt64(parts[1]) else { return nil }
-        return AgentItem(id: id, agent: .other, hostName: "", sessionTitle: "", state: .idle, since: .now, prompt: "",
-                         hostId: String(parts[0]), paneId: raw)
+        let rest = id[id.index(after: slash)...]
+        if let pane = UInt64(rest) { return (daemon, pane) }
+        guard rest.first == "a", let attention = UInt64(rest.dropFirst()),
+              let item = daemon.existingWorkspace?.attention.first(where: { $0.id == attention })
+        else { throw HostError.notConnected }
+        return (daemon, item.paneId)
     }
 
     private func decide(_ id: AgentItem.ID, allow: Bool) {

@@ -101,10 +101,12 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored let router: PaneRouter
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
     @ObservationIgnored private var pump: Task<Void, Never>?
-    /// Metadata and program reports held back, newest per pane (`throttlePaneStatus`).
+    /// Metadata and program reports held back, newest per pane (`paneStatus`).
     @ObservationIgnored private var pendingMeta: [PaneId: PaneMeta] = [:]
     @ObservationIgnored private var pendingPrograms: [PaneId: ProgramReport?] = [:]
-    @ObservationIgnored private var paneStatusWindow: Task<Void, Never>?
+    @ObservationIgnored private lazy var paneStatus = UpdateThrottle(interval: Self.paneStatusInterval) { [weak self] in
+        self?.applyPaneStatus()
+    }
     /// The most often pane metadata reaches views while it keeps changing.
     static let paneStatusInterval = Duration.milliseconds(50)
     /// The daemon run (changes when the daemon restarts).
@@ -268,8 +270,7 @@ public final class DaemonConnection: HostConnection {
         browser.detach()
         pump?.cancel()
         events?.finish()
-        paneStatusWindow?.cancel()
-        paneStatusWindow = nil
+        paneStatus.cancel()
         client = nil
         status = .idle
     }
@@ -313,28 +314,6 @@ public final class DaemonConnection: HostConnection {
 
     // MARK: Events (main actor, in order)
 
-    /// Agents in a fleet can report hundreds of times a second, and every applied update
-    /// re-renders whatever shows the pane. The first update after a quiet spell applies at once;
-    /// while updates keep coming they apply together, newest per pane, every
-    /// `paneStatusInterval`.
-    private func throttlePaneStatus(_ hold: (DaemonConnection) -> Void) {
-        hold(self)
-        guard paneStatusWindow == nil else { return }
-        applyPaneStatus()
-        openPaneStatusWindow()
-    }
-
-    private func openPaneStatusWindow() {
-        paneStatusWindow = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: Self.paneStatusInterval)
-            guard let self, !Task.isCancelled else { return }
-            let held = !pendingMeta.isEmpty || !pendingPrograms.isEmpty
-            applyPaneStatus()
-            // Still busy: keep batching. Quiet: the next update applies at once.
-            if held { openPaneStatusWindow() } else { paneStatusWindow = nil }
-        }
-    }
-
     private func applyPaneStatus() {
         guard !pendingMeta.isEmpty || !pendingPrograms.isEmpty else { return }
         let metas = pendingMeta, reports = pendingPrograms
@@ -347,10 +326,12 @@ public final class DaemonConnection: HostConnection {
     func handle(_ event: ClientEvent) {
         switch event {
         case .paneMeta(let meta):
-            throttlePaneStatus { $0.pendingMeta[PaneId(meta.paneId)] = meta }
+            pendingMeta[PaneId(meta.paneId)] = meta
+            paneStatus.note()
             return
         case .programStatus(let pane, let status):
-            throttlePaneStatus { $0.pendingPrograms[PaneId(pane)] = .some(status) }
+            pendingPrograms[PaneId(pane)] = .some(status)
+            paneStatus.note()
             return
         default:
             // Everything else keeps its order after the pane updates before it.

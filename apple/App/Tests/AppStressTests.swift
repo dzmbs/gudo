@@ -40,6 +40,13 @@ final class AppStressTests: XCTestCase {
         return window
     }
 
+    /// Closes a test window and tears down its views: AppKit keeps a test's closed windows,
+    /// and their views would go on rendering into the next scenario.
+    private func dismantle(_ window: NSWindow) {
+        window.close()
+        window.contentViewController = nil
+    }
+
     private func pump(_ seconds: Double) async {
         try? await Task.sleep(for: .seconds(seconds))
     }
@@ -67,7 +74,7 @@ final class AppStressTests: XCTestCase {
     }
 
     private func close(_ model: WindowModel, _ window: NSWindow, _ host: StressHost) async {
-        window.close()
+        dismantle(window)
         model.close()
         host.remove()
         await pump(0.3)
@@ -123,6 +130,86 @@ final class AppStressTests: XCTestCase {
         await close(model, window, host)
         XCTAssertLessThan(report.worst, .milliseconds(stress ? 100 : 250), report.description)
         XCTAssertLessThan(idle.worst, .milliseconds(100), idle.description)
+    }
+
+    private struct Weak {
+        weak var object: AnyObject?
+    }
+
+    /// The model alone, without a hosting window.
+    func testAClosedWindowModelIsFreed() async throws {
+        let host = try StressHost(id: "stress-model", tabs: 10, projects: 0)
+        defer { host.remove() }
+        let (model, workspace) = try await openAndCloseModel(on: host)
+        await pump(1)
+        XCTAssertNil(workspace.object, "workspace")
+        XCTAssertNil(model.object, "model")
+    }
+
+    private func openAndCloseModel(on host: StressHost) async throws -> (model: Weak, workspace: Weak) {
+        let feed = LiveAgentFeed(hosts: AppModel.shared.hosts)
+        let model = WindowModel(app: .shared, agents: feed)
+        feed.window = model
+        model.start()
+        model.show(.host(host.id))
+        try await until("tabs") { model.workspace(ofGroup: host.id)?.session.tabs.count == 10 }
+        let refs = (Weak(object: model), Weak(object: model.workspace(ofGroup: host.id)))
+        model.close()
+        return refs
+    }
+
+    /// A closed window gives back its panes, terminal views and surfaces. Repeated, so a slow leak shows as a count, not a guess.
+    func testClosedWindowsFreeTheirPanes() async throws {
+        let host = try StressHost(id: "stress-leak", tabs: 30, projects: 0)
+        defer { host.remove() }
+        var refs: [String: [Weak]] = [:]
+        let rounds = stress ? 10 : 3
+        let before = ProcessStats.footprintMB
+        for _ in 0..<rounds {
+            for (kind, weak) in try await openAndCloseWindow(on: host) { refs[kind, default: []] += weak }
+        }
+        await pump(1.5)
+        let alive = refs.mapValues { $0.filter { $0.object != nil }.count }.filter { $0.value > 0 }
+        print("stress leaks after \(rounds) windows of 30 panes: \(alive.isEmpty ? "none" : "\(alive)"); footprint \(Int(before)) → \(Int(ProcessStats.footprintMB)) MB")
+        XCTAssertTrue(alive.isEmpty, "still alive after closing: \(alive)")
+    }
+
+    /// Opens a window on `host`, closes it, and returns weak references to what it made (in a
+    /// function of its own, so no local of the test keeps them).
+    private func openAndCloseWindow(on host: StressHost) async throws -> [String: [Weak]] {
+        let (model, window) = try await openWindow(on: host, tabs: 30)
+        let workspace = try XCTUnwrap(model.workspace(ofGroup: host.id))
+        // The window and its model are left out: AppKit keeps a test's hosted windows (even a
+        // bare Text's) after `close`; `testAClosedWindowModelIsFreed` checks the model.
+        var refs: [String: [Weak]] = [:]
+        for pane in workspace.panes.values {
+            refs["pane", default: []].append(Weak(object: pane))
+            refs["view", default: []].append(Weak(object: pane.view))
+            refs["surface", default: []].append(Weak(object: pane.view.surface))
+        }
+        dismantle(window)
+        model.close()
+        return refs
+    }
+
+    /// Each Inbox row asks the feed about its item (approval, options, rules): resolving the
+    /// item rebuilt the whole feed, so a render of 300 agents cost 300 feeds.
+    func testInboxRowLookupsDoNotRebuildTheFeed() async throws {
+        let host = try StressHost(id: "stress-lookup", tabs: 300, projects: 0, attention: 200)
+        defer { host.remove() }
+        _ = host.connection.workspace
+        try await until("the agents") { host.connection.meta.all.count == 300 && host.connection.existingWorkspace?.attention.count == 200 }
+        let feed = LiveAgentFeed(hosts: AppModel.shared.hosts)
+        let items = feed.items
+        XCTAssertGreaterThan(items.count, 300)
+        let start = ContinuousClock.now
+        for item in items {
+            _ = feed.approval(item.id)
+            _ = feed.approvalOptions(item.id)
+            _ = feed.autoApprovals(item.id)
+        }
+        let elapsed = ContinuousClock.now - start
+        XCTAssertLessThan(elapsed, .milliseconds(150), "\(items.count) rows took \(elapsed)")
     }
 
     func testInboxUnderAgentChurnAndAttentionFlood() async throws {

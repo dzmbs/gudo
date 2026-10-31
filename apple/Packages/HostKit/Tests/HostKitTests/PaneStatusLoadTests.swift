@@ -27,19 +27,6 @@ import UnnamedCore
             size: PaneSize(cols: 80, rows: 24), sizePolicy: .smallest, sizedBy: nil)
     }
 
-    /// Counts how often reading `read` would have re-rendered a view.
-    private final class Invalidations {
-        var count = 0
-        func watch(_ read: @escaping @MainActor () -> Void) {
-            withObservationTracking { read() } onChange: { [self] in
-                Task { @MainActor in
-                    self.count += 1
-                    self.watch(read)
-                }
-            }
-        }
-    }
-
     @Test func aRowOfOnePaneIgnoresTheOthers() async throws {
         let (connection, client) = try makeConnection()
         for pane in 1...3 as ClosedRange<UInt64> { client.send(.paneMeta(meta: meta(pane, "start"))) }
@@ -64,7 +51,7 @@ import UnnamedCore
         // One quiet update applies at once.
         client.send(.paneMeta(meta: meta(1, "first")))
         try await eventually("the first update") { connection.meta[PaneId(1)]?.title == "first" }
-        #expect(all.count == 1)
+        try await eventually("one render") { all.count == 1 }
 
         // 2 000 updates over 200 panes in about half a second.
         let start = ContinuousClock.now
@@ -84,5 +71,19 @@ import UnnamedCore
         try await eventually("closed") { connection.meta[PaneId(7)] == nil }
         try await Task.sleep(for: .milliseconds(150))
         #expect(connection.meta[PaneId(7)] == nil)
+    }
+}
+
+/// Counts how often reading `read` would have re-rendered a view.
+@MainActor
+final class Invalidations {
+    var count = 0
+    func watch(_ read: @escaping @MainActor () -> Void) {
+        withObservationTracking { read() } onChange: { [self] in
+            Task { @MainActor in
+                self.count += 1
+                self.watch(read)
+            }
+        }
     }
 }
