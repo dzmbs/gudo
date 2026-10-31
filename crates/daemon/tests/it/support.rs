@@ -72,6 +72,8 @@ pub struct TestClient {
     pub history: Vec<(u64, bool)>,
     pub history_gone: u32,
     pub metas: HashMap<PaneId, client_core::proto::PaneMeta>,
+    /// `ClientEvent::PaneMeta` pushes received.
+    pub meta_events: u32,
     pub log: Vec<String>,
     /// Refusals (`ClientEvent::Refused` reasons).
     pub refused: Vec<String>,
@@ -206,6 +208,7 @@ impl TestClient {
             history: Vec::new(),
             history_gone: 0,
             metas: HashMap::new(),
+            meta_events: 0,
             log: Vec::new(),
             refused: Vec::new(),
             attached: Vec::new(),
@@ -252,6 +255,7 @@ impl TestClient {
                 self.answers.insert(req_id, event);
             }
             ClientEvent::PaneMeta { meta } => {
+                self.meta_events += 1;
                 self.metas.insert(meta.pane_id, meta);
             }
             ClientEvent::Refused { reason } => self.refused.push(reason),

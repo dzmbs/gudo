@@ -37,6 +37,9 @@ struct ConnState {
     sizes: HashMap<PaneId, PaneSize>,
     subs: HashMap<PaneId, Sub>,
     resume: HashMap<PaneId, ResumePoint>,
+    /// The metadata last sent per pane: most changes the core announces (agent events, a
+    /// title set again) leave what this client sees as it was.
+    sent_meta: HashMap<PaneId, proto::PaneMeta>,
 }
 
 impl ConnState {
@@ -824,14 +827,20 @@ impl Client {
                 if self.in_session(p)
                     && let Some(meta) = self.core.pane_meta(p)
                 {
-                    self.send(ServerCtl::PaneMeta(meta));
+                    let mut state = lock(&self.state);
+                    if state.sent_meta.get(&p) != Some(&meta) {
+                        state.sent_meta.insert(p, meta.clone());
+                        drop(state);
+                        self.send(ServerCtl::PaneMeta(meta));
+                    }
                 }
             }
             Event::PaneClosed(p) => {
-                let had = lock(&self.state)
-                    .subs
-                    .remove(&p)
-                    .map(|sub| sub.task.abort());
+                let had = {
+                    let mut state = lock(&self.state);
+                    state.sent_meta.remove(&p);
+                    state.subs.remove(&p).map(|sub| sub.task.abort())
+                };
                 // A scoped guest is only told about panes it could see.
                 if had.is_some() || self.authz.scope == Scope::Daemon {
                     self.send(ServerCtl::PaneClosed { pane_id: p });
@@ -2518,7 +2527,12 @@ impl Client {
         if let Some(gone) = missing {
             tracing::info!(conn = %self.id, requested = %gone, attached = %session, "requested session is gone; attached another");
         }
-        lock(&self.state).session = Some(session);
+        {
+            let mut state = lock(&self.state);
+            state.session = Some(session);
+            // A client may drop what it knew about another session's panes.
+            state.sent_meta.clear();
+        }
         self.core.attach(self.id, session);
         self.send(if self.caps.contains(Caps::ATTACH_RESULT) {
             ServerCtl::AttachResult(Ok(Attachment {
