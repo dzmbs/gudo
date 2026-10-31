@@ -170,8 +170,22 @@ final class Pane {
     }
 
     private func refreshWorkingDirectory() {
-        let pwd = view.surface.terminal.pwd
-        workingDirectory = URL(string: pwd).flatMap { $0.isFileURL ? $0.path : nil } ?? pwd
+        workingDirectory = Self.directory(fromOSC7: view.surface.terminal.pwd)
+    }
+
+    /// The path of an OSC 7 report, as the daemon reads it: `file://host/path` (percent-decoded),
+    /// or `kitty-shell-cwd://host/path` (Ghostty's shell integration; verbatim). Anything that
+    /// is not an absolute path is no directory.
+    nonisolated static func directory(fromOSC7 url: String) -> String {
+        let path: String? = if let rest = url.wholeMatch(of: /kitty-shell-cwd:\/\/[^\/]*(\/.*)?/) {
+            rest.1.map(String.init) ?? "/"
+        } else if url.hasPrefix("/") {
+            url
+        } else {
+            URL(string: url).flatMap { $0.isFileURL ? $0.path(percentEncoded: false) : nil }
+        }
+        guard let path, path.hasPrefix("/") else { return "" }
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
     private func gridChanged(_ grid: TerminalSurface.Grid) {
