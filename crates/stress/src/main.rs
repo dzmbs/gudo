@@ -13,9 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use client_core::{Client, ClientConfig, ClientEvent, EventQueue, RelayMode};
-use proto::{
-    Axis, LayoutNode, LayoutOp, OpOutcome, PaneId, PaneLaunch, PaneSize, SessionLayout,
-};
+use proto::{Axis, LayoutNode, LayoutOp, OpOutcome, PaneId, PaneLaunch, PaneSize, SessionLayout};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 #[derive(Parser)]
@@ -45,9 +43,7 @@ enum Cmd {
         canvas: bool,
     },
     /// Open a tab running `command` and print its pane id.
-    Spawn {
-        command: Vec<String>,
-    },
+    Spawn { command: Vec<String> },
     /// Echo latency of a pane running `cat` (created here), sampled every `interval_ms`.
     Latency {
         #[arg(long, default_value_t = 10)]
@@ -120,14 +116,18 @@ enum Cmd {
 fn config_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+        })
         .join("unnamed")
 }
 
 fn saved() -> Result<(Vec<u8>, String)> {
     let dir = config_dir();
     let key = std::fs::read(dir.join("un.key")).context("un.key: run `un pair` first")?;
-    let ticket = std::fs::read_to_string(dir.join("un.ticket"))?.trim().to_owned();
+    let ticket = std::fs::read_to_string(dir.join("un.ticket"))?
+        .trim()
+        .to_owned();
     Ok((key, ticket))
 }
 
@@ -139,12 +139,22 @@ struct Conn {
 }
 
 impl Conn {
-    fn open(handle: &tokio::runtime::Handle, key: Vec<u8>, ticket: &str, mirror: bool) -> Result<Self> {
+    fn open(
+        handle: &tokio::runtime::Handle,
+        key: Vec<u8>,
+        ticket: &str,
+        mirror: bool,
+    ) -> Result<Self> {
         let (listener, events) = EventQueue::channel();
         let mut config = ClientConfig::new(key);
         config.relay = RelayMode::Disabled;
         config.mirror_vt = mirror;
-        let client = Client::connect_on(handle, ticket, config, listener)?;
+        // A line from `un invite` joins as a guest; anything else is a pairing ticket.
+        let client = if ticket.contains("join") {
+            Client::join_on(handle, ticket, config, listener)?
+        } else {
+            Client::connect_on(handle, ticket, config, listener)?
+        };
         client.attach(None);
         Ok(Self {
             client,
@@ -190,7 +200,10 @@ impl Conn {
 }
 
 fn focused(layout: &SessionLayout) -> Option<(proto::TabId, PaneId)> {
-    let tab = layout.tabs.iter().find(|t| Some(t.tab_id) == layout.active_tab)?;
+    let tab = layout
+        .tabs
+        .iter()
+        .find(|t| Some(t.tab_id) == layout.active_tab)?;
     Some((tab.tab_id, tab.focused))
 }
 
@@ -395,12 +408,13 @@ async fn deep(
         } else {
             Axis::Vertical
         };
-        match conn.op(LayoutOp::Split {
-            pane_id: pane,
-            axis,
-            launch,
-        })
-        .await?
+        match conn
+            .op(LayoutOp::Split {
+                pane_id: pane,
+                axis,
+                launch,
+            })
+            .await?
         {
             OpOutcome::PaneCreated { pane_id } => pane = pane_id,
             other => {
@@ -528,7 +542,11 @@ async fn clients(
                 tokio::select! {
                     event = conn.next() => match event? {
                         ClientEvent::Connected { .. } => { connected.fetch_add(1, Ordering::Relaxed); }
-                        ClientEvent::Disconnected { .. } => { disconnects.fetch_add(1, Ordering::Relaxed); }
+                        ClientEvent::Disconnected { reason } => {
+                            if disconnects.fetch_add(1, Ordering::Relaxed) < 5 {
+                                println!("  disconnected: {reason}");
+                            }
+                        }
                         ClientEvent::PaneBytes { data, .. } => { bytes.fetch_add(data.len() as u64, Ordering::Relaxed); }
                         ClientEvent::PaneSnapshot { .. } => { snapshots.fetch_add(1, Ordering::Relaxed); }
                         ClientEvent::Layout { layout } => {
@@ -587,8 +605,12 @@ async fn reconnect(
     let count = Arc::new(AtomicU64::new(0));
     let mut tasks = tokio::task::JoinSet::new();
     for w in 0..parallel {
-        let (handle, key, ticket, count) =
-            (handle.clone(), key.clone(), ticket.to_owned(), Arc::clone(&count));
+        let (handle, key, ticket, count) = (
+            handle.clone(),
+            key.clone(),
+            ticket.to_owned(),
+            Arc::clone(&count),
+        );
         tasks.spawn(async move {
             let mut i = w as u64;
             while Instant::now() < end {
@@ -600,7 +622,9 @@ async fn reconnect(
                         conn.client.subscribe(p);
                     }
                 }
-                i = i.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                i = i
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 tokio::time::sleep(Duration::from_millis((i >> 33) % max_ms.max(1))).await;
                 drop(conn);
                 count.fetch_add(1, Ordering::Relaxed);
@@ -611,7 +635,10 @@ async fn reconnect(
     while let Some(r) = tasks.join_next().await {
         r??;
     }
-    println!("reconnect: {} connections dropped mid-stream", count.load(Ordering::Relaxed));
+    println!(
+        "reconnect: {} connections dropped mid-stream",
+        count.load(Ordering::Relaxed)
+    );
     Ok(())
 }
 
@@ -656,7 +683,12 @@ async fn keys(
     Ok(())
 }
 
-async fn paste(handle: &tokio::runtime::Handle, key: Vec<u8>, ticket: &str, mb: usize) -> Result<()> {
+async fn paste(
+    handle: &tokio::runtime::Handle,
+    key: Vec<u8>,
+    ticket: &str,
+    mb: usize,
+) -> Result<()> {
     let mut conn = Conn::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let (_, pane) = focused(&layout).context("no focused pane")?;
@@ -664,7 +696,10 @@ async fn paste(handle: &tokio::runtime::Handle, key: Vec<u8>, ticket: &str, mb: 
     let text = line.repeat(mb * 1024 * 1024 / line.len());
     let start = Instant::now();
     conn.client.send_paste(pane, text);
-    println!("paste: queued {mb} MiB in {:.2} s", start.elapsed().as_secs_f64());
+    println!(
+        "paste: queued {mb} MiB in {:.2} s",
+        start.elapsed().as_secs_f64()
+    );
     // Give the client time to put it on the wire.
     tokio::time::sleep(Duration::from_secs(3)).await;
     Ok(())

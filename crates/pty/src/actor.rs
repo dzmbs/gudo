@@ -423,18 +423,20 @@ impl PtyActor {
             Err(tokio::sync::TryAcquireError::NoPermits) => return Err(TryWriteError::Full(data)),
             Err(tokio::sync::TryAcquireError::Closed) => return Err(TryWriteError::Closed(data)),
         }
-        self.input.try_send(Input { data, permits }).map_err(|err| {
-            let (input, full) = match err {
-                mpsc::error::TrySendError::Full(input) => (input, true),
-                mpsc::error::TrySendError::Closed(input) => (input, false),
-            };
-            self.shared.input_budget.add_permits(input.permits as usize);
-            if full {
-                TryWriteError::Full(input.data)
-            } else {
-                TryWriteError::Closed(input.data)
-            }
-        })?;
+        self.input
+            .try_send(Input { data, permits })
+            .map_err(|err| {
+                let (input, full) = match err {
+                    mpsc::error::TrySendError::Full(input) => (input, true),
+                    mpsc::error::TrySendError::Closed(input) => (input, false),
+                };
+                self.shared.input_budget.add_permits(input.permits as usize);
+                if full {
+                    TryWriteError::Full(input.data)
+                } else {
+                    TryWriteError::Closed(input.data)
+                }
+            })?;
         self.waker.wake();
         Ok(())
     }

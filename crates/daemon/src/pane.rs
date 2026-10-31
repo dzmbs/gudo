@@ -194,7 +194,8 @@ impl Vt {
         }
         self.commands.after_output(&mut self.term);
         let events = &self.events;
-        self.scanner.feed(data, |osc| events.send(VtEvent::Osc(osc)));
+        self.scanner
+            .feed(data, |osc| events.send(VtEvent::Osc(osc)));
         let alt = self.term.active_screen() == Screen::Alternate;
         if alt != self.alt {
             self.alt = alt;
@@ -496,7 +497,11 @@ impl Pane {
             }
             let hint = cache.as_deref().map_or(0, Snapshot::size_hint);
             drop(cache);
-            (vt.term.encode_snapshot_sized(hint)?, Seq(vt.seq), vt.resize_count)
+            (
+                vt.term.encode_snapshot_sized(hint)?,
+                Seq(vt.seq),
+                vt.resize_count,
+            )
         };
         let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
         *lock(&self.cache) = Some(Arc::clone(&snapshot));
@@ -523,7 +528,11 @@ impl Pane {
                 return Ok(Arc::clone(cached));
             }
             let hint = view.snapshots.back().map_or(0, |s| s.size_hint());
-            (view.term.encode_snapshot_sized(hint)?, Seq(vt.seq), vt.resize_count)
+            (
+                view.term.encode_snapshot_sized(hint)?,
+                Seq(vt.seq),
+                vt.resize_count,
+            )
         };
         let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
         if let Some(view) = lock(&self.vt)
@@ -1063,7 +1072,11 @@ mod tests {
             .unwrap();
         // Let the I/O thread read the last output.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(events.len() <= MAX_VT_EVENTS, "{} events queued", events.len());
+        assert!(
+            events.len() <= MAX_VT_EVENTS,
+            "{} events queued",
+            events.len()
+        );
         assert_eq!(pane.latest_meta().take().title.as_deref(), Some("t4999"));
     }
 

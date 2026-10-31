@@ -206,6 +206,7 @@ async fn run(
         peers: presence.then(Arc::default),
     });
     core.client_connected(true);
+    core.device_connected(device, client.id, conn.clone());
     core.askpass.register(client.id, &client.authz, client.caps);
     core.browser.register(client.id, &client.authz, client.caps);
     client.approvals_state();
@@ -218,17 +219,24 @@ async fn run(
     // Everyone here and what they are doing, before any change to it.
     client.forward(Event::Participants);
     let mut tasks = JoinSet::new();
-    tasks.spawn(write_ctl(conn.clone(), ctl_tx, ctl_out, client.peers.clone()));
+    tasks.spawn(write_ctl(
+        conn.clone(),
+        ctl_tx,
+        ctl_out,
+        client.peers.clone(),
+    ));
     tasks.spawn(forward_events(Arc::clone(&client), core.events.subscribe()));
     tasks.spawn(accept_uni(Arc::clone(&client)));
     tasks.spawn(accept_bi(Arc::clone(&client)));
 
     // Resume: stream the panes the client already holds right away, in its order (focused
     let mut first = true;
+    let mut seen = std::collections::HashSet::new();
     for point in hello
         .resume
         .into_iter()
-        .filter(|p| client.pane_allowed(p.pane_id))
+        .filter(|p| client.pane_allowed(p.pane_id) && seen.insert(p.pane_id))
+        .take(MAX_RESUME_POINTS)
     {
         lock(&client.state).resume.insert(point.pane_id, point);
         if first {
@@ -249,6 +257,7 @@ async fn run(
     core.detach(client.id);
     core.mp.leave(&core, client.id);
     core.client_connected(false);
+    core.device_disconnected(device, client.id);
     if repo_watch {
         core.ws.repos.watch(false);
     }
@@ -512,6 +521,8 @@ async fn serve_upgrade_only(
 /// Writes `ctl`. Live presence comes from `peers` rather than the queue: while a write is
 /// stuck on a slow link it keeps only the newest state per peer, so the link catches up with
 /// the present instead of replaying every keystroke.
+/// Panes a reconnecting client may resume at once; the rest it subscribes to as usual.
+const MAX_RESUME_POINTS: usize = 256;
 /// `ctl` messages waiting for a client beyond which it is disconnected: it has stopped reading,
 /// and holding everything for it would grow without bound. It resumes on reconnect.
 const MAX_CTL_BACKLOG: usize = 8192;

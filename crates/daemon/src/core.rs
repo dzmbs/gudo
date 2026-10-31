@@ -247,6 +247,10 @@ pub(crate) struct Core {
     /// Auto-approve rules and the open requests' extras (`approve`).
     pub approvals: crate::approve::Approvals,
     connected: AtomicUsize,
+    /// Each device's open connections, oldest first (`MAX_CONNS_PER_DEVICE`).
+    device_conns: Mutex<
+        HashMap<proto::DeviceId, std::collections::VecDeque<(ConnId, iroh::endpoint::Connection)>>,
+    >,
     /// Signalled when a client connects or knocks, so work done only for clients resumes.
     pub client_arrived: Notify,
 }
@@ -291,6 +295,7 @@ impl Core {
             browser: crate::browser::Browser::install(&cfg.state_dir, &cfg.hook_bin()),
             cfg,
             connected: AtomicUsize::new(0),
+            device_conns: Mutex::default(),
             client_arrived: Notify::new(),
         })
     }
@@ -303,6 +308,39 @@ impl Core {
             self.client_arrived.notify_waiters();
         } else {
             self.connected.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Records a device's new connection and closes its oldest beyond
+    /// [`MAX_CONNS_PER_DEVICE`]. A device reconnecting after a network change, or a peer that
+    /// opens connections and never closes them, would otherwise keep every old one (and what
+    /// its streams hold in flight) until it times out.
+    pub fn device_connected(
+        &self,
+        device: proto::DeviceId,
+        id: ConnId,
+        conn: iroh::endpoint::Connection,
+    ) {
+        let evicted = {
+            let mut all = lock(&self.device_conns);
+            let conns = all.entry(device).or_default();
+            conns.push_back((id, conn));
+            let excess = conns.len().saturating_sub(MAX_CONNS_PER_DEVICE);
+            conns.drain(..excess).collect::<Vec<_>>()
+        };
+        for (_, old) in evicted {
+            old.close(4u32.into(), b"replaced by a newer connection");
+        }
+    }
+
+    /// Forgets a connection recorded by [`device_connected`](Self::device_connected).
+    pub fn device_disconnected(&self, device: proto::DeviceId, id: ConnId) {
+        let mut all = lock(&self.device_conns);
+        if let Some(conns) = all.get_mut(&device) {
+            conns.retain(|(c, _)| *c != id);
+            if conns.is_empty() {
+                all.remove(&device);
+            }
         }
     }
 
@@ -1427,6 +1465,9 @@ fn refresh_hint(core: &Core, entry: &PaneEntry) {
     }
 }
 
+/// Connections one device may hold at once: the app and its extensions, with room to spare.
+const MAX_CONNS_PER_DEVICE: usize = 16;
+
 /// How often a pane task checks for agents and feeds agent timers.
 const PANE_TICK: Duration = Duration::from_millis(500);
 /// How long after its last event a pane without an agent keeps ticking: long enough to see a
@@ -1438,11 +1479,7 @@ const META_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Per-pane task: turns VT events, termios changes, agent timers and process exit into
 /// metadata, echo hints and agent events.
-async fn pane_task(
-    core: Arc<Core>,
-    entry: Arc<PaneEntry>,
-    mut vt_events: mpsc::Receiver<VtEvent>,
-) {
+async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::Receiver<VtEvent>) {
     let id = entry.pane.id;
     let pane = Arc::clone(&entry.pane);
     let mut echo = pane.echo_updates();

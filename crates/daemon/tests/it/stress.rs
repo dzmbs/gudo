@@ -11,9 +11,23 @@ use proto::{Caps, ClientCtl, DeviceId, GrantId, Hello, LinkClass, ServerCtl, Sig
 
 use crate::support::{self, TestClient};
 
+type Raw = (
+    Endpoint,
+    iroh::endpoint::Connection,
+    iroh::endpoint::SendStream,
+    iroh::endpoint::RecvStream,
+);
+
 /// Pairs a raw connection with `ticket` and returns it once welcomed.
-async fn raw_pair(
+async fn raw_pair(ticket: &str) -> Raw {
+    raw_dial(ticket, &ClientConfig::generate_key(), true).await
+}
+
+/// Dials as device `key`, pairing with the ticket's secret or as an already paired device.
+async fn raw_dial(
     ticket: &str,
+    key: &[u8],
+    pairing: bool,
 ) -> (
     Endpoint,
     iroh::endpoint::Connection,
@@ -21,9 +35,7 @@ async fn raw_pair(
     iroh::endpoint::RecvStream,
 ) {
     let (ticket, _) = Ticket::parse_with_extras(ticket).unwrap();
-    let secret = iroh::SecretKey::from_bytes(
-        &ClientConfig::generate_key().try_into().unwrap(),
-    );
+    let secret = iroh::SecretKey::from_bytes(key.try_into().unwrap());
     let device = DeviceId(*secret.public().as_bytes());
     let endpoint = Endpoint::builder(presets::Minimal)
         .secret_key(secret)
@@ -39,10 +51,18 @@ async fn raw_pair(
     let hello = Hello {
         device_id: device,
         principal_id: ticket.principal,
-        grant: SignedGrant {
-            v: SignedGrant::PAIRING,
-            grant_id: GrantId([0; 16]),
-            token: ticket.secret.0.to_vec(),
+        grant: if pairing {
+            SignedGrant {
+                v: SignedGrant::PAIRING,
+                grant_id: GrantId([0; 16]),
+                token: ticket.secret.0.to_vec(),
+            }
+        } else {
+            SignedGrant {
+                v: SignedGrant::DEVICE,
+                grant_id: GrantId([0; 16]),
+                token: Vec::new(),
+            }
         },
         snapshot_format: u32::from(ghostty_vt::snapshot_format()),
         resume: Vec::new(),
@@ -76,7 +96,10 @@ async fn a_client_that_stops_reading_is_disconnected() {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut sent = 0;
     while conn.close_reason().is_none() {
-        assert!(Instant::now() < deadline, "the daemon kept a stuck client after {sent} requests");
+        assert!(
+            Instant::now() < deadline,
+            "the daemon kept a stuck client after {sent} requests"
+        );
         sent += 500;
         if tx.write_all(&ask.repeat(500)).await.is_err() {
             break;
@@ -91,6 +114,53 @@ async fn a_client_that_stops_reading_is_disconnected() {
     let pane = other.attach_and_follow().await;
     other.type_line(pane, "echo still-here");
     other.wait_text(pane, "still-here").await;
+}
+
+/// A paste bigger than one frame used to fail to encode on the client, which dropped the
+/// connection and lost the paste. It arrives whole.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paste_larger_than_a_frame_arrives_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = support::start(dir.path()).await;
+    let mut c = TestClient::connect(&support::ticket(&daemon), ClientConfig::generate_key());
+    let pane = c.attach_and_follow().await;
+    const LEN: usize = 6 << 20;
+    c.type_line(
+        pane,
+        &format!("stty raw -echo; head -c {LEN} | wc -c | tr -d ' '; stty sane"),
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    c.client.send_paste(pane, "a".repeat(LEN));
+    c.wait_text(pane, &LEN.to_string()).await;
+    assert_eq!(c.connected, 1, "the connection held");
+}
+
+/// One device holding many connections (a reconnect loop that never closes the old ones)
+/// used to keep them all, each with what its streams hold in flight. The oldest are closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_keeps_a_bounded_number_of_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = support::start(dir.path()).await;
+    let key = ClientConfig::generate_key();
+    let ticket = support::ticket(&daemon);
+    let mut conns = vec![raw_dial(&ticket, &key, true).await];
+    for _ in 0..20 {
+        conns.push(raw_dial(&ticket, &key, false).await);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let open = conns
+            .iter()
+            .filter(|(_, c, ..)| c.close_reason().is_none())
+            .count();
+        if open <= 16 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{open} connections still open");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(conns[0].1.close_reason().is_some(), "the oldest went first");
+    assert!(conns[20].1.close_reason().is_none(), "the newest stays");
 }
 
 /// A program setting its title in a tight loop used to push every title to every client. The

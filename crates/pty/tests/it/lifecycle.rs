@@ -18,9 +18,15 @@ async fn input_for_a_program_that_never_reads_is_bounded() {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         // What the kernel's tty buffer takes on top of the queue is small.
-        assert!(accepted <= 2 * pty::MAX_QUEUED_INPUT, "accepted {accepted} bytes");
+        assert!(
+            accepted <= 2 * pty::MAX_QUEUED_INPUT,
+            "accepted {accepted} bytes"
+        );
     }
-    assert!(accepted >= pty::MAX_QUEUED_INPUT / 2, "accepted only {accepted} bytes");
+    assert!(
+        accepted >= pty::MAX_QUEUED_INPUT / 2,
+        "accepted only {accepted} bytes"
+    );
 }
 
 #[tokio::test]

@@ -120,7 +120,10 @@ pub async fn slow(tickets: &Path, secs: u64) -> Result<()> {
         .await?;
         held.push(raw);
     }
-    println!("slow: {} clients subscribed and no longer reading", held.len());
+    println!(
+        "slow: {} clients subscribed and no longer reading",
+        held.len()
+    );
     let end = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < end {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -137,7 +140,10 @@ pub async fn slow(tickets: &Path, secs: u64) -> Result<()> {
         .iter()
         .filter(|r| r.conn.close_reason().is_some())
         .count();
-    println!("slow: {closed}/{} closed by the daemon after {secs} s", held.len());
+    println!(
+        "slow: {closed}/{} closed by the daemon after {secs} s",
+        held.len()
+    );
     Ok(())
 }
 
@@ -151,7 +157,9 @@ pub async fn stale_resume(key: &[u8], ticket: &str, secs: u64) -> Result<()> {
     let mut rounds = 0u64;
     let mut i = 1u64;
     while Instant::now() < end {
-        i = i.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        i = i
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let mut points = Vec::new();
         let n = match rounds % 4 {
             0 => 5000,
@@ -168,7 +176,11 @@ pub async fn stale_resume(key: &[u8], ticket: &str, secs: u64) -> Result<()> {
                 2 => Seq(0),
                 _ => Seq(1),
             };
-            let generation = if k % 2 == 0 { SnapGen(epoch) } else { SnapGen(i) };
+            let generation = if k % 2 == 0 {
+                SnapGen(epoch)
+            } else {
+                SnapGen(i)
+            };
             points.push(ResumePoint {
                 pane_id: pane,
                 last_seq: seq,

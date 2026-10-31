@@ -1084,7 +1084,10 @@ mod tests {
         let q = l.alloc_pane();
         l.split(p, Axis::Vertical, q).unwrap();
         assert_eq!(l.move_pane(q, pane, Direction::Down), Err(OpError::Invalid));
-        assert_eq!(l.merge_tab(t2, pane, Direction::Down), Err(OpError::Invalid));
+        assert_eq!(
+            l.merge_tab(t2, pane, Direction::Down),
+            Err(OpError::Invalid)
+        );
 
         let saved = crate::persist::Saved::new(l.clone(), Default::default());
         let json = serde_json::to_vec(&saved).unwrap();
