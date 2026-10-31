@@ -167,6 +167,13 @@ public extension DS {
         public static let springOpenDelay = Duration.milliseconds(600)
         /// A control's pressed state.
         public static let press = Animation.spring(response: 0.2, dampingFraction: 0.7)
+        /// A pane lifting out of its tab into a floating window, docking back, going to the
+        /// tray and coming back: one spring for the window and the panes making room, a breath
+        /// of bounce on the card only it shows. Grids hold for `liftDuration`, then reflow once.
+        public static let lift = Animation.spring(duration: 0.42, bounce: 0.12)
+        public static let liftDuration = 0.5
+        /// A floating window let go: carried by its flick, coming to rest on the line it snaps to.
+        public static let settle = Animation.spring(response: 0.34, dampingFraction: 0.86)
         /// Errors stay longer than confirmations: they are read, not glanced at.
         public static let bannerErrorDuration = Duration.seconds(4)
     }

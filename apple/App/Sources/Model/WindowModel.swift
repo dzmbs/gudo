@@ -129,6 +129,9 @@ final class WindowModel {
     }
 
     var isSearchShown = false
+    /// Every floating window is out of sight for a look at the panes under them (⌥⌘F); the
+    /// host keeps them as they are.
+    var floatsHidden = false
     var searchNeedle = "" {
         didSet { if searchNeedle != oldValue { updateSearchCount() } }
     }

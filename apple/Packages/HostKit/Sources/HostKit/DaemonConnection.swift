@@ -310,6 +310,7 @@ public final class DaemonConnection: HostConnection {
         case .daemonInfo(let info):
             daemonInfo = info
             layout.supportsProjects = info?.projects ?? false
+            layout.supportsFloats = info?.floats ?? false
             daemonInfoReported = true
             onDaemonInfo?(info)
         case .incompatible(let reason):
@@ -377,6 +378,8 @@ public final class DaemonConnection: HostConnection {
                 layout.acknowledge(id, failed: false)
             }
         case .projects(let report):
+            layout.receive(report)
+        case .floats(let report):
             layout.receive(report)
         case .clipboard(let pane, let text):
             onClipboard?(PaneId(pane), text)

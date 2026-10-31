@@ -22,6 +22,8 @@ public final class DaemonLayoutStore: LayoutStore {
     public private(set) var projects = HostProjects()
     /// Whether the daemon keeps projects (`DaemonFeatures::PROJECTS`).
     public var supportsProjects = false
+    /// Whether the daemon keeps floating windows (`DaemonFeatures::FLOATS`).
+    public var supportsFloats = false
 
     private enum Pending {
         case layout(PaneLayout.LayoutOp)
@@ -32,6 +34,14 @@ public final class DaemonLayoutStore: LayoutStore {
     @ObservationIgnored private var projectsRevision: UInt64?
     @ObservationIgnored private var confirmed: Session
     @ObservationIgnored private var confirmedProjects = HostProjects()
+    @ObservationIgnored private var confirmedFloats: [FloatWindow] = []
+    @ObservationIgnored private var floatsRevision: UInt64?
+    /// A layout waiting for its floats (sent right after it), so a new window never shows
+    /// for a frame as the split it is in the tree.
+    @ObservationIgnored private var heldLayout: SessionLayout?
+    @ObservationIgnored private var heldTimeout: Task<Void, Never>?
+    /// How long a layout waits for its floats before it shows anyway.
+    @ObservationIgnored public var floatsWait = Duration.milliseconds(250)
     @ObservationIgnored private var pending: [(id: UInt64, change: Pending)] = []
     @ObservationIgnored private let send: (UnnamedCore.LayoutOp) -> UInt64
 
@@ -66,10 +76,28 @@ public final class DaemonLayoutStore: LayoutStore {
     /// (`revision`), unless they belong to another session (re-attach).
     func receive(_ layout: SessionLayout) {
         if layout.sessionId == sessionId, let revision, layout.revision < revision { return }
+        if supportsFloats, layout.sessionId == sessionId || sessionId == nil,
+           floatsRevision.map({ $0 < layout.revision }) ?? true {
+            heldLayout = layout
+            heldTimeout?.cancel()
+            heldTimeout = Task { [weak self, floatsWait] in
+                try? await Task.sleep(for: floatsWait)
+                guard !Task.isCancelled, let self, let held = self.heldLayout else { return }
+                self.heldLayout = nil
+                self.show(held)
+            }
+            return
+        }
+        show(layout)
+    }
+
+    private func show(_ layout: SessionLayout) {
         if layout.sessionId != sessionId {
             pending.removeAll()
             projectsRevision = nil
             confirmedProjects = HostProjects()
+            floatsRevision = nil
+            confirmedFloats = []
         }
         sessionId = layout.sessionId
         sessionName = layout.name
@@ -77,6 +105,20 @@ public final class DaemonLayoutStore: LayoutStore {
         confirmed = LayoutConversion.session(layout)
         hasLayout = true
         rebase()
+    }
+
+    /// A `Floats` report (sent with every layout): shown together with the layout it follows.
+    func receive(_ report: DaemonFloats) {
+        if let floatsRevision, report.revision < floatsRevision { return }
+        floatsRevision = report.revision
+        confirmedFloats = LayoutConversion.floats(report)
+        if let held = heldLayout, held.revision <= report.revision {
+            heldLayout = nil
+            heldTimeout?.cancel()
+            show(held)
+        } else if report.sessionId == sessionId {
+            rebase()
+        }
     }
 
     /// A `Projects` report (sent with every layout, to owner connections only).
@@ -99,6 +141,7 @@ public final class DaemonLayoutStore: LayoutStore {
     func resetRevision() {
         revision = nil
         projectsRevision = nil
+        floatsRevision = nil
         pending.removeAll()
     }
 
@@ -110,7 +153,7 @@ public final class DaemonLayoutStore: LayoutStore {
 
     /// The confirmed state with every unacknowledged change replayed on top.
     private func rebase() {
-        var next = confirmed
+        var next = confirmed.with(floats: confirmedFloats)
         var nextProjects = confirmedProjects
         for (_, change) in pending {
             switch change {
@@ -126,7 +169,9 @@ public final class DaemonLayoutStore: LayoutStore {
     /// What is on screen, for the daemon's stream priorities (`DaemonClient.setView`).
     var view: (focused: UInt64?, visible: [UInt64]) {
         guard let tab = session.activeTab else { return (nil, []) }
-        let visible = tab.zoomed.map { [$0] } ?? tab.root.panes
+        // Windows pinned over every tab show their panes on this one too.
+        let pinned = session.floats.filter { $0.pinned && !$0.minimized }.flatMap(\.panes)
+        let visible = tab.zoomed.map { [$0] } ?? (tab.root.panes + pinned.filter { !tab.root.contains($0) })
         return (tab.focused.rawValue, visible.map(\.rawValue))
     }
 }

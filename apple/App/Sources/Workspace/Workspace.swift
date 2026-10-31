@@ -623,7 +623,8 @@ private extension LayoutOp {
     /// Starts a new shell on the host or moves panes there (and so needs a live link).
     var opensPane: Bool {
         switch self {
-        case .newTab, .split, .movePaneToNewTab, .movePane, .mergeTab: true
+        case .newTab, .split, .movePaneToNewTab, .movePane, .mergeTab, .newFloat, .movePaneToEdge: true
+        case .dock(_, let target, _): target != nil
         default: false
         }
     }

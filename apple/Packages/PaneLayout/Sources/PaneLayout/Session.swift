@@ -59,6 +59,20 @@ public enum LayoutOp: Hashable, Sendable, Codable {
     /// Moves every pane of a tab beside a pane of another tab on `side`, keeping their
     /// arrangement and focus; the tab closes.
     case mergeTab(TabId, beside: PaneId, side: Direction)
+    /// Floats a tiled pane in a window of its own (in front), tears a pane out of a window it
+    /// shares, or moves a window that is just this pane to `frame`. A tab keeps a tiled pane.
+    case float(PaneId, frame: FloatFrame?)
+    /// Opens a new pane in a window of its own over `beside`'s tab; in the tree it goes right
+    /// of the whole tab. Takes focus only when asked (an agent's float never does).
+    case newFloat(beside: PaneId, frame: FloatFrame?, focus: Bool)
+    /// Changes the window holding `pane`; nil keeps each value. Restoring it from the tray
+    /// raises it; sending the focused window to the tray hands focus to the tiled panes.
+    case setFloat(PaneId, frame: FloatFrame?, minimized: Bool?, pinned: Bool?)
+    /// Docks the window holding `pane`, splits and all: where it is (`beside` nil), or beside
+    /// a tiled pane on `side`. Focuses `pane`.
+    case dock(PaneId, beside: PaneId?, side: Direction)
+    /// Moves `pane` (out of a window too) along the whole `side` edge of a tab's tiled panes.
+    case movePaneToEdge(PaneId, tab: TabId, side: Direction)
 }
 
 /// Session → ordered tabs → split tree per tab. A value type: `apply` is pure apart from id
@@ -66,7 +80,26 @@ public enum LayoutOp: Hashable, Sendable, Codable {
 public struct Session: Hashable, Sendable, Codable {
     public private(set) var tabs: [Tab] = []
     public private(set) var activeTabId: TabId?
+    /// Floating windows over the tabs, back to front.
+    public private(set) var floats: [FloatWindow] = []
     private var lastId: UInt64 = 0
+    private var lastFloat: UInt64 = 0
+
+    /// Most windows one tab holds.
+    public static let maxFloatsPerTab = 16
+
+    private enum CodingKeys: String, CodingKey {
+        case tabs, activeTabId, floats, lastId, lastFloat
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tabs = try c.decode([Tab].self, forKey: .tabs)
+        activeTabId = try c.decodeIfPresent(TabId.self, forKey: .activeTabId)
+        floats = try c.decodeIfPresent([FloatWindow].self, forKey: .floats) ?? []
+        lastId = try c.decode(UInt64.self, forKey: .lastId)
+        lastFloat = try c.decodeIfPresent(UInt64.self, forKey: .lastFloat) ?? 0
+    }
 
     /// A session with one tab holding one pane.
     public init() {
@@ -75,10 +108,109 @@ public struct Session: Hashable, Sendable, Codable {
 
     /// A session as another source of truth has it (the daemon's layout). Ids it allocates
     /// later (local ops) continue after the largest id in `tabs`.
-    public init(tabs: [Tab], activeTabId: TabId?) {
+    public init(tabs: [Tab], activeTabId: TabId?, floats: [FloatWindow] = []) {
         self.tabs = tabs
         self.activeTabId = activeTabId ?? tabs.first?.id
         lastId = tabs.flatMap { [$0.id.rawValue] + $0.root.panes.map(\.rawValue) }.max() ?? 0
+        self.floats = floats.sorted { $0.z < $1.z }
+        lastFloat = floats.map(\.id.rawValue).max() ?? 0
+    }
+
+    /// The same tabs with the windows another source of truth reports (the daemon's
+    /// `Floats`), kept consistent with the trees.
+    public func with(floats: [FloatWindow]) -> Session {
+        var next = self
+        next.floats = floats.sorted { $0.z < $1.z }
+        next.lastFloat = max(lastFloat, floats.map(\.id.rawValue).max() ?? 0)
+        next.tidyFloats()
+        return next
+    }
+
+    // MARK: Floating windows
+
+    /// The window holding `pane`.
+    public func window(containing pane: PaneId) -> FloatWindow? {
+        floats.first { $0.panes.contains(pane) }
+    }
+
+    public func isFloating(_ pane: PaneId) -> Bool {
+        floats.contains { $0.panes.contains(pane) }
+    }
+
+    /// The windows over `tab`, back to front.
+    public func windows(in tab: TabId) -> [FloatWindow] {
+        guard let root = tabs.first(where: { $0.id == tab })?.root else { return [] }
+        return floats.filter { $0.panes.first.map(root.contains) == true }
+    }
+
+    /// The tab's tiled panes: its tree without its windows' subtrees.
+    public func tiledRoot(of tab: Tab) -> Node? {
+        tab.root.removing { isFloating($0) }
+    }
+
+    /// The window's own layout: its subtree of the tab's tree.
+    public func root(of window: FloatWindow) -> Node? {
+        tab(containing: window.panes.first ?? PaneId(0))?.root.subtree(of: window.panes)
+    }
+
+    private func windowIndex(_ pane: PaneId) -> Int? {
+        floats.firstIndex { $0.panes.contains(pane) }
+    }
+
+    private var topZ: UInt32 { floats.last?.z ?? 0 }
+
+    /// Brings window `index` to the front.
+    private mutating func raise(_ index: Int) {
+        guard index != floats.count - 1 else { return }
+        var window = floats.remove(at: index)
+        window.z = topZ + 1
+        floats.append(window)
+    }
+
+    private mutating func openWindow(_ panes: [PaneId], frame: FloatFrame) {
+        lastFloat += 1
+        floats.append(FloatWindow(id: FloatId(lastFloat), panes: panes, frame: frame, z: topZ + 1))
+    }
+
+    /// Panes just put beside `target` join its window, if it is in one.
+    private mutating func adopt(_ target: PaneId, _ panes: [PaneId]) {
+        guard let index = windowIndex(target) else { return }
+        floats[index].panes += panes
+    }
+
+    /// Takes `pane` out of the window holding it.
+    private mutating func release(_ pane: PaneId) {
+        for index in floats.indices { floats[index].panes.removeAll { $0 == pane } }
+    }
+
+    /// The daemon's invariants: a window's panes are one subtree of one tab, in reading order;
+    /// empty windows go; a tab left without a tiled pane docks its frontmost window.
+    private mutating func tidyFloats() {
+        for index in floats.indices {
+            let window = floats[index]
+            guard let tab = window.panes.compactMap({ tab(containing: $0) }).first else {
+                floats[index].panes = []
+                continue
+            }
+            let order = tab.root.panes
+            let kept = order.filter(window.panes.contains)
+            floats[index].panes = kept.first.map { tab.root.contiguous(around: $0, within: Set(kept)) } ?? []
+        }
+        floats.removeAll { $0.panes.isEmpty }
+        for tab in tabs {
+            while tiledRoot(of: tab) == nil, let front = floats.lastIndex(where: { tab.root.contains($0.panes[0]) }) {
+                floats.remove(at: front)
+            }
+        }
+    }
+
+    /// A spot for a new window in `tab`: stepped down and right for each window already there.
+    private func freeFrame(in tab: Tab) -> FloatFrame {
+        let step = 0.04 * Double(windows(in: tab.id).count % 5)
+        var frame = FloatFrame.standard
+        frame.x += step
+        frame.y += step
+        return frame
     }
 
     public var activeTab: Tab? {
@@ -108,6 +240,12 @@ public struct Session: Hashable, Sendable, Codable {
         case .movePaneToNewTab(let pane): movePaneToNewTab(pane)
         case .movePane(let pane, let target, let side): movePane(pane, beside: target, side: side)
         case .mergeTab(let id, let target, let side): mergeTab(id, beside: target, side: side)
+        case .float(let pane, let frame): float(pane, frame: frame?.clamped)
+        case .newFloat(let pane, let frame, let focus): newFloat(beside: pane, frame: frame?.clamped, focus: focus)
+        case .setFloat(let pane, let frame, let minimized, let pinned):
+            setFloat(pane, frame: frame?.clamped, minimized: minimized, pinned: pinned)
+        case .dock(let pane, let target, let side): dock(pane, beside: target, side: side)
+        case .movePaneToEdge(let pane, let tab, let side): movePaneToEdge(pane, tab: tab, side: side)
         }
     }
 
@@ -121,6 +259,7 @@ public struct Session: Hashable, Sendable, Codable {
             $0.focused = new
             $0.zoomed = nil
         }
+        adopt(pane, [new])
         activeTabId = tab.id
     }
 
@@ -135,6 +274,7 @@ public struct Session: Hashable, Sendable, Codable {
             if $0.focused == pane { $0.focused = nearest }
             if $0.zoomed == pane { $0.zoomed = nil }
         }
+        tidyFloats()
     }
 
     private mutating func focus(_ pane: PaneId) {
@@ -144,6 +284,11 @@ public struct Session: Hashable, Sendable, Codable {
             if $0.zoomed != pane { $0.zoomed = nil }
         }
         activeTabId = tab.id
+        // A window focused comes to the front, and back from the tray.
+        if let index = windowIndex(pane) {
+            floats[index].minimized = false
+            raise(index)
+        }
     }
 
     /// Geometric: of the panes entirely beyond the focused pane's `direction` edge that overlap it
@@ -151,7 +296,9 @@ public struct Session: Hashable, Sendable, Codable {
     /// first in reading order. No wrap-around. Unzooms, since the target is hidden while zoomed.
     private mutating func focusDirection(_ direction: Direction) {
         guard let tab = activeTab else { return }
-        let frames = tab.root.frames(in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        // Within the focused pane's own layer: the tiled panes, or its window.
+        let layer = window(containing: tab.focused).flatMap { tab.root.subtree(of: $0.panes) } ?? tiledRoot(of: tab) ?? tab.root
+        let frames = layer.frames(in: CGRect(x: 0, y: 0, width: 1, height: 1))
         guard let from = frames[tab.focused] else { return }
         let epsilon = 1e-9
 
@@ -169,7 +316,7 @@ public struct Session: Hashable, Sendable, Codable {
                 : min(from.maxX, to.maxX) - max(from.minX, to.minX)
         }
 
-        let order = tab.root.panes
+        let order = layer.panes
         let target = frames
             .filter { $0.key != tab.focused && gap($0.value) > -epsilon && overlap($0.value) > epsilon }
             .min { a, b in
@@ -188,7 +335,12 @@ public struct Session: Hashable, Sendable, Codable {
 
     private mutating func resize(_ pane: PaneId, _ direction: Direction, _ amount: Double) {
         guard let tab = tab(containing: pane), let path = tab.root.path(to: pane) else { return }
-        let candidates = path.indices.reversed().filter { path[$0].axis == direction.axis }
+        // Only dividers the pane's own layer shows: a split whose other side lies wholly in
+        // another layer (a window over the tiled panes, or the panes around a window) is hidden.
+        let own = window(containing: pane)?.id
+        let candidates = path.indices.reversed().filter {
+            path[$0].axis == direction.axis && path[$0].sibling.panes.contains { window(containing: $0)?.id == own }
+        }
         // The divider on the pane's `direction` side: the pane is in `first` for right/down.
         guard let depth = candidates.first(where: { path[$0].inFirst == direction.isForward }) ?? candidates.first else { return }
         updateTab(tab.id) {
@@ -216,6 +368,7 @@ public struct Session: Hashable, Sendable, Codable {
         if activeTabId == id {
             activeTabId = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)].id
         }
+        tidyFloats()
     }
 
     private mutating func moveTab(_ id: TabId, to index: Int) {
@@ -229,18 +382,126 @@ public struct Session: Hashable, Sendable, Codable {
         let new = Tab(id: TabId(nextId()), root: .leaf(pane), focused: pane)
         tabs.insert(new, at: index + 1)
         activeTabId = new.id
+        release(pane)
+        tidyFloats()
     }
 
     private mutating func movePane(_ pane: PaneId, beside target: PaneId, side: Direction) {
         guard pane != target, let source = tab(containing: pane), tab(containing: target) != nil else { return }
+        release(pane)
         if !detach(pane, from: source.id) { tabs.removeAll { $0.id == source.id } }
         insert(.leaf(pane), beside: target, side: side, focus: pane)
+        tidyFloats()
     }
 
     private mutating func mergeTab(_ id: TabId, beside target: PaneId, side: Direction) {
         guard let source = tabs.first(where: { $0.id == id }), let into = tab(containing: target), into.id != id else { return }
         tabs.removeAll { $0.id == id }
+        // Its windows dock as they merge: one window never sits inside another.
+        floats.removeAll { source.root.contains($0.panes[0]) }
         insert(source.root, beside: target, side: side, focus: source.focused)
+        tidyFloats()
+    }
+
+    private mutating func float(_ pane: PaneId, frame: FloatFrame?) {
+        guard let tab = tab(containing: pane) else { return }
+        if let index = windowIndex(pane) {
+            if floats[index].panes.count == 1 {
+                if let frame { floats[index].frame = frame }
+                raise(index)
+                return
+            }
+            // Torn out of a shared window: its own, just below and right of the old one.
+            guard windows(in: tab.id).count < Self.maxFloatsPerTab else { return }
+            var from = floats[index].frame
+            from.x += 0.04
+            from.y += 0.04
+            release(pane)
+            _ = detach(pane, from: tab.id)
+            updateTab(tab.id) {
+                $0.root = .split(axis: .horizontal, ratio: 0.5, first: $0.root, second: .leaf(pane))
+                $0.focused = pane
+            }
+            openWindow([pane], frame: frame ?? from.clamped ?? .standard)
+        } else {
+            guard let tiled = tiledRoot(of: tab), tiled.panes.count > 1,
+                  windows(in: tab.id).count < Self.maxFloatsPerTab else { return }
+            updateTab(tab.id) { if $0.zoomed == pane { $0.zoomed = nil } }
+            openWindow([pane], frame: frame ?? freeFrame(in: tab))
+        }
+        tidyFloats()
+    }
+
+    private mutating func newFloat(beside anchor: PaneId, frame: FloatFrame?, focus: Bool) {
+        guard let tab = tab(containing: anchor), windows(in: tab.id).count < Self.maxFloatsPerTab else { return }
+        let new = PaneId(nextId())
+        let spot = frame ?? freeFrame(in: tab)
+        updateTab(tab.id) {
+            $0.root = .split(axis: .horizontal, ratio: 0.5, first: $0.root, second: .leaf(new))
+            if focus {
+                $0.focused = new
+                $0.zoomed = nil
+            }
+        }
+        if focus { activeTabId = tab.id }
+        openWindow([new], frame: spot)
+    }
+
+    private mutating func setFloat(_ pane: PaneId, frame: FloatFrame?, minimized: Bool?, pinned: Bool?) {
+        guard let index = windowIndex(pane), let tab = tab(containing: pane) else { return }
+        if let frame { floats[index].frame = frame }
+        if let minimized { floats[index].minimized = minimized }
+        if let pinned { floats[index].pinned = pinned }
+        let window = floats[index]
+        // Restoring raises, even a window already out: forward without taking the focus.
+        if minimized == false { raise(index) }
+        if window.minimized && window.panes.contains(tab.focused), let next = tiledRoot(of: tab)?.panes.first {
+            updateTab(tab.id) {
+                $0.focused = next
+                $0.zoomed = nil
+            }
+        }
+    }
+
+    private mutating func dock(_ pane: PaneId, beside target: PaneId?, side: Direction) {
+        guard let index = windowIndex(pane), let home = tab(containing: pane) else { return }
+        guard let target else {
+            floats.remove(at: index)
+            focus(pane)
+            return
+        }
+        guard tab(containing: target) != nil, !isFloating(target) else { return }
+        let window = floats.remove(at: index)
+        guard let (rest, taken) = home.root.takingSubtree(window.panes) else {
+            floats.insert(window, at: index)
+            return
+        }
+        updateTab(home.id) {
+            $0.root = rest
+            if window.panes.contains($0.focused) || $0.zoomed != nil {
+                $0.focused = rest.panes[0]
+                $0.zoomed = nil
+            }
+        }
+        insert(taken, beside: target, side: side, focus: pane)
+        tidyFloats()
+    }
+
+    private mutating func movePaneToEdge(_ pane: PaneId, tab id: TabId, side: Direction) {
+        guard let source = tab(containing: pane), tabs.contains(where: { $0.id == id }) else { return }
+        if source.id == id, source.root == .leaf(pane) { return }
+        release(pane)
+        if !detach(pane, from: source.id) { tabs.removeAll { $0.id == source.id } }
+        // A third of the edge: the pane joins the tab's panes rather than halving them.
+        updateTab(id) {
+            $0.root = side.isForward
+                ? .split(axis: side.axis, ratio: 2.0 / 3.0, first: $0.root, second: .leaf(pane))
+                : .split(axis: side.axis, ratio: 1.0 / 3.0, first: .leaf(pane), second: $0.root)
+            $0.focused = pane
+            $0.zoomed = nil
+        }
+        activeTabId = id
+        tidyFloats()
     }
 
     /// Takes `pane` out of a tab that keeps others; false when it is the tab's only pane.
@@ -256,6 +517,7 @@ public struct Session: Hashable, Sendable, Codable {
 
     private mutating func insert(_ node: Node, beside target: PaneId, side: Direction, focus: PaneId) {
         guard let tab = tab(containing: target) else { return }
+        adopt(target, node.panes)
         updateTab(tab.id) {
             $0.root = $0.root.replacing(target, with: side.isForward
                 ? .split(axis: side.axis, ratio: 0.5, first: .leaf(target), second: node)
