@@ -1432,6 +1432,9 @@ const PANE_TICK: Duration = Duration::from_millis(500);
 /// How long after its last event a pane without an agent keeps ticking: long enough to see a
 /// program that was just started become an agent.
 const PANE_ACTIVE: Duration = Duration::from_secs(5);
+/// Title and directory changes reach clients at most this often per pane (the last one always
+/// arrives): a program that sets its title in a loop must not flood every client.
+const META_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Per-pane task: turns VT events, termios changes, agent timers and process exit into
 /// metadata, echo hints and agent events.
@@ -1453,6 +1456,8 @@ async fn pane_task(
     let mut screen_dirty = false;
     let mut detect_tick = 0u32;
     let codex_lookup = Arc::new(AtomicBool::new(false));
+    let mut meta_sent: Option<Instant> = None;
+    let mut meta_due: Option<tokio::time::Instant> = None;
     refresh_hint(&core, &entry);
     loop {
         let ticking = Instant::now() < active_until || lock(&entry.agent).is_some();
@@ -1479,9 +1484,26 @@ async fn pane_task(
                         refresh_hint(&core, &entry);
                         crate::askpass::detect(&core, &entry);
                     }
-                    VtEvent::Osc(osc) => handle_osc(&core, &entry, osc),
+                    VtEvent::Osc(osc) => {
+                        if handle_osc(&core, &entry, osc) && meta_due.is_none() {
+                            match meta_sent {
+                                Some(t) if t.elapsed() < META_INTERVAL => {
+                                    meta_due = Some((t + META_INTERVAL).into());
+                                }
+                                _ => {
+                                    meta_sent = Some(Instant::now());
+                                    core.emit(Event::PaneMeta(id));
+                                }
+                            }
+                        }
+                    }
                     VtEvent::Command(update) => handle_command(&core, &entry, update),
                 }
+            }
+            () = sleep_until_some(meta_due) => {
+                meta_due = None;
+                meta_sent = Some(Instant::now());
+                core.emit(Event::PaneMeta(id));
             }
             () = entry.agent_attached.notified() => {}
             changed = echo.changed() => {
@@ -1537,21 +1559,34 @@ async fn pane_task(
     }
 }
 
-fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
+/// Sleeps until `at`, or forever without one.
+async fn sleep_until_some(at: Option<tokio::time::Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Applies an OSC sequence. Returns whether the pane's title or directory changed, which the
+/// caller pushes to clients (rate-limited).
+fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) -> bool {
     let id = entry.pane.id;
     match osc {
         Osc::Title(title) => {
-            lock(&entry.meta).title = title;
-            core.emit(Event::PaneMeta(id));
+            let mut meta = lock(&entry.meta);
+            let changed = meta.title != title;
+            meta.title = title;
+            return changed;
         }
         Osc::Cwd(cwd) => {
+            let changed = lock(&entry.meta).cwd.as_deref() != Some(cwd.as_str());
             lock(&entry.meta).cwd = Some(cwd.clone());
             let mut record = lock(&entry.record);
             if record.cwd.as_deref() != Some(cwd.as_str()) {
                 record.cwd = Some(cwd);
                 core.mark_dirty();
             }
-            core.emit(Event::PaneMeta(id));
+            return changed;
         }
         Osc::Clipboard(text) => {
             // Only the device that typed into the pane last copies (vim's `y`, tmux's copy
@@ -1585,6 +1620,7 @@ fn handle_osc(core: &Core, entry: &PaneEntry, osc: Osc) {
             core.agent_event(id, event);
         }
     }
+    false
 }
 
 fn handle_command(core: &Core, entry: &PaneEntry, update: CommandUpdate) {
