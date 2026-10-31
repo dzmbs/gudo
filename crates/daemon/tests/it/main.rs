@@ -1,5 +1,6 @@
 //! End-to-end tests: daemon and client-core in one process over iroh (relays off).
 
+mod access;
 mod agents;
 mod approvals;
 mod artifacts;
@@ -17,10 +18,9 @@ mod notify;
 mod presence;
 mod program_status;
 mod pull;
+mod redteam;
 mod relays;
 mod repos;
-mod access;
-mod redteam;
 mod security;
 mod shell;
 mod support;

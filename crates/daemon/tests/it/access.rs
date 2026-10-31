@@ -254,7 +254,9 @@ async fn a_paired_device_connects_while_strangers_fill_the_pre_hello_slots() {
     }
     // The next stranger is turned away…
     let endpoint = stranger().await;
-    let fifth = endpoint.connect(addr.clone(), client_core::proto::ALPN).await;
+    let fifth = endpoint
+        .connect(addr.clone(), client_core::proto::ALPN)
+        .await;
     if let Ok(conn) = fifth {
         tokio::time::timeout(Duration::from_secs(5), conn.closed())
             .await

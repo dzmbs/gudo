@@ -205,7 +205,9 @@ impl Store {
         let now = now_millis();
         let kept = path.with_file_name(format!(
             "{}.unreadable-{now}",
-            path.file_name().and_then(|n| n.to_str()).unwrap_or(STORE_FILE)
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(STORE_FILE)
         ));
         let moved = std::fs::rename(path, &kept);
         match &moved {
@@ -291,7 +293,11 @@ impl Store {
 
 /// An owner device's display name: what it called itself, or "owner" until it said.
 fn owner_name(name: String) -> String {
-    if name.is_empty() { "owner".into() } else { name }
+    if name.is_empty() {
+        "owner".into()
+    } else {
+        name
+    }
 }
 
 fn unhex_vec(s: &str) -> Option<Vec<u8>> {
@@ -555,9 +561,8 @@ impl Mp {
         let removed = removed_at(&self.identity, &store, device);
         store.grants.iter().any(|g| {
             g.bound.contains(&device_hex)
-                && removed.is_none_or(|t| {
-                    g.redeemed_at.get(&device_hex).is_some_and(|&at| at > t.0)
-                })
+                && removed
+                    .is_none_or(|t| g.redeemed_at.get(&device_hex).is_some_and(|&at| at > t.0))
         })
     }
 
@@ -1064,7 +1069,11 @@ impl Mp {
                 || !self.chain_live(
                     store,
                     &[],
-                    &chain.links.iter().map(|l| l.grant.issuer).collect::<Vec<_>>(),
+                    &chain
+                        .links
+                        .iter()
+                        .map(|l| l.grant.issuer)
+                        .collect::<Vec<_>>(),
                     chain.links[0].grant.issued_at,
                     leaf.issuer,
                     None,
@@ -1130,7 +1139,9 @@ impl Mp {
                 name: g.name.clone(),
                 first_seen: UnixMillis(g.first_seen),
                 grant_id: unhex(&g.grant).map(GrantId),
-                revoked: store.guest_removed_at(device).is_some_and(|t| g.joined <= t.0),
+                revoked: store
+                    .guest_removed_at(device)
+                    .is_some_and(|t| g.joined <= t.0),
                 connected: connected(device),
             })
         }));

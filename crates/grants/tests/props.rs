@@ -348,12 +348,24 @@ fn non_canonical_signatures_are_refused() {
     }
     assert_eq!(carry, 0);
     assert_ne!(forged, sig);
-    assert!(!grants::verify_signature(key.device_id(), b"grant", &forged));
+    assert!(!grants::verify_signature(
+        key.device_id(),
+        b"grant",
+        &forged
+    ));
     // Nor are short, long or all-zero signatures.
     let long = [sig.clone(), vec![0]].concat();
-    assert!(!grants::verify_signature(key.device_id(), b"grant", &sig[..63]));
+    assert!(!grants::verify_signature(
+        key.device_id(),
+        b"grant",
+        &sig[..63]
+    ));
     assert!(!grants::verify_signature(key.device_id(), b"grant", &long));
-    assert!(!grants::verify_signature(key.device_id(), b"grant", &[0; 64]));
+    assert!(!grants::verify_signature(
+        key.device_id(),
+        b"grant",
+        &[0; 64]
+    ));
 }
 
 /// A removed device voids every chain it is part of whose root predates the removal, as

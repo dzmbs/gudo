@@ -101,8 +101,7 @@ impl Gate {
                     && (source.is_none() || per.0 < l.handshakes_per_addr)
             }
             Stage::Stranger => {
-                counts.strangers < l.strangers
-                    && (source.is_none() || per.1 < l.strangers_per_addr)
+                counts.strangers < l.strangers && (source.is_none() || per.1 < l.strangers_per_addr)
             }
         };
         if !fits {
@@ -120,7 +119,14 @@ impl Gate {
     /// refuses it.
     pub fn arrive(self: &Arc<Self>, ip: Option<IpAddr>, known: bool) -> Option<Slot> {
         let source = ip.map(Source::from);
-        self.take(source, if known { Stage::Known } else { Stage::Handshake })
+        self.take(
+            source,
+            if known {
+                Stage::Known
+            } else {
+                Stage::Handshake
+            },
+        )
     }
 }
 

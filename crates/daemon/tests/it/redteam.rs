@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use client_core::grants::{DeviceKey, GrantSpec, issue};
 use client_core::knock::knock;
-use client_core::proto::{
-    History, Invite, InviteTerms, PaneId, Roles, Scope, UnixMillis,
-};
+use client_core::proto::{History, Invite, InviteTerms, PaneId, Roles, Scope, UnixMillis};
 use client_core::{ClientConfig, ConnectOptions, MultiplayerEvent, RelayMode, now_millis};
 
 use crate::support::{TestClient, start, ticket};

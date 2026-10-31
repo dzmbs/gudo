@@ -443,7 +443,10 @@ async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
         // A relay names the peer's key up front; the handshake below still proves it.
         let known = named.is_some_and(|d| core.mp.known_device(d));
         let Some(slot) = gate.arrive(ip, known) else {
-            tracing::debug!(?ip, "refusing incoming connection: too many unauthenticated");
+            tracing::debug!(
+                ?ip,
+                "refusing incoming connection: too many unauthenticated"
+            );
             incoming.refuse();
             continue;
         };
