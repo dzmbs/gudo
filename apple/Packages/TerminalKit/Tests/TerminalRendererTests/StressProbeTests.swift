@@ -272,5 +272,29 @@ struct StressProbeTests {
         }
         print("PROBE search during flood: setSearch \(setCost)s, worst frame \(worst)s over \(frames) frames, status \(String(describing: surface.search?.status))")
     }
+
+    /// Reflow of a full scrollback of long wrapped lines on resize (runs on the main thread for
+    /// local panes), and an unterminated OSC of 100 MB.
+    @Test func probeReflowAndUnterminatedOSC() throws {
+        let terminal = Terminal(cols: 200, rows: 50) { _ in }
+        let line = Array((String(repeating: "wrapped text 😀 日本 ", count: 60) + "\r\n").utf8)
+        var block: [UInt8] = []
+        for _ in 0..<500 { block += line }
+        for _ in 0..<40 { terminal.write(block) }
+        var worst = 0.0
+        for i in 0..<20 {
+            let t = CACurrentMediaTime()
+            terminal.resize(cols: UInt16(80 + (i * 37) % 200), rows: UInt16(30 + i % 20), cellWidth: 10, cellHeight: 20)
+            worst = max(worst, CACurrentMediaTime() - t)
+        }
+        print("PROBE reflow full scrollback: worst resize \(worst)s")
+        let start = footprint()
+        let t0 = CACurrentMediaTime()
+        terminal.write(Array("\u{1b}]2;".utf8))
+        let chunk = [UInt8](repeating: 0x41, count: 1 << 20)
+        for _ in 0..<100 { terminal.write(chunk) }
+        terminal.write(Array("\u{7}after".utf8))
+        print("PROBE unterminated OSC 100 MB: \(CACurrentMediaTime() - t0)s, footprint +\((footprint() - start) >> 20) MB, title length \(terminal.title.count)")
+    }
 }
 
