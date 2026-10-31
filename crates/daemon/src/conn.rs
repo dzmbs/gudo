@@ -37,6 +37,9 @@ struct ConnState {
     sizes: HashMap<PaneId, PaneSize>,
     subs: HashMap<PaneId, Sub>,
     resume: HashMap<PaneId, ResumePoint>,
+    /// The metadata last sent per pane: most changes the core announces (agent events, a
+    /// title set again) leave what this client sees as it was.
+    sent_meta: HashMap<PaneId, proto::PaneMeta>,
 }
 
 impl ConnState {
@@ -402,7 +405,10 @@ async fn serve_knock(
         _ => {}
     }
     let id = match core.mp.knock(&core, knocker, ctl.clone(), conn.clone()) {
-        Ok(id) => id,
+        Ok(id) => {
+            core.client_arrived.notify_waiters();
+            id
+        }
         Err(reason) => {
             let _ = ctl.send(ServerCtl::Refused { reason });
             drop(ctl);
@@ -836,14 +842,20 @@ impl Client {
                 if self.in_session(p)
                     && let Some(meta) = self.core.pane_meta(p)
                 {
-                    self.send(ServerCtl::PaneMeta(meta));
+                    let mut state = lock(&self.state);
+                    if state.sent_meta.get(&p) != Some(&meta) {
+                        state.sent_meta.insert(p, meta.clone());
+                        drop(state);
+                        self.send(ServerCtl::PaneMeta(meta));
+                    }
                 }
             }
             Event::PaneClosed(p) => {
-                let had = lock(&self.state)
-                    .subs
-                    .remove(&p)
-                    .map(|sub| sub.task.abort());
+                let had = {
+                    let mut state = lock(&self.state);
+                    state.sent_meta.remove(&p);
+                    state.subs.remove(&p).map(|sub| sub.task.abort())
+                };
                 // A scoped guest is only told about panes it could see.
                 if had.is_some() || self.authz.scope == Scope::Daemon {
                     self.send(ServerCtl::PaneClosed { pane_id: p });
@@ -1947,6 +1959,10 @@ impl Client {
                 let pane_id = pane_id.filter(|&p| self.pane_allowed(p));
                 if let Some(pane) = pane_id {
                     crate::ws::pane_focused(&self.core, pane);
+                    // A quiet terminal stopped polling its modes: fresh ones before typing.
+                    if let Some(entry) = self.core.pane(pane) {
+                        entry.pane.pty().refresh_echo();
+                    }
                 }
                 lock(&self.state).focus = pane_id;
                 self.core.mp.set_focus(&self.core, self.id, pane_id);
@@ -2556,7 +2572,12 @@ impl Client {
         if let Some(gone) = missing {
             tracing::info!(conn = %self.id, requested = %gone, attached = %session, "requested session is gone; attached another");
         }
-        lock(&self.state).session = Some(session);
+        {
+            let mut state = lock(&self.state);
+            state.session = Some(session);
+            // A client may drop what it knew about another session's panes.
+            state.sent_meta.clear();
+        }
         self.core.attach(self.id, session);
         self.send(if self.caps.contains(Caps::ATTACH_RESULT) {
             ServerCtl::AttachResult(Ok(Attachment {
@@ -2653,6 +2674,7 @@ impl Client {
             return;
         };
         let pane = Arc::clone(&entry.pane);
+        pane.pty().refresh_echo();
         let viewer = self.viewer(pane_id);
         // A since-join guest never resumes from before its view opened: the ring would
         // replay output it must not see.

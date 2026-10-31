@@ -139,6 +139,11 @@ public final class StreamEchoInference: Sendable {
         }
     }
 
+    /// Whether keystrokes wait for their echo: `tick()` has something to judge.
+    public var isWaiting: Bool {
+        state.withLock { !$0.pending.isEmpty }
+    }
+
     /// Judges keystrokes whose echo never came.
     public func tick() -> [PredictionUpdate] {
         let t = now()

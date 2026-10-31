@@ -363,9 +363,10 @@ public final class DaemonConnection: HostConnection {
             }
             pushView()
         case .paneMeta(let meta):
-            self.meta[PaneId(meta.paneId)] = meta
+            // Assigning an equal value still invalidates every view that reads `meta`.
+            if self.meta[PaneId(meta.paneId)] != meta { self.meta[PaneId(meta.paneId)] = meta }
         case .programStatus(let pane, let status):
-            programs[PaneId(pane)] = status
+            if programs[PaneId(pane)] != status { programs[PaneId(pane)] = status }
         case .paneClosed(let pane):
             meta[PaneId(pane)] = nil
             programs[PaneId(pane)] = nil

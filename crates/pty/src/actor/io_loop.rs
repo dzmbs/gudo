@@ -17,12 +17,24 @@ use crate::termios::EchoState;
 const READ_BUF: usize = 64 * 1024;
 /// Most bytes read per loop iteration, so a flooding child cannot starve input.
 const READ_BUDGET: usize = 1024 * 1024;
+/// A macOS PTY hands out at most ~1 KiB per read, so a flooding child leaves the master empty
+/// between reads for a moment. After a full read, retry this many times before going back to
+/// `poll`: most gaps close within a few retries, which saves a sleep and a wakeup per KiB
+/// (Ghostty's `bridge_spin_max`, src/termio/Exec.zig).
+const BRIDGE_RETRIES: u32 = 16;
+/// A read at least this big suggests more is coming.
+const FULL_READ: usize = 1024;
 /// After output or input, re-check the echo flags this often...
 const ACTIVE_POLL: Duration = Duration::from_millis(25);
 /// ...for this long...
 const ACTIVE_WINDOW: Duration = Duration::from_millis(500);
-/// ...and then this often until the next activity.
+/// ...then this often...
 const IDLE_POLL: Duration = Duration::from_secs(1);
+/// ...for this long, and then not at all until the next activity or an explicit refresh
+/// ([`PtyActor::refresh_echo`](super::PtyActor::refresh_echo)). Programs change modes around
+/// their own output or the user's input, both of which re-check at once: a quiet terminal
+/// costs no wakeups.
+const IDLE_WINDOW: Duration = Duration::from_secs(30);
 
 /// The write end of the self-pipe that interrupts the I/O thread's `poll`.
 pub(super) struct Waker(OwnedFd);
@@ -80,21 +92,24 @@ impl IoLoop {
     pub(super) fn run(mut self) {
         let mut buf = vec![0u8; READ_BUF];
         let mut last_activity = Instant::now();
+        let mut echo_read: Option<Instant> = None;
         loop {
             if self.shared.shutdown.load(Ordering::Acquire) || !self.take_input() {
                 break;
             }
-            if !self.pending.is_empty() {
+            let typed = !self.pending.is_empty();
+            if typed {
                 last_activity = Instant::now();
                 self.flush_input();
             }
-            self.refresh_echo();
+            // Input (and wakes) re-read at once; a stream of output at most every ACTIVE_POLL,
+            // not once per read.
+            if typed || echo_read.is_none_or(|t| t.elapsed() >= ACTIVE_POLL) {
+                self.refresh_echo();
+                echo_read = Some(Instant::now());
+            }
 
-            let timeout = if last_activity.elapsed() < ACTIVE_WINDOW {
-                ACTIVE_POLL
-            } else {
-                IDLE_POLL
-            };
+            let timeout = poll_interval(last_activity.elapsed());
             let ready = match self.poll(timeout) {
                 Ok(ready) => ready,
                 Err(err) => {
@@ -104,6 +119,8 @@ impl IoLoop {
             };
             if ready.wake {
                 drain(&self.wake);
+                // `refresh_echo` asked for a fresh read.
+                echo_read = None;
             }
             if ready.writable {
                 self.flush_input();
@@ -162,6 +179,8 @@ impl IoLoop {
 
     fn read_output(&mut self, buf: &mut [u8], hangup: bool) -> ReadOutcome {
         let mut total = 0;
+        let mut last = 0;
+        let mut retries = 0;
         while total < READ_BUDGET {
             match rustix::io::read(&*self.master, &mut *buf) {
                 // Linux reports a closed slave as EIO, macOS as a 0-byte read.
@@ -169,9 +188,15 @@ impl IoLoop {
                 Ok(n) => {
                     self.publish(&buf[..n]);
                     total += n;
+                    last = n;
+                    retries = 0;
                 }
                 Err(Errno::INTR) => {}
                 Err(Errno::AGAIN) if hangup && total == 0 => return ReadOutcome::Eof,
+                Err(Errno::AGAIN) if last >= FULL_READ && retries < BRIDGE_RETRIES => {
+                    retries += 1;
+                    std::hint::spin_loop();
+                }
                 Err(Errno::AGAIN) => break,
                 Err(err) => {
                     tracing::warn!(%err, "pty read failed; closing");
@@ -209,7 +234,7 @@ impl IoLoop {
         });
     }
 
-    fn poll(&self, timeout: Duration) -> rustix::io::Result<Ready> {
+    fn poll(&self, timeout: Option<Duration>) -> rustix::io::Result<Ready> {
         let mut master_events = PollFlags::IN;
         if !self.pending.is_empty() {
             master_events |= PollFlags::OUT;
@@ -218,8 +243,9 @@ impl IoLoop {
             PollFd::new(&*self.master, master_events),
             PollFd::new(&self.wake, PollFlags::IN),
         ];
-        let timeout = Timespec::try_from(timeout).expect("constant timeouts fit in a timespec");
-        match rustix::event::poll(&mut fds, Some(&timeout)) {
+        let timeout =
+            timeout.map(|t| Timespec::try_from(t).expect("constant timeouts fit in a timespec"));
+        match rustix::event::poll(&mut fds, timeout.as_ref()) {
             Ok(_) => {}
             Err(Errno::INTR) => return Ok(Ready::default()),
             Err(err) => return Err(err),
@@ -234,6 +260,18 @@ impl IoLoop {
             hangup: master.intersects(PollFlags::HUP | PollFlags::ERR),
             wake: !fds[1].revents().is_empty(),
         })
+    }
+}
+
+/// How long to wait for I/O before re-reading the echo flags, by time since activity; `None`
+/// waits for I/O or a wake.
+fn poll_interval(since_activity: Duration) -> Option<Duration> {
+    if since_activity < ACTIVE_WINDOW {
+        Some(ACTIVE_POLL)
+    } else if since_activity < IDLE_WINDOW {
+        Some(IDLE_POLL)
+    } else {
+        None
     }
 }
 

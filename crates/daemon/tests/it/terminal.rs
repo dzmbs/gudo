@@ -268,3 +268,35 @@ async fn search_and_links_cover_the_whole_scrollback() {
     drop(c);
     daemon.shutdown().await;
 }
+
+/// Metadata is pushed when it changes, not every time the core mentions the pane: agents set
+/// the same title and report events many times a second, and every push re-renders sidebars.
+#[tokio::test(flavor = "multi_thread")]
+async fn unchanged_pane_metadata_is_not_pushed_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = c.attach_and_follow().await;
+    c.type_line(pane, r"printf '\033]0;same\007'; echo first-$((1+1))");
+    c.wait_text(pane, "first-2").await;
+    c.until("title", |c| {
+        c.metas.get(&pane).is_some_and(|m| m.title == "same")
+    })
+    .await;
+    let pushes = c.meta_events;
+    for i in 0..5 {
+        c.type_line(
+            pane,
+            &format!(r"printf '\033]0;same\007'; echo again-{i}-$((1+1))"),
+        );
+        c.wait_text(pane, &format!("again-{i}-2")).await;
+    }
+    c.type_line(pane, r"printf '\033]0;other\007'; echo last-$((1+1))");
+    c.until("new title", |c| {
+        c.metas.get(&pane).is_some_and(|m| m.title == "other")
+    })
+    .await;
+    assert_eq!(c.meta_events, pushes + 1, "only the real change is pushed");
+    drop(c);
+    daemon.shutdown().await;
+}

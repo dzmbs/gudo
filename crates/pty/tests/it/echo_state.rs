@@ -165,3 +165,17 @@ async fn python_getpass() {
         "{rest:?}"
     );
 }
+
+/// A mode change with no output and no input (past the active polling window) is seen as soon
+/// as someone asks: quiet terminals do not poll their modes forever.
+#[tokio::test]
+async fn refresh_echo_reads_a_silent_mode_change() {
+    let pty = spawn(&["/bin/sh", "-c", "sleep 1; stty -echo; sleep 100"]);
+    tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+    pty.refresh_echo();
+    let deadline = Instant::now() + std::time::Duration::from_millis(150);
+    while pty.echo_state().echo && Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(pty.echo_state(), HIDDEN);
+}

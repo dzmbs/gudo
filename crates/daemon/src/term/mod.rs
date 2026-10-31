@@ -592,7 +592,7 @@ impl Ctx {
         let foreground = self
             .core
             .assist
-            .foreground(id)
+            .foreground(entry)
             .map(|f| json!({ "pid": f.pid, "name": f.name }));
         let session = self.core.session_of_pane(id).unwrap_or_default();
         let tab = lock(&self.core.layout).snapshot(session);

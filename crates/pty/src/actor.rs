@@ -456,9 +456,16 @@ impl PtyActor {
     /// Returns the slave's echo and canonical-mode flags as last observed.
     ///
     /// The I/O thread re-reads them after every burst of output or input, every 25 ms for half
-    /// a second after activity, and once a second when idle.
+    /// a second after activity, once a second for the next 30 seconds, and after that only on
+    /// [`refresh_echo`](Self::refresh_echo).
     pub fn echo_state(&self) -> EchoState {
         *self.shared.echo.borrow()
+    }
+
+    /// Asks the I/O thread to re-read the echo flags now, for a terminal that has been quiet
+    /// long enough that it stopped polling them (before someone starts typing into it).
+    pub fn refresh_echo(&self) {
+        self.waker.wake();
     }
 
     /// Returns a receiver that is notified whenever the [`EchoState`] changes.
@@ -472,6 +479,12 @@ impl PtyActor {
     /// if the group or its leader has gone away.
     pub fn foreground_process(&self) -> Option<ForegroundProcess> {
         foreground::foreground_process(&*self.master, self.pid())
+    }
+
+    /// Returns the terminal's foreground process group id: one syscall, for telling cheaply
+    /// whether [`foreground_process`](Self::foreground_process) may have changed.
+    pub fn foreground_pgid(&self) -> Option<u32> {
+        foreground::foreground_pgid(&*self.master, self.pid())
     }
 }
 

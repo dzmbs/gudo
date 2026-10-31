@@ -27,7 +27,12 @@ public final class TerminalSurface {
     }
 
     public let terminal: Terminal
-    public let layer = CAMetalLayer()
+    /// Replaced with a fresh one when the surface goes off screen (`releaseGPUResources`), which
+    /// is the only way to give back the drawables it holds; hosts re-install it from
+    /// `onLayerReplaced`.
+    public private(set) var layer = CAMetalLayer()
+    /// The layer was replaced: swap `old` for `new` in the host's layer tree.
+    public var onLayerReplaced: ((_ old: CAMetalLayer, _ new: CAMetalLayer) -> Void)?
     public let stats = FrameStats()
     /// Called when the cell grid changes size, e.g. to send TIOCSWINSZ to the PTY.
     public var onGridChange: ((Grid) -> Void)?
@@ -44,6 +49,7 @@ public final class TerminalSurface {
     public var isFocused = true {
         didSet {
             guard isFocused != oldValue else { return }
+            displayLink?.preferredFrameRateRange = frameRateRange
             restartBlink()
             invalidateOverlay()
         }
@@ -115,7 +121,7 @@ public final class TerminalSurface {
     private var animationWake: Task<Void, Never>?
 
     private let renderer: MetalRenderer
-    private var fonts: FontGrid?
+    private(set) var fonts: FontGrid?
     private let state = RenderState()
     private var builder = FrameBuilder()
     private var frame = FrameContents()
@@ -128,6 +134,8 @@ public final class TerminalSurface {
     private var lastOverlay = FrameOverlay()
     private var overlayDirty = false
     private var offscreenTexture: MTLTexture?
+    /// The GPU side was dropped (`releaseGPUResources`): the next frame rebuilds it.
+    private var gpuReleased = false
     private nonisolated let wakePending = Atomic<Bool>(false)
     private nonisolated let outputPending = Atomic<Bool>(false)
     /// Output arrived since the search last caught up (its own flag: the predictor takes the other).
@@ -144,6 +152,10 @@ public final class TerminalSurface {
         self.appearance = appearance
         renderer = try MetalRenderer()
         builder.style = Self.frameStyle(appearance)
+        configure(layer)
+    }
+
+    private func configure(_ layer: CAMetalLayer) {
         layer.device = renderer.device
         layer.pixelFormat = MetalRenderer.pixelFormat
         layer.colorspace = CGColorSpace(name: CGColorSpace.displayP3)
@@ -196,12 +208,20 @@ public final class TerminalSurface {
         stopDisplayLink()
         let target = DisplayLinkTarget(surface: self)
         let link = make(target, #selector(DisplayLinkTarget.tick(_:)))
-        // ProMotion: up to 120 Hz while content changes; the link pauses when idle.
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.preferredFrameRateRange = frameRateRange
         link.add(to: .main, forMode: .common)
         displayLinkTarget = target
         displayLink = link
         restartBlink()
+    }
+
+    /// ProMotion's 120 Hz for the terminal being typed in; 60 Hz for the others, which only
+    /// stream output (the fastest view sets the display's rate, WWDC22 10083). The link pauses
+    /// when nothing changes either way.
+    private var frameRateRange: CAFrameRateRange {
+        isFocused
+            ? CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+            : CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
     }
 
     public func stopDisplayLink() {
@@ -239,7 +259,7 @@ public final class TerminalSurface {
         lastLayout = (size, scale)
         if fonts == nil || layer.contentsScale != scale {
             layer.contentsScale = scale
-            fonts = FontGrid(pixelSize: appearance.fontSize * scale, family: appearance.fontFamily)
+            fonts = FontGrid.shared(pixelSize: appearance.fontSize * scale, family: appearance.fontFamily)
             builder = FrameBuilder()
             builder.style = Self.frameStyle(appearance)
         }
@@ -911,6 +931,7 @@ public final class TerminalSurface {
     @discardableResult
     public func renderIfDirty(offscreen: Bool = false) -> Bool {
         guard let fonts, pixelSize.width > 0 else { return false }
+        gpuReleased = false
         let start = CACurrentMediaTime()
         scheduleAnimationFrame(terminal.tickKittyAnimations(nowMs: Self.nowMs()))
         state.update(from: terminal)
@@ -992,6 +1013,33 @@ public final class TerminalSurface {
 
     /// Whether the last frame had SGR 5 text.
     private var builderHasBlinkingText: Bool { builder.hasBlinkingText }
+
+    // MARK: Off screen
+
+    /// Frees what a surface that is not on screen does not need: the layer and its drawables
+    /// (the bulk: up to three frames of the pane's pixels, plus the one it shows), the
+    /// per-frame GPU buffers, the offscreen target and the built frame. The terminal and the
+    /// shared glyph atlases stay, so the next frame rebuilds everything at once.
+    public func releaseGPUResources() {
+        guard !gpuReleased, pixelSize.width > 0 else { return }
+        gpuReleased = true
+        let old = layer
+        let fresh = CAMetalLayer()
+        configure(fresh)
+        fresh.contentsScale = old.contentsScale
+        fresh.frame = old.frame
+        fresh.autoresizingMask = old.autoresizingMask
+        fresh.drawableSize = pixelSize
+        layer = fresh
+        onLayerReplaced?(old, fresh)
+        previousDrawableSize = .zero
+        renderer.releaseBuffers()
+        offscreenTexture = nil
+        frame = FrameContents()
+        builder = FrameBuilder()
+        builder.style = Self.frameStyle(appearance)
+        needsFullRender = true
+    }
 
     // MARK: Snapshots
 

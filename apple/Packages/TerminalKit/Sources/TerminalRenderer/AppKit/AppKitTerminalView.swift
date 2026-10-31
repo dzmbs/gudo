@@ -57,6 +57,9 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
+        // Off screen the surface swaps in a fresh layer to give back its drawables; set after
+        // `wantsLayer`, it stays this view's backing layer.
+        surface.onLayerReplaced = { [weak self] _, new in self?.layer = new }
         // Off screen until it is first responder of a key window: a hollow, steady cursor.
         surface.isFocused = false
         registerForDraggedTypes([.string, .fileURL, .png, .tiff, NSPasteboard.PasteboardType("public.jpeg")])
@@ -102,6 +105,22 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
                 MainActor.assumeIsolated { self?.updateFocus() }
             })
         }
+        // A window nobody can see (covered, minimized, another Space) draws nothing: give back
+        // the GPU memory until it shows again.
+        keyObservers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: newWindow, queue: .main
+        ) { [weak self, weak newWindow] _ in
+            MainActor.assumeIsolated {
+                guard let self, let newWindow else { return }
+                guard self.window === newWindow else { return }
+                if newWindow.occlusionState.contains(.visible) {
+                    self.surface.startDisplayLink { target, selector in self.displayLink(target: target, selector: selector) }
+                } else {
+                    self.surface.stopDisplayLink()
+                    self.surface.releaseGPUResources()
+                }
+            }
+        })
     }
 
     override public func viewDidMoveToWindow() {
@@ -110,6 +129,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         updateFocus()
         guard window != nil else {
             surface.stopDisplayLink()
+            surface.releaseGPUResources()
             return
         }
         relayout()

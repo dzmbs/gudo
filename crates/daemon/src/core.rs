@@ -1,12 +1,12 @@
 //! Daemon-wide state: the layout, the panes, the event bus, and the operations on them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use agents::LaunchMode;
 use proto::{
@@ -161,6 +161,10 @@ pub(crate) struct PaneEntry {
     pub meta: Mutex<MetaState>,
     pub record: Mutex<PaneRecord>,
     pub agent: Mutex<Option<AgentRuntime>>,
+    /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
+    pub agent_attached: Notify,
+    /// Periodic ticks the pane task has run.
+    ticks: AtomicU64,
     task: Mutex<Option<AbortHandle>>,
     /// When the pane's process started, for matching a Codex rollout to it.
     launched_at: SystemTime,
@@ -243,6 +247,8 @@ pub(crate) struct Core {
     /// Auto-approve rules and the open requests' extras (`approve`).
     pub approvals: crate::approve::Approvals,
     connected: AtomicUsize,
+    /// Signalled when a client connects or knocks, so work done only for clients resumes.
+    pub client_arrived: Notify,
 }
 
 impl Core {
@@ -285,6 +291,7 @@ impl Core {
             browser: crate::browser::Browser::install(&cfg.state_dir, &cfg.hook_bin()),
             cfg,
             connected: AtomicUsize::new(0),
+            client_arrived: Notify::new(),
         })
     }
 
@@ -293,6 +300,7 @@ impl Core {
         if up {
             self.connected.fetch_add(1, Ordering::Relaxed);
             self.ws.ports.trigger.notify_one();
+            self.client_arrived.notify_waiters();
         } else {
             self.connected.fetch_sub(1, Ordering::Relaxed);
         }
@@ -377,6 +385,34 @@ impl Core {
         lock(&self.attached).insert(conn, session);
         lock(&self.layout).touch(session);
         self.emit(Event::Sessions);
+    }
+
+    /// The panes of every session some connection is attached to.
+    pub fn attached_panes(&self) -> Vec<(PaneId, Arc<PaneEntry>)> {
+        let mut sessions: Vec<SessionId> = lock(&self.attached).values().copied().collect();
+        sessions.sort_unstable();
+        sessions.dedup();
+        let ids: Vec<PaneId> = {
+            let layout = lock(&self.layout);
+            sessions
+                .iter()
+                .filter_map(|&s| layout.session(s))
+                .flat_map(|s| &s.tabs)
+                .flat_map(|t| crate::layout::leaves(&t.root))
+                .collect()
+        };
+        let panes = lock(&self.panes);
+        ids.into_iter()
+            .filter_map(|id| Some((id, Arc::clone(panes.get(&id)?))))
+            .collect()
+    }
+
+    /// Panes some connection shows (focused or visible).
+    pub fn viewed_panes(&self) -> HashSet<PaneId> {
+        lock(&self.views)
+            .values()
+            .flat_map(|(_, panes)| panes.iter().copied())
+            .collect()
     }
 
     /// The session `conn` is attached to.
@@ -1120,6 +1156,8 @@ impl Core {
             }),
             record: Mutex::new(record),
             agent: Mutex::new(agent.map(|(_, _, rt)| rt)),
+            agent_attached: Notify::new(),
+            ticks: AtomicU64::new(0),
             task: Mutex::new(None),
             launched_at: SystemTime::now(),
         });
@@ -1371,6 +1409,12 @@ fn refresh_hint(core: &Core, entry: &PaneEntry) {
     }
 }
 
+/// How often a pane task checks for agents and feeds agent timers.
+const PANE_TICK: Duration = Duration::from_millis(500);
+/// How long after its last event a pane without an agent keeps ticking: long enough to see a
+/// program that was just started become an agent.
+const PANE_ACTIVE: Duration = Duration::from_secs(5);
+
 /// Per-pane task: turns VT events, termios changes, agent timers and process exit into
 /// metadata, echo hints and agent events.
 async fn pane_task(
@@ -1383,16 +1427,21 @@ async fn pane_task(
     let mut echo = pane.echo_updates();
     let exit = pane.pty().wait();
     tokio::pin!(exit);
-    let mut agent_tick = tokio::time::interval(Duration::from_millis(500));
+    let mut agent_tick = tokio::time::interval(PANE_TICK);
     agent_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Ticks run while an agent is attached or for a while after the pane did anything: a
+    // quiet shell pane costs no wakeups.
+    let mut active_until = Instant::now() + PANE_ACTIVE;
     let mut screen_dirty = false;
     let mut detect_tick = 0u32;
     let codex_lookup = Arc::new(AtomicBool::new(false));
     refresh_hint(&core, &entry);
     loop {
+        let ticking = Instant::now() < active_until || lock(&entry.agent).is_some();
         tokio::select! {
             event = vt_events.recv() => {
                 let Some(event) = event else { break };
+                active_until = Instant::now() + PANE_ACTIVE;
                 match event {
                     VtEvent::Reply(bytes) => {
                         let _ = pane.pty().try_write(bytes);
@@ -1416,10 +1465,12 @@ async fn pane_task(
                     VtEvent::Command(update) => handle_command(&core, &entry, update),
                 }
             }
+            () = entry.agent_attached.notified() => {}
             changed = echo.changed() => {
                 if changed.is_err() {
                     continue;
                 }
+                active_until = Instant::now() + PANE_ACTIVE;
                 refresh_hint(&core, &entry);
                 crate::askpass::detect(&core, &entry);
             }
@@ -1434,7 +1485,8 @@ async fn pane_task(
                 core.pane_exited(id);
                 break;
             }
-            _ = agent_tick.tick() => {
+            _ = agent_tick.tick(), if ticking => {
+                entry.ticks.fetch_add(1, Ordering::Relaxed);
                 detect_tick += 1;
                 if detect_tick.is_multiple_of(2) {
                     if lock(&entry.agent).is_none() {
@@ -1714,5 +1766,47 @@ fn notice_text(message: &str) -> String {
     match message.char_indices().nth(MAX) {
         Some((cut, _)) => format!("{}…", &message[..cut]),
         None => message.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A quiet shell pane with no agent and no client does no periodic work: dozens of idle
+    /// panes must not mean dozens of wakeups a second.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn idle_panes_stop_ticking() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::new(dir.path());
+        config.relay = crate::RelayMode::Disabled;
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+        config.shell = Some("/bin/sh".into());
+        config.pane_env = vec![("PS1".into(), "$ ".into()), ("ENV".into(), String::new())];
+        let daemon = crate::Daemon::start(config).await.unwrap();
+        let core = Arc::clone(&daemon.core);
+        for i in 0..3 {
+            let launch = PaneLaunch::Shell { cwd: None };
+            core.create_session(format!("s{i}"), launch).unwrap();
+        }
+        let ticks = || -> u64 {
+            core.pane_entries()
+                .iter()
+                .map(|(_, e)| e.ticks.load(Ordering::Relaxed))
+                .sum()
+        };
+        // Busy right after start (the shell prints its prompt), then quiet.
+        tokio::time::sleep(PANE_ACTIVE + Duration::from_secs(2)).await;
+        let settled = ticks();
+        assert!(settled > 0, "panes tick while they start");
+        tokio::time::sleep(PANE_TICK * 6).await;
+        assert_eq!(ticks(), settled, "idle panes kept ticking");
+
+        // Output makes a pane tick again.
+        let (_, entry) = core.pane_entries().remove(0);
+        entry.pane.pty().try_write(b"echo hi\n".to_vec()).unwrap();
+        tokio::time::sleep(PANE_TICK * 3).await;
+        assert!(ticks() > settled, "a pane with output ticks");
+        daemon.shutdown().await;
     }
 }

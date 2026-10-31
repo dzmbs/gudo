@@ -12,6 +12,7 @@ agents.workspace = true
 brand.workspace = true
 data-encoding.workspace = true
 libc.workspace = true
+memchr.workspace = true
 getrandom.workspace = true
 grants.workspace = true
 ghostty-vt.workspace = true

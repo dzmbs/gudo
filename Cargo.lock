@@ -1055,6 +1055,7 @@ dependencies = [
  "iroh",
  "iroh-relay",
  "libc",
+ "memchr",
  "notify",
  "postcard",
  "proto",

@@ -67,11 +67,16 @@ pub(crate) fn foreground_process(
     master: impl AsFd,
     session_leader: u32,
 ) -> Option<ForegroundProcess> {
-    let pgid = match tcgetpgrp(master) {
-        Some(pgid) => pgid,
-        None => imp::terminal_pgid_of(session_leader)?,
-    };
-    ForegroundProcess::of(pgid)
+    ForegroundProcess::of(foreground_pgid(master, session_leader)?)
+}
+
+/// The foreground process group id of the terminal behind `master` (see
+/// [`foreground_process`]).
+pub(crate) fn foreground_pgid(master: impl AsFd, session_leader: u32) -> Option<u32> {
+    match tcgetpgrp(master) {
+        Some(pgid) => Some(pgid),
+        None => imp::terminal_pgid_of(session_leader),
+    }
 }
 
 /// The terminal's foreground process group. macOS answers 0 while the terminal has none (its

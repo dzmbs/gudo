@@ -164,11 +164,17 @@ final class Workspace {
         // The key bar takes the terminal theme's light or dark itself (`KeyBarTheme`), like the
         // keyboard (`applyKeyboardSettings`).
         #endif
-        // Weak across the sleep, so a closed window's workspace is freed and the loop ends.
-        Task { [weak self] in
-            while self != nil {
-                self?.refreshForegrounds()
-                try? await Task.sleep(for: .seconds(1))
+        if let daemon = host as? DaemonConnection {
+            // Daemon panes report through the daemon's metadata: follow it, never a timer.
+            followMeta(of: daemon)
+        } else if host == nil {
+            // Local terminals have no change events: ask the kernel once a second. Weak across
+            // the sleep, so a closed window's workspace is freed and the loop ends.
+            Task { [weak self] in
+                while self != nil {
+                    self?.refreshForegrounds()
+                    try? await Task.sleep(for: .seconds(1))
+                }
             }
         }
         #if os(iOS)
@@ -335,6 +341,25 @@ final class Workspace {
         if let pwd = panes[tab.focused]?.workingDirectory, !pwd.isEmpty { return pwd }
         return foregrounds[tab.focused]?.directory
     }
+
+    /// Refreshes the foregrounds after the daemon's pane metadata changed, at most once per
+    /// `metaCoalescing`: agents retitle their panes many times a second.
+    private func followMeta(of daemon: DaemonConnection) {
+        withObservationTracking { _ = daemon.meta } onChange: { [weak self, weak daemon] in
+            Task { @MainActor in
+                guard let self, let daemon, !self.metaRefreshPending else { return }
+                self.metaRefreshPending = true
+                try? await Task.sleep(for: Self.metaCoalescing)
+                self.metaRefreshPending = false
+                self.refreshForegrounds()
+                self.followMeta(of: daemon)
+            }
+        }
+        refreshForegrounds()
+    }
+
+    @ObservationIgnored private var metaRefreshPending = false
+    private static let metaCoalescing = Duration.milliseconds(500)
 
     private func refreshForegrounds() {
         let daemon = host as? DaemonConnection

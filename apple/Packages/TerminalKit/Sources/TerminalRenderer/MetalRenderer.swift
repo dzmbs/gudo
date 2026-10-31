@@ -99,9 +99,6 @@ final class MetalRenderer {
     private var frameIndex = 0
     private let inFlight = DispatchSemaphore(value: maxFramesInFlight)
 
-    private var grayscaleTexture: MTLTexture?
-    private var colorTexture: MTLTexture?
-
     init() throws {
         gpu = try GPUContext.shared.get()
     }
@@ -133,8 +130,11 @@ final class MetalRenderer {
         frameIndex = (frameIndex + 1) % Self.maxFramesInFlight
         let bgCells = upload(frame.bgCells, into: &frames[frameIndex].bgCells)
         let text = upload(frame.text, into: &frames[frameIndex].text)
-        grayscaleTexture = sync(&fonts.grayscale, texture: grayscaleTexture, format: .r8Unorm)
-        colorTexture = sync(&fonts.color, texture: colorTexture, format: .bgra8Unorm_srgb)
+        // The atlas textures belong to the font grid, which surfaces with the same font share.
+        fonts.grayscaleTexture = sync(&fonts.grayscale, texture: fonts.grayscaleTexture, format: .r8Unorm)
+        fonts.colorTexture = sync(&fonts.color, texture: fonts.colorTexture, format: .bgra8Unorm_srgb)
+        let grayscaleTexture = fonts.grayscaleTexture
+        let colorTexture = fonts.colorTexture
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
@@ -223,6 +223,11 @@ final class MetalRenderer {
             encoder.setFragmentTexture(image.texture, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
         }
+    }
+
+    /// Drops the per-frame buffers (a surface off screen); the next frame allocates them again.
+    func releaseBuffers() {
+        frames = [FrameBuffers](repeating: FrameBuffers(), count: Self.maxFramesInFlight)
     }
 
     private func upload<T>(_ items: [T], into slot: inout MTLBuffer?) -> MTLBuffer? {
