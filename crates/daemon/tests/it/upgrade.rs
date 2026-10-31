@@ -36,12 +36,17 @@ exec sleep 600
 "#;
 
 /// A stand-in for a daemon build: answers `build-info --json` like `unnamed-hostd` does.
+/// Newer than the daemon under test (a `dev` build) unless `protocol` says otherwise.
 fn fake_build(build: &str, os: &str, arch: &str, exit: i32) -> Vec<u8> {
+    build_at(build, os, arch, exit, proto::PROTOCOL_LEVEL + 1)
+}
+
+fn build_at(build: &str, os: &str, arch: &str, exit: i32, protocol: u32) -> Vec<u8> {
     let info = proto::DaemonInfo {
         version: "9.9.9".into(),
         build: build.into(),
         built_unix: 1_800_000_000,
-        protocol: proto::PROTOCOL_LEVEL + 1,
+        protocol,
         min_client_protocol: 0,
         features: DaemonFeatures::EMPTY,
         hostname: "test".into(),
@@ -351,6 +356,73 @@ async fn guests_and_bad_builds_are_refused_and_change_nothing() {
 
     // After the failures the owner can still upgrade (nothing stayed busy).
     upgrade(&owner, good_build("fine")).await.expect("upgrade");
+    assert!(restart_requested(&daemon, TIMEOUT).await.is_some());
+    drop((owner, guest));
+    daemon.shutdown().await;
+}
+
+/// Rollback protection: an older build is refused unless the owner explicitly downgrades, and
+/// a guest cannot downgrade either.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_older_build_needs_the_owners_explicit_downgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let exe = installed_exe(tools.path());
+    let original = std::fs::read(&exe).unwrap();
+    let exe2 = exe.clone();
+    let daemon = start_with(dir.path(), move |c| c.self_exe = Some(exe2)).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    let older = || {
+        let data = build_at(
+            "older",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            0,
+            proto::PROTOCOL_LEVEL - 1,
+        );
+        DaemonBuild::new(data, "older".into()).unwrap()
+    };
+
+    assert_refused(
+        owner.client.upgrade_daemon(older(), None).await,
+        UpgradeFailure::Older,
+    );
+    assert_eq!(std::fs::read(&exe).unwrap(), original);
+    assert!(strays(&exe).is_empty(), "{:?}", strays(&exe));
+
+    let mut spec = GrantSpec::new(Roles::DRIVER | Roles::APPROVER, Scope::Daemon);
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = owner
+        .client
+        .create_invite(spec, "alice".into())
+        .await
+        .expect("invite");
+    let mut guest = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    guest.client.attach(None);
+    guest.until("guest layout", |c| c.layout.is_some()).await;
+    guest.follow(pane).await;
+    let mut forced = older();
+    forced.downgrade = true;
+    assert_refused(
+        guest.client.upgrade_daemon(forced, None).await,
+        UpgradeFailure::Forbidden,
+    );
+    assert!(
+        restart_requested(&daemon, Duration::from_millis(200))
+            .await
+            .is_none()
+    );
+
+    let mut forced = older();
+    forced.downgrade = true;
+    let info = owner
+        .client
+        .upgrade_daemon(forced, None)
+        .await
+        .expect("explicit downgrade");
+    assert_eq!(info.build, "older");
+    assert_ne!(std::fs::read(&exe).unwrap(), original);
     assert!(restart_requested(&daemon, TIMEOUT).await.is_some());
     drop((owner, guest));
     daemon.shutdown().await;

@@ -4,10 +4,14 @@
 //! binary for the host's platform, verifies its SHA-256 and uploads it; the remote never
 //! downloads anything. Steps, each one `exec` round trip:
 //!
-//! 1. **Probe**: `uname -sm`, `gzip` presence, the SHA-256 of an installed binary and
-//!    whether its daemon runs.
+//! 1. **Probe**: `uname -sm`, `gzip` presence, the SHA-256 and build of an installed binary
+//!    and whether its daemon runs.
 //! 2. **Upload** (only if the installed binary differs): gzip-compressed when possible,
-//!    written to a temp file, SHA-256-checked on the remote, renamed into place.
+//!    written to a temp file, SHA-256-checked on the remote, renamed into place. Over an
+//!    installed build that reports its version, the new one is staged next to it first and
+//!    only replaces it if it is not older (rollback protection: an older app on another
+//!    device must not quietly reinstate an older helper), unless
+//!    [`BootstrapOptions::allow_downgrade`].
 //! 3. **Service** (if uploaded or not running): `unnamed-hostd service install` (systemd
 //!    `--user` / LaunchAgent, restarting an older daemon). Without a service manager
 //!    (containers, macOS without a GUI login) the daemon is started detached instead.
@@ -171,6 +175,9 @@ pub struct BootstrapOptions {
     pub wait_secs: Option<u32>,
     /// Progress callback.
     pub listener: Option<Arc<dyn BootstrapListener>>,
+    /// Replace an installed build even when it is newer than the one supplied. Off by
+    /// default: a newer installed helper is kept ([`InstallAction::KeptNewer`]).
+    pub allow_downgrade: bool,
 }
 
 /// What the bootstrap did to the binary.
@@ -182,6 +189,8 @@ pub enum InstallAction {
     Upgraded,
     /// The installed build matched and was kept.
     Reused,
+    /// The installed build is newer than the one supplied and was kept.
+    KeptNewer,
 }
 
 /// How the daemon runs.
@@ -224,6 +233,8 @@ struct Probe {
     home: String,
     gzip: bool,
     sha256: Option<String>,
+    /// What the installed binary reports about itself (`build-info --json`).
+    installed: Option<proto::DaemonInfo>,
     running: bool,
     linger: Option<bool>,
 }
@@ -270,7 +281,7 @@ pub async fn bootstrap(
     let install_path = format!("{}/{rel}", probe.home);
     let bin = format!("\"$HOME\"/{}", shell_quote(&rel));
 
-    let action = match &probe.sha256 {
+    let mut action = match &probe.sha256 {
         Some(h) if *h == sha256 => InstallAction::Reused,
         Some(_) => InstallAction::Upgraded,
         None => InstallAction::Installed,
@@ -281,21 +292,39 @@ pub async fn bootstrap(
         } else {
             UploadEncoding::Raw
         };
+        // Over a build that reports its version, stage first and compare.
+        let staged = probe.installed.as_ref().map(|_| staged_path(&rel));
         step(BootstrapStep::Uploading {
             size: binary.len() as u64,
             sent: 0,
         });
         let report = conn
-            .upload(&format!("~/{rel}"), &binary, 0o755, encoding)
+            .upload(
+                &format!("~/{}", staged.as_deref().unwrap_or(&rel)),
+                &binary,
+                0o755,
+                encoding,
+            )
             .await?;
         step(BootstrapStep::Uploading {
             size: report.size,
             sent: report.sent,
         });
+        if let (Some(staged), Some(installed)) = (&staged, &probe.installed) {
+            action = replace_unless_older(conn, staged, &rel, installed, options).await?;
+        }
     }
 
     let mut notes = Vec::new();
-    let service = if action == InstallAction::Reused && probe.running {
+    if action == InstallAction::KeptNewer {
+        notes.push(
+            "This host already runs a newer helper than this app carries; it was kept. \
+             Update the app if it cannot connect."
+                .into(),
+        );
+    }
+    let kept = matches!(action, InstallAction::Reused | InstallAction::KeptNewer);
+    let service = if kept && probe.running {
         ServiceMode::AlreadyRunning
     } else {
         step(BootstrapStep::Starting);
@@ -353,6 +382,10 @@ pub async fn bootstrap(
         .ok_or_else(|| SshError::Bootstrap(format!("no JSON from pair: {}", out.stdout_text())))?;
     let pair: PairJson = serde_json::from_str(&json)
         .map_err(|e| SshError::Bootstrap(format!("bad JSON from pair ({e}): {json}")))?;
+    let sha256 = match action {
+        InstallAction::KeptNewer => probe.sha256.unwrap_or_default(),
+        _ => sha256,
+    };
     Ok(BootstrapReport {
         platform,
         action,
@@ -363,6 +396,62 @@ pub async fn bootstrap(
         daemon_id: pair.daemon_id,
         notes,
     })
+}
+
+/// Where a build is staged next to the installed one (`rel` is relative to `$HOME`).
+fn staged_path(rel: &str) -> String {
+    match rel.rsplit_once('/') {
+        Some((dir, name)) => format!("{dir}/.{name}.new"),
+        None => format!(".{rel}.new"),
+    }
+}
+
+/// Moves the staged build over the installed one unless it is older (and no downgrade was
+/// asked for), in which case it is deleted and the installed build stays.
+async fn replace_unless_older(
+    conn: &Connection,
+    staged: &str,
+    rel: &str,
+    installed: &proto::DaemonInfo,
+    options: &BootstrapOptions,
+) -> Result<InstallAction, SshError> {
+    let staged_q = format!("\"$HOME\"/{}", shell_quote(staged));
+    let out = conn
+        .exec(&sh_command(&format!("{staged_q} build-info --json 2>&1")))
+        .await?;
+    let new = out
+        .success()
+        .then(|| build_info(&out.stdout_text()))
+        .flatten();
+    let Some(new) = new else {
+        conn.exec(&sh_command(&format!("rm -f {staged_q}"))).await?;
+        return Err(SshError::Bootstrap(format!(
+            "the {} build does not run on this host: {}",
+            brand::DAEMON_BIN,
+            out.stdout_text().trim()
+        )));
+    };
+    if new.is_older_than(installed) && !options.allow_downgrade {
+        tracing::info!(installed = %installed.build, supplied = %new.build, "keeping the newer installed daemon");
+        conn.exec(&sh_command(&format!("rm -f {staged_q}"))).await?;
+        return Ok(InstallAction::KeptNewer);
+    }
+    conn.exec(&sh_command(&format!(
+        "mv -f {staged_q} \"$HOME\"/{}",
+        shell_quote(rel)
+    )))
+    .await?
+    .check()?;
+    Ok(InstallAction::Upgraded)
+}
+
+/// The last JSON line of `build-info --json` output.
+fn build_info(text: &str) -> Option<proto::DaemonInfo> {
+    let line = text
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))?;
+    serde_json::from_str(line).ok()
 }
 
 /// Detects the platform with `uname -sm` (separately, so odd `uname` output stays
@@ -386,6 +475,7 @@ esac
 if [ -x "$bin" ]; then
   echo "sha256=$( (sha256sum "$bin" 2>/dev/null || shasum -a 256 "$bin" 2>/dev/null || openssl dgst -sha256 -r "$bin") | cut -d' ' -f1)"
   "$bin" status 2>/dev/null | head -n 1 | sed 's/^/status=/'
+  "$bin" build-info --json 2>/dev/null | grep '^{{' | tail -n 1 | sed 's/^/info=/'
 fi
 if command -v loginctl >/dev/null 2>&1; then
   echo "linger=$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)"
@@ -412,6 +502,7 @@ fn parse_probe(text: &str) -> Probe {
             "gzip" => p.gzip = value == "1",
             "sha256" if value.len() == 64 => p.sha256 = Some(value.to_ascii_lowercase()),
             "status" => p.running = value.starts_with("running"),
+            "info" => p.installed = build_info(value),
             "linger" => p.linger = Some(value == "yes"),
             _ => {}
         }
@@ -455,6 +546,27 @@ mod tests {
         assert_eq!(p.linger, Some(false));
         let q = parse_probe("os=Darwin\narch=arm64\nhome=/Users/u\nstatus=not running (pid 3)\n");
         assert!(!q.running && !q.gzip && q.sha256.is_none());
+    }
+
+    #[test]
+    fn probe_reads_the_installed_build() {
+        let p = parse_probe(concat!(
+            "os=Linux\narch=x86_64\nhome=/h\n",
+            r#"info={"version":"0.1.0","build":"abc=1","built_unix":5,"protocol":1,"min_client_protocol":0,"features":0,"hostname":"h","os":"linux","os_name":"","arch":"x86_64"}"#,
+            "\n"
+        ));
+        let info = p.installed.expect("installed build");
+        assert_eq!((info.build.as_str(), info.built_unix), ("abc=1", 5));
+        assert!(parse_probe("info=not json\n").installed.is_none());
+    }
+
+    #[test]
+    fn staging_sits_next_to_the_install() {
+        assert_eq!(
+            staged_path(".local/bin/unnamed-hostd"),
+            ".local/bin/.unnamed-hostd.new"
+        );
+        assert_eq!(staged_path("hostd"), ".hostd.new");
     }
 
     #[test]

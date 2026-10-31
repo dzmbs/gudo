@@ -1113,6 +1113,8 @@ pub enum InstallAction {
     Upgraded,
     /// The same build was kept.
     Reused,
+    /// The host's helper is newer than the app's and was kept.
+    KeptNewer,
 }
 
 /// How the daemon runs.
@@ -1160,6 +1162,7 @@ impl From<ssh::BootstrapReport> for BootstrapReport {
                 ssh::InstallAction::Installed => InstallAction::Installed,
                 ssh::InstallAction::Upgraded => InstallAction::Upgraded,
                 ssh::InstallAction::Reused => InstallAction::Reused,
+                ssh::InstallAction::KeptNewer => InstallAction::KeptNewer,
             },
             service: match r.service {
                 ssh::ServiceMode::Service => ServiceMode::Service,
@@ -1354,6 +1357,7 @@ impl SshSession {
                 wait_secs,
                 listener: listener
                     .map(|l| Arc::new(BootstrapAdapter(l)) as Arc<dyn ssh::BootstrapListener>),
+                ..ssh::BootstrapOptions::default()
             };
             let conn = session.connected().await?;
             Ok(ssh::bootstrap(&conn, &binaries, &options).await?.into())

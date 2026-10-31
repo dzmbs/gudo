@@ -93,6 +93,8 @@ pub enum UpgradeFailureCode {
     Rejected,
     /// Writing or swapping the file failed.
     Io,
+    /// The build is older than the helper's; the app never downgrades.
+    Older,
 }
 
 impl From<proto::UpgradeFailure> for UpgradeFailureCode {
@@ -104,6 +106,7 @@ impl From<proto::UpgradeFailure> for UpgradeFailureCode {
             proto::UpgradeFailure::Corrupt => Self::Corrupt,
             proto::UpgradeFailure::Rejected => Self::Rejected,
             proto::UpgradeFailure::Io => Self::Io,
+            proto::UpgradeFailure::Older => Self::Older,
         }
     }
 }

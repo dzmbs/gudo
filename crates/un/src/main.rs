@@ -240,6 +240,9 @@ enum DaemonCmd {
         /// Build id to log on the daemon.
         #[arg(long, default_value = "")]
         build: String,
+        /// Install it even if it is older than the running build (refused otherwise).
+        #[arg(long)]
+        allow_downgrade: bool,
     },
 }
 
@@ -1180,10 +1183,15 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
                 println!("incompatible: {reason}");
             }
         }
-        DaemonCmd::Upgrade { file, build } => {
+        DaemonCmd::Upgrade {
+            file,
+            build,
+            allow_downgrade,
+        } => {
             let data =
                 std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
-            let build = client_core::DaemonBuild::new(data, build.clone())?;
+            let mut build = client_core::DaemonBuild::new(data, build.clone())?;
+            build.downgrade = *allow_downgrade;
             let size = build.data.len();
             let started = std::time::Instant::now();
             let new = client.upgrade_daemon(build, None).await?;

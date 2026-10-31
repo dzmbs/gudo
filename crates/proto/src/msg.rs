@@ -65,6 +65,9 @@ pub enum StreamHeader {
     /// Client → daemon, bidirectional, bulk priority: replace the daemon with a new build of
     /// itself (owner only). See [`UpgradeReply`](crate::UpgradeReply) and [`crate::info`].
     Upgrade(UpgradeHeader),
+    /// Like [`StreamHeader::Upgrade`], but the owner explicitly accepts a build older than
+    /// the running one (an upgrade refuses it with [`UpgradeFailure::Older`](crate::UpgradeFailure::Older)).
+    Downgrade(UpgradeHeader),
 }
 
 /// The daemon's answer on a [`StreamHeader::PortForward`] stream.

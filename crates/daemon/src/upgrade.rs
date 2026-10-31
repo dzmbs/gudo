@@ -4,7 +4,9 @@
 //! Verification, in order: the stream carries exactly the announced size; the decoded
 //! executable's SHA-256 matches the header (the owner's device, authenticated by the QUIC
 //! handshake, vouches for the bytes; there is no release signing key yet); the new file runs
-//! on this host (`<new> build-info --json` within 15 s) and reports this OS and CPU. Only then
+//! on this host (`<new> build-info --json` within 15 s) and reports this OS and CPU; it is not
+//! older than the running build unless the owner asked for a downgrade (rollback protection: a
+//! stale or compromised owner device cannot quietly reinstate a build with known bugs). Only then
 //! is it renamed over the running executable (atomic within the directory; the old one is
 //! kept as `<exe>.prev`), and the host process `exec`s it after saving the layout and stopping
 //! the panes. Any failure leaves the running daemon and its file untouched.
@@ -19,7 +21,8 @@ use std::time::Duration;
 
 use iroh::endpoint::{RecvStream, SendStream};
 use proto::{
-    Actor, AuditKind, DaemonInfo, UpgradeEncoding, UpgradeFailure, UpgradeHeader, UpgradeReply,
+    Actor, AuditKind, DaemonFeatures, DaemonInfo, StreamHeader, UpgradeEncoding, UpgradeFailure,
+    UpgradeHeader, UpgradeReply,
 };
 use tokio::sync::watch;
 
@@ -69,18 +72,29 @@ fn fail(code: UpgradeFailure, message: impl Into<String>) -> Failure {
     (code, message.into())
 }
 
+/// The build an upgrade stream announces, and whether the owner sent it as a downgrade.
+pub(crate) fn requested(header: &StreamHeader) -> Option<(&UpgradeHeader, bool)> {
+    match header {
+        StreamHeader::Upgrade(h) => Some((h, false)),
+        StreamHeader::Downgrade(h) => Some((h, true)),
+        _ => None,
+    }
+}
+
 /// Serves one upgrade stream. `owner` is whether the connection is the daemon's owner (a
-/// paired device, not a guest), checked by the caller.
+/// paired device, not a guest), checked by the caller; `downgrade` whether the owner sent it
+/// as an explicit downgrade.
 pub(crate) async fn serve(
     core: Arc<Core>,
     actor: Actor,
     owner: bool,
+    downgrade: bool,
     header: UpgradeHeader,
     mut send: SendStream,
     mut recv: RecvStream,
 ) {
     let result = if owner {
-        install(&core, &header, &mut send, &mut recv).await
+        install(&core, &header, downgrade, &mut send, &mut recv).await
     } else {
         core.mp.audit.append(
             AuditKind::Denied,
@@ -138,6 +152,7 @@ impl Drop for Busy<'_> {
 async fn install(
     core: &Arc<Core>,
     header: &UpgradeHeader,
+    downgrade: bool,
     send: &mut SendStream,
     recv: &mut RecvStream,
 ) -> Result<(DaemonInfo, PathBuf), Failure> {
@@ -172,6 +187,19 @@ async fn install(
         .map_err(|e| fail(UpgradeFailure::Io, e.to_string()))?;
     let staged = receive(staged, header, recv).await?;
     let info = check(&staged.path).await?;
+    let running = crate::info::build_info(DaemonFeatures::EMPTY);
+    if info.is_older_than(&running) {
+        if !downgrade {
+            return Err(fail(
+                UpgradeFailure::Older,
+                format!(
+                    "{} is older than the running {}; downgrading needs an explicit request",
+                    info.build, running.build
+                ),
+            ));
+        }
+        tracing::warn!(from = %running.build, to = %info.build, "owner downgrade");
+    }
     let path = staged.path.clone();
     let exe2 = exe.clone();
     tokio::task::spawn_blocking(move || swap(&path, &exe2))
