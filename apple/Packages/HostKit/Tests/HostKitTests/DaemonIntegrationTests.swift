@@ -207,6 +207,48 @@ nonisolated final class LocalDaemon {
         try await eventually("reconnected by saved ticket", timeout: .seconds(15)) { again.isReady && again.status.isLive }
     }
 
+    /// Projects live on the daemon: what one connection groups, a fresh connection is told, and
+    /// a reorder never shows the old order in between.
+    @Test func projectsComeBackFromTheDaemon() async throws {
+        let daemon = try LocalDaemon()
+        let model = makeModel()
+        let hostId = try await model.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        let connection = try #require(model.connection(hostId) as? DaemonConnection)
+        try await eventually("features", timeout: .seconds(10)) { connection.layout.supportsProjects }
+        let store = connection.layout
+        store.apply(.newTab)
+        store.apply(.newTab)
+        try await eventually("three tabs", timeout: .seconds(10)) { store.session.tabs.count == 3 }
+        let tabs = store.session.tabs.map(\.id)
+
+        let info = ProjectInfo(id: "p1", name: "app", color: 2, order: 0, updated: 1)
+        store.apply(.put(info))
+        store.apply(.setTab(tabs[0], Membership(project: "p1", rank: 0)))
+        store.apply(.setTab(tabs[2], Membership(project: "p1", rank: 1024)))
+        #expect(store.projects.members.count == 2, "shown before the daemon answers")
+        var orders: [[TabId]] = []
+        let observer = Task { @MainActor in
+            while !Task.isCancelled {
+                orders.append(store.session.tabs.map(\.id))
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+        }
+        // A click (focus) right before the drop: its echo carries the order from before the move.
+        store.apply(.focus(try #require(store.session.tabs.last?.focused)))
+        store.apply(.moveTab(tabs[2], to: 0))
+        try await Task.sleep(for: .seconds(1))
+        observer.cancel()
+        let moved = [tabs[2], tabs[0], tabs[1]]
+        #expect(store.session.tabs.map(\.id) == moved)
+        #expect(orders.allSatisfy { $0 == moved }, "an echo never showed the old order: \(orders.count) samples")
+
+        model.disconnect(hostId)
+        let again = try #require(try model.open(hostId) as? DaemonConnection)
+        try await eventually("projects again", timeout: .seconds(15)) { again.layout.projects.members.count == 2 }
+        #expect(again.layout.projects.projects["p1"]?.name == "app")
+        #expect(again.layout.projects.members[tabs[2]]?.rank == 1024)
+    }
+
     /// Tickets minted the moment a daemon starts (as the UI tests' daemons are) all pair; a
     /// used ticket is refused on another device and leaves no host there, which then pairs
     /// with a new ticket.

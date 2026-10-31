@@ -94,6 +94,8 @@ pub struct TestClient {
     pub browser: Vec<client_core::proto::BrowserPush>,
     /// `ClientEvent::ProgramStatus` pushes, in order (connections with `program_status`).
     pub programs: Vec<(PaneId, Option<client_core::proto::ProgramReport>)>,
+    /// `ClientEvent::Projects` pushes, in order.
+    pub projects: Vec<client_core::proto::SessionProjects>,
 }
 
 impl TestClient {
@@ -219,6 +221,7 @@ impl TestClient {
             browser_events,
             browser: Vec::new(),
             programs: Vec::new(),
+            projects: Vec::new(),
         }
     }
 
@@ -266,6 +269,7 @@ impl TestClient {
             ClientEvent::ProgramStatus { pane_id, status } => {
                 self.programs.push((pane_id, status));
             }
+            ClientEvent::Projects { projects } => self.projects.push(projects),
             _ => {}
         }
     }

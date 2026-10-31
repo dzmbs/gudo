@@ -57,9 +57,9 @@ nonisolated public struct HostGroup: Identifiable, Equatable, Sendable {
 @MainActor
 @Observable
 public final class HostGroups {
-    public static let localId = "local"
+    nonisolated public static let localId = "local"
     /// The pseudo-host of mixed tabs (`TabRef(hostId: mixedId, tab: composite id)`).
-    public static let mixedId = "mixed"
+    nonisolated public static let mixedId = "mixed"
 
     /// This device's group: its name ("This Mac") and layout, or nil where the device has no
     /// shell of its own (iPhone, iPad).
@@ -138,16 +138,26 @@ public final class HostGroups {
         groups.first { $0.id == id }
     }
 
-    /// Every tab of every group in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk. A
-    /// daemon's tabs follow its repository grouping (tabs outside a repository, then by
-    /// repository and worktree), as the sidebar draws them.
+    /// Every tab in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk. Projects first (in
+    /// their order, tabs by rank), then the window's loose tabs, then each host's loose tabs;
+    /// a daemon's follow its repository grouping, as the sidebar draws them.
     public var tabs: [TabRef] {
-        mixedTabs + groups.flatMap { group -> [TabRef] in
-            if let sidebar = repoSidebar(for: group) {
-                return sidebar.orderedTabs.map { group.ref($0) }
-            }
-            return group.tabs.map { group.ref($0.id) }
+        let groups = groups
+        let projects = projects(in: groups)
+        let grouped = Set(projects.flatMap(\.tabs))
+        return projects.flatMap(\.tabs)
+            + mixedTabs.filter { !grouped.contains($0) }
+            + groups.flatMap { looseTabs(of: $0, grouped: grouped) }
+    }
+
+    /// A group's tabs that are in no project, in sidebar order.
+    public func looseTabs(of group: HostGroup, grouped: Set<TabRef>? = nil) -> [TabRef] {
+        let grouped = grouped ?? Set(projects.flatMap(\.tabs))
+        let loose = group.tabs.filter { !grouped.contains(group.ref($0.id)) }
+        if let sidebar = repoSidebar(for: group, tabs: loose) {
+            return sidebar.orderedTabs.map { group.ref($0) }
         }
+        return loose.map { group.ref($0.id) }
     }
 
     /// The window's own tabs: VS Code tabs, then mixed tabs, each in the order they were made.
@@ -156,14 +166,165 @@ public final class HostGroups {
     }
 
     /// A daemon group's tabs grouped by repository and worktree, once the daemon has sent its
-    /// repository snapshot (nil otherwise: draw the tabs flat).
-    public func repoSidebar(for group: HostGroup) -> RepoSidebar? {
+    /// repository snapshot (nil otherwise: draw the tabs flat). `tabs` defaults to all of them.
+    public func repoSidebar(for group: HostGroup, tabs: [Tab]? = nil) -> RepoSidebar? {
         guard group.kind == .daemon,
               let connection = hosts.connection(group.id) as? DaemonConnection,
               let snapshot = connection.existingWorkspace?.repos,
               !snapshot.worktrees.isEmpty
         else { return nil }
-        return RepoSidebar.build(tabs: group.tabs, snapshot: snapshot)
+        return RepoSidebar.build(tabs: tabs ?? group.tabs, snapshot: snapshot)
+    }
+
+    // MARK: Projects
+
+    /// Projects of tabs without a daemon that keeps them (this device, plain SSH, window tabs,
+    /// older daemons), by host id. Persisted with the window.
+    public var windowProjects: [String: HostProjects] = [:]
+    /// Projects the user collapsed in this window.
+    public var collapsedProjects: Set<String> = []
+    /// Suggestions the user dismissed (their shared roots).
+    public var dismissedSuggestions: Set<String> = []
+
+    /// What a window saves of its projects.
+    public struct ProjectsState: Codable, Equatable, Sendable {
+        public var windowProjects: [String: HostProjects]
+        public var collapsed: [String]
+        public var dismissed: [String]
+    }
+
+    public var projectsState: ProjectsState {
+        get { ProjectsState(windowProjects: windowProjects, collapsed: collapsedProjects.sorted(), dismissed: dismissedSuggestions.sorted()) }
+        set {
+            windowProjects = newValue.windowProjects
+            collapsedProjects = Set(newValue.collapsed)
+            dismissedSuggestions = Set(newValue.dismissed)
+        }
+    }
+
+    /// Every project in the window, merged across hosts.
+    public var projects: [Project] { projects(in: groups) }
+
+    public func project(_ id: String) -> Project? { projects.first { $0.id == id } }
+
+    public func project(of ref: TabRef) -> Project? { projects.first { $0.tabs.contains(ref) } }
+
+    private func projects(in groups: [HostGroup]) -> [Project] {
+        let (sources, existing) = projectSources(groups)
+        return ProjectMerge.merge(sources, existing: existing)
+    }
+
+    /// Each host's projects (its daemon's, else the window's copy) and every tab that exists.
+    private func projectSources(_ groups: [HostGroup]) -> ([String: HostProjects], Set<TabRef>) {
+        var sources: [String: HostProjects] = [:]
+        var existing = Set<TabRef>()
+        for group in groups {
+            existing.formUnion(group.tabs.map { group.ref($0.id) })
+            sources[group.id] = daemonProjects(group.id) ?? windowProjects[group.id]
+        }
+        existing.formUnion(mixedTabs)
+        sources[Self.mixedId] = windowProjects[Self.mixedId]
+        return (sources.compactMapValues { $0 }, existing)
+    }
+
+    /// The daemon's own store when it keeps projects.
+    private func daemonStore(_ host: String) -> DaemonLayoutStore? {
+        guard let store = (hosts.connection(host) as? DaemonConnection)?.layout, store.supportsProjects else { return nil }
+        return store
+    }
+
+    private func daemonProjects(_ host: String) -> HostProjects? { daemonStore(host)?.projects }
+
+    /// A planner over the window's current projects.
+    public func planner(now: Date = .now) -> ProjectPlanner {
+        let groups = groups
+        let (sources, existing) = projectSources(groups)
+        return ProjectPlanner(
+            projects: ProjectMerge.merge(sources, existing: existing), sources: sources,
+            now: UInt64(max(0, now.timeIntervalSince1970 * 1000)))
+    }
+
+    /// Sends each change to its host's daemon, or keeps it in the window's copy.
+    public func apply(_ changes: [ProjectPlanner.Change]) {
+        var copies: [String: HostProjects] = [:]
+        for (host, change) in changes {
+            if let store = daemonStore(host) {
+                store.apply(change)
+            } else {
+                copies[host, default: windowProjects[host] ?? HostProjects()].apply(change)
+            }
+        }
+        guard !copies.isEmpty else { return }
+        // Pruned once all changes are in: a definition is put before its first member joins.
+        let tabsByHost = Dictionary(grouping: tabRefsForPruning(), by: \.hostId).mapValues { Set($0.map(\.tab)) }
+        for (host, var copy) in copies {
+            copy.keep(tabs: tabsByHost[host] ?? [])
+            windowProjects[host] = copy.isEmpty ? nil : copy
+        }
+    }
+
+    private func tabRefsForPruning() -> [TabRef] {
+        groups.flatMap { group in group.tabs.map { group.ref($0.id) } } + mixedTabs
+    }
+
+    /// The sidebar's draggable runs of rows, top to bottom: projects, the window's loose tabs,
+    /// then each host's loose tabs.
+    public var sections: [SidebarSection] {
+        let groups = groups
+        let projects = projects(in: groups)
+        let grouped = Set(projects.flatMap(\.tabs))
+        return projects.map { SidebarSection(.project($0.id), rows: $0.tabs) }
+            + [SidebarSection(.window, rows: mixedTabs.filter { !grouped.contains($0) })]
+            + groups.map { SidebarSection(.host($0.id), rows: looseTabs(of: $0, grouped: grouped)) }
+    }
+
+    /// Carries out a drop. `name` names a new project made of two tabs.
+    public func commit(_ drop: SidebarDrop, name: (TabRef, TabRef) -> String) {
+        let planner = planner()
+        switch drop {
+        case .group(let ref, let target):
+            if let project = planner.project(of: target) {
+                let index = (project.tabs.filter { $0 != ref }.firstIndex(of: target) ?? project.tabs.count) + 1
+                apply(planner.move(ref, into: project.id, at: index))
+            } else {
+                apply(planner.create([target, ref], name: name(target, ref)))
+            }
+        case .insert(let ref, .project(let id), let index):
+            apply(planner.move(ref, into: id, at: index))
+        case .insert(let ref, .window, _):
+            apply(planner.remove(ref))
+        case .insert(let ref, .host(let host), let index):
+            guard ref.hostId == host, let group = group(host) else { return }
+            apply(planner.remove(ref))
+            var loose = sections.first { $0.container == .host(host) }?.rows.filter { $0 != ref } ?? []
+            loose.insert(ref, at: min(max(index, 0), loose.count))
+            if let store = layoutStore(host),
+               let to = SidebarDrop.sessionIndex(for: ref.tab, loose: loose.map(\.tab), session: group.tabs.map(\.id))
+            {
+                store.apply(.moveTab(ref.tab, to: to))
+            }
+        }
+    }
+
+    /// Moves a tab one row up (-1) or down (+1) within its section (⌃⌘↑ / ⌃⌘↓).
+    public func moveTab(_ ref: TabRef, by offset: Int) {
+        guard let section = sections.first(where: { $0.rows.contains(ref) }),
+              let index = section.rows.firstIndex(of: ref)
+        else { return }
+        let to = index + offset
+        guard section.rows.indices.contains(to) else { return }
+        commit(.insert(ref, into: section.container, at: to), name: { _, _ in "" })
+    }
+
+    /// The layout a host's tabs live in.
+    func layoutStore(_ host: String) -> (any LayoutStore)? {
+        if host == Self.localId { return local?.layout }
+        guard let connection = hosts.connection(host), connection.isReady else { return nil }
+        return connection.layoutStore
+    }
+
+    public func toggleCollapsed(project id: String) {
+        if collapsedProjects.contains(id) { collapsedProjects.remove(id) } else { collapsedProjects.insert(id) }
     }
 
     // MARK: Opening and closing hosts
@@ -222,6 +383,7 @@ public final class HostGroups {
         openHosts.removeAll { $0 == id }
         failures[id] = nil
         collapsed.remove(id)
+        windowProjects[id] = nil
     }
 
     public func toggleCollapsed(_ id: String) {

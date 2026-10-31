@@ -96,6 +96,37 @@ nonisolated enum LayoutConversion {
         case .split, .close, .newTab, .closeTab, .movePaneToNewTab, .movePane, .mergeTab: false
         }
     }
+
+    /// Whether an optimistic op can be replayed on a layout that may already include it: it
+    /// sets a state (focus, position, name) rather than stepping one (a resize, a zoom toggle).
+    static func isReplayable(_ op: PaneLayout.LayoutOp) -> Bool {
+        switch op {
+        case .focus, .moveTab, .rename: true
+        default: false
+        }
+    }
+
+    static func op(_ change: ProjectChange, sessionId: UInt64) -> UnnamedCore.LayoutOp {
+        switch change {
+        case .put(let info):
+            return .putProject(sessionId: sessionId, project: DaemonProject(
+                id: info.id, name: info.name, color: UInt8(clamping: info.color), order: info.order, updatedMs: info.updated))
+        case .setTab(let tab, let membership):
+            return .setTabProject(tabId: tab.rawValue, projectId: membership?.project, rank: membership?.rank ?? 0)
+        case .remove(let id):
+            return .removeProject(sessionId: sessionId, projectId: id)
+        }
+    }
+
+    static func projects(_ report: DaemonProjects) -> HostProjects {
+        HostProjects(
+            projects: Dictionary(report.projects.map {
+                ($0.id, ProjectInfo(id: $0.id, name: $0.name, color: Int($0.color), order: $0.order, updated: $0.updatedMs))
+            }, uniquingKeysWith: { a, _ in a }),
+            members: Dictionary(report.tabs.map {
+                (TabId($0.tabId), Membership(project: $0.projectId, rank: $0.rank))
+            }, uniquingKeysWith: { a, _ in a }))
+    }
 }
 
 nonisolated extension PaneLayout.Axis {

@@ -693,6 +693,16 @@ public final class HostsModel {
         for connection in connections.values { connection.networkChanged() }
     }
 
+    /// Shows `connection` as host `record` without saving it (design fixtures, snapshots).
+    public func attachPreview(_ record: HostRecord, connection: any HostConnection) {
+        if let index = records.firstIndex(where: { $0.id == record.id }) {
+            records[index] = record
+        } else {
+            records.append(record)
+        }
+        connections[record.id] = connection
+    }
+
     // MARK: Persistence
 
     func upsert(_ record: HostRecord) {

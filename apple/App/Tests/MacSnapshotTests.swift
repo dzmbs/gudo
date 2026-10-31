@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import DesignSystem
+import HostKit
 import SwiftUI
 import XCTest
 @testable import App
@@ -19,6 +20,8 @@ final class MacSnapshotTests: XCTestCase {
     }
 
     private var mode: String { env["SNAPSHOT_MODE"] ?? "dark" }
+    /// The fixture's window, for captures made while it runs.
+    private var current: NSWindow?
 
     private func wanted(_ name: String) -> Bool {
         guard let only = env["SNAPSHOT_ONLY"] else { return true }
@@ -101,6 +104,7 @@ final class MacSnapshotTests: XCTestCase {
         let model = WindowModel(app: .shared)
         model.start()
         let window = makeWindow(WindowContent(request: nil, model: model).environment(AppModel.shared), size: size)
+        current = window
         for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
         model.isSidebarShown = true
         if let workspace = model.workspace {
@@ -139,6 +143,50 @@ final class MacSnapshotTests: XCTestCase {
         try await window("inbox", screen: "inbox")
         try await window("narrow", size: CGSize(width: 820, height: 600))
         try await window("nosidebar") { $0.isSidebarShown = false }
+    }
+
+    /// Projects across hosts in the sidebar, then a reorder recorded frame by frame: the rows
+    /// must slide apart (never overlap) and the drop must not move anything again.
+    func testProjects() async throws {
+        try await window("projects", screen: "projects")
+        try await window("projects-drag", screen: "projects") { model in
+            let drag = model.sidebarDrag
+            guard let app = model.projects.first(where: { $0.name == "acme-app" }), let last = app.tabs.last,
+                  let logs = model.groups.sections.first(where: { $0.container == .host("fixture-studio") })?.rows.first
+            else { return XCTFail("fixture") }
+            await self.pump(1.5)
+            // Within a project: the last tab to the top.
+            let plan = SidebarDrop.insert(last, into: .project(app.id), at: 0)
+            drag.dragging = last
+            withAnimation(DS.Motion.reorder) { drag.plan = plan }
+            for (index, delay) in [0.0, 0.04, 0.04, 0.05, 0.06, 0.08, 0.12, 0.3].enumerated() {
+                await self.pump(delay)
+                try? self.capture(self.current!, "projects-reorder-\(index)")
+            }
+            withAnimation(DS.Motion.reorder) {
+                model.commit(plan)
+                drag.reset()
+            }
+            for index in 0..<3 {
+                await self.pump(0.05)
+                try? self.capture(self.current!, "projects-dropped-\(index)")
+            }
+            XCTAssertEqual(model.projects.first { $0.id == app.id }?.tabs.first, last)
+            // A loose tab hovering the middle of a project's row: "will group".
+            drag.dragging = logs
+            withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: app.tabs[0]) }
+            await self.pump(0.5)
+            try? self.capture(self.current!, "projects-will-group")
+            // Into another project between its rows: the row leaves its host and slides in.
+            guard let infra = model.projects.first(where: { $0.name == "infra" }) else { return XCTFail("infra") }
+            withAnimation(DS.Motion.reorder) { drag.plan = .insert(logs, into: .project(infra.id), at: 1) }
+            for (index, delay) in [0.03, 0.05, 0.08, 0.3].enumerated() {
+                await self.pump(delay)
+                try? self.capture(self.current!, "projects-into-\(index)")
+            }
+            withAnimation(DS.Motion.reorder) { drag.reset() }
+        }
+        for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
 
     /// Any program's own status (pi blocked on a question) in its pane header and tab glyph.

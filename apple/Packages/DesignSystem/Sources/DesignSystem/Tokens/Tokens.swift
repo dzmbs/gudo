@@ -156,6 +156,11 @@ public extension DS {
         public static let menu = Animation.spring(response: 0.3, dampingFraction: 0.86)
         /// A row settling open or shut after a swipe.
         public static let swipe = Animation.spring(response: 0.32, dampingFraction: 0.86)
+        /// Rows making room for a dragged one, and a dropped row settling (Finder, Safari's
+        /// sidebar): springy, interruptible, no visible overshoot.
+        public static let reorder = Animation.spring(response: 0.3, dampingFraction: 0.84)
+        /// A collapsed group opening under a drag that rests on it (spring-loaded folders).
+        public static let springOpenDelay = Duration.milliseconds(600)
         /// A control's pressed state.
         public static let press = Animation.spring(response: 0.2, dampingFraction: 0.7)
         /// Errors stay longer than confirmations: they are read, not glanced at.

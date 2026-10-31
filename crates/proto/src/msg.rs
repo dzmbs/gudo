@@ -693,6 +693,10 @@ pub enum ServerCtl {
     /// The host's access control needs its owner, to owner devices with
     /// [`Caps::HOST_ALERTS`].
     HostAlert(crate::mp::HostAlert),
+    /// A session's projects, right after each [`ServerCtl::LayoutChanged`], to clients with
+    /// [`Caps::PROJECTS`] and the owner role, filtered to the tabs they see (see
+    /// [`crate::project`]).
+    Projects(crate::project::SessionProjects),
 }
 
 /// A successful [`ClientCtl::Attach`].

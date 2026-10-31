@@ -18,6 +18,7 @@ mod multiplayer_mp2;
 mod notify;
 mod presence;
 mod program_status;
+mod projects;
 mod pull;
 mod redteam;
 mod relays;

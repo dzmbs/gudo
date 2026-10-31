@@ -4,9 +4,10 @@ import UnnamedCore
 
 /// A `LayoutStore` whose source of truth is the daemon (docs/DAEMON.md §1): `apply` sends the
 /// op to the daemon and `session` is whatever `LayoutChanged` last said. Ops that only move
-/// focus or ratios are applied locally at once too (the daemon's answer, one round trip later,
-/// replaces them), so focus and divider drags never wait on the network; ops that create or
-/// end panes wait for the daemon, which allocates the ids.
+/// focus, order or names are applied locally at once too and kept until the daemon acknowledges
+/// them: every layout that arrives meanwhile gets them replayed on top, so an older echo never
+/// shows a tab back where it was. Ops that create or end panes wait for the daemon, which
+/// allocates the ids. The session's projects (`ServerCtl::Projects`) work the same way.
 @MainActor
 @Observable
 public final class DaemonLayoutStore: LayoutStore {
@@ -17,9 +18,21 @@ public final class DaemonLayoutStore: LayoutStore {
     public private(set) var hasLayout = false
     /// The daemon session's name.
     public private(set) var sessionName = ""
+    /// The session's projects as last reported, with unacknowledged changes on top.
+    public private(set) var projects = HostProjects()
+    /// Whether the daemon keeps projects (`DaemonFeatures::PROJECTS`).
+    public var supportsProjects = false
+
+    private enum Pending {
+        case layout(PaneLayout.LayoutOp)
+        case project(ProjectChange)
+    }
 
     @ObservationIgnored private var revision: UInt64?
+    @ObservationIgnored private var projectsRevision: UInt64?
     @ObservationIgnored private var confirmed: Session
+    @ObservationIgnored private var confirmedProjects = HostProjects()
+    @ObservationIgnored private var pending: [(id: UInt64, change: Pending)] = []
     @ObservationIgnored private let send: (UnnamedCore.LayoutOp) -> UInt64
 
     /// `send` delivers an op to the daemon and returns its id (`DaemonClient.op`).
@@ -37,29 +50,77 @@ public final class DaemonLayoutStore: LayoutStore {
             next.apply(op)
             if next != session { session = next }
         }
-        _ = send(daemonOp)
+        let id = send(daemonOp)
+        if LayoutConversion.isReplayable(op) { pending.append((id, .layout(op))) }
+    }
+
+    /// Changes the session's projects: shown at once, sent to the daemon.
+    public func apply(_ change: ProjectChange) {
+        guard let sessionId, supportsProjects else { return }
+        projects.apply(change)
+        let id = send(LayoutConversion.op(change, sessionId: sessionId))
+        pending.append((id, .project(change)))
     }
 
     /// A `LayoutChanged` from the daemon. Layouts older than the one applied are ignored
     /// (`revision`), unless they belong to another session (re-attach).
     func receive(_ layout: SessionLayout) {
         if layout.sessionId == sessionId, let revision, layout.revision < revision { return }
+        if layout.sessionId != sessionId {
+            pending.removeAll()
+            projectsRevision = nil
+            confirmedProjects = HostProjects()
+        }
         sessionId = layout.sessionId
         sessionName = layout.name
         revision = layout.revision
         confirmed = LayoutConversion.session(layout)
         hasLayout = true
-        if confirmed != session { session = confirmed }
+        rebase()
     }
 
-    /// The daemon restarted (new epoch): its revisions start over.
+    /// A `Projects` report (sent with every layout, to owner connections only).
+    func receive(_ report: DaemonProjects) {
+        guard report.sessionId == sessionId else { return }
+        if let projectsRevision, report.revision < projectsRevision { return }
+        projectsRevision = report.revision
+        confirmedProjects = LayoutConversion.projects(report)
+        rebase()
+    }
+
+    /// The daemon answered op `id`: its effect is in the confirmed state now, or it failed and
+    /// its optimistic change goes.
+    func acknowledge(_ id: UInt64, failed: Bool) {
+        if let index = pending.firstIndex(where: { $0.id == id }) { pending.remove(at: index) }
+        if failed { rebase() }
+    }
+
+    /// The daemon restarted (new epoch): its revisions start over, unanswered ops are lost.
     func resetRevision() {
         revision = nil
+        projectsRevision = nil
+        pending.removeAll()
     }
 
-    /// An op failed: drop optimistic changes and show the daemon's layout again.
+    /// Drops every optimistic change and shows the daemon's state again.
     func revertToConfirmed() {
-        if confirmed != session { session = confirmed }
+        pending.removeAll()
+        rebase()
+    }
+
+    /// The confirmed state with every unacknowledged change replayed on top.
+    private func rebase() {
+        var next = confirmed
+        var nextProjects = confirmedProjects
+        for (_, change) in pending {
+            switch change {
+            case .layout(let op): next.apply(op)
+            case .project(let change): nextProjects.apply(change)
+            }
+        }
+        nextProjects.keep(tabs: Set(next.tabs.map(\.id)))
+        if next != session { session = next }
+        if nextProjects != projects { projects = nextProjects }
     }
 
     /// What is on screen, for the daemon's stream priorities (`DaemonClient.setView`).

@@ -411,6 +411,31 @@ pub enum LayoutOp {
         /// Which side of `target`.
         side: Direction,
     },
+    /// Puts a tab in a project defined in its session (`PutProject` first), moves it within
+    /// it by `rank`, or ungroups it with `nil` (daemons with `projects`).
+    SetTabProject {
+        /// The tab.
+        tab_id: u64,
+        /// The project, or `nil` to ungroup.
+        project_id: Option<String>,
+        /// Where the tab sorts within the project.
+        rank: i64,
+    },
+    /// Defines or updates a project in a session; an older `updated_ms` than the daemon's
+    /// copy is ignored (daemons with `projects`).
+    PutProject {
+        /// The session.
+        session_id: u64,
+        /// The definition.
+        project: DaemonProject,
+    },
+    /// Ungroups every tab of a project in a session and drops it (daemons with `projects`).
+    RemoveProject {
+        /// The session.
+        session_id: u64,
+        /// The project.
+        project_id: String,
+    },
 }
 
 impl From<LayoutOp> for proto::LayoutOp {
@@ -503,6 +528,112 @@ impl From<LayoutOp> for proto::LayoutOp {
                 target: PaneId(target),
                 side: side.into(),
             },
+            LayoutOp::SetTabProject {
+                tab_id,
+                project_id,
+                rank,
+            } => Self::SetTabProject {
+                tab_id: TabId(tab_id),
+                project: project_id,
+                rank,
+            },
+            LayoutOp::PutProject {
+                session_id,
+                project,
+            } => Self::PutProject {
+                session_id: SessionId(session_id),
+                project: project.into(),
+            },
+            LayoutOp::RemoveProject {
+                session_id,
+                project_id,
+            } => Self::RemoveProject {
+                session_id: SessionId(session_id),
+                project: project_id,
+            },
+        }
+    }
+}
+
+/// A project (a named, coloured group of tabs) as one daemon session knows it. The same id
+/// on several daemons is one project.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DaemonProject {
+    /// Client-chosen id, 1–64 bytes.
+    pub id: String,
+    /// Its name, up to 128 bytes.
+    pub name: String,
+    /// Palette index, 0–7.
+    pub color: u8,
+    /// Where it sorts among projects.
+    pub order: i64,
+    /// When it was last changed (Unix milliseconds); the newer definition wins.
+    pub updated_ms: u64,
+}
+
+impl From<proto::Project> for DaemonProject {
+    fn from(p: proto::Project) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            color: p.color,
+            order: p.order,
+            updated_ms: p.updated.0,
+        }
+    }
+}
+
+impl From<DaemonProject> for proto::Project {
+    fn from(p: DaemonProject) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            color: p.color,
+            order: p.order,
+            updated: proto::UnixMillis(p.updated_ms),
+        }
+    }
+}
+
+/// One tab's membership in a project.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DaemonTabProject {
+    /// The tab.
+    pub tab_id: u64,
+    /// The project.
+    pub project_id: String,
+    /// Where the tab sorts within the project.
+    pub rank: i64,
+}
+
+/// A session's projects, as far as the connection sees.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DaemonProjects {
+    /// The session.
+    pub session_id: u64,
+    /// The session layout revision these belong to.
+    pub revision: u64,
+    /// Definitions of the projects `tabs` use.
+    pub projects: Vec<DaemonProject>,
+    /// Tab memberships.
+    pub tabs: Vec<DaemonTabProject>,
+}
+
+impl From<proto::SessionProjects> for DaemonProjects {
+    fn from(p: proto::SessionProjects) -> Self {
+        Self {
+            session_id: p.session_id.0,
+            revision: p.revision,
+            projects: p.projects.into_iter().map(Into::into).collect(),
+            tabs: p
+                .tabs
+                .into_iter()
+                .map(|m| DaemonTabProject {
+                    tab_id: m.tab_id.0,
+                    project_id: m.project,
+                    rank: m.rank,
+                })
+                .collect(),
         }
     }
 }

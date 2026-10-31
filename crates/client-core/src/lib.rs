@@ -270,6 +270,12 @@ pub enum ClientEvent {
         /// The report.
         status: Option<proto::ProgramReport>,
     },
+    /// A session's projects, after each [`ClientEvent::Layout`] from daemons with
+    /// `DaemonFeatures::PROJECTS`, when this connection has the owner role.
+    Projects {
+        /// The session's projects, as far as this connection sees.
+        projects: proto::SessionProjects,
+    },
     /// Raw output to feed the pane's VT, in order, continuing from the previous event.
     PaneBytes {
         /// The pane.

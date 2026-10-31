@@ -21,6 +21,8 @@ enum WorkspaceAction: Hashable {
     /// The focused VS Code pane alone in the window, without the window's chrome (⌃⌘F).
     case fullScreenEditor
     case previousTab, nextTab, selectTab(Int), lastTab, goToTab
+    /// The current tab one row up or down in the sidebar, within its project or host.
+    case moveTabUp, moveTabDown
     /// The host switcher's ⌃⌘1…⌃⌘9 (⌘1…⌘9 are the tabs', as in Ghostty).
     case selectHost(Int)
     case draw, newCanvas
@@ -40,7 +42,7 @@ enum WorkspaceAction: Hashable {
     static let paneActions: [Self] = [.toggleZoom, .movePaneToNewTab] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let drawActions: [Self] = [.draw, .newCanvas]
-    static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab]
+    static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)
     static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
@@ -83,6 +85,8 @@ enum WorkspaceAction: Hashable {
         case .selectHost(let number): "Host \(number)"
         case .lastTab: "Last Tab"
         case .goToTab: "Go to Tab…"
+        case .moveTabUp: "Move Tab Up"
+        case .moveTabDown: "Move Tab Down"
         case .draw: "Draw on Pane"
         case .newCanvas: "New Canvas Split"
         case .newWindow: "New Window"
@@ -129,6 +133,9 @@ enum WorkspaceAction: Hashable {
         case .selectHost(let number): KeyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: [.command, .control])
         case .lastTab: KeyboardShortcut("9")
         case .goToTab: KeyboardShortcut("p")
+        // ⌃⌘arrows move dividers (Ghostty); ⇧ moves the tab instead.
+        case .moveTabUp: KeyboardShortcut(.upArrow, modifiers: [.command, .control, .shift])
+        case .moveTabDown: KeyboardShortcut(.downArrow, modifiers: [.command, .control, .shift])
         // ⇧⌘D is Ghostty's Split Down.
         case .draw: KeyboardShortcut("d", modifiers: [.command, .control])
         case .newCanvas: KeyboardShortcut("d", modifiers: [.command, .control, .shift])
@@ -170,6 +177,8 @@ enum WorkspaceAction: Hashable {
         case .selectHost(let number): window.selectHost(number: number)
         case .lastTab: window.selectTab(shortcut: 9)
         case .goToTab: window.showTabFinder()
+        case .moveTabUp: withAnimation(DS.Motion.reorder) { window.moveCurrentTab(by: -1) }
+        case .moveTabDown: withAnimation(DS.Motion.reorder) { window.moveCurrentTab(by: 1) }
         case .newWindow: window.newWindow()
         case .commandPalette, .commandPaletteGhostty: window.isPaletteShown.toggle()
         case .find: window.isSearchShown = true
@@ -205,7 +214,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab, .newWindow, .newAgent, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost: break
+        case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.

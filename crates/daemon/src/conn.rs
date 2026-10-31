@@ -268,6 +268,7 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::WORKFLOWS
         | DaemonFeatures::AGENT_INSTALLS
         | DaemonFeatures::PANE_MOVES
+        | DaemonFeatures::PROJECTS
         | DaemonFeatures::BROWSER
         | DaemonFeatures::AGENT_MCP
         | DaemonFeatures::PRESENCE
@@ -809,13 +810,25 @@ impl Client {
         in_session && self.pane_allowed(pane)
     }
 
+    /// Sends a layout, then its projects to an owner client that wants them.
+    fn send_layout(&self, layout: proto::SessionLayout) {
+        let session = layout.session_id;
+        self.send(ServerCtl::LayoutChanged(layout));
+        if self.caps.contains(Caps::PROJECTS)
+            && self.authz.roles.allows_any(proto::Roles::OWNER)
+            && let Some(projects) = self.core.projects_for(session, self.authz.scope)
+        {
+            self.send(ServerCtl::Projects(projects));
+        }
+    }
+
     fn forward(&self, event: Event) {
         match event {
             Event::Layout(s) => {
                 if lock(&self.state).session == Some(s)
                     && let Some(layout) = self.core.layout_for(s, self.authz.scope)
                 {
-                    self.send(ServerCtl::LayoutChanged(layout));
+                    self.send_layout(layout);
                 }
             }
             Event::Sessions => self.send(self.core.sessions_message(self.authz.scope)),
@@ -2098,7 +2111,7 @@ impl Client {
                 if let Some(layout) =
                     session.and_then(|s| self.core.layout_for(s, self.authz.scope))
                 {
-                    self.send(ServerCtl::LayoutChanged(layout));
+                    self.send_layout(layout);
                 }
                 self.send(ServerCtl::OpResult { op_id, outcome });
             }
@@ -2534,7 +2547,7 @@ impl Client {
             .iter()
             .flat_map(|t| crate::layout::leaves(&t.root).collect::<Vec<_>>())
             .collect();
-        self.send(ServerCtl::LayoutChanged(layout));
+        self.send_layout(layout);
         for pane in panes {
             if let Some(meta) = self.core.pane_meta(pane) {
                 self.send(ServerCtl::PaneMeta(meta));

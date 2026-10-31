@@ -43,6 +43,9 @@ pub struct DaemonInfo {
     /// (`agent_mcp_commands`).
     #[uniffi(default = false)]
     pub agent_mcp: bool,
+    /// It keeps projects (`LayoutOp::SetTabProject` …, `ClientEvent::Projects`).
+    #[uniffi(default = false)]
+    pub projects: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -61,6 +64,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             agent_usage: i.features.contains(proto::DaemonFeatures::AGENT_USAGE),
             multiplayer2: i.features.contains(proto::DaemonFeatures::MP2),
             pane_moves: i.features.contains(proto::DaemonFeatures::PANE_MOVES),
+            projects: i.features.contains(proto::DaemonFeatures::PROJECTS),
             agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
         }
     }

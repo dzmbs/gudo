@@ -434,54 +434,8 @@ struct MixedHostsLine: View {
 
 // MARK: - Sidebar and strip
 
-/// The window's own tabs at the top of the sidebar: VS Code tabs under "VS Code", browser tabs
-/// under "Browser", then mixed tabs under "Mixed". Each row names its hosts.
-struct MixedSidebarSection: View {
-    let numbers: [TabRef: Int]
-    @Environment(WindowModel.self) private var model
-
-    var body: some View {
-        let ordered = model.composites.ordered
-        section(ordered.filter(\.isEditorOnly), title: "VS Code", systemImage: "chevron.left.forwardslash.chevron.right", id: "host-group-editors")
-        section(ordered.filter(\.isBrowserOnly), title: "Browser", systemImage: "globe", id: "host-group-browsers")
-        section(ordered.filter { !$0.isEditorOnly && !$0.isBrowserOnly }, title: "Mixed", systemImage: "rectangle.split.2x1", id: "host-group-mixed")
-    }
-
-    @ViewBuilder private func section(_ tabs: [CompositeTab], title: String, systemImage: String, id: String) -> some View {
-        if !tabs.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: DS.Space.s) {
-                    Image(systemName: systemImage)
-                        .font(DS.Font.section.weight(.regular))
-                        .imageScale(.small)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .opacity(DS.Opacity.mutedGlyph)
-                        .frame(width: 16)
-                    Text(title)
-                        .font(DS.Font.section)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                    Spacer()
-                }
-                .padding(.leading, DS.Space.l)
-                .padding(.trailing, DS.Space.gap10)
-                .padding(.top, DS.Space.m)
-                .padding(.bottom, DS.Space.xs)
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier(id)
-                VStack(spacing: 1) {
-                    ForEach(tabs) { tab in
-                        let ref = WindowModel.mixedRef(tab.id)
-                        MixedTabRow(tab: tab, number: numbers[ref] ?? 0)
-                    }
-                }
-            }
-            .transition(.opacity)
-        }
-    }
-}
-
-private struct MixedTabRow: View {
+/// One of the window's own tabs in the sidebar: its title over its hosts.
+struct MixedTabRow: View {
     let tab: CompositeTab
     let number: Int
     @Environment(WindowModel.self) private var model
@@ -542,6 +496,8 @@ private struct MixedTabRow: View {
         .accessibilityIdentifier("tab-row-\(number)")
         .rowActions(actions(busy: state == .working || state == .blocked), id: ref.description, name: title) { action in
             perform(action, busy: state == .working || state == .blocked)
+        } menu: {
+            ProjectMenuItems(model: model, ref: ref)
         }
     }
 

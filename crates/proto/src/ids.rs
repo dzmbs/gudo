@@ -307,6 +307,9 @@ bitset! {
         DEVICE_ALERTS = 16;
         /// On an owner device, wants `ServerCtl::HostAlert`.
         HOST_ALERTS = 17;
+        /// Wants `ServerCtl::Projects` after each `ServerCtl::LayoutChanged` (sent only
+        /// with the owner role; see `proto::project`).
+        PROJECTS = 18;
     }
 }
 
@@ -346,5 +349,8 @@ bitset! {
         INVITE_LINKS = 11;
         /// Pushes `ServerCtl::ProgramStatus` to clients with `Caps::PROGRAM_STATUS`.
         PROGRAM_STATUS = 12;
+        /// Applies `LayoutOp::SetTabProject`, `PutProject` and `RemoveProject`, and pushes
+        /// `ServerCtl::Projects` to clients with `Caps::PROJECTS`.
+        PROJECTS = 13;
     }
 }
