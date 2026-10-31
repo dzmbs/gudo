@@ -9,10 +9,17 @@ public enum PasteResult: Sendable, Equatable {
     /// could run commands. Nothing was written; confirm with the user and paste again with
     /// `allowUnsafe`.
     case needsConfirmation
+    /// Longer than `Terminal.maxPasteBytes`: nothing was written; tell the user.
+    case tooLarge
     case failed
 }
 
 extension Terminal {
+    /// The longest paste sent to a terminal. Past this it is a file transfer: framing it blocks
+    /// the caller for seconds and doubles the memory it holds, and the program reads it a line
+    /// at a time anyway.
+    public static let maxPasteBytes = 16 << 20
+
     /// Pastes `text` the way Ghostty does (`ghostty_terminal_paste`): bracketed when DECSET 2004 is
     /// on (otherwise newlines become CR), unsafe control bytes replaced, and a kitty paste event
     /// instead when the program asked for one. The bytes go to the PTY through `writePty`.
@@ -21,6 +28,7 @@ extension Terminal {
     ///   composer submissions and drops.
     public func paste(_ text: String, source: PasteSource = .clipboard, allowUnsafe: Bool = false) -> PasteResult {
         guard !text.isEmpty else { return .empty }
+        guard text.utf8.count <= Self.maxPasteBytes else { return .tooLarge }
         let box = PasteBox(bytes: Array(text.utf8))
         let reader: GhosttyMimeReaderFn = { userdata, _, writer in
             guard let userdata else { return false }
@@ -49,6 +57,22 @@ extension Terminal {
                 default: return .failed
                 }
             }
+        }
+    }
+
+    /// The lines a paste confirmation names: line breaks, plus a last line without one. One
+    /// pass over the bytes, so asking stays instant for any size.
+    public static func pasteLineCount(_ text: String) -> Int {
+        var text = text
+        return text.withUTF8 { bytes in
+            var lines = 0
+            var last: UInt8 = 0
+            for byte in bytes {
+                // CR LF is one break.
+                if byte == 0x0D || (byte == 0x0A && last != 0x0D) { lines += 1 }
+                last = byte
+            }
+            return bytes.isEmpty || last == 0x0A || last == 0x0D ? lines : lines + 1
         }
     }
 

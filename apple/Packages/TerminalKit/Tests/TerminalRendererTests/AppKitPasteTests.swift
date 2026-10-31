@@ -89,6 +89,26 @@ import Testing
         board.releaseGlobally()
     }
 
+    /// A drag of a huge text is asked about on every pointer move: the answer looks at the
+    /// pasteboard's types and never reads the text (reading 64 MB on each move froze the window
+    /// for the whole drag). The drop itself is refused calmly, with nothing written.
+    @Test func dragOfHugeTextStaysResponsive() throws {
+        let (view, window, written) = try makeView()
+        let board = NSPasteboard(name: NSPasteboard.Name("terminal-huge-drop-test"))
+        defer { board.releaseGlobally() }
+        board.clearContents()
+        board.setString(String(repeating: "0123456789abcde\n", count: 4 << 20), forType: .string)
+        let drag = FakeDrag(board)
+        let start = ContinuousClock.now
+        #expect(view.draggingEntered(drag) == .copy)
+        for _ in 0..<60 { _ = view.draggingUpdated(drag) }
+        #expect(ContinuousClock.now - start < .milliseconds(100))
+        // No window: the refusal would be a modal alert, so only the paste itself is checked.
+        #expect(view.surface.paste(TerminalView.droppedText(board)!) == .tooLarge)
+        #expect(written.bytes.withLock { $0 }.isEmpty)
+        withExtendedLifetime(window) {}
+    }
+
     /// Dropped text pastes; a drag of an unpasted type (a tab carries its reference as text too)
     /// goes to the view around the terminal instead.
     @Test func unpastedDragsGoToTheViewAround() throws {

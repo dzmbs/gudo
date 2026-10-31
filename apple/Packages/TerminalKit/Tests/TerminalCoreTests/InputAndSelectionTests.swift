@@ -140,6 +140,38 @@ private let geometry = MouseGeometry(screenWidth: 200, screenHeight: 100, cellWi
     #expect(terminal.paste("") == .empty)
 }
 
+/// A paste the size of a log file is refused before anything is copied or framed: framing
+/// 200 MB took over a second on the caller's (main) thread and doubled its memory.
+@Test func pasteOverTheLimitIsRefusedAtOnce() {
+    let (terminal, sink) = makeTerminal()
+    terminal.write(Array("\u{1b}[?2004h".utf8))
+    let line = String(repeating: "x", count: 1023) + "\n"
+    let atLimit = String(repeating: line, count: Terminal.maxPasteBytes / 1024)
+    #expect(terminal.paste(atLimit) == .written)
+    #expect(sink.take().utf8.count == Terminal.maxPasteBytes + 12, "the limit itself still pastes, bracketed")
+
+    let huge = String(repeating: line, count: 8 * Terminal.maxPasteBytes / 1024)
+    let start = ContinuousClock.now
+    #expect(terminal.paste(huge) == .tooLarge)
+    #expect(terminal.paste(huge, source: .text, allowUnsafe: true) == .tooLarge)
+    #expect(ContinuousClock.now - start < .milliseconds(50))
+    #expect(sink.take().isEmpty)
+}
+
+/// The confirmation's line count: one pass, no array of lines (splitting 50 MB took seconds).
+@Test func pasteLineCount() {
+    #expect(Terminal.pasteLineCount("") == 0)
+    #expect(Terminal.pasteLineCount("one") == 1)
+    #expect(Terminal.pasteLineCount("one\n") == 1)
+    #expect(Terminal.pasteLineCount("one\ntwo") == 2)
+    #expect(Terminal.pasteLineCount("one\r\ntwo\r\n") == 2)
+    #expect(Terminal.pasteLineCount("a\rb\n\nc") == 4)
+    let big = String(repeating: "echo hi\n", count: 2_000_000)
+    let start = ContinuousClock.now
+    #expect(Terminal.pasteLineCount(big) == 2_000_000)
+    #expect(ContinuousClock.now - start < .milliseconds(500))
+}
+
 @Test func pasteStripsControlBytesAndRefusesTerminatorInjection() {
     let (terminal, sink) = makeTerminal()
     terminal.write(Array("\u{1b}[?2004h".utf8))

@@ -455,7 +455,8 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         if sender.draggingSource as? TerminalView === self { return [] }
         let board = sender.draggingPasteboard
         if onDropAttachment != nil, Self.hasAttachment(board) { return .copy }
-        return Self.droppedText(board) != nil ? .copy : []
+        // Asked on every move of the drag: look at the types, never read the text itself.
+        return Self.hasDroppableText(board) ? .copy : []
     }
 
     override public func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -477,6 +478,11 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         window?.makeFirstResponder(self)
         pasteText(text)
         return true
+    }
+
+    static func hasDroppableText(_ pasteboard: NSPasteboard) -> Bool {
+        pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+            || pasteboard.availableType(from: [.string]) != nil
     }
 
     /// Files as shell-quoted paths separated by spaces (as Terminal and Ghostty do), else text.
@@ -504,13 +510,22 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     /// Bracketed when enabled; an unbracketed multi-line paste asks first.
     public func pasteText(_ text: String) {
         surface.terminal.clearSelection()
-        guard surface.paste(text) == .needsConfirmation else { return }
-        let alert = NSAlert()
-        alert.messageText = "Paste \(text.split(whereSeparator: \.isNewline).count) Lines?"
-        alert.informativeText = "The program did not enable bracketed paste, so each line may run as a command."
-        alert.addButton(withTitle: "Paste")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn { _ = surface.paste(text, allowUnsafe: true) }
+        switch surface.paste(text) {
+        case .needsConfirmation:
+            let alert = NSAlert()
+            alert.messageText = "Paste \(Terminal.pasteLineCount(text)) Lines?"
+            alert.informativeText = "The program did not enable bracketed paste, so each line may run as a command."
+            alert.addButton(withTitle: "Paste")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { _ = surface.paste(text, allowUnsafe: true) }
+        case .tooLarge:
+            let alert = NSAlert()
+            alert.messageText = PasteLimit.title
+            alert.informativeText = PasteLimit.message(bytes: text.utf8.count)
+            if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        default:
+            break
+        }
     }
 
     // MARK: Keyboard
