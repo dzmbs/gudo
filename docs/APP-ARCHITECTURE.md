@@ -1009,3 +1009,89 @@ restarts, create without replacing, contents only over the version they came fro
 fetch, delete into the host's trash, the working set, error mapping, what the app shares and the
 domain plan, and the whole path against a real daemon (`DaemonFilesTests`: pair, share, dial as
 the extension, browse, create, edit, rename, fetch, delete).
+
+## 23. Projects (tab groups across hosts) and sidebar reordering
+
+workspace groups, Arc folders, Safari and Chrome tab groups, the iOS "drop onto an app to make a
+folder").
+
+**Model.** A project is a named, coloured group of tabs: `ProjectInfo` (id, name, colour index,
+order, updated) and per tab a `Membership` (project id, rank). Any tab can join: a daemon tab, a
+tab on this device or a plain-SSH host, a window tab (mixed, VS Code, browser). A project exists
+while it has tabs (Chrome); there is no empty project to tend.
+
+**Sidebar.** Projects lead (after Agents, Hosts and Needs you), in their order, each a header
+(colour dot, name, tab count when collapsed, + New Terminal) over its tabs in rank order, with a
+2 pt thread of the project's colour down their leading edge. A project tab names its host on its
+second line ("studio · cargo build") when the window shows more than one host. Below the projects,
+every host keeps its own section with its loose tabs (and its repositories and agents): the host
+header stays where connection state, + New Terminal, usage, agents, Retry and Disconnect live, so
+nothing host-level moved. A host whose tabs are all in projects shows its header alone. Window
+tabs not in a project stay under Mixed / VS Code / Browser. ⌘1…⌘9, ⇧⌘[ ], Go to Tab (whose rows
+name the project) and the tab strip (a project's tabs carry its colour along their foot) follow
+this order (`HostGroups.tabs`). Project colours are the theme's own ANSI hues softened like the
+state colours (`ProjectColor`), so they sit in any theme.
+
+**Gestures.** Drag a tab's row:
+- onto the middle of another row: that row lights in the project's colour (the accent for a loose
+  row; "will group", unlike the insertion gap) and dropping groups them: into the row's project,
+  or a new project named after the shared repository or directory, else "Project N";
+- onto the top or bottom of a row: the rows slide apart and the gap is where it lands; within a
+  host section it is a reorder on the host, within a project a new rank, from a host section into
+  a project it joins, from a project onto its host's section it leaves (a tab can only land in
+  its own host's section: tabs live on their host; anywhere on another host's row groups);
+- onto a project's header: joins at the end (the header lights); a collapsed project springs open
+  after 0.6 s; onto its host's header: leaves its project.
+Drag a project's header to reorder projects. Menus (sidebar row, strip, compact switcher, Tab
+menu): New Project from Tab, Move to Project ▸, Remove from Project; a project's header: Rename…
+(in place), Colour ▸, New Terminal, Collapse, Ungroup, Close All Tabs. Keyboard: ⌃⇧⌘↑ / ⌃⇧⌘↓
+(Tab ▸ Move Tab Up / Down; ⌃⌘arrows already move dividers, Ghostty) move the current tab within
+its section; VoiceOver has Move Up / Move Down on each row. Suggestion: when two or more loose
+tabs share a repository root (the daemon's repositories) or working directory, one quiet row
+offers "Group 3 tabs in app" (one tap; dismissible, remembered per window; never automatic;
+home folders do not count).
+
+**Persistence and sync.** Daemon tabs keep their membership on the daemon (`LayoutOp::
+SetTabProject` / `PutProject` / `RemoveProject`, pushed as `ServerCtl::Projects` to clients with
+`Caps::PROJECTS`, behind `DaemonFeatures::PROJECTS`; DAEMON.md), in its layout.json too, so every
+device of the owner attached to that session sees the same projects. The client merges every
+host's report by project id: the newest `updated` wins a name, colour or order (an edit is
+stamped after the copy it replaces, so two edits in one millisecond or a host's clock ahead never
+lose one), ties broken by name. A rename, recolour or reorder of projects goes to every host
+holding a member. Tabs without a daemon that keeps them (this device, plain SSH, window tabs,
+older daemons) keep their membership with the window (`@SceneStorage("projects")`, JSON, and the
+app's last copy), as their tabs do. Guests: the daemon sends `Projects` only to connections with
+the owner role and refuses the ops for any other role, so a guest sees plain tabs and never the
+owner's grouping. Collapsed projects are per window.
+
+**Optimism without double moves.** The old reorder collided for three reasons: every
+`LayoutChanged` replaced the store's session wholesale, so an older echo (the focus the click sent
+just before the drag) put the tab back and the move's own echo moved it again; each row was its
+own drop target with no live preview, so nothing made room while dragging; and the drop landed
+without an animation. Now `DaemonLayoutStore` keeps the ops it applied optimistically that set a
+state (focus, move, rename, project changes) until their `OpResult` arrives and replays them on
+every layout and project report, so an echo can never show an order the user has left; a failed
+op drops its change and shows the daemon's truth. The sidebar's tab list is one flat list
+(`SidebarTabList`, items keyed by `TabRef`, so a row moving between a host and a project slides
+rather than fading) under one drop target that hit-tests the rows' frames. While dragging it
+draws the drop as a plan applied to its rows (`SidebarDrop`): neighbours slide apart with a
+spring (`DS.Motion.reorder`, interruptible), the dragged row leaves a gap where it will land
+(the system's lifted preview follows the pointer or finger), never sliding over its neighbours.
+On drop the plan is committed to the stores in the same transaction that clears it, so the order
+on screen does not change, nothing moves twice, and the row fades into its gap.
+
+**iPad, iPhone, Mac.** The sidebar is the same on iPad, a foldable's open screen and the Mac
+(drag with a long press on touch). The compact switcher lists each project as a menu section
+("app · 2 hosts") before the window's and the hosts' loose tabs, with the project items in the
+tab's menu.
+
+Tests: HostKit `ProjectModelTests` (definitions, last writer wins, merge across hosts, planner
+for every gesture, suggestions), `SidebarDropTests` (edges, middle, other hosts, plans applied
+to sections, loose order → session index), `ProjectStoreTests` (an old echo after an optimistic
+move, a refused move, project changes shown at once and reconciled), `HostGroupsProjectTests`
+(drops end to end, ⌘ order, a preview equals what the commit leaves, rename/recolour/reorder),
+`DaemonIntegrationTests.projectsComeBackFromTheDaemon` (a real daemon keeps them for the next
+connection); App `ProjectSidebarTests` (the list while dragging is the list after the drop,
+grouping, keys); snapshots `MacSnapshotTests.testProjects` (frame sequences of a reorder, a drop,
+"will group", a row joining another project) and `TouchSnapshotTests`; daemon and proto tests in
+DAEMON.md.

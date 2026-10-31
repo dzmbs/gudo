@@ -134,6 +134,8 @@ struct WindowContent: View {
     @SceneStorage("focusedTab") private var storedFocus: String?
     /// The window's mixed tabs (`CompositeTab`s, JSON).
     @SceneStorage("mixedTabs") private var storedMixed: String?
+    /// Projects of tabs without a daemon to keep them, collapsed projects (JSON).
+    @SceneStorage("projects") private var storedProjects: String?
     /// Two Columns as the user set it for this window (absent: automatic).
     @SceneStorage("twoColumns") private var storedTwoColumns: String?
     /// The request this scene already opened (a restored scene must not open it again).
@@ -153,6 +155,7 @@ struct WindowContent: View {
             .onChange(of: model.groups.collapsed) { _, _ in persist() }
             .onChange(of: model.currentTab) { _, _ in persist() }
             .onChange(of: model.composites.tabs) { _, _ in persist() }
+            .onChange(of: model.groups.projectsState) { _, _ in persist() }
             .onChange(of: model.twoColumnsChoice) { _, _ in persist() }
             .onChange(of: scenePhase, initial: true) { _, phase in model.isOnScreen = phase != .background }
     }
@@ -364,8 +367,13 @@ struct WindowContent: View {
         if let twoColumns = storedTwoColumns ?? defaults.string(forKey: Self.lastTwoColumnsKey) {
             model.twoColumnsChoice = twoColumns == "auto" ? nil : twoColumns == "on"
         }
+        if let projects = decode(HostGroups.ProjectsState.self, storedProjects ?? defaults.string(forKey: Self.lastProjectsKey)) {
+            model.groups.projectsState = projects
+        }
         model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: focus, mixedTabs: mixed)
     }
+
+    private static let lastProjectsKey = "window.projects"
 
     private static let lastHostsKey = "window.openHosts"
     private static let lastCollapsedKey = "window.collapsedHosts"
@@ -392,5 +400,7 @@ struct WindowContent: View {
         defaults.set(storedFocus, forKey: Self.lastFocusKey)
         defaults.set(storedMixed, forKey: Self.lastMixedKey)
         defaults.set(storedTwoColumns, forKey: Self.lastTwoColumnsKey)
+        storedProjects = encode(model.groups.projectsState)
+        defaults.set(storedProjects, forKey: Self.lastProjectsKey)
     }
 }

@@ -73,10 +73,14 @@ import UnnamedCore
         #expect(sent.last == .focus(paneId: 1))
         #expect(store.view.focused == 1)
 
-        // An older layout is ignored; a newer one replaces the optimistic state.
+        // An older layout is ignored; a newer one replaces the optimistic state once the
+        // daemon has answered the op (until then the op is replayed on top).
         store.receive(sampleLayout(revision: 4, focused: 2))
         #expect(store.session.activeTab?.focused == PaneId(1))
         store.receive(sampleLayout(revision: 6, focused: 2))
+        #expect(store.session.activeTab?.focused == PaneId(1))
+        store.acknowledge(UInt64(sent.count), failed: false)
+        store.receive(sampleLayout(revision: 7, focused: 2))
         #expect(store.session.activeTab?.focused == PaneId(2))
 
         // A failed op drops optimistic changes.

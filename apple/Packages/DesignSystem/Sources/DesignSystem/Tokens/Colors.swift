@@ -117,6 +117,8 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
         case ink
         /// One of the theme's 16 ANSI colours as the terminal draws it (presence hues, previews).
         case ansi(Int)
+        /// A project's colour (`ProjectColor`).
+        case project(Int)
     }
 
     public let token: Token
@@ -127,6 +129,9 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
 
     public func resolve(in environment: EnvironmentValues) -> Color.Resolved {
         if case .ansi(let index) = token { return environment.terminalTheme.ansiRGB(index).color.resolve(in: environment) }
+        if case .project(let index) = token {
+            return ProjectColor.color(index, theme: environment.terminalTheme, chrome: environment.chrome).color.resolve(in: environment)
+        }
         return environment.chrome.color(token).resolve(in: environment)
     }
 }
@@ -163,7 +168,7 @@ nonisolated public extension ChromePalette {
         case .groupedRow: groupedRowColor
         case .terminal: terminalColor
         case .ink: foreground.color
-        case .ansi: foreground.color
+        case .ansi, .project: foreground.color
         }
     }
 }

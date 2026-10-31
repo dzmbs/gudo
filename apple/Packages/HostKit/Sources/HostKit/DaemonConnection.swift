@@ -306,6 +306,7 @@ public final class DaemonConnection: HostConnection {
         switch event {
         case .daemonInfo(let info):
             daemonInfo = info
+            layout.supportsProjects = info?.projects ?? false
             daemonInfoReported = true
             onDaemonInfo?(info)
         case .incompatible(let reason):
@@ -365,8 +366,14 @@ public final class DaemonConnection: HostConnection {
         case .paneClosed(let pane):
             meta[PaneId(pane)] = nil
             programs[PaneId(pane)] = nil
-        case .opResult(_, let outcome):
-            if case .failed = outcome { layout.revertToConfirmed() }
+        case .opResult(let id, let outcome):
+            if case .failed = outcome {
+                layout.acknowledge(id, failed: true)
+            } else {
+                layout.acknowledge(id, failed: false)
+            }
+        case .projects(let report):
+            layout.receive(report)
         case .paneSnapshot, .paneResized:
             noteOutput()
         default:

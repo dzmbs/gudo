@@ -146,6 +146,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from below, grown from 0.9, a 4 pt blur | — |
 | `menu` | spring 0.3 / 0.86 | menus, popovers, the host switcher's highlight | — |
 | `swipe` | spring 0.32 / 0.86 | a row settling open or shut after a swipe | iOS Mail |
+| `reorder` | spring 0.3 / 0.84 | sidebar rows making room for a dragged tab, a drop settling; a collapsed project springs open after 0.6 s | Finder, Safari's sidebar |
 | `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
 
 Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
@@ -249,7 +250,14 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - Agents (count badge, red only when something needs you) and Hosts at the top. Under a
   host's tabs, its agents under a quiet "Agents" label with + New Agent on that host (hover on
   the Mac, 0.6 on touch).
-- One group per host the window shows, all at once (owner, 2026-10-18: switching hosts never
+  §23): a header with the project's colour dot (`ProjectColor`, the theme's ANSI hue softened like
+  the states), its name in the section font and + New Terminal; its tabs under it with a 2 pt
+  thread of its colour at their leading edge, each naming its host on the second line. Drop a tab
+  on another to group them (the row lights in the colour), between rows to place it (the rows
+  slide apart with `DS.Motion.reorder`; the dragged row leaves a gap, never slides over others).
+  A one-tap "Group 3 tabs in app" suggestion when loose tabs share a repository. The strip draws
+  a project's colour under its tabs.
+- Then one group per host the window shows (its loose tabs), all at once (owner, 2026-10-18: switching hosts never
   goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
   (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font
   (`.primary` when live, `.tertiary` when not), an "SSH" outline badge for plain-SSH hosts, the
@@ -268,8 +276,8 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
   every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1–8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
-  10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder within a host; context
-  menu Rename / Close. Under a group's tabs, its agents. Rows touch (no gap); the host's agent
+  10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder or group; context
+  menu Rename / Close / New Project from Tab / Move to Project ▸. Under a group's tabs, its agents. Rows touch (no gap); the host's agent
   glyph opens its agents on hover (`HoverPopover`). On iPad the sidebar's bar holds Settings (⌘,)
   and New Tab only: no app name.
 - Footer: Settings only (no connection summary, §3.7 rule 1).

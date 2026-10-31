@@ -101,38 +101,36 @@ enum PaletteCommands {
         return commands
     }
 
-    /// Every tab on every host, in the sidebar's order, searchable by name, context and host
-    /// ("hetzner · claude: fix the build"), with its ⌘N.
+    /// Every tab on every host, in the sidebar's order, searchable by name, project, context and
+    /// host ("api · hetzner · claude: fix the build"), with its ⌘N.
     static func tabs(model: WindowModel, section: String?) -> [PaletteCommand] {
         let showsHost = model.groups.groups.count > 1
-        var commands: [PaletteCommand] = []
-        for mixed in model.composites.ordered {
-            let ref = WindowModel.mixedRef(mixed.id)
-            commands.append(PaletteCommand(
-                id: "tab-\(ref)", title: model.title(ofMixedTab: mixed),
-                subtitle: mixed.hosts.map(model.groupName).joined(separator: " + "), section: section,
-                systemImage: "rectangle.split.2x1",
-                program: mixed.isEditorOnly ? .vscode : mixed.isBrowserOnly ? .browser : nil,
-                shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
-            ) { model.focus(ref) })
-        }
-        for group in model.groups.groups {
-            let workspace = model.workspace(ofGroup: group.id)
-            for tab in group.tabs {
-                let ref = group.ref(tab.id)
-                let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
-                let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
-                let context = workspace?.context(of: tab)
-                let subtitle = [showsHost || section == nil ? group.name : nil, context].compactMap(\.self).joined(separator: " · ")
-                commands.append(PaletteCommand(
-                    id: "tab-\(ref)", title: title, subtitle: subtitle.isEmpty ? nil : subtitle,
-                    section: section, program: model.programIdentity(of: tab, onGroup: group.id),
-                    state: states.min { $0.urgency < $1.urgency },
-                    shortcut: model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
-                ) { model.focus(ref) })
+        let projects = Dictionary(model.projects.flatMap { project in project.tabs.map { ($0, project.name) } }, uniquingKeysWith: { a, _ in a })
+        return model.groups.tabs.compactMap { ref -> PaletteCommand? in
+            let shortcut = model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
+            if ref.hostId == HostGroups.mixedId {
+                guard let mixed = model.composites.tab(ref.tab) else { return nil }
+                let subtitle = [projects[ref], mixed.hosts.map(model.groupName).joined(separator: " + ")].compactMap(\.self).joined(separator: " · ")
+                return PaletteCommand(
+                    id: "tab-\(ref)", title: model.title(ofMixedTab: mixed), subtitle: subtitle, section: section,
+                    systemImage: "rectangle.split.2x1",
+                    program: mixed.isEditorOnly ? .vscode : mixed.isBrowserOnly ? .browser : nil,
+                    shortcut: shortcut
+                ) { model.focus(ref) }
             }
+            guard let group = model.groups.group(ref.hostId), let tab = group.tabs.first(where: { $0.id == ref.tab }) else { return nil }
+            let workspace = model.workspace(ofGroup: group.id)
+            let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
+            let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
+            let context = workspace?.context(of: tab)
+            let subtitle = [projects[ref], showsHost || section == nil ? group.name : nil, context].compactMap(\.self).joined(separator: " · ")
+            return PaletteCommand(
+                id: "tab-\(ref)", title: title, subtitle: subtitle.isEmpty ? nil : subtitle,
+                section: section, program: model.programIdentity(of: tab, onGroup: group.id),
+                state: states.min { $0.urgency < $1.urgency },
+                shortcut: shortcut
+            ) { model.focus(ref) }
         }
-        return commands
     }
 
     /// The focused pane's worktree: pull request actions (Merge respects GitHub's merge state and

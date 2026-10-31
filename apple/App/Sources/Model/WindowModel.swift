@@ -83,6 +83,8 @@ final class WindowModel {
     @ObservationIgnored var newAgentSeed = NewAgentSeed()
     /// The tab being dragged from this window's sidebar or strip (panes take it as a split).
     @ObservationIgnored var draggedTab: TabRef?
+    /// What a drag over the sidebar would do (observed by its rows).
+    @ObservationIgnored let sidebarDrag = SidebarDragState()
     /// Each Files leaf's place, kept here so a leaf rebuilt by a split or a move keeps it.
     @ObservationIgnored var filesNavigators: [UUID: FilesNavigator] = [:]
     var isPaletteShown = false {

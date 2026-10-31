@@ -79,6 +79,10 @@ struct WorkspaceCommands: Commands {
                 }
                 .disabled(targets.isEmpty || editorHasKeys)
             }
+            if let model, let ref = model.currentTab {
+                Divider()
+                ProjectMenuItems(model: model, ref: ref)
+            }
         }
         CommandMenu("Git") {
             Button("Run Script") { model?.git.runDefault() }

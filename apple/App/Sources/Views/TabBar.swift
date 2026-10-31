@@ -159,16 +159,30 @@ private struct TabChip: View {
                 }
                 Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
                 MergeIntoTabMenu(workspace: workspace, tab: tab.id)
+                ProjectMenuItems(model: model, ref: ref)
                 Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }
             }
         }
+        // A project's tabs carry its colour along their foot (Chrome's tab groups).
+        .overlay(alignment: .bottom) {
+            if let project = model.groups.project(of: ref) {
+                Capsule()
+                    .fill(DS.Palette.project(project.color))
+                    .frame(height: 2)
+                    .padding(.horizontal, DS.Space.m)
+                    .accessibilityHidden(true)
+            }
+        }
         .tabDrag(ref, model: model)
-        .dropDestination(for: String.self) { items, _ in
-            guard let item = items.first, let slash = item.lastIndex(of: "/"),
-                  String(item[..<slash]) == group.id, let raw = UInt64(item[item.index(after: slash)...]),
-                  let index = group.tabs.firstIndex(where: { $0.id == tab.id })
+        .dropDestination(for: String.self) { _, _ in
+            // Takes the dragged tab's place in this tab's section (its project or host).
+            guard let dragged = model.draggedTab, dragged != ref,
+                  let section = model.groups.sections.first(where: { $0.rows.contains(ref) }),
+                  SidebarDrop.accepts(section.container, dragged),
+                  let index = section.rows.firstIndex(of: ref)
             else { return false }
-            workspace?.apply(.moveTab(TabId(raw), to: index))
+            model.draggedTab = nil
+            withAnimation(DS.Motion.reorder) { model.commit(.insert(dragged, into: section.container, at: index)) }
             return true
         }
         .help(Self.tooltip(title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab)))

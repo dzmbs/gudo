@@ -18,8 +18,6 @@ struct WorkspaceSidebar: View {
     @State private var swipe = RowSwipeState()
 
     var body: some View {
-        let groups = model.groups.groups
-        let numbers = Dictionary(uniqueKeysWithValues: model.groups.tabs.enumerated().map { ($1, $0 + 1) })
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
@@ -34,14 +32,10 @@ struct WorkspaceSidebar: View {
 
                 NeedsYouSection()
 
-                // Tabs whose panes live on several hosts, at the window's top.
-                MixedSidebarSection(numbers: numbers)
+                // Projects, the window's own tabs, then each host's loose tabs.
+                SidebarTabList()
 
-                ForEach(groups) { group in
-                    HostGroupSection(group: group, numbers: numbers)
-                }
-
-                if groups.isEmpty {
+                if model.groups.groups.isEmpty {
                     NoHostsRow()
                 }
             }
@@ -166,11 +160,10 @@ extension HostGroup {
     }
 }
 
-/// One host: a header (disclosure, connection dot, name, + on hover), its state in words while it
-/// is not live, then its tabs and its agents. The header's tap collapses the group.
-private struct HostGroupSection: View {
+/// One host's header in the tab list: its name and state, then its agents' plan usage. Its
+/// tabs, agents and placeholder follow as items of their own (`SidebarItem`).
+struct HostGroupHeaderItem: View {
     let group: HostGroup
-    let numbers: [TabRef: Int]
     @Environment(WindowModel.self) private var model
 
     var body: some View {
@@ -184,29 +177,7 @@ private struct HostGroupSection: View {
                     .padding(.trailing, DS.Space.gap10)
                     .padding(.bottom, DS.Space.xs)
             }
-            if !collapsed {
-                VStack(spacing: 0) {
-                    // A daemon's tabs the git way once it has sent its repositories
-                    // (Git/GitSidebar.swift): loose tabs, then repository → worktree.
-                    if let sidebar = model.groups.repoSidebar(for: group) {
-                        RepoGroupsView(group: group, sidebar: sidebar, numbers: numbers) { tab in
-                            let ref = group.ref(tab.id)
-                            TabRow(tab: tab, ref: ref, number: numbers[ref] ?? 0, group: group)
-                        }
-                    } else {
-                        ForEach(group.tabs) { tab in
-                            let ref = group.ref(tab.id)
-                            TabRow(tab: tab, ref: ref, number: numbers[ref] ?? 0, group: group)
-                        }
-                    }
-                    if group.tabs.isEmpty {
-                        GroupPlaceholder(group: group)
-                    }
-                }
-                GroupAgents(group: group, numbers: numbers)
-            }
         }
-        .transition(.opacity)
     }
 }
 
@@ -254,7 +225,7 @@ private struct HostGroupHeader: View {
                 }
                 Spacer(minLength: DS.Space.xs)
                 if collapsed, !group.tabs.isEmpty {
-                    Text("\(group.tabs.count)")
+                    Text("\(model.groups.looseTabs(of: group).count)")
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .contentTransition(.numericText())
@@ -532,7 +503,7 @@ private struct GroupMenu: View {
 }
 
 /// A host with no tabs yet: what is happening, in words (never a void).
-private struct GroupPlaceholder: View {
+struct GroupPlaceholder: View {
     let group: HostGroup
     @Environment(WindowModel.self) private var model
 
@@ -582,12 +553,13 @@ private struct NoHostsRow: View {
 }
 
 /// underneath in SF Mono (agent task, program, repo:branch or directory), and on the Mac its ⌘N
-/// on the right. Drag to reorder within its host.
-private struct TabRow: View {
+/// on the right. In a project it names its host. Dragged by the list (`SidebarTabList`).
+struct TabRow: View {
     let tab: Tab
     let ref: TabRef
     let number: Int
     let group: HostGroup
+    var showsHost = false
     @Environment(WindowModel.self) private var model
     /// Two digits at the row's size (⌘-numbers run past 9 across hosts).
     @ScaledMetric(relativeTo: .footnote) private var numberWidth: CGFloat = 20
@@ -632,8 +604,9 @@ private struct TabRow: View {
                     // Only a line that says something: not "~", not empty, not the title again;
                     // a shell command running a while shows with its run time.
                     let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
-                    // Always there (blank when it has nothing to say): rows keep one height.
-                    TabSubtitle(context: informative, running: running)
+                    // Always there (blank when it has nothing to say): rows keep one height. In a
+                    // project it leads with the host, which the section header no longer names.
+                    TabSubtitle(context: showsHost ? [group.name, informative].compactMap(\.self).joined(separator: " · ") : informative, running: running)
                         // Under the title, past the mark slot and its spacing.
                         .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
                 }
@@ -651,16 +624,6 @@ private struct TabRow: View {
             .sidebarRow(selected: isActive)
         }
         .buttonStyle(.plain)
-        .tabDrag(ref, model: model)
-        .dropDestination(for: String.self) { items, _ in
-            // Reorder within a host; tabs live on their host, so they never cross groups.
-            guard let item = items.first, let slash = item.lastIndex(of: "/"),
-                  String(item[..<slash]) == group.id, let raw = UInt64(item[item.index(after: slash)...]),
-                  let index = group.tabs.firstIndex(where: { $0.id == tab.id })
-            else { return false }
-            workspace?.apply(.moveTab(TabId(raw), to: index))
-            return true
-        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
         .accessibilityValue([running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "", TabPresence.value(workspace, tab.root.panes)]
@@ -671,7 +634,11 @@ private struct TabRow: View {
             Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
                 .accessibilityIdentifier("open-in-new-window")
             if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
+            Divider()
+            ProjectMenuItems(model: model, ref: ref)
         }
+        .accessibilityAction(named: "Move Up") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: -1) } }
+        .accessibilityAction(named: "Move Down") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: 1) } }
     }
 
     private var actions: RowActions {
@@ -702,7 +669,7 @@ private struct TabRow: View {
 }
 
 /// tabs: glyph, program, tab number, and the state word right-aligned in its color.
-private struct GroupAgents: View {
+struct GroupAgents: View {
     let group: HostGroup
     let numbers: [TabRef: Int]
     @Environment(WindowModel.self) private var model
@@ -909,47 +876,25 @@ struct CompactTerminalView: View {
     private var tabSwitcher: some View {
         let groups = model.groups.groups
         let total = model.groups.tabs.count
+        let projects = model.projects
+        let grouped = Set(projects.flatMap(\.tabs))
+        let windowTabs = model.groups.mixedTabs.filter { !grouped.contains($0) }
         return Menu {
-            if !model.composites.tabs.isEmpty {
+            // Projects first, as in the sidebar: one section each, its tabs from any host.
+            ForEach(projects) { project in
+                Section("\(project.name) · \(project.hosts.count > 1 ? "\(project.hosts.count) hosts" : model.groupName(project.hosts.first ?? ""))") {
+                    ForEach(project.tabs, id: \.self) { ref in switcherItem(ref) }
+                }
+            }
+            if !windowTabs.isEmpty {
                 Section("This Window") {
-                    ForEach(model.composites.ordered) { mixed in
-                        Button {
-                            model.focus(WindowModel.mixedRef(mixed.id))
-                        } label: {
-                            let title = model.title(ofMixedTab: mixed)
-                            if model.currentTab == WindowModel.mixedRef(mixed.id) {
-                                Label(title, systemImage: "checkmark")
-                            } else {
-                                Label(title, systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : mixed.isBrowserOnly ? "globe" : "rectangle.split.2x1")
-                            }
-                        }
-                    }
+                    ForEach(windowTabs, id: \.self) { ref in switcherItem(ref) }
                 }
             }
             // One section per host, its status in the header: every tab on every host is a tap away.
             ForEach(groups) { group in
                 Section {
-                    ForEach(group.tabs) { tab in
-                        let ref = group.ref(tab.id)
-                        Button {
-                            model.focus(ref)
-                        } label: {
-                            let title = model.workspace(ofGroup: group.id)?.title(of: tab) ?? tab.title ?? "Shell"
-                            if model.currentTab == ref {
-                                Label(title, systemImage: "checkmark")
-                            } else if let state = tab.root.panes.compactMap({ model.agentState(ofPane: $0, onGroup: group.id) }).min(by: { $0.urgency < $1.urgency }),
-                                      state != .idle, state != .unknown
-                            {
-                                Label(title, systemImage: state == .blocked ? "questionmark.circle.fill" : state == .error ? "xmark.circle.fill" : state == .done ? "checkmark.circle.fill" : "circle.dotted")
-                            } else {
-                                // The program's mark in the menu's icon column (§3.4: the state
-                                // glyph above replaces it while an agent has something to say).
-                                let program = model.programIdentity(of: tab, onGroup: group.id)
-                                Label { Text(title) } icon: { program.image }
-                                    .accessibilityLabel("\(title), \(program.displayName)")
-                            }
-                        }
-                    }
+                    ForEach(model.groups.looseTabs(of: group, grouped: grouped), id: \.self) { ref in switcherItem(ref) }
                     if group.isLocal || group.isReady {
                         Button("New Terminal on \(group.name)", systemImage: "plus") { model.newTab(onGroup: group.id) }
                     }
@@ -1004,6 +949,31 @@ struct CompactTerminalView: View {
         .accessibilityIdentifier("tab-switcher")
     }
 
+    /// A tab in the switcher: its title with a checkmark when current, the agent's state glyph
+    /// while it has something to say, else the program's mark.
+    @ViewBuilder private func switcherItem(_ ref: TabRef) -> some View {
+        Button {
+            model.focus(ref)
+        } label: {
+            let title = model.title(ofTab: ref)
+            if model.currentTab == ref {
+                Label(title, systemImage: "checkmark")
+            } else if let mixed = ref.hostId == HostGroups.mixedId ? model.composites.tab(ref.tab) : nil {
+                Label(title, systemImage: mixed.isEditorOnly ? "chevron.left.forwardslash.chevron.right" : mixed.isBrowserOnly ? "globe" : "rectangle.split.2x1")
+            } else if let tab = model.groups.group(ref.hostId)?.tabs.first(where: { $0.id == ref.tab }) {
+                if let state = tab.root.panes.compactMap({ model.agentState(ofPane: $0, onGroup: ref.hostId) }).min(by: { $0.urgency < $1.urgency }),
+                   state != .idle, state != .unknown
+                {
+                    Label(title, systemImage: state == .blocked ? "questionmark.circle.fill" : state == .error ? "xmark.circle.fill" : state == .done ? "checkmark.circle.fill" : "circle.dotted")
+                } else {
+                    let program = model.programIdentity(of: tab, onGroup: ref.hostId)
+                    Label { Text(title) } icon: { program.image }
+                        .accessibilityLabel("\(title), \(program.displayName)")
+                }
+            }
+        }
+    }
+
     private func paneSwitcher(_ tab: Tab) -> some View {
         Menu {
             Picker("Pane", selection: Binding(get: { tab.focused }, set: { workspace.apply(.focus($0)) })) {
@@ -1053,6 +1023,7 @@ struct TabMenu: View {
             model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
         }
         MergeIntoTabMenu(workspace: workspace, tab: tab.id)
+        ProjectMenuItems(model: model, ref: TabRef(hostId: workspace.groupId, tab: tab.id))
         Button(RowAction.closeTab.title, systemImage: RowAction.closeTab.systemImage, role: .destructive) {
             model.closeTab(TabRef(hostId: workspace.groupId, tab: tab.id), undoable: true)
         }
