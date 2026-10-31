@@ -487,13 +487,16 @@ impl Pane {
     pub fn snapshot(&self) -> Result<Arc<Snapshot>, SnapshotError> {
         let (full, seq, resize_count) = {
             let vt = lock(&self.vt);
-            if let Some(cached) = lock(&self.cache).as_ref()
+            let cache = lock(&self.cache);
+            if let Some(cached) = cache.as_ref()
                 && cached.seq.0 == vt.seq
                 && cached.resize_count == vt.resize_count
             {
                 return Ok(Arc::clone(cached));
             }
-            (vt.term.encode_snapshot()?, Seq(vt.seq), vt.resize_count)
+            let hint = cache.as_deref().map_or(0, Snapshot::size_hint);
+            drop(cache);
+            (vt.term.encode_snapshot_sized(hint)?, Seq(vt.seq), vt.resize_count)
         };
         let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
         *lock(&self.cache) = Some(Arc::clone(&snapshot));
@@ -519,7 +522,8 @@ impl Pane {
             {
                 return Ok(Arc::clone(cached));
             }
-            (view.term.encode_snapshot()?, Seq(vt.seq), vt.resize_count)
+            let hint = view.snapshots.back().map_or(0, |s| s.size_hint());
+            (view.term.encode_snapshot_sized(hint)?, Seq(vt.seq), vt.resize_count)
         };
         let snapshot = Arc::new(Snapshot::compress(full, seq, resize_count)?);
         if let Some(view) = lock(&self.vt)
@@ -913,6 +917,13 @@ impl Pane {
 }
 
 impl Snapshot {
+    /// Room for the next snapshot of the same pane. Encoding a large one (kitty images) into a
+    /// growing buffer leaves a chain of freed large blocks the allocator keeps resident; with a
+    /// client watching an image-heavy pane that grew the daemon by gigabytes.
+    fn size_hint(&self) -> usize {
+        self.full.len() + self.full.len() / 8
+    }
+
     /// Compresses the screen prefix of a full encoding for the wire.
     fn compress(full: Vec<u8>, seq: Seq, resize_count: u64) -> Result<Self, SnapshotError> {
         let ready = ghostty_vt::screen_len(&full).ok_or(ghostty_vt::Error::InvalidValue)?;

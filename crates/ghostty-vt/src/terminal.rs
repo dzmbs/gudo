@@ -483,7 +483,19 @@ impl Terminal {
     /// [`CONTINUATION_MAX_BYTES`]; retry once more output has arrived. Returns
     /// [`Error::OutOfMemory`] if allocation fails.
     pub fn encode_snapshot(&self) -> Result<Vec<u8>, Error> {
-        let mut out = Vec::new();
+        self.encode_snapshot_sized(0)
+    }
+
+    /// Like [`encode_snapshot`](Self::encode_snapshot), into a buffer allocated for
+    /// `capacity` bytes up front: pass the previous snapshot's size so a large one (kitty
+    /// images) is one allocation instead of a chain of doublings, each a large block the
+    /// allocator keeps around after it is freed.
+    ///
+    /// # Errors
+    ///
+    /// As for [`encode_snapshot`](Self::encode_snapshot).
+    pub fn encode_snapshot_sized(&self, capacity: usize) -> Result<Vec<u8>, Error> {
+        let mut out = Vec::with_capacity(capacity);
         // SAFETY: the handle is live; the writer's userdata points at `out`, which outlives
         // the call, and `extend_vec` treats it as a `Vec<u8>`.
         Error::check(unsafe { ffi::ghostty_snapshot_encode(self.as_raw(), vec_writer(&mut out)) })?;
