@@ -41,6 +41,8 @@ enum PaletteMode: Equatable {
     case splitWithHost
     /// The focused pane's workflows ("/" in the palette; `Model/Workflows.swift`).
     case workflows
+    /// Every recently closed tab (History ▸ Show All Recently Closed…).
+    case recentlyClosed
 }
 
 /// Modal surfaces. One at a time, like the system's own sheets.

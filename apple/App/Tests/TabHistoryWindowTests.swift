@@ -109,7 +109,9 @@ final class TabHistoryWindowTests: XCTestCase {
     /// this device.
     func testCommandWAndReopen() async throws {
         let local = try XCTUnwrap(model.workspace(ofGroup: HostGroups.localId))
-        model.focus(TabRef(hostId: HostGroups.localId, tab: try XCTUnwrap(local.session.tabs.first?.id)))
+        // A tab of its own with one pane (the local layout outlives other tests' windows).
+        model.newTab(onGroup: HostGroups.localId)
+        model.focus(TabRef(hostId: HostGroups.localId, tab: try XCTUnwrap(local.session.activeTabId)))
         let count = local.session.tabs.count
         model.closeFocusedPaneOrTab()
         XCTAssertEqual(local.session.tabs.count, count - 1)

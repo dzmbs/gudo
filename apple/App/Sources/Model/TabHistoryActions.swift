@@ -22,9 +22,15 @@ extension WindowModel {
                 closeWindowTab(ref.tab, undoable: false)
                 continue
             }
-            guard let workspace = workspace(ofGroup: ref.hostId), workspace.session.tabs.contains(where: { $0.id == ref.tab }) else { continue }
+            // The host's own layout: a host this window lists but has not shown has no window
+            // workspace yet, and its tabs close all the same.
+            guard let store = groups.layoutStore(ref.hostId), store.session.tabs.contains(where: { $0.id == ref.tab }) else { continue }
             if let entry = closedEntry(ref, batch: batch) { closed.append(entry) }
-            workspace.apply(.closeTab(ref.tab))
+            if let workspace = workspace(ofGroup: ref.hostId) {
+                workspace.apply(.closeTab(ref.tab))
+            } else {
+                store.apply(.closeTab(ref.tab))
+            }
         }
         recentlyClosed.record(closed)
         tabSelection.keep(Set(groups.tabs))
@@ -40,15 +46,16 @@ extension WindowModel {
     /// What Recently Closed keeps of a tab about to close; nil for tabs that are not this
     /// device's to keep (a guest's view of someone else's host).
     func closedEntry(_ ref: TabRef, batch: UUID? = nil) -> ClosedTab? {
-        guard let workspace = workspace(ofGroup: ref.hostId), let tab = workspace.session.tabs.first(where: { $0.id == ref.tab }) else { return nil }
+        guard let tab = groups.sessionTabs(of: ref.hostId)?.first(where: { $0.id == ref.tab }) else { return nil }
+        let workspace = workspace(ofGroup: ref.hostId)
         let daemon = app.hosts.connection(ref.hostId) as? DaemonConnection
         if daemon?.multiplayer.isGuest == true { return nil }
         // The pane the host brings back: the agent's, else the focused one.
         let agentPane = tab.root.panes.first { daemon?.meta[$0]?.agent != nil }
         let pane = agentPane ?? tab.focused
-        let directory = daemon?.meta[pane]?.cwd ?? workspace.absoluteDirectory(of: tab)
+        let directory = daemon?.meta[pane]?.cwd ?? workspace?.absoluteDirectory(of: tab)
         return groups.closedTab(
-            ref, title: workspace.title(of: tab), name: tab.title, hostName: groups.group(ref.hostId)?.name ?? ref.hostId,
+            ref, title: workspace?.title(of: tab) ?? tab.title ?? "Shell", name: tab.title, hostName: groups.group(ref.hostId)?.name ?? ref.hostId,
             pane: daemon == nil ? nil : pane.rawValue, directory: directory, agent: agentPane.flatMap { daemon?.meta[$0]?.agent?.kind },
             batch: batch)
     }
@@ -73,6 +80,12 @@ extension WindowModel {
     /// ⇧⌘T: the last close back (every tab closed with it too).
     func reopenLastClosed() {
         reopen(recentlyClosed.takeLatest())
+    }
+
+    /// History ▸ Show All Recently Closed…: the palette listing them, searchable.
+    func showRecentlyClosed() {
+        paletteMode = .recentlyClosed
+        isPaletteShown = true
     }
 
     /// History ▸ Recently Closed ▸ a tab.

@@ -15,6 +15,7 @@ enum PaletteCommands {
         case .newTabOnHost: "New tab on…"
         case .splitWithHost: "Split with a pane on…"
         case .workflows: "Run a workflow…"
+        case .recentlyClosed: "Reopen a closed tab…"
         }
     }
 
@@ -24,6 +25,7 @@ enum PaletteCommands {
         case .newTabOnHost: return newTabHosts(model: model)
         case .splitWithHost: return splitHosts(model: model)
         case .workflows: return workflows(model: model)
+        case .recentlyClosed: return recentlyClosed(model: model, all: true)
         case .commands: break
         }
         var commands: [PaletteCommand] = []
@@ -104,8 +106,8 @@ enum PaletteCommands {
 
     /// Tabs hidden at launch and recently closed ones, newest first, each with where it was and
     /// when it closed: what History ▸ Recently Closed lists, searchable.
-    static func recentlyClosed(model: WindowModel) -> [PaletteCommand] {
-        let section = "Recently Closed"
+    static func recentlyClosed(model: WindowModel, all: Bool = false) -> [PaletteCommand] {
+        let section = all ? nil : "Recently Closed"
         var commands: [PaletteCommand] = []
         let hidden = model.groups.restorableTabs.count
         if hidden > 0 {
@@ -118,7 +120,7 @@ enum PaletteCommands {
                 id: "close-idle", title: "Close \(model.idleTabs.count) Idle Tabs", subtitle: "Untouched for \(IdleTabRule.days) days",
                 section: section, systemImage: "moon.zzz") { model.closeIdleTabs() })
         }
-        for (index, entry) in model.recentlyClosed.tabs.prefix(10).enumerated() {
+        for (index, entry) in model.recentlyClosed.tabs.prefix(all ? RecentlyClosed.limit : 5).enumerated() {
             let program = entry.agent.map { ProgramCatalog.identity(process: $0) }
             commands.append(PaletteCommand(
                 id: "closed-\(entry.id)", title: entry.title, subtitle: entry.subtitle(), section: section,

@@ -1132,3 +1132,87 @@ connection); App `ProjectSidebarTests` (the list while dragging is the list afte
 grouping, ⌘T in and out of a project, New Project, the drop label, keys); snapshots `MacSnapshotTests.testProjects` (frame sequences of a reorder, a drop,
 "will group", a row joining another project) and `TouchSnapshotTests`; daemon and proto tests in
 DAEMON.md.
+
+## 24. Tab history: what a window opens with, recently closed tabs, idle tabs, multi-select
+
+(pure, unit-tested), window actions in `Model/TabHistoryActions.swift`, views in
+`Views/TabHistoryViews.swift`.
+
+**Opens with** (Settings ▸ Appearance ▸ Tabs, `launch-tabs`; Safari's "Safari opens with"):
+*Your Previous Tabs* (default: today's restore) or *A New Terminal*. With the latter, every
+window restored in the first seconds of a launch (`AppModel.isLaunching`; a later New Window
+restores as before) opens its hosts as before, but the tabs each host reports first go into the
+window's `HostGroups.hiddenTabs`: out of the sidebar, strip, ⌘-numbers and Go to Tab, still
+running on their hosts. The rule (`RestoreDecision`): a tab with an agent (the daemon's agent
+state, or any program's own status report) or a running command (a program in front of a local
+shell; for daemon tabs, asked of the host: the foreground program is not the shell, or the
+prompt is running a command) is never hidden: running work never leaves sight. Then one new
+terminal opens: on This Mac's helper (or the Mac's own shell), on iPhone and iPad on the host
+used last. "Restore N Tabs" at the top of the sidebar, History ▸ Reopen Previous Tabs, the
+palette and the compact switcher bring them back; the row's × only hides the row. Selecting a
+hidden tab any other way (an agent toast, a notification, Handoff) brings that one back.
+
+macOS's "Close windows when quitting an application" is respected for what it governs: which
+windows (their number, frames) the system brings back. It does not decide tabs: our sessions
+outlive the app on their hosts either way, and the setting above is explicit and per app, so
+the two never fight. Every window the system restores follows the setting.
+
+**Recently closed** (`RecentlyClosed`, app-wide like Safari's History; this device only, never
+sent to a host, so guests never see the owner's history and a guest's closes on someone else's
+host are not kept): the last 20 tabs, newest first, in UserDefaults across launches. Each keeps
+only what reopening needs: title and name, host id and name, the daemon pane id, its last
+directory, the agent's kind, its project (id, name, colour) and its places in the project and
+on its host, when it closed, and a batch id for tabs closed together. No terminal contents.
+Every close of a host tab goes there: ⌘W on a tab's last pane, the row and strip menus, Close
+All Tabs of a project, bulk close, the idle suggestion. Panes closed within a split are not
+kept (tabs only). ⇧⌘T reopens the last close (a whole batch at once); History ▸ Recently Closed
+lists them with "host · project · 12 minutes ago"; History ▸ Show All Recently Closed… (⌘Y,
+Safari's Show All History) is the palette listing them, searchable; the palette's empty query
+has a Recently Closed section. Undo on a close toast is the same reopen.
+
+Reopening (`WindowModel.reopen`): on a daemon host, `DaemonConnection.reopenTab` sends `NewTab`
+with `PaneLaunch::Reopen` for the kept pane (DAEMON.md "Persistence"), named as before; the
+daemon resumes its Claude Code or Codex session or starts a shell in its last directory. Then
+`HostGroups.place` puts the tab back at its place among its host's tabs and in its project at
+its place; a project gone with its last tab comes back by name (and colour). On This Mac's own
+shell or a plain-SSH host a new tab opens there (nothing outlived the close). A failed reopen
+says why and keeps the entry.
+
+**Keys.** ⇧⌘T is every browser's Reopen Closed Tab; Move Pane to New Tab moved to ⌥⇧⌘T
+(⌥ for "take the pane along"). Both are menu items and terminal key commands on iPad.
+
+**Idle tabs.** `IdleTabRule`: every pane of a daemon tab sits at its shell's prompt (asked of the
+host), no agent or program report, nothing running, and the tab was neither shown on this
+device (`TabTouches`, kept across launches; first sight starts the clock) nor had a command run
+on the host from any device (the foreground's `since`) for 3 days. Checked 20 s after a window
+opens, then every 30 minutes; never the tab on screen. One quiet row "Close N Idle Tabs";
+tapping closes them as one batch (Undo, ⇧⌘T). Not Now restarts their clocks. Never automatic.
+
+**Last tab.** Closing a host's last tab leaves its session (empty) on the daemon: the host stays
+listed with its New Terminal row and the window shows the welcome view; Undo reopens into the
+same session. The client also reconciles a session that disappears (`DaemonConnection` on
+`Sessions`: tabs and pending ops dropped, attach anew), so a tab whose panes are gone can never
+stay on screen. For the owner an input rejected for an unknown pane says "That terminal has
+closed." (the scoped-invite wording is a guest's). A collapsed host shows the count of the
+loose tabs the collapse hides, nothing when its tabs all live in projects.
+
+**Multi-select** (`TabSelection`, Finder's rules; `WindowModel.clickTab`): ⌘-click toggles
+(starting from the tab on screen), ⇧-click selects the range from the anchor in sidebar order,
+⌘A (while a selection is up) selects every visible tab, Esc ends it; a plain click goes back to
+one tab. Modifiers come from AppKit on the Mac and from the hardware keyboard
+(`GCKeyboard`) on iPad. Touch: the row menu's Select Tabs enters Select mode (taps toggle, check
+circles); iPhone: the switcher's Select Tabs… sheet. Bulk actions (row menu, the selection bar,
+Tab menu, ⌘W): Close Tabs (one confirmation when any runs an agent or a command; one batch),
+Move to Project ▸, New Project from Tabs. Dragging a selected row carries the selection
+(`SidebarDrop.carrying`): inserts land in a run after the dragged row (a host section takes only
+its own host's tabs), a group drop groups them all; the preview is the commit.
+
+Tests: HostKit `TabHistoryTests` (restore decision × activity, the store's order, cap,
+persistence and batches, what an entry keeps, idle rule incl. a command from another device,
+touches, selection, carried drops, reopen placement into a project and on the host, a project
+that went with its last tab, hidden tabs), `DaemonConnectionTests.aClosedSessionNeverLeavesItsTabsBehind`,
+`DaemonIntegrationTests.closingTheLastTabLeavesTheHostEmptyAndUndoBringsItBack` (real daemon);
+App `TabHistoryWindowTests` (what a close keeps, bulk close as one batch, clicks, dragging a
+selection, "A New Terminal" and Restore, ⌘W and ⇧⌘T); snapshots `MacSnapshotTests.testTabHistory`
+and `TouchSnapshotTests.testTabHistory`. The History menu is the system's menu and is not
+captured by the in-process snapshots; the palette list shows the same entries.

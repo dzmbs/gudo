@@ -40,8 +40,8 @@ struct RestoreTabsRow: View {
         SidebarNoticeRow(
             systemImage: "arrow.counterclockwise",
             title: count == 1 ? "Restore 1 Tab" : "Restore \(count) Tabs",
-            detail: "Still running from last time",
-            help: "Reopen Previous Tabs",
+            detail: "Your tabs from last time are still running",
+            help: "History ▸ Reopen Previous Tabs does the same",
             identifier: "restore-tabs"
         ) {
             model.restoreHiddenTabs()
@@ -72,8 +72,9 @@ struct IdleTabsRow: View {
     }
 }
 
-/// A quiet one-line offer at the top of the sidebar, in the suggestion rows' voice: glyph,
-/// the verb in secondary ink, a tertiary second line, and a dismiss ×.
+/// A quiet one-line offer at the top of the sidebar, in the project suggestion's voice: a
+/// glyph, the verb in secondary ink, the rest in tertiary, a dismiss ×. No card: it sits among
+/// the rows and leaves the tabs the attention. What it means in full is its tooltip.
 private struct SidebarNoticeRow: View {
     let systemImage: String
     let title: String
@@ -84,41 +85,34 @@ private struct SidebarNoticeRow: View {
     let dismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: DS.Space.gap10) {
+        HStack(spacing: DS.Space.gap10) {
             Button(action: action) {
-                HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
+                HStack(spacing: DS.Space.gap10) {
                     Image(systemName: systemImage)
                         .font(.caption)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(title)
-                            .font(DS.Font.sidebarSubtitle.weight(.medium))
-                            .foregroundStyle(DS.Palette.textSecondary)
-                        Text(detail)
-                            .font(DS.Font.sidebarSubtitle)
-                            .foregroundStyle(DS.Palette.textTertiary)
-                            .lineLimit(1)
-                    }
+                    Text(title)
+                        .font(DS.Font.sidebarSubtitle)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .lineLimit(1)
                     Spacer(minLength: DS.Space.xs)
                 }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help(help)
+            .help("\(detail). \(help)")
+            .accessibilityHint(detail)
             Button("Not Now", systemImage: "xmark", action: dismiss)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
-                .font(.caption2.weight(.semibold))
+                .font(.caption2)
                 .foregroundStyle(DS.Palette.textTertiary)
                 .help("Not Now")
                 .accessibilityIdentifier("\(identifier)-dismiss")
         }
-        .padding(.horizontal, DS.Space.m)
-        .padding(.vertical, DS.Space.s)
-        .background(DS.Palette.ink.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.Radius.control))
-        .padding(.horizontal, DS.Space.s)
-        .padding(.top, DS.Space.s)
+        .sidebarRow(selected: false)
+        .padding(.top, DS.Space.xs)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
     }
@@ -233,6 +227,10 @@ struct HistoryMenuItems: View {
                 }
             }
         }
+        // Safari's Show All History (⌘Y): the same list, searchable.
+        Button("Show All Recently Closed…") { model?.showRecentlyClosed() }
+            .keyboardShortcut("y")
+            .disabled(model?.recentlyClosed.tabs.isEmpty ?? true)
     }
 }
 
@@ -279,7 +277,9 @@ struct CompactTabSelection: View {
                     }
                     .tag(ref)
                 }
+                .chromeRows()
             }
+            .chromeGrouped()
             .environment(\.editMode, .constant(.active))
             .navigationTitle(selection.isEmpty ? "Select Tabs" : selection.count == 1 ? "1 Tab" : "\(selection.count) Tabs")
             .navigationBarTitleDisplayMode(.inline)

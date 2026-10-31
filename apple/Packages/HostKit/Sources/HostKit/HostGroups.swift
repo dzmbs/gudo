@@ -500,7 +500,7 @@ public final class HostGroups {
     }
 
     /// The layout a host's tabs live in.
-    func layoutStore(_ host: String) -> (any LayoutStore)? {
+    public func layoutStore(_ host: String) -> (any LayoutStore)? {
         if host == Self.localId { return local?.layout }
         guard let connection = hosts.connection(host), connection.isReady else { return nil }
         return connection.layoutStore

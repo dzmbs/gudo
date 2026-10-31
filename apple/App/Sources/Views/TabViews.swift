@@ -646,7 +646,8 @@ struct TabRow: View {
             }
             // A host that is down keeps its rows (and their last state), quieter.
             .opacity(group.status.isLive || group.isLocal ? 1 : 0.6)
-            .sidebarRow(selected: isActive)
+            // In Select mode only the checks say what is selected.
+            .sidebarRow(selected: isActive && !model.isSelectingTabs)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
@@ -909,6 +910,7 @@ struct CompactTerminalView: View {
         .sheet(isPresented: Binding(get: { model.isSelectingTabs }, set: { if !$0 { model.endTabSelection() } })) {
             CompactTabSelection()
                 .environment(model)
+                .chromeSheetBackground()
         }
         #endif
     }
