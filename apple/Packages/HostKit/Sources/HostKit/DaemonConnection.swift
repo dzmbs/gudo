@@ -450,7 +450,7 @@ public enum HostError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notConnected: "Not connected"
+        case .notConnected: "The host is not connected. It will resume when it is back."
         case .badTicket(let reason): "That is not a valid pairing ticket: \(reason)"
         case .missingSecret(let what): "Missing \(what)"
         }

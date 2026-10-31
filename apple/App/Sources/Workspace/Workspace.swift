@@ -502,7 +502,7 @@ final class Workspace {
                 Self.signposter.endInterval("Make pane", signpost)
                 Pane.log.info("pane \(id.description, privacy: .public) made in \((ContinuousClock.now - start).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
             } catch {
-                failures[id] = String(describing: error)
+                failures[id] = ScreenError.describe(error)
             }
         }
     }
