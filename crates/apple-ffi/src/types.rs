@@ -273,6 +273,14 @@ pub enum PaneLaunch {
         /// The artifact to show.
         artifact_id: Option<u64>,
     },
+    /// A pane closed earlier on this daemon, back: its agent resumes its session, else a
+    /// shell in its last directory, else `cwd` (needs `DaemonInfo.reopen` and the owner).
+    Reopen {
+        /// The closed pane.
+        pane_id: u64,
+        /// Where to start when the daemon kept no directory for it.
+        cwd: Option<String>,
+    },
 }
 
 impl From<PaneLaunch> for proto::PaneLaunch {
@@ -287,6 +295,10 @@ impl From<PaneLaunch> for proto::PaneLaunch {
             },
             PaneLaunch::Canvas { artifact_id } => Self::Canvas {
                 artifact_id: artifact_id.map(proto::ArtifactId),
+            },
+            PaneLaunch::Reopen { pane_id, cwd } => Self::Reopen {
+                pane_id: proto::PaneId(pane_id),
+                cwd,
             },
         }
     }

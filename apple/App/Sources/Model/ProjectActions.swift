@@ -210,8 +210,13 @@ extension WindowModel {
 
     /// Carries out a sidebar drop.
     func commit(_ drop: SidebarDrop) {
-        if let made = groups.commit(drop, name: { [unowned self] a, b in projectName(for: [a, b]) }) {
-            startNaming(made)
+        // A selection dragged by one of its rows lands together, in sidebar order.
+        let carried = carriedTabs(dragging: drop.dragged)
+        var made: String?
+        for step in drop.carrying(carried, in: groups.sections) {
+            if let project = groups.commit(step, name: { [unowned self] a, b in projectName(for: [a, b]) }) { made = project }
         }
+        if !carried.isEmpty { tabSelection.clear() }
+        if let made { startNaming(made) }
     }
 }

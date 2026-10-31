@@ -106,7 +106,7 @@ public final class HostGroups {
             let session = local.layout.session
             result.append(HostGroup(
                 id: Self.localId, name: local.name, kind: .local, status: .connected(rtt: nil),
-                tabs: session.tabs.filter { !(carriers[Self.localId]?.contains($0.id) ?? false) },
+                tabs: session.tabs.filter { !(carriers[Self.localId]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: Self.localId, tab: $0.id)) },
                 activeTabId: session.activeTabId, isReady: true))
         }
         for id in hostOrder {
@@ -118,7 +118,7 @@ public final class HostGroups {
             if connection == nil, let failure = failures[id] { status = .needsAttention(reason: failure) }
             result.append(HostGroup(
                 id: id, name: record.name, kind: record.kind == .daemon ? .daemon : .ssh, status: status,
-                tabs: (session?.tabs ?? []).filter { !(carriers[id]?.contains($0.id) ?? false) },
+                tabs: (session?.tabs ?? []).filter { !(carriers[id]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: id, tab: $0.id)) },
                 activeTabId: session?.activeTabId, isReady: ready,
                 failure: connection == nil ? failures[id] : nil))
         }
@@ -353,7 +353,75 @@ public final class HostGroups {
     }
 
     private func tabRefsForPruning() -> [TabRef] {
-        groups.flatMap { group in group.tabs.map { group.ref($0.id) } } + mixedTabs
+        groups.flatMap { group in group.tabs.map { group.ref($0.id) } } + mixedTabs + Array(hiddenTabs)
+    }
+
+    // MARK: Hidden tabs ("A New Terminal" at launch)
+
+    /// Tabs this window keeps out of sight: those found at launch under "A New Terminal". They
+    /// keep running on their hosts; Restore brings them back, selecting one brings it back.
+    public var hiddenTabs: Set<TabRef> = []
+    /// The Restore row was dismissed (the tabs stay hidden; History still restores them).
+    public var restoreDismissed = false
+
+    /// Hidden tabs that still exist on their hosts.
+    public var restorableTabs: [TabRef] {
+        guard !hiddenTabs.isEmpty else { return [] }
+        return hiddenTabs.filter { ref in sessionTabs(of: ref.hostId)?.contains { $0.id == ref.tab } ?? false }
+            .sorted { ($0.hostId, $0.tab.rawValue) < ($1.hostId, $1.tab.rawValue) }
+    }
+
+    /// Every tab a host has, hidden ones included (nil before its first layout).
+    public func sessionTabs(of host: String) -> [Tab]? {
+        if host == Self.localId { return local?.layout.session.tabs }
+        guard let connection = hosts.connection(host), connection.isReady else { return nil }
+        return connection.layoutStore.session.tabs
+    }
+
+    /// Brings every hidden tab back.
+    public func restoreHiddenTabs() {
+        hiddenTabs = []
+        restoreDismissed = false
+    }
+
+    /// Brings one tab back (it was selected: an agent toast, Go to Tab, Handoff).
+    public func unhide(_ ref: TabRef) {
+        hiddenTabs.remove(ref)
+    }
+
+    // MARK: Recently closed tabs
+
+    /// Where a tab sits now, for bringing it back there once closed: its project and its place
+    /// in it, its place among its host's tabs.
+    public func closedTab(
+        _ ref: TabRef, title: String, name: String?, hostName: String, pane: UInt64?, directory: String?,
+        agent: String?, batch: UUID? = nil, now: Date = .now
+    ) -> ClosedTab {
+        let project = project(of: ref)
+        return ClosedTab(
+            title: title, name: name, hostId: ref.hostId, hostName: hostName, pane: pane, directory: directory, agent: agent,
+            project: project.map { ClosedProject(id: $0.id, name: $0.name, color: $0.color) },
+            projectIndex: project?.tabs.firstIndex(of: ref),
+            hostIndex: sessionTabs(of: ref.hostId)?.firstIndex { $0.id == ref.tab },
+            closedAt: now, batch: batch)
+    }
+
+    /// Puts a reopened tab back where `closed` was: at its old place among its host's tabs, and
+    /// in its project at its old place (a project of the same name if that one is gone, else a
+    /// new one with its name and colour).
+    public func place(_ ref: TabRef, as closed: ClosedTab) {
+        if let index = closed.hostIndex, let store = layoutStore(ref.hostId), let count = sessionTabs(of: ref.hostId)?.count, count > 0 {
+            store.apply(.moveTab(ref.tab, to: min(index, count - 1)))
+        }
+        guard let was = closed.project else { return }
+        let index = closed.projectIndex ?? .max
+        if let project = project(was.id) ?? project(named: was.name) {
+            apply(planner().move(ref, into: project.id, at: index))
+        } else {
+            let id = UUID().uuidString
+            apply(planner().create([ref], name: uniqueProjectName(was.name), id: id))
+            updateProject(id, color: was.color)
+        }
     }
 
     /// The sidebar's draggable runs of rows, top to bottom: projects, the window's loose tabs,

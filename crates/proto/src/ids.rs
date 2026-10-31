@@ -361,5 +361,8 @@ bitset! {
         /// Runs a repository's setup and teardown commands only once the owner trusts them,
         /// and answers `WorkspaceRequest::RepoHooks` / `RepoTrust`.
         REPO_TRUST = 14;
+        /// Remembers closed panes (directory, agent session) and starts
+        /// `PaneLaunch::Reopen`.
+        REOPEN = 15;
     }
 }

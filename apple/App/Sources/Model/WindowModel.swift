@@ -89,6 +89,21 @@ final class WindowModel {
     var namingProject: String?
     /// A tab that just joined a project from its + or ⌘T: its row lights a moment.
     var joinedTab: TabRef?
+    /// Tabs selected in the sidebar for bulk actions (`Model/TabHistoryActions.swift`).
+    var tabSelection = TabSelection()
+    /// Touch selection mode (long-press › Select, the compact switcher's Select): a tap
+    /// toggles a row instead of showing its tab.
+    var isSelectingTabs = false
+    /// Selected tabs waiting for the one confirmation a bulk close asks when work runs in them.
+    var pendingBulkClose: [TabRef]?
+    /// Tabs idle long enough to suggest closing (`IdleTabRule`), the suggestion's rows.
+    var idleTabs: [TabRef] = []
+    /// The app's recently closed tabs (in memory for design fixtures and tests).
+    let recentlyClosed: RecentlyClosed = LaunchOptions.mock || LaunchOptions.isTesting ? RecentlyClosed(defaults: nil) : .shared
+    /// Hosts whose first layout this launch hides ("A New Terminal"), and where the new
+    /// terminal opens once they have reported.
+    @ObservationIgnored var launchHiding: Set<String> = []
+    @ObservationIgnored var launchTerminalHost: String?
     @ObservationIgnored var followsJoins = false
     /// Each Files leaf's place, kept here so a leaf rebuilt by a split or a move keeps it.
     @ObservationIgnored var filesNavigators: [UUID: FilesNavigator] = [:]
@@ -375,6 +390,7 @@ final class WindowModel {
         followEditors()
         followFullScreen()
         followAgentToasts()
+        followIdleTabs()
     }
 
     /// The window closed: its terminals stop and the daemons stop counting its panes as shown.
@@ -515,6 +531,8 @@ final class WindowModel {
     /// and the host selects the tab.
     func focus(_ ref: TabRef) {
         if ref != currentTab { noteLeavingTab() }
+        // A tab kept out of sight at launch comes back once it is asked for.
+        groups.unhide(ref)
         destination = .terminal
         if ref.hostId == HostGroups.mixedId {
             focusMixedTab(ref.tab)

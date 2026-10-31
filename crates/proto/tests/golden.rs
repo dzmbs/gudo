@@ -528,6 +528,7 @@ fn every_message_matches_its_frozen_bytes() {
     artifact_history_messages(&mut c);
     live_activity_messages(&mut c);
     browser_messages(&mut c);
+    reopen_messages(&mut c);
 
     assert!(
         c.failures.is_empty(),
@@ -3275,5 +3276,35 @@ fn browser_messages(c: &mut Checker) {
             result: Err("no".into()),
         },
         "07000000011c0701026e6f",
+    );
+}
+
+/// Reopening a closed pane (`PaneLaunch::Reopen`, appended after `Canvas`), for daemons with
+/// `DaemonFeatures::REOPEN`.
+fn reopen_messages(c: &mut Checker) {
+    c.check(
+        "PaneLaunch::Reopen",
+        PaneLaunch::Reopen {
+            pane_id: PANE,
+            cwd: Some("/w".into()),
+        },
+        "0700000001040301022f77",
+    );
+    c.check(
+        "LayoutOp::NewTab(Reopen)",
+        LayoutOp::NewTab {
+            session_id: SESSION,
+            name: "api".into(),
+            launch: PaneLaunch::Reopen {
+                pane_id: PANE,
+                cwd: None,
+            },
+        },
+        "0a00000001060103617069040300",
+    );
+    c.check(
+        "DaemonFeatures::REOPEN",
+        DaemonFeatures::REOPEN,
+        "0400000001808002",
     );
 }

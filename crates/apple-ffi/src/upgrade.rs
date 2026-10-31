@@ -46,6 +46,9 @@ pub struct DaemonInfo {
     /// It keeps projects (`LayoutOp::SetTabProject` …, `ClientEvent::Projects`).
     #[uniffi(default = false)]
     pub projects: bool,
+    /// It reopens closed panes, resuming their agents (`reopen_tab`).
+    #[uniffi(default = false)]
+    pub reopen: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -66,6 +69,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             pane_moves: i.features.contains(proto::DaemonFeatures::PANE_MOVES),
             projects: i.features.contains(proto::DaemonFeatures::PROJECTS),
             agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
+            reopen: i.features.contains(proto::DaemonFeatures::REOPEN),
         }
     }
 }

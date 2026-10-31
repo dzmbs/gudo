@@ -278,7 +278,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::PRESENCE
         | DaemonFeatures::INVITE_LINKS
         | DaemonFeatures::PROGRAM_STATUS
-        | DaemonFeatures::REPO_TRUST;
+        | DaemonFeatures::REPO_TRUST
+        | DaemonFeatures::REOPEN;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }

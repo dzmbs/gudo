@@ -129,7 +129,7 @@ private struct TabChip: View {
             .padding(.horizontal, 40)
 
             HStack(spacing: 0) {
-                Button("Close Tab", systemImage: "xmark") { workspace?.apply(.closeTab(tab.id)) }
+                Button("Close Tab", systemImage: "xmark") { model.closeTab(ref, undoable: false) }
                     .font(.caption2.weight(.bold))
                     .frame(width: 22, height: 22)
                     .opacity(isHovered ? 1 : 0)
@@ -160,7 +160,7 @@ private struct TabChip: View {
                 Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
                 MergeIntoTabMenu(workspace: workspace, tab: tab.id)
                 ProjectMenuItems(model: model, ref: ref)
-                Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }
+                Button("Close Tab", systemImage: "xmark", role: .destructive) { model.closeTab(ref, undoable: false) }
             }
         }
         // A project's tabs carry its colour along their foot (Chrome's tab groups).

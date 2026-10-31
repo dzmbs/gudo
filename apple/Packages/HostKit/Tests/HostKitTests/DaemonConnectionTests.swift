@@ -164,6 +164,30 @@ import UnnamedCore
         #expect(connection.notice == nil)
     }
 
+    /// The attached session closes under the connection (another device, the CLI): its tabs go at
+    /// once, with nothing pending replayed over them, and the connection attaches anew.
+    @Test func aClosedSessionNeverLeavesItsTabsBehind() async throws {
+        let (connection, client) = try makeConnection()
+        client().send(.connected(epoch: 1, resumed: false))
+        client().send(.attached(sessionId: 7, via: .requested, missing: nil))
+        client().send(.layout(layout: sampleLayout()))
+        try await eventually("live") { connection.isReady && connection.status.isLive }
+        let session = try #require(connection.layout.sessionId)
+        // A pending optimistic op on a tab of that session.
+        connection.layout.apply(.rename(TabId(1), "renamed"))
+
+        client().send(.sessions(sessions: [SessionSummary(sessionId: session, name: "main", tabs: 1, panes: 3, clients: 1)]))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!connection.layout.session.tabs.isEmpty, "a list that still has the session changes nothing")
+
+        let attaches = client().calls.filter { if case .attach = $0 { true } else { false } }.count
+        client().send(.sessions(sessions: [SessionSummary(sessionId: session + 1, name: "other", tabs: 1, panes: 1, clients: 0)]))
+        try await eventually("tabs gone") { connection.layout.session.tabs.isEmpty }
+        #expect(connection.layout.sessionId == nil)
+        #expect(client().calls.filter { if case .attach = $0 { true } else { false } }.count == attaches + 1)
+        #expect(client().calls.contains(.attach(nil)), "attaches whatever the host has now")
+    }
+
     /// Nothing to attach to (a guest whose session ended): needs the user, with words, never
     /// "Connected" with nothing on screen.
     @Test func attachFailureNeedsTheUser() async throws {

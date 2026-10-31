@@ -85,6 +85,29 @@ nonisolated public enum SidebarDrop: Hashable, Sendable {
         return result
     }
 
+    /// This drop with the rest of a selection carried along, in sidebar order: each lands right
+    /// after the one before (an insert) or onto the same target (a group). Rows the container
+    /// cannot take (another host's tabs in a host section) stay where they are.
+    public func carrying(_ others: [TabRef], in sections: [SidebarSection]) -> [SidebarDrop] {
+        var drops = [self]
+        switch self {
+        case .group(let ref, let target):
+            drops += others.filter { $0 != ref && $0 != target }.map { .group($0, onto: target) }
+        case .insert(let ref, let container, _):
+            var current = applied(to: sections)
+            var previous = ref
+            for other in others where other != ref && Self.accepts(container, other) {
+                let rows = current.first { $0.container == container }?.rows.filter { $0 != other } ?? []
+                guard let after = rows.firstIndex(of: previous) else { continue }
+                let drop = SidebarDrop.insert(other, into: container, at: after + 1)
+                drops.append(drop)
+                current = drop.applied(to: current)
+                previous = other
+            }
+        }
+        return drops
+    }
+
     /// The position to give `ref` in its host's session so its loose rows read `loose`
     /// (`ref` included, in the new order): just before the row after it, else just after the
     /// row before it. Indices are those `Session.moveTab` takes. Nil when nothing moves.

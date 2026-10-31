@@ -8,7 +8,7 @@ use std::sync::Arc;
 use proto::PaneId;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Core, PaneRecord, saved_state};
+use crate::core::{ClosedPane, Core, PaneRecord, saved_state};
 use crate::fsutil::{read_optional, write_atomic};
 use crate::layout::Layout;
 
@@ -21,24 +21,28 @@ pub(crate) struct Saved {
     version: u32,
     layout: Layout,
     panes: BTreeMap<u64, PaneRecord>,
+    /// Recently closed panes, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    closed: Vec<ClosedPane>,
 }
 
 impl Saved {
-    pub fn new(layout: Layout, panes: BTreeMap<u64, PaneRecord>) -> Self {
+    pub fn new(layout: Layout, panes: BTreeMap<u64, PaneRecord>, closed: Vec<ClosedPane>) -> Self {
         Self {
             version: VERSION,
             layout,
             panes,
+            closed,
         }
     }
 
-    pub fn into_parts(self) -> (Layout, HashMap<PaneId, PaneRecord>) {
+    pub fn into_parts(self) -> (Layout, HashMap<PaneId, PaneRecord>, Vec<ClosedPane>) {
         let panes = self
             .panes
             .into_iter()
             .map(|(k, v)| (PaneId(k), v))
             .collect();
-        (self.layout, panes)
+        (self.layout, panes, self.closed)
     }
 }
 
