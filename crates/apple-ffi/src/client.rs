@@ -176,6 +176,15 @@ pub enum ClientEvent {
         /// The report.
         status: Option<ProgramReport>,
     },
+    /// A program in the pane wrote to the clipboard (OSC 52) after this device typed into it
+    /// (`ConnectOptions.clipboard`): put it on this device's clipboard, local only, and say
+    /// so. Programs can never read the clipboard.
+    Clipboard {
+        /// The pane.
+        pane_id: u64,
+        /// The text.
+        text: String,
+    },
     /// Raw output to feed the pane's VT, continuing from the previous event.
     PaneBytes {
         /// The pane.
@@ -344,6 +353,10 @@ impl From<client_core::ClientEvent> for ClientEvent {
             },
             E::PaneMeta { meta } => Self::PaneMeta { meta: meta.into() },
             E::PaneClosed { pane_id } => Self::PaneClosed { pane_id: pane_id.0 },
+            E::Clipboard { pane_id, text } => Self::Clipboard {
+                pane_id: pane_id.0,
+                text,
+            },
             E::ProgramStatus { pane_id, status } => Self::ProgramStatus {
                 pane_id: pane_id.0,
                 status: status.map(Into::into),
@@ -569,6 +582,10 @@ pub struct ConnectOptions {
     /// Show what any program in a pane reports about itself (`ClientEvent::ProgramStatus`).
     #[uniffi(default = false)]
     pub program_status: bool,
+    /// Copy what programs write to the clipboard (OSC 52) in panes this device typed into
+    /// last (`ClientEvent::Clipboard`).
+    #[uniffi(default = false)]
+    pub clipboard: bool,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -586,6 +603,8 @@ impl From<ConnectOptions> for client_core::ConnectOptions {
             askpass: o.askpass,
             browser: o.browser,
             program_status: o.program_status,
+            clipboard: o.clipboard,
+            extra_caps: proto::Caps::EMPTY,
         }
     }
 }
@@ -1019,8 +1038,11 @@ mod tests {
             askpass: true,
             browser: true,
             program_status: true,
+            clipboard: true,
         };
         let core = client_core::ConnectOptions::from(options);
+        assert!(core.clipboard);
+        assert_eq!(core.extra_caps, proto::Caps::EMPTY);
         assert_eq!(core.relay_ca_der, vec![vec![0x30, 0x82]]);
         assert_eq!(core.relay_urls, vec!["https://relay.example.com"]);
         assert_eq!(core.relay_auth_token.as_deref(), Some("secret"));

@@ -305,6 +305,12 @@ bitset! {
         /// On an owner device, wants `ServerCtl::DevicePaired` whenever another owner
         /// device pairs.
         DEVICE_ALERTS = 16;
+        /// Copies what programs write to the clipboard (OSC 52) in panes this connection
+        /// typed into last: wants `ServerCtl::Clipboard`.
+        CLIPBOARD = 17;
+        /// Understands `AskpassPush::PromptWhileGuestDrives` (a password prompt asked while
+        /// a guest holds the pane's lease).
+        ASKPASS_DRIVER = 18;
     }
 }
 
@@ -344,5 +350,8 @@ bitset! {
         INVITE_LINKS = 11;
         /// Pushes `ServerCtl::ProgramStatus` to clients with `Caps::PROGRAM_STATUS`.
         PROGRAM_STATUS = 12;
+        /// Runs a repository's setup and teardown commands only once the owner trusts them,
+        /// and answers `WorkspaceRequest::RepoHooks` / `RepoTrust`.
+        REPO_TRUST = 13;
     }
 }

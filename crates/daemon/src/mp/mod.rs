@@ -84,6 +84,15 @@ impl Authz {
         }
     }
 
+    /// A paired owner device on the whole daemon, not a guest's chain (whatever roles it
+    /// delegates).
+    pub fn is_owner_device(&self, core: &Core) -> bool {
+        self.grant_ids.is_empty()
+            && self.scope == Scope::Daemon
+            && self.roles.contains(Roles::OWNER)
+            && core.identity.is_owner_device(self.actor.device)
+    }
+
     /// The leaf grant, if the connection presented one.
     pub fn grant_id(&self) -> Option<GrantId> {
         self.grant_ids.last().copied()
@@ -1396,6 +1405,30 @@ impl Mp {
 
     pub fn leases(&self) -> Vec<Lease> {
         lock(&self.leases).iter().map(|(p, l)| l.wire(*p)).collect()
+    }
+
+    /// Whether a connected guest (not an owner device) may type into `pane`: raw input as a
+    /// driver, or prompts to its agent as a prompter.
+    pub fn guest_can_type(&self, core: &Core, pane: PaneId) -> bool {
+        let guests: Vec<Authz> = lock(&self.live)
+            .values()
+            .filter(|l| !l.authz.grant_ids.is_empty())
+            .map(|l| l.authz.clone())
+            .collect();
+        guests.iter().any(|authz| {
+            self.still_valid(authz)
+                && policy::check(core, authz, policy::Need::Draw, policy::Target::Pane(pane))
+                    .is_ok()
+        })
+    }
+
+    /// The name of the guest (not an owner device) holding `pane`'s lease, while connected.
+    pub fn guest_driving(&self, pane: PaneId) -> Option<String> {
+        let holder = lock(&self.leases).get(&pane)?.holder?;
+        lock(&self.live)
+            .values()
+            .find(|l| l.authz.actor.principal == holder.principal && !l.authz.grant_ids.is_empty())
+            .map(|l| l.name.clone())
     }
 
     /// Whether `principal` may size the pane's PTY: nobody holds the lease, or it does.

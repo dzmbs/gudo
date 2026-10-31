@@ -11,7 +11,8 @@
 //!
 //! A pane's browser connection is one of the owner's with [`Caps::BROWSER`] attached to the
 //! pane's session: the one that last sized the pane (the device in use), else the newest.
-//! Guests never get one, whatever their role.
+//! Guests never get one, whatever their role, and tool calls are refused while a guest holds
+//! the pane's lease.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -230,6 +231,14 @@ pub(crate) async fn serve(
             BrowserReply::Opened
         }
         BrowserAsk::Tool { name, args } => {
+            // The tools drive the owner's signed-in browser: a guest typing in the pane must
+            // not reach it through the pane's token.
+            if let Some(guest) = core.mp.guest_driving(pane) {
+                tracing::info!(pane = %pane, "browser tool refused while a guest drives");
+                return BrowserReply::Error(format!(
+                    "browser tools are off while {guest} is driving this pane"
+                ));
+            }
             let id = core.browser.next.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = oneshot::channel();
             lock(&core.browser.calls).insert(id, Pending { conn, reply: tx });

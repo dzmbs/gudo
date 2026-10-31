@@ -166,6 +166,12 @@ final class GitUI {
         return window?.app.hosts.connection(host) as? DaemonConnection
     }
 
+    /// Whether a host (the window's when nil) is someone else's, joined as a guest.
+    func isGuest(_ host: String?) -> Bool {
+        guard let id = host ?? window?.workspace?.hostId else { return false }
+        return window?.app.hosts.record(id)?.isGuest == true
+    }
+
     /// A host's repository hub (the window's when nil).
     func hub(_ host: String?) -> DaemonWorkspace? {
         guard let daemon = connection(host) else { return nil }
@@ -307,6 +313,7 @@ final class GitUI {
         guard let api = api(host) else { return }
         Task {
             do {
+                await confirmTeardown(of: wt, host: host, api: api)
                 try await api.worktreeArchive(path: wt.path, force: confirmed)
                 closeTabs(in: wt.path, host: host)
                 toast("Archived \(wt.displayBranch)", "archivebox", style: .success)
@@ -325,6 +332,7 @@ final class GitUI {
         guard let api = api(host) else { return }
         Task {
             do {
+                await confirmTeardown(of: wt, host: host, api: api)
                 try await api.worktreeRemove(path: wt.path, force: wt.dirty, deleteBranch: false)
                 closeTabs(in: wt.path, host: host)
                 toast("Deleted \(wt.name)", "trash", style: .success)
@@ -332,6 +340,14 @@ final class GitUI {
                 toast("Couldn't delete: \(ScreenError.describe(error))")
             }
         }
+    }
+
+    /// The repository's own teardown runs only once the owner trusts it; declining archives or
+    /// deletes without it.
+    private func confirmTeardown(of wt: WorktreeState, host: String?, api: any DaemonRepoAPI) async {
+        guard let trust = api as? any DaemonRepoTrustAPI, !isGuest(host) else { return }
+        let ask = try? await trust.repoHooksForWorktree(path: wt.path)
+        await RepoTrustPrompt.confirm(ask, moment: .teardown, api: trust)
     }
 
     func restore(_ archived: ArchivedWorktree) {

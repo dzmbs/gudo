@@ -627,7 +627,7 @@ pub enum ServerCtl {
         result: Result<(), crate::askpass::AskpassError>,
     },
     /// A native password prompt opened or closed, or a detected one appeared or went away.
-    /// Sent only to clients with [`Caps::ASKPASS`] holding Driver on the pane.
+    /// Sent only to owner devices with [`Caps::ASKPASS`] attached to the pane's session.
     Askpass(crate::askpass::AskpassPush),
     /// Agent plan usage changed. Sent to clients with [`Caps::AGENT_USAGE`] that watch it
     /// ([`WorkspaceRequest::UsageWatch`]).
@@ -687,7 +687,19 @@ pub enum ServerCtl {
     /// A new owner device just paired, to owner devices with [`Caps::DEVICE_ALERTS`], so a
     /// pairing the owner did not make (a phished ticket) is noticed and can be revoked.
     DevicePaired(crate::mp::DeviceInfo),
+    /// A program in the pane wrote to the clipboard (OSC 52), to the one connection with
+    /// [`Caps::CLIPBOARD`] that typed into the pane last. Write only: programs can never read
+    /// the clipboard.
+    Clipboard {
+        /// The pane.
+        pane_id: PaneId,
+        /// The text, at most [`MAX_CLIPBOARD_BYTES`] of UTF-8.
+        text: String,
+    },
 }
+
+/// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.
+pub const MAX_CLIPBOARD_BYTES: usize = 1 << 20;
 
 /// A successful [`ClientCtl::Attach`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

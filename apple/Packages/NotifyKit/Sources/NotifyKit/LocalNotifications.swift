@@ -47,10 +47,13 @@ public struct AttentionNote: Equatable, Sendable {
         self.agent = agent
     }
 
-    /// The push kind it corresponds to (category, preferences).
+    /// The push kind it corresponds to (category, preferences). An approval whose summary was
+    /// cut (`…`) is Open only, as the daemon's push: Approve from the lock screen only what the
+    /// notification shows in full.
     public var pushKind: PushKind {
         switch kind {
-        case .approval(_, let approve, let deny): approve == nil && deny == nil ? .blocked : .approval
+        case .approval(_, let approve, let deny):
+            (approve == nil && deny == nil) || body.hasSuffix("…") ? .blocked : .approval
         case .blocked: .blocked
         case .done: .done
         case .failed: .failed
@@ -89,7 +92,7 @@ public enum LocalNotifications {
             "pane": NSNumber(value: note.paneId),
             "item": NSNumber(value: note.itemId),
         ]
-        if case .approval(let request, let approve, let deny) = note.kind {
+        if case .approval(let request, let approve, let deny) = note.kind, note.pushKind == .approval {
             local["request"] = NSNumber(value: request)
             if let approve { local["approve"] = NSNumber(value: approve.id) }
             if let deny { local["deny"] = NSNumber(value: deny.id) }

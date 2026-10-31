@@ -59,6 +59,9 @@ public final class DaemonConnection: HostConnection {
     /// Every non-pane-stream event, on the main actor after the connection handled it (search,
     /// links and command-output answers for `DaemonWorkspace`, `.connected` to re-watch).
     @ObservationIgnored public var onEvent: ((ClientEvent) -> Void)?
+    /// A program in a pane this device typed into last wrote to the clipboard (OSC 52): the
+    /// pane and the text.
+    @ObservationIgnored public var onClipboard: ((PaneId, String) -> Void)?
     /// Who is here, roles, control leases, invites and the audit log (docs/DAEMON.md §6).
     public let multiplayer = MultiplayerSession()
     /// Native password prompts from this host's panes (docs/DAEMON.md §9).
@@ -365,6 +368,8 @@ public final class DaemonConnection: HostConnection {
         case .paneClosed(let pane):
             meta[PaneId(pane)] = nil
             programs[PaneId(pane)] = nil
+        case .clipboard(let pane, let text):
+            onClipboard?(PaneId(pane), text)
         case .opResult(_, let outcome):
             if case .failed = outcome { layout.revertToConfirmed() }
         case .paneSnapshot, .paneResized:

@@ -25,8 +25,8 @@ use tokio::time::Instant;
 use crate::assist::marks::Phase;
 use crate::core::{Core, PaneEntry, lock};
 
-pub use output::Output;
 pub(crate) use output::visible;
+pub use output::{Output, SOURCE_SHARED};
 
 /// The protocol version in [`TermCall::v`].
 pub const TERM_VERSION: u32 = 1;
@@ -529,6 +529,11 @@ impl Ctx {
         self.core.session_of_pane(self.caller)
     }
 
+    /// Whether a multiplayer guest can type into `pane` (its output is then marked).
+    fn shared(&self, pane: PaneId) -> bool {
+        self.core.mp.guest_can_type(&self.core, pane)
+    }
+
     fn may_read(&self, pane: PaneId) -> Result<()> {
         if self.core.session_of_pane(pane) == self.session() {
             return Ok(());
@@ -853,7 +858,7 @@ impl Ctx {
         }
         let line = entry.pane.line_snapshot();
         Ok(json!({
-            "output": Output::new(text, max, at),
+            "output": Output::new(text, max, at).shared(self.shared(pane)),
             "altScreen": alt,
             "atPrompt": line.view.phase == Phase::Prompt,
             "command": command,
@@ -931,17 +936,17 @@ impl Ctx {
             return Ok(json!({
                 "pane": pane_ref(pane),
                 "status": if status { "unknown" } else { "timeout" },
-                "output": Output::new(text, max, at),
+                "output": Output::new(text, max, at).shared(self.shared(pane)),
                 "note": "this shell does not report commands, so there is no exit code",
             }));
         };
         let finished = mark.finished.is_some();
         let output = if finished {
             let out = entry.pane.command_output(None, Some(mark.command_id)).ok();
-            out.map(|o| Output::new(o.text, max, entry.pane.head()))
+            out.map(|o| Output::new(o.text, max, entry.pane.head()).shared(self.shared(pane)))
         } else {
             let (text, at) = self.output_since(&entry, start).await?;
-            Some(Output::new(text, max, at))
+            Some(Output::new(text, max, at).shared(self.shared(pane)))
         };
         Ok(json!({
             "pane": pane_ref(pane),
@@ -1015,7 +1020,7 @@ impl Ctx {
                     return Ok(json!({
                         "status": "matched",
                         "match": { "line": found.0, "groups": found.1 },
-                        "output": Output::new(rendered, max, position(&sub)),
+                        "output": Output::new(rendered, max, position(&sub)).shared(self.shared(pane)),
                     }));
                 }
                 text = Some(rendered);
@@ -1027,6 +1032,7 @@ impl Ctx {
                     .is_some_and(|s| a.status.iter().any(|w| w == s))
                 {
                     let mut done = self.waited(
+                        pane,
                         "status",
                         text.clone(),
                         &bytes,
@@ -1047,7 +1053,16 @@ impl Ctx {
                     .commands
                     .last()
                     .map(|c| CommandInfo::of(&c.mark));
-                return self.waited("prompt", text, &bytes, cols, max, position(&sub), last);
+                return self.waited(
+                    pane,
+                    "prompt",
+                    text,
+                    &bytes,
+                    cols,
+                    max,
+                    position(&sub),
+                    last,
+                );
             }
             if let Some(id) = a.exit {
                 let mark = entry
@@ -1060,6 +1075,7 @@ impl Ctx {
                 match mark {
                     Some(m) if m.finished.is_some() => {
                         return self.waited(
+                            pane,
                             "exited",
                             text,
                             &bytes,
@@ -1081,14 +1097,32 @@ impl Ctx {
             if let Some(quiet) = a.quiet_ms
                 && last_output.elapsed() >= Duration::from_millis(quiet)
             {
-                return self.waited("quiet", text, &bytes, cols, max, position(&sub), None);
+                return self.waited(pane, "quiet", text, &bytes, cols, max, position(&sub), None);
             }
             if self.core.pane_meta(pane).and_then(|m| m.exit).is_some() {
-                return self.waited("closed", text, &bytes, cols, max, position(&sub), None);
+                return self.waited(
+                    pane,
+                    "closed",
+                    text,
+                    &bytes,
+                    cols,
+                    max,
+                    position(&sub),
+                    None,
+                );
             }
             let now = Instant::now();
             if now >= deadline {
-                return self.waited("timeout", text, &bytes, cols, max, position(&sub), None);
+                return self.waited(
+                    pane,
+                    "timeout",
+                    text,
+                    &bytes,
+                    cols,
+                    max,
+                    position(&sub),
+                    None,
+                );
             }
             match tokio::time::timeout(TICK.min(deadline - now), sub.recv()).await {
                 Ok(Ok(chunk)) => {
@@ -1108,6 +1142,7 @@ impl Ctx {
     #[allow(clippy::too_many_arguments)]
     fn waited(
         &self,
+        pane: PaneId,
         status: &str,
         text: Option<String>,
         bytes: &[u8],
@@ -1117,7 +1152,9 @@ impl Ctx {
         command: Option<CommandInfo>,
     ) -> Result<Value> {
         let text = text.unwrap_or_else(|| output::render(bytes, cols));
-        Ok(json!({ "status": status, "output": Output::new(text, max, at), "command": command }))
+        Ok(
+            json!({ "status": status, "output": Output::new(text, max, at).shared(self.shared(pane)), "command": command }),
+        )
     }
 
     // --- agents -----------------------------------------------------------------------------
@@ -1398,6 +1435,8 @@ fn position(sub: &pty::Subscriber) -> Seq {
 
 async fn write(entry: &PaneEntry, bytes: Vec<u8>) -> Result<usize> {
     let len = bytes.len();
+    // What the agent's typing makes a program copy is not for any device's clipboard.
+    lock(&entry.meta).typed_by = None;
     entry.pane.write(bytes).await.map_err(|_| closed())?;
     Ok(len)
 }

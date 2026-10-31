@@ -168,6 +168,7 @@ async fn run(
         watches: Arc::default(),
         actor: authz.actor,
         caps: hello.caps,
+        owner: is_owner(&core, &authz),
     };
     let id = core.next_conn_id();
     let _ = ctl.send(ServerCtl::Joined(authz.join_info(&authz.name)));
@@ -266,7 +267,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::AGENT_MCP
         | DaemonFeatures::PRESENCE
         | DaemonFeatures::INVITE_LINKS
-        | DaemonFeatures::PROGRAM_STATUS;
+        | DaemonFeatures::PROGRAM_STATUS
+        | DaemonFeatures::REPO_TRUST;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -462,10 +464,7 @@ async fn serve_knock(
 /// Whether `authz` is the daemon's owner: a paired owner device on the whole daemon, not a
 /// guest's chain (whatever roles it delegates).
 fn is_owner(core: &Core, authz: &Authz) -> bool {
-    authz.grant_ids.is_empty()
-        && authz.scope == Scope::Daemon
-        && authz.roles.contains(proto::Roles::OWNER)
-        && core.identity.is_owner_device(authz.actor.device)
+    authz.is_owner_device(core)
 }
 
 /// A connection admitted only to upgrade an incompatible daemon: serves upgrade streams from
@@ -738,6 +737,7 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             client.send(reject(InputRejectReason::UnknownPane));
             continue;
         };
+        lock(&entry.meta).typed_by = Some(client.id);
         client.core.mp.typed(&client.core, client.id, input.pane_id);
         if let Some(sub) = lock(&client.state).subs.get(&input.pane_id) {
             let _ = sub.cmds.send(StreamCmd::InputAck {
@@ -1011,7 +1011,7 @@ impl Client {
             }
             Event::Askpass(push) => {
                 if self.may_answer(crate::askpass::push_pane(&push)) {
-                    self.send(ServerCtl::Askpass(push));
+                    self.send(ServerCtl::Askpass(self.askpass_push(push)));
                 }
             }
             Event::Repos => {
@@ -1061,6 +1061,21 @@ impl Client {
             Event::Browser { conn, push } => {
                 if conn == self.id {
                     self.send(ServerCtl::Browser(push));
+                }
+            }
+            Event::Clipboard {
+                conn,
+                pane_id,
+                text,
+            } => {
+                if conn == self.id
+                    && self.caps.contains(Caps::CLIPBOARD)
+                    && self.in_session(pane_id)
+                {
+                    self.send(ServerCtl::Clipboard {
+                        pane_id,
+                        text: text.to_string(),
+                    });
                 }
             }
         }
@@ -1213,10 +1228,25 @@ impl Client {
     /// Whether this connection is shown native password prompts for `pane`: it asked for
     /// them, shows the pane's session and may drive the pane. Guests who only watch never see
     /// the prompt text.
+    /// Password prompts go to owner devices only: a host that is not a guest's own must never
+    /// ask for the guest's passwords.
     fn may_answer(&self, pane: PaneId) -> bool {
         self.caps.contains(Caps::ASKPASS)
+            && is_owner(&self.core, &self.authz)
             && self.in_session(pane)
             && self.allow(Need::Drive, Target::Pane(pane)).is_ok()
+    }
+
+    /// `push` as this client understands it.
+    fn askpass_push(&self, push: proto::AskpassPush) -> proto::AskpassPush {
+        match push {
+            proto::AskpassPush::PromptWhileGuestDrives { prompt, .. }
+                if !self.caps.contains(Caps::ASKPASS_DRIVER) =>
+            {
+                proto::AskpassPush::Prompt(prompt)
+            }
+            push => push,
+        }
     }
 
     /// The open and detected password prompts of `pane`, for a connection that just attached.
@@ -1224,8 +1254,8 @@ impl Client {
         if !self.may_answer(pane) {
             return;
         }
-        for prompt in self.core.askpass.open_in(pane) {
-            self.send(ServerCtl::Askpass(proto::AskpassPush::Prompt(prompt)));
+        for push in self.core.askpass.open_in(pane) {
+            self.send(ServerCtl::Askpass(self.askpass_push(push)));
         }
         if let Some(detected) = crate::askpass::detected(&self.core, pane) {
             self.send(ServerCtl::Askpass(proto::AskpassPush::Detected(detected)));

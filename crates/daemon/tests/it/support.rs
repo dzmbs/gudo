@@ -94,6 +94,8 @@ pub struct TestClient {
     pub browser: Vec<client_core::proto::BrowserPush>,
     /// `ClientEvent::ProgramStatus` pushes, in order (connections with `program_status`).
     pub programs: Vec<(PaneId, Option<client_core::proto::ProgramReport>)>,
+    /// `ClientEvent::Clipboard` writes (connections with `clipboard`).
+    pub clipboard: Vec<(PaneId, String)>,
 }
 
 impl TestClient {
@@ -148,19 +150,6 @@ impl TestClient {
         Self::connect_with(ticket, config, options)
     }
 
-    /// A guest joining with an invite, showing native password prompts.
-    pub fn join_askpass(invite: &str, key: Vec<u8>) -> Self {
-        let (listener, events) = EventQueue::channel();
-        let mut config = ClientConfig::new(key);
-        config.relay = RelayMode::Disabled;
-        let options = client_core::ConnectOptions {
-            askpass: true,
-            ..client_core::ConnectOptions::default()
-        };
-        let client = Client::join_with(invite, config, options, listener).expect("client starts");
-        Self::wrap(client, events)
-    }
-
     /// A guest joining with an invite, offering to open URLs and run browser tools.
     pub fn join_browser(invite: &str, key: Vec<u8>) -> Self {
         let (listener, events) = EventQueue::channel();
@@ -170,6 +159,15 @@ impl TestClient {
             browser: true,
             ..client_core::ConnectOptions::default()
         };
+        let client = Client::join_with(invite, config, options, listener).expect("client starts");
+        Self::wrap(client, events)
+    }
+
+    /// A guest joining with an invite and these options.
+    pub fn join_options(invite: &str, options: client_core::ConnectOptions) -> Self {
+        let (listener, events) = EventQueue::channel();
+        let mut config = ClientConfig::new(ClientConfig::generate_key());
+        config.relay = RelayMode::Disabled;
         let client = Client::join_with(invite, config, options, listener).expect("client starts");
         Self::wrap(client, events)
     }
@@ -219,6 +217,7 @@ impl TestClient {
             browser_events,
             browser: Vec::new(),
             programs: Vec::new(),
+            clipboard: Vec::new(),
         }
     }
 
@@ -266,6 +265,7 @@ impl TestClient {
             ClientEvent::ProgramStatus { pane_id, status } => {
                 self.programs.push((pane_id, status));
             }
+            ClientEvent::Clipboard { pane_id, text } => self.clipboard.push((pane_id, text)),
             _ => {}
         }
     }

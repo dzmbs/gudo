@@ -466,7 +466,13 @@ final class LiveAgentFeed: AgentFeed {
             }
             guard let session = daemon.layout.sessionId else { throw HostError.notConnected }
             let used = Set(daemon.layout.session.tabs.compactMap(\.title))
-            let made = try await daemon.workspace.repoClient().taskCreate(task: TaskCreate(
+            let repoAPI = try daemon.workspace.repoClient()
+            // The repository's own setup command runs only once the owner trusts it.
+            if hosts.record(request.hostId)?.isGuest != true, let trust = repoAPI as? any DaemonRepoTrustAPI {
+                let ask = try? await trust.repoHooksForTask(repo: repo, base: nil)
+                await RepoTrustPrompt.confirm(ask, moment: .setup, api: trust)
+            }
+            let made = try await repoAPI.taskCreate(task: TaskCreate(
                 repo: repo, sessionId: session, name: request.name?.nonEmpty ?? FriendlyName.make(avoiding: used),
                 branch: request.branch?.nonEmpty, base: nil,
                 agent: request.shell ? nil : (request.agent == .codex ? .codex : .claude), prompt: nil))

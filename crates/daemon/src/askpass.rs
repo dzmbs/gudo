@@ -4,8 +4,10 @@
 //!   `SSH_ASKPASS_REQUIRE=prefer`) and `GIT_ASKPASS` naming `<state>/askpass/<cli>-askpass`, a
 //!   two-line script that runs the hook shim's `askpass` mode. The helper sends one
 //!   [`AskpassCall`] line on the hook socket and waits for one [`HelperReply`] line. The
-//!   daemon pushes the prompt to every connection with [`Caps::ASKPASS`] that holds Driver on
-//!   the pane and shows its session; the first answer wins. With nobody able to answer (now,
+//!   daemon pushes the prompt to every owner device with [`Caps::ASKPASS`] that shows the
+//!   pane's session, never to a guest's (a host that is not theirs must not ask for their
+//!   passwords); the first answer wins. While a guest holds the pane's lease the prompt
+//!   names them ([`AskpassPush::PromptWhileGuestDrives`]): they may have typed the command. With nobody able to answer (now,
 //!   or for [`AskpassConfig::grace`] while the prompt is open), the helper is told to ask on
 //!   the terminal itself.
 //! - **Detected prompts.** While a pane's termios is `-echo icanon` and the cursor row looks
@@ -116,7 +118,22 @@ enum Outcome {
 
 struct Open {
     prompt: SecretPrompt,
+    /// The guest holding the pane's lease when the program asked.
+    guest: Option<String>,
     reply: oneshot::Sender<Outcome>,
+}
+
+impl Open {
+    fn push(&self) -> AskpassPush {
+        prompt_push(self.prompt.clone(), self.guest.clone())
+    }
+}
+
+fn prompt_push(prompt: SecretPrompt, guest: Option<String>) -> AskpassPush {
+    match guest {
+        Some(guest) => AskpassPush::PromptWhileGuestDrives { prompt, guest },
+        None => AskpassPush::Prompt(prompt),
+    }
 }
 
 /// Open prompts, the connections that may answer them, and the helper's location.
@@ -225,15 +242,12 @@ impl Askpass {
         lock(&self.conns).remove(&conn);
     }
 
-    /// The open prompts of `pane`.
-    pub fn open_in(&self, pane: PaneId) -> Vec<SecretPrompt> {
-        let mut open: Vec<SecretPrompt> = lock(&self.open)
-            .values()
-            .filter(|o| o.prompt.pane_id == pane)
-            .map(|o| o.prompt.clone())
-            .collect();
-        open.sort_by_key(|p| p.id);
-        open
+    /// The open prompts of `pane`, as pushes.
+    pub fn open_in(&self, pane: PaneId) -> Vec<AskpassPush> {
+        let open = lock(&self.open);
+        let mut mine: Vec<&Open> = open.values().filter(|o| o.prompt.pane_id == pane).collect();
+        mine.sort_by_key(|o| o.prompt.id);
+        mine.into_iter().map(Open::push).collect()
     }
 
     fn pane_of(&self, id: AskpassId) -> Option<PaneId> {
@@ -247,7 +261,8 @@ impl Askpass {
 }
 
 impl Core {
-    /// Whether a connection that may answer a prompt in `pane` is attached to its session.
+    /// Whether a connection that may answer a prompt in `pane` (an owner device's) is attached
+    /// to its session.
     pub fn askpass_audience(&self, pane: PaneId) -> bool {
         let Some(session) = self.session_of_pane(pane) else {
             return false;
@@ -259,7 +274,7 @@ impl Core {
         conns.into_iter().any(|(conn, authz)| {
             self.attached_session(conn) == Some(session)
                 && self.mp.still_valid(&authz)
-                && policy::check(self, &authz, Need::Drive, Target::Pane(pane)).is_ok()
+                && authz.is_owner_device(self)
         })
     }
 }
@@ -326,16 +341,18 @@ pub(crate) async fn serve(
         retry,
         expires_at: UnixMillis(crate::identity::now_millis() + timeout.as_millis() as u64),
     };
+    let guest = core.mp.guest_driving(pane);
     let (tx, rx) = oneshot::channel();
     lock(&core.askpass.open).insert(
         id,
         Open {
             prompt: prompt.clone(),
+            guest: guest.clone(),
             reply: tx,
         },
     );
-    tracing::info!(pane = %pane, id = %id, source = ?prompt.source, "askpass prompt");
-    core.emit(Event::Askpass(AskpassPush::Prompt(prompt)));
+    tracing::info!(pane = %pane, id = %id, source = ?prompt.source, guest_driving = guest.is_some(), "askpass prompt");
+    core.emit(Event::Askpass(prompt_push(prompt, guest)));
 
     let (reason, reply) = tokio::select! {
         outcome = rx => match outcome {
@@ -433,9 +450,17 @@ pub(crate) async fn request(
         policy::check(core, authz, Need::Drive, Target::Pane(pane))
             .map_err(|e| AskpassError::Denied(e.to_string()))
     };
+    // Prompts go to owner devices only; so do their answers.
+    let owner = || {
+        authz
+            .is_owner_device(core)
+            .then_some(())
+            .ok_or_else(|| AskpassError::Denied("password prompts are the host owner's".into()))
+    };
     let principal = authz.actor.principal;
     match req {
         AskpassRequest::Answer { id, secret } => {
+            owner()?;
             allow(core.askpass.pane_of(id).ok_or(AskpassError::Gone)?)?;
             if has_controls(&secret) {
                 return Err(AskpassError::Failed(
@@ -445,6 +470,7 @@ pub(crate) async fn request(
             core.askpass.resolve(id, Outcome::Answer(secret, principal))
         }
         AskpassRequest::Cancel { id } => {
+            owner()?;
             allow(core.askpass.pane_of(id).ok_or(AskpassError::Gone)?)?;
             core.askpass.resolve(id, Outcome::Cancel(principal))
         }
@@ -530,7 +556,7 @@ pub(crate) fn detected(core: &Core, pane: PaneId) -> Option<DetectedPrompt> {
 /// The pane a push is about.
 pub(crate) fn push_pane(push: &AskpassPush) -> PaneId {
     match push {
-        AskpassPush::Prompt(p) => p.pane_id,
+        AskpassPush::Prompt(p) | AskpassPush::PromptWhileGuestDrives { prompt: p, .. } => p.pane_id,
         AskpassPush::Closed { pane_id, .. }
         | AskpassPush::DetectedGone { pane_id }
         | AskpassPush::Detected(DetectedPrompt { pane_id, .. }) => *pane_id,

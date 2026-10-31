@@ -68,7 +68,8 @@ final class SecretEntry {
         case .detected(let detected): copy = AskpassCopy(detected: detected)
         }
         key = AskpassVaultKey(host: hostId, kind: copy.kind, prompt: copy.fieldLabel)
-        hasSaved = vaultAvailable && !copy.echo && vault.contains(key)
+        // No one-tap saved password while a guest drives: their command may be what asks.
+        hasSaved = vaultAvailable && !copy.echo && copy.guestNotice == nil && vault.contains(key)
         if case .askpass(let prompt) = target, prompt.retry, hasSaved,
            let used = AskpassVaultStore.recentlyUsed[key], used.duration(to: .now) < .seconds(60) {
             // The saved password went out and the same question came straight back.

@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use client_core::proto::{
     CheckStatus, GhStatus, LayoutOp, MergeState, MergeStrategy, OpOutcome, PaneId, PaneLaunch,
-    PrMerge, PrState, RepoSnapshot, ScriptRun, TaskCreate, WorktreeSettings, WsError,
+    PrMerge, PrState, RepoHooksFor, RepoSnapshot, Roles, Scope, ScriptRun, TaskCreate, UnixMillis,
+    WorktreeSettings, WsError,
 };
 use client_core::{ClientConfig, ConnectOptions, RelayMode, WorkspaceEvent, WorkspaceEventQueue};
 use daemon::Daemon;
@@ -224,8 +225,10 @@ async fn snapshot_follows_panes_branches_diffs_and_pull_requests() {
         }
     );
 
-    // New task: worktree on a branch named after the task, setup first, then a shell.
+    // New task: worktree on a branch named after the task, setup first (the owner trusts
+    // it), then a shell.
     let session = c.layout.as_ref().unwrap().session_id;
+    trust_new_task(&c, &repo).await;
     let task = c
         .client
         .task_create(TaskCreate {
@@ -505,6 +508,14 @@ async fn merged_worktrees_are_deleted_after_n_days_unless_dirty() {
         path: None,
     };
     let clean = c.client.worktree_create(mk("done-clean")).await.unwrap();
+    let hooks = c
+        .client
+        .repo_hooks(RepoHooksFor::Worktree {
+            path: clean.path.clone(),
+        })
+        .await
+        .unwrap();
+    c.client.repo_trust(hooks.repo, hooks.hash).await.unwrap();
     let dirty = c.client.worktree_create(mk("done-dirty")).await.unwrap();
     let open = c.client.worktree_create(mk("still-open")).await.unwrap();
     std::fs::write(PathBuf::from(&dirty.path).join("wip.txt"), "wip\n").unwrap();
@@ -556,4 +567,130 @@ async fn clients_without_the_capability_get_no_snapshot() {
     while let Ok(e) = plain_events.try_recv() {
         assert!(!matches!(e, WorkspaceEvent::Repos { .. }), "{e:?}");
     }
+}
+
+/// Trusts the commands a new task in `repo` would run.
+async fn trust_new_task(c: &TestClient, repo: &Path) {
+    let hooks = c
+        .client
+        .repo_hooks(RepoHooksFor::NewTask {
+            repo: s(repo),
+            base: None,
+        })
+        .await
+        .unwrap();
+    c.client.repo_trust(hooks.repo, hooks.hash).await.unwrap();
+}
+
+/// Waits a moment for `path` to appear.
+async fn appears(path: &Path, within: Duration) -> bool {
+    tokio::time::timeout(within, async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// A repository's `.unnamed.json` commands (a clone, an unpacked archive) run only once the
+/// owner trusts exactly them, as VS Code's workspace trust or `direnv allow`; guests cannot
+/// trust them, and changed commands are asked about again.
+#[tokio::test(flavor = "multi_thread")]
+async fn repository_commands_run_only_once_the_owner_trusts_them() {
+    let (_state, state) = canonical_tempdir();
+    let (_home, home) = canonical_tempdir();
+    let config = r#"{"setup":"echo setup-ran > .setup-done","teardown":"touch ../teardown-ran"}"#;
+    let repo = repo(&home, Some(config));
+    let daemon = start(&state, &home, None).await;
+    let (mut c, _events) = watcher(&daemon).await;
+    c.attach_and_follow().await;
+    let session = c.layout.as_ref().unwrap().session_id;
+    let task = |name: &str| TaskCreate {
+        repo: s(&repo),
+        session_id: session,
+        name: name.into(),
+        branch: None,
+        base: None,
+        agent: None,
+    };
+    let new_task = RepoHooksFor::NewTask {
+        repo: s(&repo),
+        base: None,
+    };
+    let teardown_ran = home.join("worktrees/repo/teardown-ran");
+
+    let features = c.client.daemon_info().unwrap().features;
+    assert!(features.contains(client_core::proto::DaemonFeatures::REPO_TRUST));
+    let asked = c.client.repo_hooks(new_task.clone()).await.unwrap();
+    assert!(!asked.trusted);
+    assert_eq!(
+        asked.hooks.setup.as_deref(),
+        Some("echo setup-ran > .setup-done")
+    );
+    assert_eq!(
+        asked.hooks.teardown.as_deref(),
+        Some("touch ../teardown-ran")
+    );
+    assert_eq!(PathBuf::from(&asked.repo), repo);
+
+    // Untrusted: the task opens, but neither its setup nor its teardown runs.
+    let first = c.client.task_create(task("first")).await.unwrap();
+    assert_eq!(first.setup, None);
+    let first_path = PathBuf::from(&first.worktree.path);
+    assert!(!appears(&first_path.join(".setup-done"), Duration::from_secs(2)).await);
+    c.client
+        .worktree_archive(first.worktree.path.clone(), true)
+        .await
+        .unwrap();
+    assert!(!teardown_ran.exists(), "untrusted teardown ran");
+
+    // A guest cannot trust them, even one holding the owner role.
+    let mut spec = client_core::grants::GrantSpec::new(Roles::OWNER, Scope::Daemon);
+    spec.label = "bob".into();
+    spec.expires = Some(UnixMillis(client_core::now_millis().0 + 3_600_000));
+    let invite = c.client.create_invite(spec, "bob".into()).await.unwrap();
+    let mut bob = TestClient::join(&invite.to_string(), ClientConfig::generate_key());
+    bob.client.attach(None);
+    bob.until("guest layout", |c| c.layout.is_some()).await;
+    assert!(matches!(
+        bob.client
+            .repo_trust(asked.repo.clone(), asked.hash.clone())
+            .await,
+        Err(WsError::Denied(_))
+    ));
+    assert!(!c.client.repo_hooks(new_task.clone()).await.unwrap().trusted);
+
+    // The owner trusts them: they run.
+    c.client
+        .repo_trust(asked.repo.clone(), asked.hash.clone())
+        .await
+        .unwrap();
+    assert!(c.client.repo_hooks(new_task.clone()).await.unwrap().trusted);
+    let second = c.client.task_create(task("second")).await.unwrap();
+    assert_eq!(
+        second.setup.as_deref(),
+        Some("echo setup-ran > .setup-done")
+    );
+    let second_path = PathBuf::from(&second.worktree.path);
+    assert!(appears(&second_path.join(".setup-done"), Duration::from_secs(10)).await);
+    c.client
+        .worktree_archive(second.worktree.path.clone(), true)
+        .await
+        .unwrap();
+    assert!(teardown_ran.exists(), "trusted teardown ran");
+
+    // Changed commands (a pull, a new branch) are untrusted again.
+    std::fs::write(
+        repo.join(".unnamed.json"),
+        r#"{"setup":"echo setup-ran > .setup-done; touch ../pwned"}"#,
+    )
+    .unwrap();
+    run_git(&repo, &["commit", "-qam", "change setup"]);
+    let changed = c.client.repo_hooks(new_task.clone()).await.unwrap();
+    assert!(!changed.trusted);
+    assert_ne!(changed.hash, asked.hash);
+    let third = c.client.task_create(task("third")).await.unwrap();
+    assert_eq!(third.setup, None);
+    assert!(!appears(&home.join("worktrees/repo/pwned"), Duration::from_secs(2)).await);
 }

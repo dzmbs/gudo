@@ -172,7 +172,9 @@ impl GrantChain {
 /// assert_eq!(text.parse::<Invite>()?, invite);
 /// # Ok::<(), proto::TicketError>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` leaves the grant chain out: whoever holds it can join.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invite {
     /// Invite format version; [`Invite::VERSION`].
     pub v: u16,
@@ -194,6 +196,18 @@ impl Invite {
 
     fn prefix() -> String {
         format!("{}://join/", brand::URL_SCHEME)
+    }
+}
+
+impl fmt::Debug for Invite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Invite")
+            .field("v", &self.v)
+            .field("daemon_id", &self.daemon_id)
+            .field("addrs", &self.addrs)
+            .field("relay_url", &self.relay_url)
+            .field("inviter", &self.inviter)
+            .finish_non_exhaustive()
     }
 }
 

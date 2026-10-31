@@ -83,13 +83,19 @@ Now:
   connection that did not announce the capability), and so does the app.
 - When a user clicks a terminal link from a host, a `file:` URL is not handed to the system.
   Links the in-app browser opens from a remote pane must be web pages.
-- There is no OSC 52: a host can neither read nor write the clipboard.
+- A host can never read the clipboard. A program can write it (OSC 52) only on the device
+  that typed into its pane last; the item is local only (no Universal Clipboard), and a toast
+  says "Copied from <pane>".
+- A guest connection never offers to answer password prompts, and drops any a host sends;
+  the owner's sheet says when a guest was driving the pane.
 - Pages tied to a host (pages it opens, its agent's browser, its sign-ins, its dev servers)
   use that host's own persistent `WKWebsiteDataStore(forIdentifier:)`, never the store of the
   user's own browsing. Host A's pages cannot see host B's cookies or storage, or the user's
   sessions. Removing a host deletes its store.
 - The VS Code web view hands only `vscode:`, `vscode-insiders:`, `mailto:` and `tel:` links to
   the system, and only from the main frame.
+- A repository's own setup and teardown commands run only once the owner trusts them in the
+  app ("Run Setup Commands for repo?", listing them).
 - The Excalidraw canvas:
   - never navigates its page away from its bundled scheme, not even to a `data:` or `blob:`
     page (a shared drawing's link could otherwise replace it with a form);
@@ -133,6 +139,7 @@ has) works like a password manager's or a bank's:
 
 **Lock screen and notifications.**
 - Approve and Deny need the device unlocked (`.authenticationRequired`).
+- An approval whose summary had to be cut has no Approve: Open only, and the app shows it all.
 - An approval's action token lasts 15 minutes (`push.action_ttl`), so a notification left on a
   lock screen cannot approve a request much later.
 - Approval and blocked categories show a placeholder when previews are hidden.
@@ -145,7 +152,8 @@ has) works like a password manager's or a bank's:
 - `Debug` output of the FFI types that carry a secret leaves it out: `ClientConfig` (device
   key), `ConnectOptions` (relay token; also in client-core), `GeneratedSshKey` (private key),
   `PushSealKey`, `PushActionOffer` (action token), `CreatedInvite` (link),
-  `EditorInstance` (token) and `PushRegistration` (relay capabilities).
+  `EditorInstance` (token) and `PushRegistration` (relay capabilities). In the wire types,
+  `proto::Invite` leaves out its grant chain and `proto::EditorInstance` its token and URL.
 - Askpass secrets in the core are zeroized (`proto::Secret`).
 
 **Pasteboard.** Copied invite links expire from the iOS clipboard after 10 minutes. On the Mac
@@ -210,7 +218,11 @@ by removing it).
     tunnel page and its desktop link; IDN web pages open; vscode.dev look-alikes don't.
   - `testTheCanvasBridgeHearsOnlyItsOwnPage`: a frame inside the live canvas posts to the
     bridge and is ignored; the page navigating to a site, `data:` or `file:` stays put.
-  - `testTheCanvasMainFrameStaysInItsBundle`, `testTheEditorWebViewHandsOnlyItsSchemesToTheSystem`.
+  - `testTheCanvasMainFrameStaysInItsBundle`.
+  - `testTheEditorWebViewHandsOnlyItsSchemesToTheSystem`: the editor's navigation decision
+    itself, for web pages, its schemes in the main frame and in a frame, and files, other
+    apps' and this app's links.
+  - `testAHostsCopyIsPlainTextNamedByItsPane` (macOS), `testTheRepositoryTrustAlertListsEveryCommand`.
   - `testToolingHooksAreNeverReadFromSavedDefaults`: scans the app's sources; every tooling
     hook and `test…` key is read through `LaunchArguments`.
   - `testKeychainItemsStayOnThisDevice`: the stored item is `AfterFirstUnlockThisDeviceOnly`
@@ -223,6 +235,8 @@ by removing it).
 - `client-core` `browser::tests`: a daemon pushing browser requests to a connection that did
   not announce the capability (or to a guest) reaches nothing.
 - `apple-ffi` `debug_output_leaves_secrets_out`: every FFI type that carries a secret.
+  `proto` `golden_trust_clipboard::debug_output_leaves_bearer_secrets_out`: `Invite` and
+  `EditorInstance`.
 - Manual: the hosted tests' unified log (`log stream`) holds none of the test tickets, invite
   links or secrets; the four `PrivacyInfo.xcprivacy` files pass `plutil -lint` and land in their
   bundles; the Rust core links no disk-space API.

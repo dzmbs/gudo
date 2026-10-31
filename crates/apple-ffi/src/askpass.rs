@@ -93,6 +93,10 @@ pub struct SecretPrompt {
     pub retry: bool,
     /// When the daemon stops waiting (Unix ms).
     pub expires_at_ms: u64,
+    /// The guest who held the pane's lease when the program asked (they may have typed the
+    /// command): "Asked while <guest> is driving".
+    #[uniffi(default = None)]
+    pub guest_driving: Option<String>,
 }
 
 impl From<proto::SecretPrompt> for SecretPrompt {
@@ -106,7 +110,15 @@ impl From<proto::SecretPrompt> for SecretPrompt {
             echo: p.echo,
             retry: p.retry,
             expires_at_ms: p.expires_at.0,
+            guest_driving: None,
         }
+    }
+}
+
+fn driven(prompt: proto::SecretPrompt, guest: Option<String>) -> SecretPrompt {
+    SecretPrompt {
+        guest_driving: guest,
+        ..prompt.into()
     }
 }
 
@@ -208,6 +220,9 @@ impl From<client_core::AskpassEvent> for AskpassEvent {
         use client_core::AskpassEvent as E;
         match e {
             E::Prompt(p) => Self::Prompt { prompt: p.into() },
+            E::PromptWhileGuestDrives { prompt, guest } => Self::Prompt {
+                prompt: driven(prompt, Some(guest)),
+            },
             E::Closed {
                 id,
                 pane_id,
@@ -268,7 +283,10 @@ impl DaemonClient {
         self.inner
             .open_askpass()
             .into_iter()
-            .map(Into::into)
+            .map(|p| {
+                let guest = self.inner.askpass_guest(p.id);
+                driven(p, guest)
+            })
             .collect()
     }
 
@@ -316,5 +334,38 @@ impl DaemonClient {
         on_runtime(async move { core.type_secret(proto::PaneId(pane_id), secret).await })
             .await
             .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_prompt_asked_while_a_guest_drives_names_them() {
+        let prompt = proto::SecretPrompt {
+            id: proto::AskpassId(1),
+            pane_id: proto::PaneId(2),
+            source: proto::SecretSource::Sudo,
+            prompt: "Password:".into(),
+            program: "sudo ls".into(),
+            echo: false,
+            retry: false,
+            expires_at: proto::UnixMillis(0),
+        };
+        let driven = AskpassEvent::from(client_core::AskpassEvent::PromptWhileGuestDrives {
+            prompt: prompt.clone(),
+            guest: "bob".into(),
+        });
+        let AskpassEvent::Prompt { prompt: shown } = driven else {
+            panic!("{driven:?}");
+        };
+        assert_eq!(shown.guest_driving.as_deref(), Some("bob"));
+        let AskpassEvent::Prompt { prompt: plain } =
+            AskpassEvent::from(client_core::AskpassEvent::Prompt(prompt))
+        else {
+            panic!();
+        };
+        assert_eq!(plain.guest_driving, None);
     }
 }

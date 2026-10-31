@@ -113,3 +113,61 @@ async fn hostile_queries_type_nothing_into_the_shell() {
         assert!(!replies.contains(&b), "byte {b:#x} in {shown:?}");
     }
 }
+
+/// OSC 52 (copy from vim or tmux, also over ssh) reaches only the device that typed into the
+/// pane last: never the owner's other devices, never a guest's clipboard from the owner's
+/// typing, and never the owner's from a guest's.
+#[tokio::test(flavor = "multi_thread")]
+async fn clipboard_writes_reach_only_the_device_that_typed() {
+    use client_core::ConnectOptions;
+    use client_core::grants::GrantSpec;
+    use client_core::proto::{Roles, Scope, UnixMillis};
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let copying = || {
+        let mut config = ClientConfig::new(ClientConfig::generate_key());
+        config.relay = client_core::RelayMode::Disabled;
+        let options = ConnectOptions {
+            clipboard: true,
+            ..ConnectOptions::default()
+        };
+        (config, options)
+    };
+    let (config, options) = copying();
+    let mut mac = TestClient::connect_with(&ticket(&daemon), config, options);
+    let pane = mac.attach_and_follow().await;
+    let (config, options) = copying();
+    let mut ipad = TestClient::connect_with(&ticket(&daemon), config, options.clone());
+    ipad.client.attach(None);
+    ipad.until("layout", |c| c.layout.is_some()).await;
+    ipad.follow(pane).await;
+    let mut spec = GrantSpec::new(Roles::DRIVER, Scope::Daemon);
+    spec.label = "bob".into();
+    spec.expires = Some(UnixMillis(client_core::now_millis().0 + 3_600_000));
+    let invite = mac.client.create_invite(spec, "bob".into()).await.unwrap();
+    let mut bob = TestClient::join_options(&invite.to_string(), options);
+    bob.client.attach(None);
+    bob.until("guest layout", |c| c.layout.is_some()).await;
+    bob.follow(pane).await;
+
+    let copy = |text: &str| {
+        let b64 = data_encoding::BASE64.encode(text.as_bytes());
+        format!("printf '\\033]52;c;%s\\007\\033]52;c;?\\007' {b64}")
+    };
+    mac.type_line(pane, &copy("from-the-mac"));
+    mac.until("the Mac copied", |c| !c.clipboard.is_empty())
+        .await;
+
+    mac.client.release_control(pane).await.unwrap();
+    bob.type_line(pane, &copy("from-bob"));
+    bob.until("bob copied", |c| !c.clipboard.is_empty()).await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    for c in [&mut mac, &mut ipad, &mut bob] {
+        c.until("settled", |_| true).await;
+    }
+    assert_eq!(mac.clipboard, [(pane, "from-the-mac".to_owned())]);
+    assert_eq!(bob.clipboard, [(pane, "from-bob".to_owned())]);
+    assert!(ipad.clipboard.is_empty(), "{:?}", ipad.clipboard);
+}

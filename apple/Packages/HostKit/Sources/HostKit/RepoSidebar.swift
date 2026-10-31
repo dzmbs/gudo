@@ -24,6 +24,17 @@ nonisolated public protocol DaemonRepoAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonRepoAPI {}
 
+/// Trust for a repository's own setup and teardown commands (`.unnamed.json`): the daemon
+/// runs them only once the owner trusts exactly them. `nil` answers mean nothing to ask (no
+/// commands, already trusted, or a daemon that does not ask).
+nonisolated public protocol DaemonRepoTrustAPI: AnyObject, Sendable {
+    func repoHooksForTask(repo: String, base: String?) async throws -> RepoHooksTrust?
+    func repoHooksForWorktree(path: String) async throws -> RepoHooksTrust?
+    func repoTrust(repo: String, hash: String) async throws
+}
+
+extension DaemonClient: DaemonRepoTrustAPI {}
+
 /// running is pending; else passing).
 nonisolated public enum ChecksSummary: Equatable, Sendable {
     case none

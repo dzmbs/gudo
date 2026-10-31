@@ -300,6 +300,19 @@ pub enum WorkspaceRequest {
         /// Add (else remove).
         register: bool,
     },
+    /// A repository's setup and teardown commands and whether they are trusted →
+    /// [`WorkspaceResponse::RepoHooks`]. Only daemons offering
+    /// [`DaemonFeatures::REPO_TRUST`](crate::DaemonFeatures::REPO_TRUST) understand it.
+    RepoHooks(crate::repo::RepoHooksFor),
+    /// Trusts a repository's commands with this hash (from [`WorkspaceResponse::RepoHooks`]):
+    /// they run from now on until they change → [`WorkspaceResponse::Done`]. Owner devices
+    /// only.
+    RepoTrust {
+        /// The repository ([`RepoHooksTrust::repo`](crate::repo::RepoHooksTrust::repo)).
+        repo: String,
+        /// [`RepoHooksTrust::hash`](crate::repo::RepoHooksTrust::hash).
+        hash: String,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -376,6 +389,8 @@ pub enum WorkspaceResponse {
     AgentInstalls(Vec<AgentInstall>),
     /// One command per installed agent.
     AgentMcpCommands(Vec<AgentMcpCommand>),
+    /// A repository's setup and teardown commands.
+    RepoHooks(crate::repo::RepoHooksTrust),
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.
@@ -530,8 +545,9 @@ pub struct EditorLaunch {
 }
 
 /// A running editor server, bound to `127.0.0.1:port` on the host. Open
-/// `http://localhost:<port><url_path>` through a port forward.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `http://localhost:<port><url_path>` through a port forward. `Debug` leaves the token (also
+/// in `url_path`) out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditorInstance {
     /// Which editor.
     pub kind: EditorKind,
@@ -547,6 +563,18 @@ pub struct EditorInstance {
     pub pid: u32,
     /// When it started.
     pub started_at: UnixMillis,
+}
+
+impl std::fmt::Debug for EditorInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorInstance")
+            .field("kind", &self.kind)
+            .field("folder", &self.folder)
+            .field("port", &self.port)
+            .field("pid", &self.pid)
+            .field("started_at", &self.started_at)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the host offers.
