@@ -238,7 +238,8 @@ watchdog thread that pings it every 5 ms (`HangWatch`).
 | Sidebar, 500 tabs / 50 projects, 100 updates/s, 10 s | hang 161 ms, CPU 72 % | hang 109 ms (3 of 555 pings > 100 ms), CPU 75 %, footprint 163 → 174 MB | **Broke, fixed**: project suggestions re-resolved every host's tabs per tab (60 → 1.4 ms per render) |
 | Sidebar idle, 500 tabs | — | hang 9 ms, CPU 24 % (the shimmer and spinner of visible rows) | Survived |
 | Inbox, 500 agents, 100 updates/s + 100 attention items/s | hang 443–844 ms (120 agents), saturated | hang 220 ms, CPU ~100 % (low load) | **Broke, fixed in part**: the Inbox was O(items²) (each row rebuilt the feed), and every visible row re-rendered on every update (closure inputs defeat SwiftUI's diff; rows now equatable on what they show). Still over 100 ms at this extreme rate |
-| Opening a host with 500 tabs | — | one hang of 450–550 ms | **Limit**: 500 panes (terminal + surface + view) are created synchronously. Staging needs per-pane observation of `Workspace.panes` first (staging alone made it worse) |
+| Opening a host with 500 tabs | one hang of 450–550 ms (500 panes, terminal + surface + view, made in one turn) | worst hang 92 ms (0 of 146 pings over 100 ms), all 500 panes made within the run | **Broke, fixed**: the window's tab is made at once and the rest in 8 ms stages between frames; each pane is observed on its own (`Workspace.pane(_:)`, `PaneHolder`), so a stage redraws only the views that show its panes (`testManyTabsAreMadeInStagesAndObservedPerPane`). Sampling the open then showed two more O(tabs²) costs, both fixed: naming 500 new tabs composed the window's session once per rename (`WindowLayoutStore.apply` now composes only for ops that read it), and the queue of panes to make was searched linearly by every sidebar row (`PaneQueue`, O(1)) |
+| Sidebar idle, 12 working rows (shimmer + spinner) | main run loop woke 8299 times in 1 s (per-frame timelines) | under 15 | **Broke, fixed**: Core Animation layers (`LayerAnimationTests`) |
 | Key storm, 20k keys with prediction on | — | ~25 µs per key, flat | Survived |
 | Paste of 10 / 50 / 200 MB | 16 ms / 0.32 s / 1.3 s on main, +400 MB at 200 MB; the confirmation's line count took 4 / 14 / 100 s | Over 16 MiB refused in < 50 ms with an alert; line count is one pass | **Broke, fixed** (product decision: refuse, not chunk) |
 | Drag of 64 MB of text over a pane | ~45 ms per pointer move | 60 moves < 100 ms (types checked only) | **Broke, fixed** |
@@ -272,7 +273,11 @@ memory-warning path), samples the app's footprint every second, lists crash repo
 | A pane flooding (`while :; do seq 1 100000; done`) among 7 splits: 10 background/foreground cycles, 20 rotations, ~57 memory warnings | footprint 115 MB peak, 102 MB at the end | Survived: the pane takes input and draws its text afterwards (checked on pixels) |
 | Same, 40 cycles, 80 rotations, ~149 memory warnings (4 min) | 116 MB peak, 104 MB at the end, flat across cycles | Survived; no crash reports |
 
-Known limits (client): a frozen host shows "connected" for up to ~30 s (iroh's idle timeout). The client terminal parses
+A frozen or vanished host (fixed 2026-10-31): before, it showed "connected" for up to ~30 s (QUIC's idle timeout), also
+after the app came back to the foreground. Now both sides keep alive every 3 s and time out after 12 s, and the app pings on
+foreground and when a keystroke gets no ack within 1 s: no pong in 3 s (10 s while packets still arrive) drops the link
+and it shows as reconnecting (`client-core` `liveness.rs`: a host whose runtime is frozen is dropped within 3–5 s of a
+probe; a host answering after 5 s is kept). Known limit (client): the client terminal parses
 13–36 MB/s, so a faster pane is shown through snapshots rather than byte for byte.
 
 ### More ways to run

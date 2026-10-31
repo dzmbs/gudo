@@ -115,19 +115,13 @@ impl From<proto::AgentUsageReport> for AgentUsageReport {
 impl DaemonClient {
     /// Agent plan usage on the host now; while watching, changes arrive as
     /// `WorkspaceEvent::AgentUsage`. Call again to refresh (the daemon reads at most once a
-    /// minute). Only for daemons whose `DaemonInfo.agentUsage` is true. `api_fallback` lets
-    /// the daemon ask the providers' usage endpoints with the host's own sign-in (undocumented
-    /// endpoints; the user opts in).
+    /// minute). Only for daemons whose `DaemonInfo.agentUsage` is true.
     ///
     /// # Errors
     ///
     /// The daemon's [`WorkspaceError`] (owners only).
-    pub async fn usage_watch(
-        &self,
-        api_fallback: bool,
-    ) -> Result<AgentUsageReport, WorkspaceError> {
-        self.ws_call(|c| async move { c.usage_watch(api_fallback).await })
-            .await
+    pub async fn usage_watch(&self) -> Result<AgentUsageReport, WorkspaceError> {
+        self.ws_call(|c| async move { c.usage_watch().await }).await
     }
 
     /// Stops this connection's usage pushes.

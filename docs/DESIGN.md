@@ -151,7 +151,8 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
 
 Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
-"working"), and the secure-input gradient stops. Anything that slides or grows in (sidebar, tab strip, toasts,
+"working"), and the secure-input gradient stops. Both loops are Core Animation on a layer (`LayerAnimations.swift`):
+the render server draws them, no view body runs per frame, they stop off screen, and the app reaches idle. Anything that slides or grows in (sidebar, tab strip, toasts,
 agent toasts, notices, banners, the exit bar) uses `movingTransition(_:)` / `scalingTransition(_:)`: under Reduce
 Motion it only fades.
 

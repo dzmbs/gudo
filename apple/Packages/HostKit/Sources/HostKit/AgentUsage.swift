@@ -5,16 +5,6 @@ import UnnamedCore
 // compact meter ("Claude · 62% of 5h · resets 14:20") and a detail list. Quiet by design
 // unknown (the reason is in the detail).
 
-/// The app's usage setting (Settings › Agents).
-public enum AgentUsageSettings {
-    /// Let the host ask Anthropic's and OpenAI's usage endpoints with its own Claude / Codex
-    /// sign-in when the tools' own data says nothing. Off by default: the endpoints are
-    /// undocumented.
-    public static let apiFallbackKey = "agents.checkUsageWithSignIn"
-
-    public static var apiFallback: Bool { UserDefaults.standard.bool(forKey: apiFallbackKey) }
-}
-
 /// How loud a meter is.
 public enum UsageTone: Sendable, Equatable {
     /// Monochrome.

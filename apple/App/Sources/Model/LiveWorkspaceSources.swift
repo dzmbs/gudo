@@ -42,8 +42,8 @@ struct HostContext {
             // then the tab's other panes say where the work is.
             let tabPanes = workspace.session.activeTab?.root.panes ?? []
             let directory = pane.flatMap { daemon.meta[$0]?.cwd?.nonEmpty }
-                ?? pane.flatMap { workspace.panes[$0]?.workingDirectory.nonEmpty }
-                ?? tabPanes.lazy.compactMap { daemon.meta[$0]?.cwd?.nonEmpty ?? workspace.panes[$0]?.workingDirectory.nonEmpty }.first
+                ?? pane.flatMap { workspace.pane($0)?.workingDirectory.nonEmpty }
+                ?? tabPanes.lazy.compactMap { daemon.meta[$0]?.cwd?.nonEmpty ?? workspace.pane($0)?.workingDirectory.nonEmpty }.first
             return HostContext(
                 hostId: id, name: app.hosts.record(id)?.name ?? id, daemon: daemon, pane: pane?.rawValue,
                 directory: directory?.nonEmpty)
@@ -1251,7 +1251,7 @@ final class LiveLinkSource: LinkSource {
 
     /// A local pane: URLs and paths in its visible text.
     private func localLinks() -> [DetectedLink] {
-        guard let workspace = window?.workspace, let id = workspace.focusedPane, let pane = workspace.panes[id] else { return [] }
+        guard let workspace = window?.workspace, let id = workspace.focusedPane, let pane = workspace.pane(id) else { return [] }
         return Self.scan(pane.view.surface.terminal.visibleText())
     }
 

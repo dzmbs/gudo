@@ -84,12 +84,20 @@ nonisolated final class PaneRouter: Sendable {
     private let blocked = Mutex<(@Sendable (UInt64) -> Void)?>(nil)
     /// Keystroke-to-echo round trips (for the host's latency readout).
     let onEchoRoundTrip: @Sendable (Duration) -> Void
+    /// Input went unacknowledged for `stallAfter` (the link may be dead while it looks up).
+    let onInputStalled: @Sendable () -> Void
+    /// How long the oldest input may wait for the daemon's ack before the link is checked.
+    static let stallAfter = DispatchTimeInterval.seconds(1)
     /// How long an ack waits for the echo it implies before it is delivered anyway (input that
     /// prints nothing).
     static let ackGrace = DispatchTimeInterval.milliseconds(40)
 
-    init(onEchoRoundTrip: @escaping @Sendable (Duration) -> Void = { _ in }) {
+    init(
+        onEchoRoundTrip: @escaping @Sendable (Duration) -> Void = { _ in },
+        onInputStalled: @escaping @Sendable () -> Void = {}
+    ) {
         self.onEchoRoundTrip = onEchoRoundTrip
+        self.onInputStalled = onInputStalled
     }
 
     /// A new tap on `pane` (output buffers from now on, until a tap starts). Returns its id.
@@ -240,9 +248,15 @@ nonisolated final class PaneRouter: Sendable {
     /// Records an input frame about to be sent (`predicted`: the predictor's sequence number).
     func noteInput(_ pane: UInt64, tap id: UInt64, predicted: UInt64? = nil) {
         let now = ContinuousClock.now
-        routes.withLock { routes in
+        let first = routes.withLock { routes in
             routes[pane]?.unacked.append((now, predicted, id))
             if routes[pane]?.echoPending == nil { routes[pane]?.echoPending = now }
+            return routes[pane]?.unacked.count == 1
+        }
+        guard first else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.stallAfter) { [self] in
+            let stalled = routes.withLock { $0[pane]?.unacked.first?.sent == now }
+            if stalled { onInputStalled() }
         }
     }
 

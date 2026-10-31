@@ -45,7 +45,7 @@ enum DesignFixtures {
             // Screenshot seeds (apple/scripts/w3-screenshots.sh): text typed into the focused
             // pane, an agent started with a first prompt.
             let defaults = LaunchArguments()
-            if let text = defaults.string(forKey: "typeOnStart"), let id = workspace.focusedPane, let pane = workspace.panes[id] {
+            if let text = defaults.string(forKey: "typeOnStart"), let id = workspace.focusedPane, let pane = workspace.pane(id) {
                 Data(text.replacingOccurrences(of: "\\n", with: "\r").utf8).withUnsafeBytes { pane.backend.write($0) }
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -101,7 +101,7 @@ enum DesignFixtures {
             // Show the software keyboard with the key bar on the focused pane.
             Task {
                 try? await Task.sleep(for: .milliseconds(600))
-                if let id = workspace.focusedPane { _ = workspace.panes[id]?.view.becomeFirstResponder() }
+                if let id = workspace.focusedPane { _ = workspace.pane(id)?.view.becomeFirstResponder() }
             }
             #endif
         case "agent-toast":

@@ -142,7 +142,10 @@ public final class DaemonConnection: HostConnection {
         var sendOp: ((UnnamedCore.LayoutOp) -> UInt64)?
         layout = DaemonLayoutStore { op in sendOp?(op) ?? 0 }
         let echo = AsyncStream<Duration>.makeStream()
-        router = PaneRouter { echo.continuation.yield($0) }
+        let stalls = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        router = PaneRouter(
+            onEchoRoundTrip: { echo.continuation.yield($0) },
+            onInputStalled: { stalls.continuation.yield() })
         sendOp = { [weak self] op in self?.client?.op(op: op) ?? 0 }
         Task { [weak self] in
             var recent: [Duration] = []
@@ -153,6 +156,11 @@ public final class DaemonConnection: HostConnection {
                 echoRoundTrip = recent.sorted()[recent.count / 2]
                 if case .connected = status { status = .connected(rtt: echoRoundTrip) }
                 Self.log.debug("echo rtt \(rtt / .milliseconds(1), format: .fixed(precision: 1)) ms host=\(self.hostId, privacy: .public)")
+            }
+        }
+        Task { [weak self] in
+            for await _ in stalls.stream {
+                self?.probeLink()
             }
         }
         observeView()
@@ -282,11 +290,16 @@ public final class DaemonConnection: HostConnection {
     }
 
     /// Back in the foreground: a connection that is not up (suspended, or lost meanwhile) is
-    /// redialled now; one up or already dialling is left alone.
+    /// redialled now; one that says it is up is probed (the link may have died while the app was
+    /// away, and would otherwise look connected until the idle timeout); one dialling is left
+    /// alone.
     public func foreground() {
         guard let client else { return }
         switch status {
-        case .connected, .connecting: return
+        case .connected:
+            probeLink(force: true)
+            return
+        case .connecting: return
         default: break
         }
         Self.log.info("foreground: resuming host=\(self.hostId, privacy: .public)")
@@ -295,6 +308,21 @@ public final class DaemonConnection: HostConnection {
         timings.dialStarted = .now
         client.reconnect()
     }
+
+    /// Pings a link that says it is up (back in the foreground, typing that got no answer): a
+    /// half-open or frozen one is dropped by the client within seconds and shows as
+    /// reconnecting. Typing probes at most every `probeSpacing`.
+    func probeLink(force: Bool = false) {
+        guard case .connected = status, let client = client as? any LivenessClient else { return }
+        let now = ContinuousClock.now
+        if !force, let last = lastProbe, now - last < Self.probeSpacing { return }
+        lastProbe = now
+        Self.log.info("probing the link host=\(self.hostId, privacy: .public)")
+        client.probe()
+    }
+
+    @ObservationIgnored private var lastProbe: ContinuousClock.Instant?
+    static let probeSpacing = Duration.seconds(5)
 
     public func background() {
         guard let client else { return }

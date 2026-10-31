@@ -58,7 +58,7 @@ struct AskpassPaneOverlay: View {
 
     /// Gives the terminal the keyboard back once the card is gone.
     private func refocus() {
-        guard let view = workspace.panes[pane]?.view else { return }
+        guard let view = workspace.pane(pane)?.view else { return }
         #if os(macOS)
         view.window?.makeFirstResponder(view)
         #else

@@ -367,12 +367,19 @@ nonisolated final class LocalDaemon {
     @Test func freshTicketsPairAndAUsedOneLeavesNothingBehind() async throws {
         let daemon = try LocalDaemon()
         let first = makeModel()
+        var announced: [String] = []
+        first.onFirstPairing = { announced.append($0) }
         let used = try PairingTicket(try await daemon.ticket())
         let hostId = try await first.pair(used, name: "local")
         #expect(first.connection(hostId)?.status.isLive == true)
+        #expect(announced == [hostId], "a new host is announced once (notification permission asks then)")
+        _ = try await first.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        #expect(announced == [hostId], "re-pairing a known host is not a first pairing")
 
         let other = makeModel()
+        other.onFirstPairing = { announced.append($0) }
         await #expect(throws: PairingError.self) { try await other.pair(used, name: "local") }
+        #expect(announced.count == 1, "a refused pairing is not announced")
         #expect(other.records.isEmpty)
         #expect(other.connections.isEmpty)
 

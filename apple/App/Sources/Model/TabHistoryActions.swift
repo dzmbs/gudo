@@ -180,7 +180,7 @@ extension WindowModel {
             if daemon?.meta[pane]?.exit != nil { continue }
             if daemon?.meta[pane]?.agent != nil { activity.agent = true }
             if let report = daemon?.programs[pane], report.state != .idle { activity.agent = true }
-            if let local = workspace?.panes[pane], workspace?.reportedProgram(of: local) != nil { activity.command = true }
+            if let local = workspace?.pane(pane), workspace?.reportedProgram(of: local) != nil { activity.command = true }
         }
         return activity
     }

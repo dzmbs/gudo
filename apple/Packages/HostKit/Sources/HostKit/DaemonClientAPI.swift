@@ -46,6 +46,15 @@ nonisolated public protocol NetworkChangeClient: AnyObject, Sendable {
 
 extension DaemonClient: NetworkChangeClient {}
 
+/// A client that can check its live connection with a ping (`DaemonClient.probe`): one that
+/// gets no answer within seconds is dropped and redialled. Not part of `DaemonClientAPI` so
+/// test fakes need not implement it.
+nonisolated public protocol LivenessClient: AnyObject, Sendable {
+    func probe()
+}
+
+extension DaemonClient: LivenessClient {}
+
 /// Reopening closed tabs and reading what a pane runs, apart from `DaemonClientAPI` so test
 /// fakes need not implement it.
 nonisolated public protocol TabHistoryClient: AnyObject, Sendable {

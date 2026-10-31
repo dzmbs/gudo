@@ -9,9 +9,8 @@
 //!   the assistant message's `usage_report.rate_limits.limits[]` rows (`kind` `session` /
 //!   `weekly_all` / `weekly_scoped` with `scope.model.display_name`, `percent` 0–100,
 //!   `resets_at` RFC 3339). `claude auth status --json` names the plan (`subscriptionType`).
-//! - **`/api/oauth/usage`** (undocumented, [`super::api`]): `five_hour`, `seven_day`,
-//!   `seven_day_opus`, `seven_day_sonnet` with `utilization` 0–100 and `resets_at` RFC 3339,
-//!   and the same `limits[]` rows.
+//!
+//! The daemon never reads Claude Code's sign-in or calls the undocumented `/api/oauth/usage`.
 
 use std::path::Path;
 
@@ -94,8 +93,8 @@ pub(crate) fn from_usage_report(stream: &str, now: u64) -> Result<AgentUsage, St
         .unwrap_or_else(|| "Claude Code reported no plan limits".to_owned()))
 }
 
-/// An `/api/oauth/usage` body (or `usage_report.rate_limits`): the `limits[]` rows, else the
-/// named windows.
+/// A `usage_report.rate_limits`: the `limits[]` rows, else named windows (`five_hour`,
+/// `seven_day`, … with `utilization`), which some versions report instead.
 pub(crate) fn from_limits(v: &Value, now: u64, source: UsageSource) -> Option<AgentUsage> {
     let mut windows: Vec<UsageWindow> = Vec::new();
     for row in v
@@ -255,9 +254,9 @@ mod tests {
     }
 
     #[test]
-    fn oauth_body_named_windows() {
+    fn named_windows() {
         let v: Value = serde_json::from_str(r#"{"five_hour":{"utilization":81.0,"resets_at":"2026-10-19T19:40:00Z"},"seven_day":{"utilization":20},"seven_day_opus":null}"#).unwrap();
-        let u = from_limits(&v, 1, UsageSource::Api).unwrap();
+        let u = from_limits(&v, 1, UsageSource::Cli).unwrap();
         assert_eq!(u.windows.len(), 2);
         assert_eq!(u.windows[0].used_permille, 810);
     }

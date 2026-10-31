@@ -60,7 +60,7 @@ extension DaemonClient: DaemonWorkspaceAPI {}
 
 /// of `DaemonWorkspaceAPI`'s list so fakes that do not care need nothing.
 nonisolated public protocol DaemonUsageAPI: AnyObject, Sendable {
-    func usageWatch(apiFallback: Bool) async throws -> AgentUsageReport
+    func usageWatch() async throws -> AgentUsageReport
     func usageUnwatch() async throws
 }
 
@@ -487,26 +487,13 @@ public final class DaemonWorkspace {
         Task { try? await api?.usageUnwatch() }
     }
 
-    /// Watches again with the current setting (Settings › Agents changed).
-    public func usageSettingsChanged() {
-        if usageViewers > 0 { watchUsage() }
-    }
-
-    /// Every host's hub re-watches with the current setting.
-    public static func usageSettingsChanged() {
-        for entry in DaemonWorkspaceRegistry.hubs.values where entry.connection != nil {
-            entry.hub.usageSettingsChanged()
-        }
-    }
-
     private func watchUsage() {
         guard supportsUsage(), let api = resolve() as? any DaemonUsageAPI else { return }
-        let fallback = AgentUsageSettings.apiFallback
         usageWatchSent = true
         usageTask?.cancel()
         usageTask = Task { [weak self] in
             do {
-                let report = try await api.usageWatch(apiFallback: fallback)
+                let report = try await api.usageWatch()
                 guard !Task.isCancelled, let self, self.usageViewers > 0 else { return }
                 self.usage = report
             } catch {

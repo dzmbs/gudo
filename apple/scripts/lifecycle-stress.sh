@@ -27,13 +27,14 @@ cleanup() {
   xcrun simctl delete "$sim" 2>/dev/null || true
   rm -rf "$state"
 }
-trap cleanup EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit cleanup
 xcrun simctl boot "$sim"
 ticket="$(daemon start)"
 touch "$state/started"
 
 log="$state/xcodebuild.log"
-TEST_RUNNER_PAIR_TICKET="$ticket" TEST_RUNNER_CYCLES="$cycles" nice -n 15 xcodebuild -jobs 4 \
+TEST_RUNNER_PAIR_TICKET="$ticket" TEST_RUNNER_CYCLES="$cycles" nice -n 15 xcodebuild -collect-test-diagnostics never -jobs 4 \
   -project "$apple/App.xcodeproj" -scheme App -destination "platform=iOS Simulator,id=$sim" \
   -derivedDataPath "$apple/build/dd-lifecycle" -only-testing:AppUITests/LifecycleStressUITests test >"$log" 2>&1 &
 test_pid=$!

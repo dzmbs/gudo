@@ -44,7 +44,8 @@ cleanup() {
   daemon "$port_a" stop a; daemon "$port_b" stop b
   rm -rf "$work"
 }
-trap cleanup EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit cleanup
 
 ticket_app="$(daemon "$port_a" start a)"
 ticket_b="$(daemon "$port_b" start b)"
@@ -106,7 +107,7 @@ pids+=("$ask_pid")
 
 TEST_RUNNER_PAIR_TICKET="$ticket_app" TEST_RUNNER_JOIN_LINK="$join_link" TEST_RUNNER_KNOCKER=1 TEST_RUNNER_DRIVER=1 \
   TEST_RUNNER_PRESENCE=1 TEST_RUNNER_MIRROR=1 TEST_RUNNER_SHARING=1 \
-  xcodebuild -project "$apple/App.xcodeproj" -scheme App \
+  xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" -scheme App \
   -destination "platform=iOS Simulator,id=$sim" -derivedDataPath "$derived" \
   -resultBundlePath "$work/result.xcresult" \
   -only-testing:AppUITests/MultiplayerFlowsUITests test-without-building >"$log" 2>&1 || status=$?

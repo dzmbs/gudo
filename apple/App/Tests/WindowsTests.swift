@@ -148,7 +148,7 @@ final class WindowsTests: XCTestCase {
         func terminate() { state.withLock { $0.terminated = true } }
     }
 
-    func testTwoWindowsOnOneHostHaveTheirOwnTerminalsAndSelection() throws {
+    func testTwoWindowsOnOneHostHaveTheirOwnTerminalsAndSelection() async throws {
         // One host: two tabs, one shell per pane, shared by both windows.
         var session = Session()  // tab 2: pane 1
         session.apply(.newTab)  // tab 4: pane 3
@@ -165,8 +165,10 @@ final class WindowsTests: XCTestCase {
         XCTAssertEqual(first.session.activeTabId, TabId(2))
         XCTAssertEqual(second.session.activeTabId, TabId(4))
 
-        // Each window has its own terminal and view for the same pane.
+        // Each window has its own terminal and view for the same pane (the second window's
+        // other tab's panes are made just after its own).
         let a = try XCTUnwrap(first.panes[PaneId(1)])
+        for _ in 0..<100 where second.panes[PaneId(1)] == nil { try await Task.sleep(for: .milliseconds(10)) }
         let b = try XCTUnwrap(second.panes[PaneId(1)])
         XCTAssertFalse(a === b)
         XCTAssertFalse(a.view === b.view)
@@ -195,6 +197,42 @@ final class WindowsTests: XCTestCase {
         // Closing the pane in the remaining window ends the shell.
         second.apply(.close(PaneId(1)))
         XCTAssertTrue(shell.state.withLock { $0.terminated })
+    }
+
+    // MARK: Making panes in stages
+
+    /// A host with many tabs: the window's own tab is made at once, every other pane between
+    /// frames, and making them redraws only what shows each one.
+    func testManyTabsAreMadeInStagesAndObservedPerPane() async throws {
+        var session = Session()
+        for _ in 1..<300 { session.apply(.newTab) }
+        let layout = LocalLayoutStore(session: session)
+        let workspace = Workspace(layout: layout) { _ in Shell() }
+        let shown = try XCTUnwrap(workspace.session.activeTab?.root.panes)
+        XCTAssertEqual(Set(workspace.panes.keys), Set(shown), "only the window's tab is made at once")
+
+        // A view showing the window's pane, and one showing a pane far down the sidebar.
+        let late = try XCTUnwrap(layout.session.tabs.first?.root.panes.first { !shown.contains($0) })
+        let showingOwn = Flag()
+        withObservationTracking { _ = workspace.pane(shown[0]) } onChange: { showingOwn.set() }
+        let showingLate = Flag()
+        withObservationTracking { _ = workspace.pane(late) } onChange: { showingLate.set() }
+
+        // Asked for, the late pane is made first, on the next turn.
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNotNil(workspace.pane(late), "a pane a view asks for comes first")
+        XCTAssertTrue(showingLate.value)
+        XCTAssertLessThan(workspace.panes.count, 300, "the rest are still on their way")
+
+        for _ in 0..<500 where workspace.panes.count < 300 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(workspace.panes.count, 300, "every pane is made in the end")
+        XCTAssertFalse(showingOwn.value, "making the other panes did not redraw the window's own")
+        workspace.close()
+    }
+
+    private final class Flag: @unchecked Sendable {
+        private(set) var value = false
+        func set() { value = true }
     }
 
     func testAPaneOpenedInASecondWindowShowsWhatTheFirstShowed() throws {

@@ -48,7 +48,7 @@ final class HostsUITests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments += [
             "-hostsDirectory", hostsDirectory, "-destination", "hosts", "-restoreLastTarget", "NO",
-            "-ApplePersistenceIgnoreState", "YES", "-resetWindows", "YES",
+            "-ApplePersistenceIgnoreState", "YES", "-resetWindows", "YES", "-notificationPrompt", "NO",
         ] + extra
         app.launch()
     }

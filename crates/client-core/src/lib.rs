@@ -33,6 +33,7 @@ mod askpass;
 mod assist;
 mod browser;
 mod conn;
+pub use conn::{PROBE_DEADLINE, PROBE_SLOW_DEADLINE};
 pub mod knock;
 mod listen;
 mod mirror;
@@ -523,6 +524,9 @@ pub(crate) struct Inner {
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
     /// The last connection was for an upgrade only.
     pub incompatible: Mutex<bool>,
+    /// The nonce of the last `Pong`, for [`Client::probe`].
+    pub pong: watch::Sender<u64>,
+    pub next_ping: AtomicU64,
 }
 
 /// How a client authenticates: as a paired device (pairing ticket) or a guest (invite).
@@ -704,6 +708,8 @@ impl Client {
             programs: Mutex::new(HashMap::new()),
             daemon_info: Mutex::new(None),
             incompatible: Mutex::new(false),
+            pong: watch::Sender::new(0),
+            next_ping: AtomicU64::new(0),
         });
         let supervisor = runtime.spawn(conn::supervise(Arc::clone(&inner)));
         Ok(Self {
@@ -1034,6 +1040,20 @@ impl Client {
             self.handle
                 .spawn(async move { endpoint.network_change().await });
         }
+    }
+
+    /// Checks that the live connection still reaches the daemon (app foregrounded, typing that
+    /// got no answer): a ping must come back within [`PROBE_DEADLINE`], or within
+    /// [`PROBE_SLOW_DEADLINE`] while the link still carries packets (slow, not dead). Otherwise
+    /// the connection is dropped and redialled, so a half-open link shows as reconnecting in
+    /// seconds rather than at the idle timeout. Without a live connection it does nothing (one
+    /// is already being dialled). Returns at once.
+    pub fn probe(&self) {
+        let Some(conn) = lock(&self.inner.connection).clone() else {
+            return;
+        };
+        let inner = Arc::clone(&self.inner);
+        self.handle.spawn(conn::probe(inner, conn));
     }
 
     /// Drops the connection and stays offline until [`reconnect`](Self::reconnect), keeping

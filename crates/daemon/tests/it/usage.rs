@@ -1,17 +1,19 @@
 //! reach a watching client, the tools' own commands answer when there is no local data, and the
-//! providers' endpoints are asked only when the client opted in. Everything runs against a
-//! scratch `$HOME`, fake `claude` / `codex` programs and a local HTTP server.
+//! host's sign-ins are never used. Everything runs against a scratch `$HOME` and fake `claude` /
+//! `codex` programs.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use client_core::proto::{AgentKind, AgentUsage, AgentUsageReport, UsageSource};
+use client_core::proto::{
+    AgentKind, AgentUsage, AgentUsageReport, UsageSource, UsageWatch, WorkspaceRequest,
+    WorkspaceResponse,
+};
 use client_core::{ClientConfig, WorkspaceEvent, WorkspaceEventQueue};
 use daemon::{HookRequest, HookResponse};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::support::{TIMEOUT, TestClient, start_with, ticket};
@@ -149,7 +151,7 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
     let (listener, mut events) = WorkspaceEventQueue::channel();
     c.client.set_workspace_listener(listener);
 
-    let report = c.client.usage_watch(false).await.unwrap();
+    let report = c.client.usage_watch().await.unwrap();
     let codex = agent(&report, AgentKind::Codex);
     assert_eq!(codex.source, UsageSource::LocalLog);
     assert_eq!(codex.plan.as_deref(), Some("plus"));
@@ -177,7 +179,10 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
     assert!(claude.windows.is_empty());
     let note = claude.note.as_deref().unwrap();
     assert!(note.contains("not on the PATH"), "{note}");
-    assert!(note.contains("Settings › Agents"), "{note}");
+    assert!(
+        !note.contains("Settings"),
+        "no sign-in fallback to point to: {note}"
+    );
 
     // A Claude session's status line arrives: pushed at once.
     status_line(state.path(), daemon.hook_socket(), STATUS_LINE).await;
@@ -220,7 +225,7 @@ async fn codex_rollouts_and_claude_status_line_reach_a_watching_client() {
     let daemon = start_with(state.path(), config(&host, true)).await;
     let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     c.attach_and_follow().await;
-    let report = c.client.usage_watch(false).await.unwrap();
+    let report = c.client.usage_watch().await.unwrap();
     let claude = agent(&report, AgentKind::Claude);
     assert_eq!(claude.source, UsageSource::StatusLine);
     assert_eq!(claude.windows[0].used_permille, 900);
@@ -267,7 +272,7 @@ async fn the_tools_commands_answer_when_there_is_no_local_data() {
     c.client.set_workspace_listener(listener);
 
     // The answer comes at once (the commands take seconds); their results are pushed.
-    let first = c.client.usage_watch(false).await.unwrap();
+    let first = c.client.usage_watch().await.unwrap();
     assert_eq!(
         agent(&first, AgentKind::Claude).note.as_deref(),
         Some("Checking…")
@@ -290,31 +295,10 @@ async fn the_tools_commands_answer_when_there_is_no_local_data() {
     daemon.shutdown().await;
 }
 
-/// A one-request-per-connection HTTP server answering `body` and recording request heads.
-async fn serve(body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/usage", listener.local_addr().unwrap());
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let log = Arc::clone(&seen);
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let mut buf = vec![0; 8192];
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            log.lock()
-                .unwrap()
-                .push(String::from_utf8_lossy(&buf[..n]).to_lowercase());
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
-        }
-    });
-    (url, seen)
-}
-
+/// A client that still sends `api_fallback` (older apps) gets the documented sources only: the
+/// host's Claude and Codex sign-ins are not used and no usage endpoint is asked.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_endpoints_are_asked_only_after_opting_in() {
+async fn the_sign_in_is_never_used_even_when_a_client_asks() {
     let state = tempfile::tempdir().unwrap();
     let host = Host::new();
     std::fs::write(
@@ -327,69 +311,38 @@ async fn the_endpoints_are_asked_only_after_opting_in() {
         r#"{"tokens":{"access_token":"codex-secret","account_id":"acct-1"}}"#,
     )
     .unwrap();
-    let (claude_url, claude_seen) = serve(
-        r#"{"five_hour":{"utilization":44.0,"resets_at":"2026-10-19T19:40:00Z"},"seven_day":{"utilization":12.0,"resets_at":"2026-10-23T13:00:00Z"},"seven_day_opus":null}"#,
-    )
-    .await;
-    let (codex_url, codex_seen) = serve(
-        r#"{"plan_type":"plus","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":7,"limit_window_seconds":18000,"reset_after_seconds":60,"reset_at":1792410000},"secondary_window":{"used_percent":2,"limit_window_seconds":604800,"reset_after_seconds":60,"reset_at":1792900000}}}"#,
-    )
-    .await;
     let env = host.env();
     let daemon = start_with(state.path(), move |c| {
         c.pane_env.extend(env);
         c.usage.cli = false;
-        c.usage.claude_url = claude_url;
-        c.usage.codex_url = codex_url;
     })
     .await;
     let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     c.attach_and_follow().await;
-    let (listener, mut events) = WorkspaceEventQueue::channel();
-    c.client.set_workspace_listener(listener);
 
-    // Off by default: nothing asked.
-    let report = c.client.usage_watch(false).await.unwrap();
-    assert_eq!(
-        agent(&report, AgentKind::Claude).source,
-        UsageSource::Unknown
-    );
-    assert_eq!(
-        agent(&report, AgentKind::Codex).source,
-        UsageSource::Unknown
-    );
-    assert!(claude_seen.lock().unwrap().is_empty());
-    assert!(codex_seen.lock().unwrap().is_empty());
-
-    // Opted in.
-    c.client.usage_watch(true).await.unwrap();
-    let report = next_usage(&mut events, |r| {
-        r.agents.iter().all(|a| a.source == UsageSource::Api)
-    })
-    .await;
-    let claude = agent(&report, AgentKind::Claude);
-    assert_eq!(claude.source, UsageSource::Api);
-    assert_eq!(claude.plan.as_deref(), Some("pro"));
-    assert_eq!(claude.windows[0].used_permille, 440);
-    let codex = agent(&report, AgentKind::Codex);
-    assert_eq!(codex.source, UsageSource::Api);
-    assert_eq!(codex.plan.as_deref(), Some("plus"));
-    assert_eq!(codex.windows[1].name, "weekly");
-
-    let claude_req = claude_seen.lock().unwrap().join("\n");
-    assert!(claude_req.contains("authorization: bearer sk-ant-oat-secret"));
-    assert!(claude_req.contains("anthropic-beta: oauth-2025-04-20"));
-    let codex_req = codex_seen.lock().unwrap().join("\n");
-    assert!(codex_req.contains("authorization: bearer codex-secret"));
-    assert!(codex_req.contains("chatgpt-account-id: acct-1"));
-    // The sign-in never reaches the client.
-    let wire = format!("{report:?}");
-    assert!(!wire.contains("secret"), "{wire}");
-
-    // Cached: asking again within the interval does not call the endpoints.
-    c.client.usage_watch(true).await.unwrap();
-    assert_eq!(claude_seen.lock().unwrap().len(), 1);
-    assert_eq!(codex_seen.lock().unwrap().len(), 1);
+    // What an older app sends when its "check usage with your sign-in" switch was on.
+    let watch = || async {
+        let req = WorkspaceRequest::UsageWatch(UsageWatch { api_fallback: true });
+        match c.client.workspace(req).await.unwrap() {
+            WorkspaceResponse::AgentUsage(report) => report,
+            other => panic!("{other:?}"),
+        }
+    };
+    watch().await;
+    // Anything asked in the background would have answered by now.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let report = watch().await;
+    for kind in [AgentKind::Claude, AgentKind::Codex] {
+        let usage = agent(&report, kind);
+        assert_eq!(usage.source, UsageSource::Unknown, "{kind:?}");
+        let note = usage.note.as_deref().unwrap_or_default().to_lowercase();
+        // Neither a sign-in's answer nor a pointer to a sign-in fallback.
+        assert!(
+            !note.contains("sign-in") && !note.contains("checking"),
+            "{note}"
+        );
+    }
+    assert!(!format!("{report:?}").contains("secret"));
     drop(c);
     daemon.shutdown().await;
 }

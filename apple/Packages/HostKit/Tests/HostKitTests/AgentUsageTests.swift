@@ -95,25 +95,18 @@ struct AgentUsageTests {
         connection.handle(.daemonInfo(info: daemonInfo(agentUsage: false)))
         hub.beginWatchingUsage()
         try await Task.sleep(for: .milliseconds(100))
-        #expect(client.state.withLock { $0.usageWatches }.isEmpty)
+        #expect(client.state.withLock { $0.usageWatches } == 0)
         hub.endWatchingUsage()
 
         connection.handle(.daemonInfo(info: daemonInfo(agentUsage: true)))
-        UserDefaults.standard.set(false, forKey: AgentUsageSettings.apiFallbackKey)
         hub.beginWatchingUsage()
         hub.beginWatchingUsage()
         try await eventually("watched") { hub.usage != nil }
-        #expect(client.state.withLock { $0.usageWatches } == [false], "two viewers, one watch")
+        #expect(client.state.withLock { $0.usageWatches } == 1, "two viewers, one watch")
         #expect(hub.usage?.agents.first?.windows.first?.usedPermille == 620)
 
         client.push(.agentUsage(report: AgentUsageReport(agents: [usage([window("5h", 300, 700, resetIn: 3600)])])))
         try await eventually("pushed") { hub.usage?.agents.first?.windows.first?.usedPermille == 700 }
-
-        // The setting changed: watch again with it.
-        UserDefaults.standard.set(true, forKey: AgentUsageSettings.apiFallbackKey)
-        DaemonWorkspace.usageSettingsChanged()
-        try await eventually("rewatched") { client.state.withLock { $0.usageWatches } == [false, true] }
-        UserDefaults.standard.removeObject(forKey: AgentUsageSettings.apiFallbackKey)
 
         hub.endWatchingUsage()
         #expect(client.state.withLock { $0.usageUnwatches } == 0, "one viewer left")

@@ -16,7 +16,8 @@ iphone="${2:-}"
 root="$(mktemp -d "${TMPDIR:-/tmp}/un-ui-windows.XXXXXX")"
 started=()
 cleanup() { for entry in "${started[@]}"; do PORT=${entry%%:*} SHELL_ARGS= "$apple/scripts/local-daemon.sh" stop "${entry#*:}" || true; done; }
-trap cleanup EXIT
+. "$apple/scripts/lib/cleanup.sh"
+on_exit cleanup
 
 # A clean simulator; `yes`: with Stage Manager ("Chamois" windowing).
 fresh() {
@@ -44,7 +45,7 @@ daemon() {
 run() {
   local sim=$1 stage=$2 log="$root/xcodebuild-$1.log"
   ticket=""
-  local test=(xcodebuild -project "$apple/App.xcodeproj" -scheme App -destination "platform=iOS Simulator,id=$sim"
+  local test=(xcodebuild -collect-test-diagnostics never -project "$apple/App.xcodeproj" -scheme App -destination "platform=iOS Simulator,id=$sim"
     -derivedDataPath "$apple/build/DerivedData")
   # The two-window test first, then the rest, each on a fresh simulator.
   fresh "$sim" "$stage"

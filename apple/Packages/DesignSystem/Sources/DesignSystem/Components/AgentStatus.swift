@@ -86,26 +86,26 @@ public struct StatusIndicator: View {
 }
 
 /// A 3/4 arc that turns once per second; a still arc under Reduce Motion so it still says
-/// a sidebar of working agents must not rebuild every spinner on every frame.
+/// a sidebar of working agents costs the main thread nothing per frame, and it stops off screen.
 public struct Spinner: View {
-    var color: AnyShapeStyle
+    private let color: @Sendable (EnvironmentValues) -> Color.Resolved
     var lineWidth: CGFloat
+    @Environment(\.self) private var environment
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var turning = false
 
-    public init(color: some ShapeStyle = HierarchicalShapeStyle.secondary, lineWidth: CGFloat = 1.5) {
-        self.color = AnyShapeStyle(color)
+    public init(color: ChromeStyle = DS.Palette.textSecondary, lineWidth: CGFloat = 1.5) {
+        self.color = { color.resolve(in: $0) }
+        self.lineWidth = lineWidth
+    }
+
+    public init(color: Color, lineWidth: CGFloat = 1.5) {
+        self.color = { color.resolve(in: $0) }
         self.lineWidth = lineWidth
     }
 
     public var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.72)
-            .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-            .rotationEffect(.degrees(turning ? 360 : 0))
-            .animation(turning ? .linear(duration: 1).repeatForever(autoreverses: false) : nil, value: turning)
-            .onAppear { turning = !reduceMotion }
-            .onChange(of: reduceMotion) { _, reduce in turning = !reduce }
+        SpinnerLayer(color: color(environment).cgColor, lineWidth: lineWidth, turning: !reduceMotion)
+            .accessibilityHidden(true)
     }
 }
 

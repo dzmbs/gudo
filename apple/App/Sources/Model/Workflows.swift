@@ -73,7 +73,7 @@ extension WindowModel {
     /// Types `command` at the pane's prompt as one paste (bracketed, so a multi-line command
     /// waits too); `run` presses Return after it. The pane gets the keyboard back.
     func type(_ command: String, into paneId: PaneId, run: Bool) {
-        guard let pane = workspace?.panes[paneId] else {
+        guard let pane = workspace?.pane(paneId) else {
             toasts.show(Toast("The pane is gone", systemImage: "exclamationmark.triangle.fill", style: .failure))
             return
         }

@@ -40,7 +40,7 @@ final class PresenceSync {
 
     /// The focused pane's rows on screen, counted from the live screen up.
     private func viewport(of pane: PaneId?) -> PeerViewport? {
-        guard let pane, let view = workspace.panes[pane]?.view else { return nil }
+        guard let pane, let view = workspace.pane(pane)?.view else { return nil }
         let bar = view.surface.terminal.scrollbar
         let fromBottom = max(0, bar.total - bar.offset - bar.visible)
         return PeerViewport(paneId: pane.rawValue, fromBottom: UInt32(fromBottom), rows: UInt16(clamping: bar.visible))
@@ -55,7 +55,7 @@ final class PresenceSync {
         }
         // Moved by hand: stop following, as Zed and Figma do.
         if let followedFocus,
-           workspace.focusedPane != followedFocus || workspace.panes[followedFocus]?.moves != followedMoves {
+           workspace.focusedPane != followedFocus || workspace.pane(followedFocus)?.moves != followedMoves {
             session.breakFollow()
             self.followedFocus = nil
             followedMoves = nil
@@ -73,13 +73,13 @@ final class PresenceSync {
         }
         followedFocus = pane
         if let target = leader.viewport, target.paneId == focus, target != appliedViewport,
-           let view = workspace.panes[pane]?.view {
+           let view = workspace.pane(pane)?.view {
             appliedViewport = target
             let current = viewport(of: pane)?.fromBottom ?? 0
             let delta = Int(current) - Int(target.fromBottom)
             if delta != 0 { view.surface.scroll(rows: delta) }
         }
-        followedMoves = workspace.panes[pane]?.moves
+        followedMoves = workspace.pane(pane)?.moves
     }
 }
 

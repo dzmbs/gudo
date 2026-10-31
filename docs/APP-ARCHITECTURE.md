@@ -75,7 +75,7 @@ does not report the foreground program yet, so `ForegroundProgramReporting` is n
 
 | Rule | Where |
 |---|---|
-| R1 keepalive + probe on foreground | SSH: `SshSession` keepalives (15 s × 3); `HostsModel.foreground()` → `SshSession.setForeground(true)` (probe) and `DaemonClient.reconnect()` for daemons not live |
+| R1 keepalive + probe on foreground | SSH: `SshSession` keepalives (15 s × 3); `HostsModel.foreground()` → `SshSession.setForeground(true)` (probe), `DaemonClient.reconnect()` for daemons not live and `DaemonClient.probe()` for daemons that say they are. Daemon links: QUIC keep-alive 3 s and idle timeout 12 s on both sides (`proto::KEEP_ALIVE`, `proto::IDLE_TIMEOUT`); `probe()` pings and drops a link with no pong in 3 s (10 s while packets still arrive: slow, not dead), also when a keystroke gets no ack within 1 s (`PaneRouter.onInputStalled`, at most every 5 s) |
 | R2 "connected" = answered recently | `ConnectionStatus` comes from client-core / ssh session states, never a socket flag |
 | R3/R5 suspend → resume | iOS `scenePhase == .background` → `DaemonClient.suspend()` (resume state kept), `.active` → `reconnect()`; panes resume from the ring or a snapshot |
 | R7 stable handle | `HostConnection` per host id; transports swap underneath; `Workspace` holds the connection, views hold ids |
@@ -348,7 +348,11 @@ every daemon's `DaemonConnection.workspaceEvents` (`WorkspaceEventHub`, one
 `WorkspaceListener` fanned out; other features can `observe` it too), posts
 `.attention(.added)` items that are unseen and not `whileViewed` when the app is not active
 (approval options from `PaneMeta.agent`), clears a host's delivered notes and sets the badge
-from `unseen`. Permission is asked the first time something would be posted. Settings ▸
+from `unseen`. Permission is asked right after the user pairs a new host (`HostsModel.onFirstPairing`;
+Apple's "ask in context"), never when a note fires while the app is away (it is then just not
+posted). `-notificationPrompt NO` skips the ask; runs with the UI tests' pairing hooks skip it
+unless `-notificationPrompt YES`. Approve / Deny from a notification also marks the item seen
+(`NotificationActionClient.markSeen`), so the badge takes the daemon's new count at once. Settings ▸
 Notifications edits the prefs. `AgentLiveActivities` (iOS) starts an activity per agent run,
 updates it on blocked / done and ends it ten minutes after; `AgentActivityWidget` draws it.
 `<scheme>://open/<host>/<pane>` (activity, notification tap) focuses the pane.
@@ -500,8 +504,8 @@ the compact line ("Claude · 62% of 5h · resets 14:20": the limited, else fulle
 not reset) and its tone (quiet ≤ 80 %, amber above, red limited); `UsageDetail` the popover rows.
 Views (`UsageViews.swift`): one line per agent under each daemon host's name in the sidebar, the
 detail popover (also from the host menu's Agent Usage), and a quiet strip at the bottom of the
-Inbox. Unknown means absent; the reason is in the popover. Settings › Agents › Check Usage with
-Your Claude and Codex Sign-In (`AgentUsageSettings.apiFallbackKey`, off) re-watches every host.
+Inbox. Unknown means absent; the reason is in the popover. There is no setting: the daemon uses
+only the tools' own data and documented commands, never the host's sign-ins.
 Tests: `AgentUsageTests` (HostKit), `UsageFeedTests` (AppTests), `UsageUITests`.
 
 ## 17. Windows (iPad scenes, Stage Manager, external displays, Mac windows; Handoff; width buckets)

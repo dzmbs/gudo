@@ -167,8 +167,8 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
         var asked: Set<UInt64> = []
         var watched: [String] = []
         var nextWatch: UInt64 = 1
-        /// `usageWatch` calls (their `apiFallback`), `usageUnwatch` calls, and the report.
-        var usageWatches: [Bool] = []
+        /// `usageWatch` calls, `usageUnwatch` calls, and the report.
+        var usageWatches = 0
         var usageUnwatches = 0
         var usage = AgentUsageReport(agents: [])
         /// `worktreeList` answers by repository, and the repositories asked.
@@ -254,9 +254,9 @@ nonisolated final class FakeWorkspaceAPI: DaemonClientAPI, DaemonWorkspaceAPI, W
 }
 
 extension FakeWorkspaceAPI: DaemonUsageAPI {
-    func usageWatch(apiFallback: Bool) async throws -> AgentUsageReport {
+    func usageWatch() async throws -> AgentUsageReport {
         state.withLock { state in
-            state.usageWatches.append(apiFallback)
+            state.usageWatches += 1
             return state.usage
         }
     }

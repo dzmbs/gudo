@@ -130,3 +130,13 @@ pub use workspace::*;
 
 /// QUIC ALPN identifier this crate's messages are spoken under.
 pub const ALPN: &[u8] = brand::ALPN;
+
+/// How often either side of a connection sends a QUIC keep-alive while it has nothing else to
+/// send.
+pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long a connection may hear nothing before it is closed (QUIC's max idle timeout; the
+/// lower of the two sides' wins). Four keep-alives fit in it, so a slow or lossy mobile link
+/// is not dropped, while a host that froze or vanished is noticed in seconds rather than the
+/// 30 s default.
+pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
