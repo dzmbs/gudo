@@ -493,7 +493,9 @@ private struct GroupMenu: View {
                 Button("Retry Now", systemImage: "arrow.clockwise") { model.hosts.retry(group.id) }
             }
             Divider()
-            Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(host: group.id) }
+            if WindowRequest.isSupported {
+                Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(host: group.id) }
+            }
             if group.kind == .daemon {
                 Button("Agent Usage", systemImage: "gauge.with.dots.needle.33percent") { model.usageDetailHost = group.id }
             }
@@ -631,8 +633,10 @@ struct TabRow: View {
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
         .rowActions(actions, id: ref.description, name: title, perform: perform) {
-            Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
-                .accessibilityIdentifier("open-in-new-window")
+            if WindowRequest.isSupported {
+                Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
+                    .accessibilityIdentifier("open-in-new-window")
+            }
             if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
             Divider()
             ProjectMenuItems(model: model, ref: ref)
@@ -843,6 +847,8 @@ private struct ConnectionProbe: View {
 struct CompactTerminalView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
+    @State private var renamingProject: String?
+    @State private var projectName = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -852,6 +858,13 @@ struct CompactTerminalView: View {
         .chromeContent()
         // The bar is the window's base: the terminal's own background under Match Terminal.
         .chromeBackground(DS.Palette.base)
+        .alert("Rename Project", isPresented: Binding(get: { renamingProject != nil }, set: { if !$0 { renamingProject = nil } })) {
+            TextField("Name", text: $projectName)
+            Button("Rename") {
+                if let id = renamingProject { model.renameProject(id, to: projectName) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     private var bar: some View {
@@ -884,6 +897,16 @@ struct CompactTerminalView: View {
             ForEach(projects) { project in
                 Section("\(project.name) · \(project.hosts.count > 1 ? "\(project.hosts.count) hosts" : model.groupName(project.hosts.first ?? ""))") {
                     ForEach(project.tabs, id: \.self) { ref in switcherItem(ref) }
+                    // The sidebar header's menu: there is no header to hold it here.
+                    Menu {
+                        ProjectMenu(project: project, collapsed: nil) {
+                            projectName = project.name
+                            renamingProject = project.id
+                        }
+                    } label: {
+                        Label("Project", systemImage: "folder")
+                    }
+                    .accessibilityIdentifier("switcher-project-\(project.name)")
                 }
             }
             if !windowTabs.isEmpty {
@@ -1019,8 +1042,10 @@ struct TabMenu: View {
 
     var body: some View {
         Button("Rename…", systemImage: "pencil") { workspace.renamingTab = tab.id }
-        Button("Open in New Window", systemImage: "macwindow.badge.plus") {
-            model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
+        if WindowRequest.isSupported {
+            Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+                model.openInNewWindow(TabRef(hostId: workspace.hostId ?? HostGroups.localId, tab: tab.id))
+            }
         }
         MergeIntoTabMenu(workspace: workspace, tab: tab.id)
         ProjectMenuItems(model: model, ref: TabRef(hostId: workspace.groupId, tab: tab.id))

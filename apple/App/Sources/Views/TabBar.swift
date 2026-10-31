@@ -157,7 +157,9 @@ private struct TabChip: View {
                     model.focus(ref)
                     workspace.renamingTab = tab.id
                 }
-                Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
+                if WindowRequest.isSupported {
+                    Button("Open in New Window", systemImage: "macwindow.badge.plus") { model.openInNewWindow(ref) }
+                }
                 MergeIntoTabMenu(workspace: workspace, tab: tab.id)
                 ProjectMenuItems(model: model, ref: ref)
                 Button("Close Tab", systemImage: "xmark", role: .destructive) { workspace.apply(.closeTab(tab.id)) }

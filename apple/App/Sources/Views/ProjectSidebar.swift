@@ -503,10 +503,11 @@ private struct ProjectHeader: View {
     }
 }
 
-/// A project's menu: Rename, Colour, New Terminal, Collapse, Ungroup, Close All Tabs.
-private struct ProjectMenu: View {
+/// A project's menu: Rename, Colour, New Terminal, Collapse, Ungroup, Close All Tabs. Without
+/// `collapsed` (the compact switcher, which has nothing to collapse) there is no Collapse.
+struct ProjectMenu: View {
     let project: Project
-    let collapsed: Bool
+    let collapsed: Bool?
     let rename: () -> Void
     @Environment(WindowModel.self) private var model
 
@@ -527,8 +528,10 @@ private struct ProjectMenu: View {
             }
         }
         Button("New Terminal", systemImage: "terminal") { model.newTab(inProject: project.id) }
-        Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
-            withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) }
+        if let collapsed {
+            Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
+                withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) }
+            }
         }
         Divider()
         Button("Ungroup", systemImage: "rectangle.stack.badge.minus") {
