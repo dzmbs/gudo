@@ -199,6 +199,11 @@ final class WindowModel {
                 guard let self else { return }
                 toasts.show(Toast(layoutUnavailableHelp, systemImage: "network.slash", style: .neutral))
             }
+            workspace?.onHeldInputDropped = { [weak self] in
+                self?.toasts.show(Toast(
+                    "What you typed while connecting wasn't sent: the screen had changed.",
+                    systemImage: "keyboard", style: .neutral))
+            }
         }
     }
     /// The design fixtures' stand-in connection state (`-screen reconnect`).
@@ -708,6 +713,12 @@ final class WindowModel {
         }
         show(ref.hostId == HostGroups.localId ? .local : .host(ref.hostId))
         pendingFocus = ref
+        // A saved workspace has the tab already: selected before the first frame.
+        if let workspace = workspaces[ref.hostId], workspace.session.tabs.contains(where: { $0.id == ref.tab }),
+           currentGroupId == ref.hostId, pane == nil
+        {
+            workspace.selectTab(ref.tab)
+        }
         Task { [weak self] in
             for _ in 0..<300 {
                 guard let self, let pending = self.pendingFocus, pending == ref else { return }
@@ -981,6 +992,7 @@ final class WindowModel {
         // No host: this device's own shell is "connected"; an iPhone or iPad without one is not.
         let next = status.map { ConnectionState($0, since: downSince ?? .now) } ?? (LaunchOptions.hasLocalShell ? .connected : .disconnected)
         if next != liveConnection { liveConnection = next }
+        if next.isLive, workspace?.host != nil { LaunchTimeline.live(hostName) }
         guard let host = workspace?.host else { return }
         let observed = workspace
         let daemon = host as? DaemonConnection

@@ -88,6 +88,8 @@ public final class HostsModel {
     /// A program in a pane of a host copied text (OSC 52) after this device typed into it:
     /// the host, the pane and the text.
     @ObservationIgnored public var onClipboard: ((String, PaneId, String) -> Void)?
+    /// Where daemon hosts' workspaces are saved for instant start (nil: not saved).
+    @ObservationIgnored public var workspaceCache: WorkspaceCacheStore?
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
 
     public init(secrets: any SecretStore, repository: HostRepository, configuration: Configuration = .init()) {
@@ -196,6 +198,12 @@ public final class HostsModel {
         connection.onDaemonInfo = { [weak self] info in self?.daemonReported(record.id, info) }
         connection.browser.onPush = { [weak self] push in self?.onBrowserPush?(record.id, push) }
         connection.onClipboard = { [weak self] pane, text in self?.onClipboard?(record.id, pane, text) }
+        // A guest's view of someone else's host is never kept on this device.
+        if !record.isGuest,
+           let cached = workspaceCache?.load(hostId: record.id, daemonId: record.daemonId, sessionId: record.sessionId)
+        {
+            connection.seed(cached)
+        }
         connections[record.id] = connection
         do {
             try connection.connect()
@@ -329,6 +337,7 @@ public final class HostsModel {
 
     public func remove(_ id: String) {
         disconnect(id)
+        workspaceCache?.remove(hostId: id)
         if let record = record(id) {
             try? secrets.remove(record.ticketKey)
             try? secrets.remove(record.passwordKey)

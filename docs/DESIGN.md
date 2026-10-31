@@ -725,6 +725,7 @@ Return. Canvas panes show the same editor full size on the terminal background. 
 - [x] Context menus on tabs, panes, hosts, inbox items, files, links; swipe actions on lists.
 - [x] Optimistic UI: approve/deny/mark done move rows immediately; no spinners under 200 ms.
 - [x] Words not spinners for connection state; never a blank pane.
+- [x] Instant start: a window opens on the saved workspace (washed, "Connecting…" in the subtitle) and swaps to live in place (APP-ARCHITECTURE §26).
 - [x] One accent, used only for focus/selection/primary; state hues from the terminal palette.
 - [x] SF Symbols only; SF Pro chrome; SF Mono literals; JetBrains Mono grid.
 - [x] Light and dark everywhere; Dynamic Type through text styles on iOS; VoiceOver labels on

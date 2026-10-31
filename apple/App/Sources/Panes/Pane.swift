@@ -25,6 +25,12 @@ final class Pane {
     private(set) var foregroundProgram: String?
     /// Live, or showing stale content while its host reconnects (dimmed, never blank: R12).
     private(set) var connection = PaneConnection.live
+    /// Showing the screen this device saved last, until the host sends its own (instant start).
+    private(set) var showsSavedScreen = false
+    /// Input typed over the saved screen: held, then sent or dropped (`DaemonPaneBackend`).
+    private(set) var heldInput: DaemonPaneBackend.HeldInputState?
+    /// Held input was dropped: the host's screen was not the one it was typed at.
+    @ObservationIgnored var onHeldInputDropped: (() -> Void)?
     /// Called on the main actor after `title` or `foregroundProgram` change.
     @ObservationIgnored var onContextChange: (() -> Void)?
     /// BEL from the program (after the view's own haptic or sound).
@@ -43,10 +49,20 @@ final class Pane {
     @ObservationIgnored private(set) var moves = 0
 
     nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "pane")
+    /// `showsSavedScreen` for the stream's thread.
+    nonisolated private let savedScreenShown = OSAllocatedUnfairLock(initialState: false)
+    /// Bumped by every output and snapshot: whether the screen may have changed since the
+    /// workspace was last saved (`WorkspaceCacheWriter`).
+    nonisolated let outputGeneration = OSAllocatedUnfairLock(initialState: 0)
     /// The grid's cell size in pixels, for resizes that follow the stream (off the main actor).
     nonisolated let cellPixels = OSAllocatedUnfairLock<(width: UInt32, height: UInt32)>(initialState: (0, 0))
 
-    init(id: PaneId, backend: any PaneBackend, appearance: TerminalAppearance = .init(), onExit: @escaping @Sendable () -> Void) throws {
+    /// - Parameter saved: the pane's saved screen (instant start), drawn until the host's
+    ///   arrives; input typed over it waits for that.
+    init(
+        id: PaneId, backend: any PaneBackend, appearance: TerminalAppearance = .init(), saved: CachedPane? = nil,
+        onExit: @escaping @Sendable () -> Void
+    ) throws {
         self.id = id
         self.backend = backend
         let terminal = Terminal(cols: 80, rows: 24, configuration: appearance.terminalConfiguration) { backend.write($0) }
@@ -86,12 +102,29 @@ final class Pane {
                 Task { @MainActor in surface?.applyPrediction(update) }
             }
         }
+        let daemon = backend as? DaemonPaneBackend
+        if let saved, let screen = saved.screen, let daemon, !daemon.isLive {
+            showSaved(screen, saved: saved, on: terminal, holdingInputOf: daemon)
+        }
         let cellPixels = cellPixels
+        let generation = outputGeneration
+        let savedShown = savedScreenShown
+        // The host's own screen replaced the saved one (checked without a lock hop per output).
+        let leaveSaved: @Sendable () -> Void = { [weak self] in
+            guard savedShown.withLock({ $0 }), daemon?.isLive == true else { return }
+            savedShown.withLock { $0 = false }
+            Task { @MainActor in self?.showsSavedScreen = false }
+        }
         let handle: @Sendable (PaneEvent) -> Void = { [weak self] event in
+            switch event {
+            case .output, .snapshot: generation.withLock { $0 += 1 }
+            default: break
+            }
             switch event {
             case .output(let data):
                 data.withUnsafeBytes { terminal.write($0) }
                 surface.outputArrived()
+                leaveSaved()
             case .snapshot(let ready):
                 // Resume after a gap or first attach: the daemon's state replaces ours. A bad
                 // snapshot keeps what is on screen (stale beats blank) and is logged.
@@ -103,6 +136,7 @@ final class Pane {
                     Pane.log.error("snapshot restore failed: \(String(describing: error), privacy: .public)")
                 }
                 surface.outputArrived()
+                leaveSaved()
             case .history(let records, _):
                 _ = try? terminal.appendHistory(records)
                 surface.outputArrived()
@@ -140,6 +174,32 @@ final class Pane {
                 Task { @MainActor in
                     self?.foregroundProgram = name
                     self?.onContextChange?()
+                }
+            }
+        }
+    }
+
+    /// Draws the saved screen (and a little scrollback, scrolled where it was) and holds input
+    /// until the host's screen replaces it.
+    private func showSaved(_ screen: Data, saved: CachedPane, on terminal: Terminal, holdingInputOf daemon: DaemonPaneBackend) {
+        do {
+            try terminal.restore(snapshot: screen)
+        } catch {
+            Pane.log.error("saved screen unreadable: \(String(describing: error), privacy: .public)")
+            return
+        }
+        _ = try? terminal.appendHistory(saved.history)
+        if saved.scrolledBack > 0 { terminal.scrollViewport(by: -saved.scrolledBack) }
+        showsSavedScreen = true
+        savedScreenShown.withLock { $0 = true }
+        daemon.holdInputUntilLive(screen: { [weak terminal] in terminal?.visibleText() ?? "" }) { [weak self] state in
+            Task { @MainActor in
+                guard let self else { return }
+                self.heldInput = state == .sent ? nil : state
+                if state == .dropped {
+                    self.onHeldInputDropped?()
+                    try? await Task.sleep(for: .seconds(3))
+                    if self.heldInput == .dropped { self.heldInput = nil }
                 }
             }
         }

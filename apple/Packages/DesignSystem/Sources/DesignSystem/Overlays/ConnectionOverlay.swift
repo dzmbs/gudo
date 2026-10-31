@@ -160,6 +160,9 @@ struct GraceSpinner: View {
 private struct ConnectionOverlayModifier: ViewModifier {
     let state: ConnectionState
     let hostName: String
+    /// The panes show the screens this device saved (instant start), already marked quietly
+    /// on each pane and in the header: while connecting, no dim and no notice for the grace.
+    let showsSavedState: Bool
     let onRetry: () -> Void
     let onDisconnect: () -> Void
 
@@ -175,7 +178,7 @@ private struct ConnectionOverlayModifier: ViewModifier {
             content
                 .saturation(presentation.dimmed ? 0.25 : 1)
                 .opacity(presentation.dimmed ? 0.55 : 1)
-                .allowsHitTesting(state.isLive || state == .paused || state == .disconnected)
+                .allowsHitTesting(state.isLive || state == .paused || state == .disconnected || savedAndConnecting)
                 .overlay(alignment: .topTrailing) {
                     if let notice = presentation.notice {
                         ConnectionNotice(state: state, text: notice)
@@ -196,6 +199,11 @@ private struct ConnectionOverlayModifier: ViewModifier {
         }
     }
 
+    /// Saved screens on the way to live take clicks and scrolls; typed input waits (held).
+    private var savedAndConnecting: Bool {
+        if case .connecting = state { showsSavedState } else { false }
+    }
+
     private struct Presentation: Equatable {
         var dimmed = false
         var notice: String?
@@ -208,6 +216,9 @@ private struct ConnectionOverlayModifier: ViewModifier {
         switch state {
         case .connected, .slow, .paused, .disconnected:
             result.dimmed = false
+        case .connecting where showsSavedState:
+            result.dimmed = false
+            if down >= Self.dimAfter { result.notice = "Connecting to \(hostName)…" }
         case .connecting(let phase):
             result.notice = phase.map { "\($0.trimmingCharacters(in: ["…"])) on \(hostName)…" } ?? "Connecting to \(hostName)…"
         case .reconnecting(_, let since):
@@ -304,8 +315,10 @@ private struct ConnectionCard: View {
 
 public extension View {
     func connectionOverlay(
-        _ state: ConnectionState, hostName: String, onRetry: @escaping () -> Void, onDisconnect: @escaping () -> Void
+        _ state: ConnectionState, hostName: String, showsSavedState: Bool = false,
+        onRetry: @escaping () -> Void, onDisconnect: @escaping () -> Void
     ) -> some View {
-        modifier(ConnectionOverlayModifier(state: state, hostName: hostName, onRetry: onRetry, onDisconnect: onDisconnect))
+        modifier(ConnectionOverlayModifier(
+            state: state, hostName: hostName, showsSavedState: showsSavedState, onRetry: onRetry, onDisconnect: onDisconnect))
     }
 }

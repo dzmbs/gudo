@@ -16,6 +16,9 @@ public final class DaemonLayoutStore: LayoutStore {
     public private(set) var sessionId: UInt64?
     /// Whether a layout has arrived since attaching (views show "Connecting…" until then).
     public private(set) var hasLayout = false
+    /// Showing the layout this device saved last (instant start) until the daemon's arrives.
+    /// Ops wait for the daemon: there is no session to send them to yet.
+    public private(set) var isCached = false
     /// The daemon session's name.
     public private(set) var sessionName = ""
     /// The session's projects as last reported, with unacknowledged changes on top.
@@ -62,6 +65,16 @@ public final class DaemonLayoutStore: LayoutStore {
         pending.append((id, .project(change)))
     }
 
+    /// Shows a saved layout until the daemon's first arrives.
+    func seed(_ cached: Session, name: String, projects: HostProjects) {
+        guard !hasLayout else { return }
+        confirmed = cached
+        confirmedProjects = projects
+        sessionName = name
+        isCached = true
+        rebase()
+    }
+
     /// A `LayoutChanged` from the daemon. Layouts older than the one applied are ignored
     /// (`revision`), unless they belong to another session (re-attach).
     func receive(_ layout: SessionLayout) {
@@ -69,8 +82,11 @@ public final class DaemonLayoutStore: LayoutStore {
         if layout.sessionId != sessionId {
             pending.removeAll()
             projectsRevision = nil
-            confirmedProjects = HostProjects()
+            // Saved projects stay until the daemon's report, which follows its layout, so they
+            // never blink out in between.
+            if !(isCached && supportsProjects) { confirmedProjects = HostProjects() }
         }
+        isCached = false
         sessionId = layout.sessionId
         sessionName = layout.name
         revision = layout.revision
@@ -105,6 +121,7 @@ public final class DaemonLayoutStore: LayoutStore {
     /// The attached session no longer exists: no tabs, nothing pending, until a layout of the
     /// session attached next arrives.
     func sessionGone() {
+        isCached = false
         pending.removeAll()
         sessionId = nil
         revision = nil

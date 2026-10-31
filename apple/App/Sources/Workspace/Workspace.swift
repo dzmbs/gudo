@@ -227,6 +227,13 @@ final class Workspace {
     var isLayoutLive: Bool { host?.status.isLive ?? true }
     /// What a layout change does while the host is not live: say so (never a silent no-op).
     @ObservationIgnored var onLayoutUnavailable: (() -> Void)?
+    /// Input typed over a saved screen was not sent (the host's screen had changed).
+    @ObservationIgnored var onHeldInputDropped: (() -> Void)?
+    /// Whether any of this window's panes on the host still shows its saved screen, or the
+    /// layout itself is the saved one (instant start): "Connecting…" in the header.
+    var showsSavedWorkspace: Bool {
+        host?.showsCachedLayout == true || panes.values.contains(where: \.showsSavedScreen)
+    }
     /// A pane's terminal took the keyboard (a click or tap in it): its window follows, which
     /// matters when the pane is not in the window's own tab on this host (a mixed tab's pane,
     /// the other column).
@@ -519,7 +526,8 @@ final class Workspace {
     }
 
     private func makePane(_ id: PaneId) throws -> Pane {
-        let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance) { [weak self] in
+        let saved = (host as? DaemonConnection)?.cachedScreen(for: id)
+        let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance, saved: saved) { [weak self] in
             // The process exited: close its pane, as Ghostty does.
             Task { @MainActor in self?.apply(.close(id)) }
         }
@@ -528,6 +536,7 @@ final class Workspace {
             if self?.grids[id] != size { self?.grids[id] = size }
         }
         pane.isFocusedPane = { [weak self] in self?.focusedPane == id }
+        pane.onHeldInputDropped = { [weak self] in self?.onHeldInputDropped?() }
         pane.onBell = { [weak self] in self?.ringBell(id) }
         pane.onCellSize = { [weak self] size in
             if self?.cellSize != size { self?.cellSize = size }

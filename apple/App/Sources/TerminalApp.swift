@@ -53,6 +53,8 @@ struct TerminalApp: App {
                 #endif
                 app.hosts.foreground()
             case .background:
+                // What is on screen now is what the next launch shows first.
+                app.cacheWriter?.flush()
                 #if os(iOS)
                 BackgroundGrace.shared.enter()
                 #endif
@@ -274,6 +276,7 @@ struct WindowContent: View {
             // No `.id` per workspace: the sidebar (every host) stays put while the detail
             // column switches hosts; the panes are keyed by their workspace inside.
             WorkspaceView(workspace: workspace)
+                .onAppear { LaunchTimeline.firstFrame(savedWorkspace: workspace.showsSavedWorkspace) }
         } else {
             EmptyState(
                 "Host Unavailable", systemImage: "exclamationmark.triangle",
