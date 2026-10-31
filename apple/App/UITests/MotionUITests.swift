@@ -11,6 +11,7 @@ final class MotionUITests: XCTestCase {
 
     @MainActor
     func testLayoutChangesForRecording() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and the sidebar are the iPad and Mac layout")
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
@@ -59,6 +60,7 @@ final class MotionUITests: XCTestCase {
     /// the recording shows whether a terminal reflows while its pane animates.
     @MainActor
     func testLayoutChangesWithoutKeyboardForRecording() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and the sidebar are the iPad and Mac layout")
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-noAutoFocus", "YES"]
         app.launch()
@@ -91,6 +93,7 @@ final class MotionUITests: XCTestCase {
     /// from the pane menu with the software keyboard kept down, so only the layout resizes.
     @MainActor
     func testEachLayoutChangeResizesEachPaneOnce() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and the sidebar are the iPad and Mac layout")
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-windowProbe", "YES", "-noAutoFocus", "YES"]
         app.launch()
@@ -120,6 +123,7 @@ final class MotionUITests: XCTestCase {
     /// Hiding and showing the sidebar resizes each pane once, as the slide ends.
     @MainActor
     func testSidebarResizesEachPaneOnce() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and the sidebar are the iPad and Mac layout")
         let app = probedApp()
         paneMenu(app, "Split Right")
         XCTAssertTrue(element(app, "pane-3").waitForExistence(timeout: 5))
@@ -136,6 +140,7 @@ final class MotionUITests: XCTestCase {
     /// between panes while it stays up resizes none.
     @MainActor
     func testKeyboardResizesEachPaneOnce() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and the sidebar are the iPad and Mac layout")
         let app = probedApp()
         paneMenu(app, "Split Right")
         XCTAssertTrue(element(app, "pane-3").waitForExistence(timeout: 5))
@@ -165,6 +170,7 @@ final class MotionUITests: XCTestCase {
     /// below Frequently Visited, which stays where it was.
     @MainActor
     func testStartPageKeepsItsPlaceAsDevServersArrive() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and the sidebar are the iPad and Mac layout")
         let app = XCUIApplication()
         app.launchArguments += ["-mock", "-screen", "start-page", "-restoreLastTarget", "NO"]
         app.launch()

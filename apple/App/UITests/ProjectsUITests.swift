@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// Projects in the iPad sidebar against a real daemon (apple/scripts/projects-ui-test.sh passes
@@ -167,3 +168,4 @@ final class ProjectsUITests: XCTestCase {
         shot(app, "projects-dropped")
     }
 }
+#endif

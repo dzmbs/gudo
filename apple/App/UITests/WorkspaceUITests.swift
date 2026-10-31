@@ -11,6 +11,7 @@ final class WorkspaceUITests: XCTestCase {
     #if os(iOS)
     @MainActor
     func testShortcutsSplitZoomAndSwitchTabs() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and dividers are the iPad and Mac layout")
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
         app.launch()
@@ -68,6 +69,7 @@ final class WorkspaceUITests: XCTestCase {
     /// cycle once crashed here).
     @MainActor
     func testRotationAndDividerResize() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits and dividers are the iPad and Mac layout")
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]

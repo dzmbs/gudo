@@ -11,6 +11,7 @@ final class SplitWebLeavesUITests: XCTestCase {
     }
 
     func testBrowserBesideRightAfterSplitsZoomAndClose() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "splits are the iPad and Mac layout")
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-keyBar.fullWithHardwareKeyboard", "YES"]
         app.launch()

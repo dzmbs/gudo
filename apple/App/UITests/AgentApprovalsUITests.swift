@@ -119,6 +119,33 @@ final class AgentApprovalsUITests: XCTestCase {
 
     // MARK: Tests
 
+    /// The agent asks while the app is away: an "Approval needed" notification whose Approve
+    /// reaches the agent, with the app still running in the background afterwards.
+    func testApprovesFromTheNotification() throws {
+        try launch()
+        startAgent("slowly ask permission")
+        XCUIDevice.shared.press(.home)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        // A fresh install asks for permission with the first notification.
+        let allow = springboard.buttons["Allow"]
+        let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Approval needed'")).firstMatch
+        let deadline = Date().addingTimeInterval(30)
+        while !banner.exists, Date() < deadline {
+            if allow.exists { allow.tap() }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        XCTAssertTrue(banner.exists, "the approval is notified")
+        banner.press(forDuration: 1.5)
+        let approve = springboard.buttons["Approve"]
+        XCTAssertTrue(approve.waitForExistence(timeout: 5), "the notification offers Approve")
+        approve.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(3))
+        XCTAssertEqual(app.state, .runningBackground, "answering from the notification keeps the app running")
+        app.activate()
+        XCTAssertTrue(agentScreen(containing: "decision: allowed").waitForExistence(timeout: 20), "the approval reached the agent")
+        closeAgentPane()
+    }
+
     /// The agent asks while another tab is in front: a toast with Approve.
     func testToastApprovesAnAgentOnAnotherTab() throws {
         try launch()
@@ -143,6 +170,7 @@ final class AgentApprovalsUITests: XCTestCase {
     /// The Inbox's keys: ↩ approves, ⌘. denies, E edits then approves, and "approve all like
     /// this" answers the next identical request by itself until it is revoked.
     func testInboxKeysEditAndApproveAllLikeThis() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the Inbox keys are iPad and Mac (hardware keyboard)")
         try launch()
         startAgent("please ask permission")
         panes.firstMatch.tap()
@@ -199,6 +227,7 @@ final class AgentApprovalsUITests: XCTestCase {
     /// New Agent while a VS Code tab is in front: the agent's own tab comes forward, from
     /// Agents' + and from the sidebar's +, never the editor's.
     func testNewAgentComesForwardOverAnEditorTab() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad and Mac")
         try launch()
         func openEditor() {
             palette("Open in VS Code")
@@ -243,6 +272,7 @@ final class AgentApprovalsUITests: XCTestCase {
     /// New Agent from each entry point: ⇧⌘N, the sidebar's +, the host's +, Agents' +, then
     /// Start from one; with an agent running, the host's Agents group has its own +.
     func testNewAgentFromEveryEntryPoint() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad and Mac")
         try launch()
         let start = element("launch-start")
         func opensSheet(_ what: String, cancel: Bool = true) {

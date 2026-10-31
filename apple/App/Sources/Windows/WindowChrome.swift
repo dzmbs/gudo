@@ -202,6 +202,7 @@ struct WindowProbe: View {
             "hinge": model.fold.hinge?.status.rawValue ?? "none",
             "windows": String(model.app.openWindows.count),
             "models": String(WindowModel.made),
+            "multiWindow": String(WindowRequest.isSupported),
             // Backend resizes per pane ("1:2 3:1"): one per layout change.
             "resizes": (workspace?.panes ?? [:]).sorted { $0.key.rawValue < $1.key.rawValue }
                 .map { "\($0.key.rawValue):\($0.value.resizesSent)" }.joined(separator: " "),

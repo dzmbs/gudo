@@ -148,6 +148,10 @@ import UnnamedCore
         #expect(client().calls.last == .setView(3, [1, 2, 3]))
         connection.setWindowView(windowB, focused: nil, visible: [])
         #expect(client().calls.last == .setView(1, [1]))
+        // The last window leaves too (the app went to the background): nothing is on screen,
+        // not the layout's active tab, so the daemon notifies about it.
+        connection.setWindowView(windowA, focused: nil, visible: [])
+        #expect(client().calls.last == .setView(nil, []))
     }
 }
 

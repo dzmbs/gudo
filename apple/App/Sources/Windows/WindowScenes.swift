@@ -1,11 +1,24 @@
 import Foundation
 import HostKit
 import PaneLayout
+#if os(iOS)
+import UIKit
+#endif
 
 /// What a new window opens on (docs/APP-ARCHITECTURE.md "Windows"): New Window (⌘N) carries
 /// the current window's hosts and tab, Open in New Window a host or a tab. The window then goes
 /// its own way: its own selection, its own terminals.
 struct WindowRequest: Codable, Hashable {
+    /// Whether this device shows more than one window of the app: the Mac and iPad, not iPhone,
+    /// where New Window and Open in New Window would do nothing.
+    @MainActor static var isSupported: Bool {
+        #if os(iOS)
+        UIApplication.shared.supportsMultipleScenes
+        #else
+        true
+        #endif
+    }
+
     /// Hosts to open in the new window, in sidebar order.
     var hosts: [String] = []
     /// The tab to show (its host opens too).
