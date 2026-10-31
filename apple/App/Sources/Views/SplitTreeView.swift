@@ -400,6 +400,8 @@ struct PaneSlot: View {
             TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace)
                 // Per host and pane: pane ids repeat across hosts.
                 .id(HostPane(hostId: workspace.groupId, pane: id))
+                .saturation(pane.showsSavedScreen ? 0.5 : 1)
+                .overlay { SavedScreenOverlay(pane: pane) }
                 .overlay {
                     StalePaneOverlay(
                         connection: pane.connection, paneId: id,

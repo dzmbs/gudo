@@ -1,3 +1,4 @@
+#if os(iOS)
 import XCTest
 
 /// iPhone Duo (docs/APP-ARCHITECTURE.md "Foldable"), on a Duo simulator:
@@ -105,3 +106,4 @@ final class DuoUITests: XCTestCase {
         waitFor("the real hinge again") { fields(element)["hinge"] == "closed" }
     }
 }
+#endif

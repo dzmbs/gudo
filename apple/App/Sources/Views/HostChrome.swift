@@ -229,6 +229,38 @@ struct StalePaneOverlay: View {
     }
 }
 
+/// A pane showing the screen this device saved, before its host sends its own (instant
+/// start): a quiet wash of the terminal's background, gone the moment the host's screen
+/// replaces it. Input typed meanwhile waits, and says so.
+struct SavedScreenOverlay: View {
+    let pane: Pane
+    @Environment(\.terminalTheme) private var theme
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if pane.showsSavedScreen {
+                theme.background.opacity(0.32)
+                    .transition(.opacity)
+            }
+            if case .holding = pane.heldInput {
+                Label("Sends when connected", systemImage: "keyboard")
+                    .font(.caption)
+                    .padding(.horizontal, DS.Space.gap10)
+                    .padding(.vertical, DS.Space.xs)
+                    .floatingCapsule()
+                    .padding(DS.Space.s)
+                    .transition(.opacity)
+                    .accessibilityIdentifier("held-input-\(pane.id)")
+            }
+        }
+        .animation(DS.Motion.overlay, value: pane.showsSavedScreen)
+        .animation(DS.Motion.overlay, value: pane.heldInput)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(pane.showsSavedScreen ? "saved-\(pane.id)" : "")
+    }
+}
+
 /// Trust-on-first-use and changed-key decisions (04-mobile-ux C1.3).
 struct HostKeyPromptModifier: ViewModifier {
     let prompts: HostKeyPrompts

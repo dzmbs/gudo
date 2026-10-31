@@ -13,6 +13,9 @@ public protocol HostConnection: AnyObject, Observable {
     var layoutStore: any LayoutStore { get }
     /// False until there is a layout to show (a daemon host before its first `LayoutChanged`).
     var isReady: Bool { get }
+    /// Showing the layout this device saved last, not yet the host's (instant start): its
+    /// tabs and panes show, ops wait.
+    var showsCachedLayout: Bool { get }
     func makeBackend(for pane: PaneId) throws -> any PaneBackend
     /// User asked to retry (R9); also resets backoff (R10).
     func retry()
@@ -23,6 +26,10 @@ public protocol HostConnection: AnyObject, Observable {
     /// The network path changed: redial or probe now (R10).
     func networkChanged()
     func close()
+}
+
+public extension HostConnection {
+    var showsCachedLayout: Bool { false }
 }
 
 /// A paired daemon: one `DaemonClient` (iroh), its layout and its panes.
@@ -93,6 +100,9 @@ public final class DaemonConnection: HostConnection {
 
     public var layoutStore: any LayoutStore { layout }
     public var isReady: Bool { layout.hasLayout }
+    public var showsCachedLayout: Bool { layout.isCached }
+    /// Saved screens of panes the daemon has not sent yet (instant start).
+    @ObservationIgnored private var cachedPanes: [PaneId: CachedPane] = [:]
 
     @ObservationIgnored private let ticket: String
     @ObservationIgnored private let dialer: DaemonDialer
@@ -201,6 +211,42 @@ public final class DaemonConnection: HostConnection {
     public func paneAssist(_ pane: PaneId) async -> PaneAssist? {
         guard let client = client as? any TabHistoryClient else { return nil }
         return try? await client.paneAssist(paneId: pane.rawValue)
+    }
+
+    /// Shows what this device saved of the host until the daemon answers: the layout, names,
+    /// projects and each pane's last screen (docs/APP-ARCHITECTURE.md §26).
+    public func seed(_ cached: CachedWorkspace) {
+        guard !layout.hasLayout else { return }
+        layout.seed(cached.session, name: cached.sessionName, projects: cached.projects)
+        for (id, pane) in cached.panes {
+            meta[PaneId(id)] = PaneMeta(
+                paneId: id, title: pane.title, cwd: pane.cwd, exit: nil, agent: nil,
+                size: PaneSize(cols: pane.cols, rows: pane.rows, widthPx: 0, heightPx: 0),
+                sizePolicy: .lastInput, sizedBy: nil)
+        }
+        cachedPanes = Dictionary(uniqueKeysWithValues: cached.panes.map { (PaneId($0.key), $0.value) })
+    }
+
+    /// What to save of this host now (no screens yet: `CachedWorkspace.capturingScreens` adds
+    /// them off the main actor). Nil until the daemon's own layout is here.
+    public func workspaceToSave(daemonId: String?) -> CachedWorkspace? {
+        guard layout.hasLayout else { return nil }
+        let session = layout.session
+        var panes: [UInt64: CachedPane] = [:]
+        for pane in session.panes {
+            let meta = meta[pane]
+            panes[pane.rawValue] = CachedPane(
+                title: meta?.title ?? "", cwd: meta?.cwd, cols: meta?.size.cols ?? 0, rows: meta?.size.rows ?? 0)
+        }
+        return CachedWorkspace(
+            hostId: hostId, daemonId: daemonId, sessionId: layout.sessionId, sessionName: layout.sessionName,
+            session: session, projects: layout.projects, panes: panes)
+    }
+
+    /// A pane's saved screen while the daemon has not sent its own.
+    public func cachedScreen(for pane: PaneId) -> CachedPane? {
+        guard let cached = cachedPanes[pane], !router.isLive(pane.rawValue) else { return nil }
+        return cached
     }
 
     public func makeBackend(for pane: PaneId) throws -> any PaneBackend {
@@ -370,7 +416,9 @@ public final class DaemonConnection: HostConnection {
             Self.log.error("attach failed host=\(self.hostId, privacy: .public): \(message, privacy: .public)")
             status = .needsAttention(reason: Self.attachFailure(code, message))
         case .layout(let layout):
+            let wasCached = self.layout.isCached
             self.layout.receive(layout)
+            if wasCached { reconcileCache() }
             if timings.firstLayout == nil, let start = timings.dialStarted { timings.firstLayout = .now - start }
             if attaching {
                 attaching = false
@@ -404,12 +452,24 @@ public final class DaemonConnection: HostConnection {
             layout.receive(report)
         case .clipboard(let pane, let text):
             onClipboard?(PaneId(pane), text)
-        case .paneSnapshot, .paneResized:
+        case .paneSnapshot(let pane, _, _):
+            cachedPanes[PaneId(pane)] = nil
+            noteOutput()
+        case .paneResized:
             noteOutput()
         default:
             break
         }
         onEvent?(event)
+    }
+
+    /// The daemon's layout replaced the saved one: what it no longer has goes (tabs closed
+    /// elsewhere); its own metadata follows for the rest.
+    private func reconcileCache() {
+        let live = layout.session.panes
+        meta = meta.filter { live.contains($0.key) }
+        cachedPanes = cachedPanes.filter { live.contains($0.key) }
+        Self.log.info("saved workspace replaced by the host's host=\(self.hostId, privacy: .public)")
     }
 
     private func noteOutput() {

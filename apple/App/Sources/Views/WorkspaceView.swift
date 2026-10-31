@@ -460,6 +460,8 @@ private struct DetailColumn: View {
         if tab.root.panes.count > 1 {
             parts.append(tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed")
         }
+        // A saved workspace on screen: quietly not live yet (instant start).
+        if workspace.showsSavedWorkspace, !model.connection.isFailure { parts.append("Connecting…") }
         return parts.joined(separator: " · ")
     }
 }
@@ -628,7 +630,7 @@ struct ActiveTabView: View {
                     .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
                     // Lost link: the last frame stays, dimmed and desaturated, under the card.
                     .connectionOverlay(
-                        model.connection, hostName: model.hostName,
+                        model.connection, hostName: model.hostName, showsSavedState: workspace.showsSavedWorkspace,
                         onRetry: { model.retryConnection() },
                         onDisconnect: { model.disconnect() })
             } else if workspace.host?.isReady == false {

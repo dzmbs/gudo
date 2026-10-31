@@ -262,6 +262,33 @@ final class MacSnapshotTests: XCTestCase {
         try await settings("settings-tabs-new-terminal", SettingsNavigation(pane: .appearance))
     }
 
+    /// Instant start: the saved workspace before the host answers (quietly washed, "Connecting…"
+    /// in the header), then the same host live, in place; at the Mac's width and an iPad's.
+    func testInstantStart() async throws {
+        for (suffix, size) in [("", CGSize(width: 1180, height: 760)), ("-ipad", CGSize(width: 1024, height: 768))] {
+            guard wanted("instant-start" + suffix) else { continue }
+            let (_, client) = try InstantStartFixture.attach(.shared)
+            defer { AppModel.shared.hosts.disconnect(InstantStartFixture.hostId) }
+            let model = WindowModel(app: .shared)
+            // The window (and its theme) first: panes take the theme they are made with.
+            let window = makeWindow(WindowContent(request: nil, model: model).environment(AppModel.shared), size: size)
+            model.start()
+            model.isSidebarShown = true
+            model.show(.host(InstantStartFixture.hostId))
+            // Before the connection notice's grace: what the first second looks like.
+            await pump(1)
+            try capture(window, "instant-start-cached" + suffix)
+            InstantStartFixture.goLive(client)
+            await pump(1.5)
+            // A window far off screen gets no display-link ticks: present the frames by hand.
+            for pane in model.workspace.map({ Array($0.panes.values) }) ?? [] { pane.view.surface.renderIfDirty() }
+            await pump(0.3)
+            try capture(window, "instant-start-live" + suffix)
+            window.close()
+            model.close()
+        }
+    }
+
     /// Any program's own status (pi blocked on a question) in its pane header and tab glyph.
     func testProgramStatus() async throws {
         defer {
