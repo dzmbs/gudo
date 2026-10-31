@@ -183,6 +183,16 @@ import UnnamedCore
         connection.close()
     }
 
+    /// Waits for `marker` in a pane's output; on timeout says what the pane got.
+    func waitForEcho(_ pane: MirrorPane, _ marker: String) async throws {
+        do {
+            // Bytes, or a snapshot taken after the echo.
+            try await eventually(marker, timeout: .seconds(10)) { pane.tail.contains(marker) || pane.terminal.visibleText().contains("\n\(marker)\n") }
+        } catch {
+            throw TestError("no echo of \(marker): \(pane.snapshots) snapshots, \(pane.bytes) bytes, \(String(describing: pane.connection)), screen \(pane.terminal.visibleText().debugDescription)")
+        }
+    }
+
     /// Panes and connections opened and closed over and over: memory, threads and fds level
     /// off instead of growing with the count.
     @Test func openAndCloseRepeatedly() async throws {
@@ -203,7 +213,7 @@ import UnnamedCore
             let new = try #require(connection.layout.session.panes.subtracting([base]).first)
             let pane = MirrorPane(try connection.makeBackend(for: new))
             pane.type("echo round-\(round)\r")
-            try await eventually("echo", timeout: .seconds(10)) { pane.tail.contains("round-\(round)") }
+            try await waitForEcho(pane, "round-\(round)")
             connection.layout.apply(.close(new))
             try await eventually("closed", timeout: .seconds(10)) { connection.layout.session.panes.count == count }
             pane.backend.terminate()
@@ -220,7 +230,7 @@ import UnnamedCore
             let focused = try #require(conn.layout.session.activeTab?.focused)
             let pane = MirrorPane(try conn.makeBackend(for: focused))
             pane.type("echo conn-\(round)\r")
-            try await eventually("echo", timeout: .seconds(10)) { pane.tail.contains("conn-\(round)") }
+            try await waitForEcho(pane, "conn-\(round)")
             pane.backend.terminate()
             model.disconnect(hostId)
             if round % 5 == 0 { samples.append("conn \(round): \(Gauge.mb(Gauge.footprint())) \(Gauge.threads())t \(Gauge.fds())fd") }
@@ -231,6 +241,14 @@ import UnnamedCore
             [stress] open/close: \(rounds) panes then connections; at round 5 \(first.map { "\(Gauge.mb($0.0)) \($0.1)t \($0.2)fd" } ?? "-"), after panes \(Gauge.mb(panesDone.0)) \(panesDone.1)t \(panesDone.2)fd, end \(Gauge.mb(end.0)) \(end.1)t \(end.2)fd
               \(samples.joined(separator: "\n  "))
             """)
+        if let pause = ProcessInfo.processInfo.environment["UN_STRESS_PAUSE"].flatMap(Int.init) {
+            // Time to look at the process from outside: leaks, vmmap --summary, lsof -p.
+            print("[stress] pid \(getpid()) paused for \(pause) s")
+            if let file = ProcessInfo.processInfo.environment["UN_STRESS_PID_FILE"] {
+                try "\(getpid())\n".write(toFile: file, atomically: true, encoding: .utf8)
+            }
+            try await Task.sleep(for: .seconds(pause))
+        }
         if let first {
             #expect(end.2 <= first.2 + 4, "fds grow with connections: \(first.2) → \(end.2)")
             #expect(end.1 <= first.1 + 8, "threads grow: \(first.1) → \(end.1)")

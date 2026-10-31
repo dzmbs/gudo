@@ -786,6 +786,10 @@ async fn accept_panes(
                     while let Ok(Some(out)) = recv::<PaneOutput>(&mut stream).await {
                         apply_output(&inner, pane_id, out, &ctl);
                         acks.notify_one();
+                        // A flooding stream always has the next frame ready, so its reads
+                        // never yield: let other panes' output and the input writer run
+                        // between frames, as the listener's terminal work is slow.
+                        tokio::task::yield_now().await;
                     }
                 }
                 Ok(Some(StreamHeader::Bulk)) => {
