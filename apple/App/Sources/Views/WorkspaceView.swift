@@ -619,9 +619,18 @@ struct ActiveTabView: View {
     var body: some View {
         Group {
             if let tab = workspace.session.activeTab {
-                let single = compact ? tab.focused : tab.zoomed
-                let isSplit = single == nil && tab.root.panes.count > 1
-                SplitTreeView(node: single.map(Node.leaf) ?? tab.root, workspace: workspace, isSplit: isSplit, animated: !compact)
+                // Floating windows ride above the tiled panes; on iPhone the focused pane shows
+                // alone and the windows become picture in picture.
+                let tiled = workspace.session.tiledRoot(of: tab) ?? tab.root
+                let floats = compact ? FloatScene.none : FloatScene(workspace: workspace, tab: tab, hidden: model.floatsHidden)
+                let zoomedTiled = tab.zoomed.map(tiled.contains) ?? false
+                let isSplit = !compact && !zoomedTiled && tiled.panes.count > 1
+                SplitTreeView(
+                    node: compact ? .leaf(tab.focused) : tiled, workspace: workspace, isSplit: isSplit, animated: !compact,
+                    floats: floats, zoomed: compact ? nil : tab.zoomed)
+                    .overlay {
+                        if compact { PictureInPicture(workspace: workspace, tab: tab) }
+                    }
                     // Another tab replaces the panes at once; only this tab's own changes animate.
                     .id(tab.id)
                     .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)

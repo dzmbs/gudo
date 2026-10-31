@@ -21,7 +21,7 @@ enum WorkspaceShortcuts {
     }
 
     private static let actions = WorkspaceAction.fileActions + WorkspaceAction.paneActions + WorkspaceAction.drawActions + WorkspaceAction.tabActions
-        + WorkspaceAction.historyActions
+        + WorkspaceAction.historyActions + WorkspaceAction.floatActions
 
     private static func handle(_ event: NSEvent) -> Bool {
         if selectionKey(event) { return true }

@@ -46,6 +46,8 @@ struct WorkspaceCommands: Commands {
         CommandMenu("Pane") {
             buttons(WorkspaceAction.paneActions)
             Divider()
+            buttons(WorkspaceAction.floatActions)
+            Divider()
             buttons(WorkspaceAction.drawActions)
             Divider()
             buttons([.links])
