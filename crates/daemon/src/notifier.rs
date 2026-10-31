@@ -138,7 +138,7 @@ impl Push {
 pub(crate) fn drop_revoked(core: &Core) {
     let mut regs = lock(&core.push.regs);
     let before = regs.len();
-    regs.retain(|r| unhex::<32>(&r.device).is_some_and(|d| !core.mp.device_revoked(DeviceId(d))));
+    regs.retain(|r| unhex::<32>(&r.device).is_some_and(|d| !core.mp.device_removed(DeviceId(d))));
     if regs.len() != before {
         core.push.save(&regs);
     }
