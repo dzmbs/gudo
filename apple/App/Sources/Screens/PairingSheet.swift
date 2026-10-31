@@ -125,6 +125,7 @@ struct PairingSheet: View {
                 ticket = new
                 error = nil
                 mode = .ticket
+                focus = nil
             }
             .sensoryFeedback(DS.Haptic.success, trigger: pairedCount)
             .fileImporter(isPresented: $importingKey, allowedContentTypes: [.data, .plainText, .item]) { result in
@@ -136,7 +137,9 @@ struct PairingSheet: View {
             .modifier(OptionalHostKeyPrompts(prompts: live?.hostKeyPrompts))
         }
         #if os(iOS)
-        .phoneDetents([.medium, .large])
+        // Full height: the host to confirm, the link's warning and any error sit under the
+        // field, below a half sheet's fold on a phone.
+        .phoneDetents([.large])
         #else
         // Fitted to the mode, as the system's sheets are: when it opens and when the mode
         // changes (a choice, so the change animates), never for what arrives later (a new key's
@@ -375,7 +378,8 @@ struct PairingSheet: View {
     private func focusField() {
         switch mode {
         case .ssh: focus = .destination
-        case .ticket: focus = .ticket
+        // A ticket from a link or a scan is there to confirm: the keyboard would cover its host.
+        case .ticket: focus = ticket.isEmpty ? .ticket : nil
         case .scan: focus = nil
         }
     }

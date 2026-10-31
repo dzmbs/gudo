@@ -797,6 +797,8 @@ public enum PairingError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .refused(let reason) where reason.contains("InvalidGrant"):
+            "This ticket was already used or has expired. Ask the host for a new one (its helper's `pair` command)."
         case .refused(let reason): "The host refused this device (\(reason)). Ask it for a new ticket (its helper's `pair` command)."
         case .timedOut: "The host did not answer. Check that it is running and reachable."
         case .turnedAway: "The owner didn't let you in."

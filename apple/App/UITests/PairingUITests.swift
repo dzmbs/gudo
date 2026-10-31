@@ -116,11 +116,30 @@ final class PairingUITests: XCTestCase {
         if open.waitForExistence(timeout: 4) { open.tap() }
         // A link never pairs by itself: Add Host shows the ticket's host to confirm.
         XCTAssertTrue(element(app, "pairing-ticket-host").waitForExistence(timeout: 10), "the link's host is shown")
+        // Nothing to type: no keyboard over the host being confirmed (iPhone).
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "no keyboard for a ticket from a link")
+        XCTAssertTrue(element(app, "pairing-ticket-host").isHittable, "the host is on screen to confirm")
         let pair = element(app, "pairing-confirm")
         XCTAssertTrue(pair.isEnabled)
         pair.tap()
         assertShellAnswers(app, "linked")
         shot(app, "pairing-deep-link-connected")
+
+        // The same link on another device: the ticket is spent, and the sheet says so where
+        // it can be read.
+        app.terminate()
+        let other = launch()
+        other.open(URL(string: ticket)!)
+        if open.waitForExistence(timeout: 4) { open.tap() }
+        let again = element(other, "pairing-confirm")
+        XCTAssertTrue(again.waitForExistence(timeout: 10))
+        again.tap()
+        let error = element(other, "pairing-error")
+        XCTAssertTrue(error.waitForExistence(timeout: 30), "a refused ticket says why")
+        XCTAssertTrue(error.isHittable, "the reason is on screen")
+        XCTAssertTrue(error.label.contains("already used"), error.label)
+        shot(other, "pairing-used-ticket")
     }
 
     /// Settings › Network: "Direct and Local Network Only" and a private CA; the app still pairs
