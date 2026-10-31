@@ -82,7 +82,7 @@ let secondCA = """
         // Default: the ticket decides; no extra roots, no own relay.
         let automatic = RelaySettings()
         #expect(automatic.clientRelay() == .default)
-        #expect(automatic.connectOptions(askpass: true) == ConnectOptions(relayCaDer: [], relayUrls: [], relayAuthToken: nil, askpass: true, browser: true, programStatus: true))
+        #expect(automatic.connectOptions(askpass: true) == ConnectOptions(relayCaDer: [], relayUrls: [], relayAuthToken: nil, askpass: true, browser: true, programStatus: true, clipboard: true))
         // Someone else's host never drives this device's browser.
         #expect(automatic.connectOptions(askpass: true, guest: true).browser == false)
         // The launch configuration's `.disabled` (tests) still holds.
@@ -100,7 +100,7 @@ let secondCA = """
         let custom = RelaySettings(mode: .custom, customURL: "relay.example.com", authToken: " t0k3n ", certificates: [der])
         #expect(custom.clientRelay() == .default)
         #expect(custom.connectOptions(askpass: true) == ConnectOptions(
-            relayCaDer: [der], relayUrls: ["https://relay.example.com"], relayAuthToken: "t0k3n", askpass: true, browser: true, programStatus: true))
+            relayCaDer: [der], relayUrls: ["https://relay.example.com"], relayAuthToken: "t0k3n", askpass: true, browser: true, programStatus: true, clipboard: true))
         // An invalid URL never reaches the core: the ticket decides.
         let broken = RelaySettings(mode: .custom, customURL: "not a url", authToken: "t")
         #expect(broken.connectOptions(askpass: true).relayUrls.isEmpty)
