@@ -285,6 +285,21 @@ async fn any_program_reports_its_status_and_agents_wait_for_it() {
         .await;
     let who = agent.ok("whoami", json!({})).await;
     assert_eq!(who["pane"]["status"]["message"], "Running tests", "{who}");
+    // Its words are shown to people and agents as they print, and bounded.
+    let hostile = format!(
+        "Running\u{202e}stset\u{202c}\r\n\x1b[2Jok{}",
+        "x".repeat(4096)
+    );
+    agent
+        .ok(
+            "status_set",
+            json!({ "state": "working", "message": hostile }),
+        )
+        .await;
+    let who = agent.ok("whoami", json!({})).await;
+    let shown = who["pane"]["status"]["message"].as_str().unwrap();
+    assert!(shown.starts_with("Runningstset [2Jokxx"), "{shown:?}");
+    assert_eq!(shown.chars().count(), 513, "{shown:?}");
     agent.ok("status_set", json!({ "state": "clear" })).await;
     assert!(agent.ok("whoami", json!({})).await["pane"]["status"].is_null());
 }

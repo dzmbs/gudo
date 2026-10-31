@@ -98,23 +98,26 @@ impl OscScanner {
         let (code, rest) = body.split_once(';').unwrap_or((body, ""));
         let osc = match code {
             "0" | "2" => Osc::Title(proto::clean_prompt_text(rest, MAX_TITLE_CHARS)),
-            "7" => {
-                // Only an absolute path that prints as it is.
-                let path = file_url_path(rest);
-                let plain = path
-                    .chars()
-                    .all(|c| !c.is_control() && !proto::is_invisible_format(c));
-                if !path.starts_with('/') || !plain {
-                    return;
-                }
-                Osc::Cwd(path)
-            }
+            "7" => match cwd_path(rest) {
+                Some(path) => Osc::Cwd(path),
+                None => return,
+            },
             "9" => Osc::Notify(rest.to_owned()),
             "7501" => Osc::ProgramStatus(rest.to_owned()),
             _ => return,
         };
         emit(osc);
     }
+}
+
+/// The directory an OSC 7 URL names, if it is an absolute path that prints as it is: any
+/// program can set it, and it is shown to people and agents.
+pub(crate) fn cwd_path(url: &str) -> Option<String> {
+    let path = file_url_path(url);
+    let plain = path
+        .chars()
+        .all(|c| !c.is_control() && !proto::is_invisible_format(c));
+    (path.starts_with('/') && plain).then_some(path)
 }
 
 /// The path of an OSC 7 working-directory URL: `file://host/path` (percent-decoded) or the

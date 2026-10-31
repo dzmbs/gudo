@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 base64.workspace = true
 brand.workspace = true
+proto.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

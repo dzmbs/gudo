@@ -680,6 +680,27 @@ mod tests {
         Ok(())
     }
 
+    /// Pasted text (MCP `pane_send`/`cmd_run`, the paste RPC, the composer) cannot end
+    /// bracketed paste early or send control keys: 7-bit ESC, its UTF-8 C1 twin (U+009B CSI),
+    /// ^C/^U/^W and friends never reach the PTY as themselves.
+    #[test]
+    fn pastes_cannot_escape_the_bracket() -> Result<(), Error> {
+        let mut terminal = Terminal::new(80, 24)?;
+        terminal.write(b"\x1b[?2004h");
+        let hostile = "a\x1b[201~rm -rf ~\r\n\u{9b}201~\x03\x15\x17\x1a\x04\x7fb";
+        let out = terminal.encode_paste(hostile);
+        let body = out
+            .strip_prefix(b"\x1b[200~")
+            .and_then(|b| b.strip_suffix(b"\x1b[201~"))
+            .expect("framed");
+        for byte in [0x1b, 0x03, 0x15, 0x17, 0x1a, 0x04, 0x7f] {
+            assert!(!body.contains(&byte), "{byte:#x} in {out:?}");
+        }
+        // U+009B stays a UTF-8 character (C2 9B), never a lone 8-bit CSI byte.
+        assert!(std::str::from_utf8(body).is_ok_and(|s| s.contains('\u{9b}')));
+        Ok(())
+    }
+
     #[test]
     fn widths() {
         assert_eq!(char_width('a'), 1);

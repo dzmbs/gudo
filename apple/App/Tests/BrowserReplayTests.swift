@@ -73,6 +73,8 @@ final class BrowserReplayTests: XCTestCase {
         let raw = try JSONSerialization.jsonObject(with: ReplayStore.bundle(claimed, events: [], keyframes: [])) as! [String: Any]
         var forged = raw
         var body = raw["session"] as! [String: Any]
+        // Export leaves out which host and pane recorded it.
+        XCTAssertNil(body["hostId"] ?? body["paneId"])
         (body["hostId"], body["paneId"]) = ("host", 7)
         forged["session"] = body
         let posing = try store.importBundle(JSONSerialization.data(withJSONObject: forged))
