@@ -15,9 +15,9 @@ nonisolated enum AppData {
 
     static var isIsolated: Bool { isolatedDirectory != nil }
 
-    /// `-hostsDirectory <path>` names the folder. Otherwise any test or tooling launch argument,
-    /// or a test runner's environment, picks a shared throwaway folder under the temporary
-    /// directory (kept across relaunches within a test).
+    /// `-hostsDirectory <path>` names the folder. Otherwise any test or tooling launch argument
+    /// picks a shared throwaway folder under the temporary directory (kept across relaunches
+    /// within a test), and a test runner's environment alone (hosted unit tests) another.
     static func isolatedDirectory(
         arguments: [String: Any], flags: [String], environment: [String: String], temporary: URL, bundleId: String
     ) -> URL? {
@@ -30,7 +30,10 @@ nonisolated enum AppData {
         let byFlag = flags.contains("-mock")
         let byEnvironment = testEnvironment.contains { environment[$0] != nil }
         guard byArgument || byFlag || byEnvironment else { return nil }
-        return temporary.appending(path: "\(bundleId).test-data", directoryHint: .isDirectory)
+        // Hosted unit tests get a folder apart from the launches UI tests make, whose paired
+        // daemons and windows would otherwise show up in the unit tests' models.
+        let name = byArgument || byFlag ? "test-data" : "unit-test-data"
+        return temporary.appending(path: "\(bundleId).\(name)", directoryHint: .isDirectory)
     }
 
     /// Launch arguments only tests, dogfood runs and scripts pass (besides every `-test…`).
