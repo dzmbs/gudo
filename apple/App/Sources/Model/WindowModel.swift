@@ -120,11 +120,14 @@ final class WindowModel {
 
     /// The grids about to change follow an animated layout change, not a resize the user is
     /// making: no cols × rows overlay counting through every frame of it.
-    func quietLayoutResizes() {
-        for workspace in workspaces.values { workspace.layoutChangeUntil = .now + .milliseconds(700) }
+    func quietLayoutResizes(for duration: Double = DS.Motion.sidebarDuration) {
+        // The animation, then the resize's round trip to the pane.
+        let quiet = ContinuousClock.now + .seconds(duration) + .milliseconds(700)
+        for workspace in workspaces.values { workspace.layoutChangeUntil = max(workspace.layoutChangeUntil, quiet) }
         // The terminals resize through the animation: their grids change once, as it settles.
-        TerminalSurface.holdGrids(for: .seconds(DS.Motion.sidebarDuration))
+        TerminalSurface.holdGrids(for: .seconds(duration))
     }
+
     var isSearchShown = false
     var searchNeedle = "" {
         didSet { if searchNeedle != oldValue { updateSearchCount() } }
@@ -197,11 +200,26 @@ final class WindowModel {
     var activeMixedTab: TabId? {
         didSet { if activeMixedTab != oldValue { reportViews() } }
     }
-    /// Two Columns: the user's choice for this window; nil follows the window's shape (on for a
-    /// foldable's open inner screen, `WidthBucket.isTwoSegment`).
+    /// Two Columns: the user's choice for this window; nil follows the fold (on while the pages
+    /// of an open foldable hold a tab each, `FoldLayout.pages`).
     var twoColumnsChoice: Bool?
-    /// The window's size (`WindowRoot` measures it): automatic Two Columns.
+    /// The window's size inside its safe area (`WindowRoot` measures it).
     var windowSize = CGSize.zero
+    /// The hinge and where the fold crosses this window, in the whole window's points
+    /// (`FoldProbe`); no hinge off a foldable.
+    var fold = FoldGeometry() {
+        didSet {
+            guard FoldLayout.plan(fold) != FoldLayout.plan(oldValue) else { return }
+            quietLayoutResizes(for: DS.Motion.foldDuration)
+        }
+    }
+    #if DEBUG
+    /// `-posture <name>` or the `DebugPostures` notification: a posture the simulator cannot fold
+    /// to (it moves the hinge only by hand), drawn over the window's real size.
+    var debugPosture: FoldPosture? = LaunchArguments().string(forKey: "posture").flatMap(FoldPosture.init(rawValue:)) {
+        didSet { updateFold(debugPosture.map { .simulated($0, in: fold.windowSize) } ?? FoldGeometry(windowSize: fold.windowSize)) }
+    }
+    #endif
     /// Two Columns: the tab in the column without focus, and which column has the current tab.
     var pairedTab: TabRef?
     var currentColumnIsLeft = true

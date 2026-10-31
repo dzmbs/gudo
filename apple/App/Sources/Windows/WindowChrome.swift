@@ -170,6 +170,10 @@ struct WindowProbe: View {
             "tab": workspace?.session.activeTabId.map { String($0.rawValue) } ?? "",
             "pane": workspace?.focusedPane.map { String($0.rawValue) } ?? "",
             "overlays": String(model.resizeOverlayShows),
+            // The fold as the window reads it (iPhone Duo): posture, layout and the hinge.
+            "posture": model.fold.posture.rawValue,
+            "fold": model.foldLayout.name,
+            "hinge": model.fold.hinge?.status.rawValue ?? "none",
             "windows": String(model.app.openWindows.count),
             "models": String(WindowModel.made),
             // Backend resizes per pane ("1:2 3:1"): one per layout change.

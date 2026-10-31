@@ -41,6 +41,8 @@ struct WorkspaceView: View {
     @Environment(WindowModel.self) private var model
     @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The layout's frame in window points: where the fold falls within it.
+    @State private var frame = CGRect.zero
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     #if os(macOS)
@@ -151,27 +153,57 @@ struct WorkspaceView: View {
     /// edge, the terminal's own background family, a 1 pt divider; never a floating glass card)
     /// beside the detail column. Both tab placements share the detail column and its toolbar, so
     /// the toolbar looks the same in either.
+    ///
+    /// On a foldable the fold places them (`FoldLayout`): opened wide or as a book the sidebar is
+    /// the left page, exactly as wide as it, and the tab the right; half-folded as a laptop the
+    /// tab is the upper screen and the deck (`TabletopDeck`) the lower. Nothing is drawn under the
+    /// fold, and the same views move rather than being rebuilt, so the panes keep their state.
     private var regular: some View {
-        let shown = model.isSidebarShown && !model.isEditorFullScreen
-        let width = SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
-        return HStack(spacing: 0) {
-            // Always mounted, laid out at its full width and revealed by one animated width
-            // (Finder, Xcode): inserting it with a transition rebuilt its navigation stack and
-            // toolbar mid-animation, so it slid in, paused, then finished.
-            SidebarColumn(workspace: workspace)
-                .frame(width: width)
-                .frame(width: shown ? width : 0, alignment: .trailing)
-                .clipped()
-                .overlay(alignment: .trailing) {
-                    SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0)
+        let layout = model.foldLayout
+        // Only a fold that leaves room either side splits the window. The window's frame never
+        // depends on what is inside it, so measuring it cannot feed back.
+        let page = layout.leadingPage(from: frame.minX)
+            .flatMap { $0 >= FoldLayout.minimumPage && frame.width - $0 - layout.gutter >= FoldLayout.minimumPage ? $0 : nil }
+        let deck = layout.deckTop(from: frame.minY)
+            .flatMap { $0 >= FoldLayout.minimumDeck && frame.height - $0 - layout.gutter >= FoldLayout.minimumDeck ? $0 : nil }
+        let shown = model.isSidebarShown && !model.isEditorFullScreen && deck == nil
+        let width = page ?? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
+        return VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                // Always mounted, laid out at its full width and revealed by one animated width
+                // (Finder, Xcode): inserting it with a transition rebuilt its navigation stack and
+                // toolbar mid-animation, so it slid in, paused, then finished.
+                SidebarColumn(workspace: workspace)
+                    .frame(width: width)
+                    .frame(width: shown ? width : 0, alignment: .trailing)
+                    .clipped()
+                    .overlay(alignment: .trailing) {
+                        // A page ends at the fold: no divider to drag there.
+                        if page == nil { SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0) }
+                    }
+                    .allowsHitTesting(shown)
+                    .disabled(!shown)
+                    .accessibilityHidden(!shown)
+                if shown, page != nil {
+                    FoldGutter().frame(width: layout.gutter)
                 }
-                .allowsHitTesting(shown)
-                .disabled(!shown)
-                .accessibilityHidden(!shown)
-            NavigationStack {
-                DetailColumn(workspace: workspace)
+                NavigationStack {
+                    DetailColumn(workspace: workspace)
+                }
             }
+            .frame(height: deck)
+            // The keyboard rises over the deck, never the screen above: no reflow as it comes up.
+            .ignoresSafeArea(.keyboard, edges: deck == nil ? [] : .bottom)
+            #if os(iOS)
+            if deck != nil {
+                FoldGutter().frame(height: layout.gutter)
+                TabletopDeck(workspace: workspace)
+                    .frame(maxHeight: .infinity)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            #endif
         }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame = $0 }
         .animation(DS.Motion.sidebar, value: model.isSidebarShown)
         .animation(DS.Motion.panel, value: model.isEditorFullScreen)
         .chromeBackground(DS.Palette.base)
@@ -353,7 +385,9 @@ private struct DetailColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen {
+            // Across a fold each page's header names its tab and the sidebar is the tab list: a
+            // strip would run over the crease.
+            if !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen && !model.foldLayout.isPages {
                 TabBar(workspace: workspace)
                     .chromeContent()
                     .movingTransition(.top)

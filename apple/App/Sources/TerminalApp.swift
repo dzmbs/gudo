@@ -241,12 +241,14 @@ struct WindowContent: View {
                 // changes).
                 GeometryReader { proxy in
                     Color.clear.onChange(of: Double(proxy.size.width), initial: true) { _, width in widthChanged(width) }
-                        // Both sides: a foldable's open inner screen turns Two Columns on.
+                        // Both sides: where a fold crosses the window depends on its shape.
                         .onChange(of: proxy.size, initial: true) { _, size in
                             if model.windowSize != size { model.windowSize = size }
                         }
                 }
             }
+            // The hinge and the fold, in the window's own coordinates.
+            .background { FoldProbe(model: model).ignoresSafeArea() }
             #if DEBUG
             .frame(maxWidth: model.debugWidth.map { CGFloat($0) } ?? .infinity, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
