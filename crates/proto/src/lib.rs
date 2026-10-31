@@ -58,6 +58,8 @@
 //!   see [`peer`].
 //! - Program status (OSC 7501 or `status_set` from any program in a pane) is pushed as
 //!   [`ServerCtl::ProgramStatus`] to clients with [`Caps::PROGRAM_STATUS`]; see [`program`].
+//! - Projects (named, coloured groups of tabs) are pushed as [`ServerCtl::Projects`] to owner
+//!   clients with [`Caps::PROJECTS`], changed with layout ops; see [`project`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -91,6 +93,7 @@ pub mod mp;
 mod msg;
 pub mod peer;
 pub mod program;
+pub mod project;
 pub mod repo;
 mod serde_bytes;
 mod ticket;
@@ -118,6 +121,7 @@ pub use mp::*;
 pub use msg::*;
 pub use peer::*;
 pub use program::*;
+pub use project::*;
 pub use repo::*;
 pub use ticket::{PairingSecret, Ticket, TicketError, TicketExtras, TicketRelays};
 pub use usage::*;

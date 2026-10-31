@@ -464,6 +464,22 @@ impl Core {
         Some(layout)
     }
 
+    /// A session's projects cut down to the tabs `scope` sees, with only the definitions
+    /// those tabs use.
+    pub fn projects_for(&self, session: SessionId, scope: Scope) -> Option<proto::SessionProjects> {
+        let layout = lock(&self.layout);
+        let mut all = layout.projects(session)?;
+        let shown = match scope {
+            Scope::Daemon | Scope::Session(_) => return Some(all),
+            Scope::Tab(t) => Some(t),
+            Scope::Pane(p) => layout.tab_of_pane(p),
+        };
+        let proto::SessionProjects { projects, tabs, .. } = &mut all;
+        tabs.retain(|m| Some(m.tab_id) == shown);
+        projects.retain(|p| tabs.iter().any(|m| m.project == p.id));
+        Some(all)
+    }
+
     pub fn session_of_pane(&self, pane: PaneId) -> Option<SessionId> {
         lock(&self.layout).session_of_pane(pane)
     }
@@ -721,6 +737,37 @@ impl Core {
             LayoutOp::CloseSession { session_id } => {
                 let removed = lock(&self.layout).close_session(session_id).map_err(fail)?;
                 self.after_removal(Some(session_id), removed);
+                OpOutcome::Done
+            }
+            LayoutOp::SetTabProject {
+                tab_id,
+                project,
+                rank,
+            } => {
+                let session = lock(&self.layout)
+                    .set_tab_project(tab_id, project, rank)
+                    .map_err(fail)?;
+                self.layout_changed(session, false);
+                OpOutcome::Done
+            }
+            LayoutOp::PutProject {
+                session_id,
+                project,
+            } => {
+                lock(&self.layout)
+                    .put_project(session_id, project)
+                    .map_err(fail)?;
+                self.layout_changed(session_id, false);
+                OpOutcome::Done
+            }
+            LayoutOp::RemoveProject {
+                session_id,
+                project,
+            } => {
+                lock(&self.layout)
+                    .remove_project(session_id, &project)
+                    .map_err(fail)?;
+                self.layout_changed(session_id, false);
                 OpOutcome::Done
             }
         };

@@ -346,6 +346,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | Caps::APPROVALS
             | Caps::WORKFLOWS
             | Caps::PRESENCE
+            | Caps::PROJECTS
             | if inner.options.askpass {
                 Caps::ASKPASS
             } else {
@@ -667,6 +668,7 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
                 drop(programs);
                 ClientEvent::ProgramStatus { pane_id, status }
             }
+            ServerCtl::Projects(projects) => ClientEvent::Projects { projects },
             ServerCtl::PaneClosed { pane_id } => {
                 lock(&inner.mirrors).remove(&pane_id);
                 lock(&inner.programs).remove(&pane_id);

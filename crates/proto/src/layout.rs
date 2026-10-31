@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::ArtifactId;
 use crate::ids::{PaneId, SessionId, TabId};
+use crate::project::Project;
 
 /// The direction in which a split arranges its two children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -269,6 +270,34 @@ pub enum LayoutOp {
         target: PaneId,
         /// Which side of `target`.
         side: Direction,
+    },
+    /// Puts a tab in a project (or moves it within one by `rank`), or takes it out with
+    /// `None`. The project must already be defined in the tab's session (`Invalid`
+    /// otherwise). Needs [`DaemonFeatures::PROJECTS`](crate::DaemonFeatures::PROJECTS).
+    SetTabProject {
+        /// The tab.
+        tab_id: TabId,
+        /// The project's id, or `None` to ungroup.
+        project: Option<String>,
+        /// Where the tab sorts within the project.
+        rank: i64,
+    },
+    /// Defines or updates a project in a session; ignored (`Done`) when the session's copy
+    /// has a newer `updated`. Needs
+    /// [`DaemonFeatures::PROJECTS`](crate::DaemonFeatures::PROJECTS).
+    PutProject {
+        /// The session.
+        session_id: SessionId,
+        /// The definition.
+        project: Project,
+    },
+    /// Ungroups every tab of a project in a session and drops its definition. Needs
+    /// [`DaemonFeatures::PROJECTS`](crate::DaemonFeatures::PROJECTS).
+    RemoveProject {
+        /// The session.
+        session_id: SessionId,
+        /// The project's id.
+        project: String,
     },
 }
 

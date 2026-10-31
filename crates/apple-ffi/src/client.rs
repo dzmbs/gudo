@@ -176,6 +176,12 @@ pub enum ClientEvent {
         /// The report.
         status: Option<ProgramReport>,
     },
+    /// A session's projects, after each `layout` from daemons with `projects`, on owner
+    /// connections.
+    Projects {
+        /// The projects.
+        projects: crate::types::DaemonProjects,
+    },
     /// Raw output to feed the pane's VT, continuing from the previous event.
     PaneBytes {
         /// The pane.
@@ -347,6 +353,9 @@ impl From<client_core::ClientEvent> for ClientEvent {
             E::ProgramStatus { pane_id, status } => Self::ProgramStatus {
                 pane_id: pane_id.0,
                 status: status.map(Into::into),
+            },
+            E::Projects { projects } => Self::Projects {
+                projects: projects.into(),
             },
             E::PaneBytes { pane_id, seq, data } => Self::PaneBytes {
                 pane_id: pane_id.0,

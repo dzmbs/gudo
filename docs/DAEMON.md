@@ -35,6 +35,16 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   right after its own (`TabCreated`; a tab's only pane is `Invalid`), `MovePane` puts a pane
   beside another of the same session on a side, `MergeTab` puts a whole tab's tree beside a pane
   of another tab and closes that tab. Processes keep running; a tab left empty closes.
+- Projects (offered as `DaemonFeatures::PROJECTS`): named, coloured groups of tabs that a
+  client merges across hosts by project id. Each session stores the definitions its tabs use
+  (`Project { id, name, color 0–7, order, updated }`) and each tab's membership (`TabProject {
+  tab_id, project, rank }`), persisted in `layout.json`. `PutProject` upserts a definition
+  (last writer wins on `updated`; an older one is `Done` with no change), `SetTabProject` puts a
+  tab in a project defined in its session (else `Invalid`), moves it by `rank` or ungroups it
+  with `None`, `RemoveProject` ungroups every tab of it and drops it. A definition is dropped
+  when its last tab leaves, closes or merges away; a broken-out pane's new tab is ungrouped.
+  Owner-only (§6.3). Clients with `Caps::PROJECTS` and the owner role get `ServerCtl::Projects`
+  (same revision) right after every `LayoutChanged`, cut down to the tabs their scope shows.
 - The daemon is the source of truth. Every change bumps the session's `revision` and is
   view is the truth"). A client applies a layout only if its revision is not older than the
   one it has. `OpResult` is sent after the requesting client's `LayoutChanged`.
@@ -1103,6 +1113,8 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Op`: `Split`, `BreakPane`, `MovePane`, `MergeTab` | driver | the (target) pane's whole session in scope |
 | `Op`: `NewTab`, `RenameSession` | driver | session in scope |
 | `Op`: `ClosePane`, `CloseTab`, `CloseSession` | **owner** | in scope |
+| `Op`: `SetTabProject` | **owner** | tab in scope |
+| `Op`: `PutProject`, `RemoveProject` | **owner** | session in scope |
 | `Op`: `CreateSession`; `Attach` that would create a session | **owner** | daemon |
 | `Workspace`: `ListPorts`, `AttentionList`, `AttentionSeen` | any role | answers filtered to scope |
 | `Workspace`: `ListTurns`, `TurnDiff` | prompter, driver or approver | pane in scope |

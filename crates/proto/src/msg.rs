@@ -687,6 +687,10 @@ pub enum ServerCtl {
     /// A new owner device just paired, to owner devices with [`Caps::DEVICE_ALERTS`], so a
     /// pairing the owner did not make (a phished ticket) is noticed and can be revoked.
     DevicePaired(crate::mp::DeviceInfo),
+    /// A session's projects, right after each [`ServerCtl::LayoutChanged`], to clients with
+    /// [`Caps::PROJECTS`] and the owner role, filtered to the tabs they see (see
+    /// [`crate::project`]).
+    Projects(crate::project::SessionProjects),
 }
 
 /// A successful [`ClientCtl::Attach`].

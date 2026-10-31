@@ -124,6 +124,11 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
         O::CloseTab { tab_id } => (Need::Own, Target::Tab(*tab_id)),
         O::CloseSession { session_id } => (Need::Own, Target::Session(*session_id)),
         O::CreateSession { .. } => (Need::Own, Target::Daemon),
+        // Projects are the owner's own organisation; guests neither see nor change them.
+        O::SetTabProject { tab_id, .. } => (Need::Own, Target::Tab(*tab_id)),
+        O::PutProject { session_id, .. } | O::RemoveProject { session_id, .. } => {
+            (Need::Own, Target::Session(*session_id))
+        }
     }
 }
 

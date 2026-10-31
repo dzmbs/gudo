@@ -7,8 +7,8 @@
 //! them.
 
 use proto::{
-    Axis, Direction, LayoutNode, OpError, PaneId, SessionId, SessionLayout, SessionSummary, TabId,
-    TabLayout,
+    Axis, Direction, LayoutNode, OpError, PaneId, Project, SessionId, SessionLayout,
+    SessionProjects, SessionSummary, TabId, TabLayout, TabProject,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,12 @@ pub(crate) struct Session {
     pub revision: u64,
     pub active_tab: Option<TabId>,
     pub tabs: Vec<TabLayout>,
+    /// Definitions of the projects `tab_projects` uses.
+    #[serde(default)]
+    pub projects: Vec<Project>,
+    /// Which tabs belong to which project.
+    #[serde(default)]
+    pub tab_projects: Vec<TabProject>,
 }
 
 impl Session {
@@ -38,6 +44,27 @@ impl Session {
 
     fn panes(&self) -> impl Iterator<Item = PaneId> + '_ {
         self.tabs.iter().flat_map(|t| leaves(&t.root))
+    }
+
+    /// Takes `tab` out of its project, dropping the definition once no tab uses it. Only
+    /// the project left is dropped: others may just have been defined for tabs to join next.
+    fn leave_project(&mut self, tab: TabId) {
+        let Some(i) = self.tab_projects.iter().position(|m| m.tab_id == tab) else {
+            return;
+        };
+        let left = self.tab_projects.remove(i).project;
+        if !self.tab_projects.iter().any(|m| m.project == left) {
+            self.projects.retain(|p| p.id != left);
+        }
+    }
+
+    fn to_projects(&self) -> SessionProjects {
+        SessionProjects {
+            session_id: self.id,
+            revision: self.revision,
+            projects: self.projects.clone(),
+            tabs: self.tab_projects.clone(),
+        }
     }
 }
 
@@ -232,6 +259,8 @@ impl Layout {
             revision: 1,
             active_tab: Some(tab_id),
             tabs: vec![tab],
+            projects: Vec::new(),
+            tab_projects: Vec::new(),
         });
         self.touch(id);
         Ok((id, tab_id))
@@ -296,6 +325,7 @@ impl Layout {
             // Like browsers: the tab that slides into the closed one's place.
             s.active_tab = Some(s.tabs[ti.min(s.tabs.len() - 1)].tab_id);
         }
+        s.leave_project(tab.tab_id);
         s.revision += 1;
         Removed {
             panes,
@@ -496,6 +526,7 @@ impl Layout {
                 .get(ti.min(s.tabs.len().saturating_sub(1)))
                 .map(|t| t.tab_id);
         }
+        s.leave_project(tab.tab_id);
         tab
     }
 
@@ -535,6 +566,83 @@ impl Layout {
         tab.zoomed = None;
         s.active_tab = Some(tab.tab_id);
         s.revision += 1;
+    }
+}
+
+impl Layout {
+    /// Puts `tab` in `project` at `rank`, or ungroups it with `None`. The project must be
+    /// defined in the tab's session.
+    pub fn set_tab_project(
+        &mut self,
+        tab: TabId,
+        project: Option<String>,
+        rank: i64,
+    ) -> OpResult<SessionId> {
+        let (si, _) = self.locate_tab(tab).ok_or(OpError::NotFound)?;
+        let s = &mut self.sessions[si];
+        let new = match project {
+            Some(project) if s.projects.iter().any(|p| p.id == project) => Some(TabProject {
+                tab_id: tab,
+                project,
+                rank,
+            }),
+            Some(_) => return Err(OpError::Invalid),
+            None => None,
+        };
+        if s.tab_projects.iter().find(|m| m.tab_id == tab) == new.as_ref() {
+            return Ok(s.id);
+        }
+        match new {
+            // Moving within the same project keeps its definition.
+            Some(m) => match s.tab_projects.iter_mut().find(|o| o.tab_id == tab) {
+                Some(old) if old.project == m.project => *old = m,
+                _ => {
+                    s.leave_project(tab);
+                    s.tab_projects.push(m);
+                }
+            },
+            None => s.leave_project(tab),
+        }
+        s.revision += 1;
+        Ok(s.id)
+    }
+
+    /// Defines or updates `project` in `session`. An older `updated` than the stored one, or
+    /// an identical definition, changes nothing.
+    pub fn put_project(&mut self, session: SessionId, project: Project) -> OpResult<()> {
+        if !project.is_valid() {
+            return Err(OpError::Invalid);
+        }
+        let si = self.session_index(session)?;
+        let s = &mut self.sessions[si];
+        let full = s.projects.len() >= proto::MAX_PROJECTS_PER_SESSION;
+        match s.projects.iter_mut().find(|p| p.id == project.id) {
+            Some(stored) if stored.updated > project.updated || *stored == project => {
+                return Ok(());
+            }
+            Some(stored) => *stored = project,
+            None if full => return Err(OpError::Invalid),
+            None => s.projects.push(project),
+        }
+        s.revision += 1;
+        Ok(())
+    }
+
+    /// Ungroups every tab of `project` in `session` and drops its definition.
+    pub fn remove_project(&mut self, session: SessionId, project: &str) -> OpResult<()> {
+        let si = self.session_index(session)?;
+        let s = &mut self.sessions[si];
+        let before = (s.projects.len(), s.tab_projects.len());
+        s.projects.retain(|p| p.id != project);
+        s.tab_projects.retain(|m| m.project != project);
+        if (s.projects.len(), s.tab_projects.len()) != before {
+            s.revision += 1;
+        }
+        Ok(())
+    }
+
+    pub fn projects(&self, session: SessionId) -> Option<SessionProjects> {
+        self.session(session).map(Session::to_projects)
     }
 }
 
@@ -907,5 +1015,190 @@ mod tests {
         );
         assert_eq!(l.merge_tab(t1, p1, Direction::Down), Err(OpError::Invalid));
         assert_eq!(l.all_panes().len(), 4, "no pane was dropped");
+    }
+
+    fn project(id: &str, updated: u64) -> Project {
+        Project {
+            id: id.into(),
+            name: id.to_uppercase(),
+            color: 1,
+            order: 0,
+            updated: proto::UnixMillis(updated),
+        }
+    }
+
+    fn member(l: &Layout, s: SessionId, tab: TabId) -> Option<(String, i64)> {
+        let p = l.projects(s).unwrap();
+        let m = p.tabs.iter().find(|m| m.tab_id == tab)?;
+        Some((m.project.clone(), m.rank))
+    }
+
+    fn defined(l: &Layout, s: SessionId) -> Vec<String> {
+        l.projects(s)
+            .unwrap()
+            .projects
+            .into_iter()
+            .map(|p| p.id)
+            .collect()
+    }
+
+    fn revision(l: &Layout, s: SessionId) -> u64 {
+        l.session(s).unwrap().revision
+    }
+
+    #[test]
+    fn tabs_join_move_within_and_leave_projects() {
+        let mut l = Layout::default();
+        let (s, t1, _) = session_with(&mut l);
+        assert_eq!(
+            l.set_tab_project(t1, Some("web".into()), 0),
+            Err(OpError::Invalid),
+            "an undefined project"
+        );
+        l.put_project(s, project("web", 1)).unwrap();
+        l.put_project(s, project("api", 1)).unwrap();
+        let r = revision(&l, s);
+        l.set_tab_project(t1, Some("web".into()), 3).unwrap();
+        assert_eq!(member(&l, s, t1), Some(("web".into(), 3)));
+        assert_eq!(revision(&l, s), r + 1);
+        assert_eq!(defined(&l, s), ["web", "api"], "api awaits its tabs");
+
+        l.set_tab_project(t1, Some("web".into()), 3).unwrap();
+        assert_eq!(revision(&l, s), r + 1, "no change, no bump");
+        l.set_tab_project(t1, Some("web".into()), 7).unwrap();
+        assert_eq!(member(&l, s, t1), Some(("web".into(), 7)));
+        assert_eq!(defined(&l, s), ["web", "api"]);
+
+        // Moving to another project drops the one left empty.
+        l.set_tab_project(t1, Some("api".into()), 0).unwrap();
+        assert_eq!(defined(&l, s), ["api"]);
+        l.set_tab_project(t1, None, 0).unwrap();
+        assert_eq!(member(&l, s, t1), None);
+        assert!(defined(&l, s).is_empty());
+        let r = revision(&l, s);
+        l.set_tab_project(t1, None, 0).unwrap();
+        assert_eq!(revision(&l, s), r);
+        assert_eq!(
+            l.set_tab_project(TabId(99), None, 0),
+            Err(OpError::NotFound)
+        );
+    }
+
+    #[test]
+    fn newer_project_definitions_win() {
+        let mut l = Layout::default();
+        let (s, _, _) = session_with(&mut l);
+        l.put_project(s, project("web", 5)).unwrap();
+        let r = revision(&l, s);
+        let mut older = project("web", 4);
+        older.name = "Old".into();
+        l.put_project(s, older).unwrap();
+        l.put_project(s, project("web", 5)).unwrap();
+        assert_eq!(
+            revision(&l, s),
+            r,
+            "an older or identical definition is ignored"
+        );
+        let mut newer = project("web", 6);
+        newer.color = 7;
+        l.put_project(s, newer.clone()).unwrap();
+        assert_eq!(l.projects(s).unwrap().projects, [newer]);
+        assert_eq!(revision(&l, s), r + 1);
+    }
+
+    #[test]
+    fn invalid_projects_are_refused() {
+        let mut l = Layout::default();
+        let (s, _, _) = session_with(&mut l);
+        let long = "x".repeat(proto::MAX_PROJECT_ID_LEN + 1);
+        for bad in [
+            project("", 1),
+            project(&long, 1),
+            Project {
+                color: proto::MAX_PROJECT_COLOR + 1,
+                ..project("web", 1)
+            },
+            Project {
+                name: "n".repeat(proto::MAX_PROJECT_NAME_LEN + 1),
+                ..project("web", 1)
+            },
+        ] {
+            assert_eq!(l.put_project(s, bad), Err(OpError::Invalid));
+        }
+        for i in 0..proto::MAX_PROJECTS_PER_SESSION {
+            l.put_project(s, project(&i.to_string(), 1)).unwrap();
+        }
+        assert_eq!(
+            l.put_project(s, project("one-more", 1)),
+            Err(OpError::Invalid)
+        );
+        assert_eq!(
+            l.put_project(SessionId(99), project("web", 1)),
+            Err(OpError::NotFound)
+        );
+    }
+
+    #[test]
+    fn removing_a_project_ungroups_its_tabs() {
+        let mut l = Layout::default();
+        let (s, t1, _) = session_with(&mut l);
+        let p2 = l.alloc_pane();
+        let t2 = l.new_tab(s, String::new(), p2).unwrap();
+        l.put_project(s, project("web", 1)).unwrap();
+        l.set_tab_project(t1, Some("web".into()), 0).unwrap();
+        l.set_tab_project(t2, Some("web".into()), 1).unwrap();
+        let r = revision(&l, s);
+        l.remove_project(s, "web").unwrap();
+        assert_eq!(l.projects(s).unwrap().tabs, []);
+        assert!(defined(&l, s).is_empty());
+        assert_eq!(revision(&l, s), r + 1);
+        l.remove_project(s, "web").unwrap();
+        assert_eq!(revision(&l, s), r + 1, "nothing left to remove");
+    }
+
+    #[test]
+    fn projects_follow_tabs_that_close_merge_or_break() {
+        let mut l = Layout::default();
+        let (s, t1, p1) = session_with(&mut l);
+        let p2 = l.alloc_pane();
+        let t2 = l.new_tab(s, String::new(), p2).unwrap();
+        let p3 = l.alloc_pane();
+        let t3 = l.new_tab(s, String::new(), p3).unwrap();
+        l.put_project(s, project("a", 1)).unwrap();
+        l.put_project(s, project("b", 1)).unwrap();
+        l.set_tab_project(t1, Some("a".into()), 0).unwrap();
+        l.set_tab_project(t2, Some("a".into()), 1).unwrap();
+        l.set_tab_project(t3, Some("b".into()), 0).unwrap();
+
+        // Merging t3 away drops its membership and its now unused project.
+        l.merge_tab(t3, p1, Direction::Right).unwrap();
+        assert_eq!(member(&l, s, t3), None);
+        assert_eq!(defined(&l, s), ["a"]);
+
+        // A pane broken out of a grouped tab starts ungrouped.
+        let (_, t4) = l.break_pane(p3).unwrap();
+        assert_eq!(member(&l, s, t4), None);
+        assert_eq!(member(&l, s, t1), Some(("a".into(), 0)));
+
+        // Closing the last pane of t2 closes the tab; "a" lives on in t1.
+        l.close_pane(p2).unwrap();
+        assert_eq!(member(&l, s, t2), None);
+        assert_eq!(defined(&l, s), ["a"]);
+        l.close_tab(t1).unwrap();
+        assert!(defined(&l, s).is_empty());
+        assert_eq!(l.projects(s).unwrap().tabs, []);
+    }
+
+    #[test]
+    fn layouts_saved_before_projects_still_load() {
+        let mut l = Layout::default();
+        session_with(&mut l);
+        let mut json = serde_json::to_value(&l).unwrap();
+        for s in json["sessions"].as_array_mut().unwrap() {
+            let s = s.as_object_mut().unwrap();
+            assert!(s.remove("projects").is_some() && s.remove("tab_projects").is_some());
+        }
+        let loaded: Layout = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded, l);
     }
 }
