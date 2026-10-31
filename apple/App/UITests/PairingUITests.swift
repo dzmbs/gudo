@@ -81,7 +81,8 @@ final class PairingUITests: XCTestCase {
         let ticketTab = app.buttons["Ticket"]
         XCTAssertTrue(ticketTab.waitForExistence(timeout: 10), "the Ticket method")
         ticketTab.tap()
-        let field = app.textViews["pairing-ticket"].firstMatch
+        // A multi-line field: a text view or a text field, by iOS version.
+        let field = element(app, "pairing-ticket")
         XCTAssertTrue(field.waitForExistence(timeout: 10), "the ticket field")
         field.tap()
         field.typeText(ticket)
