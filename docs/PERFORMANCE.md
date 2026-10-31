@@ -79,8 +79,12 @@ samples are one `tcgetpgrp` per pane.
 The busy numbers did not move (the run-to-run noise is ±50 points). Almost all of this is the two
 floods (`yes`, `cat` of 64 MB in a loop) going through libghostty-vt on the daemon at about 70 MB/s
 each. A macOS PTY master hands out at most 1 KiB per read, and waiting to batch reads only throttles
-the writer: measured, a 0.5 ms pause per wake cut `yes` from 77 MB/s to 1.3 MB/s. So every KiB costs
-one wakeup. The RSS drop (95 → 72 MB) is real: no per-pane process reads are cached. In a profile of the busy run, parsing, printing and scrollback page growth inside
+the writer: measured, a 0.5 ms pause per wake cut `yes` from 77 MB/s to 1.3 MB/s. So every KiB used to cost
+one poll sleep and one wakeup. Ghostty measured the same limit and bridges the gaps instead: after a full read it
+retries the read a few times before sleeping. Doing the same (16 retries) cut the context switches
+spent draining a 64 MB `cat` from 22–44 k to 2–13 k, at equal or lower CPU (0.3–0.8 CPU s either
+way; `drain.sh`, 3 runs each). In the busy run the daemon's context switches fell from 51 k/s to 18 k/s,
+at the same 176 % CPU. In a profile of the busy run, parsing, printing and scrollback page growth inside
 libghostty are most of the active samples. The rest was per-chunk work in the daemon:
 - The OSC scanner stepped through every byte. It now jumps to the next ESC with `memchr`; it had been about 7 % of active samples.
 - The PTY thread called `tcgetattr` after every read. Under a stream it now reads the modes at most every 25 ms; this had been about 5 %.
@@ -96,6 +100,10 @@ libghostty are most of the active samples. The rest was per-chunk work in the da
 | 20 Claude + 60 idle | none | 74 MB, 15.1 %, 2.4 k | 72 MB, 5.6 %, 2.0 k |
 | 20 Claude + 60 idle | one | 77 MB, 14.1 %, 1.6 k | 76 MB, 10.7 %, 1.6 k |
 
+A `sample(1)` profile with 10 Claude sessions and a client attached (1.5 % CPU) shows nothing hot:
+the daemon's threads sit in `poll`/`kevent`, and the top Rust frame is the echo-state update with 21
+samples in 15 s.
+
 The daemon is not the bottleneck for agent work. Twenty concurrent Claude Code sessions cost it
 about 5–11 % of one core, and each agent's own Node process costs far more. Agent panes keep
 their 500 ms tick on purpose: the state arbiter's timers and agent-exit detection need it. The
@@ -107,6 +115,9 @@ Ollama, so running it would load the shared machine far more than the thing bein
 
 ### Regression guards
 
+- `daemon` `terminal::unchanged_pane_metadata_is_not_pushed_again`: setting the same title five
+  times pushes nothing. Before, every title set or agent event re-sent the pane's metadata to every client,
+  and each push re-renders the app's sidebar.
 - `daemon` `core::tests::idle_panes_stop_ticking`: three quiet panes stop ticking within the
   activity window, and output makes a pane tick again. It fails if pane tasks go back to a fixed timer.
 - `pty` `echo_state::refresh_echo_reads_a_silent_mode_change`: a quiet terminal no longer polls its
@@ -143,6 +154,8 @@ Guard: `SharedFontGridTests` checks the grid is shared and freed with its last s
 | Every daemon workspace re-read every pane's metadata once a second, forever, also in the background | Follows the daemon's metadata through Observation, coalesced to at most 2 refreshes/s. No timer. |
 | Every SSH pane ran a 250 ms timer for echo inference for as long as it was open | The timer runs only while keystrokes wait for their echo |
 | The agent `Spinner` was a `TimelineView(.animation)`: every working agent's indicator rebuilt its view on every frame (120 Hz on ProMotion) | A repeating rotation animation. No body evaluation per frame. |
+| The daemon re-sent a pane's metadata on every title set or agent event, and the app assigned it even when equal, which invalidated every view reading `meta` | Sent and assigned only when it changed |
+| Every terminal's display link asked for 60–120 Hz | 120 Hz only for the focused terminal; others stream output at up to 60 Hz. Every link still pauses when nothing changes. |
 
 ## 4. What is left (estimated gains)
 
@@ -159,6 +172,10 @@ App (not measured end to end, because the Mac app is not launched in the foregro
   in-process numbers above cover memory per pane only.
 - **Client terminal scrollback.** Each pane keeps a 10 MB scrollback cap. Lowering it on iOS
   (1–2 MB) and compacting background panes would save up to about 8 MB per busy pane.
+- **Ghostty-style gather/parse split.** Ghostty reads on one thread and parses 64 KiB batches on
+  another, one lock per batch. With bridging in place, our remaining flood cost is parsing itself
+  (libghostty, same code). A split would move it off the PTY thread but not shrink it. Worth it only if focused-pane
+  latency during floods shows up in a measurement.
 - **The renderer's idle tick does work before it can say "clean".** `renderIfDirty` runs the
   inline-image, gutter and kitty closures (allocating arrays) before checking dirty flags. Checking flags first would make
   every idle display-link tick near free.
@@ -168,3 +185,51 @@ App (not measured end to end, because the Mac app is not launched in the foregro
   but they scale with tabs.
 - **Keystroke latency and frame pacing under load** were not measured. This needs instrumentation in the
   client (input → echo applied → frame presented).
+
+## 5. Approach and references
+
+The rules followed: delete work before optimizing it; every change is backed by a measurement and
+a known technique; no speculative caches, custom allocators or thread pools.
+
+What we took, and from where:
+- **Wake only on events, never on timers.** Apple's energy guide says to replace polling with dispatch sources
+  and to give the remaining timers tolerance
+  ([Energy Efficiency Guide: Timers](https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/Timers.html)).
+  Ghostty runs its display link "only while the surface is visible and has something to draw"
+  ([DisplayLink.zig](https://github.com/ghostty-org/ghostty/blob/main/src/renderer/DisplayLink.zig)).
+  This is why pane ticks, the sampler, the port scan and the multiplayer tick sleep until something happens.
+- **Bridge the 1 KiB macOS PTY reads.** Ghostty: "the kernel tty output queue caps every read on the master at 1 KB";
+  its 8–16 immediate retries catch "over 90 % of the gaps" ([Exec.zig](https://github.com/ghostty-org/ghostty/blob/main/src/termio/Exec.zig)).
+  We adopted the retries alone.
+- **Share glyph atlases.** foot shares fonts and glyph caches across windows in server mode
+  ([foot](https://codeberg.org/dnkl/foot)). Zed keeps one long-lived glyph atlas
+  ([Leveraging Rust and the GPU to render user interfaces at 120 FPS](https://zed.dev/blog/videogame)). Windows Terminal's
+  AtlasEngine shows why an atlas must not be per view and grow-only
+  ([PR #11623](https://github.com/microsoft/terminal/pull/11623)).
+- **GPU memory is app memory.** On Apple silicon the footprint includes GPU objects, and jetsam
+  counts it ([WWDC22 10106](https://developer.apple.com/videos/play/wwdc2022/10106/),
+  [Reducing your app's memory use](https://developer.apple.com/documentation/xcode/reducing-your-app-s-memory-use)).
+  So surfaces off screen drop their layer and drawables
+  ([maximumDrawableCount](https://developer.apple.com/documentation/quartzcore/cametallayer/maximumdrawablecount)).
+- **Frame rate follows need.** "The fastest animation sets the display rate"; dropping from 60 to 30 fps can save up to 20 %
+  of battery drain ([WWDC22 10083](https://developer.apple.com/videos/play/wwdc2022/10083/),
+  [ProMotion](https://developer.apple.com/documentation/quartzcore/optimizing-iphone-and-ipad-apps-to-support-promotion-displays)).
+  Hence 120 Hz only for the focused terminal, and no per-frame `TimelineView` for spinners.
+- **Observation granularity.** An equal assignment to an `@Observable` property still invalidates its readers, and
+  per-item models beat one big dictionary ([WWDC25 306](https://developer.apple.com/videos/play/wwdc2025/306/)).
+  Hence the equality guards on pane metadata.
+
+Deliberately not adopted, and why:
+- **kitty's fixed `repaint_delay` / `input_delay` timers** ([kitty.conf](https://sw.kovidgoyal.net/kitty/conf/)).
+  They are timers, so they wake the CPU. The display link plus dirty tracking already coalesces renders to the screen's rate
+  and costs nothing when idle.
+- **Buffer-age partial redraw** (Alacritty, [PR #5863](https://github.com/alacritty/alacritty/pull/5863)).
+  `CAMetalLayer` exposes no buffer age, and a full instanced redraw of a pane is a fraction of
+  Our dirty-row cache already skips rebuilding unchanged rows.
+- **`displaySyncEnabled = false`** ([docs](https://developer.apple.com/documentation/quartzcore/cametallayer/displaysyncenabled)).
+  It tears.
+- **One thread multiplexing every pane** (foot server mode). foot itself warns that a busy window starves the others.
+  We keep one PTY thread per pane, and those threads cost nothing while idle.
+- **Raising the PTY output speed to get bigger reads.** Measured: `B230400` left reads at about 1 KiB on macOS 26.
+- **Purgeable atlases and heaps** ([setPurgeableState](https://developer.apple.com/documentation/metal/mtlresource/setpurgeablestate(_:))).
+  With one shared atlas per font size, the atlas is too small to be worth the complexity.
