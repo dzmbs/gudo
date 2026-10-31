@@ -3,9 +3,12 @@ import PaneLayout
 import UnnamedCore
 import XCTest
 @testable import App
+#if os(iOS)
+import UIKit
+#endif
 
 /// Files, Changes, Ports and Replays open as leaves beside the focused pane on the Mac: asked
-/// again, the open leaf comes forward instead of a second one.
+/// again, the open leaf comes forward instead of a second one. A phone keeps sheets.
 @MainActor
 final class ToolLeavesTests: XCTestCase {
     func testAToolOpensBesideThePaneAndIsReused() throws {
@@ -16,6 +19,15 @@ final class ToolLeavesTests: XCTestCase {
         let id = model.composites.make(fromHost: "h1", tab: session.tabs[0])
         model.activeMixedTab = id
 
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            // A phone keeps sheets: a split has no room there.
+            model.sheet = .diff
+            XCTAssertEqual(model.sheet, .diff)
+            XCTAssertEqual(model.activeMixed?.leaves.count, 2)
+            return
+        }
+        #endif
         model.sheet = .diff
         XCTAssertNil(model.sheet, "no sheet: a leaf")
         let tab = try XCTUnwrap(model.activeMixed)
