@@ -205,6 +205,18 @@ import Testing
         #expect(fonts.grayscale.size > 512)
     }
 
+    /// Re-applying the same appearance (a workspace pushes it to every pane) costs no frame.
+    @Test func equalAppearanceIsFree() throws {
+        let terminal = Terminal(cols: 20, rows: 4) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 12)
+        surface.layout(size: CGSize(width: 300, height: 100), scale: 2)
+        terminal.write(Array("hello".utf8))
+        #expect(surface.renderIfDirty(offscreen: true))
+        let same = surface.appearance
+        surface.appearance = same
+        #expect(!surface.renderIfDirty(offscreen: true))
+    }
+
     /// Endless distinct clusters (random combining marks) and glyphless codepoints keep the
     /// lookup caches bounded.
     @Test func lookupCachesStayBounded() {

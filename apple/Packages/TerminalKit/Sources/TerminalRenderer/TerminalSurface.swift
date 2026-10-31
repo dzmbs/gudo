@@ -57,6 +57,8 @@ public final class TerminalSurface {
 
     public var appearance: TerminalAppearance {
         didSet {
+            // An equal assignment would still throw away every cached row.
+            guard appearance != oldValue else { return }
             builder.style = Self.frameStyle(appearance)
             if appearance.background != oldValue.background { applyBackground() }
             if appearance.terminalConfiguration != oldValue.terminalConfiguration {
