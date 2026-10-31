@@ -170,3 +170,51 @@ interactive stream. Shell-integration marks (OSC 133) are trusted only for displ
   Ghostty)?
 - Should a guest with input rights make a pane's output untrusted for the owner's agents, for
   example by marking such reads in `source`?
+
+## Validation
+
+Exploit tests that perform each attack against the real code. Every fix was mutation-checked:
+with the fix removed or weakened, its test fails.
+
+- **No echoback.** `tests/it/hostile_output::hostile_queries_type_nothing_into_the_shell`
+  prints title, DECRQSS, XTGETTCAP, colour (OSC 4/10/11), clipboard (OSC 52/5522), DA1-3,
+  DSR, XTVERSION, kitty keyboard, DECRQM, window reports, DECRQCRA, ENQ, kitty file and
+  bad-format queries, and raw 8-bit C1 forms, all carrying a marker, in a real daemon pane. It
+  then reads what reached the shell's input. The marker, CR, LF and ^C/^U/^W/^Z/^D never
+  appear, while each query family is shown to be answered. The app's terminal (local panes)
+  has the same test: `HostileOutputTests.queriesNeverEchoProgramData`, with the unit pin
+  `pane::tests::queries_never_echo_program_data`. Ghostty's own defaults can't be
+  mutation-checked; the test shows each query family is live.
+- **Agent impersonation.** `program_status::printed_text_cannot_pose_as_an_agent` tries
+  `claude-code`, `codex`, `claude`, `Claude-Code`, `CODEX` and `codex-cli`. Before this pass,
+  `claude` and `CODEX` got through. `agent::tests::agent_app_names_are_recognised` covers the
+  same names.
+- **Hidden text for agents.**
+  - `output::tests::hidden_text_and_escapes_never_reach_agents` covers tag characters, bidi
+    and OSC 8.
+  - `output::tests::invisible_carriers_never_reach_agents` covers variation-selector
+    smuggling, fillers and format marks, which reached agents before this pass.
+- **Fences.** `term_tools::tests::printed_fences_stay_inside_the_output`.
+- **Titles, directories, command lines.**
+  - In the daemon: `osc::tests::titles_and_directories_print_as_they_are` and
+    `commands::tests::forged_command_lines_and_directories_print_as_they_are`.
+  - In the app: `HostileOutputTests.titlesPrintAsTheyAre` and
+    `directoriesThatDoNotPrintAreIgnored`. Before this pass the app showed raw titles.
+  - Status messages: `tests/it/term`, the `status_set` hostile message.
+- **Approval summaries.** `hook::tests::summarizes_tool_input`: a benign first line can no
+  longer hide the rest.
+- **Paste.** `ghostty_vt::input::tests::pastes_cannot_escape_the_bracket` and
+  `HostileOutputTests.pastesCannotEscapeTheBracket` (a confirmed paste too). ESC[201~, ^C and
+  the other controls are replaced. U+009B stays a UTF-8 character, never a lone 8-bit CSI.
+- **Links.**
+  - Mixed-case `javascript:`/`data:`: `LinkSafetyTests.disguisedScriptSchemesNeverOpen`.
+    Leading whitespace, zero-width and control prefixes and percent-encoded schemes fail to
+    parse and are refused.
+  - Labels: `LinkTests.hyperlinkLabelIsItsCells`, `LinkLabelTests.hiddenCellsAreNotPartOfWhatWasSeen`.
+  - Local files: `filesThatInstallOrRunWebContentAreNotOpened` (about 30 names, with
+    symlinks, case and trailing-dot variants) and
+    `localFilesThatWouldRunAreNotOpened`.
+  - Look-alike and `user@` hosts: `confirmationsNameTheRealHost`.
+- **Replay import/export.** `BrowserReplayTests`.
+
+Not validated here: the image decode-bomb checks. A separate branch still works on them.
