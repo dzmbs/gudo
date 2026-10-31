@@ -100,7 +100,7 @@ decision signatures, a signed relay request (the Worker verifies it) and RFC 918
 An approval notification carries `action.token`: `postcard(ActionToken { v: 2, daemon,
 device, pane, request, approve option, deny option, item, expires, subject }) ||
 Ed25519(daemon, "push-action-token/v1\0" || postcard)`. It is bound to the one device the
-payload was sealed for and expires after an hour (`push.action_ttl`). `subject` is
+payload was sealed for and expires after 15 minutes (`push.action_ttl`). `subject` is
 `push::request_subject` (SHA-256 over the agent's own request id, the tool and the summary the
 notification showed); before applying a decision the daemon recomputes it for the open request
 and checks the pane, so a stale or replayed token can never decide another or newer request.

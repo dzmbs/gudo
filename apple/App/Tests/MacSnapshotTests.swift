@@ -368,6 +368,25 @@ final class MacSnapshotTests: XCTestCase {
         try await settings("settings")
         try await settings("settings-theme", SettingsNavigation(path: [.theme]))
         try await settings("settings-acknowledgements", SettingsNavigation(pane: .about, path: [.acknowledgements]))
+        try await settings("settings-privacy", SettingsNavigation(pane: .privacy))
+    }
+
+    /// App Lock's screen, as it covers a locked window.
+    func testAppLockScreen() async throws {
+        struct Owner: AppLockAuthenticator {
+            func method() -> AppLockMethod? { .touchID }
+            func authenticate(reason: String) async -> AppLockAuthResult { .cancelled }
+        }
+        let suite = "app-lock-snapshot"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: AppLock.enabledKey)
+        let lock = AppLock(defaults: defaults, authenticator: Owner())
+        guard wanted("app-lock") else { return }
+        let window = makeWindow(AppLockScreen(lock: lock, prompts: false), size: CGSize(width: 1180, height: 760))
+        await pump(1)
+        try capture(window, "app-lock")
+        window.close()
     }
 
     private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation()) async throws {

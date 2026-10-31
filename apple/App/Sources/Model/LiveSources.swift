@@ -99,6 +99,7 @@ final class LiveHostDirectory: HostDirectory {
         guard id != Self.localId else { return }
         app.hosts.remove(id)
         window?.forgetHost(id)
+        Task { await DevServerRouting.shared.forgetHost(id) }
     }
 
     func togglePin(_ id: HostSummary.ID) {

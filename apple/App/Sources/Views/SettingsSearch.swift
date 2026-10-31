@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, font, cursor, splits, links, browser, keyboard, passwords, voice, notifications, bell, agents, agentTools, git, network, thisMac, about
+    case appearance, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, agents, agentTools, git, network, thisMac, about
 
     var title: String {
         switch self {
@@ -36,6 +36,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .links: "Links"
         case .browser: "Browser"
         case .keyboard: "Keyboard"
+        case .appLock: "App Lock"
         case .passwords: "Passwords"
         case .voice: "Voice"
         case .notifications: "Notifications"
@@ -53,7 +54,8 @@ nonisolated enum SettingsSection: String, Sendable {
     var pane: SettingsPane {
         switch self {
         case .appearance: .appearance
-        case .font, .cursor, .splits, .links, .passwords: .terminal
+        case .font, .cursor, .splits, .links: .terminal
+        case .appLock, .passwords: .privacy
         case .browser: .browser
         case .keyboard, .voice: .keyboard
         case .notifications, .bell: .notifications
@@ -82,6 +84,8 @@ enum SettingsIndex {
             .init(id: "unfocused-split-opacity", title: "Unfocused Pane Opacity", key: "unfocused-split-opacity", section: .splits, synonyms: ["dim", "split", "fade"]),
             .init(id: "resize-overlay", title: "Size Overlay", key: "resize-overlay", section: .splits, synonyms: ["resize", "columns", "rows"]),
             .init(id: "macos-option-as-alt", title: "Option Sends Meta", key: "macos-option-as-alt", section: .keyboard, synonyms: ["alt", "meta", "option", "esc"]),
+            .init(id: "app-lock", title: "Require Face ID", section: .appLock, synonyms: ["face id", "touch id", "optic id", "passcode", "password", "lock", "privacy", "security"]),
+            .init(id: "app-lock-grace", title: "Lock", section: .appLock, synonyms: ["lock", "background", "timeout", "minutes", "immediately"]),
             .init(id: "saved-passwords", title: "Saved Passwords", section: .passwords, synonyms: ["sudo", "ssh", "askpass", "keychain", "forget"]),
             .init(id: "dictation", title: "Dictation", section: .voice, synonyms: ["voice", "speech", "microphone", "language"]),
             .init(id: "notify-approvals", title: "Approval Requests", section: .notifications, synonyms: ["notification", "approve", "deny", "push"]),

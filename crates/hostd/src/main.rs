@@ -5,6 +5,8 @@
 //! unnamed-hostd pair                print a one-time pairing ticket (text + QR)
 //! unnamed-hostd pair --json --wait 30   the same as JSON, once the daemon is up
 //! unnamed-hostd status              is it running, where, how many devices
+//! unnamed-hostd devices             the paired owner devices
+//! unnamed-hostd unpair <key>        remove one (a lost phone); live connections close at once
 //! unnamed-hostd service install     run at login (systemd --user / launchd)
 //! unnamed-hostd service uninstall
 //! unnamed-hostd build-info --json   this build (version, protocol level, OS, CPU, host name)
@@ -73,6 +75,14 @@ enum Command {
     },
     /// Show whether the daemon is running.
     Status,
+    /// List the paired owner devices (guests are managed in the app).
+    Devices,
+    /// Remove a paired device, for example a lost phone: its connections close within a
+    /// second, invites it signed stop working, and it needs a new ticket to come back.
+    Unpair {
+        /// The device key, or its first 8 or more hex digits (see `devices`).
+        device: String,
+    },
     /// Install or remove a per-user service that runs the daemon at login.
     Service {
         #[command(subcommand)]
@@ -125,6 +135,13 @@ fn main() -> Result<()> {
             local,
         ),
         Command::Status => status(&state_dir),
+        Command::Devices => devices(&state_dir),
+        Command::Unpair { device } => {
+            let removed = daemon::unpair_device(&state_dir, &device)
+                .with_context(|| format!("unpairing in {}", state_dir.display()))?;
+            println!("unpaired {}", removed.device);
+            Ok(())
+        }
         Command::BuildInfo { json } => build_info(json),
         Command::Service { action } => match action {
             ServiceAction::Install => service::install(&state_dir),
@@ -450,6 +467,21 @@ fn status(state_dir: &Path) -> Result<()> {
         println!("relay:     {relay}");
     }
     println!("paired devices: {}", daemon::paired_devices(state_dir)?);
+    Ok(())
+}
+
+fn devices(state_dir: &Path) -> Result<()> {
+    let devices = daemon::list_paired(state_dir)?;
+    if devices.is_empty() {
+        println!("no paired devices; run `{} pair`", brand::DAEMON_BIN);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    for d in devices {
+        let days = now.saturating_sub(d.paired_at) / 86_400_000;
+        println!("{}  paired {days} day(s) ago", d.device);
+    }
     Ok(())
 }
 

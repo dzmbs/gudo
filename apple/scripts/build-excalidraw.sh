@@ -19,7 +19,7 @@ mkdir -p "$work"
 cp "$src/package.json" "$src/entry.jsx" "$src/no-mermaid.js" "$work/"
 [ -f "$src/package-lock.json" ] && cp "$src/package-lock.json" "$work/"
 cd "$work"
-if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund; else npm install --ignore-scripts --no-audit --no-fund; fi
 
 pkg="$work/node_modules/@excalidraw/excalidraw"
 node_modules/.bin/esbuild entry.jsx \

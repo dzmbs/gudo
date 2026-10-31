@@ -205,6 +205,22 @@ policy is always `LastInput` for now.
   the ticket's secret. Principal ≠ device, input carries the principal and is rejected if it is
   not the connection's (`InputRejected{Role}`). Paired devices are `Owner` on the whole
   daemon; guests join with signed grants (`v = CHAIN`, §6).
+- Pairing secrets are compared in constant time, consumed under the lock (one device per
+  secret), and expire server-side; a wrong guess rewrites nothing. The daemon prints a
+  startup ticket only to a terminal, never into a service log.
+- `devices.json` changes go through `devices.lock` and start from the file as it is, so a
+  pairing never brings back a device `hostd unpair` just removed. The daemon re-reads the
+  file whenever it changed (inode, size, mtime), so `hostd unpair <key prefix>` (a lost phone)
+  takes effect on the next check: the 500 ms tick closes the device's connections and those
+  of guests whose invites it signed (§6.2). `hostd devices` lists the allowlist.
+- A new pairing is announced to the other connected owner devices
+  (`ServerCtl::DevicePaired`, `Caps::DEVICE_ALERTS`), so a pairing from a phished ticket is
+  seen and can be revoked.
+- Before the `Hello`, a connection is a stranger: at most 128 at once (more are refused
+  before the QUIC handshake completes), and each has `hello_timeout` (10 s) from accept to
+  `Hello`. The daemon never reads 0-RTT data: it awaits the full handshake first. Device keys
+  of small order (whose signatures anyone can forge) are refused. A refused peer's
+  `DaemonInfo` carries no host name, OS name or build.
 
 ### Agents
 
@@ -1044,9 +1060,16 @@ Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
 ### 6.2 Live checks and revocation
 
 - Every inbound ctl message and every input frame first re-checks the connection's grant
-  against the live table: expiry, any link revoked, device revoked (`Mp::still_valid`, a few
-  hash lookups). Failure sends `ServerCtl::Revoked` and closes the connection 150 ms later.
-  A 500 ms tick also disconnects expired grants without traffic.
+  against the live table: expiry, any link revoked, device revoked, any signer revoked, and
+  the chain's root still trusted (the daemon or a paired owner device); for an owner device,
+  that it is still paired (`Mp::still_valid`). Failure sends `ServerCtl::Revoked` and closes
+  the connection 150 ms later. A 500 ms tick also disconnects connections that stopped
+  passing without traffic, so revoking or unpairing an owner device also closes the guests
+  it invited.
+- `grants.json` that cannot be read stops the daemon from starting: starting empty would
+  forget every revocation and use count.
+- Signatures (grants, approvals) are verified strictly (`ed25519-dalek` `verify_strict`):
+  small-order keys and non-canonical points are refused.
 - `Revoke(Grant | Device | Principal)` (owner, daemon scope) records the revocation, unpairs a
   revoked owner device, closes every affected connection at once (descendant grants are
   covered because every link id is checked), and answers with what it hit. A device cannot

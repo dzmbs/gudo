@@ -83,7 +83,8 @@ pub use config::{ArtifactLimits, AskpassConfig, Config, RelayMode, default_state
 pub use config::{CustomRelays, PresenceTimes, PushConfig, RepoConfig};
 pub use fsutil::create_private_temp_file;
 pub use identity::{
-    EndpointInfo, PAIRING_TTL, endpoint_info, mint_ticket, mint_ticket_text, paired_devices,
+    EndpointInfo, PAIRING_TTL, PairedDevice, endpoint_info, list_paired, mint_ticket,
+    mint_ticket_text, paired_devices, unpair_device,
 };
 pub use procinfo::inherited_env_var;
 pub use term::{ErrorCode as TermErrorCode, TERM_VERSION, TermAsk, TermCall, TermReply, ToolError};
@@ -120,7 +121,7 @@ impl Daemon {
     /// Returns [`StartError`] if the state directory is unusable or the endpoint cannot bind.
     pub async fn start(mut config: Config) -> Result<Self, StartError> {
         config.apply_user_file()?;
-        let identity = Identity::load_or_create(&config.state_dir)?;
+        let identity = Arc::new(Identity::load_or_create(&config.state_dir)?);
         let (layout, records) = persist::load(&config.state_dir)?
             .map(persist::Saved::into_parts)
             .unwrap_or_default();
@@ -132,7 +133,12 @@ impl Daemon {
                 None
             }
         };
-        let mp = mp::Mp::open(&config.state_dir, config.lease_idle, config.presence)?;
+        let mp = mp::Mp::open(
+            &config.state_dir,
+            Arc::clone(&identity),
+            config.lease_idle,
+            config.presence,
+        )?;
         let core = Core::new(config, identity, layout, hooks, shell, mp);
         let mut tasks = vec![HookServer::listen(&core)?];
         core::restore(&core, records);
@@ -420,20 +426,33 @@ fn endpoint_info_of(endpoint: &Endpoint, relays: &RelayMode) -> EndpointInfo {
     }
 }
 
+/// Connections at once that have not yet sent their `Hello` (the QUIC handshake included).
+/// Anyone may connect with a fresh key, so this bounds what strangers can hold open.
+const MAX_PENDING_CONNECTIONS: usize = 128;
+
 async fn accept_loop(core: Arc<Core>, endpoint: Endpoint) {
+    let pending = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CONNECTIONS));
     while let Some(incoming) = endpoint.accept().await {
+        let Ok(permit) = Arc::clone(&pending).try_acquire_owned() else {
+            tracing::debug!("refusing incoming connection: too many unauthenticated");
+            incoming.refuse();
+            continue;
+        };
         let core = Arc::clone(&core);
         tokio::spawn(async move {
+            // The whole handshake, never 0-RTT: nothing is read before the client's key is
+            // proven, so early data cannot be replayed into a request.
             let conn = match incoming.accept() {
-                Ok(connecting) => connecting.await,
+                Ok(connecting) => tokio::time::timeout(core.cfg.hello_timeout, connecting).await,
                 Err(e) => {
                     tracing::debug!("refusing incoming connection: {e}");
                     return;
                 }
             };
             match conn {
-                Ok(conn) => conn::serve(core, conn).await,
-                Err(e) => tracing::debug!("handshake failed: {e}"),
+                Ok(Ok(conn)) => conn::serve(core, conn, permit).await,
+                Ok(Err(e)) => tracing::debug!("handshake failed: {e}"),
+                Err(_) => tracing::debug!("handshake timed out"),
             }
         });
     }

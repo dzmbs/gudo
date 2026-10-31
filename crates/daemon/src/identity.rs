@@ -14,7 +14,7 @@
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use proto::{
@@ -95,12 +95,43 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     write_atomic(path, &serde_json::to_vec_pretty(value).map_err(json_error)?)
 }
 
+/// Identifies one version of `devices.json`: every write is an atomic rename, so a new
+/// inode means new contents even within the file system's timestamp granularity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    dev: u64,
+    ino: u64,
+    mtime_ns: i128,
+    len: u64,
+}
+
+fn stamp(path: &Path) -> io::Result<Option<Stamp>> {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::metadata(path) {
+        Ok(m) => Ok(Some(Stamp {
+            dev: m.dev(),
+            ino: m.ino(),
+            mtime_ns: i128::from(m.mtime()) * 1_000_000_000 + i128::from(m.mtime_nsec()),
+            len: m.len(),
+        })),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// The allowlist as last read, with the file version it came from.
+#[derive(Debug, Default)]
+struct Devices {
+    list: Vec<DeviceEntry>,
+    stamp: Option<Stamp>,
+}
+
 /// The daemon's long-lived identity and authorisation state.
 #[derive(Debug)]
 pub(crate) struct Identity {
     pub secret: iroh::SecretKey,
     dir: PathBuf,
-    devices: Mutex<Vec<DeviceEntry>>,
+    devices: Mutex<Devices>,
 }
 
 impl Identity {
@@ -109,16 +140,67 @@ impl Identity {
         fsutil::create_private_dir(dir)?;
         let secret = load_or_create_key(dir)?;
         load_or_create_owner(dir)?;
-        let devices = read_json(&dir.join(DEVICES_FILE))?.unwrap_or_default();
-        Ok(Self {
+        let identity = Self {
             secret,
             dir: dir.to_owned(),
-            devices: Mutex::new(devices),
-        })
+            devices: Mutex::default(),
+        };
+        identity.load_devices()?;
+        Ok(identity)
     }
 
     pub fn daemon_id(&self) -> DaemonId {
         DaemonId(*self.secret.public().as_bytes())
+    }
+
+    fn devices_path(&self) -> PathBuf {
+        self.dir.join(DEVICES_FILE)
+    }
+
+    fn lock_devices(&self) -> MutexGuard<'_, Devices> {
+        self.devices.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Reads `devices.json` if it changed since the last read, so `hostd unpair` (another
+    /// process) takes effect for every check at once.
+    fn load_devices(&self) -> io::Result<()> {
+        let path = self.devices_path();
+        let now = stamp(&path)?;
+        let mut devices = self.lock_devices();
+        if now.is_some() && devices.stamp == now {
+            return Ok(());
+        }
+        devices.list = read_json(&path)?.unwrap_or_default();
+        devices.stamp = now;
+        Ok(())
+    }
+
+    /// [`Self::load_devices`], keeping the last good list if the file is unreadable.
+    fn refresh(&self) {
+        if let Err(e) = self.load_devices() {
+            tracing::warn!("reading paired devices: {e}");
+        }
+    }
+
+    /// Changes the allowlist under its file lock, starting from the file's current contents,
+    /// so a change here never undoes one another process just made. `change` says whether it
+    /// changed anything; only then is the file written.
+    fn update_devices(
+        &self,
+        change: impl FnOnce(&mut Vec<DeviceEntry>) -> bool,
+    ) -> io::Result<bool> {
+        let path = self.devices_path();
+        fsutil::with_lock(&path, || {
+            let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
+            let changed = change(&mut list);
+            if changed {
+                write_json(&path, &list)?;
+            }
+            let mut devices = self.lock_devices();
+            devices.stamp = stamp(&path)?;
+            devices.list = list;
+            Ok(changed)
+        })
     }
 
     /// Checks a `Hello`'s grant for `device` (already authenticated by the handshake) and
@@ -140,27 +222,28 @@ impl Identity {
                 let principal = consume_pairing_secret(&self.dir, PairingSecret(secret))
                     .map_err(|_| RefuseReason::InvalidGrant)?
                     .ok_or(RefuseReason::InvalidGrant)?;
-                let mut devices = self.devices.lock().expect("devices lock");
-                devices.retain(|d| d.device != device_hex);
-                devices.push(DeviceEntry {
-                    device: device_hex,
+                let entry = DeviceEntry {
+                    device: device_hex.clone(),
                     principal: hex(&principal.0),
                     paired_at: now_millis(),
-                });
-                if let Err(e) = write_json(&self.dir.join(DEVICES_FILE), &*devices) {
+                };
+                self.update_devices(|list| {
+                    list.retain(|d| d.device != device_hex);
+                    list.push(entry);
+                    true
+                })
+                .map_err(|e| {
                     tracing::warn!("saving paired devices: {e}");
-                }
+                    RefuseReason::InvalidGrant
+                })?;
                 tracing::info!(?device, "paired new device");
                 Ok(principal)
             }
             SignedGrant::DEVICE => {
-                // Re-read so `hostd` CLI edits (unpair) apply to new connections at once.
-                if let Ok(Some(fresh)) = read_json::<Vec<DeviceEntry>>(&self.dir.join(DEVICES_FILE))
-                {
-                    *self.devices.lock().expect("devices lock") = fresh;
-                }
-                let devices = self.devices.lock().expect("devices lock");
+                self.refresh();
+                let devices = self.lock_devices();
                 let entry = devices
+                    .list
                     .iter()
                     .find(|d| d.device == device_hex)
                     .ok_or(RefuseReason::InvalidGrant)?;
@@ -178,7 +261,8 @@ impl Identity {
 
     /// Number of paired devices.
     pub fn device_count(&self) -> usize {
-        self.devices.lock().expect("devices lock").len()
+        self.refresh();
+        self.lock_devices().list.len()
     }
 
     /// The daemon key as a device id: it may sign root grants (`unnamed-hostd invite`).
@@ -186,29 +270,18 @@ impl Identity {
         DeviceId(self.daemon_id().0)
     }
 
-    /// Re-reads `devices.json` so pairings and unpairings by other processes apply.
-    fn refresh(&self) {
-        if let Ok(Some(fresh)) = read_json::<Vec<DeviceEntry>>(&self.dir.join(DEVICES_FILE)) {
-            *self.devices.lock().expect("devices lock") = fresh;
-        }
-    }
-
     /// Whether `device` is a paired owner device (it may sign root grants).
     pub fn is_owner_device(&self, device: DeviceId) -> bool {
+        self.refresh();
         let hex_id = hex(&device.0);
-        self.devices
-            .lock()
-            .expect("devices lock")
-            .iter()
-            .any(|d| d.device == hex_id)
+        self.lock_devices().list.iter().any(|d| d.device == hex_id)
     }
 
     /// Paired devices: key, principal and when they paired.
     pub fn paired(&self) -> Vec<(DeviceId, PrincipalId, UnixMillis)> {
         self.refresh();
-        self.devices
-            .lock()
-            .expect("devices lock")
+        self.lock_devices()
+            .list
             .iter()
             .filter_map(|d| {
                 Some((
@@ -222,16 +295,16 @@ impl Identity {
 
     /// Removes a paired device. Returns whether it was paired.
     pub fn unpair(&self, device: DeviceId) -> bool {
-        self.refresh();
         let hex_id = hex(&device.0);
-        let mut devices = self.devices.lock().expect("devices lock");
-        let before = devices.len();
-        devices.retain(|d| d.device != hex_id);
-        let removed = devices.len() != before;
-        if removed && let Err(e) = write_json(&self.dir.join(DEVICES_FILE), &*devices) {
+        self.update_devices(|list| {
+            let before = list.len();
+            list.retain(|d| d.device != hex_id);
+            list.len() != before
+        })
+        .unwrap_or_else(|e| {
             tracing::warn!("saving paired devices: {e}");
-        }
-        removed
+            false
+        })
     }
 }
 
@@ -270,14 +343,18 @@ fn consume_pairing_secret(dir: &Path, secret: PairingSecret) -> io::Result<Optio
     let path = dir.join(PAIRING_FILE);
     fsutil::with_lock(&path, || {
         let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
+        let before = entries.len();
         let now = now_millis();
-        let wanted = hex(&secret.0);
-        let found = entries
-            .iter()
-            .position(|e| e.secret == wanted && e.expires > now);
+        let found = entries.iter().position(|e| {
+            e.expires > now
+                && unhex::<16>(&e.secret).is_some_and(|s| fsutil::constant_eq(&s, &secret.0))
+        });
         let principal = found.and_then(|i| unhex(&entries.remove(i).principal).map(PrincipalId));
         entries.retain(|e| e.expires > now);
-        write_json(&path, &entries)?;
+        // A wrong guess costs no disk write: anyone who knows the daemon id can send them.
+        if entries.len() != before {
+            write_json(&path, &entries)?;
+        }
         Ok(principal)
     })
 }
@@ -360,17 +437,89 @@ pub fn mint_ticket_text(state_dir: &Path, ttl: Duration) -> io::Result<String> {
     }))
 }
 
+/// A device on the owner allowlist, as `hostd devices` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairedDevice {
+    /// The device's key, lowercase hex.
+    pub device: String,
+    /// When it paired, Unix ms.
+    pub paired_at: u64,
+}
+
+impl From<DeviceEntry> for PairedDevice {
+    fn from(d: DeviceEntry) -> Self {
+        Self {
+            device: d.device,
+            paired_at: d.paired_at,
+        }
+    }
+}
+
+/// The devices on the owner allowlist.
+///
+/// # Errors
+///
+/// Returns an error if `devices.json` is unreadable.
+pub fn list_paired(state_dir: &Path) -> io::Result<Vec<PairedDevice>> {
+    Ok(
+        read_json::<Vec<DeviceEntry>>(&state_dir.join(DEVICES_FILE))?
+            .unwrap_or_default()
+            .into_iter()
+            .map(PairedDevice::from)
+            .collect(),
+    )
+}
+
 /// Number of devices on the allowlist.
 ///
 /// # Errors
 ///
 /// Returns an error if `devices.json` is unreadable.
 pub fn paired_devices(state_dir: &Path) -> io::Result<usize> {
-    Ok(
-        read_json::<Vec<DeviceEntry>>(&state_dir.join(DEVICES_FILE))?
-            .unwrap_or_default()
-            .len(),
-    )
+    list_paired(state_dir).map(|d| d.len())
+}
+
+/// Removes the paired device whose key starts with `prefix` (at least 8 hex digits). A
+/// running daemon closes its connections within a second, refuses it from then on, and stops
+/// trusting invites it signed; it needs a new pairing ticket to come back.
+///
+/// # Errors
+///
+/// [`io::ErrorKind::InvalidInput`] if the prefix is too short or matches several devices,
+/// [`io::ErrorKind::NotFound`] if it matches none, or any error reading or writing the file.
+pub fn unpair_device(state_dir: &Path, prefix: &str) -> io::Result<PairedDevice> {
+    let prefix = prefix.trim().to_ascii_lowercase();
+    if prefix.len() < 8 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "give at least 8 hex digits of the device key",
+        ));
+    }
+    let path = state_dir.join(DEVICES_FILE);
+    fsutil::with_lock(&path, || {
+        let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
+        let matches: Vec<usize> = (0..list.len())
+            .filter(|&i| list[i].device.starts_with(&prefix))
+            .collect();
+        let i = match matches[..] {
+            [i] => i,
+            [] => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no paired device starts with {prefix}"),
+                ));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("several paired devices start with {prefix}; give more digits"),
+                ));
+            }
+        };
+        let removed = list.remove(i);
+        write_json(&path, &list)?;
+        Ok(removed.into())
+    })
 }
 
 #[cfg(test)]
@@ -461,6 +610,152 @@ mod tests {
                 None,
                 "a secret pairs once"
             );
+        }
+    }
+
+    fn pairing_grant(secret: PairingSecret) -> SignedGrant {
+        SignedGrant {
+            v: SignedGrant::PAIRING,
+            grant_id: proto::GrantId([0; 16]),
+            token: secret.0.to_vec(),
+        }
+    }
+
+    fn device_grant() -> SignedGrant {
+        SignedGrant {
+            v: SignedGrant::DEVICE,
+            grant_id: proto::GrantId([0; 16]),
+            token: Vec::new(),
+        }
+    }
+
+    /// `hostd unpair` (another process) removes a device while the daemon pairs another:
+    /// the removed device stays removed, and the daemon stops trusting it at once.
+    #[test]
+    fn an_unpaired_device_stays_unpaired() {
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        let lost = DeviceId([1; 32]);
+        let new = DeviceId([2; 32]);
+        let pair = |device| {
+            let secret = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+            identity
+                .authorize(device, owner, &pairing_grant(secret))
+                .expect("pairs")
+        };
+        pair(lost);
+        assert!(identity.is_owner_device(lost));
+
+        let removed = unpair_device(dir.path(), &hex(&lost.0)[..12]).expect("unpair");
+        assert_eq!(removed.device, hex(&lost.0));
+        assert!(
+            !identity.is_owner_device(lost),
+            "trust ends without a restart"
+        );
+        assert_eq!(
+            identity.authorize(lost, owner, &device_grant()),
+            Err(RefuseReason::InvalidGrant)
+        );
+
+        pair(new);
+        let listed: Vec<String> = list_paired(dir.path())
+            .expect("list")
+            .into_iter()
+            .map(|d| d.device)
+            .collect();
+        assert_eq!(
+            listed,
+            [hex(&new.0)],
+            "pairing did not bring the lost device back"
+        );
+        assert!(!identity.is_owner_device(lost));
+        assert!(identity.is_owner_device(new));
+    }
+
+    #[test]
+    fn unpairing_needs_an_unambiguous_prefix() {
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        for device in [DeviceId([0xab; 32]), DeviceId([0xaa; 32])] {
+            let secret = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+            identity
+                .authorize(device, owner, &pairing_grant(secret))
+                .expect("pairs");
+        }
+        let kind = |prefix| unpair_device(dir.path(), prefix).unwrap_err().kind();
+        assert_eq!(kind("ab"), io::ErrorKind::InvalidInput);
+        assert_eq!(kind("zzzzzzzz"), io::ErrorKind::InvalidInput);
+        assert_eq!(kind("cccccccc"), io::ErrorKind::NotFound);
+        assert_eq!(list_paired(dir.path()).expect("list").len(), 2);
+        unpair_device(dir.path(), "ABABABAB").expect("case-insensitive");
+        assert_eq!(list_paired(dir.path()).expect("list").len(), 1);
+    }
+
+    /// Wrong guesses, which anyone who knows the daemon id can send, never rewrite the file;
+    /// the right secret still pairs once.
+    #[test]
+    fn wrong_pairing_secrets_cost_no_write() {
+        let dir = started_daemon();
+        let secret = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+        let path = dir.path().join(PAIRING_FILE);
+        let before = stamp(&path).expect("stat");
+        for i in 0..20u8 {
+            let mut guess = secret.0;
+            guess[15] ^= i + 1;
+            assert_eq!(
+                consume_pairing_secret(dir.path(), PairingSecret(guess)).expect("consume"),
+                None
+            );
+        }
+        assert_eq!(stamp(&path).expect("stat"), before);
+        assert!(
+            consume_pairing_secret(dir.path(), secret)
+                .expect("consume")
+                .is_some()
+        );
+        assert_eq!(
+            consume_pairing_secret(dir.path(), secret).expect("consume"),
+            None
+        );
+    }
+
+    /// An expired ticket is refused by the daemon, whatever the ticket text says.
+    #[test]
+    fn expired_pairing_secrets_are_refused() {
+        let dir = started_daemon();
+        let secret = mint_ticket(dir.path(), Duration::ZERO)
+            .expect("mint")
+            .secret;
+        thread::sleep(Duration::from_millis(5));
+        assert_eq!(
+            consume_pairing_secret(dir.path(), secret).expect("consume"),
+            None
+        );
+    }
+
+    /// Key and allowlist are private to the user.
+    #[test]
+    fn state_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = started_daemon();
+        let identity = Identity::load_or_create(dir.path()).expect("identity");
+        let owner = load_or_create_owner(dir.path()).expect("owner");
+        let secret = mint_ticket(dir.path(), PAIRING_TTL).expect("mint").secret;
+        identity
+            .authorize(DeviceId([3; 32]), owner, &pairing_grant(secret))
+            .expect("pairs");
+        let mode = |name: &str| {
+            std::fs::metadata(dir.path().join(name))
+                .expect("stat")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode(""), 0o700);
+        for file in [KEY_FILE, OWNER_FILE, DEVICES_FILE, PAIRING_FILE] {
+            assert_eq!(mode(file), 0o600, "{file}");
         }
     }
 }

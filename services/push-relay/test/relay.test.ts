@@ -3,7 +3,7 @@ import { env as cfEnv, exports as cfExports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import vectors from "../../../crates/push/tests/vectors/push-v1.json";
-import { buildApnsRequest, providerJwt, resetJwt } from "../src/apns";
+import { APPROVAL_TTL_S, buildApnsRequest, providerJwt, resetJwt } from "../src/apns";
 import { openCap, sealCap } from "../src/cap";
 import { b64url, concat, hex, unb64url, utf8 } from "../src/encoding";
 import { MAX_BODY, addressKey } from "../src/index";
@@ -464,7 +464,18 @@ describe("formats shared with the daemon", () => {
       1_760_000_000_000,
     );
     expect(JSON.parse(apns.body).s).toBe(vectors.payloads[0].sealed);
-    expect(apns.headers["apns-expiration"]).toBe(String(1_760_000_000 + 3600));
+  });
+
+  it("expires approvals with their action token", () => {
+    const req = parseRequest(utf8.encode(vectors.relay_request.body)) as RelayRequest;
+    const cap = { t: TOKEN, e: "production" as const, d: req.daemon, k: "alert" as const, x: 0 };
+    const at = 1_760_000_000;
+    const expiry = (category: RelayRequest["category"]) =>
+      Number(buildApnsRequest(env, cap, { ...req, category }, at * 1000).headers["apns-expiration"]);
+    // An approval held by APNs past its token would offer buttons that can only fail.
+    expect(expiry("approval")).toBe(at + APPROVAL_TTL_S);
+    expect(APPROVAL_TTL_S).toBe(15 * 60);
+    for (const other of ["blocked", "done", "command"] as const) expect(expiry(other)).toBe(at + 3600);
   });
 
   it("opens capabilities sealed with the previous key during a rotation", async () => {
@@ -642,11 +653,11 @@ describe("attacks on the relay", () => {
   });
 
   it("counts a token's spellings and its daemons as one device", async () => {
-    const upper = TOKEN.toUpperCase();
+    const token = TOKEN;
     let limited = false;
     for (let i = 0; i < ALERT_TOKEN_BUCKET.capacity + 1 && !limited; i++) {
       const d = await daemon();
-      const { cap } = await register(d, { token: i % 2 ? upper : TOKEN });
+      const { cap } = await register(d, { token: i % 2 ? token.toUpperCase() : token });
       limited = (await call("/v1/push", await signed(d, { cap, category: "done" }))).status === 429;
     }
     expect(limited).toBe(true);

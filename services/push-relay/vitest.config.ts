@@ -23,5 +23,7 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.test.ts"],
+    // Several tests drive a bucket to its limit request by request; slow on a busy machine.
+    testTimeout: 60_000,
   },
 });
