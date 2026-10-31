@@ -20,6 +20,7 @@ mod pull;
 mod relays;
 mod repos;
 mod access;
+mod redteam;
 mod security;
 mod shell;
 mod support;
