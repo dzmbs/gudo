@@ -329,7 +329,9 @@ private struct ShareRoot: View {
                     .contextMenu { personMenu(person) }
                     .swipeActions {
                         if canRevoke(person) {
-                            Button("Remove", systemImage: "person.crop.circle.badge.xmark", role: .destructive) { revoking = person }
+                            // Red, not `.destructive`: the row stays until the removal is confirmed.
+                            Button("Remove", systemImage: "person.crop.circle.badge.xmark") { revoking = person }
+                                .tint(.red)
                         }
                     }
             }

@@ -82,15 +82,19 @@ final class MultiplayerUITests: XCTestCase {
         shot(app, "mp-3-grants")
         app.navigationBars["Access & Grants"].buttons.firstMatch.tap()
 
-        // Revoke Mira from People Here.
+        // Remove Mira from People Here (the row's swipe action, then the confirmation).
         reveal(app, mira, up: false)
         XCTAssertTrue(mira.waitForExistence(timeout: 5))
         mira.swipeLeft()
-        app.buttons["Revoke"].firstMatch.tap()
-        let confirm = app.buttons["Revoke Access"].firstMatch
+        let swipeRemove = app.buttons.matching(NSPredicate(format: "label == 'Remove' AND NOT (identifier BEGINSWITH 'remove-')")).firstMatch
+        XCTAssertTrue(swipeRemove.waitForExistence(timeout: 5), "the swipe action")
+        swipeRemove.tap()
+        let dialog = app.staticTexts["Remove Mira Holt?"].firstMatch
+        XCTAssertTrue(dialog.waitForExistence(timeout: 5), "removing asks first")
+        let confirm = app.buttons.matching(NSPredicate(format: "label == 'Remove' AND NOT (identifier BEGINSWITH 'remove-')")).firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         confirm.tap()
-        XCTAssertTrue(mira.waitForNonExistence(timeout: 15), "Mira is gone once revoked")
+        XCTAssertTrue(mira.waitForNonExistence(timeout: 15), "Mira is gone once removed")
         shot(app, "mp-4-revoked")
 
         // The audit log: intact chain, Mira's join and the revocation.
