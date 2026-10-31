@@ -1677,21 +1677,14 @@ impl Ctx {
     /// Brings the window to the front, out of the tray, without the keyboard: the user's
     /// focus is theirs.
     fn pane_raise(&self, a: PaneArg) -> Result<Value> {
-        let (pane, window) = self.own_float(&a.pane)?;
-        if window.minimized {
-            // Restoring raises it.
-            self.layout_op(LayoutOp::SetFloat {
-                pane_id: pane,
-                frame: None,
-                minimized: Some(false),
-                pinned: None,
-            })?;
-        } else if window.panes.len() == 1 {
-            self.layout_op(LayoutOp::FloatPane {
-                pane_id: pane,
-                frame: Some(window.frame),
-            })?;
-        }
+        let (pane, _) = self.own_float(&a.pane)?;
+        // Restoring raises it, from the tray or not, and leaves the focus where it is.
+        self.layout_op(LayoutOp::SetFloat {
+            pane_id: pane,
+            frame: None,
+            minimized: Some(false),
+            pinned: None,
+        })?;
         self.pane_result(pane)
     }
 

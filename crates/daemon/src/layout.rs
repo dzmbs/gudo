@@ -587,7 +587,14 @@ impl Layout {
         }
         let (si, ti) = self.locate(pane).ok_or(OpError::NotFound)?;
         let s = &mut self.sessions[si];
-        if resize_in(&mut s.tabs[ti].root, pane, axis, delta) == Resize::Changed {
+        // Only a divider the pane's own layer shows moves: a split whose other side is all in
+        // other layers (a floating window over the tiled panes, or the tiled panes around a
+        // window) is not on screen.
+        let layer = |p: PaneId| s.window_of(p).map(|w| s.floats[w].id);
+        let own = layer(pane);
+        let layers: Vec<(PaneId, Option<FloatId>)> = s.panes().map(|p| (p, layer(p))).collect();
+        let same = |p: PaneId| layers.iter().any(|&(q, l)| q == p && l == own);
+        if resize_in(&mut s.tabs[ti].root, pane, axis, delta, &same) == Resize::Changed {
             s.revision += 1;
         }
         Ok(())
@@ -912,7 +919,9 @@ impl Layout {
         window.pinned = pinned.unwrap_or(window.pinned);
         let after = window.clone();
         let mut changed = after != before;
-        if before.minimized && !after.minimized {
+        // Restoring raises, even a window already out: the way to bring one forward without
+        // touching the keyboard's focus.
+        if minimized == Some(false) {
             changed |= s.raise(w);
         }
         let focused = s.tabs[ti].focused;
@@ -1229,7 +1238,15 @@ enum Resize {
     Unchanged,
 }
 
-fn resize_in(node: &mut LayoutNode, pane: PaneId, axis: Axis, delta: f32) -> Resize {
+/// Moves the divider of the nearest split on `axis` around `pane` whose other side holds a
+/// pane `same` accepts.
+fn resize_in(
+    node: &mut LayoutNode,
+    pane: PaneId,
+    axis: Axis,
+    delta: f32,
+    same: &dyn Fn(PaneId) -> bool,
+) -> Resize {
     match node {
         LayoutNode::Leaf(p) if *p == pane => Resize::Pending { in_first: true },
         LayoutNode::Leaf(_) => Resize::NotFound,
@@ -1239,12 +1256,13 @@ fn resize_in(node: &mut LayoutNode, pane: PaneId, axis: Axis, delta: f32) -> Res
             first,
             second,
         } => {
-            let (child, in_first) = match resize_in(first, pane, axis, delta) {
-                Resize::NotFound => (resize_in(second, pane, axis, delta), false),
+            let (child, in_first) = match resize_in(first, pane, axis, delta, same) {
+                Resize::NotFound => (resize_in(second, pane, axis, delta, same), false),
                 other => (other, true),
             };
+            let other = if in_first { &**second } else { &**first };
             match child {
-                Resize::Pending { .. } if *split_axis == axis => {
+                Resize::Pending { .. } if *split_axis == axis && leaves(other).any(same) => {
                     let signed = if in_first { delta } else { -delta };
                     let next = (*ratio + signed).clamp(MIN_RATIO, 1.0 - MIN_RATIO);
                     if (next - *ratio).abs() > f32::EPSILON {
@@ -2014,6 +2032,44 @@ mod tests {
             Err(OpError::NotFound)
         );
         check_floats(&l);
+    }
+
+    #[test]
+    fn dividers_move_only_within_the_panes_own_layer() {
+        let mut l = Layout::default();
+        // (p1 | p2) | p3, with p2 floating: on screen p1 | p3.
+        let (s, _, p1) = session_with(&mut l);
+        let p3 = l.alloc_pane();
+        l.split(p1, Axis::Horizontal, p3).unwrap();
+        let p2 = l.alloc_pane();
+        l.split(p1, Axis::Horizontal, p2).unwrap();
+        l.float_pane(p2, None).unwrap();
+        l.resize(p1, Axis::Horizontal, 0.1).unwrap();
+        let root = l.snapshot(s).unwrap().tabs[0].root.clone();
+        let LayoutNode::Split { ratio, first, .. } = &root else {
+            panic!()
+        };
+        assert!(
+            (ratio - 0.6).abs() < 1e-6,
+            "the divider on screen moved: {ratio}"
+        );
+        let LayoutNode::Split { ratio: hidden, .. } = **first else {
+            panic!()
+        };
+        assert!(
+            (hidden - 0.5).abs() < 1e-6,
+            "the floated pane's split stays"
+        );
+        // Inside a window its own splits move.
+        let g = l.alloc_pane();
+        l.split(p2, Axis::Horizontal, g).unwrap();
+        l.resize(p2, Axis::Horizontal, 0.2).unwrap();
+        let w = l.window_of(p2).unwrap();
+        let tab = &l.snapshot(s).unwrap().tabs[0];
+        let LayoutNode::Split { ratio, .. } = subtree(&tab.root, &w.panes).unwrap() else {
+            panic!()
+        };
+        assert!((ratio - 0.7).abs() < 1e-6);
     }
 
     #[test]
