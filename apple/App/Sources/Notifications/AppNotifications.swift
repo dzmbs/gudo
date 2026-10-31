@@ -107,8 +107,16 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         case .added(let item, let count):
             unseen[hostId] = count
             updateBadge()
-            guard !item.seen, !item.whileViewed, let note = note(for: item, hostId: hostId, daemon: daemon) else { return }
-            Task { await post(note) }
+            guard !item.seen, !item.whileViewed else { return }
+            Task {
+                // The pane's agent state comes on another stream and can land just after the
+                // item: an approval waits for its options, or it would lose Approve / Deny.
+                if case .agentBlocked(_, let request?) = item.kind {
+                    await Self.settle { Self.blockedOptions(daemon.meta[PaneId(item.paneId)]?.agent, request: request) != nil }
+                }
+                guard let note = note(for: item, hostId: hostId, daemon: daemon) else { return }
+                await post(note)
+            }
         case .seen(_, let count):
             unseen[hostId] = count
             updateBadge()
@@ -144,8 +152,24 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         case .commandFinished:
             kind = .command
         }
+        // An agent's item is titled by its kind ("Approval needed"); the agent's name is in the
+        // subtitle already, where the daemon's title would repeat it lowercased ("claude needs you").
         return AttentionNote(hostId: hostId, hostName: hostName, itemId: item.id, paneId: item.paneId, kind: kind,
-                             title: item.title, body: item.body, agent: agent)
+                             title: agent == nil ? item.title : "", body: item.body, agent: agent)
+    }
+
+    /// The options of the request an agent is blocked on, once its state says so.
+    static func blockedOptions(_ agent: AgentStatus?, request: UInt64) -> [DecisionOption]? {
+        guard case .blocked(request, _, let options)? = agent?.state, !options.isEmpty else { return nil }
+        return options
+    }
+
+    /// Waits until `ready` holds, checking every 50 ms for at most `limit`.
+    static func settle(limit: Duration = .seconds(2), _ ready: () -> Bool) async {
+        let deadline = ContinuousClock.now + limit
+        while !ready(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     static func isAllow(_ label: String) -> Bool {
@@ -212,27 +236,36 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
         [.list]
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    /// The completion handler goes back on the main thread: UIKit asserts it there (it updates
+    /// the app switcher snapshot), and the `async` form of this method would call it from the
+    /// concurrency pool once the action's work is done, aborting the app.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+    ) {
         let action = response.actionIdentifier
-        let userInfo = response.notification.request.content.userInfo
-        if userInfo[Self.knockHostKey] is String {
-            await MainActor.run { ActiveWindow.model?.destination = .inbox }
-            return
-        }
-        if let host = DeviceNotifications.hostId(from: userInfo) {
-            if action != UNNotificationDismissActionIdentifier {
-                await MainActor.run { SettingsLink.shared.open(.hostDevices(host)) }
-            }
-            return
-        }
-        let thread = response.notification.request.content.threadIdentifier
-        let handler = NotificationActionHandler(client: AppActionClient())
+        let content = response.notification.request.content
+        let isKnock = content.userInfo[Self.knockHostKey] is String
+        let deviceHost = DeviceNotifications.hostId(from: content.userInfo)
+        let thread = content.threadIdentifier
         let remote = response.notification.request.trigger is UNPushNotificationTrigger
-        let result = await handler.handle(actionIdentifier: action, target: NotificationTarget(userInfo: userInfo, remote: remote))
-        Self.log.info("action \(action, privacy: .public): \(String(describing: result), privacy: .public)")
-        if case .failed(let message) = result {
-            let content = NotificationActionHandler.failureContent(message, threadIdentifier: thread)
-            try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        let target = NotificationTarget(userInfo: content.userInfo, remote: remote)
+        Task { @MainActor in
+            defer { completionHandler() }
+            if isKnock {
+                ActiveWindow.model?.destination = .inbox
+                return
+            }
+            if let deviceHost {
+                if action != UNNotificationDismissActionIdentifier { SettingsLink.shared.open(.hostDevices(deviceHost)) }
+                return
+            }
+            let result = await NotificationActionHandler(client: AppActionClient()).handle(actionIdentifier: action, target: target)
+            Self.log.info("action \(action, privacy: .public): \(String(describing: result), privacy: .public)")
+            if case .failed(let message) = result {
+                let failure = NotificationActionHandler.failureContent(message, threadIdentifier: thread)
+                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: failure, trigger: nil))
+            }
         }
     }
 
