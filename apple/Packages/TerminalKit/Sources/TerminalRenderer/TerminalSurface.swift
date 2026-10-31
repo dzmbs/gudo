@@ -49,6 +49,7 @@ public final class TerminalSurface {
     public var isFocused = true {
         didSet {
             guard isFocused != oldValue else { return }
+            displayLink?.preferredFrameRateRange = frameRateRange
             restartBlink()
             invalidateOverlay()
         }
@@ -207,12 +208,20 @@ public final class TerminalSurface {
         stopDisplayLink()
         let target = DisplayLinkTarget(surface: self)
         let link = make(target, #selector(DisplayLinkTarget.tick(_:)))
-        // ProMotion: up to 120 Hz while content changes; the link pauses when idle.
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.preferredFrameRateRange = frameRateRange
         link.add(to: .main, forMode: .common)
         displayLinkTarget = target
         displayLink = link
         restartBlink()
+    }
+
+    /// ProMotion's 120 Hz for the terminal being typed in; 60 Hz for the others, which only
+    /// stream output (the fastest view sets the display's rate, WWDC22 10083). The link pauses
+    /// when nothing changes either way.
+    private var frameRateRange: CAFrameRateRange {
+        isFocused
+            ? CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+            : CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
     }
 
     public func stopDisplayLink() {

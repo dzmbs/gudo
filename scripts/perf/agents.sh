@@ -93,6 +93,7 @@ if [ -n "${DEBUG:-}" ]; then for p in "${AGENT_PANES[@]}"; do U search --pane $p
 measure "no client"
 (sleep 100000 | script -q /dev/null /bin/zsh -c "stty rows 50 cols 160; exec $UN --no-relay attach" >/dev/null 2>&1) &
 sleep 3
+if [ -n "${PROFILE:-}" ]; then sample $DPID 15 -file $PROFILE >/dev/null 2>&1; fi
 measure "1 client attached"
 pkill -f "$UN --no-relay attach"
 cp $ROOT/panes $OUT/last-panes.txt
