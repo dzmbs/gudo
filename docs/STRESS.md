@@ -65,9 +65,43 @@ Limits now by design (renderer):
 - Drawables: at most 16384 px per side. A 6K pane holds up to 3 × 81 MB of drawables while on screen.
 - Search: with a match selected, "n of N" refreshes 4×/s while output streams.
 
-### App, input, lifecycle and connection scenarios
+### SwiftUI under churn and input (Mac, in-process)
 
-See the subsections added from the SwiftUI/iOS-lifecycle and client-connection runs below.
+Fake daemon with a real `DaemonConnection`, `LiveAgentFeed` and `WindowContent` in an offscreen window. Debug build (a Release
+test build does not link `FilesProviderKitTests`). "Hang" is the longest the main queue went unserved, measured by a
+watchdog thread that pings it every 5 ms (`HangWatch`).
+
+| Scenario | Before | After | Outcome |
+|---|---|---|---|
+| Sidebar, 120 tabs / 12 projects, 100 agent updates/s | hang 1.0–1.5 s, main thread 100 % busy | hang 85–196 ms *loaded* | **Broke, fixed**: the session was recomposed on every read (O(tabs²)), any pane's metadata invalidated every row, and there was no rate limit |
+| Sidebar, 500 tabs / 50 projects, 100 updates/s, 10 s | hang 161 ms, CPU 72 % | hang 109 ms (3 of 555 pings > 100 ms), CPU 75 %, footprint 163 → 174 MB | **Broke, fixed**: project suggestions re-resolved every host's tabs per tab (60 → 1.4 ms per render) |
+| Sidebar idle, 500 tabs | — | hang 9 ms, CPU 24 % (the shimmer and spinner of visible rows) | Survived |
+| Inbox, 500 agents, 100 updates/s + 100 attention items/s | hang 443–844 ms (120 agents), saturated | hang 220 ms, CPU ~100 % (low load) | **Broke, fixed in part**: the Inbox was O(items²) (each row rebuilt the feed), and every visible row re-rendered on every update (closure inputs defeat SwiftUI's diff; rows now equatable on what they show). Still over 100 ms at this extreme rate |
+| Opening a host with 500 tabs | — | one hang of 450–550 ms | **Limit**: 500 panes (terminal + surface + view) are created synchronously. Staging needs per-pane observation of `Workspace.panes` first (staging alone made it worse) |
+| Key storm, 20k keys with prediction on | — | ~25 µs per key, flat | Survived |
+| Paste of 10 / 50 / 200 MB | 16 ms / 0.32 s / 1.3 s on main, +400 MB at 200 MB; the confirmation's line count took 4 / 14 / 100 s | Over 16 MiB refused in < 50 ms with an alert; line count is one pass | **Broke, fixed** (product decision: refuse, not chunk) |
+| Drag of 64 MB of text over a pane | ~45 ms per pointer move | 60 moves < 100 ms (types checked only) | **Broke, fixed** |
+| Notification storm from the attention feed | one Task and two XPC calls per item | one request in flight, newest note per pane (`NoteQueue`) | **Broke, fixed** |
+| Open and close 10 windows of 30 panes | a closed window's `Workspace` stayed alive (strong captures in pending observations) | panes, views, surfaces and the window model freed | **Leak, fixed** |
+
+### Client connection and mirror (HostKit, client-core, real release daemon)
+
+Timings *loaded* (load average 500–650). Memory, fds and threads are reliable.
+
+| Scenario | Peaks (footprint / threads / fds / main hang) | Outcome |
+|---|---|---|
+| Flood (`yes`, 32 MB text loop, urandom, CJK + emoji) into the client terminal, flooding pane focused | 75–171 MB / ≤ 12 / ≤ 45 / ≤ 5 ms; other pane echo p95 ≤ 20 ms | Survived. The client takes 13–36 MB/s, and the daemon switches to snapshots when it falls behind. Memory grows by about one scrollback (10 MB), then stays flat |
+| History-page and view storm during a flood (~300 views opened and closed, 30 resubscribes, 200–300 pages) | 68–165 MB / ≤ 11 / ≤ 45 / 13–37 ms | Survived |
+| Title and bell flood (`ESC]0;…BEL` × 200k in a loop) | before: footprint 17 → 145 MB in 8 s, 5.4 M main-actor tasks; after: 103–115 MB, main hang ≤ 15 ms | **Broke, fixed** (`MainActorCoalescer`, bell at most every 100 ms) |
+| 20 hosts, 5 flooding, 60 s | 85 MB / 9 / 74; echo p50 14.5 → 4.5 ms | **Degraded, fixed** (pane streams yield the runtime's workers after each frame) |
+| Daemon that admits and drops every connection | before: 3084 dials in 4 s | **Broke, fixed** (backoff resets only after a connection stayed up 5 s) |
+| Flapping host (SIGSTOP/CONT, kill and restart ×5), resume after 15 s mid-flood | 46–102 MB, fds flat, live again in 12–110 ms through one snapshot | Survived |
+| Closing the last view of a flooding pane | the pane resubscribed and kept streaming forever | **Broke, fixed** (output for a pane without a mirror is dropped) |
+| Disconnecting or re-pairing a host while its panes are on screen | the client kept streaming and redialling | **Broke, fixed** (`close()` suspends the client) |
+| 200 pane open/close and 100 connect/disconnect rounds | 13.5 → 13.7 MB / 21 fds; `leaks`: 0 | Survived |
+
+Known limits (client): a frozen host shows "connected" for up to ~30 s (iroh's idle timeout). The client terminal parses
+13–36 MB/s, so a faster pane is shown through snapshots rather than byte for byte.
 
 ### Not tested (App and renderer)
 
