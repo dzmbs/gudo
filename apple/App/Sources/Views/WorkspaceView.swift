@@ -41,8 +41,8 @@ struct WorkspaceView: View {
     @Environment(WindowModel.self) private var model
     @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    /// The layout's top-left in window points: where the fold falls within it.
-    @State private var origin = CGPoint.zero
+    /// The layout's frame in window points: where the fold falls within it.
+    @State private var frame = CGRect.zero
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     #if os(macOS)
@@ -160,8 +160,12 @@ struct WorkspaceView: View {
     /// fold, and the same views move rather than being rebuilt, so the panes keep their state.
     private var regular: some View {
         let layout = model.foldLayout
-        let page = layout.leadingPage(from: origin.x)
-        let deck = layout.deckTop(from: origin.y)
+        // Only a fold that leaves room either side splits the window. The window's frame never
+        // depends on what is inside it, so measuring it cannot feed back.
+        let page = layout.leadingPage(from: frame.minX)
+            .flatMap { $0 >= FoldLayout.minimumPage && frame.width - $0 - layout.gutter >= FoldLayout.minimumPage ? $0 : nil }
+        let deck = layout.deckTop(from: frame.minY)
+            .flatMap { $0 >= FoldLayout.minimumDeck && frame.height - $0 - layout.gutter >= FoldLayout.minimumDeck ? $0 : nil }
         let shown = model.isSidebarShown && !model.isEditorFullScreen && deck == nil
         let width = page ?? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
         return VStack(spacing: 0) {
@@ -180,8 +184,8 @@ struct WorkspaceView: View {
                     .allowsHitTesting(shown)
                     .disabled(!shown)
                     .accessibilityHidden(!shown)
-                if shown, case .pages(_, let gutter) = layout {
-                    FoldGutter().frame(width: gutter)
+                if shown, page != nil {
+                    FoldGutter().frame(width: layout.gutter)
                 }
                 NavigationStack {
                     DetailColumn(workspace: workspace)
@@ -190,14 +194,14 @@ struct WorkspaceView: View {
             .frame(height: deck)
             // The keyboard rises over the deck, never the screen above: no reflow as it comes up.
             .ignoresSafeArea(.keyboard, edges: deck == nil ? [] : .bottom)
-            if let deck, case .deck(_, let gutter) = layout {
-                FoldGutter().frame(height: gutter)
+            if deck != nil {
+                FoldGutter().frame(height: layout.gutter)
                 TabletopDeck(workspace: workspace)
                     .frame(maxHeight: .infinity)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .onGeometryChange(for: CGPoint.self, of: { $0.frame(in: .global).origin }) { origin = $0 }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame = $0 }
         .animation(DS.Motion.sidebar, value: model.isSidebarShown)
         .animation(DS.Motion.panel, value: model.isEditorFullScreen)
         .chromeBackground(DS.Palette.base)
@@ -375,7 +379,9 @@ private struct DetailColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen {
+            // Across a fold each page's header names its tab and the sidebar is the tab list: a
+            // strip would run over the crease.
+            if !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen && !model.foldLayout.isPages {
                 TabBar(workspace: workspace)
                     .chromeContent()
                     .movingTransition(.top)

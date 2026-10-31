@@ -165,6 +165,18 @@ extension FoldLayout {
         }
     }
 
+    var isPages: Bool {
+        if case .pages = self { true } else { false }
+    }
+
+    /// The band over the fold, nothing on it.
+    var gutter: CGFloat {
+        switch self {
+        case .standard: 0
+        case .pages(_, let gutter), .deck(_, let gutter): gutter
+        }
+    }
+
     /// The left page's width for a view whose leading edge is at `x` (window points).
     func leadingPage(from x: CGFloat) -> CGFloat? {
         if case .pages(let leading, _) = self { max(0, leading - x) } else { nil }

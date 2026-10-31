@@ -4,9 +4,17 @@ import SwiftUI
 /// The band over a fold: the window's base, nothing on it. A partly open fold reserves the
 /// division's margins; a flat one a thin band, so no text or control sits in the crease.
 struct FoldGutter: View {
+    /// A flat fold shows no crease: a split divider down the middle parts the pages. Partly
+    /// open, the crease itself does.
+    var showsLine = false
+    @Environment(\.terminalTheme) private var theme
+
     var body: some View {
         Rectangle()
             .fill(DS.Palette.base)
+            .overlay {
+                if showsLine { Rectangle().fill(theme.splitDivider).frame(width: DS.Size.dividerVisible) }
+            }
             .accessibilityHidden(true)
             .allowsHitTesting(false)
     }
@@ -20,27 +28,31 @@ struct FoldPages<Leading: View, Trailing: View, Divider: View>: View {
     @ViewBuilder var divider: Divider
     @ViewBuilder var trailing: Trailing
     @Environment(WindowModel.self) private var model
-    @State private var originX: CGFloat = 0
 
     var body: some View {
-        let layout = model.foldLayout
-        let page = layout.leadingPage(from: originX)
-        // The children keep their places whether or not there is a fold: unfolding resizes
-        // them, never rebuilds them.
-        HStack(spacing: 0) {
-            leading
-                .frame(width: page)
-                .frame(maxWidth: page == nil ? .infinity : nil)
-            ZStack {
-                if case .pages(_, let gutter) = layout, page != nil {
-                    FoldGutter().frame(width: gutter)
-                } else {
-                    divider
+        // The container's own frame, which its children cannot move: where the fold falls in it.
+        GeometryReader { proxy in
+            let layout = model.foldLayout
+            let frame = proxy.frame(in: .global)
+            let page = layout.leadingPage(from: frame.minX)
+            let gutter = page == nil ? 0 : layout.gutter
+            let fits = page.map { $0 >= FoldLayout.minimumPage && frame.width - $0 - gutter >= FoldLayout.minimumPage } ?? false
+            // The children keep their places whether or not there is a fold: unfolding resizes
+            // them, never rebuilds them.
+            HStack(spacing: 0) {
+                leading
+                    .frame(width: fits ? page : nil)
+                    .frame(maxWidth: fits ? nil : .infinity)
+                ZStack {
+                    if fits {
+                        FoldGutter(showsLine: !model.fold.isDivisionActive).frame(width: gutter)
+                    } else {
+                        divider
+                    }
                 }
+                trailing.frame(maxWidth: .infinity)
             }
-            trailing.frame(maxWidth: .infinity)
         }
-        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minX }) { originX = $0 }
     }
 }
 

@@ -116,7 +116,9 @@ final class WindowModel {
     /// The grids about to change follow an animated layout change, not a resize the user is
     /// making: no cols × rows overlay counting through every frame of it.
     func quietLayoutResizes(for duration: Double = DS.Motion.sidebarDuration) {
-        for workspace in workspaces.values { workspace.layoutChangeUntil = .now + .milliseconds(700) }
+        // The animation, then the resize's round trip to the pane.
+        let quiet = ContinuousClock.now + .seconds(duration) + .milliseconds(700)
+        for workspace in workspaces.values { workspace.layoutChangeUntil = max(workspace.layoutChangeUntil, quiet) }
         // The terminals resize through the animation: their grids change once, as it settles.
         TerminalSurface.holdGrids(for: .seconds(duration))
     }
