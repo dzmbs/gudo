@@ -102,6 +102,18 @@ public final class DaemonLayoutStore: LayoutStore {
         pending.removeAll()
     }
 
+    /// The attached session no longer exists: no tabs, nothing pending, until a layout of the
+    /// session attached next arrives.
+    func sessionGone() {
+        pending.removeAll()
+        sessionId = nil
+        revision = nil
+        projectsRevision = nil
+        confirmed = Session(tabs: [], activeTabId: nil)
+        confirmedProjects = HostProjects()
+        rebase()
+    }
+
     /// Drops every optimistic change and shows the daemon's state again.
     func revertToConfirmed() {
         pending.removeAll()

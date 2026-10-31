@@ -73,7 +73,7 @@ impl Session {
 pub(crate) struct Removed {
     /// Panes whose processes must be killed.
     pub panes: Vec<PaneId>,
-    /// Set when the session lost its last tab and was removed too.
+    /// Set when the whole session was closed (`CloseSession`).
     pub session: Option<SessionId>,
 }
 
@@ -95,11 +95,6 @@ impl Layout {
     pub fn alloc_pane(&mut self) -> PaneId {
         self.next_pane += 1;
         PaneId(self.next_pane)
-    }
-
-    #[cfg(test)]
-    pub fn sessions(&self) -> &[Session] {
-        &self.sessions
     }
 
     pub fn session(&self, id: SessionId) -> Option<&Session> {
@@ -312,18 +307,14 @@ impl Layout {
         let s = &mut self.sessions[si];
         let tab = s.tabs.remove(ti);
         let panes = leaves(&tab.root).collect();
-        if s.tabs.is_empty() {
-            let id = s.id;
-            self.sessions.remove(si);
-            self.mru.retain(|&x| x != id);
-            return Removed {
-                panes,
-                session: Some(id),
-            };
-        }
+        // A session outlives its last tab: clients attached to it see it empty (and can open
+        // or reopen a tab there) instead of a session that vanished under them.
         if s.active_tab == Some(tab.tab_id) {
             // Like browsers: the tab that slides into the closed one's place.
-            s.active_tab = Some(s.tabs[ti.min(s.tabs.len() - 1)].tab_id);
+            s.active_tab = s
+                .tabs
+                .get(ti.min(s.tabs.len().saturating_sub(1)))
+                .map(|t| t.tab_id);
         }
         s.leave_project(tab.tab_id);
         s.revision += 1;
@@ -895,8 +886,13 @@ mod tests {
         l.close_pane(p1).unwrap();
         assert_eq!(l.snapshot(s).unwrap().tabs[0].root, LayoutNode::Leaf(p3));
         let removed = l.close_pane(p3).unwrap();
-        assert_eq!(removed.session, Some(s));
-        assert!(l.sessions().is_empty());
+        assert_eq!(
+            removed.session, None,
+            "the last tab leaves its session in place"
+        );
+        let snap = l.snapshot(s).unwrap();
+        assert!(snap.tabs.is_empty());
+        assert_eq!(snap.active_tab, None);
     }
 
     #[test]

@@ -416,7 +416,8 @@ public final class MultiplayerSession {
             case .role: "Your role can't type here. \(canPrompt ? "Use the composer to prompt the agent." : "You're viewing.")"
             case .noLease: "\(holderName(pane) ?? "Someone") is driving. Take control to type."
             case .blocked: "The host refused that input."
-            case .unknownPane: "That pane is outside what you were invited to."
+            // A guest's scoped invite hides panes; for the owner the pane has simply ended.
+            case .unknownPane: isGuest ? "That pane is outside what you were invited to." : "That terminal has closed."
             }
             postThrottled(.inputRejected(pane: pane, reason: reason), message)
         case .forbidden(let what, let reason):

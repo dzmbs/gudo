@@ -89,6 +89,67 @@ final class TouchSnapshotTests: XCTestCase {
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
 
+    /// Tab history on touch: the Restore and idle rows, a selection with its bar, Select mode,
+    /// the Recently Closed list, and the compact switcher's Select sheet.
+    func testTabHistory() async throws {
+        let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = theme
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        defer { for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) } }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let model = WindowModel(app: .shared)
+        model.start()
+        for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
+        model.isSidebarShown = true
+        DesignFixtures.tabHistory(model)
+
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.rootViewController = UIHostingController(rootView: WindowContent(request: nil, model: model).environment(AppModel.shared))
+        window.isHidden = false
+        await pump(2)
+        try capture(window, "tab-history")
+        model.showRecentlyClosed()
+        await pump(1)
+        try capture(window, "tab-history-palette")
+        model.isPaletteShown = false
+
+        let sidebar = UIWindow(windowScene: scene)
+        sidebar.frame = CGRect(x: 0, y: 0, width: SidebarWidth.standard + 40, height: min(scene.screen.bounds.height, 900))
+        sidebar.rootViewController = UIHostingController(rootView: WorkspaceSidebar()
+            .environment(model)
+            .environment(\.horizontalSizeClass, .regular)
+            .chromeTheme(ThemeCatalog.theme(named: theme), windowTheme: .auto))
+        window.isHidden = true
+        sidebar.isHidden = false
+        await pump(1.5)
+        try capture(sidebar, "tab-history-sidebar")
+        let rows = model.groups.tabs
+        model.isSelectingTabs = true
+        model.tabSelection.select(rows[1])
+        model.tabSelection.toggle(rows[3], current: nil)
+        await pump(1)
+        try capture(sidebar, "tab-select-mode")
+        model.isSelectingTabs = false
+        await pump(0.5)
+        try capture(sidebar, "tab-selection")
+        model.endTabSelection()
+        sidebar.isHidden = true
+
+        // The compact switcher's Select sheet, at an iPhone's width.
+        let compact = UIWindow(windowScene: scene)
+        compact.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        compact.rootViewController = UIHostingController(rootView: CompactTabSelection()
+            .environment(model)
+            .chromeTheme(ThemeCatalog.theme(named: theme), windowTheme: .auto))
+        compact.isHidden = false
+        await pump(1.5)
+        try capture(compact, "tab-select-compact")
+        compact.isHidden = true
+        model.close()
+    }
+
     /// Making projects on touch: the first-run hint, New Project named in place, what a drop
     /// says it will do, the window after a terminal joined from its project.
     func testProjectsUX() async throws {

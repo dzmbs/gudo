@@ -94,6 +94,15 @@ pub struct AgentLaunch {
     pub new_tab_in: Option<u64>,
 }
 
+/// The tab [`DaemonClient::reopen_tab`] made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ReopenedTab {
+    /// The new tab.
+    pub tab_id: u64,
+    /// Its pane.
+    pub pane_id: u64,
+}
+
 /// What [`DaemonClient::launch_agent_pane`] did.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentLaunched {
@@ -386,6 +395,52 @@ impl DaemonClient {
             Err(e) => launched.prompt_error = Some(e.to_string()),
         }
         Ok(launched)
+    }
+
+    /// Reopens a closed tab as a new tab of `session_id` named `name` (empty: the daemon's
+    /// default), selected: the closed pane's agent resumes its session and a shell comes back
+    /// in its last directory. A daemon that does not keep closed panes opens a shell in `cwd`.
+    /// Returns the new tab and pane.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkspaceError::Denied`] for a connection without the owner role; otherwise as the
+    /// op failed.
+    pub async fn reopen_tab(
+        &self,
+        session_id: u64,
+        closed_pane: u64,
+        cwd: Option<String>,
+        name: String,
+    ) -> Result<ReopenedTab, WorkspaceError> {
+        let reopens = self
+            .inner
+            .daemon_info()
+            .is_some_and(|i| i.features.contains(proto::DaemonFeatures::REOPEN));
+        let launch = if reopens {
+            proto::PaneLaunch::Reopen {
+                pane_id: proto::PaneId(closed_pane),
+                cwd,
+            }
+        } else {
+            proto::PaneLaunch::Shell { cwd }
+        };
+        let op = proto::LayoutOp::NewTab {
+            session_id: proto::SessionId(session_id),
+            name,
+            launch,
+        };
+        match self.await_op(op).await? {
+            OpOutcome::TabCreated { tab_id, pane_id } => Ok(ReopenedTab { tab_id, pane_id }),
+            OpOutcome::Failed { code, message } => Err(match code {
+                crate::types::OpErrorCode::Forbidden => WorkspaceError::Denied { message },
+                crate::types::OpErrorCode::NotFound => WorkspaceError::NotFound { message },
+                _ => WorkspaceError::Failed { message },
+            }),
+            other => Err(WorkspaceError::Failed {
+                message: format!("unexpected outcome {other:?}"),
+            }),
+        }
     }
 
     // --- files ----------------------------------------------------------------------------

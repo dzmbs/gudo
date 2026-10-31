@@ -20,6 +20,10 @@ enum SidebarItem: Identifiable, Hashable {
     case suggestion(ProjectSuggestion)
     /// The one-time line teaching drag-onto-tab grouping, before the first project.
     case projectsIntro
+    /// "Restore 6 Tabs": tabs kept out of sight at launch.
+    case restoreTabs(Int)
+    /// "Close 6 Idle Tabs".
+    case idleTabs(Int)
     case hostHeader(String)
     /// A daemon's loose tabs grouped by repository (drawn as one block).
     case hostRepos(String)
@@ -34,6 +38,8 @@ enum SidebarItem: Identifiable, Hashable {
         case .windowHeader(let kind): "window/\(kind.rawValue)"
         case .suggestion(let suggestion): "suggestion/\(suggestion.key)"
         case .projectsIntro: "projects-intro"
+        case .restoreTabs: "restore-tabs"
+        case .idleTabs: "idle-tabs"
         case .hostHeader(let id): "host/\(id)"
         case .hostRepos(let id): "repos/\(id)"
         case .hostPlaceholder(let id): "placeholder/\(id)"
@@ -120,7 +126,10 @@ extension WindowModel {
     ) -> (items: [SidebarItem], sections: [SidebarSection]) {
         let hostGroups = groups.groups
         var sections = groups.sections
-        if let drop { sections = drop.applied(to: sections) }
+        if let drop {
+            // A selection dragged by one of its rows moves together.
+            sections = drop.carrying(carriedTabs(dragging: drop.dragged), in: sections).reduce(sections) { $1.applied(to: $0) }
+        }
         func rows(_ container: SidebarContainer) -> [TabRef] {
             sections.first { $0.container == container }?.rows ?? []
         }
@@ -130,6 +139,9 @@ extension WindowModel {
             projects.insert(moving, at: min(max(projectMove.index, 0), projects.count))
         }
         var items: [SidebarItem] = []
+        let restorable = groups.restoreDismissed ? 0 : groups.restorableTabs.count
+        if restorable > 0 { items.append(.restoreTabs(restorable)) }
+        if !idleTabs.isEmpty { items.append(.idleTabs(idleTabs.count)) }
         for project in projects {
             items.append(.projectHeader(project.id))
             if !self.groups.collapsedProjects.contains(project.id) {
@@ -225,6 +237,10 @@ private struct SidebarItemView: View {
             SuggestionRow(suggestion: suggestion)
         case .projectsIntro:
             ProjectsIntroRow()
+        case .restoreTabs(let count):
+            RestoreTabsRow(count: count)
+        case .idleTabs(let count):
+            IdleTabsRow(count: count)
         case .hostHeader(let id):
             if let group = model.groups.group(id) { HostGroupHeaderItem(group: group) }
         case .hostRepos(let id):
@@ -278,6 +294,16 @@ private struct SidebarTabRow: View {
                         .accessibilityHidden(true)
                 }
             }
+            // Selected for bulk actions: the selection tint, under the row's own fills.
+            .background {
+                if model.isInMultipleSelection(ref) {
+                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                        .fill(DS.Palette.selection)
+                        .padding(.horizontal, DS.Space.s)
+                        .transition(.opacity)
+                }
+            }
+            .animation(DS.Motion.quick, value: model.isInMultipleSelection(ref))
             // "Will group": the row lights in the project's colour (the accent for a loose one).
             .background {
                 RoundedRectangle(cornerRadius: DS.Radius.control)
@@ -292,7 +318,13 @@ private struct SidebarTabRow: View {
             .animation(DS.Motion.reorder, value: isGroupTarget)
             // Gone at once (the lifted preview covers it); back with a short fade on the drop.
             .animation(drag.dragging == ref ? nil : DS.Motion.quick, value: drag.dragging == ref)
-            .sidebarTabDrag(ref, model: model, drag: drag, title: model.title(ofTab: ref))
+            .sidebarTabDrag(ref, model: model, drag: drag, title: dragTitle)
+    }
+
+    /// The lifted row's words: the tab, or how many tabs move with it.
+    private var dragTitle: String {
+        let carried = model.carriedTabs(dragging: ref).count
+        return carried > 0 ? "\(carried + 1) Tabs" : model.title(ofTab: ref)
     }
 
     @ViewBuilder private func content(showsHost: Bool) -> some View {
@@ -403,7 +435,7 @@ private struct SidebarDropDelegate: DropDelegate {
             if ref.hostId == HostGroups.mixedId, !geometry.section(.window).rows.contains(ref) {
                 next = .insert(ref, into: .window, at: 0)
             }
-        case .suggestion, .projectsIntro, .hostAgents:
+        case .suggestion, .projectsIntro, .hostAgents, .restoreTabs, .idleTabs:
             break
         }
         if next != drag.plan {

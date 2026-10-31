@@ -75,6 +75,8 @@ enum DesignFixtures {
         case "hosts": model.destination = .hosts
         case "projects": projects(model)
         case "project-hosts": projectHosts(model)
+        case "tab-history": tabHistory(model)
+        case "tab-selection": tabSelection(model)
         case "inbox": model.destination = .inbox
         case "palette": model.isPaletteShown = true
         case "host-switcher":
@@ -192,6 +194,40 @@ enum DesignFixtures {
         let infra = [ref("fixture-hetzner", "deploy"), ref("fixture-box", "htop")].compactMap(\.self)
         model.newProject(from: app, name: "acme-app", naming: false)
         model.newProject(from: infra, name: "infra", naming: false)
+    }
+
+    /// Tab history on the projects fixture: two tabs kept aside at launch ("Restore 2 Tabs"),
+    /// two idle ones ("Close 2 Idle Tabs"), and a few recently closed tabs.
+    static func tabHistory(_ model: WindowModel) {
+        projects(model)
+        let hetzner = model.groups.group("fixture-hetzner")
+        let studio = model.groups.group("fixture-studio")
+        if let hetzner, hetzner.tabs.count > 1 {
+            model.groups.hiddenTabs = Set(hetzner.tabs.suffix(2).map { hetzner.ref($0.id) })
+        }
+        model.idleTabs = [studio.flatMap { group in group.tabs.last.map { group.ref($0.id) } }, model.groups.group("fixture-box").flatMap { group in group.tabs.first.map { group.ref($0.id) } }]
+            .compactMap(\.self)
+        let now = Date.now
+        let app = model.projects.first { $0.name == "acme-app" }
+        model.recentlyClosed.removeAll()
+        model.recentlyClosed.record([
+            ClosedTab(title: "release-notes", hostId: "fixture-hetzner", hostName: "hetzner", directory: "/srv/web", closedAt: now.addingTimeInterval(-26 * 3600)),
+            ClosedTab(title: "migrate-db", hostId: "fixture-studio", hostName: "studio", pane: 9, directory: "/srv/api", agent: "codex",
+                      project: app.map { ClosedProject(id: $0.id, name: $0.name, color: $0.color) }, closedAt: now.addingTimeInterval(-3 * 3600)),
+            ClosedTab(title: "fix-reconnect", hostId: "fixture-studio", hostName: "studio", pane: 4, directory: "/srv/api", agent: "claude",
+                      project: app.map { ClosedProject(id: $0.id, name: $0.name, color: $0.color) }, closedAt: now.addingTimeInterval(-12 * 60)),
+            ClosedTab(title: "~/notes", hostId: HostGroups.localId, hostName: WindowModel.deviceName, closedAt: now.addingTimeInterval(-90)),
+        ])
+    }
+
+    /// Three tabs selected in the sidebar across a project and two hosts.
+    static func tabSelection(_ model: WindowModel) {
+        projects(model)
+        let rows = model.groups.tabs
+        guard let local = rows.first(where: { $0.hostId == HostGroups.localId }), rows.count > 3 else { return }
+        model.focus(local)
+        model.clickTab(rows[1], modifiers: .command)
+        model.clickTab(rows[3], modifiers: .command)
     }
 
     /// The projects fixture's hosts, before any project.

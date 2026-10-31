@@ -2,7 +2,8 @@
 //! human-readable version of this file; keep them in sync).
 
 use proto::{
-    AssistRequest, LayoutOp, MpError, PaneId, Roles, Scope, SessionId, TabId, WorkspaceRequest,
+    AssistRequest, LayoutOp, MpError, PaneId, PaneLaunch, Roles, Scope, SessionId, TabId,
+    WorkspaceRequest,
 };
 
 use super::Authz;
@@ -106,6 +107,18 @@ pub(crate) fn check(core: &Core, authz: &Authz, need: Need, target: Target) -> R
 pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
     use LayoutOp as O;
     match op {
+        // A closed pane comes back only for the owner, who closed it: it can resume the
+        // owner's agent session.
+        O::Split {
+            pane_id,
+            launch: PaneLaunch::Reopen { .. },
+            ..
+        } => (Need::Own, Target::SessionOf(*pane_id)),
+        O::NewTab {
+            session_id,
+            launch: PaneLaunch::Reopen { .. },
+            ..
+        } => (Need::Own, Target::Session(*session_id)),
         O::Split { pane_id, .. } | O::BreakPane { pane_id } | O::MovePane { pane_id, .. } => {
             (Need::Drive, Target::SessionOf(*pane_id))
         }
@@ -257,5 +270,39 @@ pub(crate) fn assist_pane(req: &AssistRequest) -> Option<PaneId> {
         R::Complete(c) => Some(c.pane_id),
         R::AnswerBlocked(a) => Some(a.pane_id),
         R::History(_) | R::FileSearch(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A driver may open tabs, but bringing back a closed pane (which can resume the owner's
+    /// agent session) is the owner's.
+    #[test]
+    fn reopening_a_closed_pane_needs_the_owner() {
+        let session = SessionId(1);
+        let reopen = || PaneLaunch::Reopen {
+            pane_id: PaneId(4),
+            cwd: None,
+        };
+        let shell = LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch: PaneLaunch::Shell { cwd: None },
+        };
+        assert_eq!(op(&shell), (Need::Drive, Target::Session(session)));
+        let tab = LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch: reopen(),
+        };
+        assert_eq!(op(&tab), (Need::Own, Target::Session(session)));
+        let split = LayoutOp::Split {
+            pane_id: PaneId(2),
+            axis: proto::Axis::Horizontal,
+            launch: reopen(),
+        };
+        assert_eq!(op(&split), (Need::Own, Target::SessionOf(PaneId(2))));
     }
 }

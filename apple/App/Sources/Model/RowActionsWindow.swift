@@ -6,29 +6,10 @@ import PaneLayout
 // What the rows' actions (`RowActions`) do in a window, with Undo where a close can come back.
 
 extension WindowModel {
-    /// Closes a host tab. With `undoable`, Undo opens a new shell on the same host in the folder
-    /// it was in (what ran there ended with it).
+    /// Closes a host tab into Recently Closed. With `undoable`, Undo brings it back where it was
+    /// (its agent resuming its session).
     func closeTab(_ ref: TabRef, undoable: Bool) {
-        guard let workspace = workspace(ofGroup: ref.hostId),
-              let tab = workspace.session.tabs.first(where: { $0.id == ref.tab })
-        else { return }
-        let title = workspace.title(of: tab)
-        let folder = workspace.absoluteDirectory(of: tab)
-        let named = tab.title
-        workspace.apply(.closeTab(tab.id))
-        guard undoable else { return }
-        offerUndo("Closed “\(title)”") { [weak self] in
-            AppModel.log.info("undo: reopening a tab on \(ref.hostId, privacy: .public) in \(folder ?? "-", privacy: .public)")
-            self?.reopenTab(onGroup: ref.hostId, in: folder, title: named)
-        }
-    }
-
-    private func reopenTab(onGroup host: String, in folder: String?, title: String?) {
-        if let folder, host != HostGroups.localId, app.hosts.connection(host) is DaemonConnection {
-            git.openTab(in: folder, name: title ?? "", host: host)
-        } else {
-            newTab(onGroup: host)
-        }
+        closeTabs([ref], undoable: undoable)
     }
 
     /// Closes a tab the window owns (VS Code, a page, a mixed tab). Editors and pages come back

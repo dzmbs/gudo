@@ -25,11 +25,12 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, agents, agentTools, git, network, devices, thisMac, about
+    case appearance, tabs, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, agents, agentTools, git, network, devices, thisMac, about
 
     var title: String {
         switch self {
         case .appearance: "Appearance"
+        case .tabs: "Tabs"
         case .font: "Font"
         case .cursor: "Cursor"
         case .splits: "Splits"
@@ -54,7 +55,7 @@ nonisolated enum SettingsSection: String, Sendable {
     #if os(macOS)
     var pane: SettingsPane {
         switch self {
-        case .appearance: .appearance
+        case .appearance, .tabs: .appearance
         case .font, .cursor, .splits, .links: .terminal
         case .appLock, .passwords: .privacy
         case .browser: .browser
@@ -79,6 +80,7 @@ enum SettingsIndex {
             .init(id: "theme-pair", title: "Follow Light and Dark Mode", key: "theme", section: .appearance, synonyms: ["light theme", "dark theme", "automatic", "system appearance", "pair"]),
             .init(id: "pane-style", title: "Panes", key: "pane-style", section: .appearance, synonyms: ["padding", "compact", "spacious"]),
             .init(id: "title-from-shell", title: "Tab Title from Shell", key: "title-from-shell", section: .appearance, synonyms: ["tab", "name", "osc"]),
+            .init(id: "launch-tabs", title: "Opens With", section: .tabs, synonyms: ["launch", "startup", "restore", "previous tabs", "new terminal", "session", "reopen", "start"]),
             .init(id: "font-family", title: "Font Family", key: "font-family", section: .font, synonyms: ["typeface", "jetbrains", "mono"]),
             .init(id: "font-size", title: "Font Size", key: "font-size", section: .font, synonyms: ["text", "zoom", "bigger", "smaller"]),
             .init(id: "cursor-style", title: "Cursor Style", key: "cursor-style", section: .cursor, synonyms: ["block", "bar", "underline", "caret"]),

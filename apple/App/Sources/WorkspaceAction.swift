@@ -39,6 +39,8 @@ enum WorkspaceAction: Hashable {
     case toggleSidebar
     /// Every shortcut on one page.
     case shortcuts
+    /// The last closed tab (or tabs closed together) back where it was (⇧⌘T, browsers).
+    case reopenClosedTab
 
     static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .newProject, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom, .movePaneToNewTab] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
@@ -46,11 +48,12 @@ enum WorkspaceAction: Hashable {
     static let drawActions: [Self] = [.draw, .newCanvas]
     static let tabActions: [Self] = [.previousTab, .nextTab] + (1...8).map(Self.selectTab) + [.lastTab, .goToTab, .moveTabUp, .moveTabDown]
     static let hostActions: [Self] = (1...9).map(Self.selectHost)
+    static let historyActions: [Self] = [.reopenClosedTab]
     static let windowActions: [Self] = [.toggleSidebar, .shortcuts, .commandPalette, .commandPaletteGhostty, .find, .findNext, .findPrevious, .links, .inbox, .jumpToWaitingAgent, .hosts]
     /// Every app shortcut. The terminal answers these itself while it has the keyboard (iPad):
     /// UIKit asks the first responder first, so they never depend on the responder chain reaching
     /// the scene's menu commands, which it can miss right after the window switched hosts.
-    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + hostActions + windowActions + [.newWindow]
+    static let allShortcutActions: [Self] = fileActions + paneActions + drawActions + tabActions + hostActions + windowActions + historyActions + [.newWindow]
 
     /// Whether the shortcut stays the app's while a VS Code pane has the keyboard
     /// (docs/APP-ARCHITECTURE.md §20): ⌘1–⌘9 switch tabs (VS Code's own ⌘1–⌘8 focus editor
@@ -103,6 +106,7 @@ enum WorkspaceAction: Hashable {
         case .hosts: "Hosts"
         case .toggleSidebar: "Toggle Sidebar"
         case .shortcuts: "Keyboard Shortcuts"
+        case .reopenClosedTab: "Reopen Closed Tab"
         }
     }
 
@@ -121,8 +125,8 @@ enum WorkspaceAction: Hashable {
         case .splitWithHost: KeyboardShortcut("d", modifiers: [.command, .option, .shift])
         case .closePane: KeyboardShortcut("w")
         case .toggleZoom: KeyboardShortcut(.return, modifiers: [.command, .shift])
-        // ⌘T with ⇧ to take the pane along; free in the app, iPadOS and macOS.
-        case .movePaneToNewTab: KeyboardShortcut("t", modifiers: [.command, .shift])
+        // ⇧⌘T is every browser's Reopen Closed Tab; ⌥ adds "take the pane along" to it.
+        case .movePaneToNewTab: KeyboardShortcut("t", modifiers: [.command, .option, .shift])
         case .focus(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .option])
         case .resize(let direction): KeyboardShortcut(direction.arrow, modifiers: [.command, .control])
         case .previousPrompt: KeyboardShortcut(.upArrow, modifiers: .command)
@@ -158,6 +162,7 @@ enum WorkspaceAction: Hashable {
         case .hosts: KeyboardShortcut("h", modifiers: [.command, .shift])
         case .toggleSidebar: KeyboardShortcut("b")
         case .shortcuts: KeyboardShortcut("/")
+        case .reopenClosedTab: KeyboardShortcut("t", modifiers: [.command, .shift])
         }
     }
 
@@ -196,6 +201,8 @@ enum WorkspaceAction: Hashable {
         case .hosts: window.destination = window.destination == .hosts ? .terminal : .hosts
         case .toggleSidebar: perform(window: window)
         case .shortcuts: window.sheet = window.sheet == .shortcuts ? nil : .shortcuts
+        case .reopenClosedTab: window.reopenLastClosed()
+        case .closePane: window.closeFocusedPaneOrTab()
         case .returnToTerminal: window.returnToTerminal()
         case .fullScreenEditor: window.toggleEditorFullScreen()
         case .movePaneToNewTab: window.movePaneToNewTab()
@@ -220,7 +227,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .newProject, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost: break
+        case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .newProject, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost, .reopenClosedTab: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.

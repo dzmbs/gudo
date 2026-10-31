@@ -63,6 +63,14 @@ struct WorkspaceSidebar: View {
             SidebarFooter()
         }
         #endif
+        // Tabs selected for bulk actions: how many and what to do with them.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if model.isSelectingTabs || model.tabSelection.isMultiple {
+                TabSelectionBar()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(DS.Motion.snappy, value: model.isSelectingTabs || model.tabSelection.isMultiple)
         .overlay(alignment: .bottomLeading) { ConnectionProbe() }
     }
 
@@ -232,8 +240,9 @@ private struct HostGroupHeader: View {
                         .help("Plain SSH: tabs end with the connection. Install the helper to keep them.")
                 }
                 Spacer(minLength: DS.Space.xs)
-                if collapsed, !group.tabs.isEmpty {
-                    Text("\(model.groups.looseTabs(of: group).count)")
+                // What the collapse hides: the host's loose tabs (its project tabs stay shown).
+                if collapsed, case let hidden = model.groups.looseTabs(of: group).count, hidden > 0 {
+                    Text("\(hidden)")
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .contentTransition(.numericText())
@@ -583,7 +592,7 @@ struct TabRow: View {
         let program = model.programIdentity(of: tab, onGroup: group.id)
 
         Button {
-            withAnimation(DS.Motion.snappy) { model.focus(ref) }
+            model.clickTab(ref, modifiers: ClickModifiers.current)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
                 Text("\(number)")
@@ -620,6 +629,14 @@ struct TabRow: View {
                 }
                 Spacer(minLength: DS.Space.xs)
                 TabPresence(workspace: workspace, panes: tab.root.panes)
+                if model.isSelectingTabs {
+                    let selected = model.tabSelection.contains(ref)
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.body)
+                        .foregroundStyle(selected ? DS.Palette.accent : DS.Palette.textTertiary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .accessibilityHidden(true)
+                }
                 if CommandKeyState.shared.held, let shortcut = model.groups.shortcutNumber(of: ref) {
                     Text("⌘\(shortcut)")
                         .font(DS.Font.meta)
@@ -629,21 +646,34 @@ struct TabRow: View {
             }
             // A host that is down keeps its rows (and their last state), quieter.
             .opacity(group.status.isLive || group.isLocal ? 1 : 0.6)
-            .sidebarRow(selected: isActive)
+            // In Select mode only the checks say what is selected.
+            .sidebarRow(selected: isActive && !model.isSelectingTabs)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
         .accessibilityValue([running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "", TabPresence.value(workspace, tab.root.panes)]
             .filter { !$0.isEmpty }.joined(separator: "; "))
-        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isActive || model.isInMultipleSelection(ref) ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tab-row-\(number)")
         .rowActions(actions, id: ref.description, name: title, perform: perform) {
-            Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
-                .accessibilityIdentifier("open-in-new-window")
-            if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
-            Divider()
-            ProjectMenuItems(model: model, ref: ref)
+            if model.isInMultipleSelection(ref) {
+                // A row of a selection: what applies to all of it.
+                TabSelectionMenuItems(model: model)
+            } else {
+                Button(RowAction.openInNewWindow.title, systemImage: RowAction.openInNewWindow.systemImage) { model.openInNewWindow(ref) }
+                    .accessibilityIdentifier("open-in-new-window")
+                if let workspace { MergeIntoTabMenu(workspace: workspace, tab: tab.id) }
+                Divider()
+                ProjectMenuItems(model: model, ref: ref)
+                Divider()
+                Button("Select Tabs", systemImage: "checkmark.circle") {
+                    withAnimation(DS.Motion.snappy) {
+                        model.isSelectingTabs = true
+                        model.tabSelection.select(ref)
+                    }
+                }
+            }
         }
         .accessibilityAction(named: "Move Up") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: -1) } }
         .accessibilityAction(named: "Move Down") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: 1) } }
@@ -875,6 +905,14 @@ struct CompactTerminalView: View {
         // The bar is the window's base: the terminal's own background under Match Terminal.
         .chromeBackground(DS.Palette.base)
         .modifier(ProjectNamingAlert())
+        #if os(iOS)
+        // The switcher's Select mode: every tab in a list that selects several.
+        .sheet(isPresented: Binding(get: { model.isSelectingTabs }, set: { if !$0 { model.endTabSelection() } })) {
+            CompactTabSelection()
+                .environment(model)
+                .chromeSheetBackground()
+        }
+        #endif
     }
 
     private var bar: some View {
@@ -902,7 +940,25 @@ struct CompactTerminalView: View {
         let projects = model.projects
         let grouped = Set(projects.flatMap(\.tabs))
         let windowTabs = model.groups.mixedTabs.filter { !grouped.contains($0) }
+        let restorable = model.groups.restorableTabs.count
         return Menu {
+            // Tab history: tabs kept aside at launch, idle ones, the recently closed, selecting.
+            Section {
+                if restorable > 0 {
+                    Button(restorable == 1 ? "Restore 1 Tab" : "Restore \(restorable) Tabs", systemImage: "arrow.counterclockwise") { model.restoreHiddenTabs() }
+                }
+                if !model.idleTabs.isEmpty {
+                    Button("Close \(model.idleTabs.count) Idle Tabs", systemImage: "moon.zzz") { model.closeIdleTabs() }
+                }
+                if !model.recentlyClosed.tabs.isEmpty {
+                    Menu("Recently Closed", systemImage: "clock.arrow.circlepath") {
+                        RecentlyClosedMenuItems(model: model, limit: 10)
+                    }
+                }
+                if total > 1 {
+                    Button("Select Tabs…", systemImage: "checkmark.circle") { model.isSelectingTabs = true }
+                }
+            }
             // Projects first, as in the sidebar: one section each, its tabs from any host.
             ForEach(projects) { project in
                 Section(project.tabs.isEmpty ? project.name

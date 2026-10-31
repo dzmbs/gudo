@@ -234,6 +234,34 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    /// Tab history: the Restore and idle rows, Recently Closed in the palette, a selection of
+    /// three tabs with its bar, touch Select mode, and the launch setting.
+    func testTabHistory() async throws {
+        defer { for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) } }
+        try await window("tab-history", screen: "tab-history")
+        try await window("tab-history-palette", screen: "tab-history") { model in
+            await self.pump(1)
+            model.showRecentlyClosed()
+        }
+        try await window("tab-selection", screen: "tab-selection")
+        try await window("tab-select-mode", screen: "tab-history") { model in
+            await self.pump(1)
+            model.isSelectingTabs = true
+            model.tabSelection.select(model.groups.tabs[2])
+            model.tabSelection.toggle(model.groups.tabs[4], current: nil)
+        }
+        try await settings("settings-tabs", SettingsNavigation(pane: .appearance))
+        // The argument domain shows the other choice whatever the app saved (never written).
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[LaunchTabs.key] = LaunchTabs.newTerminal.rawValue
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        defer {
+            arguments[LaunchTabs.key] = nil
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        }
+        try await settings("settings-tabs-new-terminal", SettingsNavigation(pane: .appearance))
+    }
+
     /// Any program's own status (pi blocked on a question) in its pane header and tab glyph.
     func testProgramStatus() async throws {
         defer {

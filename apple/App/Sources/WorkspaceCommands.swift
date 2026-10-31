@@ -83,6 +83,15 @@ struct WorkspaceCommands: Commands {
                 Divider()
                 ProjectMenuItems(model: model, ref: ref)
             }
+            Divider()
+            Button("Select All Tabs") { model?.selectAllTabs() }
+            if let model, model.tabSelection.isMultiple || model.isSelectingTabs {
+                Button("Close \(model.tabSelection.selected.count) Selected Tabs") { model.requestCloseSelectedTabs() }
+            }
+        }
+        // Safari's History menu: the last close back, the tabs a launch kept aside, the list.
+        CommandMenu("History") {
+            HistoryMenuItems(model: model)
         }
         CommandMenu("Git") {
             Button("Run Script") { model?.git.runDefault() }

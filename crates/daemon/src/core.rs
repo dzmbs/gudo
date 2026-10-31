@@ -1,6 +1,6 @@
 //! Daemon-wide state: the layout, the panes, the event bus, and the operations on them.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
@@ -127,6 +127,19 @@ pub(crate) struct AgentRecord {
     pub session_id: Option<String>,
 }
 
+/// A pane that closed, kept so a recently closed tab can come back (`PaneLaunch::Reopen`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ClosedPane {
+    pub pane_id: PaneId,
+    /// Its last working directory.
+    pub cwd: Option<String>,
+    /// The agent it ran, when its session id was known.
+    pub agent: Option<AgentRecord>,
+}
+
+/// How many closed panes the daemon remembers, oldest dropped first.
+pub(crate) const CLOSED_PANES: usize = 64;
+
 #[derive(Debug, Default)]
 pub(crate) struct MetaState {
     pub title: String,
@@ -218,6 +231,8 @@ pub(crate) struct Core {
     pub identity: Arc<Identity>,
     pub layout: Mutex<Layout>,
     panes: Mutex<HashMap<PaneId, Arc<PaneEntry>>>,
+    /// Recently closed panes, newest last.
+    closed: Mutex<VecDeque<ClosedPane>>,
     pub events: broadcast::Sender<Event>,
     attached: Mutex<HashMap<ConnId, SessionId>>,
     next_conn: AtomicU64,
@@ -267,6 +282,7 @@ impl Core {
             identity,
             layout: Mutex::new(layout),
             panes: Mutex::new(HashMap::new()),
+            closed: Mutex::new(VecDeque::new()),
             events,
             attached: Mutex::new(HashMap::new()),
             next_conn: AtomicU64::new(1),
@@ -918,9 +934,71 @@ impl Core {
                 self.approvals.forget_pane(*id);
                 self.ws.forget_pane(*id);
                 self.mp.forget_pane(*id);
+                if !self.shutting_down.load(Ordering::Acquire) {
+                    self.remember_closed(*id, &lock(&entry.record));
+                }
                 entry.pane.hang_up();
                 self.emit(Event::PaneClosed(*id));
             }
+        }
+    }
+
+    fn remember_closed(&self, pane_id: PaneId, record: &PaneRecord) {
+        let agent = record
+            .agent
+            .clone()
+            .filter(|agent| agent.session_id.is_some());
+        let mut closed = lock(&self.closed);
+        closed.push_back(ClosedPane {
+            pane_id,
+            cwd: record.cwd.clone(),
+            agent,
+        });
+        while closed.len() > CLOSED_PANES {
+            closed.pop_front();
+        }
+    }
+
+    /// The closed panes, oldest first (persisted with the layout).
+    pub fn closed_panes(&self) -> Vec<ClosedPane> {
+        lock(&self.closed).iter().cloned().collect()
+    }
+
+    /// Takes back the closed panes saved before a restart.
+    pub fn restore_closed(&self, panes: Vec<ClosedPane>) {
+        let mut closed = lock(&self.closed);
+        closed.extend(panes);
+        while closed.len() > CLOSED_PANES {
+            closed.pop_front();
+        }
+    }
+
+    /// What `PaneLaunch::Reopen` starts: the closed pane's agent resuming its session, else a
+    /// shell in its last directory (else `cwd`). The record is used up, so one session never
+    /// resumes in two panes.
+    fn reopen_launch(&self, pane: PaneId, cwd: Option<String>) -> PaneLaunch {
+        let closed = {
+            let mut closed = lock(&self.closed);
+            closed
+                .iter()
+                .rposition(|c| c.pane_id == pane)
+                .and_then(|i| closed.remove(i))
+        };
+        let Some(closed) = closed else {
+            return PaneLaunch::Shell { cwd };
+        };
+        self.mark_dirty();
+        let cwd = closed.cwd.or(cwd);
+        match closed.agent {
+            Some(AgentRecord {
+                kind,
+                session_id: Some(id),
+            }) => PaneLaunch::Agent {
+                agent: kind,
+                resume: Some(id),
+                cwd,
+            },
+            _ => PaneLaunch::Shell { cwd },
         }
     }
 
@@ -946,11 +1024,20 @@ impl Core {
         cwd_hint: Option<String>,
         restored: bool,
     ) -> Result<(), (OpError, String)> {
+        let (launch, restored) = match launch {
+            PaneLaunch::Reopen { pane_id, cwd } => {
+                let launch = self.reopen_launch(pane_id, cwd);
+                let resumed = matches!(launch, PaneLaunch::Agent { .. });
+                (launch, restored || resumed)
+            }
+            launch => (launch, restored),
+        };
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
         let launch_cwd = match &launch {
             PaneLaunch::Shell { cwd }
             | PaneLaunch::Command { cwd, .. }
-            | PaneLaunch::Agent { cwd, .. } => cwd.clone(),
+            | PaneLaunch::Agent { cwd, .. }
+            | PaneLaunch::Reopen { cwd, .. } => cwd.clone(),
             PaneLaunch::Canvas { artifact_id } => {
                 let artifact = artifact_id.ok_or((
                     OpError::Invalid,
@@ -1013,7 +1100,7 @@ impl Core {
             .take_pre_command(std::path::Path::new(&cwd))
             .map(|c| format!("{c}\n"));
         match &launch {
-            PaneLaunch::Shell { .. } => match &pre {
+            PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => match &pre {
                 Some(pre) => {
                     cmd.args(["-l", "-c", &format!("{pre}{}", then_shell())]);
                 }
@@ -1707,7 +1794,12 @@ pub(crate) fn shell_quote(s: &str) -> String {
 }
 
 /// Restores the saved layout, respawning every pane (agents resume their sessions).
-pub(crate) fn restore(core: &Arc<Core>, panes: HashMap<PaneId, PaneRecord>) {
+pub(crate) fn restore(
+    core: &Arc<Core>,
+    panes: HashMap<PaneId, PaneRecord>,
+    closed: Vec<ClosedPane>,
+) {
+    core.restore_closed(closed);
     let ids = lock(&core.layout).all_panes();
     let mut failed = Vec::new();
     for id in ids {
@@ -1757,7 +1849,7 @@ pub(crate) fn saved_state(core: &Core) -> persist::Saved {
         .into_iter()
         .map(|(id, e)| (id.0, lock(&e.record).clone()))
         .collect();
-    persist::Saved::new(layout, panes)
+    persist::Saved::new(layout, panes, core.closed_panes())
 }
 
 /// A notification's share of an agent's message.
