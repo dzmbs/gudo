@@ -899,6 +899,97 @@ async fn worktrees_get_stable_ports_and_dirty_checks() {
 // --- files ---------------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_state_dir_stays_out_of_reach_inside_an_allowed_root() {
+    let (_home, home) = canonical_tempdir();
+    let state = home.join(".local/state/unnamed");
+    std::fs::create_dir_all(&state).unwrap();
+    let daemon = start_home(&state, &home).await;
+    let c = connected(&daemon).await;
+    let cl = &c.client;
+    std::os::unix::fs::symlink(&state, home.join("st")).unwrap();
+    let token = s(&state.join("hook.token"));
+    fn denied<T>(r: Result<T, WsError>) -> bool {
+        matches!(r, Err(WsError::Denied(_)))
+    }
+
+    // Other spellings of the same directory, where the volume ignores case (macOS).
+    let spelled = [
+        home.join(".local/state/UNNAMED"),
+        home.join(".LOCAL/State/unnamed"),
+    ];
+    let spelled: Vec<_> = spelled.iter().filter(|p| p.exists()).collect();
+    let mut paths = vec![
+        token.clone(),
+        s(&home.join("st/hook.token")),
+        format!("{}/./hook.token", s(&state)),
+        format!("{}//hook.token", s(&state)),
+    ];
+    paths.extend(spelled.iter().map(|p| s(&p.join("hook.token"))));
+    for path in paths {
+        assert!(denied(cl.fs_read(path.clone(), 0, 64).await), "{path}");
+    }
+    assert!(denied(cl.fs_list(s(&state), true).await));
+    assert!(denied(cl.fs_list(s(&home.join("st")), true).await));
+    for dir in &spelled {
+        assert!(denied(cl.fs_list(s(dir), true).await), "{}", dir.display());
+    }
+    let write = |path: PathBuf| WriteTarget {
+        path: s(&path),
+        if_match: None,
+        create_new: false,
+        mkdirs: false,
+        mode: None,
+    };
+    assert!(denied(
+        cl.fs_write(write(state.join("devices.json")), b"[]".to_vec())
+            .await
+    ));
+    assert!(denied(
+        cl.fs_write(write(home.join("st/devices.json")), b"[]".to_vec())
+            .await
+    ));
+
+    // Carrying it somewhere unrefused: moving or deleting what holds it.
+    let mut holders = vec![home.join(".local"), home.join(".local/state")];
+    holders.extend([home.join(".LOCAL")].into_iter().filter(|p| p.exists()));
+    for from in holders {
+        let from = s(&from);
+        let moved = cl
+            .fs_rename(from.clone(), s(&home.join("moved")), false)
+            .await;
+        assert!(
+            matches!(moved, Err(WsError::Denied(_))),
+            "{from}: {moved:?}"
+        );
+    }
+    let deleted = cl
+        .fs_delete(s(&home.join(".local")), DeleteMode::Permanent, true)
+        .await;
+    assert!(matches!(deleted, Err(WsError::Denied(_))), "{deleted:?}");
+    assert!(std::fs::read(state.join("hook.token")).is_ok());
+
+    // Its hook socket is not a forward target.
+    let hook = daemon.hook_socket().to_owned();
+    if hook.starts_with(&state) {
+        let local = cl
+            .forward(0, ForwardTarget::Unix { path: s(&hook) })
+            .unwrap();
+        let mut tcp = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+        let _ = tcp
+            .write_all(b"{\"v\":1,\"token\":\"x\",\"pane\":\"1\",\"pull\":{\"op\":\"list\"}}\n")
+            .await;
+        let mut buf = [0; 1];
+        let n = tokio::time::timeout(Duration::from_secs(10), tcp.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(n, 0, "the hook socket answered through a forward");
+    }
+    drop(c);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn files_are_listed_written_transferred_and_confined() {
     let (_state, state) = canonical_tempdir();
     let (_home, home) = canonical_tempdir();

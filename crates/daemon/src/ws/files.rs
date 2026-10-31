@@ -165,7 +165,7 @@ pub(crate) fn rename(
     to: &str,
     overwrite: bool,
 ) -> Result<FileStat, WsError> {
-    let from = policy.resolve(from)?;
+    let from = policy.resolve_movable(from)?;
     let to = policy.resolve(to)?;
     fs::symlink_metadata(&from).map_err(|e| io_error(&from, &e))?;
     if overwrite {
@@ -215,7 +215,7 @@ pub(crate) fn delete(
     mode: DeleteMode,
     recursive: bool,
 ) -> Result<(), WsError> {
-    let path = policy.resolve(raw)?;
+    let path = policy.resolve_movable(raw)?;
     if policy.home() == path.as_path() || path.parent().is_none() {
         return Err(WsError::Denied(format!(
             "refusing to delete {}",
