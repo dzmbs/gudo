@@ -134,6 +134,7 @@ public final class TerminalView: UIView {
         addInteraction(UIDropInteraction(delegate: self))
         addSubview(copiedToast)
         PasteboardOrigin.observe()
+        MemoryPressure.observe()
 
         surface.onFrameRendered = { [weak self] in self?.layoutSelectionHandles() }
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: TerminalView, _) in view.setNeedsLayout() }
@@ -1272,6 +1273,21 @@ private enum PasteboardOrigin {
         guard observer == nil else { return }
         observer = NotificationCenter.default.addObserver(forName: UIPasteboard.changedNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { ownChangeCount = UIPasteboard.general.changeCount }
+        }
+    }
+}
+
+/// Gives back the shared glyph atlases on a memory warning, before the system has to end the app.
+@MainActor
+private enum MemoryPressure {
+    private static var observer: (any NSObjectProtocol)?
+
+    static func observe() {
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { FontGrid.releaseCaches() }
         }
     }
 }

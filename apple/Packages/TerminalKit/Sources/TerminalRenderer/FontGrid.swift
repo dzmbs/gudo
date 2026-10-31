@@ -139,6 +139,15 @@ final class FontGrid {
     /// Grids in use by font and pixel size.
     @MainActor private static var live: [String: WeakGrid] = [:]
 
+    /// Memory pressure: every shared grid that grew starts its atlases over, keeping only what
+    /// the next frames draw (an atlas holds every glyph ever shown at its size, up to 64 MB on the
+    /// CPU plus the same on the GPU).
+    @MainActor static func releaseCaches() {
+        for grid in live.values.compactMap(\.grid) where grid.grayscale.size > 512 || grid.color.size > 512 {
+            grid.resetAtlases()
+        }
+    }
+
     /// The grid for a font and size, shared by every surface that uses them: glyphs are
     /// rasterized, packed and uploaded once instead of once per pane. Freed with its last user.
     @MainActor static func shared(pixelSize: CGFloat, family: String? = nil) -> FontGrid {

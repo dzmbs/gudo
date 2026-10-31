@@ -1072,7 +1072,9 @@ public final class TerminalSurface {
         configure(fresh)
         fresh.contentsScale = old.contentsScale
         fresh.frame = old.frame
+        #if os(macOS)
         fresh.autoresizingMask = old.autoresizingMask
+        #endif
         fresh.drawableSize = pixelSize
         layer = fresh
         onLayerReplaced?(old, fresh)

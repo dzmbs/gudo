@@ -188,6 +188,23 @@ import Testing
         #expect(!focused.mayRender(focused: false, now: now) || focused.mayRender(focused: true, now: now))
     }
 
+    /// A memory warning empties grown atlases; the pane still draws every glyph afterwards.
+    @Test func memoryWarningReleasesGrownAtlases() throws {
+        let terminal = Terminal(cols: 60, rows: 10) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 31)
+        surface.layout(size: CGSize(width: 1200, height: 600), scale: 2)
+        terminal.write(Array(cjkScreen(from: 0x4E00, cols: 60, rows: 10).utf8))
+        surface.renderIfDirty(offscreen: true)
+        let fonts = try #require(surface.fonts)
+        #expect(fonts.grayscale.size > 512)
+        FontGrid.releaseCaches()
+        #expect(fonts.grayscale.size == 512 && fonts.grayscaleTexture == nil)
+        surface.outputArrived()
+        terminal.write(Array("!".utf8))
+        #expect(surface.renderIfDirty(offscreen: true))
+        #expect(fonts.grayscale.size > 512)
+    }
+
     /// Endless distinct clusters (random combining marks) and glyphless codepoints keep the
     /// lookup caches bounded.
     @Test func lookupCachesStayBounded() {

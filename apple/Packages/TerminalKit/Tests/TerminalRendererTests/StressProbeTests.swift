@@ -167,4 +167,72 @@ struct StressProbeTests {
         }
         print("PROBE random bytes: worst \(worst) atlas \(surface.atlasSizes) footprint +\((footprint() - start) >> 20) MB")
     }
+
+    /// Opens, draws, hides and closes 50 panes ten times; footprint per cycle should stay flat.
+    /// Waits at the end so `leaks` can inspect the process (probe-leaks.sh).
+    @Test func probeSurfaceChurn() async throws {
+        weak var lastSurface: TerminalSurface?
+        var cycles: [Int] = []
+        for cycle in 0..<10 {
+            try autoreleasepool {
+                var panes: [TerminalSurface] = []
+                for i in 0..<50 {
+                    let terminal = Terminal(cols: 80, rows: 24) { _ in }
+                    let s = try TerminalSurface(terminal: terminal, fontSize: CGFloat(12 + i % 3))
+                    s.layout(size: CGSize(width: 900, height: 600), scale: 2)
+                    terminal.write(Array(String(repeating: "cycle \(cycle) pane \(i) ✓ 日本 😀\r\n", count: 40).utf8))
+                    s.renderIfDirty()
+                    panes.append(s)
+                }
+                for p in panes { p.releaseGPUResources() }
+                lastSurface = panes.last
+            }
+            try await Task.sleep(for: .milliseconds(500))
+            cycles.append(footprint() >> 20)
+        }
+        print("PROBE churn footprint MB per cycle: \(cycles), last surface freed: \(lastSurface == nil)")
+        try await pauseForInspection()
+    }
+
+    /// With UNNAMED_STRESS_PAUSE=<file>, writes the pid there and waits for `leaks`/`vmmap`.
+    func pauseForInspection() async throws {
+        guard let pidFile = ProcessInfo.processInfo.environment["UNNAMED_STRESS_PAUSE"] else { return }
+        try? "\(getpid())".write(toFile: pidFile, atomically: true, encoding: .utf8)
+        try await Task.sleep(for: .seconds(40))
+    }
+
+    /// Kitty images at their limits: a stream of large images and one at the size cap.
+    @Test func probeKittyLimits() async throws {
+        let terminal = Terminal(cols: 120, rows: 40) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 13)
+        surface.layout(size: CGSize(width: 1400, height: 900), scale: 2)
+        let start = footprint()
+        var worst = 0.0
+        func send(id: Int, w: Int, h: Int) {
+            let pixels = [UInt8](repeating: UInt8(id % 255), count: w * h * 4)
+            let b64 = Data(pixels).base64EncodedString()
+            var seq: [UInt8] = []
+            var i = b64.startIndex
+            while i < b64.endIndex {
+                let j = b64.index(i, offsetBy: 4096, limitedBy: b64.endIndex) ?? b64.endIndex
+                let more = j < b64.endIndex ? 1 : 0
+                let head = i == b64.startIndex ? "a=T,f=32,s=\(w),v=\(h),i=\(id),c=20,r=10,q=2,m=\(more)" : "m=\(more)"
+                seq += Array("\u{1b}_G\(head);\(b64[i..<j])\u{1b}\\".utf8)
+                i = j
+            }
+            terminal.write(seq)
+            surface.outputArrived()
+            let f0 = CACurrentMediaTime()
+            surface.renderIfDirty()
+            worst = max(worst, CACurrentMediaTime() - f0)
+        }
+        for id in 1...60 { send(id: id, w: 2000, h: 1500) }
+        try await Task.sleep(for: .seconds(1))
+        print("PROBE kitty 60x 2000x1500: worst frame \(worst), textures \(surface.kittyTextures.count), placements \(surface.kittyPlacements.count), footprint +\((footprint() - start) >> 20) MB")
+        worst = 0
+        send(id: 999, w: 8000, h: 2000)
+        print("PROBE kitty 8000x2000 (64 MB): frame \(worst), textures \(surface.kittyTextures.count), footprint +\((footprint() - start) >> 20) MB")
+        try await pauseForInspection()
+    }
 }
+
