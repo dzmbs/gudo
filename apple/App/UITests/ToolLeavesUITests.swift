@@ -10,6 +10,7 @@ final class ToolLeavesUITests: XCTestCase {
     }
 
     func testChangesOpensBesideThePane() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "a phone keeps tools as sheets")
         let app = XCUIApplication()
         app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES", "-keyBar.fullWithHardwareKeyboard", "YES"]
         app.launch()

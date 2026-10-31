@@ -876,6 +876,7 @@ struct CompactTerminalView: View {
             }
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
                 .help("Command Palette (⌘K)")
+                .accessibilityIdentifier("open-palette")
             NewTabButton(workspace: workspace)
         }
         .buttonStyle(.bar)
