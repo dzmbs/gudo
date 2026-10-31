@@ -225,7 +225,7 @@ final class LiveAgentFeed: AgentFeed {
         var result: [AgentItem] = []
         for (hostId, hostName, daemon) in daemons {
             result += Self.items(
-                hostId: hostId, hostName: hostName, meta: daemon.meta, programs: daemon.programs,
+                hostId: hostId, hostName: hostName, meta: daemon.meta.all, programs: daemon.programs.all,
                 attention: daemon.existingWorkspace?.attention ?? [], answered: answered
             ).filter { dismissed[$0.id] != $0.state }
         }
@@ -929,7 +929,7 @@ final class LiveDiffSource: DiffSource {
     /// Agent panes on this host whose directory is in the repository.
     private func agentPanes() -> [(pane: UInt64, agent: String)] {
         guard let daemon = context?.daemon else { return [] }
-        return daemon.meta.compactMap { pane, meta in
+        return daemon.meta.all.compactMap { pane, meta in
             guard let agent = meta.agent else { return nil }
             if let root, let cwd = meta.cwd, !PathMatch.isInside(cwd, root) { return nil }
             return (pane.rawValue, AgentKind(agent.kind).title)
@@ -1062,7 +1062,7 @@ final class LivePortSource: PortSource {
 
     var ports: [DetectedPort] {
         guard let context else { return [] }
-        return Self.ports(servers(context.hub.ports, on: context), meta: context.daemon.meta)
+        return Self.ports(servers(context.hub.ports, on: context), meta: context.daemon.meta.all)
     }
 
     /// The host's ports but its agents' own (`DetectedPort.isAgentListener`): a helper that
@@ -1112,7 +1112,7 @@ final class LivePortSource: PortSource {
         guard context?.hostId == hostId else { return }
         let fresh = ports.filter { !before.contains($0.port) && ($0.kind == .http || $0.kind == .https) }
             .filter { info in context.map { !isAgentListener(info, on: $0) } ?? true }
-        if let new = fresh.first, let port = Self.ports([new], meta: context?.daemon.meta ?? [:]).first {
+        if let new = fresh.first, let port = Self.ports([new], meta: context?.daemon.meta.all ?? [:]).first {
             offer = port
         } else if let offer, !ports.contains(where: { $0.port == offer.port }) {
             self.offer = nil

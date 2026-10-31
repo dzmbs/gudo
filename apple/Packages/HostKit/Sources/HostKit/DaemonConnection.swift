@@ -32,14 +32,14 @@ public final class DaemonConnection: HostConnection {
     public let hostId: String
     public private(set) var status: ConnectionStatus = .idle
     public let layout: DaemonLayoutStore
-    /// Pane metadata (title, cwd, agent) by pane.
-    public private(set) var meta: [PaneId: PaneMeta] = [:]
+    /// Pane metadata (title, cwd, agent) by pane, observed per pane.
+    public let meta = PaneTable<PaneMeta>()
     /// What any program in a pane last reported about itself (OSC 7501, `status_set`), by pane.
     /// A blocked report is a status only: approvals stay in `meta[pane].agent`.
-    public private(set) var programs: [PaneId: ProgramReport] = [:]
+    public let programs = PaneTable<ProgramReport>()
     /// Panes whose agent waits for a decision.
     public var blockedAgents: [PaneId: AgentStatus] {
-        meta.compactMapValues { meta in
+        meta.all.compactMapValues { meta in
             guard let agent = meta.agent, case .blocked = agent.state else { return nil }
             return agent
         }
@@ -101,6 +101,12 @@ public final class DaemonConnection: HostConnection {
     @ObservationIgnored let router: PaneRouter
     @ObservationIgnored private var events: AsyncStream<ClientEvent>.Continuation?
     @ObservationIgnored private var pump: Task<Void, Never>?
+    /// Metadata and program reports held back, newest per pane (`throttlePaneStatus`).
+    @ObservationIgnored private var pendingMeta: [PaneId: PaneMeta] = [:]
+    @ObservationIgnored private var pendingPrograms: [PaneId: ProgramReport?] = [:]
+    @ObservationIgnored private var paneStatusWindow: Task<Void, Never>?
+    /// The most often pane metadata reaches views while it keeps changing.
+    static let paneStatusInterval = Duration.milliseconds(50)
     /// The daemon run (changes when the daemon restarts).
     public private(set) var epoch: UInt64?
     @ObservationIgnored private var attachSession: UInt64?
@@ -262,6 +268,8 @@ public final class DaemonConnection: HostConnection {
         browser.detach()
         pump?.cancel()
         events?.finish()
+        paneStatusWindow?.cancel()
+        paneStatusWindow = nil
         client = nil
         status = .idle
     }
@@ -305,7 +313,49 @@ public final class DaemonConnection: HostConnection {
 
     // MARK: Events (main actor, in order)
 
+    /// Agents in a fleet can report hundreds of times a second, and every applied update
+    /// re-renders whatever shows the pane. The first update after a quiet spell applies at once;
+    /// while updates keep coming they apply together, newest per pane, every
+    /// `paneStatusInterval`.
+    private func throttlePaneStatus(_ hold: (DaemonConnection) -> Void) {
+        hold(self)
+        guard paneStatusWindow == nil else { return }
+        applyPaneStatus()
+        openPaneStatusWindow()
+    }
+
+    private func openPaneStatusWindow() {
+        paneStatusWindow = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.paneStatusInterval)
+            guard let self, !Task.isCancelled else { return }
+            let held = !pendingMeta.isEmpty || !pendingPrograms.isEmpty
+            applyPaneStatus()
+            // Still busy: keep batching. Quiet: the next update applies at once.
+            if held { openPaneStatusWindow() } else { paneStatusWindow = nil }
+        }
+    }
+
+    private func applyPaneStatus() {
+        guard !pendingMeta.isEmpty || !pendingPrograms.isEmpty else { return }
+        let metas = pendingMeta, reports = pendingPrograms
+        pendingMeta = [:]
+        pendingPrograms = [:]
+        for (pane, value) in metas { meta.set(value, for: pane) }
+        for (pane, report) in reports { programs.set(report, for: pane) }
+    }
+
     func handle(_ event: ClientEvent) {
+        switch event {
+        case .paneMeta(let meta):
+            throttlePaneStatus { $0.pendingMeta[PaneId(meta.paneId)] = meta }
+            return
+        case .programStatus(let pane, let status):
+            throttlePaneStatus { $0.pendingPrograms[PaneId(pane)] = .some(status) }
+            return
+        default:
+            // Everything else keeps its order after the pane updates before it.
+            applyPaneStatus()
+        }
         switch event {
         case .daemonInfo(let info):
             daemonInfo = info
@@ -362,14 +412,11 @@ public final class DaemonConnection: HostConnection {
                 status = .connected(rtt: echoRoundTrip)
             }
             pushView()
-        case .paneMeta(let meta):
-            // Assigning an equal value still invalidates every view that reads `meta`.
-            if self.meta[PaneId(meta.paneId)] != meta { self.meta[PaneId(meta.paneId)] = meta }
-        case .programStatus(let pane, let status):
-            if programs[PaneId(pane)] != status { programs[PaneId(pane)] = status }
+        case .paneMeta, .programStatus:
+            break
         case .paneClosed(let pane):
-            meta[PaneId(pane)] = nil
-            programs[PaneId(pane)] = nil
+            meta.set(nil, for: PaneId(pane))
+            programs.set(nil, for: PaneId(pane))
         case .opResult(let id, let outcome):
             if case .failed = outcome {
                 layout.acknowledge(id, failed: true)

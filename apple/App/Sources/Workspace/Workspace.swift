@@ -345,7 +345,7 @@ final class Workspace {
     /// Refreshes the foregrounds after the daemon's pane metadata changed, at most once per
     /// `metaCoalescing`: agents retitle their panes many times a second.
     private func followMeta(of daemon: DaemonConnection) {
-        withObservationTracking { _ = daemon.meta } onChange: { [weak self, weak daemon] in
+        withObservationTracking { _ = daemon.meta.all } onChange: { [weak self, weak daemon] in
             Task { @MainActor in
                 guard let self, let daemon, !self.metaRefreshPending else { return }
                 self.metaRefreshPending = true

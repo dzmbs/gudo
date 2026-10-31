@@ -259,7 +259,8 @@ final class WindowModel {
     /// The size of the area the active tab's panes fill (the external display scales to it).
     var terminalArea = CGSize.zero
 
-    init(app: AppModel, isPresentation: Bool = false) {
+    /// `agents` replaces the mock feed under `-mock` (in-process tests of the live feed).
+    init(app: AppModel, isPresentation: Bool = false, agents mockAgents: (any AgentFeed)? = nil) {
         self.app = app
         self.isPresentation = isPresentation
         Self.made += 1
@@ -276,7 +277,7 @@ final class WindowModel {
         }
         if LaunchOptions.mock {
             hosts = MockHostDirectory()
-            agents = MockAgentFeed()
+            agents = mockAgents ?? MockAgentFeed()
             paneStatus = MockPaneStatus()
             files = MockFileSource()
             diffs = MockDiffSource()
