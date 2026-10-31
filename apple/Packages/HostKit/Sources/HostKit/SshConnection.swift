@@ -189,19 +189,36 @@ nonisolated public final class SshPaneBackend: PaneBackend, PredictionFeed {
     public func startPredictionFeed(_ onUpdate: @escaping @Sendable (PredictionUpdate) -> Void) {
         prediction.withLock { $0 = onUpdate }
         onUpdate(.hint(echo.hint))
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
-        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250), leeway: .milliseconds(50))
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            predict(echo.tick())
-        }
-        timer.resume()
-        echoTimer.withLock { $0?.cancel(); $0 = timer }
     }
 
     public func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64) {
         predict(echo.input(Array(bytes)))
         write(bytes)
+        armEchoCheck()
+    }
+
+    /// Checks for keystrokes whose echo never came every 250 ms while some wait, and not at
+    /// all otherwise: an idle SSH pane costs no wakeups.
+    private func armEchoCheck() {
+        guard prediction.withLock({ $0 }) != nil else { return }
+        echoTimer.withLock { timer in
+            guard timer == nil else { return }
+            let check = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+            check.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250), leeway: .milliseconds(50))
+            check.setEventHandler { [weak self] in
+                guard let self else { return }
+                predict(echo.tick())
+                // Under the lock `armEchoCheck` takes, so a keystroke sent meanwhile either
+                // keeps this timer or arms a new one.
+                echoTimer.withLock { armed in
+                    guard !echo.isWaiting else { return }
+                    armed?.cancel()
+                    armed = nil
+                }
+            }
+            check.resume()
+            timer = check
+        }
     }
 
     private func predict(_ updates: [PredictionUpdate]) {

@@ -86,10 +86,12 @@ public struct StatusIndicator: View {
 }
 
 /// A 3/4 arc that turns once per second; a still arc under Reduce Motion so it still says
+/// a sidebar of working agents must not rebuild every spinner on every frame.
 public struct Spinner: View {
     var color: AnyShapeStyle
     var lineWidth: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var turning = false
 
     public init(color: some ShapeStyle = HierarchicalShapeStyle.secondary, lineWidth: CGFloat = 1.5) {
         self.color = AnyShapeStyle(color)
@@ -97,13 +99,13 @@ public struct Spinner: View {
     }
 
     public var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { context in
-            let angle = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) * 360
-            Circle()
-                .trim(from: 0, to: 0.72)
-                .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .rotationEffect(.degrees(angle))
-        }
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .rotationEffect(.degrees(turning ? 360 : 0))
+            .animation(turning ? .linear(duration: 1).repeatForever(autoreverses: false) : nil, value: turning)
+            .onAppear { turning = !reduceMotion }
+            .onChange(of: reduceMotion) { _, reduce in turning = !reduce }
     }
 }
 
