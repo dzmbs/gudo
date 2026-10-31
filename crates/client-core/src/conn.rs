@@ -23,6 +23,10 @@ use crate::mirror::{Applied, Mirror};
 use crate::{ClientEvent, Inner, Outgoing, RelayMode, device_id, lock};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
+/// How long a connection must stay up for its end to count as a drop, redialled at once,
+/// rather than a failure, backed off (a daemon that welcomes and then drops every connection
+/// must not be redialled in a tight loop).
+const STABLE_FOR: Duration = Duration::from_secs(5);
 const ACK_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Debug, thiserror::Error)]
@@ -218,7 +222,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
         }
         match connect_once(&inner, &endpoint).await {
             Ok(conn) => {
-                backoff = Duration::from_millis(100);
+                let up = tokio::time::Instant::now();
                 let reason = run(&inner, conn).await;
                 *lock(&inner.connection) = None;
                 inner.ws.fail_pending();
@@ -232,8 +236,10 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 if *lock(&inner.paused) {
                     continue;
                 }
-                // A dropped connection is retried at once; backoff only applies to failures.
-                continue;
+                if up.elapsed() >= STABLE_FOR {
+                    backoff = Duration::from_millis(100);
+                    continue;
+                }
             }
             Err(ConnError::Refused(reason)) => {
                 inner.emit(ClientEvent::Refused {
@@ -803,9 +809,19 @@ fn apply_output(
     let event = match out {
         PaneOutput::Bytes { seq, data } => {
             lock(&inner.stats).byte_frames += 1;
-            let applied = lock(&inner.mirrors)
-                .get_mut(&pane_id)
-                .map_or(Applied::Gap, |m| m.apply(seq.0, &data));
+            let mut mirrors = lock(&inner.mirrors);
+            // No mirror: the pane is not followed (any more). Output that was in flight when
+            // it was unsubscribed or closed is dropped, never a reason to follow it again.
+            let Some(mirror) = mirrors.get_mut(&pane_id) else {
+                return;
+            };
+            let applied = mirror.apply(seq.0, &data);
+            if applied == Applied::Gap {
+                // Start over from a snapshot, once: the frames still in flight behind this
+                // one find no mirror and are dropped.
+                mirrors.remove(&pane_id);
+            }
+            drop(mirrors);
             match applied {
                 Applied::New { seq, start } => ClientEvent::PaneBytes {
                     pane_id,
@@ -836,7 +852,10 @@ fn apply_output(
             raw_len,
             data,
         } => match inflate(&data, raw_len) {
-            Ok(raw) => snapshot_event(inner, pane_id, seq, snap_gen, raw, keep_vt),
+            Ok(raw) => match snapshot_event(inner, pane_id, seq, snap_gen, raw, keep_vt) {
+                Some(event) => event,
+                None => return,
+            },
             Err(e) => {
                 tracing::warn!(%pane_id, "bad snapshot: {e}");
                 return;
@@ -846,7 +865,10 @@ fn apply_output(
             seq,
             snap_gen,
             data,
-        } => snapshot_event(inner, pane_id, seq, snap_gen, data, keep_vt),
+        } => match snapshot_event(inner, pane_id, seq, snap_gen, data, keep_vt) {
+            Some(event) => event,
+            None => return,
+        },
         PaneOutput::Resized { seq, size } => {
             if let Some(m) = lock(&inner.mirrors).get_mut(&pane_id) {
                 m.resize(size);
@@ -941,15 +963,19 @@ fn snapshot_event(
     snap_gen: proto::SnapGen,
     raw: Vec<u8>,
     keep_vt: bool,
-) -> ClientEvent {
+) -> Option<ClientEvent> {
     lock(&inner.stats).snapshots += 1;
+    // A snapshot that was in flight when the pane was unsubscribed starts nothing.
+    if !lock(&inner.wanted).subscribed.contains(&pane_id) {
+        return None;
+    }
     let mirror = Mirror::from_snapshot(snap_gen, seq.0, &raw, keep_vt);
     lock(&inner.mirrors).insert(pane_id, mirror);
-    ClientEvent::PaneSnapshot {
+    Some(ClientEvent::PaneSnapshot {
         pane_id,
         seq: seq.0,
         data: raw,
-    }
+    })
 }
 
 async fn send_acks(
