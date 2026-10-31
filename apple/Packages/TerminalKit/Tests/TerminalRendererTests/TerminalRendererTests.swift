@@ -42,7 +42,7 @@ import TerminalCore
     @Test func packsWithoutOverlapAndGrows() {
         var atlas = Atlas(format: .grayscale, size: 64)
         let pixels = [UInt8](repeating: 0xFF, count: 20 * 20)
-        let regions = (0..<12).map { _ in pixels.withUnsafeBytes { atlas.insert(width: 20, height: 20, data: $0) } }
+        let regions = (0..<12).map { _ in pixels.withUnsafeBytes { atlas.insert(width: 20, height: 20, data: $0)! } }
         #expect(atlas.size == 128)
         #expect(atlas.takePendingUploads() == nil)  // grew: re-upload everything
         for (i, a) in regions.enumerated() {
@@ -52,9 +52,22 @@ import TerminalCore
                 #expect(disjoint)
             }
         }
-        let next = pixels.withUnsafeBytes { atlas.insert(width: 20, height: 20, data: $0) }
+        let next = pixels.withUnsafeBytes { atlas.insert(width: 20, height: 20, data: $0)! }
         #expect(atlas.takePendingUploads() == [next])
         #expect(atlas.pixels[next.y * atlas.size + next.x] == 0xFF)
+    }
+
+    /// Growth stops at the cap: a full atlas reports it instead of doubling past Metal's limit.
+    @Test func stopsGrowingAtItsCapAndStartsOver() {
+        var atlas = Atlas(format: .grayscale, size: 64, maxSize: 128)
+        let pixels = [UInt8](repeating: 0xFF, count: 20 * 20)
+        var placed = 0
+        while pixels.withUnsafeBytes({ atlas.insert(width: 20, height: 20, data: $0) }) != nil { placed += 1 }
+        #expect(atlas.size == 128 && placed >= 25)
+        #expect(pixels.withUnsafeBytes { atlas.insert(width: 200, height: 1, data: $0) } == nil)
+        atlas.reset()
+        #expect(atlas.size == 64)
+        #expect(pixels.withUnsafeBytes { atlas.insert(width: 20, height: 20, data: $0) } != nil)
     }
 }
 

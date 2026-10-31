@@ -90,6 +90,8 @@ final class FrameBuilder {
         var blinkOn: Bool
         /// Inverted text color for each column under a block cursor.
         var fg: [SIMD4<UInt8>]
+        /// Every glyph was drawn (none deferred to a later frame).
+        var complete = true
     }
 
     /// One cell's data, gathered in a first pass so the second can look at neighbours.
@@ -109,12 +111,33 @@ final class FrameBuilder {
     }
     /// The last frame showed SGR 5 (blinking) text.
     private(set) var hasBlinkingText = false
+    /// The last frame left glyphs out (rasterization deadline, full atlas); build again soon.
+    private(set) var isIncomplete = false
+    /// The atlas epoch the cached rows were built in.
+    private var cacheEpoch: Int?
 
     /// Builds the frame.
     func build(_ state: RenderState, fonts: FontGrid, overlay: FrameOverlay, into frame: inout FrameContents) -> BuildStats {
+        let deferrals = fonts.deferrals
+        let epoch = fonts.epoch
+        var stats = assemble(state, fonts: fonts, overlay: overlay, forceFull: epoch != cacheEpoch, into: &frame)
+        if fonts.epoch != epoch {
+            // The atlas started over during this frame: rows built before point into the old one.
+            fonts.resetAllowed = false
+            stats = assemble(state, fonts: fonts, overlay: overlay, forceFull: true, into: &frame)
+            fonts.resetAllowed = true
+        }
+        cacheEpoch = fonts.epoch
+        isIncomplete = fonts.deferrals != deferrals
+        return stats
+    }
+
+    private func assemble(
+        _ state: RenderState, fonts: FontGrid, overlay: FrameOverlay, forceFull: Bool, into frame: inout FrameContents
+    ) -> BuildStats {
         let (cols, rows) = state.size
         let colors = state.colors
-        let fullRebuild = state.dirty == .full || frame.cols != Int(cols) || frame.rows != Int(rows)
+        let fullRebuild = forceFull || state.dirty == .full || frame.cols != Int(cols) || frame.rows != Int(rows)
         if fullRebuild { cache.removeAll(keepingCapacity: true) }
 
         frame.cols = Int(cols)
@@ -145,7 +168,7 @@ final class FrameBuilder {
             guard y >= 0, y < Int32(rows) else { return }
             let id = row.id
             let cached: CachedRow
-            if !fullRebuild, !row.isDirty, let hit = cache[id], !hit.hasBlink || hit.blinkOn == overlay.textBlinkOn {
+            if !fullRebuild, !row.isDirty, let hit = cache[id], hit.complete, !hit.hasBlink || hit.blinkOn == overlay.textBlinkOn {
                 cached = hit
                 stats.rowsReused += 1
             } else {
@@ -188,7 +211,8 @@ final class FrameBuilder {
         if let link = overlay.hoveredLink, link.row < Int(rows) {
             let fg = rgba(colors.foreground)
             for x in link.columns where x < Int(cols) {
-                var glyph = instance(fonts.sprite(.underline, span: 1), x: x, color: rowFg.indices.contains(link.row) ? rowFg[link.row][x] : fg)
+                guard let sprite = fonts.sprite(.underline, span: 1) else { break }
+                var glyph = instance(sprite, x: x, color: rowFg.indices.contains(link.row) ? rowFg[link.row][x] : fg)
                 glyph.gridPos.y = UInt16(link.row)
                 frame.text.append(glyph)
             }
@@ -230,6 +254,7 @@ final class FrameBuilder {
             blinkOn: blinkOn,
             fg: .init(repeating: rgba(colors.background), count: cols)
         )
+        let deferrals = fonts.deferrals
         // Pass 1: gather cells.
         if infos.count < cols { infos = .init(repeating: CellInfo(), count: cols) }
         var x = 0
@@ -297,15 +322,18 @@ final class FrameBuilder {
                 case .palette(let index): rgba(colors.palette[Int(index)])
                 case .rgb(let rgb): rgba(rgb)
                 }
-                out.text.append(instance(fonts.sprite(Self.sprite(for: style.underline), span: span), x: x, color: underlineColor))
+                if let sprite = fonts.sprite(Self.sprite(for: style.underline), span: span) {
+                    out.text.append(instance(sprite, x: x, color: underlineColor))
+                }
             }
-            if style.overline {
-                out.text.append(instance(fonts.sprite(.overline, span: span), x: x, color: color))
+            if style.overline, let sprite = fonts.sprite(.overline, span: span) {
+                out.text.append(instance(sprite, x: x, color: color))
             }
-            if style.strikethrough {
-                out.text.append(instance(fonts.sprite(.strikethrough, span: span), x: x, color: color))
+            if style.strikethrough, let sprite = fonts.sprite(.strikethrough, span: span) {
+                out.text.append(instance(sprite, x: x, color: color))
             }
         }
+        out.complete = fonts.deferrals == deferrals
         return out
     }
 
@@ -333,8 +361,8 @@ final class FrameBuilder {
                 g.gridPos.y = UInt16(cell.y)
                 frame.text.append(g)
             }
-            if cell.underline != .none {
-                var u = instance(fonts.sprite(Self.sprite(for: cell.underline), span: cell.span), x: cell.x, color: color)
+            if cell.underline != .none, let sprite = fonts.sprite(Self.sprite(for: cell.underline), span: cell.span) {
+                var u = instance(sprite, x: cell.x, color: color)
                 u.gridPos.y = UInt16(cell.y)
                 frame.text.append(u)
             }
@@ -372,7 +400,8 @@ final class FrameBuilder {
         case .bar: .cursorBar
         case .underline: .cursorUnderline
         }
-        var glyph = instance(fonts.sprite(sprite, span: wide ? 2 : 1), x: x, color: rgba(colors.cursor ?? colors.foreground))
+        guard let rendered = fonts.sprite(sprite, span: wide ? 2 : 1) else { return }
+        var glyph = instance(rendered, x: x, color: rgba(colors.cursor ?? colors.foreground))
         glyph.gridPos.y = UInt16(y)
         glyph.flags = CellText.Flags.isCursorGlyph.rawValue
 

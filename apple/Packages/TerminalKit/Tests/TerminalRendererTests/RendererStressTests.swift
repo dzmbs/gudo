@@ -1,0 +1,200 @@
+import CoreGraphics
+import Foundation
+import QuartzCore
+import Testing
+@testable import TerminalCore
+@testable import TerminalRenderer
+
+/// Limits that keep the renderer alive under hostile or extreme content: bounded atlases and
+/// caches, a per-frame rasterization budget, oversized views, and GPU memory off screen.
+@MainActor @Suite struct RendererStressTests {
+    /// A screen of distinct CJK ideographs starting at `first`.
+    private func cjkScreen(from first: UInt32, cols: Int, rows: Int) -> String {
+        var s = "\u{1b}[H"
+        var cp = first
+        for row in 0..<rows {
+            for _ in 0..<(cols / 2) {
+                s.unicodeScalars.append(Unicode.Scalar(cp)!)
+                cp += 1
+            }
+            if row < rows - 1 { s += "\r\n" }
+        }
+        return s
+    }
+
+    /// Glyph instances (not the cursor) whose atlas regions must match what the grid now holds.
+    private func expectFrameMatchesAtlas(_ frame: FrameContents, fonts: FontGrid) {
+        for g in frame.text where g.flags & CellText.Flags.isCursorGlyph.rawValue == 0 {
+            let size = g.atlas == CellText.Atlas.color.rawValue ? fonts.color.size : fonts.grayscale.size
+            #expect(Int(g.glyphPos.x + g.glyphSize.x) < size && Int(g.glyphPos.y + g.glyphSize.y) < size)
+        }
+    }
+
+    /// Distinct glyphs past the atlas cap make it start over instead of doubling past Metal's
+    /// texture limit (before: 20k CJK at 48 pt grew it to 16384², 256 MB on CPU plus GPU, and the
+    /// next doubling would fail to allocate and blank every pane with this font).
+    @Test func fullAtlasStartsOverAndTheFrameIsRebuilt() {
+        let terminal = Terminal(cols: 40, rows: 8) { _ in }
+        let fonts = FontGrid(pixelSize: 64, maxAtlasSize: 1024)
+        let builder = FrameBuilder()
+        let state = RenderState()
+        var frame = FrameContents()
+        var first: UInt32 = 0x4E00
+        for _ in 0..<12 {
+            terminal.write(Array(cjkScreen(from: first, cols: 40, rows: 8).utf8))
+            first += 160
+            state.update(from: terminal)
+            _ = builder.build(state, fonts: fonts, overlay: FrameOverlay(), into: &frame)
+            state.markClean()
+            #expect(fonts.grayscale.size <= 1024)
+            #expect(!builder.isIncomplete)
+            expectFrameMatchesAtlas(frame, fonts: fonts)
+        }
+        #expect(fonts.epoch > 0)
+        // Every glyph on screen is the one the grid would hand out now (none from before a reset).
+        let row = frame.text.filter { $0.gridPos.y == 7 && $0.flags == 0 }
+        #expect(row.count == 20)
+        let last = first - 160 + 7 * 20
+        for (i, g) in row.sorted(by: { $0.gridPos.x < $1.gridPos.x }).enumerated() {
+            let glyph = fonts.glyph(for: [last + UInt32(i)], style: .regular, span: 2)
+            #expect(glyph?.region.x == Int(g.glyphPos.x) && glyph?.region.y == Int(g.glyphPos.y))
+        }
+    }
+
+    /// A surface sharing the grid drops its cached rows after another one reset the atlas.
+    @Test func otherBuildersRebuildAfterAReset() {
+        let fonts = FontGrid(pixelSize: 64, maxAtlasSize: 1024)
+        let quiet = Terminal(cols: 20, rows: 4) { _ in }
+        quiet.write(Array("quiet pane".utf8))
+        let quietState = RenderState()
+        let quietBuilder = FrameBuilder()
+        var quietFrame = FrameContents()
+        quietState.update(from: quiet)
+        _ = quietBuilder.build(quietState, fonts: fonts, overlay: FrameOverlay(), into: &quietFrame)
+        quietState.markClean()
+
+        let busy = Terminal(cols: 40, rows: 8) { _ in }
+        let busyState = RenderState()
+        let busyBuilder = FrameBuilder()
+        var busyFrame = FrameContents()
+        var first: UInt32 = 0x4E00
+        while fonts.epoch == 0 {
+            busy.write(Array(cjkScreen(from: first, cols: 40, rows: 8).utf8))
+            first += 160
+            busyState.update(from: busy)
+            _ = busyBuilder.build(busyState, fonts: fonts, overlay: FrameOverlay(), into: &busyFrame)
+            busyState.markClean()
+        }
+        quiet.write(Array("!".utf8))
+        quietState.update(from: quiet)
+        let stats = quietBuilder.build(quietState, fonts: fonts, overlay: FrameOverlay(), into: &quietFrame)
+        #expect(stats.rowsReused == 0 && stats.rowsRebuilt == 4)
+        expectFrameMatchesAtlas(quietFrame, fonts: fonts)
+    }
+
+    /// A frame needing more glyph space than the whole atlas draws what fits and stays
+    /// incomplete; it neither loops nor crashes.
+    @Test func frameLargerThanTheAtlasDropsGlyphs() {
+        let terminal = Terminal(cols: 80, rows: 20) { _ in }
+        let fonts = FontGrid(pixelSize: 96, maxAtlasSize: 512)
+        let builder = FrameBuilder()
+        let state = RenderState()
+        var frame = FrameContents()
+        terminal.write(Array(cjkScreen(from: 0x4E00, cols: 80, rows: 20).utf8))
+        state.update(from: terminal)
+        _ = builder.build(state, fonts: fonts, overlay: FrameOverlay(), into: &frame)
+        #expect(builder.isIncomplete)
+        #expect(fonts.grayscale.size == 512)
+        expectFrameMatchesAtlas(frame, fonts: fonts)
+    }
+
+    /// Past the deadline no glyph is rasterized or cached as missing; the row is rebuilt later.
+    @Test func rasterDeadlineDefersGlyphsToLaterFrames() {
+        let terminal = Terminal(cols: 20, rows: 2) { _ in }
+        let fonts = FontGrid(pixelSize: 26)
+        let builder = FrameBuilder()
+        let state = RenderState()
+        var frame = FrameContents()
+        terminal.write(Array("日本語 abc".utf8))
+        state.update(from: terminal)
+        fonts.rasterDeadline = 0
+        _ = builder.build(state, fonts: fonts, overlay: FrameOverlay(), into: &frame)
+        state.markClean()
+        #expect(builder.isIncomplete)
+        #expect(frame.text.filter { $0.flags == 0 }.isEmpty)
+
+        fonts.rasterDeadline = .infinity
+        state.update(from: terminal)
+        let stats = builder.build(state, fonts: fonts, overlay: FrameOverlay(), into: &frame)
+        #expect(!builder.isIncomplete)
+        #expect(stats.rowsRebuilt >= 1)
+        #expect(frame.text.filter { $0.flags == 0 }.count == 6)
+    }
+
+    /// A screen of new large emoji used to stall the main thread for about 2 s in one frame;
+    /// now each frame spends a bounded time and the glyphs fill in over the next frames.
+    @Test func newGlyphsNeverStallAFrame() throws {
+        let terminal = Terminal(cols: 40, rows: 10) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 40)
+        surface.layout(size: CGSize(width: 2400, height: 1200), scale: 2)
+        let emoji = (0x1F300...0x1F5FF).compactMap(Unicode.Scalar.init).filter(\.properties.isEmojiPresentation)
+        var text = "\u{1b}[H"
+        for e in emoji.prefix(400) { text.unicodeScalars.append(e) }
+        terminal.write(Array(text.utf8))
+        var worst = 0.0
+        var frames = 0
+        repeat {
+            let start = CACurrentMediaTime()
+            surface.renderIfDirty()
+            worst = max(worst, CACurrentMediaTime() - start)
+            frames += 1
+        } while surface.builderIsIncomplete && frames < 2000
+        #expect(!surface.builderIsIncomplete)
+        #expect(frames > 1)
+        #expect(worst < 0.2, "worst frame \(worst * 1000) ms")
+    }
+
+    /// Endless distinct clusters (random combining marks) and glyphless codepoints keep the
+    /// lookup caches bounded.
+    @Test func lookupCachesStayBounded() {
+        let fonts = FontGrid(pixelSize: 26)
+        fonts.maxCacheEntries = 500
+        for i in 0..<3000 {
+            let base = UInt32(0x61 + i % 26)
+            _ = fonts.glyph(for: [base, 0x300 + UInt32(i % 112), 0x300 + UInt32(i / 112 % 112)], style: .regular, span: 1)
+            _ = fonts.glyph(for: [0xE0000 + UInt32(i)], style: .regular, span: 1)
+        }
+        #expect(fonts.cacheEntryCounts.resolved <= 500 && fonts.cacheEntryCounts.fast <= 500)
+    }
+
+    /// A view whose drawable would pass Metal's 16384 limit used to stay blank (the layer
+    /// refused the size and handed out no drawable); it now draws at a lower scale.
+    @Test func oversizedViewStillDraws() throws {
+        let terminal = Terminal(cols: 80, rows: 24) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 13)
+        surface.layout(size: CGSize(width: 9000, height: 5000), scale: 2)
+        let size = surface.layer.drawableSize
+        #expect(size.width > 0 && size.width <= 16384 && size.height <= 16384)
+        #expect(surface.layer.contentsScale == 1.75)
+        terminal.write(Array("hello".utf8))
+        #expect(surface.renderIfDirty())
+        #expect(TerminalSurface.drawableScale(for: CGSize(width: 1000, height: 800), scale: 2) == 2)
+    }
+
+    /// Off screen, kitty images leave the GPU with the rest (up to the terminal's whole image
+    /// storage per pane stayed resident before).
+    @Test func offscreenPanesDropKittyTextures() throws {
+        let terminal = Terminal(cols: 20, rows: 6) { _ in }
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 12)
+        surface.layout(size: CGSize(width: 400, height: 200), scale: 2)
+        let pixels = [UInt8](repeating: 255, count: 64 * 64 * 4)
+        terminal.write(Array("\u{1b}_Ga=T,f=32,s=64,v=64,i=1,q=2;\(Data(pixels).base64EncodedString())\u{1b}\\".utf8))
+        surface.outputArrived()
+        #expect(surface.renderIfDirty(offscreen: true))
+        #expect(surface.kittyTextures.count == 1)
+        surface.releaseGPUResources()
+        #expect(surface.kittyTextures.isEmpty)
+        #expect(surface.renderIfDirty(offscreen: true))
+        #expect(surface.kittyTextures.count == 1)
+    }
+}

@@ -115,7 +115,7 @@ public final class TerminalSurface {
     /// Kitty graphics: the terminal's placements as of the last frame, a texture per image on
     /// screen (only those, so memory follows what is shown), and the draws of the last frame.
     public private(set) var kittyPlacements: [ImagePlacement] = []
-    private var kittyTextures: [UInt32: KittyTexture] = [:]
+    private(set) var kittyTextures: [UInt32: KittyTexture] = [:]
     private var kittyGenerations: (placements: UInt64, storage: UInt64)?
     private var kittyDraws = KittyDraws()
     private var animationWake: Task<Void, Never>?
@@ -255,8 +255,9 @@ public final class TerminalSurface {
     /// always ending at the final size. Meanwhile the
     /// current grid stays drawn where it was, anchored top-left: clipped by a shrinking view,
     /// on background in a growing one, never reflowed.
-    public func layout(size: CGSize, scale: CGFloat) {
-        lastLayout = (size, scale)
+    public func layout(size: CGSize, scale requestedScale: CGFloat) {
+        lastLayout = (size, requestedScale)
+        let scale = Self.drawableScale(for: size, scale: requestedScale)
         if fonts == nil || layer.contentsScale != scale {
             layer.contentsScale = scale
             fonts = FontGrid.shared(pixelSize: appearance.fontSize * scale, family: appearance.fontFamily)
@@ -301,6 +302,18 @@ public final class TerminalSurface {
             _ = renderIfDirty()
             layer.presentsWithTransaction = false
         }
+    }
+
+    /// Metal's texture limit: `CAMetalLayer` hands out no drawable past it, so the pane would
+    /// stay blank.
+    static let maxDrawableSide: CGFloat = 16384
+
+    /// The display scale, lowered in quarter steps for a view so large (a window spanning
+    /// displays) that its drawable would pass `maxDrawableSide`: it draws softer, not blank.
+    static func drawableScale(for size: CGSize, scale: CGFloat) -> CGFloat {
+        let side = max(size.width, size.height)
+        guard side * scale > maxDrawableSide else { return scale }
+        return max(0.25, ((maxDrawableSide / side) * 4).rounded(.down) / 4)
     }
 
     // MARK: Grid commits
@@ -924,6 +937,24 @@ public final class TerminalSurface {
             || (0x1F900...0x1F9FF).contains(v) || (0x20000...0x3FFFD).contains(v)
     }
 
+    /// Main-thread time per display frame that all surfaces together may spend rasterizing new
+    /// glyphs; the rest appear over the next frames instead of stalling the UI (a screen of new
+    /// emoji or CJK at a large size takes seconds to rasterize).
+    static let rasterBudget: CFTimeInterval = 0.006
+    private static var rasterWindowEnd: CFTimeInterval = 0
+    private static var rasterWindowDeadline: CFTimeInterval = 0
+
+    /// The rasterization deadline of the current display frame, shared by every surface that
+    /// renders in it.
+    private static func rasterDeadline() -> CFTimeInterval {
+        let now = CACurrentMediaTime()
+        if now >= rasterWindowEnd {
+            rasterWindowDeadline = now + rasterBudget
+            rasterWindowEnd = now + 1.0 / 60
+        }
+        return rasterWindowDeadline
+    }
+
     /// Snapshots the terminal and, if anything changed, rebuilds dirty rows and presents a frame.
     /// Returns false when the frame was clean (the display link uses this to go idle).
     /// - Parameter offscreen: draw into an offscreen texture instead of a layer drawable (headless
@@ -944,12 +975,16 @@ public final class TerminalSurface {
         let marksChanged = marksDirty || marks != lastMarks
         let kittyChanged = refreshKittyImages(full: state.dirty == .full || needsFullRender)
         guard state.dirty != .clean || needsFullRender || overlayChanged || imagesChanged || marksChanged || kittyChanged
+            || builder.isIncomplete
         else { return false }
         if cursor.blinking != cursorBlinks {
             cursorBlinks = cursor.blinking
             restartBlink()
         }
+        // Headless renders (snapshots, benchmarks) draw every glyph at once.
+        fonts.rasterDeadline = offscreen ? .infinity : Self.rasterDeadline()
         let rows = builder.build(state, fonts: fonts, overlay: overlay, into: &frame)
+        fonts.rasterDeadline = .infinity
         if builder.hasBlinkingText, blinkTask == nil { restartBlink() }
         cursorRect = cursorRect(cursor, metrics: fonts.metrics)
         state.markClean()
@@ -1013,6 +1048,8 @@ public final class TerminalSurface {
 
     /// Whether the last frame had SGR 5 text.
     private var builderHasBlinkingText: Bool { builder.hasBlinkingText }
+    /// The last frame left glyphs for later frames.
+    var builderIsIncomplete: Bool { builder.isIncomplete }
 
     // MARK: Off screen
 
@@ -1035,6 +1072,10 @@ public final class TerminalSurface {
         previousDrawableSize = .zero
         renderer.releaseBuffers()
         offscreenTexture = nil
+        // Up to the terminal's whole image storage again on the GPU; reloaded with the next frame.
+        kittyTextures.removeAll()
+        kittyGenerations = nil
+        kittyDraws = KittyDraws()
         frame = FrameContents()
         builder = FrameBuilder()
         builder.style = Self.frameStyle(appearance)

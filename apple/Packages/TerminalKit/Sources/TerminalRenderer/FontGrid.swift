@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreText
 import Foundation
 import Metal
+import QuartzCore
 
 /// Cell geometry in pixels, computed like Ghostty's `font/Metrics.zig` `calc`.
 struct CellMetrics: Equatable {
@@ -70,11 +71,28 @@ enum FontStyle: Int, CaseIterable {
 final class FontGrid {
     let metrics: CellMetrics
     /// Written by rasterization; the renderer drains their pending uploads each frame.
-    var grayscale = Atlas(format: .grayscale)
-    var color = Atlas(format: .color)
+    var grayscale: Atlas
+    var color: Atlas
     /// The atlases on the GPU, kept current by the renderer before each frame.
     var grayscaleTexture: MTLTexture?
     var colorTexture: MTLTexture?
+
+    /// Bumped when a full atlas starts over: every glyph handed out before is void, so frames
+    /// built from them must be rebuilt.
+    private(set) var epoch = 0
+    /// Whether a full atlas may start over now. Off while a frame is rebuilt after a reset, so a
+    /// frame that needs more than the atlas holds drops glyphs instead of resetting again.
+    var resetAllowed = true
+    /// Glyph rasterization stops for this frame once this time (`CACurrentMediaTime`) passes;
+    /// the glyphs left are drawn on later frames. Rasterizing is the one per-frame cost that
+    /// grows with new content (a large emoji takes milliseconds), and it runs on the main thread.
+    var rasterDeadline = CFTimeInterval.infinity
+    /// Counts glyphs left out (deadline passed or atlas full); a change during a build means the
+    /// frame is incomplete.
+    private(set) var deferrals = 0
+    /// Lookup caches are cleared past this many entries: hostile output can make up endless
+    /// distinct clusters and codepoints with no glyph, which never fill the atlas.
+    var maxCacheEntries = 65_536
 
     private var faces: [CTFont]
     private var faceIndexByName: [String: Int] = [:]
@@ -136,7 +154,9 @@ final class FontGrid {
     ///   - pixelSize: font size in device pixels (points x display scale).
     ///   - family: a font family installed on the system, or nil for the bundled JetBrains Mono
     ///     Nerd Font. An unknown family falls back to the bundled font.
-    init(pixelSize: CGFloat, family: String? = nil) {
+    init(pixelSize: CGFloat, family: String? = nil, maxAtlasSize: Int? = nil) {
+        grayscale = Atlas(format: .grayscale, maxSize: maxAtlasSize)
+        color = Atlas(format: .color, maxSize: maxAtlasSize)
         faces = family.flatMap { Self.systemFaces(family: $0, pixelSize: pixelSize) } ?? Self.bundledFaces(pixelSize: pixelSize)
         for (i, face) in faces.enumerated() {
             faceIndexByName[CTFontCopyPostScriptName(face) as String] = i
@@ -186,9 +206,20 @@ final class FontGrid {
         let fastKey = scalars.count == 1
             ? FastKey(codepoint: base, style: style, span: span, maxSpan: maxSpan ?? 1) : nil
         if let fastKey, let cached = fastGlyphs[fastKey] { return cached }
+        let deferred = deferrals
         let result = slowGlyph(for: scalars, base: base, style: style, span: span, maxSpan: maxSpan)
-        if let fastKey { fastGlyphs[fastKey] = result }
+        if let fastKey, deferrals == deferred {
+            if fastGlyphs.count >= maxCacheEntries { fastGlyphs.removeAll() }
+            fastGlyphs[fastKey] = result
+        }
         return result
+    }
+
+    /// False (and counted as deferred) once the frame's rasterization time is used up.
+    private func mayRasterize() -> Bool {
+        guard rasterDeadline != .infinity, CACurrentMediaTime() > rasterDeadline else { return true }
+        deferrals += 1
+        return false
     }
 
     private struct FastKey: Hashable {
@@ -199,6 +230,8 @@ final class FontGrid {
     }
 
     private var fastGlyphs: [FastKey: RenderedGlyph?] = [:]
+
+    var cacheEntryCounts: (resolved: Int, fast: Int) { (resolved.count, fastGlyphs.count) }
 
     private func slowGlyph(for scalars: [UInt32], base: UInt32, style: FontStyle, span: Int, maxSpan: Int?) -> RenderedGlyph? {
         if scalars.count == 1, SpriteFace.covers(base) {
@@ -212,7 +245,9 @@ final class FontGrid {
         if let cached = resolved[key] {
             hit = cached
         } else {
+            guard mayRasterize() else { return nil }
             hit = resolve(text, style: style)
+            if resolved.count >= maxCacheEntries { resolved.removeAll() }
             resolved[key] = hit
         }
         guard let hit else { return nil }
@@ -220,35 +255,69 @@ final class FontGrid {
         let constraintWidth = span >= 2 ? span : NerdFontConstraint.isSymbol(base) ? max(1, min(2, maxSpan ?? 1)) : 1
         let glyphKey = GlyphKey(face: hit.face, glyph: hit.glyph, span: span, constraintWidth: constraintWidth, codepoint: base)
         if let cached = glyphs[glyphKey] { return cached }
+        guard mayRasterize() else { return nil }
+        let deferred = deferrals
         let rendered = render(
             glyph: hit.glyph, face: faces[hit.face], isFallback: hit.face >= FontStyle.allCases.count,
             codepoint: base, constraintWidth: constraintWidth)
-        glyphs[glyphKey] = rendered
+        if deferrals == deferred { glyphs[glyphKey] = rendered }
         return rendered
     }
 
-    func sprite(_ sprite: Sprite, span: Int) -> RenderedGlyph {
+    /// A decoration or cursor sprite; nil only when the atlas is full and may not start over.
+    func sprite(_ sprite: Sprite, span: Int) -> RenderedGlyph? {
         let key = SpriteKey(sprite: sprite, span: span)
         if let cached = sprites[key] { return cached }
-        // Decoration sprites always draw something.
-        let rendered = place(SpriteFace.render(sprite, metrics: metrics, span: span))!
-        sprites[key] = rendered
+        let rendered = place(SpriteFace.render(sprite, metrics: metrics, span: span))
+        if let rendered { sprites[key] = rendered }
         return rendered
     }
 
     private func spriteGlyph(_ cp: UInt32, span: Int) -> RenderedGlyph? {
         let key = SpriteGlyphKey(codepoint: cp, span: span)
         if let cached = spriteGlyphs[key] { return cached }
+        let deferred = deferrals
         let rendered = SpriteFace.render(cp, metrics: metrics, span: span).flatMap(place)
-        spriteGlyphs[key] = rendered
+        if deferrals == deferred { spriteGlyphs[key] = rendered }
         return rendered
     }
 
     /// Copies a drawn sprite into the grayscale atlas.
     private func place(_ canvas: SpriteCanvas) -> RenderedGlyph? {
         guard let bitmap = canvas.export() else { return nil }
-        let region = bitmap.pixels.withUnsafeBytes { grayscale.insert(width: bitmap.width, height: bitmap.height, data: $0) }
-        return RenderedGlyph(atlas: .grayscale, region: region, offsetX: bitmap.offsetX, offsetY: bitmap.offsetY)
+        let region = bitmap.pixels.withUnsafeBytes { insert(.grayscale, width: bitmap.width, height: bitmap.height, data: $0) }
+        return region.map { RenderedGlyph(atlas: .grayscale, region: $0, offsetX: bitmap.offsetX, offsetY: bitmap.offsetY) }
+    }
+
+    /// Packs a bitmap into an atlas. A full atlas starts over when allowed (Ghostty's renderer
+    /// grows without limit instead): every cached glyph goes and `epoch` tells frame builders to
+    /// rebuild. Otherwise, or for a bitmap larger than an empty atlas, the glyph is deferred.
+    private func insert(_ kind: CellText.Atlas, width: Int, height: Int, data: UnsafeRawBufferPointer) -> Atlas.Region? {
+        func attempt() -> Atlas.Region? {
+            kind == .color
+                ? color.insert(width: width, height: height, data: data)
+                : grayscale.insert(width: width, height: height, data: data)
+        }
+        if let region = attempt() { return region }
+        if resetAllowed {
+            resetAtlases()
+            if let region = attempt() { return region }
+        }
+        deferrals += 1
+        return nil
+    }
+
+    private func resetAtlases() {
+        grayscale.reset()
+        color.reset()
+        // Fresh textures: frames still on the GPU keep sampling the old ones.
+        grayscaleTexture = nil
+        colorTexture = nil
+        fastGlyphs.removeAll()
+        glyphs.removeAll()
+        spriteGlyphs.removeAll()
+        sprites.removeAll()
+        epoch += 1
     }
 
     private func resolve(_ text: String, style: FontStyle) -> (face: Int, glyph: CGGlyph)? {
@@ -367,11 +436,8 @@ final class FontGrid {
         }
         guard drawn else { return nil }
 
-        let region = buffer.withUnsafeBytes { bytes in
-            isColor
-                ? color.insert(width: pxWidth, height: pxHeight, data: bytes)
-                : grayscale.insert(width: pxWidth, height: pxHeight, data: bytes)
-        }
+        guard let region = buffer.withUnsafeBytes({ insert(isColor ? .color : .grayscale, width: pxWidth, height: pxHeight, data: $0) })
+        else { return nil }
         return RenderedGlyph(
             atlas: isColor ? .color : .grayscale,
             region: region,

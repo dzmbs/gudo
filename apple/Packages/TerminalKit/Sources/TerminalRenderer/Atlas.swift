@@ -4,6 +4,7 @@
 /// the Bin" and freetype-gl): same 1px border, best-fit node choice, node shrinking and merging,
 /// and grow-by-doubling. Unlike Ghostty, which re-uploads the whole texture whenever it changes,
 /// this records the regions written since the last sync so the GPU copy uploads only those.
+/// Growth stops at `maxSize`: a full atlas returns nil and its owner starts over (`reset`).
 struct Atlas {
     struct Region: Equatable {
         var x: Int
@@ -28,6 +29,10 @@ struct Atlas {
     }
 
     let format: Format
+    /// Largest edge the atlas grows to. Doubling on would soon pass Metal's 16384 texture limit
+    /// and cost hundreds of MB; a whole 6K screen of distinct glyphs fits in this.
+    let maxSize: Int
+    private let initialSize: Int
     private(set) var size: Int
     private(set) var pixels: [UInt8]
     /// Bumped on every write or grow; lets each GPU texture know whether it is stale.
@@ -36,25 +41,32 @@ struct Atlas {
     private var pendingRegions: [Region]? = []
     private var nodes: [Node]
 
-    init(format: Format, size: Int = 512) {
+    init(format: Format, size: Int = 512, maxSize: Int? = nil) {
         self.format = format
         self.size = size
+        initialSize = size
+        self.maxSize = max(size, maxSize ?? (format == .grayscale ? 8192 : 4096))
         pixels = [UInt8](repeating: 0, count: size * size * format.depth)
         // Keep a 1px border so linear sampling never bleeds between neighbours.
         nodes = [Node(x: 1, y: 1, width: size - 2)]
     }
 
-    /// Reserves space and copies `data` (tightly packed rows) into it, growing the atlas if full.
-    mutating func insert(width: Int, height: Int, data: UnsafeRawBufferPointer) -> Region {
-        let region: Region
-        if let fit = reserve(width: width, height: height) {
-            region = fit
-        } else {
+    /// Reserves space and copies `data` (tightly packed rows) into it, growing the atlas if
+    /// needed; nil when it is full at `maxSize`.
+    mutating func insert(width: Int, height: Int, data: UnsafeRawBufferPointer) -> Region? {
+        while true {
+            if let region = reserve(width: width, height: height) {
+                set(region, data: data)
+                return region
+            }
+            guard size * 2 <= maxSize else { return nil }
             grow()
-            return insert(width: width, height: height, data: data)
         }
-        set(region, data: data)
-        return region
+    }
+
+    /// Empties the atlas back to its initial size; every region handed out so far is void.
+    mutating func reset() {
+        self = Atlas(format: format, size: initialSize, maxSize: maxSize)
     }
 
     /// Returns the regions to upload since the last call; nil means the whole texture.
