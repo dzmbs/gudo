@@ -269,7 +269,9 @@ public final class DaemonWorkspace {
         case .fsChanged(let change):
             watches[change.watchId]?.handler(change)
         case .attention(let update):
-            apply(update)
+            // Observers (notifications) hear every item; the views get them paced.
+            pendingAttention.append(update)
+            attentionPacing.note()
             for observer in attentionObservers.values { observer(update) }
         case .vsCodeTunnel(let status):
             vsCodeTunnel = status
@@ -374,6 +376,17 @@ public final class DaemonWorkspace {
         guard var snapshot = repos, let i = snapshot.worktrees.firstIndex(where: { $0.path == path }) else { return }
         snapshot.worktrees[i].pr = pr
         repos = snapshot
+    }
+
+    @ObservationIgnored private var pendingAttention: [AttentionUpdate] = []
+    @ObservationIgnored private lazy var attentionPacing = UpdateThrottle(interval: DaemonConnection.paneStatusInterval) { [weak self] in
+        self?.applyPendingAttention()
+    }
+
+    private func applyPendingAttention() {
+        let updates = pendingAttention
+        pendingAttention = []
+        for update in updates { apply(update) }
     }
 
     func apply(_ update: AttentionUpdate) {

@@ -345,11 +345,12 @@ final class Workspace {
     /// Refreshes the foregrounds after the daemon's pane metadata changed, at most once per
     /// `metaCoalescing`: agents retitle their panes many times a second.
     private func followMeta(of daemon: DaemonConnection) {
-        withObservationTracking { _ = daemon.meta } onChange: { [weak self, weak daemon] in
-            Task { @MainActor in
-                guard let self, let daemon, !self.metaRefreshPending else { return }
-                self.metaRefreshPending = true
+        withObservationTracking { _ = daemon.meta.all } onChange: { [weak self, weak daemon] in
+            Task { @MainActor [weak self] in
+                guard self?.beginMetaRefresh() == true else { return }
+                // Weak across the sleep: a busy host must not keep a closed window's workspace.
                 try? await Task.sleep(for: Self.metaCoalescing)
+                guard let self, let daemon, !self.isClosed else { return }
                 self.metaRefreshPending = false
                 self.refreshForegrounds()
                 self.followMeta(of: daemon)
@@ -359,6 +360,12 @@ final class Workspace {
     }
 
     @ObservationIgnored private var metaRefreshPending = false
+
+    private func beginMetaRefresh() -> Bool {
+        guard !isClosed, !metaRefreshPending else { return false }
+        metaRefreshPending = true
+        return true
+    }
     private static let metaCoalescing = Duration.milliseconds(500)
 
     private func refreshForegrounds() {

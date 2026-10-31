@@ -48,6 +48,25 @@ private func twoTabs() -> LocalLayoutStore {
 
 @MainActor
 @Suite struct WindowLayoutStoreTests {
+    /// Every sidebar row reads the window's session (the tab on screen): with 500 tabs a render
+    /// composed it 500 times, O(tabs²). Unchanged, it is composed once; a change still shows.
+    @Test func readingTheSessionOfAWideLayoutIsCheapAndStaysCurrent() {
+        var session = Session()
+        for _ in 1..<500 { session.apply(.newTab) }
+        let base = LocalLayoutStore(session: session)
+        let window = WindowLayoutStore(base: base)
+        let start = ContinuousClock.now
+        for _ in 0..<2_000 { _ = window.session.activeTabId }
+        #expect(ContinuousClock.now - start < .milliseconds(200))
+
+        let second = window.session.tabs[1]
+        window.select(tab: second.id)
+        #expect(window.session.activeTabId == second.id)
+        window.apply(.split(second.focused, .vertical))
+        #expect(window.session.activeTab?.root.panes.count == 2)
+        #expect(window.session.tabs.count == 500)
+    }
+
     @Test func windowsSelectTabsIndependently() {
         let base = twoTabs()
         let a = WindowLayoutStore(base: base)

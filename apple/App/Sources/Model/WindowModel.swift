@@ -282,7 +282,8 @@ final class WindowModel {
     /// The size of the area the active tab's panes fill (the external display scales to it).
     var terminalArea = CGSize.zero
 
-    init(app: AppModel, isPresentation: Bool = false) {
+    /// `agents` replaces the mock feed under `-mock` (in-process tests of the live feed).
+    init(app: AppModel, isPresentation: Bool = false, agents mockAgents: (any AgentFeed)? = nil) {
         self.app = app
         self.isPresentation = isPresentation
         Self.made += 1
@@ -299,7 +300,7 @@ final class WindowModel {
         }
         if LaunchOptions.mock {
             hosts = MockHostDirectory()
-            agents = MockAgentFeed()
+            agents = mockAgents ?? MockAgentFeed()
             paneStatus = MockPaneStatus()
             files = MockFileSource()
             diffs = MockDiffSource()
@@ -922,8 +923,9 @@ final class WindowModel {
         withObservationTracking {
             _ = observed?.layout.view
             _ = screenViews()
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
+        } onChange: { [weak self, weak observed] in
+            // Weak: a pending observation must not keep a workspace the window has left.
+            Task { @MainActor [weak self, weak observed] in
                 guard let self, self.workspace === observed else { return }
                 self.followView()
             }
@@ -971,8 +973,9 @@ final class WindowModel {
         withObservationTracking {
             _ = host.status
             _ = daemon?.notice
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
+        } onChange: { [weak self, weak observed] in
+            // Weak: the host's status may not change for days after the window leaves it.
+            Task { @MainActor [weak self, weak observed] in
                 // Only the host on screen drives the window's state.
                 guard let self, self.workspace === observed else { return }
                 self.followConnection()

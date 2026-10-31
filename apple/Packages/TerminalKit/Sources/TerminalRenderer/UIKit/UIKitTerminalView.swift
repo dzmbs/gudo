@@ -784,7 +784,7 @@ public final class TerminalView: UIView {
         clearSelection()
         switch surface.paste(text) {
         case .needsConfirmation:
-            let lines = text.split(whereSeparator: \.isNewline).count
+            let lines = Terminal.pasteLineCount(text)
             let alert = UIAlertController(
                 title: "Paste \(lines) Lines?",
                 message: "The program did not enable bracketed paste, so each line may run as a command.",
@@ -793,6 +793,10 @@ public final class TerminalView: UIView {
             alert.addAction(UIAlertAction(title: "Paste", style: .destructive) { [weak self] _ in
                 _ = self?.surface.paste(text, allowUnsafe: true)
             })
+            presenter?.present(alert, animated: true)
+        case .tooLarge:
+            let alert = UIAlertController(title: PasteLimit.title, message: PasteLimit.message(bytes: text.utf8.count), preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel))
             presenter?.present(alert, animated: true)
         default:
             break
