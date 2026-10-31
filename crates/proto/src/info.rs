@@ -19,7 +19,9 @@
 //! On a [`StreamHeader::Upgrade`](crate::StreamHeader::Upgrade) stream (owner only): header
 //! → [`UpgradeReply::Ready`] → the client sends exactly `size` bytes and finishes →
 //! [`UpgradeReply::Installed`] once the daemon verified the build (SHA-256, then the binary
-//! itself must run on this host and report its info) and swapped it in atomically. The daemon
+//! itself must run on this host and report its info, and must not be older than the running
+//! build unless the owner sent it as a [`StreamHeader::Downgrade`](crate::StreamHeader::Downgrade))
+//! and swapped it in atomically. The daemon
 //! then saves its layout, stops its panes and executes the new build in its own process (same
 //! PID, so systemd and launchd keep supervising it); the connection drops and the client
 //! redials as after any restart. Panes come back from `layout.json` (shells restart in their
@@ -65,6 +67,40 @@ pub struct DaemonInfo {
     pub os_name: String,
     /// `std::env::consts::ARCH` of the build: `x86_64`, `aarch64`.
     pub arch: String,
+}
+
+impl DaemonInfo {
+    /// Whether this build is older than `other`: a lower protocol level, or the same level
+    /// from an earlier source (see the module docs; `dev` builds are older than any release
+    /// build). The same order as the app's `HelperVersion.isOlder`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use proto::{DaemonFeatures, DaemonInfo};
+    /// let build = |build: &str, built_unix, protocol| DaemonInfo {
+    ///     version: "0.1.0".into(),
+    ///     build: build.into(),
+    ///     built_unix,
+    ///     protocol,
+    ///     min_client_protocol: 0,
+    ///     features: DaemonFeatures::EMPTY,
+    ///     hostname: String::new(),
+    ///     os: "linux".into(),
+    ///     os_name: String::new(),
+    ///     arch: "x86_64".into(),
+    /// };
+    /// assert!(build("a", 100, 1).is_older_than(&build("b", 200, 1)));
+    /// assert!(build("b", 200, 1).is_older_than(&build("a", 100, 2)));
+    /// assert!(!build("a", 100, 1).is_older_than(&build("a", 100, 1)));
+    /// assert!(build("dev", 0, 1).is_older_than(&build("a", 100, 1)));
+    /// ```
+    pub fn is_older_than(&self, other: &DaemonInfo) -> bool {
+        if self.protocol != other.protocol {
+            return self.protocol < other.protocol;
+        }
+        self.build != other.build && self.built_unix < other.built_unix
+    }
 }
 
 /// How the bytes on an upgrade stream are encoded.
@@ -122,4 +158,7 @@ pub enum UpgradeFailure {
     Rejected,
     /// Writing or swapping the file failed.
     Io,
+    /// The new build is older than the running one; only an explicit
+    /// [`StreamHeader::Downgrade`](crate::StreamHeader::Downgrade) installs it.
+    Older,
 }

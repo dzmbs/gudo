@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gudo Authors <noreply@gudo.dev>
+Date: Fri, 30 Oct 2026 22:23:52 +0100
+Subject: [PATCH] snapshot: degrade cursor states the terminal cannot reach on
+ decode
+
+A SCREEN payload may carry two states that live terminal input never
+produces and that other code asserts against:
+
+- GR invoking G0. There is no LS0R, and the formatter treats GR = G0 as
+  unreachable when it emits charset state.
+- Clear-at-end-of-line on output content. Terminal.index asserts that
+  output never has it.
+
+Following the snapshot rule of degrading invalid state on decode, GR = G0
+now decodes to the default (G2) like an unknown slot, and the clear flag
+is dropped for output content.
+---
+ src/terminal/snapshot/screen.zig | 40 ++++++++++++++++++++++++++------
+ 1 file changed, 33 insertions(+), 7 deletions(-)
+
+diff --git a/src/terminal/snapshot/screen.zig b/src/terminal/snapshot/screen.zig
+index 02d6207f7..4e0586e35 100644
+--- a/src/terminal/snapshot/screen.zig
++++ b/src/terminal/snapshot/screen.zig
+@@ -573,7 +573,10 @@ pub const CursorFlags = packed struct(u8) {
+             .pending_wrap = bits.pending_wrap,
+             .protected = bits.protected,
+             .semantic_content = semantic_content,
+-            .semantic_content_clear_eol = bits.semantic_content_clear_eol,
++            // Clearing at end of line only applies to prompt and input
++            // content; Terminal.index asserts that output never has it.
++            .semantic_content_clear_eol = bits.semantic_content_clear_eol and
++                semantic_content != .output,
+         };
+     }
+ };
+@@ -657,10 +660,13 @@ fn decodeCharsetState(
+         terminal_charsets.Slots,
+         bits.gl,
+     ) orelse result.gl;
+-    result.gr = enumFromInt(
++    // There is no G0 invocation into GR (no LS0R), and the formatter
++    // relies on that, so G0 keeps the default like an unknown slot.
++    const gr = enumFromInt(
+         terminal_charsets.Slots,
+         bits.gr,
+     ) orelse result.gr;
++    if (gr != .G0) result.gr = gr;
+     result.single_shift = if (bits.single_shift == 0)
+         null
+     else if (bits.single_shift <= 4)
+@@ -1492,7 +1498,7 @@ test "header decoding normalizes unknown semantic values" {
+     fixture[16] = 4; // Unknown cursor style.
+     fixture[17] = 0xFF; // Known flags, unknown semantic value, reserved bits.
+     fixture[18] = 3; // Unknown cursor foreground color kind.
+-    fixture[39] = 0xD0; // Invalid single shift plus a reserved bit.
++    fixture[39] = 0xD0; // GR = G0, invalid single shift, a reserved bit.
+     fixture[40] = 3; // Unknown protected mode.
+     fixture[41] = 8; // Out-of-range Kitty keyboard index.
+     @memset(fixture[42..50], 0xFF); // Known flags plus reserved bits.
+@@ -1514,13 +1520,14 @@ test "header decoding normalizes unknown semantic values" {
+         terminal_page.Cell.SemanticContent.output,
+         decoded.cursor_flags.semantic_content,
+     );
++    // Output never clears at end of line.
+     try std.testing.expect(
+-        decoded.cursor_flags.semantic_content_clear_eol,
++        !decoded.cursor_flags.semantic_content_clear_eol,
+     );
+     try std.testing.expectEqual(@as(u3, 0), decoded.cursor_flags._padding);
+ 
+     try std.testing.expectEqual(null, decoded.charset.single_shift);
+-    try std.testing.expectEqual(terminal_charsets.Slots.G0, decoded.charset.gr);
++    try std.testing.expectEqual(terminal_charsets.Slots.G2, decoded.charset.gr);
+     try std.testing.expectEqual(
+         terminal_ansi.ProtectedMode.off,
+         decoded.protected_mode,
+@@ -1560,6 +1567,25 @@ test "header decoding normalizes unknown semantic values" {
+     }
+ }
+ 
++test "cursor flags decoding keeps clear-at-EOL only off output" {
++    const Case = struct {
++        raw: CursorFlags,
++        clear_eol: bool,
++    };
++    const cases = [_]Case{
++        .{ .raw = .{ .semantic_content = .input, .semantic_content_clear_eol = true }, .clear_eol = true },
++        .{ .raw = .{ .semantic_content = .prompt, .semantic_content_clear_eol = true }, .clear_eol = true },
++        .{ .raw = .{ .semantic_content = .output, .semantic_content_clear_eol = true }, .clear_eol = false },
++    };
++    for (cases) |case| {
++        const raw: [1]u8 = .{@bitCast(case.raw)};
++        var reader: std.Io.Reader = .fixed(&raw);
++        const decoded = try CursorFlags.decode(&reader);
++        try std.testing.expectEqual(case.raw.semantic_content, decoded.semantic_content);
++        try std.testing.expectEqual(case.clear_eol, decoded.semantic_content_clear_eol);
++    }
++}
++
+ test "header decoding rejects every truncation" {
+     for (0..Header.len) |fixture_len| {
+         var reader: std.Io.Reader = .fixed(
+@@ -1633,7 +1659,7 @@ test "saved cursor encoding rejects and decoding normalizes invalid state" {
+     var invalid: [SavedCursor.len]u8 = @splat(0);
+     invalid[4] = 3; // Unknown saved-cursor foreground color kind.
+     invalid[20] = 0xF9; // Protected plus reserved bits.
+-    invalid[22] = 0xD0; // Invalid single shift plus a reserved bit.
++    invalid[22] = 0xD0; // GR = G0, invalid single shift, a reserved bit.
+     var reader: std.Io.Reader = .fixed(&invalid);
+     const decoded = try SavedCursor.decode(&reader);
+ 
+@@ -1644,7 +1670,7 @@ test "saved cursor encoding rejects and decoding normalizes invalid state" {
+     try std.testing.expectEqual(@as(u5, 0), decoded.flags._padding);
+     try std.testing.expectEqual(null, decoded.charset.single_shift);
+     try std.testing.expectEqual(
+-        terminal_charsets.Slots.G0,
++        terminal_charsets.Slots.G2,
+         decoded.charset.gr,
+     );
+ }

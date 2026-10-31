@@ -11,8 +11,12 @@
 //!   `hostd-manifest.json` so the app knows what it bundles without running it.
 //! - `build-hostd-macos`: the stripped arm64 daemon the Mac app runs for "This Mac", in
 //!   `apple/build/hostd/macos/`, stamped the same way.
+//! - `notices [--check]`: regenerates the third-party licence notices shipped with the app
+//!   and the helper (see `notices.rs`); `--check` fails if they are out of date.
 //!
 //! See docs/APPLE-FFI.md.
+
+mod notices;
 
 use std::ffi::OsStr;
 use std::fs;
@@ -70,7 +74,8 @@ commands:
                                      + generated Swift); --macos-only skips the iOS slices
   build-hostd-linux                  stripped, gzipped static musl daemons (aarch64, x86_64)
                                      into apple/build/hostd/
-  build-hostd-macos                  the Mac app's own daemon (arm64) into apple/build/hostd/macos/";
+  build-hostd-macos                  the Mac app's own daemon (arm64) into apple/build/hostd/macos/
+  notices [--check]                  regenerate (or check) the shipped third-party licence notices";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -85,6 +90,11 @@ fn main() -> Result<()> {
         }
         Some("build-hostd-linux") if args.len() == 1 => build_hostd_linux(),
         Some("build-hostd-macos") if args.len() == 1 => build_hostd_macos(),
+        Some("notices") => match &args[1..] {
+            [] => notices::notices(false),
+            [flag] if flag == "--check" => notices::notices(true),
+            _ => bail!("{USAGE}"),
+        },
         _ => bail!("{USAGE}"),
     }
 }

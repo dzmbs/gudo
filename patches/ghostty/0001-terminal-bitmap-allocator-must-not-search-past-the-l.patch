@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gudo Authors <noreply@gudo.dev>
+Date: Fri, 30 Oct 2026 22:18:35 +0100
+Subject: [PATCH] terminal: bitmap allocator must not search past the last
+ bitmap
+
+findFreeChunks for more than 64 chunks reads, and on success marks, the
+bitmap after the one a span starts in. When the span starts in the last
+bitmap that index is one past the end of the slice: an out-of-bounds read
+and write in page memory in builds without safety checks.
+
+A page decoded from a snapshot with a small string capacity and a long
+hyperlink URI reaches this.
+---
+ src/terminal/bitmap_allocator.zig | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/src/terminal/bitmap_allocator.zig b/src/terminal/bitmap_allocator.zig
+index eed0bdd86..c1090bb81 100644
+--- a/src/terminal/bitmap_allocator.zig
++++ b/src/terminal/bitmap_allocator.zig
+@@ -317,6 +317,9 @@ fn findFreeChunks(bitmaps: []u64, n: usize) ?usize {
+                 rem -= 64;
+             }
+ 
++            // A span starting in the last bitmap has nowhere to continue.
++            if (i >= bitmaps.len) return null;
++
+             // If the number of available chunks at the start of this bitmap
+             // is less than the remaining required, we have to try again.
+             if (@ctz(bitmaps[i]) < rem) continue;
+@@ -484,6 +487,24 @@ test "findFreeChunks larger than 64 chunks exact" {
+     try testing.expectEqual(@as(usize, 0), idx);
+ }
+ 
++test "findFreeChunks larger than 64 chunks starting in the last bitmap" {
++    const testing = std.testing;
++
++    // The word after the slice must stay untouched: the search may neither
++    // read nor mark past the last bitmap.
++    var storage = [_]u64{
++        0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
++        0b00000000_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
++        0,
++    };
++    try testing.expectEqual(@as(?usize, null), findFreeChunks(storage[0..2], 65));
++    try testing.expectEqual(
++        0b00000000_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
++        storage[1],
++    );
++    try testing.expectEqual(@as(u64, 0), storage[2]);
++}
++
+ test "BitmapAllocator layout" {
+     const Alloc = BitmapAllocator(4);
+     const cap = 64 * 4;

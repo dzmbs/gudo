@@ -699,6 +699,17 @@ fn daemon_info_messages(c: &mut Checker) {
         }),
         "340000000108c09fab030144444444444444444444444444444444444444444444444444444444444444440c336632613963316437653462",
     );
+    // Appended after `Upgrade` (variant 8): the owner's explicit downgrade.
+    c.check(
+        "StreamHeader::Downgrade",
+        StreamHeader::Downgrade(UpgradeHeader {
+            size: 7_000_000,
+            encoding: UpgradeEncoding::Gzip,
+            sha256: [0x44; 32],
+            build: "3f2a9c1d7e4b".into(),
+        }),
+        "340000000109c09fab030144444444444444444444444444444444444444444444444444444444444444440c336632613963316437653462",
+    );
     c.check("UpgradeReply::Ready", UpgradeReply::Ready, "020000000100");
     c.check(
         "UpgradeReply::Installed",
@@ -731,6 +742,12 @@ fn daemon_info_messages(c: &mut Checker) {
             "020000000104",
         ),
         ("UpgradeFailure::Io", UpgradeFailure::Io, "020000000105"),
+        // Appended for rollback protection.
+        (
+            "UpgradeFailure::Older",
+            UpgradeFailure::Older,
+            "020000000106",
+        ),
     ] {
         c.check(name, code, hex);
     }

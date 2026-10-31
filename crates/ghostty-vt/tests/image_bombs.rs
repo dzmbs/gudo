@@ -63,7 +63,6 @@ fn transmit(term: &mut Terminal, keys: &str, data: &[u8]) {
 /// zlib, or a long run of chunks, cannot make the terminal allocate hundreds of MiB for an
 /// image it will refuse anyway.
 #[test]
-#[ignore = "libghostty-vt bounds a load by its own 400 MB, not by the image storage"]
 fn transmissions_stay_within_the_image_storage() {
     let mut term = Terminal::new(80, 24).unwrap();
     term.set_kitty_image_storage_limit(KITTY_IMAGE_STORAGE_LIMIT)

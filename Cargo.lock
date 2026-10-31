@@ -4613,6 +4613,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "p256",
+ "proto",
  "ring",
  "russh",
  "serde",
@@ -6047,6 +6048,7 @@ dependencies = [
  "camino",
  "flate2",
  "proto",
+ "serde_json",
  "uniffi_bindgen",
 ]
 

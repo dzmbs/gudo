@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds ghostty-vt.xcframework (macOS universal, iOS arm64, iOS simulator arm64) from the pinned
-# vendor/ghostty. TerminalKit consumes it as the `GhosttyVt` binary target.
+# vendor/ghostty plus patches/ghostty (scripts/ghostty-source.sh). TerminalKit consumes it as the
+# `GhosttyVt` binary target.
 #
 # Output: apple/build/ghostty-vt/lib/ghostty-vt.xcframework
 #
@@ -28,11 +29,16 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   exit 1
 fi
 
+source="$repo_root/apple/build/ghostty-src"
+version="$("$repo_root/scripts/ghostty-source.sh" "$source")"
+
 rm -rf "$prefix"
-(cd "$ghostty" && "$zig" build \
+(cd "$source" && "$zig" build \
   -Demit-lib-vt \
   -Demit-xcframework=true \
+  -Dversion-string="$version" \
   -Doptimize="$optimize" \
+  --cache-dir "$ghostty/.zig-cache" \
   --prefix "$prefix")
 
 xcframework="$prefix/lib/ghostty-vt.xcframework"

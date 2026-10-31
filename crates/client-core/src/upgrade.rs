@@ -48,6 +48,9 @@ pub struct DaemonBuild {
     pub sha256: [u8; 32],
     /// Its build id, for the daemon's log (may be empty).
     pub build: String,
+    /// Whether the owner explicitly accepts a build older than the running one; otherwise
+    /// the daemon refuses it ([`UpgradeFailure::Older`]). Off by default.
+    pub downgrade: bool,
 }
 
 impl DaemonBuild {
@@ -73,6 +76,7 @@ impl DaemonBuild {
             encoding,
             sha256,
             build,
+            downgrade: false,
         })
     }
 
@@ -144,12 +148,17 @@ async fn send_build(
     let (mut send, mut recv) = conn.open_bi().await.map_err(link)?;
     let _ = send.set_priority(1);
     let size = build.data.len() as u64;
-    let header = StreamHeader::Upgrade(UpgradeHeader {
+    let header = UpgradeHeader {
         size,
         encoding: build.encoding,
         sha256: build.sha256,
         build: build.build,
-    });
+    };
+    let header = if build.downgrade {
+        StreamHeader::Downgrade(header)
+    } else {
+        StreamHeader::Upgrade(header)
+    };
     crate::conn::send(&mut send, &header).await.map_err(link)?;
     match crate::conn::recv::<UpgradeReply>(&mut recv)
         .await

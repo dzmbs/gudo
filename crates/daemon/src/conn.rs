@@ -472,19 +472,26 @@ async fn serve_upgrade_only(
         let conn = conn.clone();
         tokio::spawn(async move {
             while let Ok((mut send, mut recv)) = conn.accept_bi().await {
-                match net::recv::<StreamHeader>(&mut recv).await {
-                    Ok(Some(StreamHeader::Upgrade(header))) => {
+                let header = net::recv::<StreamHeader>(&mut recv).await;
+                match header
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .and_then(crate::upgrade::requested)
+                {
+                    Some((header, downgrade)) => {
                         let _ = send.set_priority(crate::stream::priority::BULK);
                         tokio::spawn(crate::upgrade::serve(
                             Arc::clone(&core),
                             actor,
                             owner,
-                            header,
+                            downgrade,
+                            header.clone(),
                             send,
                             recv,
                         ));
                     }
-                    _ => {
+                    None => {
                         let _ = send.finish();
                     }
                 }
@@ -612,14 +619,20 @@ async fn accept_bi(client: Arc<Client>) {
             let _ = send.finish();
             continue;
         }
-        if let Ok(Some(StreamHeader::Upgrade(header))) = header {
+        if let Some((header, downgrade)) = header
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .and_then(crate::upgrade::requested)
+        {
             let owner = client.live().is_ok() && is_owner(&client.core, &client.authz);
             let _ = send.set_priority(crate::stream::priority::BULK);
             tokio::spawn(crate::upgrade::serve(
                 Arc::clone(&client.core),
                 client.actor,
                 owner,
-                header,
+                downgrade,
+                header.clone(),
                 send,
                 recv,
             ));

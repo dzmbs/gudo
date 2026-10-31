@@ -160,14 +160,11 @@ fn corrupt_snapshots_fail_cleanly() {
     }
 }
 
-/// Seeds that break libghostty-vt 1.4.0's invariants (docs/security/supply-chain.md, "Residual
-/// risk"): an out-of-bounds bitmap access in `findFreeChunks`, `unreachable` for GR = G0 in
-/// the formatter, and a cursor-flags assertion in `index`. Silent in `ReleaseFast`, so this
-/// only fails with the checks on:
-/// `LIBGHOSTTY_VT_OPTIMIZE=safe cargo test -p ghostty-vt --test it -- --ignored upstream`.
-/// Un-ignore once the pinned Ghostty fixes them.
+/// Seeds that broke Ghostty 1.4.0's invariants until `patches/ghostty`: an out-of-bounds
+/// bitmap access in `findFreeChunks`, `unreachable` for GR = G0 in the formatter, and a
+/// cursor-flags assertion in `index`. Silent memory corruption in `ReleaseFast`, so CI runs
+/// this with the checks on: `LIBGHOSTTY_VT_OPTIMIZE=safe cargo test -p ghostty-vt --test it`.
 #[test]
-#[ignore = "fails until upstream Ghostty fixes its snapshot decoder"]
 fn upstream_decoder_bugs() {
     let base = sample();
     for seed in [4253, 5620, 27383] {

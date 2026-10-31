@@ -620,7 +620,7 @@ public final class HostsModel {
             binaries: configuration.hostdBinaries(), ticketMinutes: 1, waitSecs: nil, listener: listener)
         Self.log.info("helper update over ssh host=\(id, privacy: .public) action=\(String(describing: report.action), privacy: .public)")
         installNotes[id] = report.notes.isEmpty ? nil : report.notes
-        return report.action != .reused
+        return report.action != .reused && report.action != .keptNewer
     }
 
     // MARK: ~/.ssh/config

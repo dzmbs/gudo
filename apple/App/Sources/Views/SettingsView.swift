@@ -776,6 +776,13 @@ private struct AcknowledgementsView: View {
             } footer: {
                 Text("Opening the editor uses VS Code under these terms, for you, on hosts you control.")
             }
+            Section {
+                NavigationLink("Open-Source Licenses") { LicenseNoticesView() }
+                    .accessibilityIdentifier("ack-open-source-licenses")
+                    .chromeRows()
+            } footer: {
+                Text("Full licence texts for the open-source code inside the app and its host helper.")
+            }
         }
         .chromeGrouped()
         .navigationTitle("Acknowledgements")
@@ -800,5 +807,33 @@ private struct AcknowledgementsView: View {
         }
         .accessibilityIdentifier("ack-\(title)")
         .chromeRows()
+    }
+}
+
+/// The generated third-party notices (`cargo xtask notices`), as bundled.
+private struct LicenseNoticesView: View {
+    @State private var paragraphs: [String] = []
+
+    var body: some View {
+        ScrollView {
+            // About 1 MB of text: lazily, a paragraph at a time.
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(paragraphs.indices, id: \.self) { i in
+                    Text(paragraphs[i])
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Open-Source Licenses")
+        .task {
+            guard paragraphs.isEmpty,
+                  let url = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "txt") else { return }
+            paragraphs = await Task.detached {
+                let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+                return text.components(separatedBy: "\n\n")
+            }.value
+        }
     }
 }
