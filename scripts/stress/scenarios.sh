@@ -32,6 +32,39 @@ case_slow() {
   RECOVER=5 D slow "$W/s-slow.sh" 4 90
 }
 
+case_panes() {
+  echo "== 400 panes as tabs (macOS allows 511 PTYs system-wide)"
+  "$W/panes.sh" "$B" 400
+  echo "== pane cap: a 600-descriptor limit allows 114 panes"
+  DAEMON_NOFILE=600 "$W/panes.sh" "$B" 150
+  echo "== launchd's soft limit of 256"
+  DAEMON_NOFILE_SOFT=256 "$W/panes.sh" "$B" 150
+  echo "== nested splits, then a restart"
+  "$W/deep-restart.sh" "$B" 80
+}
+
+case_clients() {
+  echo "== 50 paired clients on a flooding pane"
+  RECOVER=5 D clients "$W/s-clients.sh" 50 30 0
+  echo "== 200 guests on a flooding pane, each resizing 5 times a second"
+  GUESTS=1 RECOVER=10 D clients "$W/s-clients.sh" 200 40 5
+}
+
+case_control() {
+  echo "== keys, 100 MB paste, layout and project storms, reconnects, garbage resumes"
+  RECOVER=5 D control "$W/s-control.sh"
+}
+
+case_lifecycle() {
+  "$W/lifecycle.sh" "$B"
+  "$W/diskfull.sh" "$B"
+}
+
+case_soak() {
+  echo "== mixed soak, ${SOAK_MIN:-30} min"
+  RECOVER=10 D soak "$W/s-soak.sh" ${SOAK_MIN:-30}
+}
+
 for s in "$@"; do
   echo "######## $s"
   "case_$s"
