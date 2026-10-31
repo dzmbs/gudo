@@ -144,6 +144,16 @@ pub enum PaneLaunch {
         /// The drawing to show.
         artifact_id: Option<ArtifactId>,
     },
+    /// Reopens a pane closed earlier on this daemon (a recently closed tab): its agent
+    /// resumes its session when the daemon knew the session id, otherwise a shell starts in
+    /// the pane's last directory, else `cwd`. An unknown pane is a shell in `cwd`. Needs the
+    /// owner role and [`DaemonFeatures::REOPEN`](crate::DaemonFeatures::REOPEN).
+    Reopen {
+        /// The closed pane.
+        pane_id: PaneId,
+        /// Where to start when the daemon kept no directory for it.
+        cwd: Option<String>,
+    },
 }
 
 /// A change to the layout, sent in [`ClientCtl::Op`](crate::ClientCtl::Op).

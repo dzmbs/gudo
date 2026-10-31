@@ -51,7 +51,7 @@ fn float_messages_match_their_frozen_bytes() {
         &mut failures,
         "DaemonFeatures::FLOATS",
         DaemonFeatures::FLOATS,
-        "0400000001808002",
+        "0400000001808004",
     );
     let ops = [
         (

@@ -17,6 +17,7 @@ struct TerminalApp: App {
     #endif
 
     init() {
+        _ = AppModel.launchedAt
         TerminalPreferences.WindowTheme.migrate()
         #if os(macOS)
         // Tabs are ours (⌘T); AppKit's window tabbing would compete for the same shortcuts.
@@ -153,7 +154,11 @@ struct WindowContent: View {
             .onChange(of: app.lastError) { _, error in showError(error) }
             .onChange(of: model.groups.openHosts) { _, _ in persist() }
             .onChange(of: model.groups.collapsed) { _, _ in persist() }
-            .onChange(of: model.currentTab) { _, _ in persist() }
+            .onChange(of: model.currentTab) { _, ref in
+                persist()
+                // "Untouched" for the idle-tab suggestion: when this device last showed a tab.
+                if let ref, !LaunchOptions.mock, ref.hostId != HostGroups.mixedId { TabTouches.shared.touch(ref) }
+            }
             .onChange(of: model.composites.tabs) { _, _ in persist() }
             .onChange(of: model.groups.projectsState) { _, _ in persist() }
             .onChange(of: model.twoColumnsChoice) { _, _ in persist() }
@@ -167,6 +172,7 @@ struct WindowContent: View {
     var body: some View {
         observed
             .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
+            .modifier(BulkCloseConfirmation(model: model))
             .modifier(HandoffActivity(model: model, onContinue: continueActivity))
             .onOpenURL(perform: open(url:))
             // Links (pairing, invites, a pane from a notification) go to a window that is
@@ -374,7 +380,12 @@ struct WindowContent: View {
         if let projects = decode(HostGroups.ProjectsState.self, storedProjects ?? defaults.string(forKey: Self.lastProjectsKey)) {
             model.groups.projectsState = projects
         }
-        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: focus, mixedTabs: mixed)
+        // "A New Terminal" (Settings ▸ General) for windows coming back at launch: the old tabs
+        // keep running, out of sight, and one new terminal opens. A window opened later
+        // (New Window) restores as before.
+        let fresh = LaunchTabs.current == .newTerminal && AppModel.isLaunching
+        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: fresh ? nil : focus, mixedTabs: mixed)
+        if fresh { model.startFresh(lastHost: focus?.hostId) }
     }
 
     private static let lastProjectsKey = "window.projects"

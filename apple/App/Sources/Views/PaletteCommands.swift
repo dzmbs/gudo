@@ -15,6 +15,7 @@ enum PaletteCommands {
         case .newTabOnHost: "New tab on…"
         case .splitWithHost: "Split with a pane on…"
         case .workflows: "Run a workflow…"
+        case .recentlyClosed: "Reopen a closed tab…"
         }
     }
 
@@ -24,6 +25,7 @@ enum PaletteCommands {
         case .newTabOnHost: return newTabHosts(model: model)
         case .splitWithHost: return splitHosts(model: model)
         case .workflows: return workflows(model: model)
+        case .recentlyClosed: return recentlyClosed(model: model, all: true)
         case .commands: break
         }
         var commands: [PaletteCommand] = []
@@ -35,6 +37,7 @@ enum PaletteCommands {
         }
 
         commands += tabs(model: model, section: "Tabs")
+        commands += recentlyClosed(model: model)
         commands += git(model: model)
 
         let actions: [(WorkspaceAction, String)] = [
@@ -97,6 +100,33 @@ enum PaletteCommands {
             commands.append(PaletteCommand(
                 id: "host-\(host.id)", title: "Connect to \(host.name)", subtitle: host.address, section: "Hosts",
                 systemImage: host.kind == .ssh ? "terminal" : host.kind == .local ? "laptopcomputer" : "server.rack") { model.hosts.connect(host.id) })
+        }
+        return commands
+    }
+
+    /// Tabs hidden at launch and recently closed ones, newest first, each with where it was and
+    /// when it closed: what History ▸ Recently Closed lists, searchable.
+    static func recentlyClosed(model: WindowModel, all: Bool = false) -> [PaletteCommand] {
+        let section = all ? nil : "Recently Closed"
+        var commands: [PaletteCommand] = []
+        let hidden = model.groups.restorableTabs.count
+        if hidden > 0 {
+            commands.append(PaletteCommand(
+                id: "restore-previous", title: "Reopen Previous Tabs", subtitle: hidden == 1 ? "1 tab" : "\(hidden) tabs",
+                section: section, systemImage: "arrow.counterclockwise") { model.restoreHiddenTabs() })
+        }
+        if !model.idleTabs.isEmpty {
+            commands.append(PaletteCommand(
+                id: "close-idle", title: "Close \(model.idleTabs.count) Idle Tabs", subtitle: "Untouched for \(IdleTabRule.days) days",
+                section: section, systemImage: "moon.zzz") { model.closeIdleTabs() })
+        }
+        for (index, entry) in model.recentlyClosed.tabs.prefix(all ? RecentlyClosed.limit : 5).enumerated() {
+            let program = entry.agent.map { ProgramCatalog.identity(process: $0) }
+            commands.append(PaletteCommand(
+                id: "closed-\(entry.id)", title: entry.title, subtitle: entry.subtitle(), section: section,
+                systemImage: program == nil ? "terminal" : nil, program: program,
+                shortcut: index == 0 ? WorkspaceAction.reopenClosedTab.shortcut.symbols : nil
+            ) { model.reopenClosed(entry.id) })
         }
         return commands
     }

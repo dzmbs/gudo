@@ -46,6 +46,15 @@ nonisolated public protocol NetworkChangeClient: AnyObject, Sendable {
 
 extension DaemonClient: NetworkChangeClient {}
 
+/// Reopening closed tabs and reading what a pane runs, apart from `DaemonClientAPI` so test
+/// fakes need not implement it.
+nonisolated public protocol TabHistoryClient: AnyObject, Sendable {
+    func reopenTab(sessionId: UInt64, closedPane: UInt64, cwd: String?, name: String) async throws -> ReopenedTab
+    func paneAssist(paneId: UInt64) async throws -> PaneAssist
+}
+
+extension DaemonClient: TabHistoryClient {}
+
 /// Dials a daemon. The real one is `DaemonClient.connect`; tests pass a fake.
 public typealias DaemonDialer = @Sendable (_ ticket: String, _ listener: any ClientEventListener) throws -> any DaemonClientAPI
 

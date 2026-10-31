@@ -125,7 +125,7 @@ impl Daemon {
     pub async fn start(mut config: Config) -> Result<Self, StartError> {
         config.apply_user_file()?;
         let identity = Arc::new(Identity::load_or_create(&config.state_dir)?);
-        let (layout, records) = persist::load(&config.state_dir)?
+        let (layout, records, closed) = persist::load(&config.state_dir)?
             .map(persist::Saved::into_parts)
             .unwrap_or_default();
         let hooks = HookServer::new(&config.state_dir, config.hook_bin())?;
@@ -144,7 +144,7 @@ impl Daemon {
         )?;
         let core = Core::new(config, identity, layout, hooks, shell, mp);
         let mut tasks = vec![HookServer::listen(&core)?];
-        core::restore(&core, records);
+        core::restore(&core, records, closed);
 
         let endpoint = bind(&core).await?;
         let info = endpoint_info_of(&endpoint, &core.cfg.relay);

@@ -249,6 +249,32 @@ nonisolated final class LocalDaemon {
         #expect(again.layout.projects.members[tabs[2]]?.rank == 1024)
     }
 
+    /// Closing a host's last tab leaves the host empty, never a tab whose panes are gone (the
+    /// owner once typed into one and was told it was "outside what you were invited to"); Undo
+    /// brings the tab back in the same session, in its directory.
+    @Test func closingTheLastTabLeavesTheHostEmptyAndUndoBringsItBack() async throws {
+        let daemon = try LocalDaemon()
+        let model = makeModel()
+        let hostId = try await model.pair(try PairingTicket(try await daemon.ticket()), name: "local")
+        let connection = try #require(model.connection(hostId) as? DaemonConnection)
+        try await eventually("layout", timeout: .seconds(15)) { connection.isReady && connection.layout.session.tabs.count == 1 }
+        let store = connection.layout
+        let session = try #require(store.sessionId)
+        let tab = try #require(store.session.tabs.first)
+
+        store.apply(.closeTab(tab.id))
+        try await eventually("empty host", timeout: .seconds(10)) { store.session.tabs.isEmpty }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(store.session.tabs.isEmpty, "nothing comes back on its own")
+        #expect(store.sessionId == session, "the session stays, empty")
+        #expect(connection.status.isLive)
+
+        let back = try await connection.reopenTab(closedPane: tab.focused.rawValue, directory: NSTemporaryDirectory(), name: "again")
+        try await eventually("reopened", timeout: .seconds(10)) { store.session.tabs.map(\.id) == [back.tab] }
+        #expect(store.session.tabs.first?.title == "again")
+        #expect(store.sessionId == session)
+    }
+
     /// Tickets minted the moment a daemon starts (as the UI tests' daemons are) all pair; a
     /// used ticket is refused on another device and leaves no host there, which then pairs
     /// with a new ticket.

@@ -25,7 +25,7 @@ extension WindowModel {
         return (groups.group(workspace.groupId)?.tabs ?? []).filter { $0.id != tab }
     }
 
-    /// Whether the focused pane can move to a tab of its own (⇧⌘T).
+    /// Whether the focused pane can move to a tab of its own (⌥⇧⌘T).
     var canMovePaneToNewTab: Bool {
         guard destination == .terminal else { return false }
         if let mixed = activeMixed {
@@ -37,7 +37,7 @@ extension WindowModel {
         return workspace.canMoveToNewTab(pane)
     }
 
-    /// ⇧⌘T: the focused pane (or `pane`) leaves for a new tab right after its own, focused. In a
+    /// ⌥⇧⌘T: the focused pane (or `pane`) leaves for a new tab right after its own, focused. In a
     /// mixed tab a host pane goes to a tab on its host, an editor to a VS Code tab.
     func movePaneToNewTab(_ pane: PaneId? = nil, in workspace: Workspace? = nil) {
         if pane == nil, let mixed = activeMixed {

@@ -46,6 +46,9 @@ pub struct DaemonInfo {
     /// It keeps projects (`LayoutOp::SetTabProject` …, `ClientEvent::Projects`).
     #[uniffi(default = false)]
     pub projects: bool,
+    /// It reopens closed panes, resuming their agents (`reopen_tab`).
+    #[uniffi(default = false)]
+    pub reopen: bool,
     /// It keeps floating windows (`LayoutOp::NewFloat` …, `ClientEvent::Floats`).
     #[uniffi(default = false)]
     pub floats: bool,
@@ -70,6 +73,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             projects: i.features.contains(proto::DaemonFeatures::PROJECTS),
             floats: i.features.contains(proto::DaemonFeatures::FLOATS),
             agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
+            reopen: i.features.contains(proto::DaemonFeatures::REOPEN),
         }
     }
 }

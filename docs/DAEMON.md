@@ -28,8 +28,12 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   focuses it.
 - Ops (`proto::LayoutOp`): split, close pane, focus, focus direction, resize (moves the nearest
   divider on that axis), toggle zoom, new/close/move/select/rename tab, create/rename/close
-  session. Closing a tab's last pane closes the tab; closing a session's last tab closes the
-  session. A pane whose process exits is closed like `ClosePane`.
+  session. Closing a tab's last pane closes the tab; a session outlives its last tab (clients
+  attached to it get an empty layout, the host shows its New Terminal row, and Undo or ⇧⌘T can
+  reopen into it); only `CloseSession` removes one. A pane whose process exits is closed like
+  `ClosePane`. A client whose attached session disappears anyway (`CloseSession` from another
+  device or the CLI, an older daemon) sees it missing from `Sessions`, drops its tabs and pending
+  ops and attaches anew.
 - Pane moves (offered as `DaemonFeatures::PANE_MOVES`; older daemons fail to decode them, so
   clients send them only to daemons that offer it): `BreakPane` moves a pane into a new tab
   right after its own (`TabCreated`; a tab's only pane is `Invalid`), `MovePane` puts a pane
@@ -286,6 +290,18 @@ atomically (tmp, fsync, rename, fsync dir) 500 ms after the last change and on s
 start the layout is restored with the same ids; shells restart in their last directory
 (OSC 7), agents resume, one-off commands come back as shells. An unreadable file is moved
 aside, never overwritten.
+
+**Closed panes (recently closed tabs).** When a pane closes (a close op or its process exiting,
+not a shutdown) the daemon keeps `{pane_id, cwd, agent{kind, session_id}}` (the agent only while
+its session id is known and it had not exited), the last 64, in `layout.json`'s `closed` list
+(absent in older files). `PaneLaunch::Reopen { pane_id, cwd }` in `NewTab` or `Split` starts the
+closed pane's agent resuming that session (`claude --resume <id>`, `codex resume <id>`, as a
+restored agent: idle until seen working), else a shell in its last directory, else in `cwd`; an
+unknown pane is a shell in `cwd`. The record is used up, so one session never resumes in two
+panes. Offered as `DaemonFeatures::REOPEN`; clients send `Shell { cwd }` to older daemons.
+Only the owner may reopen. Tests: `tests/it/reopen.rs` (the last tab keeps its session and a
+reopened tab comes back in its directory; an agent resumes its session, also after a restart,
+and only once), `mp::policy` unit test.
 
 ### Version, host name and updating the daemon (`proto::info`)
 
@@ -1168,6 +1184,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Artifact`: `Create`, `Apply`, `Delete`, `SetAnchor`, `SetPreview`; `InkLive`; blob upload | **prompter or driver** | artifact visible; anchor pane / session in scope |
 | `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |
 | `Op` `Split`/`NewTab` with `PaneLaunch::Canvas` | driver (as any split) | session of the pane |
+| `Op` `Split`/`NewTab` with `PaneLaunch::Reopen` | **owner** (it can resume the owner's agent session) | session / session of the pane |
 | `Assist`: `Watch`, `State`, `BlockedOptions` / `SubmitLine` / `History`, `Complete`, `FileSearch` / `AnswerBlocked` | any role / **driver** + lease / **driver** / **approver** (§7.8) | pane in scope / pane / host / pane |
 
 An artifact is visible to daemon- and session-wide grants in its session; tab- and

@@ -188,6 +188,21 @@ public final class DaemonConnection: HostConnection {
         client?.sendPaste(paneId: pane, text: text)
     }
 
+    /// Reopens a closed tab on this host (its agent resuming its session) and returns the
+    /// new tab, selected.
+    public func reopenTab(closedPane: UInt64?, directory: String?, name: String) async throws -> TabRef {
+        guard let session = layout.sessionId, let client = client as? any TabHistoryClient else { throw HostError.notConnected }
+        // No pane to reopen (a tab closed elsewhere than a daemon): a shell in its directory.
+        let made = try await client.reopenTab(sessionId: session, closedPane: closedPane ?? 0, cwd: directory, name: name)
+        return TabRef(hostId: hostId, tab: TabId(made.tabId))
+    }
+
+    /// The pane's foreground program and prompt now (nil when the host can't say).
+    public func paneAssist(_ pane: PaneId) async -> PaneAssist? {
+        guard let client = client as? any TabHistoryClient else { return nil }
+        return try? await client.paneAssist(paneId: pane.rawValue)
+    }
+
     public func makeBackend(for pane: PaneId) throws -> any PaneBackend {
         guard let client else { throw HostError.notConnected }
         return DaemonPaneBackend(pane: pane, client: client, router: router)
@@ -371,6 +386,15 @@ public final class DaemonConnection: HostConnection {
         case .paneClosed(let pane):
             meta[PaneId(pane)] = nil
             programs[PaneId(pane)] = nil
+        case .sessions(let sessions):
+            // The attached session was closed elsewhere (another device, the CLI): drop its tabs
+            // at once and attach to what the host has now, never keeping panes that are gone.
+            if let current = layout.sessionId, !sessions.contains(where: { $0.sessionId == current }) {
+                Self.log.info("session \(current) closed on host=\(self.hostId, privacy: .public); attaching anew")
+                layout.sessionGone()
+                attachSession = nil
+                client?.attach(sessionId: nil)
+            }
         case .opResult(let id, let outcome):
             if case .failed = outcome {
                 layout.acknowledge(id, failed: true)

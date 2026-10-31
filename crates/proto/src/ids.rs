@@ -364,8 +364,11 @@ bitset! {
         /// Runs a repository's setup and teardown commands only once the owner trusts them,
         /// and answers `WorkspaceRequest::RepoHooks` / `RepoTrust`.
         REPO_TRUST = 14;
+        /// Remembers closed panes (directory, agent session) and starts
+        /// `PaneLaunch::Reopen`.
+        REOPEN = 15;
         /// Applies `LayoutOp::NewFloat`, `FloatPane`, `SetFloat` and `DockPane`, and pushes
         /// `ServerCtl::Floats` to clients with `Caps::FLOATS`.
-        FLOATS = 15;
+        FLOATS = 16;
     }
 }

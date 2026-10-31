@@ -17,6 +17,10 @@ enum WorkspaceTarget: Hashable, Codable {
 @MainActor
 @Observable
 final class AppModel {
+    /// When this process started: windows restored in its first seconds are the launch's.
+    static let launchedAt = ContinuousClock.now
+    static var isLaunching: Bool { ContinuousClock.now - launchedAt < .seconds(8) }
+
     let hosts: HostsModel
     /// Shown by the window when a pairing / connection started outside it fails (deep link).
     var lastError: String?

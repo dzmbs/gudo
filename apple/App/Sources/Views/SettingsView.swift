@@ -151,6 +151,7 @@ struct SettingsView: View {
     private var form: some View {
         Form {
             AppearanceSection().chromeRows()
+            TabsSettingsSection().chromeRows()
             FontSection().chromeRows()
             CursorSection().chromeRows()
             SplitsSection().chromeRows()
@@ -191,7 +192,7 @@ struct SettingsView: View {
     #if os(macOS)
     @ViewBuilder private func detail(_ pane: SettingsPane) -> some View {
         switch pane {
-        case .appearance: AppearanceSection()
+        case .appearance: AppearanceSection(); TabsSettingsSection()
         case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection()
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
         case .browser: BrowserSettingsSection(); ReplaySettingsSection()
@@ -377,6 +378,27 @@ private struct ConfigLabel: View {
         #if os(macOS)
         .onModifierKeysChanged(mask: .option, initial: true) { _, keys in showsKey = keys.contains(.option) }
         #endif
+    }
+}
+
+/// What a window opens with (Safari's "Safari opens with").
+private struct TabsSettingsSection: View {
+    @AppStorage(LaunchTabs.key) private var launch = LaunchTabs.previous
+
+    var body: some View {
+        Section {
+            Picker("\(Brand.name) Opens With", selection: $launch) {
+                ForEach(LaunchTabs.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .accessibilityIdentifier("settings-launch-tabs")
+            .settingAnchor("launch-tabs")
+        } header: {
+            PaneSectionTitle("Tabs")
+        } footer: {
+            Text(launch == .previous
+                ? "Every tab comes back as you left it."
+                : "Your other tabs keep running on their hosts: Restore in the sidebar or History ▸ Reopen Previous Tabs brings them back. Tabs with an agent or a command running always come back.")
+        }
     }
 }
 

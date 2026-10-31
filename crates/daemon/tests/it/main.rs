@@ -23,6 +23,7 @@ mod projects;
 mod pull;
 mod redteam;
 mod relays;
+mod reopen;
 mod repos;
 mod security;
 mod shell;

@@ -259,6 +259,19 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   slide apart with `DS.Motion.reorder`; the dragged row leaves a gap, never slides over others).
   A one-tap "Group 3 tabs in app" suggestion when loose tabs share a repository. The strip draws
   a project's colour under its tabs.
+- Tab history (APP-ARCHITECTURE §25), in the suggestion's voice at the top of the list: one
+  quiet line each, glyph, the verb in secondary ink, a dismiss ×, the meaning in the tooltip.
+  "↺ Restore 6 Tabs" while tabs a launch under "A New Terminal" kept aside still run; "Close 6
+  Idle Tabs" (`moon.zzz`) for tabs at a prompt untouched for 3 days. Never a card, never
+  automatic.
+- Several tabs selected (⌘-click toggles, ⇧-click a range, ⌘A, Esc ends; on touch the row
+  menu's Select Tabs): the rows take the `selection` tint (the accent at 14/24 %) under their
+  own fills; in touch Select mode a trailing check circle (accent when on) replaces the active
+  fill. A bar under the list says "3 Tabs" with ⋯ (Close Tabs, New Project from Tabs, Move to
+  Project ▸, Select All) and Done. A selected row's context menu is the selection's. Dragging a
+  selected row carries the others: they land in a run right after it with the same reorder
+  spring. On iPhone the switcher's Select Tabs… opens a sheet with the system's multi-select
+  list and the same actions.
 - Then one group per host the window shows (its loose tabs), all at once (owner, 2026-10-18: switching hosts never
   goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
   (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font
