@@ -201,7 +201,7 @@ extension PaneDrawing {
         for group in window.groups.groups where !group.isLocal {
             guard let daemon = window.app.hosts.connection(group.id) as? DaemonConnection, daemon.status.isLive else { continue }
             let tabs = daemon.layout.session.tabs
-            for (pane, meta) in daemon.meta {
+            for (pane, meta) in daemon.meta.all {
                 guard let agent = meta.agent, meta.exit == nil else { continue }
                 guard let tab = tabs.first(where: { $0.root.panes.contains(pane) }) else { continue }
                 result.append(AgentDestination(

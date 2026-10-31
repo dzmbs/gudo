@@ -27,6 +27,9 @@ struct TerminalApp: App {
         WindowSnapshot.scheduleIfRequested()
         #endif
         #endif
+        #if DEBUG && os(iOS)
+        DebugMemoryWarning.install()
+        #endif
     }
 
     var body: some Scene {

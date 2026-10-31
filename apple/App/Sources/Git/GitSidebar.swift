@@ -435,7 +435,7 @@ struct NeedsYouSection: View {
     var body: some View {
         let items = self.items
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
                     SectionDot(DS.Palette.attention)
                     Text("Needs you").font(DS.Font.section).foregroundStyle(DS.Palette.textSecondary)

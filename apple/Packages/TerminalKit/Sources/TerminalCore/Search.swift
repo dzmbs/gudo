@@ -62,6 +62,13 @@ public final class TerminalSearch {
     /// Every match (exact case only, with `caseSensitive`) in screen coordinates, newest first;
     /// nil until needed or after output moved them.
     private var ordered: [Range]?
+    /// When `ordered` was last read in full, and how many times (tests).
+    private var lastRecount: ContinuousClock.Instant?
+    private(set) var recounts = 0
+    /// Reading every match costs O(matches) (hundreds of thousands for a one-letter needle over a
+    /// full scrollback, tens of ms); while output streams, the status's selected index and exact
+    /// count are refreshed at most this often instead of on every frame.
+    static let recountInterval = Duration.milliseconds(250)
     /// The selected match: its first cell's row, tracked by libghostty-vt so it follows
     /// scrolling, history paged in above it and pruning. The selection is ours, not the
     /// search's: libghostty-vt's own is dropped when a restored terminal's history grows.
@@ -136,6 +143,7 @@ public final class TerminalSearch {
             guard let search else { return .idle }
             ghostty_search_run(search)
             ordered = nil
+            lastRecount = nil
             return readStatus(t, search, complete: true)
         }
         return status
@@ -272,6 +280,8 @@ public final class TerminalSearch {
         }
         let sorted = ranges.sorted { $0.start > $1.start }
         ordered = sorted
+        lastRecount = .now
+        recounts += 1
         return sorted
     }
 
@@ -312,6 +322,10 @@ public final class TerminalSearch {
         // The full list is read only when it matters: a selection to place, or exact case.
         guard selectedRef != nil || needsExactFilter else {
             return SearchStatus(total: total(search), selected: nil, isComplete: complete)
+        }
+        if ordered == nil, let lastRecount, ContinuousClock.now - lastRecount < Self.recountInterval {
+            // Not complete, so the caller comes back for the exact numbers.
+            return SearchStatus(total: needsExactFilter ? status.total : total(search), selected: status.selected, isComplete: false)
         }
         let matches = orderedMatches(t, search)
         return SearchStatus(total: matches.count, selected: selectedIndex(t, matches), isComplete: complete)

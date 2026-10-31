@@ -52,7 +52,7 @@ final class LiveHostDirectory: HostDirectory {
         let connection = app.hosts.connection(entry.id)
         let daemon = connection as? DaemonConnection
         var counts: [DesignSystem.AgentState: Int] = [:]
-        let panes = Set(daemon.map { Array($0.meta.keys) + Array($0.programs.keys) } ?? [])
+        let panes = Set(daemon.map { Array($0.meta.all.keys) + Array($0.programs.all.keys) } ?? [])
         let reports = panes.sorted().compactMap { daemon?.report(of: $0) }
         for report in reports { counts[report.state, default: 0] += 1 }
         let sessions: Int

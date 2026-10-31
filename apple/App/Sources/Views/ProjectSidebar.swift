@@ -193,7 +193,9 @@ struct SidebarTabList: View {
         let (items, sections) = model.sidebarItems(drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed)
         let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { a, _ in a })
         let _ = geometry.record(items, sections)
-        VStack(alignment: .leading, spacing: 0) {
+        // Lazy: a host with hundreds of tabs lays out the rows in view, not every row on every
+        // status change.
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(items) { item in
                 SidebarItemView(item: item, numbers: numbers)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { geometry.frames[item.id] = $0 }

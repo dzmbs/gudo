@@ -728,7 +728,8 @@ struct GroupAgents: View {
             }
         }
         if !rows.isEmpty {
-            VStack(spacing: 0) {
+            // One row per agent, and a host can run hundreds: only the rows in view are built.
+            LazyVStack(spacing: 0) {
                 header
                 ForEach(rows) { row in
                     Button {

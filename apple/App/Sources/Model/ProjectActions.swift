@@ -32,15 +32,22 @@ extension WindowModel {
     /// The repository root a tab works in (the daemon's repositories, or a `.git` above a local
     /// tab's folder), else its folder; nil for a home folder or above, which says nothing.
     func projectRoot(of ref: TabRef) -> String? {
-        #if os(iOS)
-        // This device runs no real shell here: its tabs' folders say nothing about the work.
-        if ref.hostId == HostGroups.localId { return nil }
-        #endif
         guard ref.hostId != HostGroups.mixedId, let group = groups.group(ref.hostId),
               let tab = group.tabs.first(where: { $0.id == ref.tab })
         else { return nil }
+        return projectRoot(of: tab, in: group, sidebar: groups.repoSidebar(for: group))
+    }
+
+    /// `projectRoot(of:)` with the host's group and repositories resolved once by the caller:
+    /// resolving them costs a pass over every host's tabs, too much to repeat for each tab.
+    private func projectRoot(of tab: Tab, in group: HostGroup, sidebar: RepoSidebar?) -> String? {
+        #if os(iOS)
+        // This device runs no real shell here: its tabs' folders say nothing about the work.
+        if group.id == HostGroups.localId { return nil }
+        #endif
+        let ref = group.ref(tab.id)
         let home = home(of: ref.hostId)
-        if let sidebar = groups.repoSidebar(for: group),
+        if let sidebar,
            let repo = sidebar.repos.first(where: { $0.worktrees.contains { $0.tabs.contains(ref.tab) } }),
            !ProjectNaming.isHomeOrAbove(repo.id, home: home)
         {
@@ -185,8 +192,17 @@ extension WindowModel {
     /// Loose tabs that share a repository or directory, worth a one-tap project.
     var projectSuggestions: [ProjectSuggestion] {
         let grouped = Set(projects.flatMap(\.tabs))
-        let loose = groups.groups.flatMap { groups.looseTabs(of: $0, grouped: grouped) }
-        return ProjectSuggestion.find(loose.map { ($0, projectRoot(of: $0)) }, dismissed: groups.dismissedSuggestions)
+        var loose: [(TabRef, String?)] = []
+        for group in groups.groups where group.id != HostGroups.mixedId {
+            let refs = groups.looseTabs(of: group, grouped: grouped)
+            guard !refs.isEmpty else { continue }
+            let sidebar = groups.repoSidebar(for: group)
+            let tabs = Dictionary(group.tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for ref in refs {
+                loose.append((ref, tabs[ref.tab].flatMap { projectRoot(of: $0, in: group, sidebar: sidebar) }))
+            }
+        }
+        return ProjectSuggestion.find(loose, dismissed: groups.dismissedSuggestions)
     }
 
     /// The project a suggestion's tabs would join (one already named for their folder).

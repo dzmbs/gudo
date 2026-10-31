@@ -33,6 +33,8 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     private var unseen: [String: UInt32] = [:]
     private var authorization: UNAuthorizationStatus?
     private var installed = false
+    /// Attention notes, posted one at a time, newest per pane (a burst is not a task per item).
+    private lazy var notes = NoteQueue<AttentionNote> { [weak self] note in await self?.post(note) }
     private lazy var security = HostSecurityNotifier { [weak self] in await self?.ensureAuthorized() ?? false }
 
     /// Registers categories and the delegate (before launch finishes, so actions on a cold
@@ -108,7 +110,7 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
             unseen[hostId] = count
             updateBadge()
             guard !item.seen, !item.whileViewed, let note = note(for: item, hostId: hostId, daemon: daemon) else { return }
-            Task { await post(note) }
+            notes.enqueue(note, key: LocalNotifications.identifier(hostId: note.hostId, paneId: note.paneId))
         case .seen(_, let count):
             unseen[hostId] = count
             updateBadge()

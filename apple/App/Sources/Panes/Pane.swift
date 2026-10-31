@@ -79,15 +79,16 @@ final class Pane {
         // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).
         view.keyInterceptor = { [weak self] event in self.map { VoiceDictation.shared.handleKey(event, pane: $0) } ?? false }
 
+        // A program can set its title or ring the bell hundreds of thousands of times a second:
+        // each kind reaches the main actor at most once per turn, and the bell at most every
+        // `bellInterval`.
+        let title = MainActorCoalescer { [weak self] in self?.refreshTitle() }
+        let pwd = MainActorCoalescer { [weak self] in self?.refreshWorkingDirectory() }
+        let bell = MainActorCoalescer { [weak self] in self?.bellRang() }
         var events = Terminal.Events()
-        events.titleChanged = { [weak self] in Task { @MainActor in self?.refreshTitle() } }
-        events.pwdChanged = { [weak self] in Task { @MainActor in self?.refreshWorkingDirectory() } }
-        events.bell = { [weak self] in
-            Task { @MainActor in
-                self?.view.ringBell()
-                self?.onBell?()
-            }
-        }
+        events.titleChanged = { title.signal() }
+        events.pwdChanged = { pwd.signal() }
+        events.bell = { bell.signal() }
         terminal.setEvents(events)
 
         if let feed = backend as? any PredictionFeed {
@@ -221,6 +222,17 @@ final class Pane {
     /// This window's view of the pane drives its size (it took focus): the PTY follows it.
     func claimSize() {
         (backend as? any SharedPaneTap)?.claimSize()
+    }
+
+    @ObservationIgnored private var lastBell: ContinuousClock.Instant?
+    static let bellInterval = Duration.milliseconds(100)
+
+    private func bellRang() {
+        let now = ContinuousClock.now
+        if let lastBell, now - lastBell < Self.bellInterval { return }
+        lastBell = now
+        view.ringBell()
+        onBell?()
     }
 
     private func refreshTitle() {
