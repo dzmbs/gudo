@@ -189,6 +189,51 @@ final class MacSnapshotTests: XCTestCase {
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
 
+    /// Making projects: the first-run hint, New Project's name field and empty line, what a drop
+    /// says it will do, a terminal joining from ⌘T, and the sidebar that leaves.
+    func testProjectsUX() async throws {
+        defer { for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) } }
+        // The argument domain shows the hint whatever the app saved (and is never written).
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[ProjectsIntroRow.dismissedKey] = false
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        try await window("projects-intro", screen: "project-hosts")
+        arguments[ProjectsIntroRow.dismissedKey] = nil
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+
+        try await window("projects-new", screen: "projects") { model in
+            await self.pump(1)
+            withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+        }
+        try await window("projects-drop", screen: "projects") { model in
+            let drag = model.sidebarDrag
+            guard let app = model.projects.first(where: { $0.name == "acme-app" }),
+                  let logs = model.groups.sections.first(where: { $0.container == .host("fixture-studio") })?.rows.first,
+                  let migrate = model.groups.sections.first(where: { $0.container == .host(HostGroups.localId) })?.rows.last
+            else { return XCTFail("fixture") }
+            await self.pump(1.5)
+            drag.dragging = logs
+            withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: app.tabs[1]) }
+            await self.pump(0.6)
+            try? self.capture(self.current!, "projects-drop-add")
+            withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: migrate) }
+            await self.pump(0.6)
+            try? self.capture(self.current!, "projects-drop-group")
+            withAnimation(DS.Motion.reorder) { drag.reset() }
+        }
+        try await window("projects-after", screen: "projects") { model in
+            guard let app = model.projects.first(where: { $0.name == "acme-app" }),
+                  let infra = model.projects.first(where: { $0.name == "infra" })
+            else { return XCTFail("fixture") }
+            await self.pump(1.5)
+            model.focus(app.tabs[0])
+            model.newTab()
+            await self.pump(0.4)
+            try? self.capture(self.current!, "projects-joined")
+            model.groups.toggleCollapsed(project: infra.id)
+        }
+    }
+
     /// Any program's own status (pi blocked on a question) in its pane header and tab glyph.
     func testProgramStatus() async throws {
         defer {

@@ -85,6 +85,11 @@ final class WindowModel {
     @ObservationIgnored var draggedTab: TabRef?
     /// What a drag over the sidebar would do (observed by its rows).
     @ObservationIgnored let sidebarDrag = SidebarDragState()
+    /// The project whose name is being typed in place (just made, or Rename…).
+    var namingProject: String?
+    /// A tab that just joined a project from its + or ⌘T: its row lights a moment.
+    var joinedTab: TabRef?
+    @ObservationIgnored var followsJoins = false
     /// Each Files leaf's place, kept here so a leaf rebuilt by a split or a move keeps it.
     @ObservationIgnored var filesNavigators: [UUID: FilesNavigator] = [:]
     var isPaletteShown = false {
@@ -537,6 +542,11 @@ final class WindowModel {
     /// ⌘T (the current host), ⌥⌘T's choice or a group's +: a new tab on that host. Where this
     /// device has no shell (iPhone, iPad) a new tab goes to an open host, else Add Host.
     func newTab(onGroup id: String? = nil) {
+        // ⌘T from a project's tab: the new terminal joins that project, next to it.
+        if id == nil, let current = currentTab, let project = groups.project(of: current) {
+            newTab(inProject: project.id)
+            return
+        }
         guard let host = groups.newTabHost(preferred: id ?? currentGroupId) else {
             if let id, id != HostGroups.localId, groups.group(id) != nil {
                 // A host still connecting: show it; the tab comes with its first layout.

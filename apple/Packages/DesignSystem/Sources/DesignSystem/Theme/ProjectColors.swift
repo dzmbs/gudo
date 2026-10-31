@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Project colours (Safari and Chrome tab groups): the theme's own ANSI hues, softened toward the
-/// foreground like the state colours, so a project's dot sits in the chrome of any theme.
+/// Project colours (Safari and Chrome tab groups): the theme's own ANSI hues, barely softened
+/// toward the foreground (less than the state colours: a project's colour is how it is told
+/// apart, so hues stay distinct), kept legible on the sidebar.
 nonisolated public enum ProjectColor {
     public static let names = ["Blue", "Purple", "Cyan", "Green", "Yellow", "Red", "Orange", "Grey"]
 
@@ -9,6 +10,9 @@ nonisolated public enum ProjectColor {
     private static let slots: [(index: Int, reference: String)] = [
         (4, "#81a2be"), (5, "#b294bb"), (6, "#8abeb7"), (2, "#b5bd68"), (3, "#f0c674"), (1, "#cc6666"),
     ]
+
+    /// How far a hue moves toward the foreground.
+    static let mix = 0.12
 
     public static func color(_ index: Int, theme: TerminalTheme, chrome: ChromePalette) -> ThemeColor {
         let fg = chrome.foreground
@@ -24,7 +28,7 @@ nonisolated public enum ProjectColor {
         case 7: chrome.background.blended(with: fg, 0.5)
         case let slot: hue(slot)
         }
-        let mixed = fg.blended(with: base, 1 - ChromePalette.stateMix)
+        let mixed = fg.blended(with: base, 1 - mix)
         return ChromePalette.legible(mixed, on: surfaces, toward: fg, minimum: ChromePalette.minimumGlyphContrast)
     }
 }

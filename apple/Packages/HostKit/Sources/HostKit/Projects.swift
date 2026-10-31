@@ -15,6 +15,9 @@ nonisolated public struct ProjectInfo: Codable, Hashable, Sendable, Identifiable
 
     public static let colorCount = 8
     public static let maxNameLength = 128
+    /// The order new projects take colours in, each far in hue from the ones before (Blue,
+    /// Orange, Green, Purple, Red, Cyan, Yellow, Grey), so neighbours never look alike.
+    public static let colorOrder = [0, 6, 3, 1, 5, 2, 4, 7]
 
     public init(id: String, name: String, color: Int, order: Int64, updated: UInt64) {
         self.id = id
@@ -240,10 +243,11 @@ nonisolated public struct ProjectPlanner {
         max(now, info.updated + 1)
     }
 
-    /// The first colour no project uses, else cycling.
+    /// The first colour no project uses (in `ProjectInfo.colorOrder`), else cycling.
     var nextColor: Int {
         let used = Set(projects.map(\.color))
-        return (0..<ProjectInfo.colorCount).first { !used.contains($0) } ?? projects.count % ProjectInfo.colorCount
+        let order = ProjectInfo.colorOrder
+        return order.first { !used.contains($0) } ?? order[projects.count % order.count]
     }
 
     var nextOrder: Int64 {
@@ -272,7 +276,8 @@ nonisolated public struct ProjectSuggestion: Hashable, Sendable, Identifiable {
         var order: [String] = []
         var byKey: [String: [TabRef]] = [:]
         for (ref, root) in roots {
-            guard let root = root.map(normalize), !isHome(root), !dismissed.contains(root) else { continue }
+            guard let root = root.map(ProjectNaming.normalize), !ProjectNaming.isHomeOrAbove(root, home: nil), !dismissed.contains(root)
+            else { continue }
             if byKey[root] == nil { order.append(root) }
             byKey[root, default: []].append(ref)
         }
@@ -282,20 +287,82 @@ nonisolated public struct ProjectSuggestion: Hashable, Sendable, Identifiable {
         }
     }
 
+    static func displayName(_ key: String) -> String {
+        ProjectNaming.folderName(key) ?? key
+    }
+}
+
+/// How projects are named: after the repository or folder their tabs share, never after a home
+/// folder or one above it (every shell starts there, so it says nothing about the work), else
+/// "New Project"; and never twice the same.
+nonisolated public enum ProjectNaming {
+    public static let fallback = "New Project"
+
+    /// The path of an OSC 7 working directory: `file://host/path` (percent-decoded),
+    /// `kitty-shell-cwd://host/path` (Ghostty's shell integration, verbatim) or a bare path.
+    /// Anything else is not a directory.
+    public static func directory(fromOSC7 value: String) -> String? {
+        if value.hasPrefix("/") { return value }
+        for scheme in ["file://", "kitty-shell-cwd://"] where value.hasPrefix(scheme) {
+            let rest = value.dropFirst(scheme.count)
+            let path = rest.firstIndex(of: "/").map { String(rest[$0...]) } ?? "/"
+            return scheme == "file://" ? (path.removingPercentEncoding ?? path) : path
+        }
+        return nil
+    }
+
     static func normalize(_ path: String) -> String {
         var path = path
         while path.count > 1, path.hasSuffix("/") { path.removeLast() }
         return path
     }
 
-    /// Where every shell starts: sharing it says nothing about the work.
-    static func isHome(_ path: String) -> Bool {
-        if path.isEmpty || path == "/" || path == "~" || path == "/root" { return true }
+    /// Whether `path` is a home folder or above one: `home` and its ancestors when the host's
+    /// home is known, and anywhere the usual homes and their parents (`/Users/x`, `/home/x`,
+    /// `/var/home/x`, `/root`, `/Users`, `/`).
+    public static func isHomeOrAbove(_ path: String, home: String?) -> Bool {
+        let path = normalize(path)
+        guard path.hasPrefix("/"), path != "/" else { return true }
+        if let home = home.map(normalize), path == home || home.hasPrefix(path + "/") { return true }
         let parts = path.split(separator: "/")
-        return parts.count == 2 && (parts[0] == "Users" || parts[0] == "home")
+        switch parts.count {
+        case 1: return ["Users", "home", "var", "root"].contains(parts[0])
+        case 2: return parts[0] == "Users" || parts[0] == "home" || parts == ["var", "home"] || parts == ["var", "root"]
+        case 3: return parts[0] == "var" && parts[1] == "home"
+        default: return false
+        }
     }
 
-    static func displayName(_ key: String) -> String {
-        key.split(separator: "/").last.map(String.init) ?? key
+    /// A path's last component, or nil for a home folder or above.
+    public static func folderName(_ path: String, home: String? = nil) -> String? {
+        guard !isHomeOrAbove(path, home: home) else { return nil }
+        return normalize(path).split(separator: "/").last.map(String.init)
+    }
+
+    /// The name for tabs working in `roots` (each tab's repository root, else its folder): the
+    /// folder they all share, else nil.
+    public static func sharedName(_ roots: [String?], home: String? = nil) -> String? {
+        let unique = Set(roots.map { $0.map(normalize) })
+        guard unique.count == 1, let root = unique.first ?? nil else { return nil }
+        return folderName(root, home: home)
+    }
+
+    /// The repository holding `path`: the nearest folder at or above it with a `.git`, short of
+    /// home (a dotfiles repository in home is not a project).
+    public static func gitRoot(of path: String, home: String?, exists: (String) -> Bool) -> String? {
+        var current = normalize(path)
+        while !isHomeOrAbove(current, home: home) {
+            if exists(current + "/.git") { return current }
+            guard let slash = current.lastIndex(of: "/") else { return nil }
+            current = String(current[..<slash])
+        }
+        return nil
+    }
+
+    /// `base`, else "base 2", "base 3"…, whichever no name in `taken` has (ignoring case).
+    public static func unique(_ base: String, taken: some Sequence<String>) -> String {
+        let taken = Set(taken.map { $0.lowercased() })
+        if !taken.contains(base.lowercased()) { return base }
+        return (2...).lazy.map { "\(base) \($0)" }.first { !taken.contains($0.lowercased()) }!
     }
 }

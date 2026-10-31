@@ -250,6 +250,10 @@ struct NewTabButton: View {
                     .accessibilityIdentifier("new-tab-terminal")
                 Button(WorkspaceAction.newAgent.title, systemImage: "sparkle") { model.newAgent() }
                     .accessibilityIdentifier("new-tab-agent")
+                Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") {
+                    withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+                }
+                .accessibilityIdentifier("new-tab-project")
                 if groups.count > 1 {
                     Menu("New Terminal On", systemImage: "plus.rectangle.on.rectangle") {
                         ForEach(groups) { group in

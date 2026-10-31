@@ -38,7 +38,7 @@ enum PaletteCommands {
         commands += git(model: model)
 
         let actions: [(WorkspaceAction, String)] = [
-            (.newTab, "plus"), (.newTabOnHost, "plus.rectangle.on.rectangle"), (.goToTab, "arrow.right.square"),
+            (.newTab, "plus"), (.newTabOnHost, "plus.rectangle.on.rectangle"), (.newProject, "folder.badge.plus"), (.goToTab, "arrow.right.square"),
             (.splitRight, "rectangle.split.2x1"), (.splitDown, "rectangle.split.1x2"), (.splitWithHost, "rectangle.split.2x1.fill"),
             (.toggleZoom, "arrow.up.left.and.arrow.down.right"), (.closePane, "xmark"),
             (.nextTab, "chevron.right"), (.previousTab, "chevron.left"),

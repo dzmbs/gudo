@@ -7,6 +7,8 @@ import SwiftUI
 /// asks which host, ⌘1…⌘9 and ⇧⌘[ ] walk the unified list across hosts, ⌘P finds a tab anywhere.
 enum WorkspaceAction: Hashable {
     case newTab, newTabOnHost, splitRight, splitDown, closePane
+    /// An empty project in the sidebar, its name typed in place.
+    case newProject
     /// The New Agent sheet (Claude Code, Codex or a shell, optionally in its own worktree).
     case newAgent
     /// A pane on another host beside the focused one: the tab becomes a mixed tab.
@@ -38,7 +40,7 @@ enum WorkspaceAction: Hashable {
     /// Every shortcut on one page.
     case shortcuts
 
-    static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .splitRight, .splitDown, .splitWithHost, .closePane]
+    static let fileActions: [Self] = [.newTab, .newTabOnHost, .newAgent, .newProject, .splitRight, .splitDown, .splitWithHost, .closePane]
     static let paneActions: [Self] = [.toggleZoom, .movePaneToNewTab] + Direction.allCases.map(Self.focus) + Direction.allCases.map(Self.resize)
         + [.previousPrompt, .nextPrompt, .returnToTerminal, .fullScreenEditor]
     static let drawActions: [Self] = [.draw, .newCanvas]
@@ -67,6 +69,7 @@ enum WorkspaceAction: Hashable {
         case .newTab: "New Tab"
         case .newTabOnHost: "New Tab on Host…"
         case .newAgent: "New Agent…"
+        case .newProject: "New Project"
         case .splitRight: "Split Right"
         case .splitDown: "Split Down"
         case .splitWithHost: "Split with Host…"
@@ -109,6 +112,8 @@ enum WorkspaceAction: Hashable {
         case .newTabOnHost: KeyboardShortcut("t", modifiers: [.command, .option])
         // ⌘N is New Window; ⇧⌘N is free in the app and on iPadOS and macOS.
         case .newAgent: KeyboardShortcut("n", modifiers: [.command, .shift])
+        // Safari's New Empty Tab Group (⌥⌘N is Open in New Window for a tool pane).
+        case .newProject: KeyboardShortcut("n", modifiers: [.command, .control])
         case .splitRight: KeyboardShortcut("d")
         case .splitDown: KeyboardShortcut("d", modifiers: [.command, .shift])
         // ⌥ is "on another host" (⌥⌘T); ⌥⌘D itself is the system's Dock shortcut on the Mac and
@@ -170,6 +175,7 @@ enum WorkspaceAction: Hashable {
         case .newTab: window.newTab()
         case .newTabOnHost: window.showHostPicker()
         case .newAgent: window.newAgent()
+        case .newProject: withAnimation(DS.Motion.reorder) { window.newEmptyProject() }
         case .splitWithHost: window.showSplitWithHostPicker()
         case .previousTab: window.selectTab(offset: -1)
         case .nextTab: window.selectTab(offset: 1)
@@ -214,7 +220,7 @@ enum WorkspaceAction: Hashable {
         case .nextTab: workspace.selectTab(offset: 1)
         case .selectTab(let number): workspace.selectTab(at: number - 1)
         case .lastTab: workspace.selectTab(at: nil)
-        case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost: break
+        case .goToTab, .moveTabUp, .moveTabDown, .newWindow, .newAgent, .newProject, .splitWithHost, .returnToTerminal, .fullScreenEditor, .selectHost: break
         case .draw: DrawingCommands.toggleDrawing(in: workspace)
         case .newCanvas: DrawingCommands.newCanvas(in: workspace)
         // Window screens need a window.

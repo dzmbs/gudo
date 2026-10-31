@@ -50,9 +50,55 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(ids(.group(dragged, onto: target)), ids())
         model.commit(.group(dragged, onto: target))
         let made = try XCTUnwrap(model.projects.first { $0.tabs == [target, dragged] })
-        XCTAssertTrue(made.name.hasPrefix("Project"), made.name)
+        XCTAssertEqual(made.name, "New Project")
+        // Its name opens for typing at once.
+        XCTAssertEqual(model.namingProject, made.id)
         // Its rows lead ⌘-numbers in project order.
         XCTAssertEqual(Array(model.groups.tabs.prefix(5)), model.projects.flatMap(\.tabs).prefix(5).map { $0 })
+    }
+
+    /// ⌘T from a project's tab adds to that project, beside it, and shows it; ⌘T anywhere else,
+    /// or a host's +, makes a loose tab and never a project.
+    func testNewTerminalJoinsAProjectOnlyWhenMadeFromIt() throws {
+        let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
+        let host = app.tabs[0].hostId
+        model.focus(app.tabs[0])
+        model.newTab()
+        let joined = try XCTUnwrap(model.joinedTab)
+        XCTAssertEqual(model.groups.project(app.id)?.tabs, [app.tabs[0], joined] + app.tabs.dropFirst())
+        XCTAssertEqual(joined.hostId, host)
+
+        let projects = model.projects.map(\.id)
+        model.newTab(onGroup: host)
+        let loose = try XCTUnwrap(model.currentTab)
+        XCTAssertNil(model.groups.project(of: loose))
+        model.newTab()
+        XCTAssertNil(model.groups.project(of: try XCTUnwrap(model.currentTab)))
+        XCTAssertEqual(model.projects.map(\.id), projects)
+        XCTAssertEqual(model.groups.project(app.id)?.tabs.count, app.tabs.count + 1)
+    }
+
+    /// New Project: an empty project named in place, a line inviting tabs, never a duplicate name.
+    func testNewProjectStartsEmptyAndNamedInPlace() throws {
+        model.newEmptyProject()
+        let made = try XCTUnwrap(model.projects.last)
+        XCTAssertEqual(made.name, "New Project")
+        XCTAssertEqual(made.tabs, [])
+        XCTAssertEqual(model.namingProject, made.id)
+        XCTAssertTrue(ids().contains(SidebarItem.projectEmpty(made.id).id))
+        model.newEmptyProject()
+        XCTAssertEqual(model.projects.last?.name, "New Project 2")
+        model.renameProject(made.id, to: "infra")
+        XCTAssertEqual(model.groups.project(made.id)?.name, "infra 2")
+    }
+
+    /// The drop says what it will do.
+    func testTheDropSaysWhatItWillDo() throws {
+        let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
+        let loose = model.groups.sections.first { $0.container == .host("fixture-hetzner") }?.rows ?? []
+        let logs = try XCTUnwrap(model.groups.sections.first { $0.container == .host("fixture-studio") }?.rows.first)
+        XCTAssertEqual(model.groupLabel(logs, onto: app.tabs[1]), "Add to acme-app")
+        XCTAssertEqual(model.groupLabel(logs, onto: try XCTUnwrap(loose.first)), "Group")
     }
 
     func testMoveTabKeysStayWithinTheSection() throws {
