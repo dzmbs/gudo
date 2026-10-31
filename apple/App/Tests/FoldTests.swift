@@ -129,6 +129,19 @@ final class FoldTests: XCTestCase {
         XCTAssertFalse(model.isTwoColumns, "cover: the phone layout")
     }
 
+    func testACompactWindowKeepsThePhoneLayoutInAnyPosture() {
+        let model = makeModel()
+        defer { close(model) }
+        model.widthBucket = .compact
+        for posture in FoldPosture.allCases {
+            model.updateFold(.simulated(posture, in: cover))
+            XCTAssertEqual(model.foldLayout, .standard, "\(posture)")
+        }
+        model.widthBucket = .regular
+        model.updateFold(.simulated(.tabletop, in: tall))
+        XCTAssertEqual(model.foldLayout, .deck(top: 463.5, gutter: 24))
+    }
+
     func testABookNeverRunsOneColumnUnderTheFold() {
         let model = makeModel()
         defer { close(model) }
@@ -138,6 +151,28 @@ final class FoldTests: XCTestCase {
         XCTAssertFalse(model.isTwoColumns, "flat: the user's choice holds")
         model.updateFold(.simulated(.book, in: wide))
         XCTAssertTrue(model.isTwoColumns, "a book keeps its pages apart")
+    }
+
+    /// Dragging between pages: a column dropped on the other trades places; another tab dropped
+    /// on a page shows there and takes the keyboard, the other page keeping its tab.
+    func testDroppingATabOnAPage() throws {
+        let model = makeModel()
+        defer { close(model) }
+        model.isSidebarShown = false
+        model.updateFold(.simulated(.book, in: wide))
+        let columns = try XCTUnwrap(model.columns)
+        let left = try XCTUnwrap(columns.left)
+        let right = try XCTUnwrap(columns.right)
+
+        model.place(right, inLeftColumn: true)
+        XCTAssertEqual(model.columns?.left, right)
+        XCTAssertEqual(model.columns?.right, left)
+
+        let third = try XCTUnwrap(model.groups.tabs.first { $0 != left && $0 != right })
+        model.place(third, inLeftColumn: true)
+        XCTAssertEqual(model.columns?.left, third)
+        XCTAssertEqual(model.columns?.right, left, "the other page keeps its tab")
+        XCTAssertEqual(model.currentTab, third)
     }
 
     func testTurningColumnsOnAcrossAFoldGivesTheLeftPageToATab() {

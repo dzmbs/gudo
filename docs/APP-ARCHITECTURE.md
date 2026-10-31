@@ -160,7 +160,8 @@ and secrets in that folder. Without it, any `-test…` argument, `-dogfood`, `-s
 tests, dogfood runs and screenshot scripts never touch the user's hosts, replays or Keychain; `-connectionProbe
 YES` exposes each open host's connection identity and dial count to UI tests; `-testSSH user@host[:port]` with `-testSSHKey <path>` or
 `-testSSHPassword <pw>`; `-testTrustHostKeys YES`; `-testInstallHelper YES`; `-testRelay
-disabled`; `-testMirror YES` (core VT mirror for pane text).
+disabled`; `-testMirror YES` (core VT mirror for pane text); DEBUG `-posture
+<folded|flat|book|tabletop>` draws an iPhone Duo posture over the window's real size (§24).
 
 ## 7. Tests
 
@@ -723,14 +724,14 @@ Two tabs side by side, each column its own tab (any host, or a mixed tab), a 1 p
 26 pt header per column. The current tab's column takes the keyboard; the other is dimmed like an
 unfocused split. Columns stay put: a tab picked in the sidebar replaces the current column's,
 focus moving into the other column swaps which is current, and a closed tab's column takes the
-next tab not shown (or offers New Tab, which lands there). It turns on by itself on a phone
-window that is regular both ways (`WidthBucket.isTwoSegment`: a foldable's open inner screen; a
-phone's portrait width and landscape height are both under 600 pt); the user's choice per window
-wins and is restored. Never in compact width.
+next tab not shown (or offers New Tab, which lands there). On an open iPhone Duo with the
+sidebar hidden it turns on by itself, one column per page with the fold between them (§24); the
+user's choice per window wins and is restored, except that a book never runs one column across
+its fold. Never in compact width.
 
 Tests: `CompositeTabTests` (PaneLayout: tree mapping, split with host, ⌘D on a leaf, close,
 answers, strays, host down, dissolve, timeout, close tab, round trip), `HostGroupsTests.
-mixedTabsLeadAndHideTheirCarriers`, `WindowsTests.testTwoColumnsComeOnByThemselvesOnlyOnAnOpenFoldable`,
+mixedTabsLeadAndHideTheirCarriers`, `FoldTests` (§24),
 `MixedTabsUITests` (iPad: `apple/scripts/mixed-ui-test.sh` starts two daemons on 47421/47422 —
 split with host, type in both, ⌘D/⌘W on beta, relaunch restores, kill alpha and beta keeps
 working; Two Columns with this iPad's echo shell).

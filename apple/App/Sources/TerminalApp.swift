@@ -250,15 +250,6 @@ struct WindowContent: View {
             // The hinge and the fold, in the window's own coordinates.
             .background { FoldProbe(model: model).ignoresSafeArea() }
             #if DEBUG
-            // What the fold made of the window, for UI tests.
-            .overlay(alignment: .topLeading) {
-                Color.clear.frame(width: 1, height: 1)
-                    .accessibilityElement()
-                    .accessibilityIdentifier("fold-posture")
-                    .accessibilityValue("\(model.fold.posture.rawValue) \(model.foldLayout.name)")
-            }
-            #endif
-            #if DEBUG
             .frame(maxWidth: model.debugWidth.map { CGFloat($0) } ?? .infinity, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.black.ignoresSafeArea())

@@ -609,24 +609,24 @@ struct TwoColumnsView: View {
         if let columns = model.columns {
             // Across an open foldable's fold: one column per page, the crease between them.
             FoldPages {
-                column(columns.left, isActive: model.currentColumnIsLeft)
+                column(columns.left, isLeft: true, isActive: model.currentColumnIsLeft)
                     .accessibilityIdentifier("column-left")
             } divider: {
                 Rectangle()
                     .fill(theme.splitDivider)
                     .frame(width: DS.Size.dividerVisible)
             } trailing: {
-                column(columns.right, isActive: !model.currentColumnIsLeft)
+                column(columns.right, isLeft: false, isActive: !model.currentColumnIsLeft)
                     .accessibilityIdentifier("column-right")
             }
             .background(theme.background, ignoresSafeAreaEdges: [])
         }
     }
 
-    @ViewBuilder private func column(_ ref: TabRef?, isActive: Bool) -> some View {
+    @ViewBuilder private func column(_ ref: TabRef?, isLeft: Bool, isActive: Bool) -> some View {
         Group {
             if let ref {
-                TabColumn(ref: ref, isActive: isActive)
+                TabColumn(ref: ref, isLeft: isLeft, isActive: isActive)
                     .id(ref)
             } else {
                 EmptyColumn()
@@ -641,6 +641,7 @@ struct TwoColumnsView: View {
 /// focus dims like an unfocused split (Ghostty's unfocused-split-opacity).
 private struct TabColumn: View {
     let ref: TabRef
+    let isLeft: Bool
     let isActive: Bool
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
@@ -648,7 +649,7 @@ private struct TabColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ColumnHeader(ref: ref, isActive: isActive)
+            ColumnHeader(ref: ref, isLeft: isLeft, isActive: isActive)
             content
                 .overlay {
                     if !isActive { UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background).allowsHitTesting(false) }
@@ -682,6 +683,7 @@ private struct TabColumn: View {
 /// A column's title strip: the tab's mark and name, and its host; tap to work in that column.
 private struct ColumnHeader: View {
     let ref: TabRef
+    let isLeft: Bool
     let isActive: Bool
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
@@ -710,6 +712,14 @@ private struct ColumnHeader: View {
         .overlay(alignment: .bottom) { Rectangle().fill(theme.splitDivider).frame(height: 1) }
         .contentShape(.rect)
         .onTapGesture { if !isActive { model.focus(ref) } }
+        // Drag a column by its header onto the other to trade pages; drop any tab here to show it.
+        .tabDrag(ref, model: model)
+        .dropDestination(for: String.self) { _, _ in
+            guard let dragged = model.draggedTab else { return false }
+            model.draggedTab = nil
+            withAnimation(DS.Motion.fold) { model.place(dragged, inLeftColumn: isLeft) }
+            return true
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
     }

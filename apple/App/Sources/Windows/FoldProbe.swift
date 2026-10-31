@@ -30,6 +30,14 @@ struct FoldProbe: UIViewRepresentable {
 
     func updateUIView(_ view: ProbeView, context: Context) {
         view.layout = model.foldLayout
+        #if DEBUG
+        // Back to the device's own hinge: read it again.
+        if view.debugPosture != model.debugPosture {
+            view.debugPosture = model.debugPosture
+            view.setNeedsUpdateConstraints()
+            view.setNeedsLayout()
+        }
+        #endif
     }
 
     /// The page holding `view` in screen coordinates while its window lies open across a fold
@@ -55,6 +63,7 @@ struct FoldProbe: UIViewRepresentable {
         private weak var registered: UIWindow?
         #if DEBUG
         var debugPostureObserver: NSObjectProtocol?
+        var debugPosture: FoldPosture?
         #endif
 
         private func register() {
