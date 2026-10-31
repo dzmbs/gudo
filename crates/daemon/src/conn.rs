@@ -176,6 +176,12 @@ async fn run(
             let _ = ctl.send(ServerCtl::Knock(proto::KnockUpdate::Added(knock)));
         }
     }
+    if hello.caps.contains(Caps::HOST_ALERTS)
+        && is_owner(&core, &authz)
+        && let Some(alert) = core.mp.host_alert()
+    {
+        let _ = ctl.send(ServerCtl::HostAlert(alert));
+    }
     let presence = hello.caps.contains(Caps::PRESENCE);
     core.mp
         .join(&core, id, &authz, presence, ctl.clone(), conn.clone());
@@ -283,7 +289,7 @@ enum Admission {
 }
 
 /// Checks a `Hello`.
-fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, RefuseReason> {
+fn handshake(core: &Arc<Core>, hello: &Hello, device: DeviceId) -> Result<Admission, RefuseReason> {
     if hello.device_id != device {
         return Err(RefuseReason::DeviceMismatch);
     }
@@ -314,7 +320,8 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, 
                 Redeemed::Knock(knocker) => Admission::Knock(knocker),
             });
     }
-    if core.mp.device_revoked(device) {
+    // A removed device comes back only with a fresh pairing ticket.
+    if hello.grant.v != SignedGrant::PAIRING && core.mp.device_removed(device) {
         return Err(RefuseReason::Revoked);
     }
     let principal = core
@@ -323,25 +330,7 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, 
     let _ = WIRE_VERSION;
     let actor = Actor { principal, device };
     if hello.grant.v == SignedGrant::PAIRING {
-        core.mp.audit.append(
-            AuditKind::Paired,
-            crate::mp::AuditEntry {
-                actor: Some(actor),
-                detail: "paired a new owner device".into(),
-                ..crate::mp::AuditEntry::default()
-            },
-        );
-        // Every other owner device hears of it: a phished ticket must not pair unnoticed.
-        core.emit(Event::DevicePaired(proto::DeviceInfo {
-            device,
-            principal,
-            kind: proto::DeviceKind::Owner,
-            name: "owner".into(),
-            first_seen: proto::UnixMillis(crate::identity::now_millis()),
-            grant_id: None,
-            revoked: false,
-            connected: 1,
-        }));
+        core.mp.paired(core, actor);
     }
     Ok(Admission::Join(Authz::owner(actor), maintenance))
 }

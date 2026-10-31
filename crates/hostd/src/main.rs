@@ -480,7 +480,8 @@ fn devices(state_dir: &Path) -> Result<()> {
         .map_or(0, |d| d.as_millis() as u64);
     for d in devices {
         let days = now.saturating_sub(d.paired_at) / 86_400_000;
-        println!("{}  paired {days} day(s) ago", d.device);
+        let name = if d.name.is_empty() { "unnamed" } else { &d.name };
+        println!("{}  {name}  paired {days} day(s) ago", d.device);
     }
     Ok(())
 }

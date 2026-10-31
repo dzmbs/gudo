@@ -192,7 +192,7 @@ proptest! {
         );
         // Revoking any issuer's device does too.
         let mut b = auth(&owner);
-        b.revoked_devices.insert(chain.links[i].grant.issuer);
+        b.revoked_devices.insert(chain.links[i].grant.issuer, NOW);
         prop_assert_eq!(
             verify(&chain, DAEMON, presenter.device_id(), NOW, &b).unwrap_err(),
             GrantError::DeviceRevoked

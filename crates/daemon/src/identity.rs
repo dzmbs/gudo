@@ -8,9 +8,11 @@
 //! | `daemon.key` | iroh Ed25519 secret key, 32 raw bytes, mode 0600 |
 //! | `owner.json` | the owner principal |
 //! | `devices.json` | the device allowlist |
+//! | `unpaired.json` | when each removed device was removed (changed under `devices.lock`) |
 //! | `pairing.json` | unused pairing secrets with expiry (changed under `pairing.lock`) |
 //! | `endpoint.json` | where the running daemon listens (written by `run`) |
 
+use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -27,6 +29,7 @@ use crate::fsutil::{self, hex, read_optional, unhex, write_atomic};
 const KEY_FILE: &str = "daemon.key";
 const OWNER_FILE: &str = "owner.json";
 const DEVICES_FILE: &str = "devices.json";
+const REMOVED_FILE: &str = "unpaired.json";
 const PAIRING_FILE: &str = "pairing.json";
 const ENDPOINT_FILE: &str = "endpoint.json";
 
@@ -43,7 +46,13 @@ struct DeviceEntry {
     device: String,
     principal: String,
     paired_at: u64,
+    /// What the device calls itself (its first `SetName`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
 }
+
+/// When each device was last removed from the allowlist, Unix ms, by device hex.
+type Removed = BTreeMap<String, u64>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PairingEntry {
@@ -123,7 +132,17 @@ fn stamp(path: &Path) -> io::Result<Option<Stamp>> {
 #[derive(Debug, Default)]
 struct Devices {
     list: Vec<DeviceEntry>,
+    removed: Removed,
     stamp: Option<Stamp>,
+}
+
+/// A paired owner device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Owner {
+    pub device: DeviceId,
+    pub principal: PrincipalId,
+    pub name: String,
+    pub paired_at: UnixMillis,
 }
 
 /// The daemon's long-lived identity and authorisation state.
@@ -157,12 +176,16 @@ impl Identity {
         self.dir.join(DEVICES_FILE)
     }
 
+    fn removed_path(&self) -> PathBuf {
+        self.dir.join(REMOVED_FILE)
+    }
+
     fn lock_devices(&self) -> MutexGuard<'_, Devices> {
         self.devices.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Reads `devices.json` if it changed since the last read, so `hostd unpair` (another
-    /// process) takes effect for every check at once.
+    /// Reads `devices.json` (and `unpaired.json`, always written first) if it changed since
+    /// the last read, so `hostd unpair` (another process) takes effect for every check at once.
     fn load_devices(&self) -> io::Result<()> {
         let path = self.devices_path();
         let now = stamp(&path)?;
@@ -171,6 +194,7 @@ impl Identity {
             return Ok(());
         }
         devices.list = read_json(&path)?.unwrap_or_default();
+        devices.removed = read_json(&self.removed_path())?.unwrap_or_default();
         devices.stamp = now;
         Ok(())
     }
@@ -187,18 +211,22 @@ impl Identity {
     /// changed anything; only then is the file written.
     fn update_devices(
         &self,
-        change: impl FnOnce(&mut Vec<DeviceEntry>) -> bool,
+        change: impl FnOnce(&mut Vec<DeviceEntry>, &mut Removed) -> bool,
     ) -> io::Result<bool> {
         let path = self.devices_path();
+        let removed_path = self.removed_path();
         fsutil::with_lock(&path, || {
             let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
-            let changed = change(&mut list);
+            let mut removed: Removed = read_json(&removed_path)?.unwrap_or_default();
+            let changed = change(&mut list, &mut removed);
             if changed {
+                write_json(&removed_path, &removed)?;
                 write_json(&path, &list)?;
             }
             let mut devices = self.lock_devices();
             devices.stamp = stamp(&path)?;
             devices.list = list;
+            devices.removed = removed;
             Ok(changed)
         })
     }
@@ -226,8 +254,11 @@ impl Identity {
                     device: device_hex.clone(),
                     principal: hex(&principal.0),
                     paired_at: now_millis(),
+                    name: String::new(),
                 };
-                self.update_devices(|list| {
+                // A fresh ticket brings a removed device back, but not its old invites: they
+                // stay void by its removal time (`removed_at`).
+                self.update_devices(|list, _| {
                     list.retain(|d| d.device != device_hex);
                     list.push(entry);
                     true
@@ -277,35 +308,76 @@ impl Identity {
         self.lock_devices().list.iter().any(|d| d.device == hex_id)
     }
 
-    /// Paired devices: key, principal and when they paired.
-    pub fn paired(&self) -> Vec<(DeviceId, PrincipalId, UnixMillis)> {
+    /// The paired owner devices.
+    pub fn paired(&self) -> Vec<Owner> {
         self.refresh();
         self.lock_devices()
             .list
             .iter()
             .filter_map(|d| {
-                Some((
-                    DeviceId(unhex(&d.device)?),
-                    PrincipalId(unhex(&d.principal)?),
-                    UnixMillis(d.paired_at),
-                ))
+                Some(Owner {
+                    device: DeviceId(unhex(&d.device)?),
+                    principal: PrincipalId(unhex(&d.principal)?),
+                    name: d.name.clone(),
+                    paired_at: UnixMillis(d.paired_at),
+                })
             })
             .collect()
+    }
+
+    /// When `device` was last removed from the allowlist, if ever.
+    pub fn removed_at(&self, device: DeviceId) -> Option<UnixMillis> {
+        self.refresh();
+        self.lock_devices()
+            .removed
+            .get(&hex(&device.0))
+            .map(|&at| UnixMillis(at))
+    }
+
+    /// Records what a paired device calls itself. No-op for other devices or an unchanged
+    /// name.
+    pub fn set_name(&self, device: DeviceId, name: &str) {
+        let hex_id = hex(&device.0);
+        let known = self
+            .lock_devices()
+            .list
+            .iter()
+            .any(|d| d.device == hex_id && d.name != name);
+        if !known {
+            return;
+        }
+        let saved = self.update_devices(|list, _| {
+            list.iter_mut()
+                .find(|d| d.device == hex_id && d.name != name)
+                .map(|d| d.name = name.to_owned())
+                .is_some()
+        });
+        if let Err(e) = saved {
+            tracing::warn!("saving paired devices: {e}");
+        }
     }
 
     /// Removes a paired device. Returns whether it was paired.
     pub fn unpair(&self, device: DeviceId) -> bool {
         let hex_id = hex(&device.0);
-        self.update_devices(|list| {
-            let before = list.len();
-            list.retain(|d| d.device != hex_id);
-            list.len() != before
-        })
-        .unwrap_or_else(|e| {
-            tracing::warn!("saving paired devices: {e}");
-            false
-        })
+        self.update_devices(|list, removed| remove_device(list, removed, &hex_id))
+            .unwrap_or_else(|e| {
+                tracing::warn!("saving paired devices: {e}");
+                false
+            })
     }
+}
+
+/// Takes `device` off the allowlist and records when, so everything it signed until now stays
+/// void even if it pairs again.
+fn remove_device(list: &mut Vec<DeviceEntry>, removed: &mut Removed, device: &str) -> bool {
+    let before = list.len();
+    list.retain(|d| d.device != device);
+    if list.len() == before {
+        return false;
+    }
+    removed.insert(device.to_owned(), now_millis());
+    true
 }
 
 fn load_or_create_key(dir: &Path) -> io::Result<iroh::SecretKey> {
@@ -444,6 +516,8 @@ pub struct PairedDevice {
     pub device: String,
     /// When it paired, Unix ms.
     pub paired_at: u64,
+    /// What it calls itself; empty until it said.
+    pub name: String,
 }
 
 impl From<DeviceEntry> for PairedDevice {
@@ -451,6 +525,7 @@ impl From<DeviceEntry> for PairedDevice {
         Self {
             device: d.device,
             paired_at: d.paired_at,
+            name: d.name,
         }
     }
 }
@@ -481,7 +556,8 @@ pub fn paired_devices(state_dir: &Path) -> io::Result<usize> {
 
 /// Removes the paired device whose key starts with `prefix` (at least 8 hex digits). A
 /// running daemon closes its connections within a second, refuses it from then on, and stops
-/// trusting invites it signed; it needs a new pairing ticket to come back.
+/// trusting invites it signed; it needs a new pairing ticket to come back, and those invites
+/// stay void even then.
 ///
 /// # Errors
 ///
@@ -496,8 +572,10 @@ pub fn unpair_device(state_dir: &Path, prefix: &str) -> io::Result<PairedDevice>
         ));
     }
     let path = state_dir.join(DEVICES_FILE);
+    let removed_path = state_dir.join(REMOVED_FILE);
     fsutil::with_lock(&path, || {
         let mut list: Vec<DeviceEntry> = read_json(&path)?.unwrap_or_default();
+        let mut removed: Removed = read_json(&removed_path)?.unwrap_or_default();
         let matches: Vec<usize> = (0..list.len())
             .filter(|&i| list[i].device.starts_with(&prefix))
             .collect();
@@ -516,9 +594,11 @@ pub fn unpair_device(state_dir: &Path, prefix: &str) -> io::Result<PairedDevice>
                 ));
             }
         };
-        let removed = list.remove(i);
+        let entry = list[i].clone();
+        remove_device(&mut list, &mut removed, &entry.device);
+        write_json(&removed_path, &removed)?;
         write_json(&path, &list)?;
-        Ok(removed.into())
+        Ok(entry.into())
     })
 }
 
