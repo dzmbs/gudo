@@ -194,12 +194,14 @@ struct WorkspaceView: View {
             .frame(height: deck)
             // The keyboard rises over the deck, never the screen above: no reflow as it comes up.
             .ignoresSafeArea(.keyboard, edges: deck == nil ? [] : .bottom)
+            #if os(iOS)
             if deck != nil {
                 FoldGutter().frame(height: layout.gutter)
                 TabletopDeck(workspace: workspace)
                     .frame(maxHeight: .infinity)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            #endif
         }
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame = $0 }
         .animation(DS.Motion.sidebar, value: model.isSidebarShown)
