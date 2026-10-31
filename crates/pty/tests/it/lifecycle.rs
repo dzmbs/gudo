@@ -7,7 +7,11 @@ use crate::support::{read_to_end, read_until, spawn, spawn_with, within};
 /// A program that never reads its input used to let queued input grow without bound.
 #[tokio::test]
 async fn input_for_a_program_that_never_reads_is_bounded() {
-    let pty = spawn(&["/bin/sleep", "100"]);
+    // Raw mode: a canonical tty discards input past its line limit, so writes would never back
+    // up into our queue and the bound would go untested.
+    let pty = spawn(&["/bin/sh", "-c", "stty raw -echo; echo ready; exec sleep 100"]);
+    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut out, "ready").await;
     let chunk = vec![b'x'; 64 * 1024];
     let mut accepted = 0;
     let end = std::time::Instant::now() + std::time::Duration::from_millis(500);
