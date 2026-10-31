@@ -114,6 +114,20 @@ enum Cmd {
         /// Pane to split (default: focused).
         #[arg(long)]
         pane: Option<u64>,
+        /// Working directory for the new pane (default: the split pane's).
+        #[arg(long)]
+        cwd: Option<String>,
+    },
+    /// Type text into the focused pane (or `--pane`), as if pasted; `--enter` presses Return
+    /// after it, `--raw` sends the bytes as typed keys instead (e.g. `$'\e[A'` for Up).
+    Send {
+        text: String,
+        #[arg(long)]
+        pane: Option<u64>,
+        #[arg(long)]
+        enter: bool,
+        #[arg(long)]
+        raw: bool,
     },
     /// Close the focused pane (or `--pane`).
     Close {
@@ -668,6 +682,39 @@ async fn run(cli: Cli) -> Result<()> {
             }
             return Ok(());
         }
+        Cmd::Send {
+            text,
+            pane,
+            enter,
+            raw,
+        } => {
+            let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
+            conn.client.subscribe(pane_id);
+            if raw {
+                conn.client.send_input(pane_id, text.into_bytes());
+            } else {
+                conn.client.send_paste(pane_id, text);
+            }
+            if enter {
+                conn.client.send_input(pane_id, b"\r".to_vec());
+            }
+            // Input is acknowledged on the pane's stream once the program echoes something;
+            // keys that echo nothing are not, so wait a little rather than for the ack.
+            let acks = if enter { 2 } else { 1 };
+            let mut seen = 0;
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(1500),
+                conn.answer(|e| match e {
+                    ClientEvent::InputAck { pane_id: p, .. } if p == pane_id => {
+                        seen += 1;
+                        (seen == acks).then_some(())
+                    }
+                    _ => None,
+                }),
+            )
+            .await;
+            return Ok(());
+        }
         Cmd::Marks { pane } => {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let id = conn.client.commands(pane_id);
@@ -722,17 +769,18 @@ async fn run(cli: Cli) -> Result<()> {
             vertical,
             agent,
             pane,
+            cwd,
         } => {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let launch = match agent {
-                None => shell,
+                None => PaneLaunch::Shell { cwd },
                 Some(a) => PaneLaunch::Agent {
                     agent: match a {
                         Agent::Claude => AgentKind::Claude,
                         Agent::Codex => AgentKind::Codex,
                     },
                     resume: None,
-                    cwd: None,
+                    cwd,
                 },
             };
             let axis = if vertical {

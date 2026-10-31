@@ -44,7 +44,17 @@ pub(crate) struct OscScanner {
 impl OscScanner {
     /// Feeds bytes, calling `emit` for every complete OSC recognised.
     pub fn feed(&mut self, data: &[u8], mut emit: impl FnMut(Osc)) {
-        for &b in data {
+        let mut rest = data;
+        while !rest.is_empty() {
+            // Almost all output is outside escapes: skip to the next ESC at once.
+            if matches!(self.state, State::Ground) {
+                match memchr::memchr(0x1b, rest) {
+                    Some(at) => rest = &rest[at..],
+                    None => return,
+                }
+            }
+            let b = rest[0];
+            rest = &rest[1..];
             self.state = match (&self.state, b) {
                 (State::Ground, 0x1b) => State::Esc,
                 (State::Ground, _) => State::Ground,

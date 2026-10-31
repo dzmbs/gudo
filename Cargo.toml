@@ -33,6 +33,7 @@ bytes = "1.12"
 # Pinned: libc 0.2.190+ declares `in6_ifreq` for macOS only, and netdev 0.46 (iroh → netwatch)
 # uses it on every Darwin target, so iOS stops compiling. Lift once netdev adapts.
 libc = "=0.2.189"
+memchr = "=2.8.3"
 proptest = "1"
 rustix = { version = "1", features = ["event", "fs", "pipe", "process", "pty", "termios"] }
 thiserror = "2"

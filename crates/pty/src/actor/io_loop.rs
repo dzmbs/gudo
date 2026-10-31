@@ -85,15 +85,22 @@ impl IoLoop {
     pub(super) fn run(mut self) {
         let mut buf = vec![0u8; READ_BUF];
         let mut last_activity = Instant::now();
+        let mut echo_read: Option<Instant> = None;
         loop {
             if self.shared.shutdown.load(Ordering::Acquire) || !self.take_input() {
                 break;
             }
-            if !self.pending.is_empty() {
+            let typed = !self.pending.is_empty();
+            if typed {
                 last_activity = Instant::now();
                 self.flush_input();
             }
-            self.refresh_echo();
+            // Input (and wakes) re-read at once; a stream of output at most every ACTIVE_POLL,
+            // not once per read.
+            if typed || echo_read.is_none_or(|t| t.elapsed() >= ACTIVE_POLL) {
+                self.refresh_echo();
+                echo_read = Some(Instant::now());
+            }
 
             let timeout = poll_interval(last_activity.elapsed());
             let ready = match self.poll(timeout) {
@@ -105,6 +112,8 @@ impl IoLoop {
             };
             if ready.wake {
                 drain(&self.wake);
+                // `refresh_echo` asked for a fresh read.
+                echo_read = None;
             }
             if ready.writable {
                 self.flush_input();
