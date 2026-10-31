@@ -202,9 +202,11 @@ mod tests {
         // The same host over IPv4-mapped IPv6 is the same source.
         assert!(gate.arrive(ip("::ffff:10.0.0.1"), false).is_none());
         // Another /64 is not; the same /64 is.
-        assert!(gate.arrive(ip("2001:db8:0:1::1"), false).is_some());
-        let b = gate.arrive(ip("2001:db8:0:1::2"), false);
-        assert!(b.is_some());
+        let b: Vec<_> = ["2001:db8:0:1::1", "2001:db8:0:1::2"]
+            .into_iter()
+            .map(|a| gate.arrive(ip(a), false))
+            .collect();
+        assert!(b.iter().all(Option::is_some));
         assert!(gate.arrive(ip("2001:db8:0:1::3"), false).is_none());
         // Global limit.
         assert!(gate.arrive(ip("10.0.0.9"), false).is_none());
