@@ -58,18 +58,25 @@ real path must lie inside `$HOME` or `files.allow`. Symlinks are checked through
 targets.
 
 - **State directory.** It is refused even inside a root, so a host-scope Driver cannot silently
-  read keys or rewrite the grant store through the Files API.
+  read keys or rewrite the grant store through the Files API. That holds for any spelling of
+  it (case on macOS), through symlinks, and for moving or deleting a directory that holds it,
+  which would otherwise carry it to an unrefused name or into the trash.
 - **File modes.** Writes never get setuid, setgid or sticky bits from a client.
 - **Daemon-run git.** Every call disables the following (the Zed CVE-2026-44465 class):
   - `core.fsmonitor`
   - automatic gc and maintenance
   - the pager and editor
   - hooks (except a user-initiated `push`)
-  - the repository's own clean, smudge and process filters (LFS's own excepted)
+  - the repository's own clean, smudge and process filters (LFS's own excepted), wherever
+    they are defined: `.git/config`, files it includes (`include`, `includeIf`) and the
+    worktree's `config.worktree`
+  - filters of nested repositories and submodules: status and diff do not look inside them
+    (`--ignore-submodules=dirty`), and a worktree snapshot records them at their HEAD instead
+    of letting `git add` run `git status` inside them
 
   Porcelain diffs pass `--no-ext-diff --no-textconv`. Branch and base names that start with `-`
-  are refused, and paths come after `--`. `gh` gets fsmonitor and hooks disabled through
-  `GIT_CONFIG_*`. The throwaway index lives in a private temporary directory.
+  are refused, and paths come after `--`. `gh` gets the same config through `GIT_CONFIG_*`,
+  filters included. The throwaway index lives in a private temporary directory.
 
 **Port forwarding.** TCP forwards connect only to `localhost:<port>`: IPv4 loopback, then IPv6.
 No hostname is resolved, so there is no path to the LAN or to `169.254.169.254`. Unix-socket
@@ -143,3 +150,43 @@ SHA-256, must run here and report this OS and CPU, and is then swapped in atomic
    `unnamed-hostd pair`; it is no longer printed into the log.
 5. **Pane limit.** The limit of 32 panes per agent tree is a constant. It may need to be a
    setting for large agent fleets.
+6. **Host browser and guests.** A Driver guest in a pane can call the browser tools with the
+   pane's token, and they reach the owner's in-app browser with the owner's sign-ins. This
+   follows from "Driver means code execution", but it reaches the owner's device, not only
+   the host. Should browser calls be refused while a guest holds the pane's lease?
+
+## Validation
+
+Each test runs the attack against the real code (real git, real sockets, a real daemon in
+`tests/it`), and each was checked to fail with its fix removed.
+
+- `ws::git::tests::a_repositorys_own_config_runs_nothing`: fsmonitor, filters and hooks in
+  `.git/config` during status and a worktree snapshot.
+- `ws::git::tests::config_from_elsewhere_runs_nothing`: filters from an `include`, an
+  `includeIf`, `config.worktree` and a nested repository's own config, plus `gpg.program`,
+  through status, the repository list's diff, a worktree snapshot, `commit-tree`, diffs with
+  hunks and `worktree add`.
+- `ws::gh::tests::the_git_gh_runs_is_guarded_too`: a stand-in `gh` running `git status` and
+  `git checkout` in a hostile repository.
+- `ws::paths::tests::the_state_dir_is_never_served`, `…_is_refused_in_any_case`,
+  `what_holds_the_state_dir_is_not_moved`, and
+  `workspace::the_state_dir_stays_out_of_reach_inside_an_allowed_root` (it): reads, listings
+  and writes by path, `.`, `//`, symlink and other case; renaming or deleting its parents;
+  a Unix forward to the hook socket.
+- `ws::files::tests::a_client_cannot_create_setuid_files`. On macOS the kernel already drops
+  setuid on create, so this test can only fail on Linux.
+- `ws::editor_proxy::http_tests::refuses_hosts_that_are_not_loopback` and
+  `ws::editor_proxy::tests::only_loopback_names_pass_the_host_check`: `localhost.evil.com`,
+  `127.0.0.1.nip.io`, trailing dots, IPv4-mapped IPv6, decimal and hex IPs, userinfo tricks.
+- `term::a_panes_environment_reaches_only_that_pane` (it): a pane's environment holds no
+  `hook.token`; its own token cannot speak for the pane that opened it on the pull or browser
+  channels; the agent tree stops at 32 panes, workers included.
+- `term::an_agent_runs_waits_reads_and_stays_in_its_lane` (it): term tools with another
+  pane's token, and driving a pane the caller did not open.
+- `browser::a_driving_guest_never_gets_the_hosts_browser_calls` (it): browser calls never
+  reach a guest's device.
+- `agent::tests::only_this_user_may_use_the_hook_socket`: the peer-uid check, unit level (a
+  second uid is not available to the tests); `a_long_state_dir_puts_the_socket_in_a_private_dir`.
+- `pty foreground::tests::a_terminal_with_no_program_has_no_foreground`: macOS reports a
+  foreground group of 0 once a pane's program exits. `rustix` turned that into an invalid pid
+  (a panic in debug builds, undefined behaviour in release), which a pane could trigger.

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use proto::{
@@ -13,7 +14,7 @@ use proto::{
     SubscribeMode, TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest, WorkspaceResponse,
     WsError,
 };
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 
 use crate::core::{ConnId, Core, Event, lock};
@@ -69,27 +70,61 @@ struct Client {
     peers: Option<Arc<Mailbox>>,
 }
 
-/// Serves one accepted connection until it closes.
-pub(crate) async fn serve(core: Arc<Core>, conn: Connection) {
+/// Serves one accepted connection until it closes. `pending` is its slot among the
+/// connections not yet past the `Hello`; it is released once the `Hello` is in.
+pub(crate) async fn serve(core: Arc<Core>, conn: Connection, pending: OwnedSemaphorePermit) {
     let remote = conn.remote_id();
-    match run(core, conn).await {
+    match run(core, conn, pending).await {
         Ok(()) => tracing::debug!(%remote, "client left"),
         Err(e) => tracing::debug!(%remote, "client connection ended: {e}"),
     }
 }
 
-async fn run(core: Arc<Core>, conn: Connection) -> Result<(), NetError> {
-    let (mut ctl_tx, mut ctl_rx) = conn.accept_bi().await.map_err(conn_err)?;
-    let _ = ctl_tx.set_priority(priority::CTL);
-    let Some(ClientCtl::Hello(hello)) = net::recv(&mut ctl_rx).await? else {
+/// The connection's `ctl` stream and its `Hello`; `None` if it sent something else, left, or
+/// took longer than `timeout`.
+async fn await_hello(
+    conn: &Connection,
+    timeout: Duration,
+) -> Result<Option<(SendStream, RecvStream, Hello)>, NetError> {
+    let hello = async {
+        let (ctl_tx, mut ctl_rx) = conn.accept_bi().await.map_err(conn_err)?;
+        let hello = match net::recv(&mut ctl_rx).await? {
+            Some(ClientCtl::Hello(hello)) => Some(hello),
+            _ => None,
+        };
+        Ok(hello.map(|h| (ctl_tx, ctl_rx, h)))
+    };
+    match tokio::time::timeout(timeout, hello).await {
+        Ok(result) => result,
+        Err(_) => {
+            conn.close(0u32.into(), b"no hello");
+            Ok(None)
+        }
+    }
+}
+
+async fn run(
+    core: Arc<Core>,
+    conn: Connection,
+    pending: OwnedSemaphorePermit,
+) -> Result<(), NetError> {
+    let Some((mut ctl_tx, ctl_rx, hello)) = await_hello(&conn, core.cfg.hello_timeout).await?
+    else {
         return Ok(());
     };
+    drop(pending);
+    let _ = ctl_tx.set_priority(priority::CTL);
     let device = DeviceId(*conn.remote_id().as_bytes());
     let handshake = handshake(&core, &hello, device);
     if hello.caps.contains(Caps::DAEMON_INFO) {
         let mut info = daemon_info(&core);
         if !matches!(handshake, Ok(Admission::Join(..))) {
+            // A refused peer learns what explains the refusal (versions), not which
+            // machine or build this is.
             info.hostname.clear();
+            info.os_name.clear();
+            info.build.clear();
+            info.built_unix = 0;
         }
         net::send(&mut ctl_tx, &ServerCtl::DaemonInfo(info)).await?;
     }
@@ -252,6 +287,11 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, 
     if hello.device_id != device {
         return Err(RefuseReason::DeviceMismatch);
     }
+    // The TLS handshake accepts small-order keys, whose signatures anyone can forge: such
+    // a key proves nothing about who is connecting.
+    if !grants::is_strong_key(device) {
+        return Err(RefuseReason::InvalidGrant);
+    }
     let format = core.cfg.snapshot_format();
     let maintenance = hello.snapshot_format != format;
     if maintenance
@@ -291,6 +331,17 @@ fn handshake(core: &Core, hello: &Hello, device: DeviceId) -> Result<Admission, 
                 ..crate::mp::AuditEntry::default()
             },
         );
+        // Every other owner device hears of it: a phished ticket must not pair unnoticed.
+        core.emit(Event::DevicePaired(proto::DeviceInfo {
+            device,
+            principal,
+            kind: proto::DeviceKind::Owner,
+            name: "owner".into(),
+            first_seen: proto::UnixMillis(crate::identity::now_millis()),
+            grant_id: None,
+            revoked: false,
+            connected: 1,
+        }));
     }
     Ok(Admission::Join(Authz::owner(actor), maintenance))
 }
@@ -984,6 +1035,14 @@ impl Client {
             Event::Knock(update) => {
                 if self.caps.contains(Caps::KNOCK) && is_owner(&self.core, &self.authz) {
                     self.send(ServerCtl::Knock(update));
+                }
+            }
+            Event::DevicePaired(info) => {
+                if self.caps.contains(Caps::DEVICE_ALERTS)
+                    && info.device != self.actor.device
+                    && is_owner(&self.core, &self.authz)
+                {
+                    self.send(ServerCtl::DevicePaired(info));
                 }
             }
             Event::ApprovalPolicy(session_id, policy) => {

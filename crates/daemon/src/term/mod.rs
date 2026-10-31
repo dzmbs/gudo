@@ -26,6 +26,7 @@ use crate::assist::marks::Phase;
 use crate::core::{Core, PaneEntry, lock};
 
 pub use output::Output;
+pub(crate) use output::visible;
 
 /// The protocol version in [`TermCall::v`].
 pub const TERM_VERSION: u32 = 1;

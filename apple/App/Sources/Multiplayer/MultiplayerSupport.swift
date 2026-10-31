@@ -97,6 +97,7 @@ extension MultiplayerSession.Notice {
         case .controlKept, .controlLost: "keyboard.badge.ellipsis"
         case .viewOnly, .inputRejected: "eye"
         case .revoked: "person.crop.circle.badge.xmark"
+        case .devicePaired: "lock.shield"
         case .alreadyDecided: "checkmark.seal"
         case .forbidden, .failed: "exclamationmark.triangle.fill"
         case .arrived: "person.crop.circle.badge.plus"

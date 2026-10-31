@@ -141,6 +141,7 @@ struct SettingsView: View {
             BrowserSettingsSection().chromeRows()
             ReplaySettingsSection().chromeRows()
             KeyboardSection().chromeRows()
+            AppLockSection().chromeRows()
             PasswordsSection().chromeRows()
             VoiceSettingsSection().chromeRows()
             NotificationsSection().chromeRows()
@@ -173,10 +174,11 @@ struct SettingsView: View {
     @ViewBuilder private func detail(_ pane: SettingsPane) -> some View {
         switch pane {
         case .appearance: AppearanceSection()
-        case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection(); PasswordsSection()
+        case .terminal: FontSection(); CursorSection(); SplitsSection(); LinksSettingsSection()
         case .keyboard: KeyboardSection(); VoiceSettingsSection()
         case .browser: BrowserSettingsSection(); ReplaySettingsSection()
         case .notifications: NotificationsSection()
+        case .privacy: AppLockSection(); PasswordsSection()
         case .agents: AgentsSettingsSection(); AgentToolsSection()
         case .git: GitSettingsSection()
         case .network: NetworkSettingsSection()
@@ -239,7 +241,7 @@ final class SettingsNavigation {
 #if os(macOS)
 /// The Mac Settings window's panes, in its sidebar.
 nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case appearance, terminal, keyboard, browser, notifications, agents, git, network, thisMac, about
+    case appearance, terminal, keyboard, browser, notifications, privacy, agents, git, network, thisMac, about
     var id: String { rawValue }
 
     var title: String {
@@ -249,6 +251,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .keyboard: "Keyboard"
         case .browser: "Browser"
         case .notifications: "Notifications"
+        case .privacy: "Privacy & Security"
         case .agents: "Agents"
         case .browser: "Browser"
         case .git: "Git"
@@ -265,6 +268,7 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .keyboard: "keyboard"
         case .browser: "globe"
         case .notifications: "bell.badge"
+        case .privacy: "hand.raised"
         case .agents: "sparkle"
         case .browser: "globe"
         case .git: "arrow.triangle.branch"

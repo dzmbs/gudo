@@ -86,6 +86,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
  "brand",
+ "proto",
  "regex",
  "serde",
  "serde_json",
@@ -1681,7 +1682,9 @@ name = "ghostty-vt"
 version = "0.0.0"
 dependencies = [
  "data-encoding",
+ "flate2",
  "ghostty-vt-sys",
+ "libc",
  "png",
  "zstd",
 ]
@@ -1746,6 +1749,7 @@ dependencies = [
 name = "grants"
 version = "0.0.0"
 dependencies = [
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "iroh",
  "proptest",
@@ -3662,6 +3666,7 @@ dependencies = [
  "brand",
  "data-encoding",
  "postcard",
+ "proptest",
  "serde",
  "zeroize",
 ]

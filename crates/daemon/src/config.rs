@@ -56,7 +56,8 @@ pub struct PushConfig {
     /// How long an attention item must stay unseen before it is pushed (`push.delay_ms`). A
     /// client focusing the pane in that window, or a newer item for the same pane, cancels it.
     pub delay: Duration,
-    /// Lifetime of the Approve / Deny token in an approval notification.
+    /// Lifetime of the Approve / Deny token in an approval notification: short, so a
+    /// notification left on a lock screen cannot approve a request much later.
     pub action_ttl: Duration,
     /// Delivery attempts per push (transient failures only).
     pub attempts: u32,
@@ -80,7 +81,7 @@ impl Default for PushConfig {
             enabled: true,
             relay_url: brand::PUSH_RELAY_URL.to_owned(),
             delay: Duration::from_secs(3),
-            action_ttl: Duration::from_secs(60 * 60),
+            action_ttl: Duration::from_secs(15 * 60),
             attempts: 5,
             backoff: Duration::from_secs(1),
             live_activity: true,
@@ -168,6 +169,9 @@ pub struct Config {
     pub push: PushConfig,
     /// A pane's control lease moves to someone who asked for it once the holder has not typed
     pub lease_idle: Duration,
+    /// How long a new connection has to complete the QUIC handshake and send its `Hello`.
+    /// Anyone can connect with a fresh key, so a silent one must not hold a slot for long.
+    pub hello_timeout: Duration,
     pub presence: PresenceTimes,
     /// Command history for completion and the line editor (`[history]` in `config.toml`).
     pub history: crate::assist::HistoryConfig,
@@ -307,6 +311,7 @@ impl Config {
             vscode_update_url: crate::ws::VSCODE_UPDATE_URL.to_owned(),
             push: PushConfig::default(),
             lease_idle: Duration::from_secs(5),
+            hello_timeout: Duration::from_secs(10),
             presence: PresenceTimes::default(),
             artifacts: ArtifactLimits::default(),
             askpass: AskpassConfig::default(),

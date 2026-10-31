@@ -175,21 +175,49 @@ private final class FakeClient: NotificationActionClient {
         #expect(client.recorded == [.open(host: "h1", daemon: nil, pane: 7), .open(host: "h1", daemon: nil, pane: 7)])
     }
 
-    @Test func pushApproveSendsTheTokenOnAOneShotConnection() async throws {
-        let token = Data([1, 2, 3, 4])
+    /// What the extension stores for an approval payload signed by `daemon`.
+    private func signedApproval(_ daemon: Curve25519.Signing.PrivateKey, token: Data) throws -> (info: [AnyHashable: Any], id: String) {
+        let id = daemon.publicKey.rawRepresentation.map { String(format: "%02x", $0) }.joined()
         let expires = UInt64((Date.now.timeIntervalSince1970 + 600) * 1000)
         let json = Data("""
-            {"v":1,"daemon":"ab","host":"studio","kind":"approval","item":42,"pane":7,"session":1,
+            {"v":1,"daemon":"\(id)","host":"studio","kind":"approval","item":42,"pane":7,"session":1,
              "title":"t","body":"b","at":0,
              "action":{"token":"\(Base64URL.encode(token))","approve":"Yes","deny":"No","expires":\(expires)}}
             """.utf8)
-        #expect(throws: Never.self) { try JSONDecoder().decode(PushNotification.self, from: json) }
-        let info: [AnyHashable: Any] = [PushContent.payloadKey: String(decoding: json, as: UTF8.self)]
+        let signature = try daemon.signature(for: PushCrypto.payloadDomain + json)
+        return ([PushContent.payloadKey: String(decoding: json, as: UTF8.self), PushContent.signatureKey: signature.base64EncodedString()], id)
+    }
+
+    @Test func pushApproveSendsTheTokenOnAOneShotConnection() async throws {
+        let token = Data([1, 2, 3, 4])
+        let (info, daemon) = try signedApproval(Curve25519.Signing.PrivateKey(), token: token)
         let client = FakeClient()
         let handler = NotificationActionHandler(client: client)
         #expect(await handler.handle(actionIdentifier: PushAction.deny, userInfo: info, remote: true) == .decided(approve: false))
         #expect(await handler.handle(actionIdentifier: PushAction.open, userInfo: info, remote: true) == .opened)
-        #expect(client.recorded == [.push(daemon: "ab", token: token, approve: false), .open(host: nil, daemon: "ab", pane: 7)])
+        #expect(client.recorded == [.push(daemon: daemon, token: token, approve: false), .open(host: nil, daemon: daemon, pane: 7)])
+    }
+
+    @Test func aPushThatSkipsTheExtensionCannotForgeAPayload() async throws {
+        // Without `mutable-content` the extension never runs and `userInfo` is the relay's.
+        let daemon = Curve25519.Signing.PrivateKey()
+        let (info, id) = try signedApproval(daemon, token: Data([1, 2, 3, 4]))
+        let json = try #require(info[PushContent.payloadKey] as? String)
+        let signature = try #require(info[PushContent.signatureKey] as? String)
+        let (other, _) = try signedApproval(Curve25519.Signing.PrivateKey(), token: Data([1, 2, 3, 4]))
+        let forgeries: [[AnyHashable: Any]] = [
+            [PushContent.payloadKey: json],
+            [PushContent.payloadKey: json.replacingOccurrences(of: "\"pane\":7", with: "\"pane\":8"), PushContent.signatureKey: signature],
+            // Another key's valid signature over a payload that names this daemon.
+            [PushContent.payloadKey: json, PushContent.signatureKey: try #require(other[PushContent.signatureKey])],
+            [PushContent.payloadKey: json, PushContent.signatureKey: "!!"],
+        ]
+        let client = FakeClient()
+        for forged in forgeries {
+            #expect(await NotificationActionHandler(client: client).handle(actionIdentifier: PushAction.approve, userInfo: forged, remote: true) == .ignored)
+        }
+        #expect(client.recorded.isEmpty)
+        #expect(PushContent.payload(from: info)?.daemon == id)
     }
 
     @Test func expiredTokensAndRefusalsBecomeFailures() async throws {

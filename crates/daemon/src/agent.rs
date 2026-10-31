@@ -80,13 +80,28 @@ pub(crate) fn adapter(kind: AgentKind) -> Box<dyn AgentAdapter + Send + Sync> {
     }
 }
 
-/// Whether a program-status report names one of our agent integrations (`claude-code`,
-/// `codex`). Outside a pane running that agent it is printed text posing as the agent.
+/// Whether a program-status report names one of our agents in any spelling (`claude-code`,
+/// `Claude`, `codex-cli`): clients show such a name with the agent's mark. Outside a pane
+/// running that agent it is printed text posing as the agent.
 pub(crate) fn names_an_agent(report: &agents::ProgramStatus) -> bool {
+    let Some(app) = report.app.as_deref().map(str::to_ascii_lowercase) else {
+        return false;
+    };
     [AgentKind::Claude, AgentKind::Codex]
         .into_iter()
-        .any(|k| report.app.as_deref() == Some(adapter(k).program_status_app()))
+        .any(|k| app.contains(program(k)))
 }
+
+/// What a blocked agent asks, as people see and approve it. It may come from printed text
+/// (OSC 9, OSC 7501) or a prompt-injected tool call: every line kept, nothing invisible.
+fn shown_summary(blocker: &agents::Blocker) -> String {
+    let text = blocker.summary.as_ref().or(blocker.tool.as_ref());
+    text.map(|t| proto::clean_prompt_text(t, SUMMARY_CHARS))
+        .unwrap_or_default()
+}
+
+/// Longest blocked summary, in characters (the adapters cut tool calls at 200 already).
+const SUMMARY_CHARS: usize = 512;
 
 /// The command that runs `kind`, looked up on `PATH`.
 pub(crate) fn program(kind: AgentKind) -> &'static str {
@@ -230,12 +245,7 @@ impl AgentRuntime {
                 let request_id = self.wire_request(&blocked.request_id);
                 AgentState::Blocked(Blocker {
                     request_id,
-                    summary: blocked
-                        .blocker
-                        .summary
-                        .clone()
-                        .or(blocked.blocker.tool.clone())
-                        .unwrap_or_default(),
+                    summary: shown_summary(&blocked.blocker),
                     options: blocked
                         .blocker
                         .options
@@ -381,12 +391,7 @@ impl AgentRuntime {
         let wire = self.wire_request(&blocked.request_id);
         Some(BlockedDetail {
             wire,
-            summary: blocked
-                .blocker
-                .summary
-                .clone()
-                .or(blocked.blocker.tool.clone())
-                .unwrap_or_default(),
+            summary: shown_summary(&blocked.blocker),
             options: blocked
                 .blocker
                 .options
@@ -411,12 +416,7 @@ impl AgentRuntime {
             tool: blocked.blocker.tool.clone(),
             allows: chosen.map(|o| o.id != ApprovalChoice::Deny),
             option: chosen.map(|o| o.label.clone()),
-            summary: blocked
-                .blocker
-                .summary
-                .clone()
-                .or(blocked.blocker.tool.clone())
-                .unwrap_or_default(),
+            summary: shown_summary(&blocked.blocker),
             request,
         })
     }
@@ -467,12 +467,7 @@ impl AgentRuntime {
             request: request.clone(),
             option: chosen.label.clone(),
             tool: blocked.blocker.tool.clone(),
-            summary: blocked
-                .blocker
-                .summary
-                .clone()
-                .or(blocked.blocker.tool.clone())
-                .unwrap_or_default(),
+            summary: shown_summary(&blocked.blocker),
         };
         let decision = Decision {
             request_id: request,
@@ -879,6 +874,18 @@ mod tests {
         let report = |body| agents::ProgramStatus::parse(body).unwrap();
         assert!(names_an_agent(&report("state=blocked:app=claude-code")));
         assert!(names_an_agent(&report("state=working:app=codex")));
+        for app in [
+            "claude",
+            "Claude-Code",
+            "CODEX",
+            "codex-cli",
+            "-claude",
+            "claude.exe",
+        ] {
+            let body = format!("state=blocked:app={app}");
+            let report = agents::ProgramStatus::parse(&body).unwrap();
+            assert!(names_an_agent(&report), "{app}");
+        }
         assert!(!names_an_agent(&report("state=working:app=terraform")));
         assert!(!names_an_agent(&report("state=working")));
     }

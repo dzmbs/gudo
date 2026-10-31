@@ -285,6 +285,21 @@ async fn any_program_reports_its_status_and_agents_wait_for_it() {
         .await;
     let who = agent.ok("whoami", json!({})).await;
     assert_eq!(who["pane"]["status"]["message"], "Running tests", "{who}");
+    // Its words are shown to people and agents as they print, and bounded.
+    let hostile = format!(
+        "Running\u{202e}stset\u{202c}\r\n\x1b[2Jok{}",
+        "x".repeat(4096)
+    );
+    agent
+        .ok(
+            "status_set",
+            json!({ "state": "working", "message": hostile }),
+        )
+        .await;
+    let who = agent.ok("whoami", json!({})).await;
+    let shown = who["pane"]["status"]["message"].as_str().unwrap();
+    assert!(shown.starts_with("Runningstset [2Jokxx"), "{shown:?}");
+    assert_eq!(shown.chars().count(), 513, "{shown:?}");
     agent.ok("status_set", json!({ "state": "clear" })).await;
     assert!(agent.ok("whoami", json!({})).await["pane"]["status"].is_null());
 }
@@ -494,4 +509,88 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
         answered["result"]["message"], "Lint is clean.",
         "{answered}"
     );
+}
+
+/// What a program in a pane can reach with what its environment holds (a guest Driver, a
+/// misled agent): never the daemon's token, never another pane's calls, and a bounded number
+/// of panes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_panes_environment_reaches_only_that_pane() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |c| c.shell = Some(zsh)).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let me = user.attach_and_follow().await;
+    let hook_token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: hook_token.clone(),
+        pane: me.0.to_string(),
+    };
+
+    let run = agent
+        .ok(
+            "cmd_run",
+            json!({ "command": "env; echo $UN_TOKEN", "maxBytes": 262_144 }),
+        )
+        .await;
+    let text = run["output"]["text"].as_str().unwrap();
+    assert!(
+        !text.contains(hook_token.trim()),
+        "the daemon's token is in a pane's environment"
+    );
+    let token = text.lines().last().unwrap().trim().to_owned();
+    assert_eq!(token.len(), 64, "{run}");
+    let pane = run["pane"].as_str().unwrap().trim_start_matches('p');
+    let worker = Caller {
+        token: token.clone(),
+        ..agent.clone_as(pane.to_owned())
+    };
+
+    // Its token does not speak for the pane that opened it on the other channels either.
+    let pull = raw(
+        &agent.socket,
+        json!({ "v": 1, "token": token, "pane": me.0.to_string(), "pull": { "op": "list" } }),
+    )
+    .await;
+    assert!(pull.contains("bad token"), "{pull}");
+    let browser = raw(
+        &agent.socket,
+        json!({ "v": 1, "token": token, "pane": me.0.to_string(),
+                "browser": { "open": { "url": "https://example.com" } } }),
+    )
+    .await;
+    assert!(browser.contains("bad token"), "{browser}");
+
+    // The agent's tree, worker included, opens at most 32 panes.
+    let mut opened = 1;
+    loop {
+        match worker.call("tab_new", json!({})).await {
+            TermReply::Ok(_) => opened += 1,
+            TermReply::Error(e) => {
+                assert_eq!(e.code, TermErrorCode::Forbidden, "{e:?}");
+                break;
+            }
+        }
+        assert!(opened <= 32, "no limit on panes");
+    }
+    assert_eq!(opened, 32);
+    assert_eq!(
+        agent.refused("cmd_run", json!({ "command": "true" })).await,
+        TermErrorCode::Forbidden,
+        "the agent that started the worker shares its limit"
+    );
+}
+
+async fn raw(socket: &Path, call: Value) -> String {
+    let mut stream = UnixStream::connect(socket).await.unwrap();
+    let mut line = serde_json::to_vec(&call).unwrap();
+    line.push(b'\n');
+    stream.write_all(&line).await.unwrap();
+    let mut answer = String::new();
+    BufReader::new(stream).read_line(&mut answer).await.unwrap();
+    answer
 }

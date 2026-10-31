@@ -75,23 +75,33 @@ Now:
   - a `file:` URL, which its agent could then read through the browser tools;
   - another app's link;
   - our own pairing links.
+- Other addresses a host reports open only if they are web pages: a pull request's or CI
+  check's page, an editor sign-in page. A tunnel's editor page must be on vscode.dev, and its
+  desktop link must be a `vscode://vscode-remote/tunnel+…` link.
 - A guest connection (someone else's host) never announces the browser capability. If such a
-  host sends a browser request anyway, the app drops it.
+  host sends a browser request anyway, the Rust core drops it (it does the same for any
+  connection that did not announce the capability), and so does the app.
 - When a user clicks a terminal link from a host, a `file:` URL is not handed to the system.
   Links the in-app browser opens from a remote pane must be web pages.
 - There is no OSC 52: a host can neither read nor write the clipboard.
+- Pages tied to a host (pages it opens, its agent's browser, its sign-ins, its dev servers)
+  use that host's own persistent `WKWebsiteDataStore(forIdentifier:)`, never the store of the
+  user's own browsing. Host A's pages cannot see host B's cookies or storage, or the user's
+  sessions. Removing a host deletes its store.
 - The VS Code web view hands only `vscode:`, `vscode-insiders:`, `mailto:` and `tel:` links to
   the system, and only from the main frame.
 - The Excalidraw canvas:
-  - never navigates away from its bundled scheme;
+  - never navigates its page away from its bundled scheme, not even to a `data:` or `blob:`
+    page (a shared drawing's link could otherwise replace it with a form);
   - opens clicked links in the system browser, and only web links;
   - accepts bridge messages only from its own main frame, so an embedded site in a shared scene
     cannot edit the drawing.
 
-**Tooling hooks.** Test hooks (`-testTrustHostKeys`, `-testBundledDaemons`, `-testTicket`,
-`-testTunnelWebBase`, …) are read from the launch arguments only, never from saved defaults.
-On the Mac, `defaults write` could otherwise turn off host key checks for good, or make the
-app install a different daemon on every host.
+**Tooling hooks.** Test and tooling hooks (`-testTrustHostKeys`, `-testBundledDaemons`,
+`-testTicket`, `-testTunnelWebBase`, `-screen`, `-typeOnStart`, `-seedAgent`, `-joinInvite`,
+`-browserProxy`, …) are read from the launch arguments only, never from saved defaults. On the
+Mac, `defaults write` could otherwise turn off host key checks for good, make the app install a
+different daemon on every host, or type a command into a paired host's terminal at launch.
 
 **SSH.**
 - Host keys are trust-on-first-use, with the fingerprint shown. A changed key raises a "Host
@@ -102,8 +112,29 @@ app install a different daemon on every host.
 - The terminal disables autocorrect, spell checking and inline prediction, so typed passwords
   are not learned by the keyboard.
 
+**App Lock** (Settings › Privacy & Security on the Mac, App Lock on iPhone and iPad; off by
+default). "Require Face ID" (Touch ID, Optic ID or the passcode, named after what the device
+has) works like a password manager's or a bank's:
+- LocalAuthentication's `.deviceOwnerAuthentication`: biometrics with the passcode (Mac: login
+  password) as fallback, as Apple recommends. Turning it on or off asks too, so someone holding
+  the unlocked app cannot quietly switch it off.
+- The app opens locked, and locks again after it has been in the background (Mac: another app
+  in front) for the grace period: Immediately, 1, 5 or 15 minutes (default 1). The time is
+  measured on a clock that keeps running while the device sleeps.
+- Locked, every window shows the app icon and Unlock (asked for once on its own each time the
+  app comes back). It is a window of its own above each iPhone/iPad scene's windows and above
+  each Mac window (sheets, popovers, tool windows, Settings included), so nothing behind it is
+  visible or reachable, and the keyboard goes to it, never to a terminal.
+- With App Lock on, an iPhone or iPad window that leaves the front is covered at once, so the
+  app switcher's snapshot shows only the icon.
+- Connections stay up while locked: agents keep working and notifications still arrive.
+- If the device's passcode is removed, App Lock turns itself off (there is no owner left to
+  check; removing the passcode needed it).
+
 **Lock screen and notifications.**
 - Approve and Deny need the device unlocked (`.authenticationRequired`).
+- An approval's action token lasts 15 minutes (`push.action_ttl`), so a notification left on a
+  lock screen cannot approve a request much later.
 - Approval and blocked categories show a placeholder when previews are hidden.
 - The push body is sealed end to end. The NSE shows it only for a daemon this device paired
   with, and takes the category from the sealed payload, not from the relay.
@@ -111,8 +142,10 @@ app install a different daemon on every host.
 **Logs and debug output.**
 - Rust core messages and user- or host-identifying fields (host names, device names, paths,
   invitee names) are logged `privacy: .private`.
-- `Debug` output of `ClientConfig`, `ConnectOptions` (client-core and FFI) and
-  `GeneratedSshKey` redacts the device key, the relay token and the private key.
+- `Debug` output of the FFI types that carry a secret leaves it out: `ClientConfig` (device
+  key), `ConnectOptions` (relay token; also in client-core), `GeneratedSshKey` (private key),
+  `PushSealKey`, `PushActionOffer` (action token), `CreatedInvite` (link),
+  `EditorInstance` (token) and `PushRegistration` (relay capabilities).
 - Askpass secrets in the core are zeroized (`proto::Secret`).
 
 **Pasteboard.** Copied invite links expire from the iOS clipboard after 10 minutes. On the Mac
@@ -138,8 +171,14 @@ collected data. Required-reason APIs are declared: UserDefaults `CA92.1`/`1C8F.1
   host" and shows the key, but a user who doesn't read it can still pair. A paired host gets
   what the user types in its terminals and can show pages in the in-app browser beside its
   panes. It cannot reach the device's files, other apps or the clipboard.
-- **The app switcher snapshot shows terminal content.** There is no privacy cover and no App
-  Lock (Face ID to open the app). Both are product decisions.
+- **With App Lock off** (the default), the app switcher snapshot shows terminal content and
+  anyone holding the unlocked device can use the app.
+- **App Lock is not a defence against local malware on the Mac.** The setting lives in the
+  app's preferences, which a process running as the user can change; and the Mac's cover is a
+  window above the app's own, not encryption.
+- **Mac windows are not covered while another app is in front** within the grace period (the
+  terminal stays readable beside other apps, as users expect). Mission Control shows them
+  as they are.
 - **The Mac app is not sandboxed.** A local process running as the user can read whatever the
   user can, including an ad-hoc build's secret files. A team-signed build keeps secrets in the
   Keychain, where another app's access triggers a prompt.
@@ -147,6 +186,43 @@ collected data. Required-reason APIs are declared: UserDefaults `CA92.1`/`1C8F.1
   host's proxy. A resolver that sends `*.localhost` off the machine would expose those loads.
 - **Secrets cross into Swift as `Data`/`String`**, which Swift cannot zeroize. The Rust side
   zeroizes askpass secrets; device and SSH keys live as long as the connection does.
-- **The in-app browser** (the agent browser and vscode.dev) uses the default website data
-  store unless a page is given its own. A page a host opens can then see cookies from earlier
-  browsing in the app.
+- **Links a user clicks in a host's terminal** open as the user's own browsing (as a
+  terminal opening Safari would), in the app's default store with vscode.dev's sign-in.
+- **Editor servers' stores** (per host and folder, for VS Code on the host) are not deleted
+  when the host is removed; they hold only the server's connection token.
+- **Saved preferences on the Mac.** Tooling hooks ignore saved defaults, but real preferences
+  (themes, Git scripts, hosts to reopen) are still the user's files; a process running as the
+  user can change them.
+
+## Validation
+
+Each test runs the attack against the real code and fails if the defence is removed (checked
+by removing it).
+
+- `AppTests/ClientExploitTests` (macOS; also on an iOS simulator):
+  - `testNoFormOfLinkPairsOrJoins`: pairing links with odd casing, extra path segments,
+    query/fragment, duplicated parameters, percent-encoding, control characters, 1 MiB of
+    payload, `scheme:`/`scheme:///` forms, user info, `join` wrappers and `file:` URLs reach
+    Add Host or Join at most (showing the ticket a tap would pair) and add no host.
+  - `testAHostOpensWebPagesAndNothingElse`: `FILE:`, `file:///`, `x-apple.systempreferences:`,
+    `shortcuts://`, our own links, the canvas scheme, `javascript:`, `data:`, `blob:`, `smb:`,
+    `itms-services:` and host-less URLs are refused by `HostLinks`, `browser_navigate`, the
+    tunnel page and its desktop link; IDN web pages open; vscode.dev look-alikes don't.
+  - `testTheCanvasBridgeHearsOnlyItsOwnPage`: a frame inside the live canvas posts to the
+    bridge and is ignored; the page navigating to a site, `data:` or `file:` stays put.
+  - `testTheCanvasMainFrameStaysInItsBundle`, `testTheEditorWebViewHandsOnlyItsSchemesToTheSystem`.
+  - `testToolingHooksAreNeverReadFromSavedDefaults`: scans the app's sources; every tooling
+    hook and `test…` key is read through `LaunchArguments`.
+  - `testKeychainItemsStayOnThisDevice`: the stored item is `AfterFirstUnlockThisDeviceOnly`
+    and not synchronizable (skipped where the data-protection keychain is unusable: ad-hoc Mac
+    builds).
+  - `testCopiedInviteLinksAreConcealed` (macOS).
+- `AppTests/LinkSecurityTests`: a pairing link shows Add Host; invites open Join.
+- `HostKitTests`: `fileSecretsAreOwnerOnlyUnderAnOpenUmask` (umask 0, a folder made before),
+  `fileSecretsMoveIntoTheKeychainAndLeaveNoFiles`.
+- `client-core` `browser::tests`: a daemon pushing browser requests to a connection that did
+  not announce the capability (or to a guest) reaches nothing.
+- `apple-ffi` `debug_output_leaves_secrets_out`: every FFI type that carries a secret.
+- Manual: the hosted tests' unified log (`log stream`) holds none of the test tickets, invite
+  links or secrets; the four `PrivacyInfo.xcprivacy` files pass `plutil -lint` and land in their
+  bundles; the Rust core links no disk-space API.

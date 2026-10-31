@@ -17,7 +17,8 @@ import UserNotifications
 /// The relay sends `{"aps": {..., "mutable-content": 1}, "s": <sealed>, "v": 1}` with a
 /// placeholder alert. On success the title, subtitle (host), body, category, thread and
 /// interruption level come from the decrypted payload, and `userInfo["push"]` holds the
-/// decrypted JSON for the action handler. On any failure the placeholder stays.
+/// decrypted JSON (with the daemon's signature) for the action handler. On any failure the
+/// placeholder stays.
 ///
 /// Everything else in a push's `userInfo` came from the relay and is dropped, success or not:
 /// the action handler must only ever see a payload this device opened and verified.
@@ -26,6 +27,8 @@ public enum PushContent {
     public static let sealedKey = "s"
     /// `userInfo` key the decrypted payload JSON is stored under.
     public static let payloadKey = "push"
+    /// `userInfo` key of the daemon's signature over that JSON, base64.
+    public static let signatureKey = "push-sig"
 
     public static func decrypt(
         _ content: UNNotificationContent,
@@ -39,7 +42,7 @@ public enum PushContent {
             isPairedDaemon(note.daemon),
             let mutable = content.mutableCopy() as? UNMutableNotificationContent
         else { return placeholder(content) }
-        apply(note, json: opened.json, to: mutable)
+        apply(note, opened: opened, to: mutable)
         return mutable
     }
 
@@ -58,7 +61,7 @@ public enum PushContent {
     /// Fills `content` from a decrypted notification.
     public static func apply(
         _ note: PushNotification,
-        json: Data,
+        opened: Opened,
         to content: UNMutableNotificationContent
     ) {
         content.title = note.title
@@ -74,14 +77,19 @@ public enum PushContent {
             content.interruptionLevel = .active
         }
         var info = trusted(content.userInfo)
-        info[payloadKey] = String(decoding: json, as: UTF8.self)
+        info[payloadKey] = String(decoding: opened.json, as: UTF8.self)
+        info[signatureKey] = opened.signature.base64EncodedString()
         content.userInfo = info
     }
 
     /// The decrypted notification stored by ``decrypt(_:deviceKey:isPairedDaemon:)``, for the
-    /// action handler (`userNotificationCenter(_:didReceive:)`).
+    /// action handler (`userNotificationCenter(_:didReceive:)`). Its daemon signature is checked
+    /// again: a push without `mutable-content` skips the extension and arrives with whatever
+    /// `userInfo` the relay chose.
     public static func payload(from userInfo: [AnyHashable: Any]) -> PushNotification? {
-        guard let json = userInfo[payloadKey] as? String else { return nil }
-        return try? JSONDecoder().decode(PushNotification.self, from: Data(json.utf8))
+        guard let json = userInfo[payloadKey] as? String,
+            let signature = (userInfo[signatureKey] as? String).flatMap({ Data(base64Encoded: $0) })
+        else { return nil }
+        return try? Opened(signature: signature, json: Data(json.utf8)).notification()
     }
 }

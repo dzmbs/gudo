@@ -100,7 +100,7 @@ decision signatures, a signed relay request (the Worker verifies it) and RFC 918
 An approval notification carries `action.token`: `postcard(ActionToken { v: 2, daemon,
 device, pane, request, approve option, deny option, item, expires, subject }) ||
 Ed25519(daemon, "push-action-token/v1\0" || postcard)`. It is bound to the one device the
-payload was sealed for and expires after an hour (`push.action_ttl`). `subject` is
+payload was sealed for and expires after 15 minutes (`push.action_ttl`). `subject` is
 `push::request_subject` (SHA-256 over the agent's own request id, the tool and the summary the
 notification showed); before applying a decision the daemon recomputes it for the open request
 and checks the pane, so a stale or replayed token can never decide another or newer request.
@@ -260,12 +260,16 @@ free account; APNs registration activates only with `PUSH_ENTITLEMENT = YES` and
   authenticated iroh connection).
 - A daemon request needs the daemon's signature, a capability bound to that daemon, a
   timestamp within 5 minutes and a fresh nonce (kept per daemon in a Durable Object until the
-  request's own timestamp leaves the window); 30 burst / 300 per 15 min per daemon. Each
-  device token also has its own budget across all daemons (alerts: 30 burst / 300 an hour;
-  Live Activity tokens: 60 burst / one per 3 s).
-- The NSE keeps only `aps` and the payload it opened and verified in `userInfo`; the action
-  handler reads a local-notification target only from local notifications. So nothing a
-  sender adds to a push can choose what Approve decides.
+  request's own timestamp leaves the window; checked and recorded with synchronous storage, so
+  concurrent copies cannot all pass); 30 burst / 300 per 15 min per daemon. Each device token
+  also has its own budget across all daemons, one per push kind (alerts: 30 burst / 300 an
+  hour; Live Activity tokens: 60 burst / one per 3 s).
+- The NSE keeps only `aps` and the payload it opened and verified (with the daemon's
+  signature) in `userInfo`; the action handler re-checks that signature, because a push
+  without `mutable-content` skips the NSE and arrives with the sender's `userInfo`, and it
+  reads a local-notification target only from local notifications. So nothing a sender adds
+  to a push can choose what Approve decides.
+- Revoking a device drops its push registration; the daemon never pushes to a revoked device.
 - `/v1/register` is unauthenticated: anyone who learns a device's APNs token can bind it to a
   daemon of their own and send it the relay's placeholder alerts (never readable content and
   never a working Approve), within the per-token budget. Signing the registration with the

@@ -43,7 +43,7 @@ enum DesignFixtures {
         if !LaunchOptions.mock {
             // Screenshot seeds (apple/scripts/w3-screenshots.sh): text typed into the focused
             // pane, an agent started with a first prompt.
-            let defaults = UserDefaults.standard
+            let defaults = LaunchArguments()
             if let text = defaults.string(forKey: "typeOnStart"), let id = workspace.focusedPane, let pane = workspace.panes[id] {
                 Data(text.replacingOccurrences(of: "\\n", with: "\r").utf8).withUnsafeBytes { pane.backend.write($0) }
                 try? await Task.sleep(for: .seconds(1))
@@ -204,7 +204,7 @@ enum DesignFixtures {
         ]
         var fixture: [String: (program: String, state: AgentState?)] = [:]
         // `-fixtureTabs N`: the first N only (the tab strip has room for about six).
-        let count = UserDefaults.standard.integer(forKey: "fixtureTabs")
+        let count = LaunchArguments().integer(forKey: "fixtureTabs")
         for (index, tab) in tabs.prefix(count > 0 ? count : tabs.count).enumerated() {
             if index > 0 { workspace.apply(.newTab) }
             guard let id = workspace.session.activeTabId, let pane = workspace.focusedPane else { continue }

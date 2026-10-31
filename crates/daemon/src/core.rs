@@ -80,6 +80,8 @@ pub(crate) enum Event {
     Repos,
     /// A knock arrived or ended (owner devices hear it).
     Knock(proto::KnockUpdate),
+    /// An owner device paired.
+    DevicePaired(proto::DeviceInfo),
     /// A session's approval policy changed.
     ApprovalPolicy(SessionId, proto::ApprovalPolicy),
     /// An open approval request's votes or claim changed.
@@ -168,6 +170,9 @@ impl PaneEntry {
 }
 
 /// A report as clients see it; `None` for `Clear`.
+/// Longest message or title kept from a program's own status report, in characters.
+const PROGRAM_TEXT_CHARS: usize = 512;
+
 fn program_report(status: &agents::ProgramStatus) -> Option<proto::ProgramReport> {
     use agents::{ProgramKind as K, ProgramState as S};
     let state = match status.state {
@@ -198,7 +203,7 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(crate) struct Core {
     pub cfg: Config,
     pub epoch: SessionEpoch,
-    pub identity: Identity,
+    pub identity: Arc<Identity>,
     pub layout: Mutex<Layout>,
     panes: Mutex<HashMap<PaneId, Arc<PaneEntry>>>,
     pub events: broadcast::Sender<Event>,
@@ -235,7 +240,7 @@ pub(crate) struct Core {
 impl Core {
     pub fn new(
         cfg: Config,
-        identity: Identity,
+        identity: Arc<Identity>,
         layout: Layout,
         hooks: HookServer,
         shell: Option<ShellIntegration>,
@@ -530,7 +535,14 @@ impl Core {
 
     /// Records the program's own top-level report (`Clear` removes it) and tells clients
     /// when what they see changes.
-    pub fn set_program(&self, entry: &PaneEntry, status: agents::ProgramStatus) {
+    pub fn set_program(&self, entry: &PaneEntry, mut status: agents::ProgramStatus) {
+        // Any program's words, shown in status lines, the Inbox and to agents: as they print.
+        let clean = |text: Option<String>| {
+            text.map(|t| proto::clean_prompt_text(&t, PROGRAM_TEXT_CHARS))
+                .filter(|t| !t.is_empty())
+        };
+        status.msg = clean(status.msg);
+        status.title = clean(status.title);
         let status = (status.state != agents::ProgramState::Clear).then_some(status);
         let mut meta = lock(&entry.meta);
         let changed = meta.program.as_ref().and_then(program_report)

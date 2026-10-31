@@ -55,8 +55,18 @@ struct EditorLicence {
 nonisolated enum TunnelWeb {
     static let origin = "https://vscode.dev"
 
+    /// The page for a host's tunnel address: vscode.dev only. The host names the address, and
+    /// any other page would show in the editor's place.
     static func url(_ webURL: String, base: String? = LaunchArguments().string(forKey: "testTunnelWebBase")) -> URL? {
-        guard let base, !base.isEmpty, webURL.hasPrefix(origin) else { return URL(string: webURL) }
+        guard webURL.hasPrefix(origin + "/") || webURL.hasPrefix("https://insiders.vscode.dev/") else { return nil }
+        guard let base, !base.isEmpty, webURL.hasPrefix(origin + "/") else { return URL(string: webURL) }
         return URL(string: base + webURL.dropFirst(origin.count))
+    }
+
+    /// The desktop app's link for a tunnel, or nil for anything else the host sends (other
+    /// `vscode:` links reach extensions' URI handlers).
+    static func desktopURI(_ text: String) -> URL? {
+        guard text.hasPrefix("vscode://vscode-remote/tunnel+") else { return nil }
+        return URL(string: text)
     }
 }

@@ -8,7 +8,7 @@ import TerminalRenderer
 /// `snapshot()` is drawn into its frame on top. Debug builds only.
 enum WindowSnapshot {
     static func scheduleIfRequested() {
-        guard let path = UserDefaults.standard.string(forKey: "snapshot") else { return }
+        guard let path = LaunchArguments().string(forKey: "snapshot") else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(UserDefaults.standard.double(forKey: "snapshotDelay").nonZero ?? 4))
             NSApp.activate()

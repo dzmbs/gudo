@@ -93,11 +93,14 @@ async function readBody(request: Request): Promise<Uint8Array | null> {
 }
 
 /**
- * The rate-limit key of a client address: IPv4 as is, IPv6 by its /64 (one subscriber gets a
- * whole /64, so per-address limits would not hold).
+ * The rate-limit key of a client address: IPv4 as is (also IPv4-mapped, which would otherwise
+ * all share `::/64`), IPv6 by its /64 (one subscriber gets a whole /64, so per-address limits
+ * would not hold).
  */
 export function addressKey(ip: string): string {
   if (!ip.includes(":")) return ip;
+  const mapped = /^(?:::|(?:0{1,4}:){5})ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (mapped) return mapped[1];
   const [head, tail = ""] = ip.toLowerCase().split("::");
   const left = head ? head.split(":") : [];
   const right = tail ? tail.split(":") : [];
@@ -110,9 +113,13 @@ export function addressKey(ip: string): string {
     .join(":")}::/64`;
 }
 
-/** Durable Object name of an APNs token's bucket; hashed so the token never names an object. */
+/**
+ * Durable Object name of an APNs token's bucket; hashed so the token never names an object.
+ * One per kind: the alert and activity buckets refill at different rates and sharing one
+ * state would let activity pushes refill the alert budget.
+ */
 async function tokenKey(cap: Cap): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", utf8.encode(`${cap.e}:${cap.t}`));
+  const digest = await crypto.subtle.digest("SHA-256", utf8.encode(`${cap.k}:${cap.e}:${cap.t}`));
   return `token:${hex(new Uint8Array(digest))}`;
 }
 

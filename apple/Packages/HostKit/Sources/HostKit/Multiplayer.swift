@@ -291,6 +291,8 @@ public final class MultiplayerSession {
             case alreadyDecided(by: String)
             /// Revoked: the connection closes.
             case revoked
+            /// Another device paired with this host (the new device's key).
+            case devicePaired(String)
             /// People came or went (by person, not device).
             case arrived([String])
             case left([String])
@@ -415,6 +417,9 @@ public final class MultiplayerSession {
         case .revoked:
             isRevoked = true
             post(.revoked, "Your access to this host was revoked", failure: true)
+        case .devicePaired(let device):
+            Self.log.info("device paired \(device.device.prefix(12), privacy: .public)")
+            post(.devicePaired(device.device), "A new device paired with this host. Not you? Remove it under Devices.", failure: false)
         case .knockAdded(let knock):
             if let index = knocks.firstIndex(where: { $0.knockId == knock.knockId }) {
                 knocks[index] = knock

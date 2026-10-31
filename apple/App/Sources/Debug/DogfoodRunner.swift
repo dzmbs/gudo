@@ -20,7 +20,7 @@ final class DogfoodRunner {
     private static var current: DogfoodRunner?
 
     static func startIfRequested(workspace: Workspace) {
-        guard current == nil, let path = UserDefaults.standard.string(forKey: "dogfood"), !path.isEmpty else { return }
+        guard current == nil, let path = LaunchArguments().string(forKey: "dogfood"), !path.isEmpty else { return }
         let out = UserDefaults.standard.string(forKey: "dogfoodOut")
             ?? NSTemporaryDirectory() + "dogfood-\(Int(Date().timeIntervalSince1970))"
         let runner = DogfoodRunner(scenarioURL: URL(fileURLWithPath: path), outDir: URL(fileURLWithPath: out), workspace: workspace)

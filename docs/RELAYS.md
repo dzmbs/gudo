@@ -116,7 +116,9 @@ again) if a ticket leaks. Access control covers relaying only; QUIC address disc
 7842 answers anyone (it only reports the caller's own address).
 
 Without Docker: `cargo install iroh-relay --version 1.3.0 --features server` and run
-`iroh-relay --config-path iroh-relay.toml` under systemd. For a quick LAN experiment,
+`iroh-relay --config-path iroh-relay.toml` under systemd, with your token in
+`access.shared_token` (the shipped `[""]` makes the relay refuse to start) or in
+`IROH_RELAY_ACCESS_TOKEN`. For a quick LAN experiment,
 `iroh-relay --dev` serves plain HTTP on port 3340 (use `urls = ["http://host:3340"]`).
 
 ## 3. Tests

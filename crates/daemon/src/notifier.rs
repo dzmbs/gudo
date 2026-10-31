@@ -133,6 +133,23 @@ impl Push {
     }
 }
 
+/// Drops the registrations of revoked devices: a revoked device may be lost or stolen, and
+/// must not keep receiving sealed prompts or action tokens.
+pub(crate) fn drop_revoked(core: &Core) {
+    let mut regs = lock(&core.push.regs);
+    let before = regs.len();
+    regs.retain(|r| unhex::<32>(&r.device).is_some_and(|d| !core.mp.device_revoked(DeviceId(d))));
+    if regs.len() != before {
+        core.push.save(&regs);
+    }
+}
+
+/// The registrations to push to now.
+fn targets(core: &Core) -> Vec<Registration> {
+    drop_revoked(core);
+    core.push.registrations()
+}
+
 /// An HTTPS client on rustls/ring with the web roots (reqwest is built without a default
 /// crypto provider, as iroh-relay uses it).
 pub(crate) fn http_client() -> reqwest::Client {
@@ -445,7 +462,7 @@ async fn deliver(core: Arc<Core>, item: AttentionItem) {
     }
     let (kind, buttons) = classify(&core, &item);
     let host = crate::ws::tunnel::hostname();
-    for reg in core.push.registrations() {
+    for reg in targets(&core) {
         if !wants(&reg.prefs, kind) {
             continue;
         }

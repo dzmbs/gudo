@@ -144,12 +144,13 @@ final class CanvasWebView: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         frame.isMainFrame && frame.securityOrigin.protocol == scheme
     }
 
-    /// Whether the canvas may load a navigation: its own bundle, and web frames inside it (a
-    /// scene's embeds). The page itself never leaves the bundle; a link opens in the browser.
+    /// Whether the canvas may load a navigation: its own bundle, and frames inside it (a
+    /// scene's embeds). The page itself never leaves the bundle, not even for a page made from
+    /// a `data:` or `blob:` URL; a link opens in the browser.
     static func policy(for url: URL?, mainFrame: Bool) -> WKNavigationActionPolicy {
         let scheme = url?.scheme?.lowercased() ?? ""
-        if scheme == Self.scheme || scheme == "about" || scheme == "blob" || scheme == "data" { return .allow }
-        if !mainFrame, scheme == "http" || scheme == "https" { return .allow }
+        if scheme == Self.scheme { return .allow }
+        if !mainFrame, ["about", "http", "https", "blob", "data"].contains(scheme) { return .allow }
         return .cancel
     }
 

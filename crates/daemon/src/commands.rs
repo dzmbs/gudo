@@ -99,14 +99,20 @@ impl CommandLog {
                 SemanticPromptKind::OutputStart { command } => {
                     let raw = command.or_else(|| self.typed_command(term, event.pin));
                     let private = raw.as_deref().is_some_and(|c| c.starts_with([' ', '\t']));
-                    let command = raw.map(|c| c.trim().to_owned()).filter(|c| !c.is_empty());
+                    // `133;C;cmdline=` is forgeable by any program: keep only what prints.
+                    let command = raw
+                        .map(|c| {
+                            let c = crate::term::visible(&c);
+                            c.trim().chars().take(MAX_COMMAND_LINE).collect::<String>()
+                        })
+                        .filter(|c| !c.is_empty());
                     self.next_id += 1;
                     self.line.output_started(term, self.next_id);
                     let mark = CommandMark {
                         pane_id: pane,
                         command_id: self.next_id,
                         command,
-                        cwd: term.pwd().map(|p| crate::osc::file_url_path(&p)),
+                        cwd: term.pwd().and_then(|p| crate::osc::cwd_path(&p)),
                         started_at: UnixMillis(now_millis()),
                         at_seq: seq,
                         finished: None,
@@ -294,5 +300,26 @@ mod tests {
         assert_eq!(list[0].rows.prompt, Some(0));
         assert_eq!(list[0].rows.output, Some(1));
         assert_eq!(list[0].rows.end, Some(3));
+    }
+
+    /// Any program can report a command line and directory: what reaches clients, history and
+    /// agents prints as it is.
+    #[test]
+    fn forged_command_lines_and_directories_print_as_they_are() {
+        let mut term = Terminal::new(40, 10).unwrap();
+        term.record_semantic_prompts().unwrap();
+        let mut log = CommandLog::default();
+        let updates = feed(
+            &mut log,
+            &mut term,
+            "\x1b]7;file://h/tmp/a%0Ab\x07\x1b]133;A\x07$ \x1b]133;B\x07\
+             \x1b]133;C;cmdline=make\u{202e}fr- mr\u{202c}\u{e0041} test\x07"
+                .as_bytes(),
+        );
+        let Some(CommandUpdate::Mark(start)) = updates.last() else {
+            panic!("{updates:?}")
+        };
+        assert_eq!(start.command.as_deref(), Some("makefr- mr test"));
+        assert_eq!(start.cwd, None);
     }
 }

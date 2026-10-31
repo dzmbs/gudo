@@ -682,12 +682,17 @@ enum Pasteboard {
         UIPasteboard.general.setItems(
             [[UTType.utf8PlainText.identifier: text]], options: [.expirationDate: Date.now.addingTimeInterval(secretLifetime)])
         #else
-        let board = NSPasteboard.general
+        copySecret(text, to: .general)
+        #endif
+    }
+
+    #if os(macOS)
+    static func copySecret(_ text: String, to board: NSPasteboard) {
         board.clearContents()
         board.setString(text, forType: .string)
         // nspasteboard.org markers: clipboard managers leave it out of their history.
         board.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
         board.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
-        #endif
     }
+    #endif
 }

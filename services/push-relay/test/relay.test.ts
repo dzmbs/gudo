@@ -1,8 +1,9 @@
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { env as cfEnv, exports as cfExports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import vectors from "../../../crates/push/tests/vectors/push-v1.json";
-import { buildApnsRequest, providerJwt, resetJwt } from "../src/apns";
+import { APPROVAL_TTL_S, buildApnsRequest, providerJwt, resetJwt } from "../src/apns";
 import { openCap, sealCap } from "../src/cap";
 import { b64url, concat, hex, unb64url, utf8 } from "../src/encoding";
 import { MAX_BODY, addressKey } from "../src/index";
@@ -388,13 +389,24 @@ describe("push relay", () => {
     const big = "x".repeat(MAX_BODY + 1);
     expect((await call("/v1/register", { method: "POST", body: big })).status).toBe(413);
     // No content-length: a streamed body is cut off at the limit.
-    const stream = new ReadableStream<Uint8Array>({
-      pull(c) {
-        c.enqueue(new Uint8Array(4096));
-      },
-    });
-    const res = await call("/v1/push", { method: "POST", body: stream, duplex: "half" } as RequestInit);
-    expect(res.status).toBe(413);
+    const chunks = (n: number) => {
+      const pulled = { count: 0 };
+      const body = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (pulled.count++ === n) c.close();
+          else c.enqueue(new Uint8Array(4096));
+        },
+      });
+      return { pulled, init: { method: "POST", body, duplex: "half" } as RequestInit };
+    };
+    const streamed = chunks(4);
+    expect((await call("/v1/push", streamed.init)).status).toBe(413);
+    // A declared length over the limit is refused before reading anything.
+    const declared = chunks(4);
+    const init = { ...declared.init, headers: { "content-length": String(4 * 4096) } };
+    expect((await call("/v1/push", init)).status).toBe(413);
+    // (The runtime may read ahead one chunk; reading to the limit takes three.)
+    expect(declared.pulled.count).toBeLessThan(3);
   });
 
   it("refuses header injection and loose types", async () => {
@@ -452,7 +464,18 @@ describe("formats shared with the daemon", () => {
       1_760_000_000_000,
     );
     expect(JSON.parse(apns.body).s).toBe(vectors.payloads[0].sealed);
-    expect(apns.headers["apns-expiration"]).toBe(String(1_760_000_000 + 3600));
+  });
+
+  it("expires approvals with their action token", () => {
+    const req = parseRequest(utf8.encode(vectors.relay_request.body)) as RelayRequest;
+    const cap = { t: TOKEN, e: "production" as const, d: req.daemon, k: "alert" as const, x: 0 };
+    const at = 1_760_000_000;
+    const expiry = (category: RelayRequest["category"]) =>
+      Number(buildApnsRequest(env, cap, { ...req, category }, at * 1000).headers["apns-expiration"]);
+    // An approval held by APNs past its token would offer buttons that can only fail.
+    expect(expiry("approval")).toBe(at + APPROVAL_TTL_S);
+    expect(APPROVAL_TTL_S).toBe(15 * 60);
+    for (const other of ["blocked", "done", "command"] as const) expect(expiry(other)).toBe(at + 3600);
   });
 
   it("opens capabilities sealed with the previous key during a rotation", async () => {
@@ -466,5 +489,222 @@ describe("formats shared with the daemon", () => {
     const a = await providerJwt(env, 1_000_000);
     expect(await providerJwt(env, 1_000_000 + 30 * 60 * 1000)).toBe(a);
     expect(await providerJwt(env, 1_000_000 + 41 * 60 * 1000)).not.toBe(a);
+  });
+});
+
+describe("attacks on the relay", () => {
+  const TTL = 5 * 60 * 1000;
+
+  it("lets exactly one of many concurrent copies of a request through", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    for (let round = 0; round < 10; round++) {
+      const once = await signed(d, { cap, category: "done" });
+      const statuses = await Promise.all(
+        Array.from({ length: 16 }, () => call("/v1/push", once).then((r) => r.status)),
+      );
+      expect(statuses.filter((s) => s === 200), `round ${round}`).toHaveLength(1);
+      expect(statuses.filter((s) => s === 409)).toHaveLength(15);
+    }
+    expect(apnsCalls).toHaveLength(10);
+  });
+
+  it("does not let concurrent requests overdraw a bucket", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const requests = await Promise.all(
+      Array.from({ length: DAEMON_BUCKET.capacity + 10 }, () => signed(d, { cap, category: "done" })),
+    );
+    const statuses = await Promise.all(requests.map((r) => call("/v1/push", r).then((x) => x.status)));
+    expect(statuses.filter((s) => s === 200)).toHaveLength(DAEMON_BUCKET.capacity);
+  });
+
+  it("refuses a replay while the clock crosses the edge of the skew window", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const ts = Date.now();
+    const once = await signed(d, { cap, ts });
+    expect((await call("/v1/push", once)).status).toBe(200);
+    // The skew check sees the last accepted millisecond; the clock moves on before the nonce
+    // lookup.
+    let calls = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (calls++ === 0 ? ts + TTL : ts + TTL + 1));
+    expect((await call("/v1/push", once)).status).toBe(409);
+    expect(apnsCalls).toHaveLength(1);
+  });
+
+  it("keeps a future-dated nonce through cleanup until its request goes stale", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const start = Date.now();
+    const once = await signed(d, { cap, ts: start + TTL - 1000 });
+    expect((await call("/v1/push", once)).status).toBe(200);
+    // Seven minutes on, the cleanup alarm runs; the request is still inside the skew window.
+    vi.spyOn(Date, "now").mockReturnValue(start + 7 * 60 * 1000);
+    const limiter = env.LIMITER.get(env.LIMITER.idFromName(`daemon:${d.id}`));
+    expect(await runDurableObjectAlarm(limiter)).toBe(true);
+    expect((await call("/v1/push", once)).status).toBe(409);
+    expect(apnsCalls).toHaveLength(1);
+  });
+
+  it("accepts the window's edges and nothing beyond", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    for (const [ts, status] of [
+      [now - TTL, 200],
+      [now + TTL, 200],
+      [now - TTL - 1, 401],
+      [now + TTL + 1, 401],
+    ]) {
+      expect((await call("/v1/push", await signed(d, { cap, ts }))).status, String(ts - now)).toBe(
+        status,
+      );
+    }
+  });
+
+  it("refuses any change to a signed body", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const good = await signed(d, { cap });
+    const text = new TextDecoder().decode(good.body as Uint8Array);
+    const parsed = JSON.parse(text);
+    for (const body of [
+      JSON.stringify({ ...parsed, sealed: b64url(crypto.getRandomValues(new Uint8Array(200))) }),
+      JSON.stringify({ ...parsed, category: "done" }),
+      JSON.stringify({ ...parsed, nonce: nonce() }),
+      JSON.stringify({ ...parsed, ts: parsed.ts + 1 }),
+      `${text} `,
+      JSON.stringify(parsed, null, 1),
+    ]) {
+      expect((await call("/v1/push", { ...good, body })).status, body.slice(0, 40)).toBe(401);
+    }
+    expect((await call("/v1/push", { method: "POST", body: good.body })).status).toBe(401);
+    expect(
+      (await call("/v1/push", { ...good, headers: { "x-push-signature": "!!" } })).status,
+    ).toBe(401);
+    expect(apnsCalls).toHaveLength(0);
+  });
+
+  it("refuses a body longer than its content-length claims", async () => {
+    const res = await call("/v1/push", {
+      method: "POST",
+      headers: { "content-length": "10" },
+      body: "x".repeat(MAX_BODY + 1),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("answers malformed JSON of every shape with 400, never 500", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    for (const body of ["null", "[]", '"x"', "1", "true", "{}", '{"v":"1"}']) {
+      expect((await call("/v1/push", { method: "POST", body })).status, body).toBe(400);
+      expect((await call("/v1/register", { method: "POST", body })).status, body).toBe(400);
+    }
+    for (const bad of [
+      { daemon: 1 },
+      { cap: { a: 1 } },
+      { sealed: null },
+      { ts: "1" },
+      { ts: -1 },
+      { ts: 1e300 },
+      { nonce: 7 },
+      { nonce: "AB".repeat(8) },
+      { collapse: "AB" },
+      { collapse: "ａ" },
+      { collapse: "" },
+      { v: 2 },
+    ] as unknown as Partial<RelayRequest>[]) {
+      expect((await call("/v1/push", await signed(d, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(
+        400,
+      );
+    }
+    for (const bad of [
+      { token: ["ab"] },
+      { daemon: 1 },
+      { kind: "admin" },
+      { env: "Production" },
+      { token: `${"ab".repeat(8)}\r\n` },
+    ]) {
+      const body = JSON.stringify({ token: TOKEN, env: "production", daemon: d.id, ...bad });
+      expect((await call("/v1/register", { method: "POST", body })).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect(apnsCalls).toHaveLength(0);
+  });
+
+  it("puts only the relay's own headers on the APNs request", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    expect((await call("/v1/push", await signed(d, { cap, collapse: "ab" }))).status).toBe(200);
+    const [sent] = apnsCalls;
+    expect([...sent.headers.keys()].sort()).toEqual([
+      "apns-collapse-id",
+      "apns-expiration",
+      "apns-priority",
+      "apns-push-type",
+      "apns-topic",
+      "authorization",
+      "content-type",
+    ]);
+    expect(sent.headers.get("apns-topic")).toBe(env.APNS_TOPIC);
+    expect(sent.url).toBe(`https://api.push.apple.com/3/device/${TOKEN}`);
+  });
+
+  it("counts a token's spellings and its daemons as one device", async () => {
+    const token = TOKEN;
+    let limited = false;
+    for (let i = 0; i < ALERT_TOKEN_BUCKET.capacity + 1 && !limited; i++) {
+      const d = await daemon();
+      const { cap } = await register(d, { token: i % 2 ? token.toUpperCase() : token });
+      limited = (await call("/v1/push", await signed(d, { cap, category: "done" }))).status === 429;
+    }
+    expect(limited).toBe(true);
+    expect(apnsCalls).toHaveLength(ALERT_TOKEN_BUCKET.capacity);
+  });
+
+  it("does not let activity pushes refill a device's alert budget", async () => {
+    const d = await daemon();
+    const { cap } = await register(d);
+    const { cap: act } = await register(d, { kind: "activity" });
+    const start = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(start);
+    const alert = async () =>
+      (await call("/v1/push", await signed(d, { cap, category: "done" }))).status;
+    for (let i = 0; i < ALERT_TOKEN_BUCKET.capacity; i++) expect(await alert()).toBe(200);
+    expect(await alert()).toBe(429);
+    // A minute on the alert budget has regained 5; an activity push in between changes nothing.
+    vi.spyOn(Date, "now").mockReturnValue(start + 60_000);
+    const update = await signed(d, {
+      cap: act,
+      push_type: "live_activity",
+      category: undefined,
+      event: "update",
+    });
+    expect((await call("/v1/push", update)).status).toBe(200);
+    let sent = 0;
+    for (let i = 0; i < 10; i++) if ((await alert()) === 200) sent++;
+    expect(sent).toBe(Math.floor(60 * ALERT_TOKEN_BUCKET.refill));
+  });
+
+  it("keys IPv4-mapped addresses by their IPv4 address", async () => {
+    expect(addressKey("::ffff:203.0.113.9")).toBe("203.0.113.9");
+    expect(addressKey("::FFFF:198.51.100.1")).toBe("198.51.100.1");
+    expect(addressKey("0:0:0:0:0:ffff:203.0.113.9")).toBe("203.0.113.9");
+    expect(addressKey("2001:DB8:1:2::5")).toBe(addressKey("2001:db8:1:2:a:b:c:d"));
+    // Mapped clients do not all share one budget.
+    const d = await daemon();
+    const reg = (ip: string) =>
+      call("/v1/register", {
+        method: "POST",
+        headers: { "cf-connecting-ip": ip },
+        body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id }),
+      }).then((r) => r.status);
+    let status = 200;
+    for (let i = 0; i < 25 && status === 200; i++) status = await reg("::ffff:198.51.100.77");
+    expect(status).toBe(429);
+    expect(await reg("198.51.100.77")).toBe(429);
+    expect(await reg("::ffff:198.51.100.78")).toBe(200);
   });
 });

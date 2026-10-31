@@ -23,10 +23,12 @@ import WebKit
 final class DevServerRouting {
     static let shared = DevServerRouting()
 
-    var isEnabled = UserDefaults.standard.string(forKey: "browserProxy") != "NO"
+    var isEnabled = LaunchArguments().string(forKey: "browserProxy") != "NO"
 
     private let router = LoopbackRouter()
     private var hosts: [String: HostRoute] = [:]
+    /// One instance per host's store: two instances on one identifier would not share a proxy.
+    private var stores: [String: WKWebsiteDataStore] = [:]
 
     private final class HostRoute {
         let store: WKWebsiteDataStore
@@ -45,6 +47,34 @@ final class DevServerRouting {
     /// The host's web data store, once one of its dev servers was opened (nil: the default).
     func store(forHost id: String?) -> WKWebsiteDataStore? {
         id.flatMap { hosts[$0]?.store }
+    }
+
+    /// The store for a page on `hostId` (a host opened it, or it shows the host's servers), else
+    /// the user's own. A host's pages never share cookies or storage with another host's or
+    /// with the user's own browsing, whether or not its proxy runs.
+    func dataStore(forHost hostId: String?) -> WKWebsiteDataStore {
+        guard let hostId else { return .default() }
+        if let store = stores[hostId] { return store }
+        let store = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier(hostId))
+        stores[hostId] = store
+        return store
+    }
+
+    /// A host was removed: its pages' cookies and storage go with it.
+    func forgetHost(_ hostId: String) async {
+        let store = stores.removeValue(forKey: hostId)
+        if let route = hosts.removeValue(forKey: hostId) {
+            route.proxy?.stop()
+            router.release(token: route.token)
+        }
+        // Emptied first: the store cannot be deleted while a page still uses it.
+        await (store ?? WKWebsiteDataStore(forIdentifier: Self.storeIdentifier(hostId)))
+            .removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+        do {
+            try await WKWebsiteDataStore.remove(forIdentifier: Self.storeIdentifier(hostId))
+        } catch {
+            AppModel.log.info("a removed host's web data store stays until its pages close: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Connections the in-app browser sent to the host through the proxy or the router.
@@ -146,7 +176,7 @@ final class DevServerRouting {
             route.client = client
         } else {
             route = HostRoute(
-                store: WKWebsiteDataStore(forIdentifier: Self.storeIdentifier(hostId)),
+                store: dataStore(forHost: hostId),
                 token: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(),
                 client: client)
             hosts[hostId] = route

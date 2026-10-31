@@ -809,7 +809,7 @@ private struct SheetContent: View {
         case .sharing:
             SharingSheet()
         case .join:
-            JoinSheet(invite: model.joinInvite.isEmpty ? UserDefaults.standard.string(forKey: "joinInvite") ?? "" : model.joinInvite)
+            JoinSheet(invite: model.joinInvite.isEmpty ? LaunchArguments().string(forKey: "joinInvite") ?? "" : model.joinInvite)
         case .settings:
             SettingsView()
         case .shortcuts:

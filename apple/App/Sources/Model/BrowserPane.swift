@@ -16,6 +16,8 @@ final class BrowserPane: Identifiable {
     let page: any BrowserPageContent
     /// The host the page's `localhost` goes to, if any.
     let hostId: String?
+    /// Its cookies and storage (`DevServerRouting.dataStore(forHost:)`).
+    let dataStore: WKWebsiteDataStore
     /// Where it started (shown until the page has a URL of its own).
     let initialURL: URL
     /// Sees every navigation of the main frame first; true keeps it from loading (a sign-in
@@ -89,6 +91,7 @@ final class BrowserPane: Identifiable {
         initialURL = url
         var configuration = WebPage.Configuration()
         if let dataStore { configuration.websiteDataStore = dataStore }
+        self.dataStore = configuration.websiteDataStore
         BrowserAgentScript.install(in: configuration.userContentController, frames: frames)
         BrowserRecorder.install(in: configuration.userContentController, page: id)
         if popup {
@@ -107,6 +110,7 @@ final class BrowserPane: Identifiable {
     init(id: UUID = UUID(), popupOf opener: BrowserPane, configuration: WKWebViewConfiguration, url: URL?) {
         self.id = id
         hostId = opener.hostId
+        dataStore = configuration.websiteDataStore
         initialURL = url ?? URL(string: "about:blank")!
         // WebKit loads it.
         started = true
@@ -400,13 +404,14 @@ final class BrowserPanes {
     func pane(for member: BrowserMember, app: AppModel) async -> BrowserPane? {
         if let pane = panes[member.id] { return pane }
         guard let url = URL(string: member.url) else { return nil }
-        var store: WKWebsiteDataStore?
         var client: (() throws -> any DaemonWorkspaceAPI)?
         if let hostId = member.hostId, let context = HostContext.host(hostId, app: app) {
             let hub = context.hub
             client = { try hub.client() }
-            store = await DevServerRouting.shared.store(forHost: hostId, client: { try hub.client() })
+            // Starts the host's proxy on its store, so its `localhost` is the host's.
+            _ = await DevServerRouting.shared.store(forHost: hostId, client: { try hub.client() })
         }
+        let store = DevServerRouting.shared.dataStore(forHost: member.hostId)
         if let pane = panes[member.id] { return pane }
         let pane = BrowserPane(id: member.id, url: url, hostId: member.hostId, dataStore: store, popup: popups.contains(member.id))
         if let hostId = member.hostId, let client {
