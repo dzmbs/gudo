@@ -1,0 +1,178 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gudo Authors <noreply@gudo.dev>
+Date: Sat, 31 Oct 2026 08:43:36 +0100
+Subject: [PATCH] kitty: bound every load step by the image storage limit
+
+A load could hold up to max_size (400 MB) at each step regardless of the
+storage limit: about 380 KiB of zlib data (o=z), or chunked loads that never
+end, made the terminal allocate hundreds of MB per load even with a 64 MiB
+image storage limit. Each step (received data, decompressed data, decoded
+pixels) is now capped at the smaller of max_size and the storage limit, and
+zlib output at width x height x bytes-per-pixel when those are known.
+---
+ src/terminal/kitty/graphics_exec.zig    |  6 ++---
+ src/terminal/kitty/graphics_image.zig   | 33 +++++++++++++++++--------
+ src/terminal/kitty/graphics_storage.zig |  8 ++++++
+ 3 files changed, 34 insertions(+), 13 deletions(-)
+
+diff --git a/src/terminal/kitty/graphics_exec.zig b/src/terminal/kitty/graphics_exec.zig
+index 13bdaf142..23767be50 100644
+--- a/src/terminal/kitty/graphics_exec.zig
++++ b/src/terminal/kitty/graphics_exec.zig
+@@ -179,7 +179,7 @@ fn query(
+     // changing image storage.
+     // https://sw.kovidgoyal.net/kitty/graphics-protocol/#querying-support-and-available-transmission-mediums
+     const storage = &terminal.screens.active.kitty_images;
+-    var loading = LoadingImage.init(io, alloc, cmd, storage.image_limits) catch |err| {
++    var loading = LoadingImage.init(io, alloc, cmd, storage.loadingLimits()) catch |err| {
+         encodeError(&result, err);
+         return result;
+     };
+@@ -529,7 +529,7 @@ fn transmitAnimationFrame(
+         io,
+         alloc,
+         cmd,
+-        storage.image_limits,
++        storage.loadingLimits(),
+     ) catch |err| {
+         encodeError(&result, err);
+         return result;
+@@ -1046,7 +1046,7 @@ fn loadAndAddImage(
+             } });
+         }
+ 
+-        break :loading try .init(io, alloc, cmd, storage.image_limits);
++        break :loading try .init(io, alloc, cmd, storage.loadingLimits());
+     };
+ 
+     // We only want to deinit on error. If we're chunking, then we don't
+diff --git a/src/terminal/kitty/graphics_image.zig b/src/terminal/kitty/graphics_image.zig
+index d0e325291..09bf47e6e 100644
+--- a/src/terminal/kitty/graphics_image.zig
++++ b/src/terminal/kitty/graphics_image.zig
+@@ -56,6 +56,12 @@ pub const LoadingImage = struct {
+     /// temporary directory transmission is disabled).
+     temporary_directory: ?[]const u8,
+ 
++    /// The most bytes the load may hold at any step: received data,
++    /// decompressed data and decoded pixels. No more than the image
++    /// storage could keep, so a small compressed payload cannot make
++    /// the terminal allocate far more than it would ever store.
++    max_bytes: usize = max_size,
++
+     pub const FrameContext = struct {
+         /// The frame parameters from the initial a=f command. Chunked
+         /// continuations only contribute payload bytes; all parameters
+@@ -87,6 +93,9 @@ pub const LoadingImage = struct {
+         },
+         shared_memory: bool,
+ 
++        /// The most bytes a load may hold (see LoadingImage.max_bytes).
++        max_bytes: usize = max_size,
++
+         /// Enables all filesystem-related image transmission mediums. `path`
+         /// is the temporary directory to expect files in when files are
+         /// transmitted using said medium.
+@@ -144,6 +153,7 @@ pub const LoadingImage = struct {
+                 .enabled => |d| d.directory,
+                 .disabled => null,
+             },
++            .max_bytes = @min(limits.max_bytes, max_size),
+         };
+ 
+         // Special case for the direct medium, we just add the chunk directly.
+@@ -327,7 +337,7 @@ pub const LoadingImage = struct {
+             expected_size.?
+         else
+             available;
+-        if (data_size > max_size or data_size > available) {
++        if (data_size > self.max_bytes or data_size > available) {
+             return error.InvalidData;
+         }
+ 
+@@ -451,7 +461,7 @@ pub const LoadingImage = struct {
+             // https://sw.kovidgoyal.net/kitty/graphics-protocol/#local-client
+             const size = std.math.cast(usize, t.size) orelse
+                 return error.InvalidData;
+-            if (size > max_size) return error.InvalidData;
++            if (size > self.max_bytes) return error.InvalidData;
+ 
+             // Read exact size
+             const data = reader.readAlloc(alloc, size) catch |err| {
+@@ -463,7 +473,7 @@ pub const LoadingImage = struct {
+             };
+             managed = .fromOwnedSlice(data);
+         } else {
+-            reader.appendRemaining(alloc, &managed, .limited(max_size)) catch {
++            reader.appendRemaining(alloc, &managed, .limited(self.max_bytes)) catch {
+                 log.warn("failed to read image file: {?}", .{buf_reader.err});
+                 return error.InvalidData;
+             };
+@@ -551,8 +561,8 @@ pub const LoadingImage = struct {
+         if (data.len == 0) return;
+ 
+         // If our data would get too big, return an error
+-        if (self.data.items.len + data.len > max_size) {
+-            log.warn("image data too large max_size={}", .{max_size});
++        if (self.data.items.len + data.len > self.max_bytes) {
++            log.warn("image data too large max_bytes={}", .{self.max_bytes});
+             return error.InvalidData;
+         }
+ 
+@@ -661,12 +671,15 @@ pub const LoadingImage = struct {
+                 pixels,
+                 command.Transmission.formatBpp(self.image.format),
+             ) catch break :hint null;
+-            break :hint if (bytes <= max_size) bytes else null;
++            break :hint if (bytes <= self.max_bytes) bytes else null;
+         };
++        // Anything but an animation frame must decompress to exactly
++        // its expected size, so it may not grow past it.
++        const limit = if (self.frame == null) size_hint orelse self.max_bytes else self.max_bytes;
+         const decompressed = wuffs.zlib.decode(
+             alloc,
+             self.data.items,
+-            max_size,
++            limit,
+             size_hint,
+         ) catch |err| switch (err) {
+             error.OutOfMemory => return error.OutOfMemory,
+@@ -687,7 +700,7 @@ pub const LoadingImage = struct {
+         const decode_png_fn = sys.decode_png orelse
+             return error.UnsupportedFormat;
+ 
+-        var limited: LimitedAllocator = .init(alloc, max_size);
++        var limited: LimitedAllocator = .init(alloc, self.max_bytes);
+         const decode_alloc = limited.allocator();
+         const result = decode_png_fn(
+             decode_alloc,
+@@ -701,8 +714,8 @@ pub const LoadingImage = struct {
+         };
+         defer decode_alloc.free(result.data);
+ 
+-        if (result.data.len > max_size) {
+-            log.warn("png image too large size={} max_size={}", .{ result.data.len, max_size });
++        if (result.data.len > self.max_bytes) {
++            log.warn("png image too large size={} max_bytes={}", .{ result.data.len, self.max_bytes });
+             return error.InvalidData;
+         }
+ 
+diff --git a/src/terminal/kitty/graphics_storage.zig b/src/terminal/kitty/graphics_storage.zig
+index a2db22715..357d21534 100644
+--- a/src/terminal/kitty/graphics_storage.zig
++++ b/src/terminal/kitty/graphics_storage.zig
+@@ -364,6 +364,14 @@ pub const ImageStorage = struct {
+         self.total_limit = limit;
+     }
+ 
++    /// The limits for a new load: the allowed mediums, and no more bytes
++    /// than this storage can keep.
++    pub fn loadingLimits(self: *const ImageStorage) LoadingImage.Limits {
++        var limits = self.image_limits;
++        limits.max_bytes = self.total_limit;
++        return limits;
++    }
++
+     /// Returns the next ID to automatically assign to an image that
+     /// was transmitted without an explicit ID (i=). The result is
+     /// never zero (zero means "no ID") and never an ID currently in
