@@ -1,4 +1,5 @@
 import Foundation
+import HostKit
 import Observation
 import PaneLayout
 import TerminalCore
@@ -171,7 +172,7 @@ final class Pane {
 
     private func refreshWorkingDirectory() {
         let pwd = view.surface.terminal.pwd
-        workingDirectory = URL(string: pwd).flatMap { $0.isFileURL ? $0.path : nil } ?? pwd
+        workingDirectory = ProjectNaming.directory(fromOSC7: pwd) ?? ""
     }
 
     private func gridChanged(_ grid: TerminalSurface.Grid) {

@@ -160,7 +160,8 @@ and secrets in that folder. Without it, any `-test…` argument, `-dogfood`, `-s
 tests, dogfood runs and screenshot scripts never touch the user's hosts, replays or Keychain; `-connectionProbe
 YES` exposes each open host's connection identity and dial count to UI tests; `-testSSH user@host[:port]` with `-testSSHKey <path>` or
 `-testSSHPassword <pw>`; `-testTrustHostKeys YES`; `-testInstallHelper YES`; `-testRelay
-disabled`; `-testMirror YES` (core VT mirror for pane text).
+disabled`; `-testMirror YES` (core VT mirror for pane text); DEBUG `-posture
+<folded|flat|book|tabletop>` draws an iPhone Duo posture over the window's real size (§24).
 
 ## 7. Tests
 
@@ -723,14 +724,14 @@ Two tabs side by side, each column its own tab (any host, or a mixed tab), a 1 p
 26 pt header per column. The current tab's column takes the keyboard; the other is dimmed like an
 unfocused split. Columns stay put: a tab picked in the sidebar replaces the current column's,
 focus moving into the other column swaps which is current, and a closed tab's column takes the
-next tab not shown (or offers New Tab, which lands there). It turns on by itself on a phone
-window that is regular both ways (`WidthBucket.isTwoSegment`: a foldable's open inner screen; a
-phone's portrait width and landscape height are both under 600 pt); the user's choice per window
-wins and is restored. Never in compact width.
+next tab not shown (or offers New Tab, which lands there). On an open iPhone Duo with the
+sidebar hidden it turns on by itself, one column per page with the fold between them (§24); the
+user's choice per window wins and is restored, except that a book never runs one column across
+its fold. Never in compact width.
 
 Tests: `CompositeTabTests` (PaneLayout: tree mapping, split with host, ⌘D on a leaf, close,
 answers, strays, host down, dissolve, timeout, close tab, round trip), `HostGroupsTests.
-mixedTabsLeadAndHideTheirCarriers`, `WindowsTests.testTwoColumnsComeOnByThemselvesOnlyOnAnOpenFoldable`,
+mixedTabsLeadAndHideTheirCarriers`, `FoldTests` (§24),
 `MixedTabsUITests` (iPad: `apple/scripts/mixed-ui-test.sh` starts two daemons on 47421/47422 —
 split with host, type in both, ⌘D/⌘W on beta, relaunch restores, kill alpha and beta keeps
 working; Two Columns with this iPad's echo shell).
@@ -1018,7 +1019,34 @@ folder").
 **Model.** A project is a named, coloured group of tabs: `ProjectInfo` (id, name, colour index,
 order, updated) and per tab a `Membership` (project id, rank). Any tab can join: a daemon tab, a
 tab on this device or a plain-SSH host, a window tab (mixed, VS Code, browser). A project exists
-while it has tabs (Chrome); there is no empty project to tend.
+while it has tabs (Chrome), except one made from nothing (New Project): it waits empty in the
+window (`HostGroups.emptyProjects`, saved with it) until its first tab joins, then lives on that
+tab's host like any other.
+
+**Only made on purpose.** A project is made by New Project (⌃⌘N, Safari's New Empty Tab Group;
+File menu, the + menu, the Mac sidebar's footer and empty-space menu, the palette), New Project
+from Tab, a drop onto a tab, or a suggestion's tap; never by anything else. A new terminal joins
+one only when asked for from it: its header's + or New Terminal, or ⌘T while one of its tabs is
+current (it lands right after that tab; `HostGroups.expectNewTab` / `claimNewTabs` take the
+next tab that host makes, a daemon's a round trip later). The joined row lights in the project's
+colour a moment and a collapsed project opens, so the join shows. A host's +, ⌥⌘T and the
+palette's New Tab on Host make loose tabs. Restores never make one either: tab ids of this device
+and of plain-SSH hosts start over each run, so the window keeps their memberships only within the
+run that made them (`ProjectsState.launch`), and a plain-SSH host closed in the window drops
+them (its next connection numbers tabs afresh). Before, a relaunch's first two terminals took the
+ids of an earlier run's grouped tabs and appeared as a project of their own.
+
+**Names.** The repository root the tabs share (the daemon's repositories; on the Mac a `.git`
+above a local tab's folder), else their folder, else "New Project" (`ProjectNaming`). Home and
+every folder above it never name one (the host's own home where known, and `/Users/x`,
+`/home/x`, `/root`… anywhere); OSC 7 directories are read as paths in both `file://` and
+Ghostty's `kitty-shell-cwd://` form (read as a URL, a shell in home once named projects after
+the user). Two projects never share a name: tabs grouped under a folder that already has a
+project join it (one project for the same work; the drop label and the suggestion say "Add to
+app"), and an explicit New Project or a rename to a taken name gets the next number ("app 2").
+A project just made opens its name for typing at once, selected (Finder's New Folder, Safari's
+New Tab Group); Return or leaving keeps it, Escape keeps the name it had. On iPhone an alert
+asks for it.
 
 **Sidebar.** Projects lead (after Agents, Hosts and Needs you), in their order, each a header
 (colour dot, name, tab count when collapsed, + New Terminal) over its tabs in rank order, with a
@@ -1034,22 +1062,29 @@ state colours (`ProjectColor`), so they sit in any theme.
 
 **Gestures.** Drag a tab's row:
 - onto the middle of another row: that row lights in the project's colour (the accent for a loose
-  row; "will group", unlike the insertion gap) and dropping groups them: into the row's project,
-  or a new project named after the shared repository or directory, else "Project N";
+  row; "will group", unlike the insertion gap) with a quiet label saying what the drop does
+  ("Group", "Add to app"), and dropping groups them: into the row's project, or the project
+  named for their shared folder, else a new one (see Names);
 - onto the top or bottom of a row: the rows slide apart and the gap is where it lands; within a
   host section it is a reorder on the host, within a project a new rank, from a host section into
   a project it joins, from a project onto its host's section it leaves (a tab can only land in
   its own host's section: tabs live on their host; anywhere on another host's row groups);
-- onto a project's header: joins at the end (the header lights); a collapsed project springs open
-  after 0.6 s; onto its host's header: leaves its project.
+- onto a project's header or an empty project's "Drag tabs here or press +" line: joins at the
+  end (the header lights); a collapsed project springs open after 0.6 s; onto its host's header:
+  leaves its project.
 Drag a project's header to reorder projects. Menus (sidebar row, strip, compact switcher, Tab
 menu): New Project from Tab, Move to Project ▸, Remove from Project; a project's header: Rename…
-(in place), Colour ▸, New Terminal, Collapse, Ungroup, Close All Tabs. Keyboard: ⌃⇧⌘↑ / ⌃⇧⌘↓
+(in place), Colour ▸, New Terminal, Collapse, Ungroup, Close All Tabs (Delete Project for an
+empty one). Keyboard: ⌃⇧⌘↑ / ⌃⇧⌘↓
 (Tab ▸ Move Tab Up / Down; ⌃⌘arrows already move dividers, Ghostty) move the current tab within
 its section; VoiceOver has Move Up / Move Down on each row. Suggestion: when two or more loose
 tabs share a repository root (the daemon's repositories) or working directory, one quiet row
 offers "Group 3 tabs in app" (one tap; dismissible, remembered per window; never automatic;
-home folders do not count).
+home folders do not count). Before the first project, while there are two tabs to group and no
+suggestion, one small card teaches the gesture ("Group tabs into projects · Drop a tab onto
+another tab, from any host."); its × or any first project retires it for good. Colours are
+handed out far apart in hue (`ProjectInfo.colorOrder`: blue, orange, green, purple…) and are
+the theme's hues barely softened, so neighbouring projects never look alike.
 
 **Persistence and sync.** Daemon tabs keep their membership on the daemon (`LayoutOp::
 SetTabProject` / `PutProject` / `RemoveProject`, pushed as `ServerCtl::Projects` to clients with
@@ -1060,7 +1095,7 @@ stamped after the copy it replaces, so two edits in one millisecond or a host's 
 lose one), ties broken by name. A rename, recolour or reorder of projects goes to every host
 holding a member. Tabs without a daemon that keeps them (this device, plain SSH, window tabs,
 older daemons) keep their membership with the window (`@SceneStorage("projects")`, JSON, and the
-app's last copy), as their tabs do. Guests: the daemon sends `Projects` only to connections with
+app's last copy), as their tabs do (this device's and plain SSH's only within one run, above). Guests: the daemon sends `Projects` only to connections with
 the owner role and refuses the ops for any other role, so a guest sees plain tabs and never the
 owner's grouping. Collapsed projects are per window.
 
@@ -1082,16 +1117,152 @@ on screen does not change, nothing moves twice, and the row fades into its gap.
 
 **iPad, iPhone, Mac.** The sidebar is the same on iPad, a foldable's open screen and the Mac
 (drag with a long press on touch). The compact switcher lists each project as a menu section
-("app · 2 hosts") before the window's and the hosts' loose tabs, with the project items in the
-tab's menu.
+("app · 2 hosts") before the window's and the hosts' loose tabs, each ending in New Terminal in
+it, with the project items in the tab's menu and New Project in the + menu.
 
 Tests: HostKit `ProjectModelTests` (definitions, last writer wins, merge across hosts, planner
 for every gesture, suggestions), `SidebarDropTests` (edges, middle, other hosts, plans applied
 to sections, loose order → session index), `ProjectStoreTests` (an old echo after an optimistic
 move, a refused move, project changes shown at once and reconciled), `HostGroupsProjectTests`
 (drops end to end, ⌘ order, a preview equals what the commit leaves, rename/recolour/reorder),
+`ProjectNamingTests` (home and above, OSC 7 forms, repository roots, unique names),
+`ProjectCreationTests` (new tabs, restores and reconnects never make or fill one; ⌘T/+ joins;
+same-named grouping joins; empty projects),
 `DaemonIntegrationTests.projectsComeBackFromTheDaemon` (a real daemon keeps them for the next
 connection); App `ProjectSidebarTests` (the list while dragging is the list after the drop,
-grouping, keys); snapshots `MacSnapshotTests.testProjects` (frame sequences of a reorder, a drop,
+grouping, ⌘T in and out of a project, New Project, the drop label, keys); snapshots `MacSnapshotTests.testProjects` (frame sequences of a reorder, a drop,
 "will group", a row joining another project) and `TouchSnapshotTests`; daemon and proto tests in
 DAEMON.md.
+
+## 24. Foldable (iPhone Duo)
+
+
+### Reading the fold
+
+iOS has no posture value (Apple DTS). The window reads two things, both public iOS 27.1 API,
+through `FoldProbe` (`Windows/FoldProbe.swift`). It is a UIKit view that fills the window, so its
+coordinates are the window's.
+
+- **The hinge.** `UIHingeInteraction` calls back with the first state and every change. Its
+  `UIHinge.Status` and `angle` become `HingeReading`; no update (or a nil hinge) means no foldable.
+- **The fold.** `reservedRegions(kind: .division, options: .includeInactive)`, read in
+  `updateConstraints()` so UIKit runs it again whenever the region moves. Inactive regions too, so
+  a flat screen still says where its fold is.
+
+`FoldGeometry` (`Model/Fold.swift`, plain values, no UIKit) turns those into a posture:
+
+| Posture | Rule |
+|---|---|
+| `none` | no hinge (iPhone, iPad, Mac) |
+| `folded` | status closed; or partly open, or unknown, with no fold in a phone-width window (the cover, half-closed) |
+| `flat` | status fully open; or unknown on a regular-width window |
+| `book` | partly open with an active division taller than wide (the fold runs top to bottom) |
+| `tabletop` | partly open with an active division wider than tall (laptop) |
+
+The angle is kept, but nothing is laid out by it: Apple calls its rate and precision system policy.
+
+### Layout
+
+`FoldLayout.plan` maps the fold to one of three layouts. `WindowModel.foldLayout` adds two rules:
+an external display's copy and any compact-width window always get `standard`.
+
+- **`standard`.** Whatever the window's width gives, as before. Used on the cover, in a Split View
+  half (the fold lies outside the window), and on a flat inner screen held tall (Apple: scrolling
+  content may cross a flat fold).
+- **`pages(leading:gutter:)`.** A fold running top to bottom, open flat or as a book.
+  - The left page ends at the fold's band. The band is the division frame with its margins, or
+    12 pt over a flat fold (`flatGutter`); the right page starts after it.
+  - Sidebar shown: the sidebar is the left page, exactly as wide, with no resize divider. The tab
+    is the right page.
+  - Sidebar hidden: Two Columns, one tab per page. On by default flat (the user's choice per window
+    holds); always on in a book, so one column never runs under an active fold. Turning Two
+    Columns on gives the left page to a tab (the sidebar hides).
+  - The tab strip gives way to each page's header, so no chip sits on the crease.
+  - A flat band shows the split divider's line down its middle; a book's crease is its own divider.
+- **`deck(top:gutter:)`.** A fold running across, partly open.
+  - The tab is the upper screen, without the sidebar.
+  - `TabletopDeck` is the lower screen: the Inbox (approve, deny and reply inline), with a Keyboard
+    button that gives the focused pane the keyboard.
+  - The upper screen ignores the keyboard's safe area. The keyboard rises over the deck only, so
+    the terminal never reflows for it.
+
+A page or deck is used only if both sides hold at least a phone (320 pt pages, 200 pt deck
+halves); otherwise the window stays `standard`.
+
+**Placement.** Views place the fold against their own frame in window points:
+- `WorkspaceView.regular` measures the window's frame, which its content cannot change;
+- `FoldPages` (Two Columns) uses a `GeometryReader`.
+
+So a leading vertical bar or inset moves the content, never the fold. An earlier version measured
+the view's own origin; once its content overflowed, the two fed each other and the pages ran to
+2700 pt.
+
+### Continuity
+
+Folding is a size and trait change, not a teardown (Apple DTS): the window model, workspaces,
+panes and their terminal views live on.
+
+- **Nothing rebuilt.** `updateFold` animates a layout change with `DS.Motion.fold` (0.4 s; none
+  under Reduce Motion). Every layout keeps its views in place: the sidebar's width, an optional
+  band, an optional deck. Two Columns' children keep their slots whether or not there is a fold.
+- **One reflow.** `quietLayoutResizes(for:)` holds the grids through the animation, so each pane
+  resizes once when it settles. The cols × rows overlay stays quiet for the animation plus the
+  resize's round trip.
+- **Same pane, same text.** The tab, focused pane, scrollback, cursor and the key bar's per-pane
+  drafts (keyed by the pane's view) carry over. Two Columns keeps its tabs.
+- **Hinge alone, no reflow.** An angle change that leaves the layout as it was does nothing.
+
+### Input across the fold
+
+- **Pages.** The key bar (the terminal's input accessory, in the keyboard's window) keeps to the
+  page under the focused terminal (`FoldProbe.page(containing:)`, `KeyBar.foldPage()`). No key
+  sits in the crease and the keys stay under the text they type into. Focus moving to the other
+  page moves the bar with it.
+- **Deck.** The keyboard and key bar sit on the lower screen; the terminal stays readable above.
+- **Hardware only.** How the system keyboard splits on a half-folded Duo, and where it docks
+  relative to the fold.
+
+### Drag between pages
+
+- A column's header drags (as a tab) onto the other page's header: the two trade places.
+- Any tab dropped on a page's header shows there and takes the keyboard
+  (`WindowModel.place(_:inLeftColumn:)`).
+- Within a page, dragging a tab onto a pane's edge merges it there, as before (`TabDrop`).
+
+### Test hooks
+
+DEBUG only; the simulator folds only by hand in Device Hub.
+- `-posture <none|folded|flat|book|tabletop>` at launch, or the Darwin notification
+  `dev.unnamed.debug.posture.<name>` at run time (`DebugPostures`;
+  `xcrun simctl spawn <udid> notifyutil -p …`; `real` returns to the device's hinge).
+- Either feeds `FoldGeometry.simulated` (the fold through the window's middle, a 24 pt band when
+  partly open) through the same path as the real API.
+- `-windowProbe YES` adds `posture`, `fold` (layout) and `hinge` to the probe's JSON.
+- Real inner-screen sizes: `xcrun devicectl device appResize start --device <udid>
+  --preferred-size 951x669` (or `669x951`; `appResize set` resizes it).
+
+### Tests
+
+- **`FoldTests`** (unit, any simulator):
+  - posture from hinge and direction;
+  - the cover, a Split View half and an unknown hinge;
+  - each posture's layout;
+  - the band covers the fold, and content starts outside it;
+  - a fold too close to an edge;
+  - placement relative to the view;
+  - Two Columns per posture, and a book never running one column across;
+  - a compact window keeps the phone layout;
+  - dropping tabs on pages;
+  - a full fold cycle keeping the tab, focus, pane objects and columns;
+  - only a layout change holds the grids.
+- **`DuoUITests`** (iOS, on an iPhone Duo simulator):
+  - the closed Duo's real `UIHingeInteraction` reports `closed`, read as `folded` on the cover;
+  - folding through every posture keeps the tab, the pane, its output and its size.
+
+**Hardware only:**
+- division margins (crease width) and when they turn active;
+- the system's fold animation against ours;
+- vertical bars on the wide inner screen;
+- the split keyboard;
+- 50/50 Split View;
+- touch at the crease.

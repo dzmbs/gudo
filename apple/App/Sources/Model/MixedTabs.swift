@@ -366,24 +366,35 @@ extension WindowModel {
 
     // MARK: Two Columns
 
-    /// Two Columns is on: the user's choice for this window, else on by itself on a foldable's
-    /// open inner screen. Never in compact width, and never on an external display's copy.
+    /// How this window uses its fold: never on an external display's copy, and never in compact
+    /// width, where the phone layout has one screen (the cover, a Split View half).
+    var foldLayout: FoldLayout {
+        isPresentation || widthBucket == .compact ? .standard : FoldLayout.plan(fold)
+    }
+
+    /// Two Columns is on: the user's choice for this window, else on by itself while an open
+    /// foldable's pages hold a tab each (the sidebar hidden; shown, it is the left page). A book
+    /// always keeps its pages apart: a column never runs under an active fold. Never in compact
+    /// width, nor on the deck of a half-folded screen.
     var isTwoColumns: Bool {
         guard !isPresentation, widthBucket != .compact else { return false }
-        return twoColumnsChoice ?? WidthBucket.isTwoSegment(width: windowSize.width, height: windowSize.height, isPhone: Self.isPhone)
+        switch foldLayout {
+        case .pages:
+            if isSidebarShown { return false }
+            return fold.posture == .book ? true : twoColumnsChoice ?? true
+        case .deck:
+            return false
+        case .standard:
+            return twoColumnsChoice ?? false
+        }
     }
 
-    static var isPhone: Bool {
-        #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
-        #else
-        false
-        #endif
-    }
-
-    /// View ▸ Two Columns.
+    /// View ▸ Two Columns. Across a fold the sidebar is the left page: turning columns on there
+    /// gives that page to a tab.
     func toggleTwoColumns() {
-        twoColumnsChoice = !isTwoColumns
+        let on = !isTwoColumns
+        twoColumnsChoice = on
+        if on, case .pages = foldLayout, isSidebarShown { isSidebarShown = false }
         syncColumns()
     }
 
@@ -398,6 +409,22 @@ extension WindowModel {
     var validPairedTab: TabRef? {
         guard let pairedTab, pairedTab != currentTab, groups.tabs.contains(pairedTab) else { return nil }
         return pairedTab
+    }
+
+    /// A tab dropped on a column (across a fold: onto a page). The other column's own tab trades
+    /// places with it; any other tab takes that column and the keyboard.
+    func place(_ ref: TabRef, inLeftColumn left: Bool) {
+        guard let columns, groups.tabs.contains(ref) else { return }
+        let target = left ? columns.left : columns.right
+        let other = left ? columns.right : columns.left
+        guard ref != target else { return }
+        if ref == other {
+            currentColumnIsLeft.toggle()
+            return
+        }
+        if left != currentColumnIsLeft { pairedTab = ref }
+        focus(ref)
+        syncColumns()
     }
 
     /// The empty column's New Tab: the tab lands in that column.
@@ -444,14 +471,5 @@ extension WindowModel {
             let after = all.indices.map { all[(start + 1 + $0) % all.count] }
             pairedTab = after.first { $0 != current }
         }
-    }
-}
-
-extension WidthBucket {
-    /// A phone window regular both ways is a foldable's open inner screen (a phone's portrait
-    /// width and landscape height are both under the boundary): two phone-width columns fit,
-    /// one each side of the fold.
-    static func isTwoSegment(width: Double, height: Double, isPhone: Bool) -> Bool {
-        isPhone && width >= boundary && height >= boundary
     }
 }

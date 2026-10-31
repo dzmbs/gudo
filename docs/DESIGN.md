@@ -142,6 +142,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `indicator` | spring 0.3 / 0.8 | badges, status glyphs | Ghostty `KeyStateIndicator` |
 | `bell` | easeInOut 0.3 s | bell border | Ghostty |
 | `panel` | smooth 0.35 s | panels, tab style switch | — |
+| `fold` | smooth 0.4 s | the iPhone Duo's layout moving to a new posture (pages parting, the deck rising); ends on time so the grids reflow once | — |
 | resize overlay | visible 750 ms after the last change | cols × rows | Ghostty `resize-overlay-duration` |
 | `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from below, grown from 0.9, a 4 pt blur | — |
 | `menu` | spring 0.3 / 0.86 | menus, popovers, the host switcher's highlight | — |
@@ -212,9 +213,10 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - Layout by window width, never by device (`WidthBucket`): under 600 pt the compact layout (one
   pane, the tab switcher, the floating tab bar), from 600 pt the sidebar with splits; 12 pt of
   hysteresis. An iPhone in portrait, Slide Over, a third or an 11" half of an iPad and narrow
-  Stage Manager windows are compact; an iPhone in landscape, a foldable's inner screen, iPad mini
-  and wider windows are regular. Crossing the boundary keeps the tab, the focused pane and its
-  scroll position, and never shows the cols × rows overlay.
+  Stage Manager windows are compact; an iPhone in landscape, the iPhone Duo's inner screen, iPad
+  mini and wider windows are regular. Crossing the boundary keeps the tab, the focused pane and
+  its scroll position, and never shows the cols × rows overlay. On the iPhone Duo the fold
+  arranges a regular window further (Foldable, below).
 - Every window is its own (iPad scenes, Stage Manager, Mac windows): New Window (⌘N) opens the
   same hosts on the same tab; tab and host context menus have Open in New Window
   (`macwindow.badge.plus`); on iPad a tab dragged out of the window becomes a window.
@@ -345,6 +347,58 @@ A Liquid Glass tab bar: Terminal · Agents (badge) · Hosts; it minimizes on scr
 is one pane full screen under a 36 pt bar on the terminal background: connection dot, tab title
 with ▾ (switcher menu with tab count), pane switcher when the tab is split, palette, new tab.
 Settings is in Hosts' toolbar.
+
+### Foldable (iPhone Duo)
+
+Each posture has a job. The posture is read from the hinge and the fold's division region
+adjustments over rearrangement, nothing interactive under the fold.
+
+| Posture | Screen | Job | Layout |
+|---|---|---|---|
+| **Closed** | cover, 466 × 678 | glance and act: which agent needs you, approve, a quick reply, a key or two | the iPhone layout. The system's vertical bar on the trailing edge carries Terminal · Agents (badge) · Hosts; the terminal keeps the rest of the width. |
+| **Open flat, wide** | inner, 951 × 669 | the iPad-class workspace | pages: the sidebar is the left page (projects, agents, tabs; rows get the room for their second lines), the tab the right. With the sidebar hidden, two tabs, one per page (Two Columns). A 12 pt band with a split divider down its middle sits over the fold. |
+| **Book** (partly open, fold top to bottom) | inner, held wide | list or Inbox on one page, the session on the other | the same pages, so opening into a book does not reflow. The band widens to the division's margins and its line goes, since the crease is the divider. Two tabs never share one page across the fold. |
+| **Laptop / tabletop** (partly open, fold across) | inner, held tall | read above, act below | the tab fills the upper screen, without the sidebar. The lower screen is the deck: the Agents list with Approve · Deny · Reply under the thumbs, and a Keyboard button. The keyboard and key bar rise over the deck only, so the terminal above never reflows. |
+| **Open flat, tall** | inner, 669 × 951 | a tall iPad-mini | the standard sidebar layout. A flat fold is no boundary for scrolling text (HIG); no control sits on it. |
+
+**The fold's band.** Nothing is drawn over it but the window's base colour. Its width is the
+division's frame with its margins while partly open (the device's own value), 12 pt over a flat
+fold. Splits live inside a page, so no split divider can land on the crease. Pages are the
+hardware's halves, not resizable: no divider handle on the fold (HIG: split views settle at
+50/50). A page holds at least a phone (320 pt) or the window stays whole.
+
+**Continuity.**
+- Folding, unfolding, opening into a book and standing it up keep the tab, the focused pane, its
+  scroll position, the cursor and the composer draft.
+- The views move rather than being rebuilt: the sidebar's width animates into the page and the
+  deck rises from below in one `fold` animation.
+- The grids reflow once as it settles. No cols × rows overlay, no blank frame
+  (`snaps/duo/transitions`).
+- Under Reduce Motion the layout changes at once.
+
+**Input across the fold.**
+- Pages: the key bar keeps to the page under the focused terminal, never across the crease, and
+  follows focus to the other page.
+- Deck: keyboard, key bar, composer and the agents' verbs are all on the lower screen.
+
+**Drag between pages.**
+- A page's header is a handle: drag it onto the other page and the two trade places.
+- Drop any tab on a page's header to show it there.
+
+**Worth adding, not yet built.** Each needs hardware to tune.
+- *Cover glance on folding.* Closing with an agent blocked could bring its request forward on the
+  cover. It must never move the pane you were typing in (continuity wins), so it would be the
+  existing agent toast, not a switch.
+- *Cover actions in the system bar.* Our 36 pt terminal bar is our own, so it stays horizontal on
+  the cover. Its actions (switcher, palette, New) could join the system's vertical bar
+  (`axisBehavior .verticalPreferred`) and give the terminal those rows back.
+- *Deck as a trackpad.* In tabletop, a drag on the deck's empty area could move the terminal's
+  cursor and selection above, like the keyboard's own trackpad.
+
+**Rejected.**
+- Anything driven by the hinge angle: Apple calls its rate and precision policy.
+- Approving by folding: an action no one can see happening.
+- Opting out of vertical bars: Apple asks not to, and our bars follow the system.
 
 ### Welcome / empty
 

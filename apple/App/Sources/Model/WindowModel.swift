@@ -85,6 +85,11 @@ final class WindowModel {
     @ObservationIgnored var draggedTab: TabRef?
     /// What a drag over the sidebar would do (observed by its rows).
     @ObservationIgnored let sidebarDrag = SidebarDragState()
+    /// The project whose name is being typed in place (just made, or Rename…).
+    var namingProject: String?
+    /// A tab that just joined a project from its + or ⌘T: its row lights a moment.
+    var joinedTab: TabRef?
+    @ObservationIgnored var followsJoins = false
     /// Each Files leaf's place, kept here so a leaf rebuilt by a split or a move keeps it.
     @ObservationIgnored var filesNavigators: [UUID: FilesNavigator] = [:]
     var isPaletteShown = false {
@@ -115,11 +120,14 @@ final class WindowModel {
 
     /// The grids about to change follow an animated layout change, not a resize the user is
     /// making: no cols × rows overlay counting through every frame of it.
-    func quietLayoutResizes() {
-        for workspace in workspaces.values { workspace.layoutChangeUntil = .now + .milliseconds(700) }
+    func quietLayoutResizes(for duration: Double = DS.Motion.sidebarDuration) {
+        // The animation, then the resize's round trip to the pane.
+        let quiet = ContinuousClock.now + .seconds(duration) + .milliseconds(700)
+        for workspace in workspaces.values { workspace.layoutChangeUntil = max(workspace.layoutChangeUntil, quiet) }
         // The terminals resize through the animation: their grids change once, as it settles.
-        TerminalSurface.holdGrids(for: .seconds(DS.Motion.sidebarDuration))
+        TerminalSurface.holdGrids(for: .seconds(duration))
     }
+
     var isSearchShown = false
     var searchNeedle = "" {
         didSet { if searchNeedle != oldValue { updateSearchCount() } }
@@ -192,11 +200,26 @@ final class WindowModel {
     var activeMixedTab: TabId? {
         didSet { if activeMixedTab != oldValue { reportViews() } }
     }
-    /// Two Columns: the user's choice for this window; nil follows the window's shape (on for a
-    /// foldable's open inner screen, `WidthBucket.isTwoSegment`).
+    /// Two Columns: the user's choice for this window; nil follows the fold (on while the pages
+    /// of an open foldable hold a tab each, `FoldLayout.pages`).
     var twoColumnsChoice: Bool?
-    /// The window's size (`WindowRoot` measures it): automatic Two Columns.
+    /// The window's size inside its safe area (`WindowRoot` measures it).
     var windowSize = CGSize.zero
+    /// The hinge and where the fold crosses this window, in the whole window's points
+    /// (`FoldProbe`); no hinge off a foldable.
+    var fold = FoldGeometry() {
+        didSet {
+            guard FoldLayout.plan(fold) != FoldLayout.plan(oldValue) else { return }
+            quietLayoutResizes(for: DS.Motion.foldDuration)
+        }
+    }
+    #if DEBUG
+    /// `-posture <name>` or the `DebugPostures` notification: a posture the simulator cannot fold
+    /// to (it moves the hinge only by hand), drawn over the window's real size.
+    var debugPosture: FoldPosture? = LaunchArguments().string(forKey: "posture").flatMap(FoldPosture.init(rawValue:)) {
+        didSet { updateFold(debugPosture.map { .simulated($0, in: fold.windowSize) } ?? FoldGeometry(windowSize: fold.windowSize)) }
+    }
+    #endif
     /// Two Columns: the tab in the column without focus, and which column has the current tab.
     var pairedTab: TabRef?
     var currentColumnIsLeft = true
@@ -537,6 +560,11 @@ final class WindowModel {
     /// ⌘T (the current host), ⌥⌘T's choice or a group's +: a new tab on that host. Where this
     /// device has no shell (iPhone, iPad) a new tab goes to an open host, else Add Host.
     func newTab(onGroup id: String? = nil) {
+        // ⌘T from a project's tab: the new terminal joins that project, next to it.
+        if id == nil, let current = currentTab, let project = groups.project(of: current) {
+            newTab(inProject: project.id)
+            return
+        }
         guard let host = groups.newTabHost(preferred: id ?? currentGroupId) else {
             if let id, id != HostGroups.localId, groups.group(id) != nil {
                 // A host still connecting: show it; the tab comes with its first layout.

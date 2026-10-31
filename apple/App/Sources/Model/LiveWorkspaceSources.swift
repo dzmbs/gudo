@@ -87,7 +87,12 @@ enum ScreenError {
             }
         }
         if let error = error as? MultiplayerError {
-            return String(describing: error)
+            switch error {
+            case .Forbidden(let message): return "Not allowed: \(message)"
+            case .NotFound(let message): return "Not found: \(message)"
+            case .Invalid(let message), .Conflict(let message), .Failed(let message): return message
+            case .Disconnected: return "The host is not connected. It will resume when it is back."
+            }
         }
         if let error = error as? HostError { return error.localizedDescription }
         return SshErrorText.describe(error)

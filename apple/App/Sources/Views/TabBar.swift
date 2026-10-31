@@ -22,6 +22,37 @@ struct TabBar: View {
     @State private var chipWidth: CGFloat = 0
 
     var body: some View {
+        let active = model.destination == .terminal ? model.currentTab : nil
+        HStack(spacing: 0) {
+            // More tabs than the strip holds scroll (Safari) instead of widening the window.
+            ViewThatFits(in: .horizontal) {
+                chips
+                ScrollView(.horizontal, showsIndicators: false) { chips }
+            }
+            NewTabButton(workspace: workspace)
+                .padding(.leading, DS.Space.xs)
+        }
+        .buttonStyle(.bar)
+        .labelStyle(.iconOnly)
+        .padding(.horizontal, DS.Space.row)
+        .frame(height: DS.Size.tabStrip)
+        .background(DS.Palette.base)
+        .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
+        // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+        .animation(DS.Motion.quick, value: active)
+        .onHover { inside in
+            isPointerInside = inside
+            if !inside, frozenWidth != nil { withAnimation(DS.Motion.quick) { frozenWidth = nil } }
+        }
+        .onChange(of: model.groups.tabs.count) { old, new in
+            if new < old, isPointerInside, chipWidth > 0 { frozenWidth = chipWidth }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tab-bar")
+    }
+
+    @ViewBuilder private var chips: some View {
         let groups = model.groups.groups
         let all = model.groups.tabs
         let active = model.destination == .terminal ? model.currentTab : nil
@@ -52,27 +83,7 @@ struct TabBar: View {
                 }
             }
             if frozenWidth != nil { Spacer(minLength: 0) }
-            NewTabButton(workspace: workspace)
-                .padding(.leading, DS.Space.xs)
         }
-        .buttonStyle(.bar)
-        .labelStyle(.iconOnly)
-        .padding(.horizontal, DS.Space.row)
-        .frame(height: DS.Size.tabStrip)
-        .background(DS.Palette.base)
-        .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
-        // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
-        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-        .animation(DS.Motion.quick, value: active)
-        .onHover { inside in
-            isPointerInside = inside
-            if !inside, frozenWidth != nil { withAnimation(DS.Motion.quick) { frozenWidth = nil } }
-        }
-        .onChange(of: all.count) { old, new in
-            if new < old, isPointerInside, chipWidth > 0 { frozenWidth = chipWidth }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("tab-bar")
     }
 }
 
