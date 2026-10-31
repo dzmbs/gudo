@@ -245,12 +245,29 @@ struct InboxView: View {
 
     private func row(_ item: AgentItem) -> some View {
         let isFocused = focused == item.id
-        return InboxRow(
+        let approval = feed.approval(item.id)
+        let options = feed.approvalOptions(item.id)
+        let rules = feed.autoApprovals(item.id)
+        let rowActions = actions(item)
+        let key = InboxRowKey(
+            item: item, approval: approval, options: options, rules: rules, actions: rowActions, isFocused: isFocused,
+            isEditing: editing == item.id)
+        return EquatableRow(key: key) {
+            rowContent(item, approval: approval, options: options, rules: rules, actions: rowActions, isFocused: isFocused)
+        }
+        .equatable()
+    }
+
+    private func rowContent(
+        _ item: AgentItem, approval: ApprovalContext?, options: AgentApprovalOptions?, rules: [AgentAutoApproval],
+        actions rowActions: RowActions, isFocused: Bool
+    ) -> some View {
+        InboxRow(
             item: item,
-            approval: feed.approval(item.id),
+            approval: approval,
             claim: { feed.claim(item.id, $0) },
-            options: feed.approvalOptions(item.id),
-            rules: feed.autoApprovals(item.id),
+            options: options,
+            rules: rules,
             isFocused: isFocused,
             isEditing: Binding(get: { editing == item.id }, set: { editing = $0 ? item.id : nil }),
             open: { open(item) },
@@ -273,7 +290,7 @@ struct InboxView: View {
                 }
             })
             .id(item.id)
-            .listRowActions(actions(item), name: item.title) { action in
+            .listRowActions(rowActions, name: item.title) { action in
                 perform(action, on: item)
             } menu: {
                 Button(item.isCommand ? "Copy Command" : "Copy Prompt", systemImage: "doc.on.doc") { copy(item.prompt) }
@@ -560,6 +577,28 @@ private struct InboxFilterBar: View {
 }
 
 /// One agent: status glyph, agent and where it runs, age, prompt, then what it needs.
+/// What an Inbox row shows. Rows take their actions as closures, which SwiftUI cannot compare,
+/// so without this every visible row re-rendered on every feed update.
+private struct InboxRowKey: Equatable {
+    var item: AgentItem
+    var approval: ApprovalContext?
+    var options: AgentApprovalOptions?
+    var rules: [AgentAutoApproval]
+    var actions: RowActions
+    var isFocused: Bool
+    var isEditing: Bool
+}
+
+/// Re-renders its content only when `key` changes (its own observed reads still update it).
+private struct EquatableRow<Key: Equatable, Content: View>: View, Equatable {
+    let key: Key
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    static func == (a: Self, b: Self) -> Bool { a.key == b.key }
+}
+
 private struct InboxRow: View {
     let item: AgentItem
     /// The session's approval rules as they apply here (multiplayer).

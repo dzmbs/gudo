@@ -124,6 +124,19 @@ final class AppStressTests: XCTestCase {
         XCTAssertEqual(made, tabs, "every tab's pane is made, a few per turn")
     }
 
+    /// The sidebar asks for project suggestions on every render: each tab's folder used to
+    /// re-resolve every host's tabs, quadratic in tabs (most of an Inbox-flood frame at 500).
+    func testProjectSuggestionsStayCheapWithManyTabs() async throws {
+        let host = try StressHost(id: "stress-suggest", tabs: 500, projects: 0)
+        let (model, window) = try await openWindow(on: host, tabs: 500)
+        let start = ContinuousClock.now
+        for _ in 0..<5 { _ = model.projectSuggestions }
+        let elapsed = (ContinuousClock.now - start) / 5
+        print("stress suggestions over 500 tabs: \(elapsed)")
+        await close(model, window, host)
+        XCTAssertLessThan(elapsed, .milliseconds(30), "\(elapsed) per call")
+    }
+
     func testSidebarUnderAgentChurn() async throws {
         let tabs = tabCount, seconds = duration
         let host = try StressHost(id: "stress-sidebar", tabs: tabs, projects: stress ? 50 : 12)
