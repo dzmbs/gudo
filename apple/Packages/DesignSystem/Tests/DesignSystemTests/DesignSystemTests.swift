@@ -1,6 +1,22 @@
 import Testing
 @testable import DesignSystem
 
+/// A keyboard slide right after a resize (an app coming back to the front) hides the overlay
+/// instead of leaving the first size on screen for good.
+@Test func resizeOverlayHidesOnASuppressedChange() {
+    var state = ResizeOverlayState(ready: true)
+    let first = state.change(to: GridSize(cols: 51, rows: 25), mode: .afterFirst, suppressed: false)
+    #expect(!first, "the first size")
+    let resized = state.change(to: GridSize(cols: 51, rows: 24), mode: .afterFirst, suppressed: false)
+    #expect(resized && state.visible)
+    let keyboard = state.change(to: GridSize(cols: 51, rows: 20), mode: .afterFirst, suppressed: true)
+    #expect(!keyboard && !state.visible)
+    let never = state.change(to: GridSize(cols: 50, rows: 20), mode: .never, suppressed: false)
+    #expect(!never)
+    let always = state.change(to: GridSize(cols: 40, rows: 20), mode: .always, suppressed: false)
+    #expect(always)
+}
+
 @Test func themeCatalogLoadsGhosttyThemes() {
     #expect(ThemeCatalog.all.count > 400)
     #expect(ThemeCatalog.all.allSatisfy { $0.palette.count == 16 })
