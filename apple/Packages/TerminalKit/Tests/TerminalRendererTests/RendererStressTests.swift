@@ -154,6 +154,40 @@ import Testing
         #expect(worst < 0.2, "worst frame \(worst * 1000) ms")
     }
 
+    /// Panes that cost more main-thread time than the share drop frames, the focused one last,
+    /// and render again once time has passed: the main thread is never all rendering.
+    @Test func renderBudgetLeavesTheMainThreadTimeAndPrefersTheFocusedPane() {
+        var budget = RenderBudget()
+        var now = 100.0
+        var busy = 0.0
+        // 16 flooding panes at 60 Hz, 5 ms each: 480 ms of work asked for per second.
+        for _ in 0..<600 {
+            for pane in 0..<16 where budget.mayRender(focused: pane == 0, now: now) {
+                budget.spend(0.005)
+                busy += 0.005
+            }
+            now += 1.0 / 60
+        }
+        #expect(busy / 10 <= 0.5 + 0.01)
+        #expect(busy / 10 >= 0.45)
+
+        // One huge pane (140 ms frames): it renders, then yields the time back.
+        var focused = RenderBudget()
+        now = 0
+        var frames = 0
+        for _ in 0..<600 {
+            if focused.mayRender(focused: true, now: now) {
+                focused.spend(0.14)
+                now += 0.14
+                frames += 1
+            }
+            now += 1.0 / 120
+        }
+        #expect(frames > 0)
+        #expect(Double(frames) * 0.14 / now <= 0.55)
+        #expect(!focused.mayRender(focused: false, now: now) || focused.mayRender(focused: true, now: now))
+    }
+
     /// Endless distinct clusters (random combining marks) and glyphless codepoints keep the
     /// lookup caches bounded.
     @Test func lookupCachesStayBounded() {

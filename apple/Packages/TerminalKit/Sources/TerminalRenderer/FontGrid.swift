@@ -202,18 +202,29 @@ final class FontGrid {
     ///     that is not a symbol; nil means `span`.
     func glyph(for scalars: [UInt32], style: FontStyle, span: Int, maxSpan: Int? = nil) -> RenderedGlyph? {
         guard let base = scalars.first else { return nil }
+        // Hottest path: narrow ASCII, by index (most cells of most screens; ASCII is never a symbol,
+        // so `maxSpan` does not change its glyph).
+        let asciiIndex = scalars.count == 1 && base < 128 && span == 1 ? style.rawValue << 7 | Int(base) : nil
+        if let asciiIndex, let cached = asciiGlyphs[asciiIndex] { return cached }
         // Hot path: one codepoint, already resolved and rasterized (no String key to build).
         let fastKey = scalars.count == 1
             ? FastKey(codepoint: base, style: style, span: span, maxSpan: maxSpan ?? 1) : nil
         if let fastKey, let cached = fastGlyphs[fastKey] { return cached }
         let deferred = deferrals
         let result = slowGlyph(for: scalars, base: base, style: style, span: span, maxSpan: maxSpan)
-        if let fastKey, deferrals == deferred {
-            if fastGlyphs.count >= maxCacheEntries { fastGlyphs.removeAll() }
-            fastGlyphs[fastKey] = result
+        if deferrals == deferred {
+            if let asciiIndex {
+                asciiGlyphs[asciiIndex] = .some(result)
+            } else if let fastKey {
+                if fastGlyphs.count >= maxCacheEntries { fastGlyphs.removeAll() }
+                fastGlyphs[fastKey] = result
+            }
         }
         return result
     }
+
+    /// Narrow ASCII glyphs by `style << 7 | codepoint`; `.some(nil)` caches "draws nothing".
+    private var asciiGlyphs = [RenderedGlyph??](repeating: nil, count: FontStyle.allCases.count << 7)
 
     /// False (and counted as deferred) once the frame's rasterization time is used up.
     private func mayRasterize() -> Bool {
@@ -314,6 +325,7 @@ final class FontGrid {
         grayscaleTexture = nil
         colorTexture = nil
         fastGlyphs.removeAll()
+        asciiGlyphs = asciiGlyphs.map { _ in nil }
         glyphs.removeAll()
         spriteGlyphs.removeAll()
         sprites.removeAll()

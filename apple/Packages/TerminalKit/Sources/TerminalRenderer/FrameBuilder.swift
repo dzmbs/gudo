@@ -256,6 +256,11 @@ final class FrameBuilder {
         )
         let deferrals = fonts.deferrals
         // Pass 1: gather cells.
+        // Work on a local copy (moved out, not copied): class-property access costs an exclusivity
+        // check and a uniqueness check per cell.
+        var infos: [CellInfo] = []
+        swap(&infos, &self.infos)
+        defer { swap(&infos, &self.infos) }
         if infos.count < cols { infos = .init(repeating: CellInfo(), count: cols) }
         var x = 0
         row.forEachCell { cell in

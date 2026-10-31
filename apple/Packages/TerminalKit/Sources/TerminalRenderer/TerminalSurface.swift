@@ -881,9 +881,16 @@ public final class TerminalSurface {
         setNeedsRender()
     }
 
+    /// Main-thread time shared by every surface's display-link frames.
+    static var renderBudget = RenderBudget()
+
     fileprivate func tick(_ link: CADisplayLink) {
+        // Over budget: stay dirty and try again on a later tick.
+        guard Self.renderBudget.mayRender(focused: isFocused, now: CACurrentMediaTime()) else { return }
         wakePending.store(false, ordering: .releasing)
+        let start = CACurrentMediaTime()
         let rendered = renderIfDirty()
+        Self.renderBudget.spend(CACurrentMediaTime() - start)
         // Keep ticking while predictions wait for confirmation, so their timeouts fire, and while
         // a search is still working through the scrollback.
         if !rendered, !(predictor?.isActive ?? false), search?.status.isComplete ?? true { link.isPaused = true }
@@ -1152,6 +1159,29 @@ public final class TerminalSurface {
             useDisplayP3: false,
             useLinearBlending: false,
             useLinearCorrection: false)
+    }
+}
+
+/// A token bucket of main-thread time for rendering, shared by all surfaces. Frames run on the
+/// main thread, and a flood in a large grid or in many visible panes would otherwise take all of
+/// it (a full 6K grid at a tiny font costs tens of ms per frame), leaving none for input and UI.
+/// Rendering may use `share` of the time on average, in bursts up to `burst`; past that, panes
+/// skip display-link frames (they drop frame rate, never content). The focused pane may run
+/// further into debt, so it keeps priority over the others.
+struct RenderBudget {
+    var share = 0.5
+    var burst: CFTimeInterval = 0.05
+    private var tokens: CFTimeInterval = 0.05
+    private var updated: CFTimeInterval?
+
+    mutating func mayRender(focused: Bool, now: CFTimeInterval) -> Bool {
+        if let updated { tokens = min(burst, tokens + max(0, now - updated) * share) }
+        updated = now
+        return tokens > (focused ? -burst : 0)
+    }
+
+    mutating func spend(_ seconds: CFTimeInterval) {
+        tokens -= seconds
     }
 }
 

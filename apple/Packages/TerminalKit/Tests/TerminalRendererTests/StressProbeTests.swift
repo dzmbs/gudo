@@ -76,14 +76,15 @@ struct StressProbeTests {
         let start = footprint()
         var worst = 0.0
         let line = (0..<2000).map { _ in Character(Unicode.Scalar(UInt32.random(in: 0x21...0x7E))!) }
-        for i in 0..<60 {
+        _ = surface.stats.drain()
+        for i in 0..<300 {
             terminal.write(Array(("\u{1b}[3\(i % 8)m" + String(line) + "\r\n").utf8))
             terminal.write(Array(String(repeating: String(line) + "\r\n", count: 50).utf8))
             let f0 = CACurrentMediaTime()
             surface.renderIfDirty()
             worst = max(worst, CACurrentMediaTime() - f0)
         }
-        print("PROBE 6K tiny: worst frame \(worst) footprint +\((footprint() - start) >> 20) MB")
+        print("PROBE 6K tiny: worst frame \(worst) footprint +\((footprint() - start) >> 20) MB \(surface.stats.drain().map(String.init(describing:)) ?? "")")
     }
 
     @Test func probeManySurfaces() async throws {
