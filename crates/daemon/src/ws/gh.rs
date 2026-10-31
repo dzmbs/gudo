@@ -73,8 +73,8 @@ struct Output {
 
 /// Runs `program args` in `dir` with a timeout.
 fn run(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> Result<Output, WsError> {
-    let mut child = Command::new(program)
-        .current_dir(dir)
+    let mut cmd = Command::new(program);
+    cmd.current_dir(dir)
         .args(args)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
@@ -82,13 +82,16 @@ fn run(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> Result<O
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
-        // The git `gh` runs gets the same guard as ours against the repository's own config.
-        .env("GIT_CONFIG_COUNT", "2")
-        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
-        .env("GIT_CONFIG_VALUE_0", "false")
-        .env("GIT_CONFIG_KEY_1", "core.hooksPath")
-        .env("GIT_CONFIG_VALUE_1", "/dev/null")
-        .env("LC_ALL", "C")
+        .env("LC_ALL", "C");
+    // The git `gh` runs gets the same guard as ours against the repository's own config.
+    let guard = super::git::guard(dir, false);
+    cmd.env("GIT_CONFIG_COUNT", guard.len().to_string());
+    for (i, setting) in guard.iter().enumerate() {
+        let (key, value) = setting.split_once('=').unwrap_or((setting, ""));
+        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key)
+            .env(format!("GIT_CONFIG_VALUE_{i}"), value);
+    }
+    let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -468,6 +471,57 @@ pub(crate) fn checkout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `gh` runs git in the repository (status, checkout): the repository's own filters and
+    /// fsmonitor must not run through it either.
+    #[test]
+    fn the_git_gh_runs_is_guarded_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let marker = dir.path().join("ran");
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .current_dir(&repo)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        let script = |name: &str, body: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let evil = script(
+            "evil",
+            &format!("echo \"$0\" >> '{}'; cat", marker.display()),
+        );
+        std::fs::create_dir(&repo).unwrap();
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(repo.join(".gitattributes"), "* filter=x\n").unwrap();
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "one"]);
+        git(&["config", "filter.x.clean", &evil.to_string_lossy()]);
+        git(&["config", "filter.x.smudge", &evil.to_string_lossy()]);
+        git(&["config", "core.fsmonitor", &evil.to_string_lossy()]);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        // Stands in for `gh`, doing what `gh pr status` and `gh pr checkout` do.
+        let gh = script(
+            "gh",
+            "git status --porcelain >/dev/null && git checkout -q -- . && git status >/dev/null",
+        );
+        run(&gh, &repo, &[], TIMEOUT).unwrap();
+        let ran = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(ran.is_empty(), "ran: {ran}");
+    }
 
     #[test]
     fn parses_a_pr_with_checks() {

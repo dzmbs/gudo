@@ -78,11 +78,7 @@ impl Policy {
         // Lexically normalise `.` and repeated separators.
         let path: PathBuf = path.components().collect();
         // The final component is not followed: a symlink is itself inside the root.
-        let real = match (path.parent(), path.file_name()) {
-            (Some(parent), Some(name)) => real_prefix(parent).join(name),
-            _ => path.clone(),
-        };
-        if self.allows(&real) {
+        if self.allows(&real_of(&path)) {
             Ok(path)
         } else {
             Err(WsError::Denied(format!(
@@ -105,6 +101,35 @@ impl Policy {
             ))),
             Err(_) => Ok(path),
         }
+    }
+
+    /// Like [`resolve`](Self::resolve), for a path that will be moved or deleted: it must not
+    /// hold a refused directory, which would then reappear elsewhere (or in the trash) unrefused.
+    pub fn resolve_movable(&self, raw: &str) -> Result<PathBuf, WsError> {
+        let path = self.resolve(raw)?;
+        let real = real_of(&path);
+        if self.denied.iter().any(|d| d.starts_with(&real)) {
+            return Err(WsError::Denied(format!(
+                "{} holds the daemon's state",
+                path.display()
+            )));
+        }
+        Ok(path)
+    }
+}
+
+/// The real path of `path`, without following a final symlink. An existing entry is
+/// canonicalised whole, so another spelling of its name (case on macOS) is not another path.
+fn real_of(path: &Path) -> PathBuf {
+    if let Ok(meta) = std::fs::symlink_metadata(path)
+        && !meta.file_type().is_symlink()
+        && let Ok(real) = path.canonicalize()
+    {
+        return real;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => real_prefix(parent).join(name),
+        _ => path.to_owned(),
     }
 }
 
@@ -187,6 +212,56 @@ mod tests {
             policy.resolve_followed("~/escape"),
             Err(WsError::Denied(_))
         ));
+    }
+
+    /// On a case-insensitive volume (macOS by default) another spelling names the same
+    /// directory.
+    #[test]
+    fn the_state_dir_is_refused_in_any_case() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join("Library/Application Support/Unnamed");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("hook.token"), "secret").unwrap();
+        let policy = Policy::new(home.path(), &[]).deny(&state);
+        let other = home.path().join("library/application support/UNNAMED");
+        if !other.join("hook.token").exists() {
+            return; // a case-sensitive volume: another spelling is another path
+        }
+        for path in [other.join("hook.token"), other.join("new-file"), other] {
+            let raw = path.to_string_lossy();
+            assert!(
+                matches!(policy.resolve(&raw), Err(WsError::Denied(_))),
+                "{raw}"
+            );
+            assert!(
+                matches!(policy.resolve_followed(&raw), Err(WsError::Denied(_))),
+                "{raw}"
+            );
+        }
+        let parent = home.path().join("LIBRARY");
+        assert!(matches!(
+            policy.resolve_movable(&parent.to_string_lossy()),
+            Err(WsError::Denied(_))
+        ));
+    }
+
+    /// Moving or deleting a directory that holds the state dir would carry it out of reach of
+    /// the refusal (into another name, or the trash).
+    #[test]
+    fn what_holds_the_state_dir_is_not_moved() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join(".local/state/un");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(home.path().join(".local/share")).unwrap();
+        let policy = Policy::new(home.path(), &[]).deny(&state);
+        for path in ["~/.local", "~/.local/state", "~/.local/state/un"] {
+            assert!(
+                matches!(policy.resolve_movable(path), Err(WsError::Denied(_))),
+                "{path}"
+            );
+        }
+        assert!(policy.resolve_movable("~/.local/share").is_ok());
+        assert!(policy.resolve_movable("~/.local/state-old").is_ok());
     }
 
     #[test]

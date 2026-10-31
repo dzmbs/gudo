@@ -1013,6 +1013,47 @@ mod tests {
         assert_eq!(negotiate(&HeaderMap::new()), None);
     }
 
+    /// DNS rebinding names an attacker can point at 127.0.0.1, and spellings of loopback.
+    #[test]
+    fn only_loopback_names_pass_the_host_check() {
+        let host = |h: &str| loopback_host(Some(&HeaderValue::from_str(h).unwrap()));
+        for ok in [
+            "localhost",
+            "LOCALHOST:8080",
+            "app.localhost:1",
+            "127.0.0.1",
+            "127.0.0.1:443",
+            "127.8.9.10:1",
+            "[::1]",
+            "[::1]:8080",
+        ] {
+            assert!(host(ok), "{ok}");
+        }
+        for evil in [
+            "localhost.evil.com",
+            "localhost.evil.com:80",
+            "127.0.0.1.nip.io",
+            "127.0.0.1.nip.io:8080",
+            "evil.com",
+            "localhost.",
+            "evil.com.",
+            "[::ffff:127.0.0.1]",
+            "[::ffff:7f00:1]:80",
+            "[fe80::1]",
+            "0.0.0.0:80",
+            "2130706433",
+            "0x7f000001",
+            "127.1",
+            "::1",
+            "",
+            "evil.com#@localhost",
+            "localhost@evil.com",
+        ] {
+            assert!(!host(evil), "{evil}");
+        }
+        assert!(!loopback_host(None));
+    }
+
     #[test]
     fn decides_what_to_compress() {
         let ok = |pairs| compressible(StatusCode::OK, &headers(pairs));

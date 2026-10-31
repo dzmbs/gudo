@@ -43,20 +43,32 @@ const SAFE_CONFIG: &[&str] = &[
 /// Subcommands the person asked for that keep the repository's hooks (`pre-push`).
 const HOOKED: &[&str] = &["push"];
 
+/// The config every daemon-run git in `dir` gets (`key=value`), and so does the git `gh`
+/// runs there.
+pub(crate) fn guard(dir: &Path, hooks: bool) -> Vec<String> {
+    let mut out: Vec<String> = SAFE_CONFIG.iter().map(|s| (*s).to_owned()).collect();
+    if !hooks {
+        out.push("core.hooksPath=/dev/null".into());
+    }
+    out.extend(neutralised_filters(dir));
+    out
+}
+
 fn command(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(dir)
         .args(["-c", "core.quotePath=false", "-c", "color.ui=false"]);
-    for setting in SAFE_CONFIG {
-        cmd.args(["-c", setting]);
-    }
-    if !args.first().is_some_and(|a| HOOKED.contains(a)) {
-        cmd.args(["-c", "core.hooksPath=/dev/null"]);
-    }
-    for setting in neutralised_filters(dir) {
+    let hooks = args.first().is_some_and(|a| HOOKED.contains(a));
+    for setting in guard(dir, hooks) {
         cmd.arg("-c").arg(setting);
     }
-    cmd.args(args)
+    cmd.args(args.first());
+    // Status and diff look into a submodule's files by running `git status` inside it, under
+    // that repository's own filters, which the overrides above do not name.
+    if matches!(args.first(), Some(&("status" | "diff"))) {
+        cmd.arg("--ignore-submodules=dirty");
+    }
+    cmd.args(args.iter().skip(1))
         // Status must not take the index lock behind the user's back.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -75,13 +87,14 @@ const LFS_FILTERS: &[&str] = &[
     "git-lfs filter-process",
 ];
 
-/// `-c` overrides emptying the clean/smudge/process filters the repository's own config
-/// defines (status and diff run them on changed files), Git LFS's excepted. Filters in the
-/// user's global config are theirs and stay.
+/// `-c` overrides emptying the clean/smudge/process filters the repository defines (status
+/// and diff run them on changed files), Git LFS's excepted: in `.git/config`, the files it
+/// includes, and the worktree's config. Filters in the user's global or system config are
+/// theirs and stay.
 fn neutralised_filters(dir: &Path) -> Vec<String> {
     let Ok(out) = Command::new("git")
         .current_dir(dir)
-        .args(["config", "--local", "--null", "--get-regexp"])
+        .args(["config", "--show-scope", "--null", "--get-regexp"])
         .arg(r"^filter\..*\.(clean|smudge|process)$")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -92,10 +105,15 @@ fn neutralised_filters(dir: &Path) -> Vec<String> {
     overrides_for(&out.stdout)
 }
 
-/// The overrides for `git config --null --get-regexp` output (`key\nvalue\0`…).
+/// The overrides for `git config --show-scope --null --get-regexp` output
+/// (`scope\0key\nvalue\0`…).
 fn overrides_for(listing: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
-    for entry in listing.split(|&b| b == 0).filter(|e| !e.is_empty()) {
+    let mut fields = listing.split(|&b| b == 0);
+    while let (Some(scope), Some(entry)) = (fields.next(), fields.next()) {
+        if matches!(scope, b"global" | b"system") {
+            continue;
+        }
         let entry = String::from_utf8_lossy(entry);
         let (key, value) = entry.split_once('\n').unwrap_or((&entry, ""));
         if !LFS_FILTERS.contains(&value.trim()) {
@@ -346,8 +364,40 @@ fn index_tree(root: &Path) -> Result<String, WsError> {
 pub(crate) fn worktree_tree(root: &Path) -> Result<String, WsError> {
     let tmp = TempIndex::new(root)?;
     let env = [("GIT_INDEX_FILE", tmp.0.as_path())];
-    git_env(root, &["add", "-A", "--", "."], &env)?;
+    // `add` looks for changes inside a submodule by running `git status` in it, under that
+    // repository's own filters. Submodules are recorded at their HEAD instead, as `add` would.
+    let gitlinks = gitlinks(&git_env(root, &["ls-files", "--stage", "-z"], &env)?);
+    let mut add = vec!["add".to_owned(), "-A".into(), "--".into(), ".".into()];
+    add.extend(gitlinks.iter().map(|p| format!(":(exclude,literal){p}")));
+    git_env(
+        root,
+        &add.iter().map(String::as_str).collect::<Vec<_>>(),
+        &env,
+    )?;
+    for path in &gitlinks {
+        let dir = root.join(path);
+        if !dir.exists() {
+            git_env(root, &["update-index", "--force-remove", "--", path], &env)?;
+        } else if dir.join(".git").exists()
+            && let Ok(head) = git(&dir, &["rev-parse", "--verify", "-q", "HEAD"])
+        {
+            let info = format!("160000,{},{path}", text(head));
+            git_env(root, &["update-index", "--cacheinfo", &info], &env)?;
+        }
+    }
     git_env(root, &["write-tree"], &env).map(text)
+}
+
+/// The submodule paths in `git ls-files --stage -z` output.
+fn gitlinks(listing: &[u8]) -> Vec<String> {
+    listing
+        .split(|&b| b == 0)
+        .filter_map(|record| {
+            let (meta, path) = record.split_at(record.iter().position(|&b| b == b'\t')?);
+            meta.starts_with(b"160000 ")
+                .then(|| String::from_utf8_lossy(&path[1..]).into_owned())
+        })
+        .collect()
 }
 
 // --- diffs ----------------------------------------------------------------------------------
@@ -673,9 +723,145 @@ mod tests {
         );
     }
 
+    /// Config that reaches git other than through `.git/config` itself: an included file, a
+    /// worktree config, a submodule's own config, and a signing program (`commit-tree` is
+    /// plumbing and ignores `commit.gpgSign`).
+    #[test]
+    fn config_from_elsewhere_runs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let marker = dir.path().join("ran");
+        let run = |cwd: &Path, args: &[&str]| {
+            let ok = Command::new("git")
+                .current_dir(cwd)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        let evil = |tag: &str| {
+            let script = dir.path().join(format!("evil-{tag}"));
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\necho \"{tag}\" >> '{}'\ncat\n", marker.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            script.to_string_lossy().into_owned()
+        };
+        std::fs::create_dir(&repo).unwrap();
+        run(&repo, &["init", "-q"]);
+        run(&repo, &["config", "user.email", "t@t"]);
+        run(&repo, &["config", "user.name", "t"]);
+        for f in ["inc.txt", "wt.txt", "cond.txt"] {
+            std::fs::write(repo.join(f), "one\n").unwrap();
+        }
+        // Committed, so a checkout applies them too.
+        std::fs::write(
+            repo.join(".gitattributes"),
+            "inc.txt filter=inc\nwt.txt filter=wt\ncond.txt filter=cond\n",
+        )
+        .unwrap();
+        // Nested repositories, as an unpacked archive holds them (no `.gitmodules`).
+        let nested = |name: &str| {
+            let sub = repo.join(name);
+            std::fs::create_dir(&sub).unwrap();
+            run(&sub, &["init", "-q"]);
+            run(&sub, &["config", "user.email", "t@t"]);
+            run(&sub, &["config", "user.name", "t"]);
+            std::fs::write(sub.join("s.txt"), "one\n").unwrap();
+            std::fs::write(sub.join(".gitattributes"), "* filter=sub\n").unwrap();
+            run(&sub, &["add", "."]);
+            run(&sub, &["commit", "-qm", "one"]);
+            sub
+        };
+        let (sub, moved) = (nested("sub"), nested("moved"));
+        run(&repo, &["add", "."]);
+        run(&repo, &["commit", "-qm", "one"]);
+
+        std::fs::write(
+            dir.path().join("inc.cfg"),
+            format!(
+                "[filter \"inc\"]\n\tclean = {e}\n\tsmudge = {e}\n",
+                e = evil("include")
+            ),
+        )
+        .unwrap();
+        run(&repo, &["config", "include.path", "../../inc.cfg"]);
+        std::fs::write(
+            dir.path().join("cond.cfg"),
+            format!(
+                "[filter \"cond\"]\n\tclean = {e}\n\tsmudge = {e}\n",
+                e = evil("includeIf")
+            ),
+        )
+        .unwrap();
+        run(
+            &repo,
+            &["config", "includeIf.gitdir:/.path", "../../cond.cfg"],
+        );
+        run(&repo, &["config", "core.repositoryformatversion", "1"]);
+        run(&repo, &["config", "extensions.worktreeConfig", "true"]);
+        std::fs::write(
+            repo.join(".git/config.worktree"),
+            format!("[filter \"wt\"]\n\tclean = {}\n", evil("worktree-config")),
+        )
+        .unwrap();
+        // One submodule moves to a new commit; the other has changes inside it, under its own
+        // filter.
+        std::fs::write(moved.join("s.txt"), "two\n").unwrap();
+        run(&moved, &["commit", "-qam", "two"]);
+        let moved_head = text(git(&moved, &["rev-parse", "HEAD"]).unwrap());
+        run(&sub, &["config", "filter.sub.clean", &evil("submodule")]);
+        std::fs::write(sub.join("s.txt"), "two\n").unwrap();
+        run(&repo, &["config", "commit.gpgSign", "true"]);
+        run(&repo, &["config", "gpg.program", &evil("gpg")]);
+        for f in ["inc.txt", "wt.txt", "cond.txt"] {
+            std::fs::write(repo.join(f), "two\n").unwrap();
+        }
+
+        assert!(!status(&repo).unwrap().files.is_empty());
+        // As the repository list's counts do.
+        git(&repo, &["diff", "--numstat", "-z", "HEAD", "--"]).unwrap();
+        let tree = worktree_tree(&repo).unwrap();
+        let in_tree = text(git(&repo, &["rev-parse", &format!("{tree}:moved")]).unwrap());
+        assert_eq!(in_tree, moved_head, "a submodule is recorded at its HEAD");
+        let head = text(git(&repo, &["rev-parse", "HEAD"]).unwrap());
+        // As the worktree archive does.
+        git(&repo, &["commit-tree", &tree, "-p", &head, "-m", "x"]).unwrap();
+        let req = GitDiffRequest {
+            path: repo.to_string_lossy().into_owned(),
+            base: DiffBase::Head,
+            files: Vec::new(),
+            context: 3,
+            hunks: true,
+        };
+        assert!(!diff(&req, &repo).unwrap().files.is_empty());
+        // Checking out runs smudge filters.
+        let wt = dir.path().join("wt");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                "--",
+                &wt.to_string_lossy(),
+                "HEAD",
+            ],
+        )
+        .unwrap();
+        let ran = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(ran.is_empty(), "ran: {ran}");
+    }
+
     #[test]
     fn lfs_filters_stay_and_others_are_emptied() {
-        let listing = b"filter.lfs.clean\ngit-lfs clean -- %f\0filter.lfs.process\ngit-lfs filter-process\0filter.x.smudge\nsh -c evil\0";
+        let listing = b"local\0filter.lfs.clean\ngit-lfs clean -- %f\0local\0filter.lfs.process\ngit-lfs filter-process\0worktree\0filter.x.smudge\nsh -c evil\0global\0filter.mine.clean\nmine\0";
         assert_eq!(
             overrides_for(listing),
             ["filter.x.smudge=", "filter.x.required=false"]

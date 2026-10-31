@@ -67,11 +67,20 @@ pub(crate) fn foreground_process(
     master: impl AsFd,
     session_leader: u32,
 ) -> Option<ForegroundProcess> {
-    let pgid = match rustix::termios::tcgetpgrp(master) {
-        Ok(pid) => pid.as_raw_nonzero().get() as u32,
-        Err(_) => imp::terminal_pgid_of(session_leader)?,
+    let pgid = match tcgetpgrp(master) {
+        Some(pgid) => pgid,
+        None => imp::terminal_pgid_of(session_leader)?,
     };
     ForegroundProcess::of(pgid)
+}
+
+/// The terminal's foreground process group. macOS answers 0 while the terminal has none (its
+/// session leader gone), which `rustix`'s wrapper takes for a valid pid.
+fn tcgetpgrp(master: impl AsFd) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: the descriptor is borrowed for the duration of the call.
+    let pgid = unsafe { libc::tcgetpgrp(master.as_fd().as_raw_fd()) };
+    u32::try_from(pgid).ok().filter(|&p| p > 0)
 }
 
 #[cfg(test)]
@@ -81,6 +90,15 @@ mod tests {
 
     use crate::spawn::spawn;
     use crate::termios::WinSize;
+
+    /// A terminal whose program has exited has no foreground group (macOS reports 0).
+    #[test]
+    fn a_terminal_with_no_program_has_no_foreground() {
+        let mut spawned = spawn(Command::new("/usr/bin/true"), WinSize::new(24, 80)).unwrap();
+        let pid = spawned.child.id();
+        spawned.child.wait().unwrap();
+        assert_eq!(super::foreground_process(&spawned.master, pid), None);
+    }
 
     /// `tcgetpgrp` works on the master itself, so the `e_tpgid`/`tpgid` fallback is a fallback.
     #[test]
