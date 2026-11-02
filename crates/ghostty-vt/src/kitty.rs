@@ -122,10 +122,10 @@ impl Terminal {
         if image.is_null() {
             return None;
         }
-        let get = |data, out: *mut c_void| {
-            // SAFETY: `image` is live as above and `out` points at the type documented for
+        let get = |data, value: *mut c_void| {
+            // SAFETY: `image` is live as above and `value` points at the type documented for
             // `data`.
-            let result = unsafe { ffi::ghostty_kitty_graphics_image_get(image, data, out) };
+            let result = unsafe { ffi::ghostty_kitty_graphics_image_get(image, data, value) };
             result == ffi::GhosttyResult_GHOSTTY_SUCCESS
         };
         let (mut width, mut height, mut format, mut generation) = (0u32, 0u32, 0, 0u64);
@@ -171,30 +171,30 @@ impl Terminal {
         let Some(graphics) = self.kitty_graphics() else {
             return Vec::new();
         };
-        let mut iter = ptr::null_mut();
-        // SAFETY: `iter` is a valid out pointer; a null allocator selects the default one.
-        if unsafe { ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iter) }
+        let mut iterator = ptr::null_mut();
+        // SAFETY: `iterator` is a valid out pointer; a null allocator selects the default one.
+        if unsafe { ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator) }
             != ffi::GhosttyResult_GHOSTTY_SUCCESS
         {
             return Vec::new();
         }
-        let mut out = Vec::new();
+        let mut placements = Vec::new();
         // SAFETY: the storage and terminal stay live and unmutated for this `&self` call; the
         // iterator is ours and freed below.
         unsafe {
             let filled = ffi::ghostty_kitty_graphics_get(
                 graphics,
                 ffi::GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
-                (&raw mut iter).cast(),
+                (&raw mut iterator).cast(),
             ) == ffi::GhosttyResult_GHOSTTY_SUCCESS;
-            while filled && ffi::ghostty_kitty_graphics_placement_next(iter) {
-                if let Some(p) = placement(iter, graphics, self.as_raw()) {
-                    out.push(p);
+            while filled && ffi::ghostty_kitty_graphics_placement_next(iterator) {
+                if let Some(placement) = placement(iterator, graphics, self.as_raw()) {
+                    placements.push(placement);
                 }
             }
-            ffi::ghostty_kitty_graphics_placement_iterator_free(iter);
+            ffi::ghostty_kitty_graphics_placement_iterator_free(iterator);
         }
-        out
+        placements
     }
 
     /// The active screen's image storage, borrowed until the next mutation.
@@ -216,16 +216,16 @@ impl Terminal {
 ///
 /// # Safety
 ///
-/// `iter` must be positioned on a placement of `graphics`, which belongs to the live, unmutated
-/// `terminal`.
+/// `iterator` must be positioned on a placement of `graphics`, which belongs to the live,
+/// unmutated `terminal`.
 unsafe fn placement(
-    iter: ffi::GhosttyKittyGraphicsPlacementIterator,
+    iterator: ffi::GhosttyKittyGraphicsPlacementIterator,
     graphics: ffi::GhosttyKittyGraphics,
     terminal: ffi::GhosttyTerminal,
 ) -> Option<KittyPlacement> {
-    let get = |data, out: *mut c_void| {
-        // SAFETY: as the caller guarantees; `out` points at the type documented for `data`.
-        let result = unsafe { ffi::ghostty_kitty_graphics_placement_get(iter, data, out) };
+    let get = |data, value: *mut c_void| {
+        // SAFETY: as the caller guarantees; `value` points at the type documented for `data`.
+        let result = unsafe { ffi::ghostty_kitty_graphics_placement_get(iterator, data, value) };
         result == ffi::GhosttyResult_GHOSTTY_SUCCESS
     };
     let (mut image_id, mut placement_id, mut is_virtual, mut z) = (0u32, 0u32, false, 0i32);
@@ -254,7 +254,7 @@ unsafe fn placement(
     // SAFETY: as the caller guarantees; `info` is a sized out struct.
     let geometry = !image.is_null()
         && unsafe {
-            ffi::ghostty_kitty_graphics_placement_render_info(iter, image, terminal, &mut info)
+            ffi::ghostty_kitty_graphics_placement_render_info(iterator, image, terminal, &mut info)
         } == ffi::GhosttyResult_GHOSTTY_SUCCESS;
     Some(KittyPlacement {
         image_id,
@@ -279,7 +279,7 @@ pub(crate) fn install_png_decoder() {
         let result = unsafe {
             ffi::ghostty_sys_set(
                 ffi::GhosttySysOption_GHOSTTY_SYS_OPT_DECODE_PNG,
-                decode.map_or(ptr::null(), |f| f as *const c_void),
+                decode.map_or(ptr::null(), |decode| decode as *const c_void),
             )
         };
         debug_assert_eq!(result, ffi::GhosttyResult_GHOSTTY_SUCCESS);
@@ -340,24 +340,27 @@ fn png_to_rgba(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     if !png_fits(width, height) || size as u64 > KITTY_IMAGE_STORAGE_LIMIT {
         return None;
     }
-    let mut buf = vec![0; size];
-    let frame = reader.next_frame(&mut buf).ok()?;
-    buf.truncate(frame.buffer_size());
+    let mut decoded = vec![0; size];
+    let frame = reader.next_frame(&mut decoded).ok()?;
+    decoded.truncate(frame.buffer_size());
     let rgba = match frame.color_type {
-        png::ColorType::Rgba => buf,
-        png::ColorType::Rgb => buf
+        png::ColorType::Rgba => decoded,
+        png::ColorType::Rgb => decoded
             .as_chunks::<3>()
             .0
             .iter()
             .flat_map(|[r, g, b]| [*r, *g, *b, 0xff])
             .collect(),
-        png::ColorType::GrayscaleAlpha => buf
+        png::ColorType::GrayscaleAlpha => decoded
             .as_chunks::<2>()
             .0
             .iter()
-            .flat_map(|[g, a]| [*g, *g, *g, *a])
+            .flat_map(|[gray, alpha]| [*gray, *gray, *gray, *alpha])
             .collect(),
-        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 0xff]).collect(),
+        png::ColorType::Grayscale => decoded
+            .iter()
+            .flat_map(|&gray| [gray, gray, gray, 0xff])
+            .collect(),
         png::ColorType::Indexed => return None,
     };
     Some((frame.width, frame.height, rgba))
@@ -368,15 +371,15 @@ mod tests {
     use super::*;
 
     fn png(width: u32, height: u32, color: png::ColorType, data: &[u8]) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut encoder = png::Encoder::new(&mut out, width, height);
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
         encoder.set_color(color);
         encoder.set_depth(png::BitDepth::Eight);
         encoder
             .write_header()
-            .and_then(|mut w| w.write_image_data(data))
+            .and_then(|mut writer| writer.write_image_data(data))
             .unwrap();
-        out
+        encoded
     }
 
     #[test]
@@ -396,49 +399,49 @@ mod tests {
     #[test]
     fn oversized_pngs_are_refused() {
         let side = 5_000;
-        let mut out = Vec::new();
-        let mut encoder = png::Encoder::new(&mut out, side, side);
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, side, side);
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_compression(png::Compression::Fast);
         encoder
             .write_header()
-            .and_then(|mut w| w.write_image_data(&vec![0; (side * side) as usize]))
+            .and_then(|mut writer| writer.write_image_data(&vec![0; (side * side) as usize]))
             .unwrap();
-        assert!(out.len() < 1 << 20, "{}", out.len());
-        assert_eq!(png_to_rgba(&out), None);
+        assert!(encoded.len() < 1 << 20, "{}", encoded.len());
+        assert_eq!(png_to_rgba(&encoded), None);
         assert!(png_fits(4_096, 4_096));
         assert!(!png_fits(10_001, 1));
     }
 
     /// A PNG claiming `width`×`height` RGBA at 16 bits whose pixel data is an empty stream.
     fn png_header(width: u32, height: u32) -> Vec<u8> {
-        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-            out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
-            let start = out.len();
-            out.extend_from_slice(kind);
-            out.extend_from_slice(data);
-            let crc = out[start..].iter().fold(!0u32, |mut crc, &byte| {
+        fn chunk(encoded: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            encoded.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            let start = encoded.len();
+            encoded.extend_from_slice(kind);
+            encoded.extend_from_slice(data);
+            let crc = encoded[start..].iter().fold(!0u32, |mut crc, &byte| {
                 crc ^= u32::from(byte);
                 for _ in 0..8 {
                     crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
                 }
                 crc
             });
-            out.extend_from_slice(&(!crc).to_be_bytes());
+            encoded.extend_from_slice(&(!crc).to_be_bytes());
         }
-        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut encoded = b"\x89PNG\r\n\x1a\n".to_vec();
         let mut ihdr = [0; 13];
         ihdr[..4].copy_from_slice(&width.to_be_bytes());
         ihdr[4..8].copy_from_slice(&height.to_be_bytes());
         ihdr[8..10].copy_from_slice(&[16, 6]);
-        chunk(&mut out, b"IHDR", &ihdr);
+        chunk(&mut encoded, b"IHDR", &ihdr);
         chunk(
-            &mut out,
+            &mut encoded,
             b"IDAT",
             &[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
         );
-        chunk(&mut out, b"IEND", &[]);
-        out
+        chunk(&mut encoded, b"IEND", &[]);
+        encoded
     }
 
     #[test]
@@ -461,7 +464,7 @@ mod tests {
             &[7; 10_000],
         );
         assert_eq!(
-            png_to_rgba(&edge).map(|(w, h, p)| (w, h, p.len())),
+            png_to_rgba(&edge).map(|(width, height, pixels)| (width, height, pixels.len())),
             Some((10_000, 1, 40_000))
         );
     }
@@ -469,8 +472,8 @@ mod tests {
     #[test]
     fn programs_cannot_crash_the_terminal_with_a_png_header() -> Result<(), Error> {
         let mut terminal = Terminal::new(20, 6)?;
-        let b64 = data_encoding::BASE64.encode(&png_header(1 << 24, 1 << 24));
-        terminal.write(format!("\x1b_Ga=T,f=100,i=5,q=2;{b64}\x1b\\").as_bytes());
+        let base64 = data_encoding::BASE64.encode(&png_header(1 << 24, 1 << 24));
+        terminal.write(format!("\x1b_Ga=T,f=100,i=5,q=2;{base64}\x1b\\").as_bytes());
         assert_eq!(terminal.kitty_image(5), None);
         terminal.write(b"still here");
         Ok(())
@@ -481,18 +484,21 @@ mod tests {
         let mut terminal = Terminal::new(20, 6)?;
         terminal.resize(20, 6, (10, 20))?;
         let data = png(20, 40, png::ColorType::Rgba, &[200; 20 * 40 * 4]);
-        let b64 = data_encoding::BASE64.encode(&data);
-        terminal.write(format!("\x1b_Ga=T,f=100,i=3,q=2;{b64}\x1b\\").as_bytes());
+        let base64 = data_encoding::BASE64.encode(&data);
+        terminal.write(format!("\x1b_Ga=T,f=100,i=3,q=2;{base64}\x1b\\").as_bytes());
         let image = terminal.kitty_image(3).expect("stored");
         assert_eq!(
             (image.width, image.height, image.format),
             (20, 40, ImageFormat::Rgba)
         );
-        assert_eq!(image.pixels.map(|p| p.len()), Some(20 * 40 * 4));
+        assert_eq!(image.pixels.map(|pixels| pixels.len()), Some(20 * 40 * 4));
         let placements = terminal.kitty_placements();
         assert_eq!(placements.len(), 1);
-        let p = placements[0];
-        assert_eq!((p.cols, p.rows, p.viewport), (2, 2, Some((0, 0))));
+        let placement = placements[0];
+        assert_eq!(
+            (placement.cols, placement.rows, placement.viewport),
+            (2, 2, Some((0, 0)))
+        );
         // The cursor moved to the image's last row, past its right edge.
         assert_eq!((terminal.cursor().x, terminal.cursor().y), (2, 1));
         Ok(())

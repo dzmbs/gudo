@@ -1,5 +1,4 @@
 //! Snapshot size and speed for a 200x60 terminal with 10k lines of scrollback.
-//!
 
 use std::time::{Duration, Instant};
 
@@ -24,7 +23,7 @@ enum Workload {
 }
 
 impl Workload {
-    fn line(self, rng: &mut Rng, n: usize) -> String {
+    fn line(self, rng: &mut Rng, line_number: usize) -> String {
         let words = |rng: &mut Rng, len: usize| -> String {
             const WORDS: &[&str] = &[
                 "let", "fn", "match", "self", "terminal", "snapshot", "Ok(())", "=>", "{", "}",
@@ -49,9 +48,9 @@ impl Workload {
                     *rng.pick(&[(32, "INFO"), (33, "WARN"), (31, "ERROR"), (36, "DEBUG")]);
                 let len = 40 + rng.below(100);
                 format!(
-                    "\x1b[2m2026-10-18T12:{:02}:{:02}.{n:06}Z\x1b[0m \x1b[{color}m{level:5}\x1b[0m \x1b[1mhostd::pane\x1b[0m {}",
-                    n / 60 % 60,
-                    n % 60,
+                    "\x1b[2m2026-10-18T12:{:02}:{:02}.{line_number:06}Z\x1b[0m \x1b[{color}m{level:5}\x1b[0m \x1b[1mhostd::pane\x1b[0m {}",
+                    line_number / 60 % 60,
+                    line_number % 60,
                     words(rng, len)
                 )
             }
@@ -92,8 +91,8 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 
 fn measure(label: &str, terminal: &Terminal) -> Result<Measurement, Error> {
     let snapshot = terminal.encode_snapshot()?;
-    // Set SPIKE_B_DUMP=<dir> to write the snapshots out, e.g. to try transport compression.
-    if let Some(dir) = std::env::var_os("SPIKE_B_DUMP") {
+    // Set SNAPSHOT_FUZZ_DUMP=<dir> to write the snapshots out, e.g. to try transport compression.
+    if let Some(dir) = std::env::var_os("SNAPSHOT_FUZZ_DUMP") {
         let name = label.replace(' ', "_").replace('+', "");
         std::fs::write(
             std::path::Path::new(&dir).join(format!("{name}.snap")),
@@ -146,8 +145,8 @@ fn filled(workload: Workload, seed: u64) -> Result<Terminal, Error> {
     terminal.set_scrollback_max_bytes(None)?;
     let mut rng = Rng::new(seed);
     let mut bytes = Vec::new();
-    for n in 0..HISTORY_LINES + usize::from(ROWS) - 1 {
-        bytes.extend_from_slice(workload.line(&mut rng, n).as_bytes());
+    for line_number in 0..HISTORY_LINES + usize::from(ROWS) - 1 {
+        bytes.extend_from_slice(workload.line(&mut rng, line_number).as_bytes());
         bytes.extend_from_slice(b"\r\n");
     }
     bytes.extend_from_slice(b"\x1b[1;32mme@host\x1b[0m:\x1b[1;34m~/projects/gudo\x1b[0m$ cargo te");
@@ -185,21 +184,21 @@ fn snapshot_size_200x60_with_10k_lines() -> Result<(), Error> {
         "| workload | primary history rows | READY bytes | READY zstd | VT redraw of active area | full bytes | encode | decode READY | decode full | zstd READY < 50 KB |"
     );
     println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---|");
-    for m in &results {
+    for measurement in &results {
         println!(
             "| {} | {} | {} ({:.1} KB) | {:.1} KB | {} | {} ({:.1} MB) | {:.2} ms | {:.2} ms | {:.2} ms | {} |",
-            m.label,
-            m.primary_history,
-            m.ready_bytes,
-            m.ready_bytes as f64 / 1024.0,
-            m.ready_zstd_bytes as f64 / 1024.0,
-            m.vt_redraw_bytes,
-            m.full_bytes,
-            m.full_bytes as f64 / (1024.0 * 1024.0),
-            m.encode.as_secs_f64() * 1e3,
-            m.decode_ready.as_secs_f64() * 1e3,
-            m.decode_full.as_secs_f64() * 1e3,
-            if m.ready_zstd_bytes < READY_TARGET {
+            measurement.label,
+            measurement.primary_history,
+            measurement.ready_bytes,
+            measurement.ready_bytes as f64 / 1024.0,
+            measurement.ready_zstd_bytes as f64 / 1024.0,
+            measurement.vt_redraw_bytes,
+            measurement.full_bytes,
+            measurement.full_bytes as f64 / (1024.0 * 1024.0),
+            measurement.encode.as_secs_f64() * 1e3,
+            measurement.decode_ready.as_secs_f64() * 1e3,
+            measurement.decode_full.as_secs_f64() * 1e3,
+            if measurement.ready_zstd_bytes < READY_TARGET {
                 "pass"
             } else {
                 "FAIL"
@@ -211,15 +210,15 @@ fn snapshot_size_200x60_with_10k_lines() -> Result<(), Error> {
     // shell on the primary screen over plain or colored output. Raw READY is platform-dependent:
     // libghostty-vt sizes pages from the OS page size, so Linux (4 KiB) encodes ~3-4x more raw
     // bytes than Apple Silicon (16 KiB) for the same screen.
-    for m in results
+    for measurement in results
         .iter()
-        .filter(|m| m.label == "Source" || m.label == "Logs")
+        .filter(|measurement| measurement.label == "Source" || measurement.label == "Logs")
     {
         assert!(
-            m.ready_zstd_bytes < READY_TARGET,
+            measurement.ready_zstd_bytes < READY_TARGET,
             "{}: zstd READY is {} bytes",
-            m.label,
-            m.ready_zstd_bytes
+            measurement.label,
+            measurement.ready_zstd_bytes
         );
     }
     Ok(())

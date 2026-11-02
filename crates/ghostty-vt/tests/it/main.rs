@@ -1,3 +1,4 @@
+//! Snapshot continuation correctness and snapshot size.
 //!
 //! Run `cargo test -p ghostty-vt --test it -- --nocapture` to see the size table.
 
@@ -22,9 +23,9 @@ impl Rng {
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    /// Uniform in `0..n`.
-    pub fn below(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
+    /// Uniform in `0..bound`.
+    pub fn below(&mut self, bound: usize) -> usize {
+        (self.next_u64() % bound as u64) as usize
     }
 
     pub fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {

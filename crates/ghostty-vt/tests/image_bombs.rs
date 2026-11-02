@@ -43,7 +43,7 @@ fn zlib_zeros(len: usize) -> Vec<u8> {
 }
 
 /// Sends `data` as a chunked direct transmission with control keys `keys`.
-fn transmit(term: &mut Terminal, keys: &str, data: &[u8]) {
+fn transmit(terminal: &mut Terminal, keys: &str, data: &[u8]) {
     let encoded = data_encoding::BASE64.encode(data);
     let chunks: Vec<_> = encoded.as_bytes().chunks(4096).collect();
     for (i, chunk) in chunks.iter().enumerate() {
@@ -53,9 +53,9 @@ fn transmit(term: &mut Terminal, keys: &str, data: &[u8]) {
         } else {
             format!("m={more}")
         };
-        term.write(format!("\x1b_G{keys};").as_bytes());
-        term.write(chunk);
-        term.write(b"\x1b\\");
+        terminal.write(format!("\x1b_G{keys};").as_bytes());
+        terminal.write(chunk);
+        terminal.write(b"\x1b\\");
     }
 }
 
@@ -64,8 +64,9 @@ fn transmit(term: &mut Terminal, keys: &str, data: &[u8]) {
 /// image it will refuse anyway.
 #[test]
 fn transmissions_stay_within_the_image_storage() {
-    let mut term = Terminal::new(80, 24).unwrap();
-    term.set_kitty_image_storage_limit(KITTY_IMAGE_STORAGE_LIMIT)
+    let mut terminal = Terminal::new(80, 24).unwrap();
+    terminal
+        .set_kitty_image_storage_limit(KITTY_IMAGE_STORAGE_LIMIT)
         .unwrap();
     let bound = 2 * KITTY_IMAGE_STORAGE_LIMIT;
 
@@ -78,22 +79,22 @@ fn transmissions_stay_within_the_image_storage() {
         "a=t,f=100,o=z",
     ];
     for (id, keys) in (1..).zip(attacks) {
-        let grew = peak_growth(|| transmit(&mut term, &format!("{keys},i={id},q=2"), &bomb));
+        let grew = peak_growth(|| transmit(&mut terminal, &format!("{keys},i={id},q=2"), &bomb));
         assert!(grew < bound, "{keys}: peak grew by {} MiB", grew >> 20);
     }
 
     // Uncompressed chunks that never end, written a chunk at a time.
     let grew = peak_growth(|| {
         let chunk = data_encoding::BASE64.encode(&[0; 3 << 10]);
-        term.write(format!("\x1b_Ga=t,f=32,s=1,v=1,i=5,q=2,m=1;{chunk}\x1b\\").as_bytes());
+        terminal.write(format!("\x1b_Ga=t,f=32,s=1,v=1,i=5,q=2,m=1;{chunk}\x1b\\").as_bytes());
         for _ in 0..(300 << 20) / (3 << 10) {
-            term.write(format!("\x1b_Gm=1;{chunk}\x1b\\").as_bytes());
+            terminal.write(format!("\x1b_Gm=1;{chunk}\x1b\\").as_bytes());
         }
-        term.write(b"\x1b_Gm=0;\x1b\\");
+        terminal.write(b"\x1b_Gm=0;\x1b\\");
     });
     assert!(grew < bound, "chunks: peak grew by {} MiB", grew >> 20);
     for id in 1..=5 {
-        assert_eq!(term.kitty_image(id), None);
+        assert_eq!(terminal.kitty_image(id), None);
     }
 
     // Real images past the storage evict the oldest.
@@ -101,10 +102,10 @@ fn transmissions_stay_within_the_image_storage() {
     let grew = peak_growth(|| {
         for id in 10..60 {
             let keys = format!("a=t,f=32,s=1024,v=1024,o=z,i={id},q=2");
-            transmit(&mut term, &keys, &image);
+            transmit(&mut terminal, &keys, &image);
         }
     });
     assert!(grew < bound, "images: peak grew by {} MiB", grew >> 20);
-    assert!(term.kitty_image(59).is_some());
-    assert_eq!(term.kitty_image(10), None);
+    assert!(terminal.kitty_image(59).is_some());
+    assert_eq!(terminal.kitty_image(10), None);
 }

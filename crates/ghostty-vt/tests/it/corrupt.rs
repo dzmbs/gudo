@@ -16,75 +16,82 @@ const DEFAULT_SEEDS: u64 = 400;
 
 /// A snapshot with scrollback on both screens, styles, hyperlinks, prompts and images.
 fn sample() -> Vec<u8> {
-    let mut t = Terminal::new(24, 6).unwrap();
-    t.resize(24, 6, (8, 16)).unwrap();
-    t.set_scrollback_max_bytes(None).unwrap();
+    let mut terminal = Terminal::new(24, 6).unwrap();
+    terminal.resize(24, 6, (8, 16)).unwrap();
+    terminal.set_scrollback_max_bytes(None).unwrap();
     for i in 0..60 {
         let line = format!(
             "\x1b[3{}m{i} línea 中文 😀\x1b[0m \x1b]8;;https://e.x/{i}\x1b\\link\x1b]8;;\x1b\\\r\n",
             i % 8
         );
-        t.write(line.as_bytes());
+        terminal.write(line.as_bytes());
         if i % 20 == 0 {
-            t.write(b"\x1b]133;A\x07$ \x1b]133;B\x07ls\x1b]133;C\x07\r\n");
-            t.write(b"\x1b_Ga=T,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\r\n");
+            terminal.write(b"\x1b]133;A\x07$ \x1b]133;B\x07ls\x1b]133;C\x07\r\n");
+            terminal.write(b"\x1b_Ga=T,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\r\n");
         }
     }
-    t.write(b"\x1b[?1049h");
+    terminal.write(b"\x1b[?1049h");
     for i in 0..20 {
-        t.write(format!("alt {i}\r\n").as_bytes());
+        terminal.write(format!("alt {i}\r\n").as_bytes());
     }
-    t.encode_snapshot().unwrap()
+    terminal.encode_snapshot().unwrap()
 }
 
 fn mutate(rng: &mut Rng, base: &[u8]) -> Vec<u8> {
-    let mut s = base.to_vec();
+    let mut snapshot = base.to_vec();
     for _ in 0..=rng.below(4) {
-        if s.is_empty() {
+        if snapshot.is_empty() {
             break;
         }
-        let at = rng.below(s.len());
+        let at = rng.below(snapshot.len());
         match rng.below(6) {
-            0 => s[at] ^= 1 << rng.below(8),
+            0 => snapshot[at] ^= 1 << rng.below(8),
             1 => {
-                let end = (at + 1 + rng.below(16)).min(s.len());
+                let end = (at + 1 + rng.below(16)).min(snapshot.len());
                 let byte = *rng.pick(&[0x00, 0xff, 0x7f, 0x80]);
-                s[at..end].fill(byte);
+                snapshot[at..end].fill(byte);
             }
             // A record length field (any 4 bytes really) set to an extreme.
-            2 if at + 4 <= s.len() => {
+            2 if at + 4 <= snapshot.len() => {
                 let value = *rng.pick(&[0u32, 1, 0x7fff_ffff, u32::MAX, 0x0100_0000]);
-                s[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                snapshot[at..at + 4].copy_from_slice(&value.to_le_bytes());
             }
-            3 => s.truncate(at),
+            3 => snapshot.truncate(at),
             4 => {
-                let from = rng.below(s.len());
-                let len = rng.below(64).min(s.len() - from);
-                let run = s[from..from + len].to_vec();
-                s.splice(at..at, run);
+                let from = rng.below(snapshot.len());
+                let len = rng.below(64).min(snapshot.len() - from);
+                let run = snapshot[from..from + len].to_vec();
+                snapshot.splice(at..at, run);
             }
             _ => {
-                let end = (at + 1 + rng.below(32)).min(s.len());
-                s.drain(at..end);
+                let end = (at + 1 + rng.below(32)).min(snapshot.len());
+                snapshot.drain(at..end);
             }
         }
     }
     if rng.below(4) != 0 {
-        fix_checksums(&mut s);
+        fix_checksums(&mut snapshot);
     }
-    s
+    snapshot
 }
 
 /// Recomputes each record's CRC32C (over tag, length and payload) after the 10-byte envelope.
-fn fix_checksums(s: &mut [u8]) {
+fn fix_checksums(snapshot: &mut [u8]) {
     let mut pos = 10;
-    while pos + 10 <= s.len() {
-        let len = u32::from_le_bytes(s[pos + 2..pos + 6].try_into().unwrap()) as usize;
-        let Some(end) = (pos + 10).checked_add(len).filter(|&e| e <= s.len()) else {
+    while pos + 10 <= snapshot.len() {
+        let len = u32::from_le_bytes(snapshot[pos + 2..pos + 6].try_into().unwrap()) as usize;
+        let Some(end) = (pos + 10)
+            .checked_add(len)
+            .filter(|&end| end <= snapshot.len())
+        else {
             break;
         };
-        let crc = crc32c(s[pos..pos + 6].iter().chain(&s[pos + 10..end]));
-        s[pos + 6..pos + 10].copy_from_slice(&crc.to_le_bytes());
+        let crc = crc32c(
+            snapshot[pos..pos + 6]
+                .iter()
+                .chain(&snapshot[pos + 10..end]),
+        );
+        snapshot[pos + 6..pos + 10].copy_from_slice(&crc.to_le_bytes());
         pos = end;
     }
 }
@@ -100,20 +107,20 @@ fn crc32c<'a>(bytes: impl Iterator<Item = &'a u8>) -> u32 {
 }
 
 /// Uses a restored terminal the ways a client does: render, select, re-encode, keep writing.
-fn touch(t: &mut Terminal) {
-    let _ = t.text(TextRegion::All);
-    let _ = t.vt(TextRegion::Active);
-    let _ = t.kitty_placements();
-    let _ = t.encode_snapshot();
-    t.write(b"\x1b[2J\x1b[Hafter\r\n");
-    let _ = t.resize(10, 3, (8, 16));
+fn touch(terminal: &mut Terminal) {
+    let _ = terminal.text(TextRegion::All);
+    let _ = terminal.vt(TextRegion::Active);
+    let _ = terminal.kitty_placements();
+    let _ = terminal.encode_snapshot();
+    terminal.write(b"\x1b[2J\x1b[Hafter\r\n");
+    let _ = terminal.resize(10, 3, (8, 16));
 }
 
 fn exercise(bytes: &[u8]) {
     if let Ok(mut decoder) = SnapshotDecoder::new(bytes)
-        && let Ok(mut t) = decoder.decode()
+        && let Ok(mut terminal) = decoder.decode()
     {
-        touch(&mut t);
+        touch(&mut terminal);
     }
 
     if let Ok(decoder) = SnapshotDecoder::new(bytes)
@@ -152,7 +159,7 @@ fn corrupt_snapshots_fail_cleanly() {
     exercise(&base);
     let seeds = std::env::var("CORRUPT_SEEDS")
         .ok()
-        .and_then(|s| s.parse().ok())
+        .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_SEEDS);
     for seed in 0..seeds {
         let mut rng = Rng::new(seed);
@@ -182,11 +189,11 @@ fn arbitrary_records_fail_cleanly() {
         let tail = mutate(&mut rng, &base[ready..]);
         let mut at = 0;
         while at < tail.len() {
-            let n = (1 + rng.below(700)).min(tail.len() - at);
-            if restore.push(&tail[at..at + n]).is_err() {
+            let chunk_len = (1 + rng.below(700)).min(tail.len() - at);
+            if restore.push(&tail[at..at + chunk_len]).is_err() {
                 break;
             }
-            at += n;
+            at += chunk_len;
         }
     }
 }

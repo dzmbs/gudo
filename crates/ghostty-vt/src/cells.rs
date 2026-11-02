@@ -25,17 +25,13 @@ pub enum Color {
 /// The parts of a cell's style that matter for reading text back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CellStyle {
-    /// Foreground color.
     pub fg: Color,
     /// SGR 2: faint (dim).
     pub faint: bool,
-    /// SGR 1.
     pub bold: bool,
-    /// SGR 3.
     pub italic: bool,
     /// Any underline style.
     pub underline: bool,
-    /// SGR 7.
     pub inverse: bool,
 }
 
@@ -63,16 +59,12 @@ pub enum Semantic {
     Prompt,
 }
 
-/// One cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// The grapheme cluster shown, empty for a blank cell or a spacer.
     pub text: String,
-    /// Its width.
     pub width: CellWidth,
-    /// Its style.
     pub style: CellStyle,
-    /// Its shell-integration role.
     pub semantic: Semantic,
 }
 
@@ -83,7 +75,6 @@ impl Cell {
     }
 }
 
-/// One row of cells.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// The row soft-wraps: its text continues on the next row.
@@ -186,22 +177,23 @@ fn read_cell(grid_ref: &ffi::GhosttyGridRef) -> Result<Cell, Error> {
 }
 
 fn graphemes(grid_ref: &ffi::GhosttyGridRef) -> Result<String, Error> {
-    let mut buf = [0u32; 8];
+    let mut inline = [0u32; 8];
     let mut len = 0usize;
-    // SAFETY: `buf` holds `buf.len()` codepoints; `len` is a valid out pointer.
-    let code =
-        unsafe { ffi::ghostty_grid_ref_graphemes(grid_ref, buf.as_mut_ptr(), buf.len(), &mut len) };
+    // SAFETY: `inline` holds `inline.len()` codepoints; `len` is a valid out pointer.
+    let code = unsafe {
+        ffi::ghostty_grid_ref_graphemes(grid_ref, inline.as_mut_ptr(), inline.len(), &mut len)
+    };
     let codepoints = if code == ffi::GhosttyResult_GHOSTTY_OUT_OF_SPACE {
-        let mut big = vec![0u32; len];
-        // SAFETY: `big` holds the `len` codepoints libghostty-vt asked for.
+        let mut heap = vec![0u32; len];
+        // SAFETY: `heap` holds the `len` codepoints libghostty-vt asked for.
         Error::check(unsafe {
-            ffi::ghostty_grid_ref_graphemes(grid_ref, big.as_mut_ptr(), big.len(), &mut len)
+            ffi::ghostty_grid_ref_graphemes(grid_ref, heap.as_mut_ptr(), heap.len(), &mut len)
         })?;
-        big.truncate(len);
-        big
+        heap.truncate(len);
+        heap
     } else {
         Error::check(code)?;
-        buf[..len.min(buf.len())].to_vec()
+        inline[..len.min(inline.len())].to_vec()
     };
     Ok(codepoints.into_iter().filter_map(char::from_u32).collect())
 }
@@ -255,9 +247,9 @@ mod tests {
 
     #[test]
     fn rows_report_styles_widths_wraps_and_semantics() {
-        let mut t = Terminal::new(6, 3).unwrap();
-        t.write("\x1b]133;A\x07$ \x1b]133;B\x07漢x\x1b[38;2;10;20;30myz".as_bytes());
-        let row = t.row(0).unwrap();
+        let mut terminal = Terminal::new(6, 3).unwrap();
+        terminal.write("\x1b]133;A\x07$ \x1b]133;B\x07漢x\x1b[38;2;10;20;30myz".as_bytes());
+        let row = terminal.row(0).unwrap();
         assert!(row.wrapped);
         assert_eq!(row.cells[0].semantic, Semantic::Prompt);
         assert_eq!(row.cells[2].text, "漢");
@@ -266,9 +258,9 @@ mod tests {
         assert_eq!(row.cells[3].width, CellWidth::SpacerTail);
         assert!(row.cells[3].text.is_empty());
         assert_eq!(row.cells[5].style.fg, Color::Rgb(10, 20, 30));
-        let next = t.row(1).unwrap();
+        let next = terminal.row(1).unwrap();
         assert!(!next.wrapped);
         assert_eq!(next.cells[0].text, "z");
-        assert!(t.row(99).is_err());
+        assert!(terminal.row(99).is_err());
     }
 }

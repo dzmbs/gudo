@@ -118,10 +118,10 @@ impl StreamingRestore {
         // which keeps its address and outlives the decoder (see field order and `Drop`).
         Error::check(unsafe { ffi::ghostty_snapshot_decoder_new(ptr::null(), &mut raw, reader) })?;
         let decoder = NonNull::new(raw).ok_or(Error::InvalidValue)?;
-        let free = |e| {
+        let free = |error| {
             // SAFETY: created above, not shared, freed once on this error path.
             unsafe { ffi::ghostty_snapshot_decoder_free(decoder.as_ptr()) };
-            e
+            error
         };
         // SAFETY: the decoder is live; each option reads the documented type before returning.
         unsafe {
@@ -142,12 +142,12 @@ impl StreamingRestore {
                 ptr::from_ref(&CONTINUATION_MAX_BYTES).cast(),
             )
             .map_err(free)?;
-            let yes = true;
+            let enabled = true;
             for option in [
                 ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION,
                 ffi::GhosttySnapshotDecoderOption_GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY,
             ] {
-                set(option, (&raw const yes).cast()).map_err(free)?;
+                set(option, (&raw const enabled).cast()).map_err(free)?;
             }
         }
         let mut terminal = ptr::null_mut();
@@ -215,12 +215,12 @@ impl StreamingRestore {
                 ffi::GhosttySnapshotDecoderData_GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_ALTERNATE
             }
         };
-        let mut out = 0u64;
+        let mut rows = 0u64;
         // SAFETY: both HISTORY_ROWS fields write a `uint64_t`.
         let result = unsafe {
-            ffi::ghostty_snapshot_decoder_get(self.decoder.as_ptr(), data, (&raw mut out).cast())
+            ffi::ghostty_snapshot_decoder_get(self.decoder.as_ptr(), data, (&raw mut rows).cast())
         };
-        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(out)
+        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(rows)
     }
 
     /// Whether the snapshot's FINISH record has been decoded: all history is restored.
@@ -307,10 +307,10 @@ impl StreamingRestore {
             ffi::GhosttyResult_GHOSTTY_NO_VALUE => Ok(Step::Finished),
             code => {
                 Error::check(code)?;
-                let get = |data, out: *mut c_void| {
+                let get = |data, value: *mut c_void| {
                     // SAFETY: each PROGRESS field is available after a successful `next` and
-                    // `out` points at its documented type.
-                    Error::check(unsafe { ffi::ghostty_snapshot_decoder_get(decoder, data, out) })
+                    // `value` points at its documented type.
+                    Error::check(unsafe { ffi::ghostty_snapshot_decoder_get(decoder, data, value) })
                 };
                 let mut kind: ffi::GhosttySnapshotDecoderProgressKind = 0;
                 get(
@@ -363,7 +363,6 @@ impl StreamingRestore {
 /// What one decoder step restored.
 enum Step {
     Page(HistoryPage),
-    /// An image's pixels.
     Image,
     /// FINISH: everything is restored.
     Finished,
@@ -389,10 +388,10 @@ unsafe extern "C" fn read_source(
     unsafe {
         let source = &mut *userdata.cast::<Source>();
         let available = &source.data[source.pos..];
-        let n = available.len().min(capacity);
-        ptr::copy_nonoverlapping(available.as_ptr(), buffer, n);
-        source.pos += n;
-        *out_read = n;
+        let copied = available.len().min(capacity);
+        ptr::copy_nonoverlapping(available.as_ptr(), buffer, copied);
+        source.pos += copied;
+        *out_read = copied;
     }
     true
 }
@@ -428,7 +427,7 @@ pub fn history_chunks(snapshot: &[u8], start: usize, max_bytes: usize) -> Vec<(u
         let len = u32::from_le_bytes([header[2], header[3], header[4], header[5]]) as usize;
         let Some(end) = pos
             .checked_add(RECORD_HEADER_LEN + len)
-            .filter(|&e| e <= snapshot.len())
+            .filter(|&end| end <= snapshot.len())
         else {
             break;
         };
@@ -437,18 +436,18 @@ pub fn history_chunks(snapshot: &[u8], start: usize, max_bytes: usize) -> Vec<(u
             return chunks;
         }
         if tag == TAG_PAGE {
-            if let Some(c) = cut
+            if let Some(cut_at) = cut
                 && end - chunk_start > max_bytes
             {
-                chunks.push((chunk_start, c));
-                chunk_start = c;
+                chunks.push((chunk_start, cut_at));
+                chunk_start = cut_at;
             }
             cut = Some(end);
         }
         pos = end;
     }
-    if let Some(c) = cut.filter(|&c| c > chunk_start) {
-        chunks.push((chunk_start, c));
+    if let Some(cut_at) = cut.filter(|&cut_at| cut_at > chunk_start) {
+        chunks.push((chunk_start, cut_at));
     }
     chunks
 }
@@ -463,12 +462,12 @@ pub fn history_chunk(snapshot: &[u8], start: usize, max_bytes: usize) -> Option<
         let len = u32::from_le_bytes([header[2], header[3], header[4], header[5]]) as usize;
         let end = pos
             .checked_add(RECORD_HEADER_LEN + len)
-            .filter(|&e| e <= snapshot.len())?;
+            .filter(|&end| end <= snapshot.len())?;
         match tag {
             TAG_FINISH => return Some((end, true)),
             TAG_PAGE => {
                 if cut.is_some() && end - start > max_bytes {
-                    return cut.map(|c| (c, false));
+                    return cut.map(|cut_at| (cut_at, false));
                 }
                 cut = Some(end);
             }
@@ -476,7 +475,7 @@ pub fn history_chunk(snapshot: &[u8], start: usize, max_bytes: usize) -> Option<
         }
         pos = end;
     }
-    cut.map(|c| (c, false))
+    cut.map(|cut_at| (cut_at, false))
 }
 
 /// Counts the page records in `records` (whole records only).
@@ -501,12 +500,12 @@ mod tests {
     use crate::{TextRegion, ready_len, screen_len};
 
     fn busy_terminal(lines: usize) -> Result<Terminal, Error> {
-        let mut t = Terminal::new(40, 5)?;
-        t.set_scrollback_max_bytes(Some(64 << 20))?;
+        let mut terminal = Terminal::new(40, 5)?;
+        terminal.set_scrollback_max_bytes(Some(64 << 20))?;
         for i in 0..lines {
-            t.write(format!("\x1b[3{}mline {i} of history\x1b[0m\r\n", i % 8).as_bytes());
+            terminal.write(format!("\x1b[3{}mline {i} of history\x1b[0m\r\n", i % 8).as_bytes());
         }
-        Ok(t)
+        Ok(terminal)
     }
 
     #[test]
@@ -524,7 +523,7 @@ mod tests {
             // A chunk's last page waits for the record after it.
             assert!(pages.len() as u32 <= count_pages(&snapshot[start..end]) + 1);
             decoded += pages.len() as u32;
-            rows += pages.iter().map(|p| p.rows).sum::<usize>();
+            rows += pages.iter().map(|page| page.rows).sum::<usize>();
             if i == 1 {
                 // Live output keeps flowing while history is restored.
                 daemon.write(b"live output\r\n");
@@ -626,7 +625,8 @@ mod tests {
         }
         assert!(client.is_finished());
         // Generations are per process, never shared between terminals.
-        let pixels = |t: &Terminal, id| t.kitty_image(id).and_then(|i| i.pixels);
+        let pixels =
+            |terminal: &Terminal, id| terminal.kitty_image(id).and_then(|image| image.pixels);
         for id in [1, 2] {
             assert!(pixels(client.terminal(), id).is_some());
             assert_eq!(pixels(client.terminal(), id), pixels(&daemon, id));
