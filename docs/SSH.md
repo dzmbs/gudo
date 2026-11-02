@@ -1,6 +1,6 @@
 # SSH client (`crates/ssh`) and plain-SSH panes
 
-Status: working end to end against OpenSSH 9.6 (Ubuntu 24.04 arm64 VM), 2026-10-18. The
+Status: working end to end against OpenSSH 9.6 (Ubuntu 24.04 arm64 VM). The
 zero-setup path of D7 and rungs (c) and (d) of the 05 §8 ladder: dial any host with plain SSH,
 show a terminal right away, and upgrade to the daemon over iroh with one tap.
 
@@ -45,7 +45,7 @@ shell write/resize, shell output) fails at once instead of waiting on the socket
 | Setting | Default | Meaning |
 |---|---|---|
 | `Keepalive::interval` | 15 s (`ServerAliveInterval`) | a `keepalive@openssh.com` request is sent this often and must be answered before the next is due |
-| `Keepalive::count_max` | 3 (`ServerAliveCountMax`) | consecutive misses that declare the peer dead; after a miss the next keepalive goes out at once, so an idle silent drop is detected `interval × count_max` after the first unanswered keepalive: **45–60 s** after the drop, ≤ `interval × (count_max + 1)` = 60 s after the last answer |
+| `Keepalive::count_max` | 3 (`ServerAliveCountMax`) | consecutive misses that declare the peer dead; after a miss the next keepalive goes out at once, so an idle silent drop is detected `interval × count_max` after the first unanswered keepalive: **45-60 s** after the drop, ≤ `interval × (count_max + 1)` = 60 s after the last answer |
 | `Keepalive::probe_timeout` | 5 s | a *probe* (foreground, network change, or input after ≥ 1 interval without an answer) must be answered within this, else dead at once; a probe also shortens a keepalive already in flight |
 | `Timeouts::connect` / `handshake` / `auth` | 10 / 15 / 60 s | per hop; host-key prompts are outside these |
 | TCP | `TCP_NODELAY`; addresses raced RFC 8305-style (IPv6 first, next family after 250 ms) | |
@@ -58,17 +58,17 @@ States (`SessionListener::on_state`): `Connecting{attempt}` → `Connected{gener
 `NeedsAttention{error}` (auth failed, host key changed or refused, bad key: not retried
 until `reconnect_now`); `Closed`. A new `generation` means channels were lost.
 
-Measured against the VM (debug build, test keepalive 1 s × 3, probe 1–1.5 s):
+Measured against the VM (debug build, test keepalive 1 s × 3, probe 1-1.5 s):
 
 | | |
 |---|---|
-| silent drop (traffic blackholed, sockets open), idle | detected in 3.96–4.00 s (= interval × (count_max + 1)) |
-| frozen sshd session process (SIGSTOP) | 3.94–3.96 s |
+| silent drop (traffic blackholed, sockets open), idle | detected in 3.96-4.00 s (= interval × (count_max + 1)) |
+| frozen sshd session process (SIGSTOP) | 3.94-3.96 s |
 | fast probe after a silent drop | 1.00 s (= probe timeout) |
 | input typed after an interval of silence on a dead link | 1.00 s |
-| session: path heals → `Connected` again (handshake timeout 2 s, max backoff 1 s) | 2.7–2.8 s |
+| session: path heals → `Connected` again (handshake timeout 2 s, max backoff 1 s) | 2.7-2.8 s |
 | fallback pane: path heals → new shell on screen | 0.34 s |
-| keepalive RTT on the LAN VM | 0.4–0.6 ms |
+| keepalive RTT on the LAN VM | 0.4-0.6 ms |
 | first PTY command round trip / keystroke echo | 5.7 ms / 0.17 ms |
 | connect through 2 jump hosts (3 handshakes) | 176 ms |
 | upload 4 MiB raw / gzip (half random) | 68 ms / 82 ms (2.1 MB on the wire) |
@@ -78,6 +78,7 @@ the app probes (foreground, path change, typing).
 
 ## 3. Daemon bootstrap (`ssh::bootstrap`)
 
+The client
 holds the binaries, checks SHA-256, uploads; the remote never downloads. Each step is one
 `exec` round trip under `sh -c` (works whatever the login shell is):
 
@@ -104,7 +105,7 @@ build → `Upgraded` and restarted with its state (daemon id, paired devices, la
 
 Measured (release, Mac → VM): fresh install 4.2 s = probe 17 ms + upload 0.74 s + service
 0.07 s + pairing 3.3 s (mostly the daemon registering with its relay); reuse 43 ms; then
-`Client::connect(ticket)` paired over iroh in 33–60 ms. `gudo --ticket <ticket> ls` with a
+`Client::connect(ticket)` paired over iroh in 33-60 ms. `gudo --ticket <ticket> ls` with a
 bootstrap ticket lists the VM's session.
 
 ## 4. Plain-SSH fallback panes (`client_core::SshPane`)
@@ -115,7 +116,7 @@ pane) and emits the same `ClientEvent`s as daemon panes: `PaneBytes{seq}` as one
 stream, `PaneResized{seq}` at the resize point, `Connected{epoch, resumed}`,
 `Disconnected{reason}`, `Refused{reason}` (needs attention) and `PaneClosed` when the shell
 exits or the pane is closed. After a drop the session redials and the pane opens a new
-shell, writing a dim `[connection lost — new shell]` line into the stream (never lose a
+shell, writing a dim `[connection lost: new shell]` line into the stream (never lose a
 session silently). With `tmux_session: Some(name)` the shell runs in `tmux new -A -s name`
 when tmux exists, so reconnects re-attach the same session. Input typed while disconnected
 is dropped, not replayed into a different shell. `client_core::ssh_runtime()` is a shared
