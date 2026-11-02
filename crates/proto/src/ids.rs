@@ -316,6 +316,10 @@ bitset! {
         /// Understands `AskpassPush::PromptWhileGuestDrives` (a password prompt asked while
         /// a guest holds the pane's lease).
         ASKPASS_DRIVER = 20;
+        /// Numbers its input across reconnects (`Input::input_seq` keeps counting) and, after
+        /// reconnecting with the `Welcome`'s resume token, sends again what was not yet
+        /// acknowledged; the daemon applies each number once (`DaemonFeatures::INPUT_RESUME`).
+        INPUT_RESUME = 21;
     }
 }
 
@@ -364,5 +368,7 @@ bitset! {
         /// Remembers closed panes (directory, agent session) and starts
         /// `PaneLaunch::Reopen`.
         REOPEN = 15;
+        /// Applies each input of a client once across its reconnects (`Caps::INPUT_RESUME`).
+        INPUT_RESUME = 16;
     }
 }

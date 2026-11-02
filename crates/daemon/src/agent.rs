@@ -36,7 +36,6 @@ use tokio::sync::oneshot;
 
 use crate::core::{Core, lock};
 use crate::fsutil;
-use crate::identity::now_millis;
 
 /// How long a `PermissionRequest` hook waits for a decision (Claude allows 600 s; the
 /// recipe's hook timeout is 590 s).
@@ -60,7 +59,8 @@ pub struct HookRequest {
     pub agent: String,
     /// The hook event name (`PermissionRequest`, …), for logging.
     pub event: String,
-    /// Monotonic per-pane sequence (nanoseconds since the epoch is fine).
+    /// Orders a pane's hooks: the boot clock's nanoseconds ([`crate::hook_seq`]), which a
+    /// change of the wall clock cannot send back.
     pub seq: u64,
     /// The agent's hook payload, verbatim.
     pub payload: Value,
@@ -119,8 +119,9 @@ fn agent_kind(name: &str) -> Option<AgentKind> {
     }
 }
 
+/// The arbiter measures debounces and staleness, so it must not see the wall clock's steps.
 fn now() -> agents::UnixMillis {
-    agents::UnixMillis(now_millis())
+    agents::UnixMillis(crate::clock::steady_millis())
 }
 
 /// A random RFC 4122 version-4 UUID, for pinning a Claude session id.

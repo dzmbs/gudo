@@ -396,6 +396,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             } else {
                 Caps::EMPTY
             }
+            | Caps::INPUT_RESUME
             | inner.options.extra_caps,
         link: LinkClass::Normal,
         resume_token: lock(&inner.resume_token).clone(),
@@ -474,12 +475,16 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
         epoch,
         incompatible: _,
     } = live;
-    let resumed = {
+    let (resumed, same_run) = {
         let mut e = lock(&inner.epoch);
-        let resumed = e.is_some();
+        let seen = (e.is_some(), *e == Some(epoch));
         *e = Some(epoch);
-        resumed
+        seen
     };
+    // Input is kept for sending again only for daemons that apply it once.
+    let resends = lock(&inner.daemon_info)
+        .as_ref()
+        .is_some_and(|i| i.features.contains(proto::DaemonFeatures::INPUT_RESUME));
     lock(&inner.stats).connections += 1;
     inner.mp.reset_for_connection();
     // History requests in flight died with the previous connection.
@@ -496,6 +501,20 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
     let _ = input.set_priority(90);
     if let Err(e) = send(&mut input, &StreamHeader::Input).await {
         return e.to_string();
+    }
+    // What the last connection took but the daemon never confirmed: it may have died with it.
+    let principal = inner.ticket.principal;
+    let again = lock(&inner.input).resend(resends && same_run);
+    for sent in again {
+        let frame = ClientInput::Input(Input {
+            pane_id: sent.pane_id,
+            input_seq: InputSeq(sent.seq),
+            principal,
+            payload: sent.payload,
+        });
+        if let Err(e) = send(&mut input, &frame).await {
+            return e.to_string();
+        }
     }
 
     // Replay what the client wants. Panes in the Hello's resume list are already streaming.
@@ -552,8 +571,6 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
     ));
 
     let mut outgoing = inner.outgoing_rx.lock().await;
-    let mut input_seq: u64 = 0;
-    let principal = inner.ticket.principal;
     let reason = loop {
         tokio::select! {
             msg = outgoing.recv() => {
@@ -563,7 +580,7 @@ async fn run(inner: &Arc<Inner>, live: Live) -> String {
                         let _ = ctl_out.send(ctl);
                     }
                     Outgoing::Input { pane_id, payload } => {
-                        input_seq += 1;
+                        let input_seq = lock(&inner.input).send(pane_id, &payload, resends);
                         let frame = ClientInput::Input(Input {
                             pane_id,
                             input_seq: InputSeq(input_seq),
@@ -668,6 +685,9 @@ async fn read_ctl(inner: Arc<Inner>, mut rx: RecvStream) -> String {
             Ok(None) => return "daemon closed ctl".into(),
             Err(e) => return e.to_string(),
         };
+        if let ServerCtl::InputRejected { input_seq, .. } = &msg {
+            lock(&inner.input).confirm(input_seq.0);
+        }
         let Some(msg) = inner.ws.dispatch(msg) else {
             continue;
         };
@@ -934,11 +954,14 @@ fn apply_output(
                 size,
             }
         }
-        PaneOutput::InputAck { input_seq, at_seq } => ClientEvent::InputAck {
-            pane_id,
-            input_seq: input_seq.0,
-            at_seq: at_seq.0,
-        },
+        PaneOutput::InputAck { input_seq, at_seq } => {
+            lock(&inner.input).confirm(input_seq.0);
+            ClientEvent::InputAck {
+                pane_id,
+                input_seq: input_seq.0,
+                at_seq: at_seq.0,
+            }
+        }
     };
     inner.emit(event);
 }

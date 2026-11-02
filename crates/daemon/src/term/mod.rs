@@ -46,6 +46,10 @@ const TICK: Duration = Duration::from_millis(50);
 const MAX_OPEN_PANES: usize = 32;
 /// Output a wait holds at most (the pane's ring is 1 MiB).
 const WAIT_KEEP: usize = 1 << 20;
+/// How often a wait for a pattern renders and searches new output at most.
+const MATCH_EVERY: Duration = Duration::from_millis(100);
+/// Chunks (64 KiB each) a wait takes at once when output is waiting.
+const MAX_BATCH: usize = 16;
 
 /// What the shim sends on the hook socket: one JSON line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1001,11 +1005,25 @@ impl Ctx {
         let mut bytes = Vec::new();
         let mut last_output = Instant::now();
         let cols = entry.pane.size().cols;
+        // Output not yet searched, and when the pattern last ran.
+        let mut fresh = true;
+        let mut matched_at: Option<Instant> = None;
         loop {
             // Each condition is checked against the state after the newest output.
             let mut text = None;
-            if let Some(re) = &re {
-                let rendered = output::visible(&output::render(&bytes, cols));
+            let due = matched_at.is_none_or(|t| t.elapsed() >= MATCH_EVERY)
+                || Instant::now() + TICK >= deadline;
+            if let Some(re) = re.as_ref().filter(|_| fresh && due) {
+                // Rendering is the costly part: off the async workers, and at most every
+                // MATCH_EVERY however fast the pane prints.
+                let input = bytes.clone();
+                let rendered = tokio::task::spawn_blocking(move || {
+                    output::visible(&output::render(&input, cols))
+                })
+                .await
+                .map_err(|e| ToolError::new(ErrorCode::Failed, e.to_string()))?;
+                fresh = false;
+                matched_at = Some(Instant::now());
                 if let Some(found) = rendered.lines().find_map(|l| {
                     re.captures(l).map(|c| {
                         (
@@ -1127,6 +1145,14 @@ impl Ctx {
             match tokio::time::timeout(TICK.min(deadline - now), sub.recv()).await {
                 Ok(Ok(chunk)) => {
                     bytes.extend_from_slice(&chunk.data);
+                    fresh = true;
+                    // Take what else is ready too, so a flood is checked per batch.
+                    for _ in 0..MAX_BATCH {
+                        match tokio::time::timeout(Duration::ZERO, sub.recv()).await {
+                            Ok(Ok(chunk)) => bytes.extend_from_slice(&chunk.data),
+                            _ => break,
+                        }
+                    }
                     // A flood of output over a long wait keeps only its newest part.
                     if bytes.len() > WAIT_KEEP {
                         bytes.drain(..bytes.len() - WAIT_KEEP / 2);

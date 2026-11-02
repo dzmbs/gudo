@@ -33,6 +33,13 @@ const ZSTD_LEVEL: i32 = 3;
 const ACTIVITY_INTERVAL: Duration = Duration::from_millis(100);
 /// Full snapshots kept for history paging: the newest few sent to clients.
 const HISTORY_SNAPSHOTS: usize = 2;
+/// Bytes of full snapshots kept for history paging, past the newest: one snapshot of a pane
+/// full of kitty images can be tens of MB.
+const HISTORY_BYTES: usize = 48 << 20;
+/// A snapshot this recent is shared by every stream that asks for one, although output moved
+/// on (each continues with the bytes since): many clients following a flooding pane would
+/// otherwise each encode the whole terminal, under its lock, several times a second.
+const SHARE_SNAPSHOT: Duration = Duration::from_millis(30);
 /// Longest command output returned; longer output keeps its end.
 const MAX_OUTPUT: usize = 2 << 20;
 /// Cell size in pixels for clients that report none: kitty images need one to have a size.
@@ -233,6 +240,7 @@ pub(crate) struct Snapshot {
     /// The complete snapshot; history (and the other images' pixels) follow the first
     /// `raw_len` bytes.
     full: Vec<u8>,
+    made: Instant,
 }
 
 /// One page of history records, from [`Pane::history_page`].
@@ -483,15 +491,16 @@ impl Pane {
         }
     }
 
-    /// The current snapshot, encoded at most once per stream position. The newest few are
-    /// kept whole so clients can page through their history.
+    /// The current snapshot, encoded at most once per stream position, or one from the last
+    /// [`SHARE_SNAPSHOT`] that the ring can still continue from. The newest few are kept whole
+    /// so clients can page through their history.
     pub fn snapshot(&self) -> Result<Arc<Snapshot>, SnapshotError> {
         let (full, seq, resize_count) = {
             let vt = lock(&self.vt);
             let cache = lock(&self.cache);
             if let Some(cached) = cache.as_ref()
-                && cached.seq.0 == vt.seq
                 && cached.resize_count == vt.resize_count
+                && (cached.seq.0 == vt.seq || self.shareable(cached))
             {
                 return Ok(Arc::clone(cached));
             }
@@ -510,6 +519,12 @@ impl Pane {
         Ok(snapshot)
     }
 
+    /// Whether a stream may start from `snapshot` although output moved on since: it is recent
+    /// and the bytes after it are still in the ring.
+    fn shareable(&self, snapshot: &Snapshot) -> bool {
+        snapshot.made.elapsed() < SHARE_SNAPSHOT && self.pty.oldest().get() <= snapshot.seq.0
+    }
+
     /// The current snapshot as `viewer` may see it: the pane's own for `None`, the
     /// principal's since-join view otherwise (opened now if it is missing, which only ever
     /// hides more).
@@ -522,8 +537,8 @@ impl Pane {
             open_view(&mut vt, principal)?;
             let view = vt.view(principal).ok_or(ghostty_vt::Error::InvalidValue)?;
             if let Some(cached) = view.snapshots.back()
-                && cached.seq.0 == vt.seq
                 && cached.resize_count == vt.resize_count
+                && (cached.seq.0 == vt.seq || self.shareable(cached))
             {
                 return Ok(Arc::clone(cached));
             }
@@ -943,16 +958,21 @@ impl Snapshot {
             raw_len: ready as u32,
             zstd,
             full,
+            made: Instant::now(),
         })
     }
 }
 
-/// Keeps `snapshot` among the newest few for history paging.
+/// Keeps `snapshot` among the newest few for history paging: older ones only while all kept
+/// stay within [`HISTORY_BYTES`] (a client paging a dropped one starts over from the newest).
 fn keep_snapshot(snapshots: &mut VecDeque<Arc<Snapshot>>, snapshot: &Arc<Snapshot>) {
     snapshots.retain(|s| s.seq != snapshot.seq);
     snapshots.push_back(Arc::clone(snapshot));
-    while snapshots.len() > HISTORY_SNAPSHOTS {
-        snapshots.pop_front();
+    let mut total: usize = snapshots.iter().map(|s| s.full.len()).sum();
+    while snapshots.len() > HISTORY_SNAPSHOTS || (snapshots.len() > 1 && total > HISTORY_BYTES) {
+        if let Some(old) = snapshots.pop_front() {
+            total -= old.full.len();
+        }
     }
 }
 
@@ -1043,6 +1063,41 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
 
     use super::*;
+
+    fn snapshot(seq: u64, len: usize) -> Arc<Snapshot> {
+        Arc::new(Snapshot {
+            seq: Seq(seq),
+            resize_count: 0,
+            raw_len: 0,
+            zstd: Vec::new(),
+            full: vec![0; len],
+            made: Instant::now(),
+        })
+    }
+
+    /// Snapshots of an image-heavy pane are tens of MB each; older ones for paging must not
+    /// multiply that.
+    #[test]
+    fn large_snapshots_keep_no_older_copies() {
+        let mut kept = VecDeque::new();
+        for seq in 1..=3 {
+            keep_snapshot(&mut kept, &snapshot(seq, 1 << 20));
+        }
+        assert_eq!(
+            kept.iter().map(|s| s.seq.0).collect::<Vec<_>>(),
+            [2, 3],
+            "small ones: the newest two"
+        );
+        keep_snapshot(&mut kept, &snapshot(4, 40 << 20));
+        keep_snapshot(&mut kept, &snapshot(5, 40 << 20));
+        assert_eq!(kept.iter().map(|s| s.seq.0).collect::<Vec<_>>(), [5]);
+        keep_snapshot(&mut kept, &snapshot(6, 80 << 20));
+        assert_eq!(
+            kept.iter().map(|s| s.seq.0).collect::<Vec<_>>(),
+            [6],
+            "the newest is kept whatever its size"
+        );
+    }
 
     /// A program printing marks and titles faster than the pane's task handles them used to
     /// queue every event: an OSC 133 flood grew the daemon by 130 MB/s.

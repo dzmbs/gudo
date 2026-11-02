@@ -255,6 +255,8 @@ pub(crate) struct Core {
     pub(crate) term: crate::term::Term,
     /// Self upgrade: one at a time, and the restart it asks the host process for.
     pub upgrade: crate::upgrade::Upgrade,
+    /// Input already applied per client input stream, so a resend after a reconnect is not.
+    pub(crate) inputs: crate::resume::InputStreams,
     /// Native password prompts: the helper, open prompts, connections that may answer.
     pub askpass: crate::askpass::Askpass,
     /// URLs and browser tools for the app (`browser`).
@@ -302,6 +304,7 @@ impl Core {
             assist: crate::assist::Assist::new(&cfg),
             term: crate::term::Term::default(),
             upgrade: crate::upgrade::Upgrade::default(),
+            inputs: crate::resume::InputStreams::default(),
             askpass: crate::askpass::Askpass::install(
                 &cfg.askpass,
                 &cfg.state_dir,

@@ -40,6 +40,7 @@ mod mirror;
 mod mp;
 mod peer;
 pub mod push;
+mod resend;
 mod ssh_pane;
 mod upgrade;
 pub mod vscode;
@@ -501,6 +502,8 @@ pub(crate) struct Inner {
     pub resumed: watch::Sender<u64>,
     pub epoch: Mutex<Option<u64>>,
     pub resume_token: Mutex<Option<proto::ResumeToken>>,
+    /// Input numbering across connections, and input to send again after a reconnect.
+    pub(crate) input: Mutex<resend::InputLog>,
     pub paired: Mutex<bool>,
     pub next_op: AtomicU64,
     pub stats: Mutex<ClientStats>,
@@ -695,6 +698,7 @@ impl Client {
             resumed: watch::Sender::new(0),
             epoch: Mutex::new(None),
             resume_token: Mutex::new(None),
+            input: Mutex::default(),
             paired: Mutex::new(false),
             next_op: AtomicU64::new(1),
             stats: Mutex::new(ClientStats::default()),
