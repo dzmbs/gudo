@@ -92,6 +92,8 @@ final class MacSnapshotTests: XCTestCase {
     /// surface's own frame (see `terminalsDrawn`).
     private var drawsTerminals = false
     private var currentModel: WindowModel?
+    /// Each terminal's frame as presented before a layout motion (`motion`).
+    private var heldFrames: [PaneId: CGImage] = [:]
 
     /// `image` with every terminal drawn in from its surface's own complete frame. A window off
     /// every display presents Metal frames only when it gets drawables, so the window server's
@@ -101,7 +103,8 @@ final class MacSnapshotTests: XCTestCase {
     private func terminalsDrawn(over image: CGImage, in frameView: NSView) -> CGImage? {
         guard let model = currentModel, let workspace = model.workspace, let target = model.arrangement.layout else { return nil }
         // As drawn: part way through a scrubbed change, too.
-        let layout = model.arrangement.scrub.map { target.blended(from: $0.from, progress: $0.progress) } ?? target
+        let shown = model.arrangement.preview ?? target
+        let layout = model.arrangement.scrub.map { shown.blended(from: $0.from, progress: $0.progress) } ?? shown
         let scale = CGFloat(image.width) / frameView.bounds.width
         let height = CGFloat(image.height)
         guard let ctx = CGContext(
@@ -137,16 +140,21 @@ final class MacSnapshotTests: XCTestCase {
         }
         func drawTerminal(_ pane: PaneId) {
             guard let rect = onScreen(pane), let surface = workspace.panes[pane]?.view.surface else { return }
-            _ = surface.renderIfDirty(offscreen: true)
-            guard let still = surface.snapshot() else { return }
+            // A terminal in a layout motion shows the frame it last presented (its layer keeps
+            // it, anchored top-left, on its background).
+            let held = surface.isHoldingFrame ? heldFrames[pane] : nil
+            if held == nil { _ = surface.renderIfDirty(offscreen: true) }
+            guard let still = held ?? surface.snapshot() else { return }
             ctx.saveGState()
             ctx.clip(to: pixels(rect))
+            ctx.setFillColor(NSColor(theme.background).cgColor)
+            ctx.fill(pixels(rect))
             ctx.draw(still, in: CGRect(x: pixels(rect).minX, y: pixels(rect).maxY - CGFloat(still.height), width: CGFloat(still.width), height: CGFloat(still.height)))
             ctx.restoreGState()
         }
         let focused = workspace.focusedPane
         let dim = NSColor(theme.background).withAlphaComponent(1 - TerminalPreferences.Default.unfocusedSplitOpacity).cgColor
-        let tiled = layout.leaves.filter { $0.window == nil && $0.visible }
+        let tiled = layout.leaves.filter { $0.window == nil && $0.visible }.sorted { $0.z < $1.z }
         for leaf in tiled {
             guard let rect = onScreen(leaf.pane) else { continue }
             drawTerminal(leaf.pane)
@@ -159,6 +167,10 @@ final class MacSnapshotTests: XCTestCase {
                 ctx.setFillColor(NSColor(theme.background).withAlphaComponent(0.55).cgColor)
                 ctx.fill(pixels(rect))
             }
+        }
+        // A pane drawn over the others (zooming) keeps its header over their terminals.
+        for leaf in tiled where leaf.z > 0 {
+            restore(window(CGRect(x: leaf.frame.minX, y: leaf.frame.minY, width: leaf.frame.width, height: PaneHeader.height)))
         }
         // Windows back to front, from where their panes are now: as captured (header, rim,
         // backdrop) with the panel shadow, then their terminals.
@@ -867,6 +879,130 @@ final class MacSnapshotTests: XCTestCase {
             XCTAssertFalse(arrangement.guides.isEmpty, "a snap guide shows")
             try? self.capture(self.current!, "floating-guides")
             arrangement.endMove(card.id, by: CGSize(width: dx, height: 20), velocity: .zero)
+        }
+    }
+
+    // MARK: Layout motion
+
+    /// The moments of a motion each sequence shows: every 30 ms of its first 0.3 s, then later.
+    private static let motionTimes = [0, 0.03, 0.06, 0.09, 0.12, 0.15, 0.18, 0.21, 0.24, 0.3, 0.42]
+
+    /// Captures `name-0…` through `change`, the canvas drawn at points along `spring` as its
+    /// animation draws it (a capture takes longer than a frame), each terminal as it shows
+    /// then (its held last frame); then `name-rest` once it has settled and redrawn.
+    private func motion(_ name: String, _ model: WindowModel, spring: Spring = Spring(duration: DS.Motion.splitDuration, bounce: 0), _ change: () -> Void) async {
+        guard let window = current else { return }
+        let arrangement = model.arrangement
+        guard let from = arrangement.preview ?? arrangement.layout else { return }
+        keepFrames(model)
+        PaneArrangement.settleStretch = 40
+        model.workspace?.layoutChangeUntil = .now + .seconds(20)
+        arrangement.scrub = .init(from: from, progress: 0)
+        change()
+        await pump(0.1)
+        for (index, time) in Self.motionTimes.enumerated() {
+            arrangement.scrub = .init(from: from, progress: spring.value(target: 1.0, time: time))
+            await pump(0.08)
+            try? capture(window, "\(name)-\(index)")
+        }
+        arrangement.scrub = nil
+        PaneArrangement.settleStretch = 1
+        await pump(0.8)
+        await present(model)
+        try? capture(window, "\(name)-rest")
+    }
+
+    /// Keeps what each terminal shows now, for the frames of a motion that holds it.
+    private func keepFrames(_ model: WindowModel) {
+        for (pane, terminal) in model.workspace?.panes ?? [:] where !terminal.view.surface.isHoldingFrame {
+            _ = terminal.view.surface.renderIfDirty(offscreen: true)
+            heldFrames[pane] = terminal.view.surface.snapshot()
+        }
+    }
+
+    /// The terminals' grid changes so far, by pane: each is one SIGWINCH to its shell.
+    private func resizes(_ model: WindowModel) -> [PaneId: Int] {
+        model.workspace?.panes.mapValues(\.resizesSent) ?? [:]
+    }
+
+    /// Zoom in and out of the right pane of two side by side, and the lower of two stacked, each
+    /// shell at a prompt with a clock at its right edge: the pane moves as a picture of its last
+    /// frame, its grid changes once (one SIGWINCH, before it moves) and the shell's redraw shows
+    /// when it lands. Then a split and a close.
+    func testTransitions() async throws {
+        drawsTerminals = true
+        defer { drawsTerminals = false }
+        defer { MockPaneStatus.fixture = nil }
+        for (layout, screen) in [("columns", "transitions-columns"), ("rows", "transitions-rows")] {
+            try await window("transitions-\(layout)", screen: screen) { model in
+                self.animating(self.current!)
+                await self.pump(0.8)
+                await self.present(model)
+                guard let workspace = model.workspace, let (first, second) = TransitionFixtures.last else { return XCTFail("no panes") }
+                workspace.apply(.focus(second))
+                await self.pump(0.5)
+                await self.present(model)
+
+                var before = self.resizes(model)
+                await self.motion("zoom-\(layout)-in", model) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
+                var after = self.resizes(model)
+                XCTAssertEqual(after[second], (before[second] ?? 0) + 1, "the zoomed pane resizes once")
+                XCTAssertEqual(after[first], before[first], "the pane under it keeps its size")
+
+                before = after
+                await self.motion("zoom-\(layout)-out", model) { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
+                after = self.resizes(model)
+                XCTAssertEqual(after[second], (before[second] ?? 0) + 1, "back to its place: one resize")
+                XCTAssertEqual(after[first], before[first])
+
+                guard layout == "columns" else { return }
+                await self.motion("split-\(layout)", model) { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
+                await self.motion("close-\(layout)", model) { WorkspaceAction.closePane.perform(on: workspace, window: model) }
+            }
+        }
+    }
+
+    /// part of the top one. The preview shows the panes as the drop leaves them (the dragged
+    /// one the tab's whole left half), and the drop settles exactly there.
+    func testDragPreview() async throws {
+        drawsTerminals = true
+        defer { drawsTerminals = false }
+        defer { MockPaneStatus.fixture = nil }
+        try await window("drag-preview", screen: "transitions-rows") { model in
+            self.animating(self.current!)
+            await self.pump(0.8)
+            await self.present(model)
+            let arrangement = model.arrangement
+            guard let workspace = model.workspace, let (top, bottom) = TransitionFixtures.last, let layout = arrangement.layout,
+                  let from = layout.leaf(bottom)?.frame, let onto = layout.leaf(top)?.frame else { return XCTFail("no panes") }
+            let start = CGPoint(x: from.midX, y: from.minY + 12)
+            let end = CGPoint(x: onto.minX + onto.width * 0.18, y: onto.midY)
+            self.keepFrames(model)
+            for step in 0...10 {
+                let t = CGFloat(step) / 10
+                let shown = arrangement.preview ?? layout
+                let drop = arrangement.paneDrag?.drop
+                arrangement.scrub = .init(from: shown, progress: 0)
+                arrangement.drag(bottom, to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+                if step > 0, arrangement.paneDrag?.drop != drop {
+                    // The panes making room, along the `reorder` spring.
+                    let spring = Spring(response: 0.3, dampingRatio: 0.84)
+                    for (index, time) in Self.motionTimes.enumerated() {
+                        arrangement.scrub = .init(from: shown, progress: spring.value(target: 1.0, time: time))
+                        await self.pump(0.08)
+                        try? self.capture(self.current!, "drag-room-\(step)-\(index)")
+                    }
+                }
+                arrangement.scrub = nil
+                await self.pump(step == 10 ? 0.5 : 0.1)
+                try? self.capture(self.current!, "drag-preview-\(step)")
+            }
+            let lit = arrangement.paneDrag?.preview
+            XCTAssertEqual(arrangement.paneDrag?.drop, .beside(top, .left))
+            XCTAssertEqual(lit?.height ?? 0, layout.bounds.height, accuracy: 1, "lit: the whole left half")
+            await self.motion("drag-drop", model) { arrangement.endDrag(bottom, at: end) }
+            XCTAssertEqual(arrangement.layout?.leaf(bottom)?.frame, lit, "dropped where it was lit")
+            _ = workspace
         }
     }
 

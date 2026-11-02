@@ -14,6 +14,23 @@ nonisolated final class EchoBackend: PaneBackend {
         var onOutput: (@Sendable (UnsafeRawBufferPointer) -> Void)?
         /// A screen `show` was given before the pane started, drawn after its greeting.
         var shown: [UInt8] = []
+        var cols = 80
+        /// A prompt with a right-aligned part (zsh's RPROMPT), redrawn at each new width.
+        var rightPrompt: (left: String, leftWidth: Int, right: String, rightWidth: Int)?
+    }
+
+    /// Draws `left` with `right` at the right edge on the cursor's line, and redraws it after
+    /// every resize as zsh does on SIGWINCH (design fixtures).
+    func showPrompt(_ left: String, width leftWidth: Int, right: String, width rightWidth: Int) {
+        let cols = state.withLock { state in
+            state.rightPrompt = (left, leftWidth, right, rightWidth)
+            return state.cols
+        }
+        show(Self.promptLine(left, leftWidth, right, rightWidth, cols: cols))
+    }
+
+    private static func promptLine(_ left: String, _ leftWidth: Int, _ right: String, _ rightWidth: Int, cols: Int) -> String {
+        "\r\u{1b}[J" + left + "\u{1b}[\(max(cols - rightWidth + 1, leftWidth + 2))G" + right + "\u{1b}[\(leftWidth + 1)G"
     }
 
     private let pane: PaneId
@@ -71,7 +88,17 @@ nonisolated final class EchoBackend: PaneBackend {
         }
     }
 
-    func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {}
+    /// Counts the resizes the "shell" was sent (tests: one SIGWINCH per layout change).
+    let resizes = Atomic<Int>(0)
+
+    func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {
+        resizes.add(1, ordering: .relaxed)
+        let prompt = state.withLock { state in
+            state.cols = Int(cols)
+            return state.rightPrompt
+        }
+        if let prompt { emit(Array(Self.promptLine(prompt.left, prompt.leftWidth, prompt.right, prompt.rightWidth, cols: Int(cols)).utf8)) }
+    }
 
     func terminate() {
         state.withLock { $0.onOutput = nil }

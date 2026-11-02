@@ -126,6 +126,8 @@ struct SplitTreeView: View {
     @State private var lastShape = ShapeMemo()
     @State private var lastLayout = LayoutMemo()
     @State private var ownArrangement = PaneArrangement()
+    /// The zoomed pane once it has finished growing: the panes under it go out of sight.
+    @State private var settledZoom: PaneId?
     @Environment(WindowModel.self) private var model
 
     /// The window's arrangement for the tree it arranges (so its keys and tests reach it); a
@@ -151,9 +153,10 @@ struct SplitTreeView: View {
         // Here rather than in `onChange`: the hold must start before the animation's first
         // frame resizes a terminal.
         let change = lastShape.update(shape)
+        let settle = (change == .float ? DS.Motion.liftDuration : DS.Motion.splitSettle) * PaneArrangement.settleStretch
         if change != .none {
             if animated {
-                TerminalSurface.holdGrids(for: .milliseconds(Int((change == .float ? DS.Motion.liftDuration : DS.Motion.splitDuration) * 1000)))
+                TerminalSurface.holdGrids(for: .milliseconds(Int(settle * 1000)))
             }
             // The grids change with the layout, not by a resize the user makes: no cols × rows
             // overlay (a window tab's tree changes without `Workspace.apply`).
@@ -163,12 +166,22 @@ struct SplitTreeView: View {
         }
         let motion: Animation? = animated ? (lastShape.lastChange == .float ? DS.Motion.lift : DS.Motion.split) : nil
         return GeometryReader { geometry in
-            let target = CanvasLayout(
+            var target = CanvasLayout(
                 node: node, floats: floats, zoomed: zoomed, focused: tree.focusedLeaf,
                 size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
-                header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, live: arrangement.live)
+                header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, headers: isSplit, live: arrangement.live,
+                zoomSettled: !animated || zoomed == settledZoom)
+            // A new pane comes in under the panes making room for it, which uncover it; a pane
+            // unzoomed shrinks back over the panes it covered.
+            let _ = change != .none && animated ? lastLayout.move(target.newTiles(since: lastLayout.layout), for: settle) : ()
+            let _ = target.lower(lastLayout.lowered)
+            let _ = target.raise(lastLayout.raised(lastShape.unzoomed))
             let _ = arrangement.update(layout: target, tree: tree)
-            let layout = arrangement.scrub.map { target.blended(from: $0.from, progress: $0.progress) } ?? target
+            // Every terminal heads for its new size: its grid changes once, now, and its last
+            // frame stands in until it is there.
+            let _ = change != .none && animated ? arrangement.prepareTerminals(for: target, within: settle) : ()
+            let shown = arrangement.preview ?? target
+            let layout = arrangement.scrub.map { shown.blended(from: $0.from, progress: $0.progress) } ?? shown
             let _ = takeStills(before: lastLayout.layout, after: target, animated: change == .float && animated)
             let _ = lastLayout.layout = target
             let _ = arrangement.stillsVersion
@@ -181,6 +194,9 @@ struct SplitTreeView: View {
                     PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
                         .environment(\.paneStill, arrangement.still(of: leaf.pane))
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
+                        // A pane zooming over its neighbours, or shrinking back onto them,
+                        // keeps an edge against them on the way.
+                        .shadow(color: .black.opacity(leaf.z == CanvasLayout.zoomZ && lastLayout.isMoving ? 0.3 : 0), radius: 10)
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
                         .liftBeat(floating: leaf.window != nil)
                         .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)
@@ -223,12 +239,34 @@ struct SplitTreeView: View {
         // Only shape changes animate: a divider drag or a moving window must track the pointer
         // frame for frame.
         .animation(arrangement.scrub == nil ? motion : nil, value: shape)
+        .task(id: zoomed) {
+            if animated { try? await Task.sleep(for: .milliseconds(Int(DS.Motion.splitSettle * PaneArrangement.settleStretch * 1000))) }
+            guard !Task.isCancelled else { return }
+            settledZoom = zoomed
+        }
     }
 }
 
 /// The canvas's last layout (not state SwiftUI observes).
 private final class LayoutMemo {
     var layout: CanvasLayout?
+    private var newTiles: Set<PaneId> = []
+    private var movingUntil = ContinuousClock.now
+
+    var isMoving: Bool { ContinuousClock.now < movingUntil }
+
+    /// New panes kept under the others while they make room.
+    var lowered: Set<PaneId> { ContinuousClock.now < movingUntil ? newTiles : [] }
+
+    /// `pane` while the last change is still moving (a pane unzoomed, kept over the panes it
+    /// shrinks back onto).
+    func raised(_ pane: PaneId?) -> PaneId? { ContinuousClock.now < movingUntil ? pane : nil }
+
+    /// A change starts moving panes for `seconds`; `newTiles` are the panes it brings in.
+    func move(_ newTiles: Set<PaneId>, for seconds: Double) {
+        self.newTiles = newTiles
+        movingUntil = .now + .milliseconds(Int(seconds * 1000))
+    }
 }
 
 extension SplitTreeView {
@@ -252,6 +290,8 @@ private final class ShapeMemo {
     enum Change { case none, split, float }
     private var shape: CanvasShape?
     private(set) var lastChange = Change.split
+    /// The pane zoomed before the last change, on its way back into the tree.
+    private(set) var unzoomed: PaneId?
 
     /// Records `shape`; a change, or a tree just shown (a tab turning into a window tab swaps
     /// the whole view, and its panes move with it).
@@ -260,6 +300,7 @@ private final class ShapeMemo {
         guard let old = self.shape else { return .split }
         guard old != shape else { return .none }
         lastChange = old.windows != shape.windows || old.hidden != shape.hidden ? .float : .split
+        unzoomed = old.zoomed != shape.zoomed ? old.zoomed : nil
         return lastChange
     }
 }

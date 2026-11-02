@@ -167,6 +167,12 @@ public final class TerminalSurface {
         layer.framebufferOnly = true
         layer.maximumDrawableCount = 3
         layer.isOpaque = true
+        // A held frame (`Motion`) larger than the view is cropped, not drawn past its edges.
+        layer.masksToBounds = true
+        #if os(iOS)
+        // Top-left as seen: a UIKit layer's y axis points down, gravity's up.
+        layer.contentsGravity = .bottomLeft
+        #endif
         applyBackground()
     }
 
@@ -259,7 +265,8 @@ public final class TerminalSurface {
     /// `gridInterval` while the size keeps changing (a divider drag, a live window resize),
     /// always ending at the final size. Meanwhile the
     /// current grid stays drawn where it was, anchored top-left: clipped by a shrinking view,
-    /// on background in a growing one, never reflowed.
+    /// on background in a growing one, never reflowed. A view in a layout motion
+    /// (`prepareResize`, `holdFrames`) does not even redraw: it shows its last frame.
     public func layout(size: CGSize, scale requestedScale: CGFloat) {
         lastLayout = (size, requestedScale)
         let scale = Self.drawableScale(for: size, scale: requestedScale)
@@ -268,18 +275,33 @@ public final class TerminalSurface {
             fonts = FontGrid.shared(pixelSize: appearance.fontSize * scale, family: appearance.fontFamily)
             builder = FrameBuilder()
             builder.style = Self.frameStyle(appearance)
+            // New cells: the frame on screen no longer stands for anything.
+            motion = nil
+            motionTask?.cancel()
+            motionTask = nil
         }
-        guard let fonts else { return }
+        guard fonts != nil else { return }
         let newPixelSize = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        if motion == nil, ContinuousClock.now < Self.frameHoldUntil, grid != nil, pixelSize.width > 0, newPixelSize != pixelSize {
+            motionPixelSize = pixelSize
+            motion = Motion(target: nil, deadline: Self.frameHoldUntil)
+            scheduleMotionEnd()
+        }
+        if var motion {
+            // In motion: the last frame stays, anchored top-left, until the view arrives.
+            if newPixelSize != motionPixelSize { lastSizeChange = .now }
+            motionPixelSize = newPixelSize
+            if motion.arrived == nil, let target = motion.target, Self.isClose(newPixelSize, target, scale: scale) {
+                motion.arrived = .now
+                self.motion = motion
+            }
+            return
+        }
         if newPixelSize != pixelSize { lastSizeChange = .now }
         pixelSize = newPixelSize
         layer.drawableSize = pixelSize
 
-        let m = fonts.metrics
-        let pad = Int((appearance.padding * scale).rounded())
-        let cols = max(1, (Int(pixelSize.width) - 2 * pad) / m.cellWidth)
-        let rows = max(1, (Int(pixelSize.height) - 2 * pad) / m.cellHeight)
-        let target = Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
+        guard let target = gridFitting(pixelSize) else { return }
 
         if let grid, target == grid {
             pendingGrid = nil
@@ -382,7 +404,7 @@ public final class TerminalSurface {
         }
     }
 
-    private func commitGrid(_ newGrid: Grid) {
+    private func commitGrid(_ newGrid: Grid, in pixels: CGSize? = nil) {
         pendingGrid = nil
         pendingIsHeld = false
         gridCommitTask?.cancel()
@@ -391,7 +413,7 @@ public final class TerminalSurface {
         if grid != nil { lastGridCommit = .now }
         let changed = newGrid != grid
         grid = newGrid
-        updateInset(for: newGrid)
+        updateInset(for: newGrid, in: pixels ?? pixelSize)
         guard changed else { return }
         if !sizeFollowsStream {
             terminal.resize(cols: newGrid.cols, rows: newGrid.rows, cellWidth: newGrid.cellWidth, cellHeight: newGrid.cellHeight)
@@ -400,15 +422,168 @@ public final class TerminalSurface {
         onGridChange?(newGrid)
     }
 
+    /// The whole cells that fit a drawable of `pixels`, the remainder becoming padding.
+    private func gridFitting(_ pixels: CGSize) -> Grid? {
+        guard let m = fonts?.metrics else { return nil }
+        let pad = Int((appearance.padding * layer.contentsScale).rounded())
+        let cols = max(1, (Int(pixels.width) - 2 * pad) / m.cellWidth)
+        let rows = max(1, (Int(pixels.height) - 2 * pad) / m.cellHeight)
+        return Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(m.cellWidth), cellHeight: UInt32(m.cellHeight))
+    }
+
     /// `window-padding-balance`: split the space left over after whole cells evenly, so the grid
     /// sits centered instead of hugging the top-left edge.
-    private func updateInset(for grid: Grid) {
+    private func updateInset(for grid: Grid, in pixels: CGSize? = nil) {
+        let pixels = pixels ?? pixelSize
         let pad = Int((appearance.padding * layer.contentsScale).rounded())
         guard appearance.paddingBalance else { return gridInset = SIMD2(pad, pad) }
-        let extraX = Int(pixelSize.width) - 2 * pad - Int(grid.cols) * Int(grid.cellWidth)
-        let extraY = Int(pixelSize.height) - 2 * pad - Int(grid.rows) * Int(grid.cellHeight)
+        let extraX = Int(pixels.width) - 2 * pad - Int(grid.cols) * Int(grid.cellWidth)
+        let extraY = Int(pixels.height) - 2 * pad - Int(grid.rows) * Int(grid.cellHeight)
         gridInset = SIMD2(pad + max(0, extraX) / 2, pad + max(0, extraY) / 2)
     }
+
+    // MARK: Layout motion
+
+    /// A view carried to a new size by an animated layout change (a split, a close, a zoom, a
+    /// drop, the sidebar). Drawn at every size on the way, it would reallocate its drawable
+    /// and redraw every frame, and the program's redraw for its new size would land after it
+    /// stopped. Instead it shows its last frame, anchored top-left (cropped as it shrinks, on
+    /// its background as it grows), its grid changes once for where it is going while nothing
+    /// new is shown, and the next frame it draws is the program's at the new size.
+    private struct Motion {
+        /// Where the view is going, in pixels (nil: wherever it settles).
+        var target: CGSize?
+        /// When it should be there.
+        var deadline: ContinuousClock.Instant
+        /// When it got there.
+        var arrived: ContinuousClock.Instant?
+        /// The grid already changed for the target: nothing is drawn until the end.
+        var regridded = false
+        /// Output seen while waiting for the program's redraw, and since when it has been quiet.
+        var outputSeen: UInt64 = 0
+        var quietSince = ContinuousClock.now
+    }
+
+    private var motion: Motion?
+    private var motionTask: Task<Void, Never>?
+    /// The view's size in pixels while in motion (the drawable keeps the last frame's).
+    private var motionPixelSize = CGSize.zero
+    private nonisolated let outputSerial = Atomic<UInt64>(0)
+    static var frameHoldUntil = ContinuousClock.now
+
+    /// Close enough to count as there: a spring's last moves are under a pixel each.
+    static let arrivalTolerance: CGFloat = 1.5
+    /// How long the program's output must pause after a resize to count as redrawn, and how
+    /// long a view that arrived waits for that at most.
+    static let redrawQuiet = Duration.milliseconds(30)
+    static let redrawWait = Duration.milliseconds(150)
+
+    /// Holds the frames of views resized during `duration`, for an animation whose end size only
+    /// the layout knows (the sidebar): each shows its last frame until it settles, then changes
+    /// its grid once and draws again when the program has redrawn.
+    public static func holdFrames(for duration: Duration) {
+        frameHoldUntil = max(frameHoldUntil, .now + duration)
+    }
+
+    /// An animated layout change takes this view to `size` (points) within `duration`. The grid
+    /// changes now, once, so the program gets one SIGWINCH and redraws while the view shows its
+    /// last frame; it draws again once it is there and that redraw has come in. A view already
+    /// at `size` only waits for the redraw.
+    public func prepareResize(to size: CGSize, within duration: Duration) {
+        guard let lastLayout, fonts != nil, grid != nil else { return }
+        let scale = Self.drawableScale(for: size, scale: lastLayout.scale)
+        guard scale == layer.contentsScale else { return }
+        let target = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        let here = CGSize(width: (lastLayout.size.width * scale).rounded(), height: (lastLayout.size.height * scale).rounded())
+        guard let newGrid = gridFitting(target) else { return }
+        let regrid = newGrid != grid
+        let arrived = Self.isClose(here, target, scale: scale)
+        if motion == nil, !regrid, arrived, here == pixelSize { return }
+        var next = motion ?? Motion(target: target, deadline: .now + duration)
+        if motion == nil { motionPixelSize = pixelSize }
+        next.target = target
+        next.deadline = .now + duration
+        next.arrived = arrived ? .now : nil
+        next.regridded = next.regridded || regrid
+        next.outputSeen = outputSerial.load(ordering: .acquiring)
+        next.quietSince = .now
+        motion = next
+        if regrid { commitGrid(newGrid, in: target) }
+        scheduleMotionEnd()
+    }
+
+    /// Shows the last frame while the view is moved about with no known end (a dragged pane's
+    /// preview of a drop), until `prepareResize` says where it lands. The grid keeps its size.
+    public func holdFrame() {
+        guard motion == nil, grid != nil else { return }
+        motionPixelSize = pixelSize
+        motion = Motion(target: nil, deadline: .now + .seconds(30))
+        scheduleMotionEnd()
+    }
+
+    /// The frame on screen stands in for a view in motion: nothing new is drawn.
+    private var showsHeldFrame: Bool {
+        guard let motion else { return false }
+        return motion.regridded || motionPixelSize != pixelSize
+    }
+
+    private static func isClose(_ a: CGSize, _ b: CGSize, scale: CGFloat) -> Bool {
+        let tolerance = arrivalTolerance * scale
+        return abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
+    }
+
+    private func scheduleMotionEnd() {
+        guard motionTask == nil else { return }
+        motionTask = Task { [weak self] in
+            while let self, self.motion != nil, !Task.isCancelled {
+                if self.stepMotion() { return }
+                try? await Task.sleep(for: .milliseconds(8))
+            }
+            if !Task.isCancelled { self?.motionTask = nil }
+        }
+    }
+
+    /// Moves the motion along; true once it is over.
+    private func stepMotion() -> Bool {
+        guard var motion, let lastLayout else { return finishMotion() }
+        let now = ContinuousClock.now
+        guard motion.target != nil else {
+            // Settled where the layout put it: from here on, a resize to that size.
+            guard now >= motion.deadline, now >= lastSizeChange + Self.settleInterval else { return false }
+            motionTask = nil
+            prepareResize(to: lastLayout.size, within: .zero)
+            if self.motion?.target == nil { finishMotion() }
+            return true
+        }
+        let output = outputSerial.load(ordering: .acquiring)
+        if output != motion.outputSeen {
+            motion.outputSeen = output
+            motion.quietSince = now
+        }
+        if motion.arrived == nil, now >= motion.deadline { motion.arrived = now }
+        self.motion = motion
+        guard let arrived = motion.arrived else { return false }
+        // A remote pane's terminal takes its new size when its stream says so.
+        let caughtUp = !sizeFollowsStream || grid.map { terminal.size.cols == Int($0.cols) && terminal.size.rows == Int($0.rows) } ?? true
+        let redrawn = !motion.regridded || (caughtUp && now >= motion.quietSince + Self.redrawQuiet)
+        guard redrawn || now >= arrived + Self.redrawWait else { return false }
+        return finishMotion()
+    }
+
+    /// Back to drawing, at the size the view has now.
+    @discardableResult
+    private func finishMotion() -> Bool {
+        motion = nil
+        motionTask = nil
+        if let lastLayout {
+            needsFullRender = true
+            layout(size: lastLayout.size, scale: lastLayout.scale)
+        }
+        return true
+    }
+
+    /// The view shows a held frame in place of new ones (tests).
+    public var isHoldingFrame: Bool { showsHeldFrame }
 
     /// Padding around the applied grid in the current drawable: the kept inset on the top and
     /// left, whatever remains (none when clipped) on the right and bottom.
@@ -611,6 +786,7 @@ public final class TerminalSurface {
     /// Output was written to the terminal (any thread). Wakes the renderer and has the predictor
     /// reconcile against the new screen on the next frame.
     public nonisolated func outputArrived() {
+        outputSerial.add(1, ordering: .releasing)
         outputPending.store(true, ordering: .releasing)
         searchOutputPending.store(true, ordering: .releasing)
         setNeedsRender()
@@ -991,7 +1167,7 @@ public final class TerminalSurface {
     ///   benchmarks; a layer that is not on screen hands out drawables at an arbitrary cadence).
     @discardableResult
     public func renderIfDirty(offscreen: Bool = false) -> Bool {
-        guard let fonts, pixelSize.width > 0 else { return false }
+        guard let fonts, pixelSize.width > 0, !showsHeldFrame else { return false }
         gpuReleased = false
         let start = CACurrentMediaTime()
         scheduleAnimationFrame(terminal.tickKittyAnimations(nowMs: Self.nowMs()))

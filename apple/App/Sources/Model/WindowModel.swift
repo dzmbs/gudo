@@ -141,8 +141,10 @@ final class WindowModel {
         // The animation, then the resize's round trip to the pane.
         let quiet = ContinuousClock.now + .seconds(duration) + .milliseconds(700)
         for workspace in workspaces.values { workspace.layoutChangeUntil = max(workspace.layoutChangeUntil, quiet) }
-        // The terminals resize through the animation: their grids change once, as it settles.
+        // The terminals resize through the animation: each shows its last frame on the way, and
+        // its grid changes once, as it settles.
         TerminalSurface.holdGrids(for: .seconds(duration))
+        TerminalSurface.holdFrames(for: .seconds(duration))
     }
 
     var isSearchShown = false

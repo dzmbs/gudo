@@ -30,6 +30,7 @@ struct PaneHeader: View {
     @Environment(WindowModel.self) private var model
     @Environment(PaneArrangement.self) private var arrangement: PaneArrangement?
     @State private var isHovered = false
+    @GestureState private var isDragging = false
 
     var body: some View {
         let state = model.paneStatus.state(of: id.description)
@@ -98,6 +99,12 @@ struct PaneHeader: View {
         .onTapGesture { focus() }
         .simultaneousGesture(TapGesture(count: 2).onEnded { zoom() })
         .gesture(handleDrag, including: arrangement?.workspace === workspace ? .all : .subviews)
+        // A drag the system cancels never ends: the preview goes and the panes settle back.
+        .onChange(of: isDragging) { _, dragging in
+            guard !dragging, let arrangement else { return }
+            // After `onEnded`, which drops it when the drag did end.
+            Task { if arrangement.paneDrag?.pane == id { arrangement.cancelDrag() } }
+        }
         .onHover { isHovered = $0 }
         .task(id: workspace.groupId) { model.loadAccounts(onGroup: workspace.groupId) }
         .contextMenu {
@@ -115,6 +122,7 @@ struct PaneHeader: View {
     /// a new place, with the region it would take lit under the hand.
     private var handleDrag: some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .named(PaneArrangement.space))
+            .updating($isDragging) { _, dragging, _ in dragging = true }
             .onChanged { value in
                 guard let arrangement else { return }
                 if let window = workspace.window(of: id), window.panes.count == 1 {
