@@ -1,3 +1,4 @@
+//! Developer-workflow messages: port forwarding targets, detected ports, the editor
 //! server, git status and diffs, agent-turn changes, review notes, worktrees, files and the
 //! attention feed.
 //!
@@ -13,8 +14,6 @@
 //!
 //! Every path is absolute or starts with `~/` and must stay inside the daemon's allowed roots
 //! (`$HOME` unless the host's config allows more); `..` components are refused.
-//!
-//! Same compatibility rules as the rest of the crate: append only.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,29 +21,18 @@ use crate::ids::{PaneId, RequestId, SessionId, UnixMillis};
 use crate::layout::{AgentKind, Axis};
 use crate::msg::CommandMark;
 
-// ---------------------------------------------------------------------------------------------
-// Port forwarding
-// ---------------------------------------------------------------------------------------------
-
 /// Where a [`StreamHeader::Forward`](crate::StreamHeader::Forward) stream connects on the
 /// daemon's host.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ForwardTarget {
     /// `localhost:port` (IPv4 loopback, then IPv6).
-    Tcp {
-        /// The port.
-        port: u16,
-    },
+    Tcp { port: u16 },
     /// A Unix domain socket, subject to the path policy.
     Unix {
         /// Absolute path (or `~/…`) of the socket.
         path: String,
     },
 }
-
-// ---------------------------------------------------------------------------------------------
-// Requests and responses
-// ---------------------------------------------------------------------------------------------
 
 /// A workspace request (see the module docs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,16 +44,12 @@ pub enum WorkspaceRequest {
     /// Starts (or reuses) an editor server for a folder → [`WorkspaceResponse::Editor`].
     EditorLaunch(EditorLaunch),
     /// Stops the editor serving `folder` → [`WorkspaceResponse::Done`].
-    EditorStop {
-        /// The folder.
-        folder: String,
-    },
+    EditorStop { folder: String },
     /// Opens a file at a line in the running editor → [`WorkspaceResponse::EditorOpened`].
     EditorOpen {
         /// Folder whose editor to use; `None` picks the running editor whose folder contains
         /// `path` (the deepest one).
         folder: Option<String>,
-        /// The file.
         path: String,
         /// 1-based line.
         line: Option<u32>,
@@ -130,20 +114,15 @@ pub enum WorkspaceRequest {
     },
     /// Lists a directory → [`WorkspaceResponse::Dir`].
     FsList {
-        /// The directory.
         path: String,
         /// Include dot files.
         show_hidden: bool,
     },
     /// Stats a path without following a final symlink → [`WorkspaceResponse::Stat`].
-    FsStat {
-        /// The path.
-        path: String,
-    },
+    FsStat { path: String },
     /// Reads part of a file (at most 1 MiB; use a download stream for more) →
     /// [`WorkspaceResponse::FileData`].
     FsRead {
-        /// The file.
         path: String,
         /// Byte offset.
         offset: u64,
@@ -152,23 +131,19 @@ pub enum WorkspaceRequest {
     },
     /// Creates a directory → [`WorkspaceResponse::Stat`].
     FsMkdir {
-        /// The directory.
         path: String,
         /// Create missing parents too.
         parents: bool,
     },
     /// Renames or moves → [`WorkspaceResponse::Stat`] of the destination.
     FsRename {
-        /// Source.
         from: String,
-        /// Destination.
         to: String,
         /// Replace an existing destination.
         overwrite: bool,
     },
     /// Deletes a file or directory → [`WorkspaceResponse::Done`].
     FsDelete {
-        /// The path.
         path: String,
         /// Move to the user's trash, or delete for good.
         mode: DeleteMode,
@@ -177,10 +152,7 @@ pub enum WorkspaceRequest {
     },
     /// Watches a directory (not recursively) → [`WorkspaceResponse::Watching`]; changes
     /// arrive as [`ServerCtl::FsChanged`](crate::ServerCtl::FsChanged) on this connection.
-    FsWatch {
-        /// The directory.
-        path: String,
-    },
+    FsWatch { path: String },
     /// Stops a watch → [`WorkspaceResponse::Done`].
     FsUnwatch {
         /// From [`WorkspaceResponse::Watching`].
@@ -193,9 +165,7 @@ pub enum WorkspaceRequest {
     /// Writes a small file in one message (at most 1 MiB; use an upload stream for more) →
     /// [`WorkspaceResponse::Stat`].
     FsWrite {
-        /// Where and how.
         target: WriteTarget,
-        /// The contents.
         #[serde(with = "crate::serde_bytes")]
         data: Vec<u8>,
     },
@@ -222,7 +192,7 @@ pub enum WorkspaceRequest {
     PushStatus,
     /// Answers an approval from a notification action → [`WorkspaceResponse::PushDecided`].
     PushAction(PushActionRequest),
-    /// Agent plan usage now → [`WorkspaceResponse::AgentUsage`]; while watching, changes
+    /// Current agent plan usage → [`WorkspaceResponse::AgentUsage`]; while watching, changes
     /// arrive as [`ServerCtl::AgentUsage`](crate::ServerCtl::AgentUsage) (clients with
     /// [`Caps::AGENT_USAGE`](crate::Caps::AGENT_USAGE)). Sending it again refreshes (at most
     /// once a minute) and replaces the options. Only daemons offering
@@ -231,7 +201,7 @@ pub enum WorkspaceRequest {
     /// Stops this connection's usage pushes → [`WorkspaceResponse::Done`].
     UsageUnwatch,
     /// Re-reads the git state of every watched worktree (and the pull request of `path`'s, or
-    /// of all of them) now → [`WorkspaceResponse::Repos`].
+    /// of all of them) → [`WorkspaceResponse::Repos`].
     RepoRefresh {
         /// One worktree whose pull request to refresh; `None` for all.
         path: Option<String>,
@@ -240,10 +210,7 @@ pub enum WorkspaceRequest {
     PrMerge(crate::repo::PrMerge),
     /// Re-runs the failed jobs of the pull request's failed workflow runs (`gh run rerun
     /// --failed`) → [`WorkspaceResponse::Pr`].
-    PrRerunFailed {
-        /// The worktree.
-        path: String,
-    },
+    PrRerunFailed { path: String },
     /// Pushes the branch and opens a pull request → [`WorkspaceResponse::Pr`].
     PrCreate(crate::repo::PrCreate),
     /// Checks a pull request out into a new worktree → [`WorkspaceResponse::Worktree`].
@@ -252,7 +219,6 @@ pub enum WorkspaceRequest {
     /// uncommitted changes) under a ref, removes the directory → [`WorkspaceResponse::Done`].
     /// Refused with `Conflict` when it has changes unless `force`.
     WorktreeArchive {
-        /// The worktree.
         path: String,
         /// Archive even with uncommitted changes (they are saved and restored).
         force: bool,
@@ -321,9 +287,7 @@ pub enum WorkspaceRequest {
     AccountAdd(crate::account::AccountAdd),
     /// Renames or recolours an account → [`WorkspaceResponse::Accounts`].
     AccountEdit {
-        /// The account's agent.
         agent: AgentKind,
-        /// The account.
         account: String,
         /// Its new name.
         label: String,
@@ -333,24 +297,13 @@ pub enum WorkspaceRequest {
     /// Signs an account out with the agent's own logout and deletes its directory →
     /// [`WorkspaceResponse::Accounts`]. Refused for the system account and while an agent
     /// pane runs under it.
-    AccountRemove {
-        /// The account's agent.
-        agent: AgentKind,
-        /// The account.
-        account: String,
-    },
+    AccountRemove { agent: AgentKind, account: String },
     /// Asks the agent whether an account is signed in, and as whom →
     /// [`WorkspaceResponse::Account`].
-    AccountCheck {
-        /// The account's agent.
-        agent: AgentKind,
-        /// The account.
-        account: String,
-    },
+    AccountCheck { agent: AgentKind, account: String },
     /// Sets or clears the account an agent uses by default, on the host or in a project →
     /// [`WorkspaceResponse::Accounts`].
     AccountSetDefault {
-        /// The agent.
         agent: AgentKind,
         /// The project; `None` sets the host default.
         project: Option<String>,
@@ -364,32 +317,24 @@ pub enum WorkspaceRequest {
 pub enum WorkspaceResponse {
     /// Done; nothing to return.
     Done,
-    /// Detected ports.
     Ports(Vec<PortInfo>),
-    /// Editors.
     Editors(EditorList),
     /// A running editor server.
     Editor(EditorInstance),
     /// How a file was opened in the editor.
     EditorOpened(EditorOpened),
-    /// Repository status.
     GitStatus(GitStatus),
-    /// A diff.
     GitDiff(GitDiff),
     /// Recorded agent turns.
     Turns(Vec<TurnInfo>),
     /// The prompt that was typed into the pane.
     ReviewSent {
-        /// The prompt text.
         prompt: String,
     },
-    /// A worktree.
     Worktree(WorktreeInfo),
-    /// Worktrees.
     Worktrees(Vec<WorktreeInfo>),
     /// A pane was created.
     PaneCreated {
-        /// The new pane.
         pane_id: PaneId,
     },
     /// A directory listing.
@@ -425,7 +370,6 @@ pub enum WorkspaceResponse {
     WorktreeSettings(crate::repo::WorktreeSettings),
     /// A new task.
     TaskCreated(crate::repo::TaskCreated),
-    /// Workflows.
     Workflows(crate::workflow::WorkflowList),
     /// The workflow as written (its file in [`Workflow::path`](crate::workflow::Workflow::path)).
     WorkflowSaved(crate::workflow::Workflow),
@@ -437,14 +381,12 @@ pub enum WorkspaceResponse {
     RepoHooks(crate::repo::RepoHooksTrust),
     /// The host's agent accounts.
     Accounts(crate::account::AccountsReport),
-    /// One account.
     Account(crate::account::AgentAccount),
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentMcpCommand {
-    /// The agent.
     pub agent: AgentKind,
     /// The program and its arguments.
     pub argv: Vec<String>,
@@ -453,7 +395,6 @@ pub struct AgentMcpCommand {
 /// Whether an agent's command is on the host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInstall {
-    /// The agent.
     pub agent: AgentKind,
     /// The command launching runs (`claude`, `codex`).
     pub program: String,
@@ -515,14 +456,9 @@ impl std::fmt::Display for WsError {
 
 impl std::error::Error for WsError {}
 
-// ---------------------------------------------------------------------------------------------
-// Ports
-// ---------------------------------------------------------------------------------------------
-
 /// A listening TCP port owned by a process in a pane's process tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortInfo {
-    /// The port.
     pub port: u16,
     /// Bound to loopback only (`127.0.0.1`/`::1`), so only reachable through a forward.
     pub loopback_only: bool,
@@ -550,10 +486,6 @@ pub enum PortKind {
     /// Not probed yet, or it did not answer in time.
     Unknown,
 }
-
-// ---------------------------------------------------------------------------------------------
-// Editor
-// ---------------------------------------------------------------------------------------------
 
 /// Which editor server to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -585,7 +517,6 @@ pub enum EditorChoice {
 pub struct EditorLaunch {
     /// The workspace folder to open.
     pub folder: String,
-    /// Which editor.
     pub choice: EditorChoice,
     /// The user accepted the Microsoft VS Code Server licence in the app
     /// (<https://aka.ms/vscode-server-license>); required for [`EditorKind::VsCode`].
@@ -597,7 +528,6 @@ pub struct EditorLaunch {
 /// in `url_path`) out.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditorInstance {
-    /// Which editor.
     pub kind: EditorKind,
     /// The folder it serves.
     pub folder: String,
@@ -609,7 +539,6 @@ pub struct EditorInstance {
     pub url_path: String,
     /// The server's process id.
     pub pid: u32,
-    /// When it started.
     pub started_at: UnixMillis,
 }
 
@@ -637,7 +566,6 @@ pub struct EditorList {
 /// Whether an editor kind can run on this host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditorAvailability {
-    /// The editor.
     pub kind: EditorKind,
     /// Installed (the `code` CLI found; openvscode-server already downloaded).
     pub installed: bool,
@@ -662,10 +590,6 @@ pub struct EditorOpened {
     /// Otherwise load this path and query (it opens the file on load).
     pub url_path: String,
 }
-
-// ---------------------------------------------------------------------------------------------
-// Git
-// ---------------------------------------------------------------------------------------------
 
 /// Repository status (`git status --porcelain=v2 --branch -z`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -776,7 +700,6 @@ pub struct FileDiff {
     pub path: String,
     /// Path before a rename or copy.
     pub old_path: Option<String>,
-    /// What happened.
     pub change: FileChange,
     /// Git treats the file as binary; no hunks.
     pub binary: bool,
@@ -803,14 +726,12 @@ pub struct Hunk {
     pub new_lines: u32,
     /// Text after the second `@@` (often the enclosing function).
     pub header: String,
-    /// The lines.
     pub lines: Vec<DiffLine>,
 }
 
 /// One line of a hunk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffLine {
-    /// Its kind.
     pub kind: LineKind,
     /// The text without the leading marker or line ending (lossy UTF-8).
     pub text: String,
@@ -821,9 +742,7 @@ pub struct DiffLine {
 pub enum LineKind {
     /// Unchanged.
     Context,
-    /// Added.
     Added,
-    /// Removed.
     Removed,
     /// `\ No newline at end of file` for the previous line.
     NoNewline,
@@ -836,7 +755,6 @@ pub struct TurnInfo {
     pub turn: u64,
     /// Top level of the repository the pane was in.
     pub root: String,
-    /// When it started.
     pub started_at: UnixMillis,
     /// When it ended; `None` while running.
     pub ended_at: Option<UnixMillis>,
@@ -876,10 +794,6 @@ pub struct ReviewNote {
     pub note: String,
 }
 
-// ---------------------------------------------------------------------------------------------
-// Worktrees
-// ---------------------------------------------------------------------------------------------
-
 /// Creates a worktree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorktreeCreate {
@@ -912,10 +826,6 @@ pub struct WorktreeInfo {
     pub port: Option<u16>,
 }
 
-// ---------------------------------------------------------------------------------------------
-// Files
-// ---------------------------------------------------------------------------------------------
-
 /// What a directory entry is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FileKind {
@@ -936,7 +846,6 @@ pub struct FileStat {
     pub path: String,
     /// File name.
     pub name: String,
-    /// What it is.
     pub kind: FileKind,
     /// Size in bytes.
     pub size: u64,
@@ -959,7 +868,6 @@ pub struct FileStat {
 pub struct DirListing {
     /// The directory, absolute.
     pub path: String,
-    /// Its entries.
     pub entries: Vec<FileStat>,
     /// More than 10 000 entries; the rest were left out.
     pub truncated: bool,
@@ -992,7 +900,6 @@ pub enum DeleteMode {
 /// file in the same directory and renamed over the target, so readers never see half a file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WriteTarget {
-    /// The file.
     pub path: String,
     /// Only replace the file if it still has this [`FileStat::version`] (`None`: no check).
     pub if_match: Option<String>,
@@ -1007,7 +914,6 @@ pub struct WriteTarget {
 /// First frame of an upload stream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadHeader {
-    /// Where.
     pub target: WriteTarget,
     /// Exact number of bytes that will follow.
     pub size: u64,
@@ -1016,7 +922,6 @@ pub struct UploadHeader {
 /// First frame of a download stream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadHeader {
-    /// The file.
     pub path: String,
     /// Where to start.
     pub offset: u64,
@@ -1047,7 +952,6 @@ pub enum TransferReply {
 /// Changes in a watched directory, debounced (about 100 ms).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsChange {
-    /// The watch.
     pub watch_id: u64,
     /// Paths that were created, changed or removed (absolute).
     pub paths: Vec<String>,
@@ -1055,27 +959,19 @@ pub struct FsChange {
     pub rescan: bool,
 }
 
-// ---------------------------------------------------------------------------------------------
-// Attention
-// ---------------------------------------------------------------------------------------------
-
 /// Something that needs (or got) the user's attention: one feed for local notifications and
 /// the inbox, across all sessions of this daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionItem {
     /// Increasing id, unique for the daemon's lifetime.
     pub id: u64,
-    /// When it happened.
     pub at: UnixMillis,
-    /// The pane.
     pub pane_id: PaneId,
     /// The pane's session, if it still has one.
     pub session_id: Option<SessionId>,
-    /// What happened.
     pub kind: AttentionKind,
     /// One-line title for a notification ("claude needs you").
     pub title: String,
-    /// Body text.
     pub body: String,
     /// A client looked at it (focused the pane or marked it seen); synced across devices.
     pub seen: bool,
@@ -1094,15 +990,9 @@ pub enum AttentionKind {
         request_id: Option<RequestId>,
     },
     /// An agent finished its turn.
-    AgentDone {
-        /// Agent name.
-        agent: String,
-    },
+    AgentDone { agent: String },
     /// An agent's turn failed.
-    AgentFailed {
-        /// Agent name.
-        agent: String,
-    },
+    AgentFailed { agent: String },
     /// A long command finished while no client showed its pane
     /// (also sent as `CommandFinishedUnseen`).
     CommandFinished(CommandMark),
@@ -1133,23 +1023,18 @@ pub struct AttentionSeen {
 pub enum AttentionUpdate {
     /// A new item.
     Added {
-        /// The item.
         item: AttentionItem,
-        /// Unseen items now.
+        /// Unseen items after this change.
         unseen: u32,
     },
     /// Items were marked seen (by a client, or because the pane was focused or the blocker
     /// went away).
     Seen {
-        /// The items.
         ids: Vec<u64>,
-        /// Unseen items now.
+        /// Unseen items after this change.
         unseen: u32,
     },
 }
-
-// ---------------------------------------------------------------------------------------------
-// ---------------------------------------------------------------------------------------------
 
 /// The Microsoft Software License Terms for Visual Studio Code, which cover the `code` CLI.
 /// The app shows them before [`WorkspaceRequest::VsCodeCliInstall`].
@@ -1222,7 +1107,6 @@ pub struct VsCodeCli {
 /// A device-code sign-in waiting for the user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceLogin {
-    /// The account kind.
     pub provider: TunnelProvider,
     /// Where to enter the code (open it in a browser sheet).
     pub verification_url: String,
@@ -1243,7 +1127,6 @@ pub enum TunnelState {
     NeedsLogin(DeviceLogin),
     /// Connected to Microsoft's tunnel service.
     Running {
-        /// The machine name.
         name: String,
         /// `https://vscode.dev/tunnel/<name>…` as the CLI printed it.
         web_url: String,
@@ -1267,7 +1150,6 @@ pub struct VsCodeTunnelStatus {
     /// Microsoft publishes a CLI build for this host, so
     /// [`WorkspaceRequest::VsCodeCliInstall`] can fetch it.
     pub cli_downloadable: bool,
-    /// The tunnel.
     pub state: TunnelState,
     /// The account kind last used.
     pub provider: Option<TunnelProvider>,
@@ -1289,10 +1171,6 @@ pub struct VsCodeTunnelOpened {
     /// the server's own CLI channel); otherwise load `web_url` and ask again once connected.
     pub in_window: bool,
 }
-
-// ---------------------------------------------------------------------------------------------
-// Push notifications (docs/PUSH.md)
-// ---------------------------------------------------------------------------------------------
 
 /// A device's push registration, sent over its own connection (so the daemon knows which
 /// device it is). Everything Apple-side stays inside `cap`, which only the push relay can

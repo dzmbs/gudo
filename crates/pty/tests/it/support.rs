@@ -8,13 +8,14 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A command with a minimal, predictable environment.
 pub fn command(argv: &[&str]) -> Command {
-    let mut cmd = Command::new(argv[0]);
-    cmd.args(&argv[1..])
+    let mut command = Command::new(argv[0]);
+    command
+        .args(&argv[1..])
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .env("TERM", "dumb")
         .env("LC_ALL", "C");
-    cmd
+    command
 }
 
 pub fn spawn(argv: &[&str]) -> PtyActor {
@@ -25,20 +26,20 @@ pub fn spawn_with(argv: &[&str], options: SpawnOptions) -> PtyActor {
     PtyActor::spawn(command(argv), options).expect("spawn")
 }
 
-pub async fn within<T>(what: &str, fut: impl Future<Output = T>) -> T {
-    tokio::time::timeout(TIMEOUT, fut)
+pub async fn within<T>(what: &str, future: impl Future<Output = T>) -> T {
+    tokio::time::timeout(TIMEOUT, future)
         .await
         .unwrap_or_else(|_| panic!("timed out: {what}"))
 }
 
 /// Receives until the output contains `needle`; returns the output up to and including it and
 /// leaves the subscriber just past it.
-pub async fn read_until(sub: &mut Subscriber, needle: &str) -> String {
-    let start = sub.position();
+pub async fn read_until(subscriber: &mut Subscriber, needle: &str) -> String {
+    let start = subscriber.position();
     let mut seen = Vec::new();
     let found = tokio::time::timeout(TIMEOUT, async {
         loop {
-            match sub.recv().await {
+            match subscriber.recv().await {
                 Ok(chunk) => seen.extend_from_slice(&chunk.data),
                 Err(RecvError::Closed) => return None,
                 Err(err) => panic!("recv: {err}"),
@@ -57,16 +58,18 @@ pub async fn read_until(sub: &mut Subscriber, needle: &str) -> String {
         panic!("never saw {needle:?}; output was {seen_text:?}");
     };
     // Rewind over whatever arrived after the needle so the next read sees it.
-    sub.seek(start + end as u64).expect("still in the ring");
+    subscriber
+        .seek(start + end as u64)
+        .expect("still in the ring");
     String::from_utf8_lossy(&seen[..end]).into_owned()
 }
 
 /// Receives until output ends; returns everything received.
-pub async fn read_to_end(sub: &mut Subscriber) -> String {
+pub async fn read_to_end(subscriber: &mut Subscriber) -> String {
     let mut seen = String::new();
     within("read_to_end", async {
         loop {
-            match sub.recv().await {
+            match subscriber.recv().await {
                 Ok(chunk) => seen.push_str(&String::from_utf8_lossy(&chunk.data)),
                 Err(RecvError::Closed) => break,
                 Err(err) => panic!("recv: {err}"),
@@ -77,11 +80,12 @@ pub async fn read_to_end(sub: &mut Subscriber) -> String {
     seen
 }
 
-/// Waits until the reported echo state satisfies `pred`.
-pub async fn wait_echo(pty: &PtyActor, pred: impl Fn(EchoState) -> bool) -> EchoState {
-    let mut rx = pty.echo_updates();
+/// Waits until the reported echo state satisfies `predicate`.
+pub async fn wait_echo(pty: &PtyActor, predicate: impl Fn(EchoState) -> bool) -> EchoState {
+    let mut echo_rx = pty.echo_updates();
     within("echo state", async {
-        *rx.wait_for(|state| pred(*state))
+        *echo_rx
+            .wait_for(|state| predicate(*state))
             .await
             .expect("echo sender alive")
     })

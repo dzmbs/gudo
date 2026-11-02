@@ -29,13 +29,13 @@ fn connect(ticket: &str, mirror_vt: bool) -> (Client, UnboundedReceiver<ClientEv
 
 async fn next_matching(
     events: &mut UnboundedReceiver<ClientEvent>,
-    mut f: impl FnMut(&ClientEvent) -> bool,
+    mut predicate: impl FnMut(&ClientEvent) -> bool,
 ) -> ClientEvent {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let e = events.recv().await.expect("client alive");
-            if f(&e) {
-                return e;
+            let event = events.recv().await.expect("client alive");
+            if predicate(&event) {
+                return event;
             }
         }
     })
@@ -76,7 +76,10 @@ async fn a_wrong_secret_is_refused() {
     let mut ticket = daemon.pairing_ticket(daemon::PAIRING_TTL).unwrap();
     ticket.secret = PairingSecret([0xab; 16]);
     let (_client, mut events) = connect(&ticket.to_string(), true);
-    next_matching(&mut events, |e| matches!(e, ClientEvent::Refused { .. })).await;
+    next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Refused { .. })
+    })
+    .await;
     assert_eq!(daemon.paired_devices(), 0);
     daemon.shutdown().await;
 }
@@ -90,12 +93,15 @@ async fn a_ticket_pairs_only_one_device() {
         .unwrap()
         .to_string();
     let (_a, mut a_events) = connect(&ticket, true);
-    next_matching(&mut a_events, |e| {
-        matches!(e, ClientEvent::Connected { .. })
+    next_matching(&mut a_events, |event| {
+        matches!(event, ClientEvent::Connected { .. })
     })
     .await;
     let (_b, mut b_events) = connect(&ticket, true);
-    next_matching(&mut b_events, |e| matches!(e, ClientEvent::Refused { .. })).await;
+    next_matching(&mut b_events, |event| {
+        matches!(event, ClientEvent::Refused { .. })
+    })
+    .await;
     assert_eq!(daemon.paired_devices(), 1);
     daemon.shutdown().await;
 }
@@ -110,15 +116,17 @@ async fn without_a_mirror_bytes_and_snapshots_still_flow() {
         .to_string();
     let (client, mut events) = connect(&ticket, false);
     client.attach(None);
-    let ClientEvent::Layout { layout } =
-        next_matching(&mut events, |e| matches!(e, ClientEvent::Layout { .. })).await
+    let ClientEvent::Layout { layout } = next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Layout { .. })
+    })
+    .await
     else {
         unreachable!()
     };
     let pane = layout.tabs[0].focused;
     client.subscribe(pane);
-    let ClientEvent::PaneSnapshot { data, .. } = next_matching(&mut events, |e| {
-        matches!(e, ClientEvent::PaneSnapshot { .. })
+    let ClientEvent::PaneSnapshot { data, .. } = next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::PaneSnapshot { .. })
     })
     .await
     else {
@@ -130,11 +138,11 @@ async fn without_a_mirror_bytes_and_snapshots_still_flow() {
     );
     client.send_input(pane, b"echo x$((7*6))\r".to_vec());
     let mut seen = Vec::new();
-    next_matching(&mut events, |e| {
-        if let ClientEvent::PaneBytes { data, .. } = e {
+    next_matching(&mut events, |event| {
+        if let ClientEvent::PaneBytes { data, .. } = event {
             seen.extend_from_slice(data);
         }
-        seen.windows(3).any(|w| w == b"x42")
+        seen.windows(3).any(|window| window == b"x42")
     })
     .await;
     assert!(client.pane_text(pane).is_none(), "no mirror kept");

@@ -1,3 +1,4 @@
+//! Links that open real desktop VS Code on a host.
 //!
 //! - Remote - Tunnels: `vscode://vscode-remote/tunnel+<name>/<path>` (the daemon returns this
 //!   in [`VsCodeTunnelOpened::desktop_uri`](proto::VsCodeTunnelOpened::desktop_uri)).
@@ -71,7 +72,7 @@ pub fn ssh_authority(host: &SshHost) -> String {
         json.insert("port".into(), port.into());
     }
     let text = serde_json::Value::Object(json).to_string();
-    let hex: String = text.bytes().map(|b| format!("{b:02x}")).collect();
+    let hex: String = text.bytes().map(|byte| format!("{byte:02x}")).collect();
     format!("ssh-remote+{hex}")
 }
 
@@ -128,7 +129,7 @@ pub fn tunnel_web_url(name: &str, folder: &str) -> String {
 /// An `~/.ssh/config` entry that reaches the host's sshd through the daemon link, for users
 /// who prefer an alias over a local port. `gudo` is the CLI that holds the pairing.
 pub fn ssh_config_entry(alias: &str, user: &str, gudo: &str, ticket_arg: Option<&str>) -> String {
-    let ticket = ticket_arg.map_or(String::new(), |t| format!(" --ticket {t}"));
+    let ticket = ticket_arg.map_or(String::new(), |ticket| format!(" --ticket {ticket}"));
     format!(
         "Host {alias}\n  HostName {alias}\n  User {user}\n  ProxyCommand {gudo}{ticket} ssh-proxy\n"
     )
@@ -136,25 +137,25 @@ pub fn ssh_config_entry(alias: &str, user: &str, gudo: &str, ticket_arg: Option<
 
 fn line_suffix(line: Option<u32>, column: Option<u32>) -> String {
     match (line, column) {
-        (Some(l), Some(c)) => format!(":{l}:{c}"),
-        (Some(l), None) => format!(":{l}"),
+        (Some(line), Some(column)) => format!(":{line}:{column}"),
+        (Some(line), None) => format!(":{line}"),
         _ => String::new(),
     }
 }
 
 fn encode_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len() + 1);
+    let mut encoded = String::with_capacity(path.len() + 1);
     if !path.starts_with('/') {
-        out.push('/');
+        encoded.push('/');
     }
-    for b in path.bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~/".contains(&b) {
-            out.push(b as char);
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~/".contains(&byte) {
+            encoded.push(byte as char);
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            encoded.push_str(&format!("%{byte:02X}"));
         }
     }
-    out
+    encoded
 }
 
 #[cfg(test)]
@@ -163,8 +164,8 @@ mod tests {
 
     #[test]
     fn authority_matches_remote_ssh() {
-        let a = ssh_authority(&SshHost::local_forward("me", 2222));
-        let hex = a.strip_prefix("ssh-remote+").unwrap();
+        let authority = ssh_authority(&SshHost::local_forward("me", 2222));
+        let hex = authority.strip_prefix("ssh-remote+").unwrap();
         let bytes: Vec<u8> = (0..hex.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())

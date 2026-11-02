@@ -1,3 +1,4 @@
+//! Agent plan usage on the host (`proto::usage`): Claude Code's and Codex's limit
 //! windows, gathered by the daemon from what the tools wrote there. Watch with
 //! [`DaemonClient::usage_watch`]; changes arrive as `WorkspaceEvent::AgentUsage`.
 
@@ -10,7 +11,6 @@ use crate::ws_types::WorkspaceError;
 /// Where usage numbers come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum UsageSource {
-    /// Nothing known.
     Unknown,
     /// A log the tool writes on the host (Codex session rollouts).
     LocalLog,
@@ -22,7 +22,6 @@ pub enum UsageSource {
     Api,
 }
 
-/// One rate-limit window.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct UsageWindow {
     /// `5h`, `weekly`, `weekly Opus`.
@@ -40,7 +39,6 @@ pub struct UsageWindow {
 /// One agent's plan and windows.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentUsage {
-    /// The agent.
     pub agent: AgentKind,
     /// The plan as the tool names it, if known.
     pub plan: Option<String>,
@@ -62,8 +60,8 @@ pub struct AgentUsageReport {
 }
 
 impl From<proto::AgentKind> for AgentKind {
-    fn from(a: proto::AgentKind) -> Self {
-        match a {
+    fn from(agent_kind: proto::AgentKind) -> Self {
+        match agent_kind {
             proto::AgentKind::Claude => Self::Claude,
             proto::AgentKind::Codex => Self::Codex,
         }
@@ -71,8 +69,8 @@ impl From<proto::AgentKind> for AgentKind {
 }
 
 impl From<proto::UsageSource> for UsageSource {
-    fn from(s: proto::UsageSource) -> Self {
-        match s {
+    fn from(usage_source: proto::UsageSource) -> Self {
+        match usage_source {
             proto::UsageSource::Unknown => Self::Unknown,
             proto::UsageSource::LocalLog => Self::LocalLog,
             proto::UsageSource::StatusLine => Self::StatusLine,
@@ -83,32 +81,36 @@ impl From<proto::UsageSource> for UsageSource {
 }
 
 impl From<proto::AgentUsage> for AgentUsage {
-    fn from(a: proto::AgentUsage) -> Self {
+    fn from(agent_usage: proto::AgentUsage) -> Self {
         Self {
-            agent: a.agent.into(),
-            plan: a.plan,
-            windows: a
+            agent: agent_usage.agent.into(),
+            plan: agent_usage.plan,
+            windows: agent_usage
                 .windows
                 .into_iter()
-                .map(|w| UsageWindow {
-                    name: w.name,
-                    minutes: w.minutes,
-                    used_permille: w.used_permille,
-                    resets_at_ms: w.resets_at.map(|t| t.0),
-                    limited: w.limited,
+                .map(|window| UsageWindow {
+                    name: window.name,
+                    minutes: window.minutes,
+                    used_permille: window.used_permille,
+                    resets_at_ms: window.resets_at.map(|t| t.0),
+                    limited: window.limited,
                 })
                 .collect(),
-            source: a.source.into(),
-            as_of_ms: a.as_of.map(|t| t.0),
-            note: a.note,
+            source: agent_usage.source.into(),
+            as_of_ms: agent_usage.as_of.map(|t| t.0),
+            note: agent_usage.note,
         }
     }
 }
 
 impl From<proto::AgentUsageReport> for AgentUsageReport {
-    fn from(r: proto::AgentUsageReport) -> Self {
+    fn from(agent_usage_report: proto::AgentUsageReport) -> Self {
         Self {
-            agents: r.agents.into_iter().map(Into::into).collect(),
+            agents: agent_usage_report
+                .agents
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }
@@ -123,7 +125,8 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`] (owners only).
     pub async fn usage_watch(&self) -> Result<AgentUsageReport, WorkspaceError> {
-        self.ws_call(|c| async move { c.usage_watch().await }).await
+        self.ws_call(|client| async move { client.usage_watch().await })
+            .await
     }
 
     /// Stops this connection's usage pushes.
@@ -132,7 +135,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn usage_unwatch(&self) -> Result<(), WorkspaceError> {
-        self.ws_call(|c| async move { c.usage_unwatch().await })
+        self.ws_call(|client| async move { client.usage_unwatch().await })
             .await
     }
 
@@ -144,7 +147,7 @@ impl DaemonClient {
     /// daemon's [`WorkspaceError`].
     pub async fn agent_installs(&self) -> Result<Vec<AgentInstall>, WorkspaceError> {
         let installs: Vec<proto::AgentInstall> = self
-            .ws_call(|c| async move { c.agent_installs().await })
+            .ws_call(|client| async move { client.agent_installs().await })
             .await?;
         Ok(installs.into_iter().map(Into::into).collect())
     }
@@ -160,13 +163,13 @@ impl DaemonClient {
         register: bool,
     ) -> Result<Vec<AgentMcpCommand>, WorkspaceError> {
         let commands: Vec<proto::AgentMcpCommand> = self
-            .ws_call(move |c| async move { c.agent_mcp_commands(register).await })
+            .ws_call(move |client| async move { client.agent_mcp_commands(register).await })
             .await?;
         Ok(commands
             .into_iter()
-            .map(|c| AgentMcpCommand {
-                agent: c.agent.into(),
-                argv: c.argv,
+            .map(|command| AgentMcpCommand {
+                agent: command.agent.into(),
+                argv: command.argv,
             })
             .collect())
     }
@@ -175,7 +178,6 @@ impl DaemonClient {
 /// A command that registers or removes the daemon's MCP server with an agent.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentMcpCommand {
-    /// The agent.
     pub agent: AgentKind,
     /// The program and its arguments.
     pub argv: Vec<String>,
@@ -184,7 +186,6 @@ pub struct AgentMcpCommand {
 /// Whether an agent's command is on the host.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentInstall {
-    /// The agent.
     pub agent: AgentKind,
     /// The command launching runs (`claude`, `codex`).
     pub program: String,
@@ -197,25 +198,22 @@ pub struct AgentInstall {
 pub enum InstallState {
     /// On the login shell's `PATH`: launching works.
     Installed {
-        /// The resolved executable.
         path: String,
     },
     /// In an installer's directory the login shell's `PATH` lacks: launching fails until
     /// `PATH` is fixed.
     NotOnPath {
-        /// The executable found.
         path: String,
     },
-    /// Not found.
     Missing,
 }
 
 impl From<proto::AgentInstall> for AgentInstall {
-    fn from(i: proto::AgentInstall) -> Self {
+    fn from(agent_install: proto::AgentInstall) -> Self {
         Self {
-            agent: i.agent.into(),
-            program: i.program,
-            state: match i.state {
+            agent: agent_install.agent.into(),
+            program: agent_install.program,
+            state: match agent_install.state {
                 proto::InstallState::Installed { path } => InstallState::Installed { path },
                 proto::InstallState::NotOnPath { path } => InstallState::NotOnPath { path },
                 proto::InstallState::Missing => InstallState::Missing,

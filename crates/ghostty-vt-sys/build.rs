@@ -54,7 +54,7 @@ fn main() {
         .arg(&script)
         .arg(&source)
         .output()
-        .unwrap_or_else(|err| panic!("failed to run {}: {err}", script.display()));
+        .unwrap_or_else(|error| panic!("failed to run {}: {error}", script.display()));
     assert!(
         prepared.status.success(),
         "preparing the patched Ghostty source failed:\n{}",
@@ -76,8 +76,8 @@ fn main() {
         .arg(format!("-Doptimize={optimize}"))
         .arg(format!("-Dtarget={}", zig_target(&target)))
         .status()
-        .unwrap_or_else(|err| {
-            panic!("failed to run {zig:?} (Zig 0.17.x required; set ZIG to override): {err}")
+        .unwrap_or_else(|error| {
+            panic!("failed to run {zig:?} (Zig 0.17.x required; set ZIG to override): {error}")
         });
     assert!(
         status.success(),

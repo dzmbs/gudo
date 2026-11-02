@@ -9,35 +9,21 @@ use client_core::proto;
 use crate::bytes::Bytes;
 use crate::types::{AgentKind, Axis, CommandMark};
 
-// --- errors ---------------------------------------------------------------------------------
-
 /// Why a workspace request (files, git, worktrees, editor, push, forwards) failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum WorkspaceError {
     /// Outside the allowed roots, `..` components, or not allowed by the grant's roles.
     #[error("not allowed: {message}")]
-    Denied {
-        /// Why.
-        message: String,
-    },
+    Denied { message: String },
     /// The path, repository, pane, turn or editor does not exist.
     #[error("not found: {message}")]
-    NotFound {
-        /// What.
-        message: String,
-    },
+    NotFound { message: String },
     /// The target changed or exists (`if_match` mismatch, destination exists, dirty worktree).
     #[error("conflict: {message}")]
-    Conflict {
-        /// Why.
-        message: String,
-    },
+    Conflict { message: String },
     /// The request was malformed.
     #[error("invalid request: {message}")]
-    Invalid {
-        /// Why.
-        message: String,
-    },
+    Invalid { message: String },
     /// A tool the request needs is missing on the host (git, the `code` CLI).
     #[error("unavailable: {message}")]
     Unavailable {
@@ -46,19 +32,16 @@ pub enum WorkspaceError {
     },
     /// Anything else (including local I/O: binding a forward, writing a download).
     #[error("{message}")]
-    Failed {
-        /// Why.
-        message: String,
-    },
+    Failed { message: String },
     /// The connection dropped before the daemon answered.
     #[error("disconnected before the daemon answered")]
     Disconnected,
 }
 
 impl From<proto::WsError> for WorkspaceError {
-    fn from(e: proto::WsError) -> Self {
+    fn from(ws_error: proto::WsError) -> Self {
         use proto::WsError as E;
-        match e {
+        match ws_error {
             E::Denied(message) => Self::Denied { message },
             E::NotFound(message) => Self::NotFound { message },
             E::Conflict(message) => Self::Conflict { message },
@@ -71,33 +54,25 @@ impl From<proto::WsError> for WorkspaceError {
 }
 
 impl From<client_core::ClientError> for WorkspaceError {
-    fn from(e: client_core::ClientError) -> Self {
+    fn from(client_error: client_core::ClientError) -> Self {
         Self::Failed {
-            message: e.to_string(),
+            message: client_error.to_string(),
         }
     }
 }
-
-// --- forwards and ports ---------------------------------------------------------------------
 
 /// Where a forward connects on the daemon's host.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum ForwardTarget {
     /// `localhost:port` (IPv4 loopback, then IPv6).
-    Tcp {
-        /// The port.
-        port: u16,
-    },
+    Tcp { port: u16 },
     /// A Unix domain socket (absolute or `~/…`; path policy applies).
-    Unix {
-        /// The socket's path.
-        path: String,
-    },
+    Unix { path: String },
 }
 
 impl From<ForwardTarget> for proto::ForwardTarget {
-    fn from(t: ForwardTarget) -> Self {
-        match t {
+    fn from(forward_target: ForwardTarget) -> Self {
+        match forward_target {
             ForwardTarget::Tcp { port } => Self::Tcp { port },
             ForwardTarget::Unix { path } => Self::Unix { path },
         }
@@ -105,8 +80,8 @@ impl From<ForwardTarget> for proto::ForwardTarget {
 }
 
 impl From<proto::ForwardTarget> for ForwardTarget {
-    fn from(t: proto::ForwardTarget) -> Self {
-        match t {
+    fn from(forward_target: proto::ForwardTarget) -> Self {
+        match forward_target {
             proto::ForwardTarget::Tcp { port } => Self::Tcp { port },
             proto::ForwardTarget::Unix { path } => Self::Unix { path },
         }
@@ -116,9 +91,7 @@ impl From<proto::ForwardTarget> for ForwardTarget {
 /// A running forward: `127.0.0.1:local_port` here → `target` on the host.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ForwardInfo {
-    /// The bound local port.
     pub local_port: u16,
-    /// Where it goes.
     pub target: ForwardTarget,
 }
 
@@ -127,81 +100,65 @@ pub struct ForwardInfo {
 pub enum PortKind {
     /// HTTP (answered a request, or the pane printed an `http://` URL).
     Http,
-    /// HTTPS.
     Https,
-    /// Something else.
     Other,
-    /// Not probed yet.
     Unknown,
 }
 
 /// A listening TCP port owned by a process in a pane.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PortInfo {
-    /// The port.
     pub port: u16,
     /// Bound to loopback only, so reachable only through a forward.
     pub loopback_only: bool,
     /// The pane whose process tree owns it.
     pub pane_id: Option<u64>,
-    /// The owning process.
     pub pid: u32,
-    /// Its name.
     pub process: String,
-    /// What it speaks.
     pub kind: PortKind,
     /// A URL the pane printed for it.
     pub url: Option<String>,
 }
 
 impl From<proto::PortInfo> for PortInfo {
-    fn from(p: proto::PortInfo) -> Self {
+    fn from(port_info: proto::PortInfo) -> Self {
         Self {
-            port: p.port,
-            loopback_only: p.loopback_only,
-            pane_id: p.pane_id.map(|p| p.0),
-            pid: p.pid,
-            process: p.process,
-            kind: match p.kind {
+            port: port_info.port,
+            loopback_only: port_info.loopback_only,
+            pane_id: port_info.pane_id.map(|port_info| port_info.0),
+            pid: port_info.pid,
+            process: port_info.process,
+            kind: match port_info.kind {
                 proto::PortKind::Http => PortKind::Http,
                 proto::PortKind::Https => PortKind::Https,
                 proto::PortKind::Other => PortKind::Other,
                 proto::PortKind::Unknown => PortKind::Unknown,
             },
-            url: p.url,
+            url: port_info.url,
         }
     }
 }
 
-// --- git ------------------------------------------------------------------------------------
-
-/// How a path changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum FileChange {
     /// No change on this side.
     Unmodified,
-    /// Contents or mode changed.
     Modified,
-    /// New file.
     Added,
-    /// Removed.
     Deleted,
     /// Renamed (see the old path).
     Renamed,
-    /// Copied.
     Copied,
     /// File ↔ symlink.
     TypeChanged,
-    /// Merge conflict.
     Unmerged,
-    /// Not tracked.
     Untracked,
 }
 
 impl From<proto::FileChange> for FileChange {
-    fn from(c: proto::FileChange) -> Self {
+    fn from(file_change: proto::FileChange) -> Self {
         use proto::FileChange as C;
-        match c {
+        match file_change {
             C::Unmodified => Self::Unmodified,
             C::Modified => Self::Modified,
             C::Added => Self::Added,
@@ -228,7 +185,6 @@ pub struct GitFileStatus {
     pub unstaged: FileChange,
 }
 
-/// Repository status.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GitStatus {
     /// Top level of the worktree.
@@ -237,33 +193,30 @@ pub struct GitStatus {
     pub branch: Option<String>,
     /// `HEAD`; `nil` with no commits.
     pub head: Option<String>,
-    /// Upstream branch.
     pub upstream: Option<String>,
-    /// Commits ahead of upstream.
     pub ahead: u32,
-    /// Commits behind.
     pub behind: u32,
     /// Changed, unmerged and untracked paths.
     pub files: Vec<GitFileStatus>,
 }
 
 impl From<proto::GitStatus> for GitStatus {
-    fn from(s: proto::GitStatus) -> Self {
+    fn from(git_status: proto::GitStatus) -> Self {
         Self {
-            root: s.root,
-            branch: s.branch,
-            head: s.head,
-            upstream: s.upstream,
-            ahead: s.ahead,
-            behind: s.behind,
-            files: s
+            root: git_status.root,
+            branch: git_status.branch,
+            head: git_status.head,
+            upstream: git_status.upstream,
+            ahead: git_status.ahead,
+            behind: git_status.behind,
+            files: git_status
                 .files
                 .into_iter()
-                .map(|f| GitFileStatus {
-                    path: f.path,
-                    orig_path: f.orig_path,
-                    staged: f.staged.into(),
-                    unstaged: f.unstaged.into(),
+                .map(|file| GitFileStatus {
+                    path: file.path,
+                    orig_path: file.orig_path,
+                    staged: file.staged.into(),
+                    unstaged: file.unstaged.into(),
                 })
                 .collect(),
         }
@@ -280,20 +233,14 @@ pub enum DiffBase {
     /// `HEAD` vs the index.
     Staged,
     /// A commit, branch or tag vs the worktree.
-    Rev {
-        /// The revision.
-        rev: String,
-    },
+    Rev { rev: String },
     /// The merge base of `HEAD` and a branch vs the worktree.
-    MergeBase {
-        /// The branch.
-        branch: String,
-    },
+    MergeBase { branch: String },
 }
 
 impl From<DiffBase> for proto::DiffBase {
-    fn from(b: DiffBase) -> Self {
-        match b {
+    fn from(diff_base: DiffBase) -> Self {
+        match diff_base {
             DiffBase::Head => Self::Head,
             DiffBase::Index => Self::Index,
             DiffBase::Staged => Self::Staged,
@@ -303,17 +250,14 @@ impl From<DiffBase> for proto::DiffBase {
     }
 }
 
-/// A diff request.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GitDiffRequest {
     /// Any directory inside the repository.
     pub path: String,
-    /// What to compare against.
     pub base: DiffBase,
     /// Only these paths (relative to the root); empty for all.
     #[uniffi(default = [])]
     pub files: Vec<String>,
-    /// Context lines.
     #[uniffi(default = 3)]
     pub context: u32,
     /// Include hunks (else only the file list with counts).
@@ -322,34 +266,28 @@ pub struct GitDiffRequest {
 }
 
 impl From<GitDiffRequest> for proto::GitDiffRequest {
-    fn from(r: GitDiffRequest) -> Self {
+    fn from(git_diff_request: GitDiffRequest) -> Self {
         Self {
-            path: r.path,
-            base: r.base.into(),
-            files: r.files,
-            context: r.context,
-            hunks: r.hunks,
+            path: git_diff_request.path,
+            base: git_diff_request.base.into(),
+            files: git_diff_request.files,
+            context: git_diff_request.context,
+            hunks: git_diff_request.hunks,
         }
     }
 }
 
-/// Kinds of [`DiffLine`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum LineKind {
-    /// Unchanged.
     Context,
-    /// Added.
     Added,
-    /// Removed.
     Removed,
     /// `\ No newline at end of file`.
     NoNewline,
 }
 
-/// One line of a hunk.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DiffLine {
-    /// Its kind.
     pub kind: LineKind,
     /// The text without marker or line ending.
     pub text: String,
@@ -358,36 +296,26 @@ pub struct DiffLine {
 /// One `@@` hunk.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Hunk {
-    /// First old line.
     pub old_start: u32,
-    /// Old line count.
     pub old_lines: u32,
-    /// First new line.
     pub new_start: u32,
-    /// New line count.
     pub new_lines: u32,
     /// Text after the second `@@`.
     pub header: String,
-    /// The lines.
     pub lines: Vec<DiffLine>,
 }
 
 /// One file of a [`GitDiff`].
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FileDiff {
-    /// Path after the change.
     pub path: String,
     /// Path before a rename or copy.
     pub old_path: Option<String>,
-    /// What happened.
     pub change: FileChange,
     /// Binary: no hunks.
     pub binary: bool,
-    /// Added lines.
     pub additions: u32,
-    /// Removed lines.
     pub deletions: u32,
-    /// Hunks, unless left out.
     pub hunks: Vec<Hunk>,
     /// Hunks were left out (too large, or not asked for).
     pub hunks_omitted: bool,
@@ -398,54 +326,51 @@ pub struct FileDiff {
 pub struct GitDiff {
     /// Top level of the worktree.
     pub root: String,
-    /// Tree it starts from.
     pub from: String,
-    /// Tree it ends at.
     pub to: String,
-    /// Changed files.
     pub files: Vec<FileDiff>,
     /// Some hunks were left out to stay under the size caps.
     pub truncated: bool,
 }
 
 impl From<proto::GitDiff> for GitDiff {
-    fn from(d: proto::GitDiff) -> Self {
+    fn from(git_diff: proto::GitDiff) -> Self {
         Self {
-            root: d.root,
-            from: d.from,
-            to: d.to,
-            truncated: d.truncated,
-            files: d
+            root: git_diff.root,
+            from: git_diff.from,
+            to: git_diff.to,
+            truncated: git_diff.truncated,
+            files: git_diff
                 .files
                 .into_iter()
-                .map(|f| FileDiff {
-                    path: f.path,
-                    old_path: f.old_path,
-                    change: f.change.into(),
-                    binary: f.binary,
-                    additions: f.additions,
-                    deletions: f.deletions,
-                    hunks_omitted: f.hunks_omitted,
-                    hunks: f
+                .map(|file| FileDiff {
+                    path: file.path,
+                    old_path: file.old_path,
+                    change: file.change.into(),
+                    binary: file.binary,
+                    additions: file.additions,
+                    deletions: file.deletions,
+                    hunks_omitted: file.hunks_omitted,
+                    hunks: file
                         .hunks
                         .into_iter()
-                        .map(|h| Hunk {
-                            old_start: h.old_start,
-                            old_lines: h.old_lines,
-                            new_start: h.new_start,
-                            new_lines: h.new_lines,
-                            header: h.header,
-                            lines: h
+                        .map(|hunk| Hunk {
+                            old_start: hunk.old_start,
+                            old_lines: hunk.old_lines,
+                            new_start: hunk.new_start,
+                            new_lines: hunk.new_lines,
+                            header: hunk.header,
+                            lines: hunk
                                 .lines
                                 .into_iter()
-                                .map(|l| DiffLine {
-                                    kind: match l.kind {
+                                .map(|line| DiffLine {
+                                    kind: match line.kind {
                                         proto::LineKind::Context => LineKind::Context,
                                         proto::LineKind::Added => LineKind::Added,
                                         proto::LineKind::Removed => LineKind::Removed,
                                         proto::LineKind::NoNewline => LineKind::NoNewline,
                                     },
-                                    text: l.text,
+                                    text: line.text,
                                 })
                                 .collect(),
                         })
@@ -461,27 +386,23 @@ impl From<proto::GitDiff> for GitDiff {
 pub struct TurnInfo {
     /// Per-pane turn number, from 1.
     pub turn: u64,
-    /// Repository top level.
     pub root: String,
-    /// Start, Unix ms.
     pub started_at_ms: u64,
     /// End, Unix ms; `nil` while running.
     pub ended_at_ms: Option<u64>,
-    /// Tree at the start.
     pub start_tree: String,
-    /// Tree at the end.
     pub end_tree: Option<String>,
 }
 
 impl From<proto::TurnInfo> for TurnInfo {
-    fn from(t: proto::TurnInfo) -> Self {
+    fn from(turn_info: proto::TurnInfo) -> Self {
         Self {
-            turn: t.turn,
-            root: t.root,
-            started_at_ms: t.started_at.0,
-            ended_at_ms: t.ended_at.map(|t| t.0),
-            start_tree: t.start_tree,
-            end_tree: t.end_tree,
+            turn: turn_info.turn,
+            root: turn_info.root,
+            started_at_ms: turn_info.started_at.0,
+            ended_at_ms: turn_info.ended_at.map(|turn_info| turn_info.0),
+            start_tree: turn_info.start_tree,
+            end_tree: turn_info.end_tree,
         }
     }
 }
@@ -501,19 +422,16 @@ pub struct ReviewNote {
     /// Quoted code to include.
     #[uniffi(default = None)]
     pub quote: Option<String>,
-    /// The note.
     pub note: String,
 }
 
 /// Review notes for an agent pane.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ReviewRequest {
-    /// The agent pane.
     pub pane_id: u64,
     /// Text before the notes; a default when `nil`.
     #[uniffi(default = None)]
     pub preamble: Option<String>,
-    /// The notes.
     pub notes: Vec<ReviewNote>,
     /// Press Enter after typing the prompt.
     #[uniffi(default = true)]
@@ -521,30 +439,27 @@ pub struct ReviewRequest {
 }
 
 impl From<ReviewRequest> for proto::ReviewRequest {
-    fn from(r: ReviewRequest) -> Self {
+    fn from(review_request: ReviewRequest) -> Self {
         Self {
-            pane_id: proto::PaneId(r.pane_id),
-            preamble: r.preamble,
-            submit: r.submit,
-            notes: r
+            pane_id: proto::PaneId(review_request.pane_id),
+            preamble: review_request.preamble,
+            submit: review_request.submit,
+            notes: review_request
                 .notes
                 .into_iter()
-                .map(|n| proto::ReviewNote {
-                    path: n.path,
-                    start_line: n.start_line,
-                    end_line: n.end_line,
-                    old_side: n.old_side,
-                    quote: n.quote,
-                    note: n.note,
+                .map(|note| proto::ReviewNote {
+                    path: note.path,
+                    start_line: note.start_line,
+                    end_line: note.end_line,
+                    old_side: note.old_side,
+                    quote: note.quote,
+                    note: note.note,
                 })
                 .collect(),
         }
     }
 }
 
-// --- worktrees ------------------------------------------------------------------------------
-
-/// Creates a worktree.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WorktreeCreate {
     /// Any directory inside the repository.
@@ -561,45 +476,40 @@ pub struct WorktreeCreate {
 }
 
 impl From<WorktreeCreate> for proto::WorktreeCreate {
-    fn from(w: WorktreeCreate) -> Self {
+    fn from(worktree_create: WorktreeCreate) -> Self {
         Self {
-            repo: w.repo,
-            branch: w.branch,
-            base: w.base,
-            path: w.path,
+            repo: worktree_create.repo,
+            branch: worktree_create.branch,
+            base: worktree_create.base,
+            path: worktree_create.path,
         }
     }
 }
 
-/// One worktree.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WorktreeInfo {
-    /// Its directory.
     pub path: String,
     /// Branch; `nil` when detached.
     pub branch: Option<String>,
     /// `HEAD`.
     pub head: Option<String>,
-    /// The main worktree.
     pub main: bool,
-    /// Locked.
     pub locked: bool,
-    /// Its directory is gone.
     pub prunable: bool,
     /// `PORT` given to panes in it.
     pub port: Option<u16>,
 }
 
 impl From<proto::WorktreeInfo> for WorktreeInfo {
-    fn from(w: proto::WorktreeInfo) -> Self {
+    fn from(worktree_info: proto::WorktreeInfo) -> Self {
         Self {
-            path: w.path,
-            branch: w.branch,
-            head: w.head,
-            main: w.main,
-            locked: w.locked,
-            prunable: w.prunable,
-            port: w.port,
+            path: worktree_info.path,
+            branch: worktree_info.branch,
+            head: worktree_info.head,
+            main: worktree_info.main,
+            locked: worktree_info.locked,
+            prunable: worktree_info.prunable,
+            port: worktree_info.port,
         }
     }
 }
@@ -607,35 +517,26 @@ impl From<proto::WorktreeInfo> for WorktreeInfo {
 /// What [`DaemonClient::worktree_launch`](crate::DaemonClient::worktree_launch) starts.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WorktreeLaunch {
-    /// The worktree's directory.
     pub path: String,
-    /// Pane to split.
     pub split_from: u64,
-    /// Split direction.
     pub axis: Axis,
     /// Agent to run; `nil` opens a shell.
     #[uniffi(default = None)]
     pub agent: Option<AgentKind>,
 }
 
-// --- files ----------------------------------------------------------------------------------
-
-/// What a path is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum FileKind {
-    /// Regular file.
     File,
-    /// Directory.
     Dir,
-    /// Symbolic link.
     Symlink,
     /// Socket, FIFO, device.
     Other,
 }
 
 impl From<proto::FileKind> for FileKind {
-    fn from(k: proto::FileKind) -> Self {
-        match k {
+    fn from(file_kind: proto::FileKind) -> Self {
+        match file_kind {
             proto::FileKind::File => Self::File,
             proto::FileKind::Dir => Self::Dir,
             proto::FileKind::Symlink => Self::Symlink,
@@ -647,19 +548,12 @@ impl From<proto::FileKind> for FileKind {
 /// `lstat` of a path.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FileStat {
-    /// Absolute path.
     pub path: String,
-    /// File name.
     pub name: String,
-    /// What it is.
     pub kind: FileKind,
-    /// Size in bytes.
     pub size: u64,
-    /// Modification time, Unix ms.
     pub modified_ms: u64,
-    /// Permission bits.
     pub mode: u32,
-    /// Dot file.
     pub hidden: bool,
     /// Symlink target as stored.
     pub link_target: Option<String>,
@@ -670,18 +564,18 @@ pub struct FileStat {
 }
 
 impl From<proto::FileStat> for FileStat {
-    fn from(s: proto::FileStat) -> Self {
+    fn from(file_stat: proto::FileStat) -> Self {
         Self {
-            path: s.path,
-            name: s.name,
-            kind: s.kind.into(),
-            size: s.size,
-            modified_ms: s.modified.0,
-            mode: s.mode,
-            hidden: s.hidden,
-            link_target: s.link_target,
-            target_kind: s.target_kind.map(Into::into),
-            version: s.version,
+            path: file_stat.path,
+            name: file_stat.name,
+            kind: file_stat.kind.into(),
+            size: file_stat.size,
+            modified_ms: file_stat.modified.0,
+            mode: file_stat.mode,
+            hidden: file_stat.hidden,
+            link_target: file_stat.link_target,
+            target_kind: file_stat.target_kind.map(Into::into),
+            version: file_stat.version,
         }
     }
 }
@@ -691,47 +585,42 @@ impl From<proto::FileStat> for FileStat {
 pub struct DirListing {
     /// The directory, absolute.
     pub path: String,
-    /// Entries.
     pub entries: Vec<FileStat>,
     /// More than 10 000 entries; the rest were left out.
     pub truncated: bool,
 }
 
 impl From<proto::DirListing> for DirListing {
-    fn from(d: proto::DirListing) -> Self {
+    fn from(dir_listing: proto::DirListing) -> Self {
         Self {
-            path: d.path,
-            entries: d.entries.into_iter().map(Into::into).collect(),
-            truncated: d.truncated,
+            path: dir_listing.path,
+            entries: dir_listing.entries.into_iter().map(Into::into).collect(),
+            truncated: dir_listing.truncated,
         }
     }
 }
 
-/// Part of a file.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FileChunk {
-    /// The file when read.
     pub stat: FileStat,
     /// Offset of `data`.
     pub offset: u64,
-    /// The bytes.
     pub data: Bytes,
     /// Reaches the end of the file.
     pub eof: bool,
 }
 
 impl From<proto::FileChunk> for FileChunk {
-    fn from(c: proto::FileChunk) -> Self {
+    fn from(file_chunk: proto::FileChunk) -> Self {
         Self {
-            stat: c.stat.into(),
-            offset: c.offset,
-            data: c.data.into(),
-            eof: c.eof,
+            stat: file_chunk.stat.into(),
+            offset: file_chunk.offset,
+            data: file_chunk.data.into(),
+            eof: file_chunk.eof,
         }
     }
 }
 
-/// How to delete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum DeleteMode {
     /// Into the user's trash.
@@ -741,8 +630,8 @@ pub enum DeleteMode {
 }
 
 impl From<DeleteMode> for proto::DeleteMode {
-    fn from(m: DeleteMode) -> Self {
-        match m {
+    fn from(delete_mode: DeleteMode) -> Self {
+        match delete_mode {
             DeleteMode::Trash => Self::Trash,
             DeleteMode::Permanent => Self::Permanent,
         }
@@ -752,7 +641,6 @@ impl From<DeleteMode> for proto::DeleteMode {
 /// Where a write or upload goes (written to a temporary file, then renamed over the target).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WriteTarget {
-    /// The file.
     pub path: String,
     /// Only replace the file if it still has this [`FileStat::version`].
     #[uniffi(default = None)]
@@ -760,7 +648,6 @@ pub struct WriteTarget {
     /// Fail if the file exists.
     #[uniffi(default = false)]
     pub create_new: bool,
-    /// Create missing parent directories.
     #[uniffi(default = false)]
     pub mkdirs: bool,
     /// Permission bits for a new file.
@@ -769,13 +656,13 @@ pub struct WriteTarget {
 }
 
 impl From<WriteTarget> for proto::WriteTarget {
-    fn from(t: WriteTarget) -> Self {
+    fn from(write_target: WriteTarget) -> Self {
         Self {
-            path: t.path,
-            if_match: t.if_match,
-            create_new: t.create_new,
-            mkdirs: t.mkdirs,
-            mode: t.mode,
+            path: write_target.path,
+            if_match: write_target.if_match,
+            create_new: write_target.create_new,
+            mkdirs: write_target.mkdirs,
+            mode: write_target.mode,
         }
     }
 }
@@ -783,15 +670,11 @@ impl From<WriteTarget> for proto::WriteTarget {
 /// Changes in a watched directory (debounced).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FsChange {
-    /// The watch.
     pub watch_id: u64,
-    /// Changed paths (absolute).
     pub paths: Vec<String>,
     /// Too many to name: list the directory again.
     pub rescan: bool,
 }
-
-// --- attention ------------------------------------------------------------------------------
 
 /// What an attention item is about.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -803,39 +686,27 @@ pub enum AttentionKind {
         /// Answer with `decide` when set.
         request_id: Option<u64>,
     },
-    /// An agent finished its turn.
     AgentDone {
-        /// Agent name.
         agent: String,
     },
     /// An agent's turn failed.
     AgentFailed {
-        /// Agent name.
         agent: String,
     },
     /// A long command finished unseen.
     CommandFinished {
-        /// The command.
         mark: CommandMark,
     },
 }
 
-/// One item of the attention feed.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AttentionItem {
-    /// Increasing id.
     pub id: u64,
-    /// When, Unix ms.
     pub at_ms: u64,
-    /// The pane.
     pub pane_id: u64,
-    /// The pane's session.
     pub session_id: Option<u64>,
-    /// What happened.
     pub kind: AttentionKind,
-    /// Notification title.
     pub title: String,
-    /// Body.
     pub body: String,
     /// Seen on some device.
     pub seen: bool,
@@ -844,13 +715,13 @@ pub struct AttentionItem {
 }
 
 impl From<proto::AttentionItem> for AttentionItem {
-    fn from(i: proto::AttentionItem) -> Self {
+    fn from(attention_item: proto::AttentionItem) -> Self {
         Self {
-            id: i.id,
-            at_ms: i.at.0,
-            pane_id: i.pane_id.0,
-            session_id: i.session_id.map(|s| s.0),
-            kind: match i.kind {
+            id: attention_item.id,
+            at_ms: attention_item.at.0,
+            pane_id: attention_item.pane_id.0,
+            session_id: attention_item.session_id.map(|s| s.0),
+            kind: match attention_item.kind {
                 proto::AttentionKind::AgentBlocked { agent, request_id } => {
                     AttentionKind::AgentBlocked {
                         agent,
@@ -863,10 +734,10 @@ impl From<proto::AttentionItem> for AttentionItem {
                     AttentionKind::CommandFinished { mark: mark.into() }
                 }
             },
-            title: i.title,
-            body: i.body,
-            seen: i.seen,
-            while_viewed: i.while_viewed,
+            title: attention_item.title,
+            body: attention_item.body,
+            seen: attention_item.seen,
+            while_viewed: attention_item.while_viewed,
         }
     }
 }
@@ -876,15 +747,14 @@ impl From<proto::AttentionItem> for AttentionItem {
 pub struct AttentionList {
     /// The last 500 items, oldest first.
     pub items: Vec<AttentionItem>,
-    /// Unseen items.
     pub unseen: u32,
 }
 
 impl From<proto::AttentionList> for AttentionList {
-    fn from(l: proto::AttentionList) -> Self {
+    fn from(attention_list: proto::AttentionList) -> Self {
         Self {
-            items: l.items.into_iter().map(Into::into).collect(),
-            unseen: l.unseen,
+            items: attention_list.items.into_iter().map(Into::into).collect(),
+            unseen: attention_list.unseen,
         }
     }
 }
@@ -892,7 +762,6 @@ impl From<proto::AttentionList> for AttentionList {
 /// Which items to mark seen (all conditions add up).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AttentionSeen {
-    /// These ids.
     #[uniffi(default = [])]
     pub ids: Vec<u64>,
     /// Every item up to and including this id.
@@ -904,11 +773,11 @@ pub struct AttentionSeen {
 }
 
 impl From<AttentionSeen> for proto::AttentionSeen {
-    fn from(s: AttentionSeen) -> Self {
+    fn from(attention_seen: AttentionSeen) -> Self {
         Self {
-            ids: s.ids,
-            up_to: s.up_to,
-            pane_id: s.pane_id.map(proto::PaneId),
+            ids: attention_seen.ids,
+            up_to: attention_seen.up_to,
+            pane_id: attention_seen.pane_id.map(proto::PaneId),
         }
     }
 }
@@ -916,16 +785,12 @@ impl From<AttentionSeen> for proto::AttentionSeen {
 /// A change to the attention feed.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AttentionUpdate {
-    /// A new item.
     Added {
-        /// The item.
         item: AttentionItem,
         /// Unseen items now.
         unseen: u32,
     },
-    /// Items were marked seen.
     Seen {
-        /// The items.
         ids: Vec<u64>,
         /// Unseen items now.
         unseen: u32,
@@ -933,8 +798,8 @@ pub enum AttentionUpdate {
 }
 
 impl From<proto::AttentionUpdate> for AttentionUpdate {
-    fn from(u: proto::AttentionUpdate) -> Self {
-        match u {
+    fn from(attention_update: proto::AttentionUpdate) -> Self {
+        match attention_update {
             proto::AttentionUpdate::Added { item, unseen } => Self::Added {
                 item: item.into(),
                 unseen,
@@ -944,9 +809,6 @@ impl From<proto::AttentionUpdate> for AttentionUpdate {
     }
 }
 
-// --- editor ---------------------------------------------------------------------------------
-
-/// Which editor server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum EditorKind {
     /// Microsoft's VS Code through `code serve-web` (the default; no sign-in).
@@ -959,8 +821,8 @@ pub enum EditorKind {
 }
 
 impl From<proto::EditorKind> for EditorKind {
-    fn from(k: proto::EditorKind) -> Self {
-        match k {
+    fn from(editor_kind: proto::EditorKind) -> Self {
+        match editor_kind {
             proto::EditorKind::VsCode => Self::VsCode,
             proto::EditorKind::OpenVsCode => Self::OpenVsCode,
             proto::EditorKind::Vscodium => Self::Vscodium,
@@ -969,8 +831,8 @@ impl From<proto::EditorKind> for EditorKind {
 }
 
 impl From<EditorKind> for proto::EditorKind {
-    fn from(k: EditorKind) -> Self {
-        match k {
+    fn from(editor_kind: EditorKind) -> Self {
+        match editor_kind {
             EditorKind::VsCode => Self::VsCode,
             EditorKind::OpenVsCode => Self::OpenVsCode,
             EditorKind::Vscodium => Self::Vscodium,
@@ -985,39 +847,34 @@ pub enum EditorChoice {
     /// owner chose VSCodium. For VS Code it fails with `Unavailable` without the CLI and
     /// `Denied` without the licence accepted; it never switches editors silently.
     Auto,
-    /// Exactly this one.
     Only {
-        /// The editor.
         kind: EditorKind,
     },
 }
 
 impl From<EditorChoice> for proto::EditorChoice {
-    fn from(c: EditorChoice) -> Self {
-        match c {
+    fn from(editor_choice: EditorChoice) -> Self {
+        match editor_choice {
             EditorChoice::Auto => Self::Auto,
             EditorChoice::Only { kind } => Self::Only(kind.into()),
         }
     }
 }
 
-/// Starts an editor server.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct EditorLaunch {
-    /// The folder to open.
     pub folder: String,
-    /// Which editor.
     pub choice: EditorChoice,
     /// The user accepted the VS Code Server licence in the app.
     pub accept_vscode_license: bool,
 }
 
 impl From<EditorLaunch> for proto::EditorLaunch {
-    fn from(l: EditorLaunch) -> Self {
+    fn from(editor_launch: EditorLaunch) -> Self {
         Self {
-            folder: l.folder,
-            choice: l.choice.into(),
-            accept_vscode_license: l.accept_vscode_license,
+            folder: editor_launch.folder,
+            choice: editor_launch.choice.into(),
+            accept_vscode_license: editor_launch.accept_vscode_license,
         }
     }
 }
@@ -1025,19 +882,14 @@ impl From<EditorLaunch> for proto::EditorLaunch {
 /// A running editor server on the host's `127.0.0.1:port`. `Debug` leaves the token out.
 #[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct EditorInstance {
-    /// Which editor.
     pub kind: EditorKind,
-    /// The folder it serves.
     pub folder: String,
     /// Port on the host's loopback.
     pub port: u16,
-    /// The connection token.
     pub token: String,
     /// Path and query to load (token and folder included).
     pub url_path: String,
-    /// The server's pid.
     pub pid: u32,
-    /// Start, Unix ms.
     pub started_at_ms: u64,
 }
 
@@ -1054,15 +906,15 @@ impl std::fmt::Debug for EditorInstance {
 }
 
 impl From<proto::EditorInstance> for EditorInstance {
-    fn from(e: proto::EditorInstance) -> Self {
+    fn from(editor_instance: proto::EditorInstance) -> Self {
         Self {
-            kind: e.kind.into(),
-            folder: e.folder,
-            port: e.port,
-            token: e.token,
-            url_path: e.url_path,
-            pid: e.pid,
-            started_at_ms: e.started_at.0,
+            kind: editor_instance.kind.into(),
+            folder: editor_instance.folder,
+            port: editor_instance.port,
+            token: editor_instance.token,
+            url_path: editor_instance.url_path,
+            pid: editor_instance.pid,
+            started_at_ms: editor_instance.started_at.0,
         }
     }
 }
@@ -1070,15 +922,11 @@ impl From<proto::EditorInstance> for EditorInstance {
 /// Whether an editor can run on the host.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct EditorAvailability {
-    /// The editor.
     pub kind: EditorKind,
     /// Installed (the `code` CLI found; openvscode-server downloaded).
     pub installed: bool,
-    /// Downloadable on demand.
     pub downloadable: bool,
-    /// The executable.
     pub path: Option<String>,
-    /// Version, if known.
     pub version: Option<String>,
     /// Why it cannot run, or licence notes.
     pub note: Option<String>,
@@ -1089,26 +937,25 @@ pub struct EditorAvailability {
 pub struct EditorList {
     /// Each editor and whether it can run.
     pub available: Vec<EditorAvailability>,
-    /// Running servers.
     pub running: Vec<EditorInstance>,
 }
 
 impl From<proto::EditorList> for EditorList {
-    fn from(l: proto::EditorList) -> Self {
+    fn from(editor_list: proto::EditorList) -> Self {
         Self {
-            available: l
+            available: editor_list
                 .available
                 .into_iter()
-                .map(|a| EditorAvailability {
-                    kind: a.kind.into(),
-                    installed: a.installed,
-                    downloadable: a.downloadable,
-                    path: a.path,
-                    version: a.version,
-                    note: a.note,
+                .map(|availability| EditorAvailability {
+                    kind: availability.kind.into(),
+                    installed: availability.installed,
+                    downloadable: availability.downloadable,
+                    path: availability.path,
+                    version: availability.version,
+                    note: availability.note,
                 })
                 .collect(),
-            running: l.running.into_iter().map(Into::into).collect(),
+            running: editor_list.running.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1116,7 +963,6 @@ impl From<proto::EditorList> for EditorList {
 /// How `editor_open` reached the editor.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct EditorOpened {
-    /// The editor used.
     pub instance: EditorInstance,
     /// Opened in an already-open window; just show the editor.
     pub in_window: bool,
@@ -1125,29 +971,26 @@ pub struct EditorOpened {
 }
 
 impl From<proto::EditorOpened> for EditorOpened {
-    fn from(o: proto::EditorOpened) -> Self {
+    fn from(editor_opened: proto::EditorOpened) -> Self {
         Self {
-            instance: o.instance.into(),
-            in_window: o.in_window,
-            url_path: o.url_path,
+            instance: editor_opened.instance.into(),
+            in_window: editor_opened.in_window,
+            url_path: editor_opened.url_path,
         }
     }
 }
-
-// --- VS Code tunnel (opt-in fallback) -------------------------------------------------------
 
 /// Which account a tunnel signs in with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum TunnelProvider {
     /// GitHub (device code at `github.com/login/device`).
     GitHub,
-    /// Microsoft.
     Microsoft,
 }
 
 impl From<proto::TunnelProvider> for TunnelProvider {
-    fn from(p: proto::TunnelProvider) -> Self {
-        match p {
+    fn from(tunnel_provider: proto::TunnelProvider) -> Self {
+        match tunnel_provider {
             proto::TunnelProvider::GitHub => Self::GitHub,
             proto::TunnelProvider::Microsoft => Self::Microsoft,
         }
@@ -1155,15 +998,14 @@ impl From<proto::TunnelProvider> for TunnelProvider {
 }
 
 impl From<TunnelProvider> for proto::TunnelProvider {
-    fn from(p: TunnelProvider) -> Self {
-        match p {
+    fn from(tunnel_provider: TunnelProvider) -> Self {
+        match tunnel_provider {
             TunnelProvider::GitHub => Self::GitHub,
             TunnelProvider::Microsoft => Self::Microsoft,
         }
     }
 }
 
-/// Starts the tunnel.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct VsCodeTunnelStart {
     /// The user accepted the VS Code Server licence and Microsoft's privacy statement.
@@ -1194,11 +1036,8 @@ pub struct VsCodeTunnelOpen {
 /// The `code` CLI on the host.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct VsCodeCli {
-    /// The executable.
     pub path: String,
-    /// Product version.
     pub version: Option<String>,
-    /// Build commit.
     pub commit: Option<String>,
     /// SHA-256 of the archive (daemon installs only).
     pub sha256: Option<String>,
@@ -1210,40 +1049,30 @@ pub struct VsCodeCli {
 /// asks for one).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DeviceLogin {
-    /// The account kind.
     pub provider: TunnelProvider,
     /// Where to enter the code.
     pub verification_url: String,
-    /// The code.
     pub user_code: String,
-    /// When printed, Unix ms.
     pub at_ms: u64,
 }
 
 /// What the tunnel is doing.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum TunnelState {
-    /// Not running.
     Stopped,
-    /// Signing in or connecting.
     Starting,
     /// Show the URL and code.
     NeedsLogin {
-        /// The sign-in.
         login: DeviceLogin,
     },
-    /// Connected.
     Running {
-        /// Machine name.
         name: String,
         /// `https://vscode.dev/tunnel/<name>…`.
         web_url: String,
         /// Not started by the daemon.
         adopted: bool,
     },
-    /// Failed.
     Failed {
-        /// Why.
         message: String,
         /// The daemon restarts it.
         retrying: bool,
@@ -1257,32 +1086,31 @@ pub struct VsCodeTunnelStatus {
     pub cli: Option<VsCodeCli>,
     /// Microsoft publishes a CLI for this host (`vscode_cli_install` can fetch it).
     pub cli_downloadable: bool,
-    /// The tunnel.
     pub state: TunnelState,
     /// The account kind last used.
     pub provider: Option<TunnelProvider>,
 }
 
 impl From<proto::VsCodeTunnelStatus> for VsCodeTunnelStatus {
-    fn from(s: proto::VsCodeTunnelStatus) -> Self {
+    fn from(status: proto::VsCodeTunnelStatus) -> Self {
         Self {
-            cli: s.cli.map(|c| VsCodeCli {
-                path: c.path,
-                version: c.version,
-                commit: c.commit,
-                sha256: c.sha256,
-                managed: c.managed,
+            cli: status.cli.map(|cli| VsCodeCli {
+                path: cli.path,
+                version: cli.version,
+                commit: cli.commit,
+                sha256: cli.sha256,
+                managed: cli.managed,
             }),
-            cli_downloadable: s.cli_downloadable,
-            state: match s.state {
+            cli_downloadable: status.cli_downloadable,
+            state: match status.state {
                 proto::TunnelState::Stopped => TunnelState::Stopped,
                 proto::TunnelState::Starting => TunnelState::Starting,
-                proto::TunnelState::NeedsLogin(l) => TunnelState::NeedsLogin {
+                proto::TunnelState::NeedsLogin(login) => TunnelState::NeedsLogin {
                     login: DeviceLogin {
-                        provider: l.provider.into(),
-                        verification_url: l.verification_url,
-                        user_code: l.user_code,
-                        at_ms: l.at.0,
+                        provider: login.provider.into(),
+                        verification_url: login.verification_url,
+                        user_code: login.user_code,
+                        at_ms: login.at.0,
                     },
                 },
                 proto::TunnelState::Running {
@@ -1298,7 +1126,7 @@ impl From<proto::VsCodeTunnelStatus> for VsCodeTunnelStatus {
                     TunnelState::Failed { message, retrying }
                 }
             },
-            provider: s.provider.map(Into::into),
+            provider: status.provider.map(Into::into),
         }
     }
 }
@@ -1306,9 +1134,7 @@ impl From<proto::VsCodeTunnelStatus> for VsCodeTunnelStatus {
 /// Where a folder or file opens through the tunnel.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct VsCodeTunnelOpened {
-    /// Machine name.
     pub name: String,
-    /// Workspace folder.
     pub folder: String,
     /// `https://vscode.dev/tunnel/<name>/<folder>` (top-level web view; vscode.dev refuses
     /// framing).
@@ -1320,18 +1146,16 @@ pub struct VsCodeTunnelOpened {
 }
 
 impl From<proto::VsCodeTunnelOpened> for VsCodeTunnelOpened {
-    fn from(o: proto::VsCodeTunnelOpened) -> Self {
+    fn from(opened: proto::VsCodeTunnelOpened) -> Self {
         Self {
-            name: o.name,
-            folder: o.folder,
-            web_url: o.web_url,
-            desktop_uri: o.desktop_uri,
-            in_window: o.in_window,
+            name: opened.name,
+            folder: opened.folder,
+            web_url: opened.web_url,
+            desktop_uri: opened.desktop_uri,
+            in_window: opened.in_window,
         }
     }
 }
-
-// --- push -----------------------------------------------------------------------------------
 
 /// Which attention items a device wants pushed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
@@ -1342,7 +1166,6 @@ pub struct PushPrefs {
     /// An agent waits in the terminal.
     #[uniffi(default = true)]
     pub blocked: bool,
-    /// An agent finished.
     #[uniffi(default = true)]
     pub done: bool,
     /// An agent's turn failed.
@@ -1354,25 +1177,25 @@ pub struct PushPrefs {
 }
 
 impl From<PushPrefs> for proto::PushPrefs {
-    fn from(p: PushPrefs) -> Self {
+    fn from(push_prefs: PushPrefs) -> Self {
         Self {
-            approvals: p.approvals,
-            blocked: p.blocked,
-            done: p.done,
-            failed: p.failed,
-            commands: p.commands,
+            approvals: push_prefs.approvals,
+            blocked: push_prefs.blocked,
+            done: push_prefs.done,
+            failed: push_prefs.failed,
+            commands: push_prefs.commands,
         }
     }
 }
 
 impl From<proto::PushPrefs> for PushPrefs {
-    fn from(p: proto::PushPrefs) -> Self {
+    fn from(push_prefs: proto::PushPrefs) -> Self {
         Self {
-            approvals: p.approvals,
-            blocked: p.blocked,
-            done: p.done,
-            failed: p.failed,
-            commands: p.commands,
+            approvals: push_prefs.approvals,
+            blocked: push_prefs.blocked,
+            done: push_prefs.done,
+            failed: push_prefs.failed,
+            commands: push_prefs.commands,
         }
     }
 }
@@ -1388,7 +1211,6 @@ pub struct PushRegistration {
     /// The relay that issued `cap`; the daemon's default when `nil`.
     #[uniffi(default = None)]
     pub relay_url: Option<String>,
-    /// What to push.
     pub prefs: PushPrefs,
     /// A push-to-start capability for the agents Live Activity.
     #[uniffi(default = None)]
@@ -1408,86 +1230,71 @@ impl std::fmt::Debug for PushRegistration {
 /// Push settings on the daemon and this device's registration.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PushStatus {
-    /// Pushes are on.
     pub enabled: bool,
     /// The daemon's default relay.
     pub relay_url: String,
     /// This device's preferences, if registered.
     pub registered: Option<PushPrefs>,
-    /// Registered devices.
     pub devices: u32,
     /// The last delivery failure for this device.
     pub last_error: Option<String>,
 }
 
 impl From<proto::PushStatus> for PushStatus {
-    fn from(s: proto::PushStatus) -> Self {
+    fn from(push_status: proto::PushStatus) -> Self {
         Self {
-            enabled: s.enabled,
-            relay_url: s.relay_url,
-            registered: s.registered.map(Into::into),
-            devices: s.devices,
-            last_error: s.last_error,
+            enabled: push_status.enabled,
+            relay_url: push_status.relay_url,
+            registered: push_status.registered.map(Into::into),
+            devices: push_status.devices,
+            last_error: push_status.last_error,
         }
     }
 }
-
-// --- events ---------------------------------------------------------------------------------
 
 /// A workspace push from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum WorkspaceEvent {
     /// The detected ports (the whole list).
     PortsChanged {
-        /// Every detected port.
         ports: Vec<PortInfo>,
     },
-    /// A watched directory changed.
     FsChanged {
-        /// What changed.
         change: FsChange,
     },
-    /// The attention feed changed.
     Attention {
-        /// The change.
         update: AttentionUpdate,
     },
     /// The VS Code tunnel changed state (a device code to show, running, failed).
     VsCodeTunnel {
-        /// The whole status.
         status: VsCodeTunnelStatus,
     },
     /// Agent plan usage changed (while watching, `DaemonClient::usage_watch`).
     AgentUsage {
-        /// The whole report.
         report: crate::usage::AgentUsageReport,
     },
     /// The repositories, worktrees, branches and pull requests of the panes (whole).
     Repos {
-        /// The snapshot.
         snapshot: crate::repo::RepoSnapshot,
     },
     /// A workflow file the daemon listed changed: list again (`DaemonClient::workflow_list`).
     WorkflowsChanged {
-        /// The new revision.
         rev: u64,
     },
     /// The host's agent accounts or the panes' accounts changed (owner devices).
     Accounts {
-        /// The whole report.
         report: crate::accounts::AccountsReport,
     },
     /// Usage per account changed (owner devices, while watching usage).
     AccountUsage {
-        /// The whole report.
         report: crate::accounts::AccountUsageReport,
     },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
-    fn from(e: client_core::WorkspaceEvent) -> Self {
+    fn from(workspace_event: client_core::WorkspaceEvent) -> Self {
         use client_core::WorkspaceEvent as E;
-        match e {
+        match workspace_event {
             E::PortsChanged { ports } => Self::PortsChanged {
                 ports: ports.into_iter().map(Into::into).collect(),
             },

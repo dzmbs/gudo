@@ -73,7 +73,11 @@ const RESTORE_MODES: &[u8] =
 fn detach_position(input: &[u8]) -> Option<usize> {
     DETACH_SEQUENCES
         .iter()
-        .filter_map(|seq| input.windows(seq.len()).position(|w| w == *seq))
+        .filter_map(|sequence| {
+            input
+                .windows(sequence.len())
+                .position(|window| window == *sequence)
+        })
         .min()
 }
 
@@ -300,7 +304,7 @@ pub(crate) enum Agent {
 
 fn config_dir() -> PathBuf {
     let root = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
@@ -369,15 +373,15 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     let dir = path.parent().context("no parent directory")?;
     std::fs::create_dir_all(dir)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    let tmp = path.with_extension("tmp");
-    let _ = std::fs::remove_file(&tmp);
+    let staging = path.with_extension("tmp");
+    let _ = std::fs::remove_file(&staging);
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(&tmp)?
+        .open(&staging)?
         .write_all(data)?;
-    std::fs::rename(&tmp, path)?;
+    std::fs::rename(&staging, path)?;
     Ok(())
 }
 
@@ -388,23 +392,23 @@ enum Dial {
 }
 
 fn dial(cli: &Cli) -> Result<Dial> {
-    if let Some(t) = &cli.ticket {
-        return Ok(Dial::Ticket(t.clone()));
+    if let Some(ticket) = &cli.ticket {
+        return Ok(Dial::Ticket(ticket.clone()));
     }
-    if let Some(i) = &cli.invite {
-        return Ok(Dial::Invite(i.clone()));
+    if let Some(invite) = &cli.invite {
+        return Ok(Dial::Invite(invite.clone()));
     }
     match saved_ticket() {
-        Ok(t) => Ok(Dial::Ticket(t)),
-        Err(e) => std::fs::read_to_string(config_dir().join("gudo.invite"))
-            .map(|i| Dial::Invite(i.trim().to_owned()))
-            .map_err(|_| e),
+        Ok(ticket) => Ok(Dial::Ticket(ticket)),
+        Err(no_ticket) => std::fs::read_to_string(config_dir().join("gudo.invite"))
+            .map(|invite| Dial::Invite(invite.trim().to_owned()))
+            .map_err(|_| no_ticket),
     }
 }
 
 fn saved_ticket() -> Result<String> {
     std::fs::read_to_string(config_dir().join("gudo.ticket"))
-        .map(|t| t.trim().to_owned())
+        .map(|ticket| ticket.trim().to_owned())
         .with_context(|| format!("no ticket: run `{} pair <ticket>` first", brand::CLI_BIN))
 }
 
@@ -465,7 +469,7 @@ impl Conn {
     /// Connects without attaching (forwards need no session).
     async fn connect(cli: &Cli) -> Result<Self> {
         let mut conn = Self::dial(cli)?;
-        conn.wait("the connection", |c| c.connected).await?;
+        conn.wait("the connection", |conn| conn.connected).await?;
         Ok(conn)
     }
 
@@ -475,20 +479,20 @@ impl Conn {
         let session = match &cli.session {
             Some(name) => {
                 conn.client.list_sessions();
-                conn.wait("session list", |c| !c.sessions.is_empty())
+                conn.wait("session list", |conn| !conn.sessions.is_empty())
                     .await?;
                 Some(
                     conn.sessions
                         .iter()
-                        .find(|s| &s.name == name)
-                        .map(|s| s.session_id)
+                        .find(|session| &session.name == name)
+                        .map(|session| session.session_id)
                         .with_context(|| format!("no session named {name:?}"))?,
                 )
             }
             None => None,
         };
         conn.client.attach(session);
-        conn.wait("layout", |c| c.layout.is_some()).await?;
+        conn.wait("layout", |conn| conn.layout.is_some()).await?;
         Ok(conn)
     }
 
@@ -535,7 +539,7 @@ impl Conn {
         let why = self
             .last_error
             .as_deref()
-            .map_or_else(String::new, |e| format!(" (last error: {e})"));
+            .map_or_else(String::new, |error| format!(" (last error: {error})"));
         let hint = if self.direct_only {
             "; with --no-relay only the ticket's direct addresses are dialled: if the daemon \
              now listens elsewhere (another network, or an older daemon that changed its port on \
@@ -558,7 +562,7 @@ impl Conn {
         layout
             .tabs
             .iter()
-            .find(|t| Some(t.tab_id) == layout.active_tab)
+            .find(|tab| Some(tab.tab_id) == layout.active_tab)
             .context("session has no tabs")
     }
 
@@ -687,7 +691,7 @@ async fn run(cli: Cli) -> Result<()> {
             };
             let id = conn.client.search(pane_id, query, 0, limit);
             let page = conn
-                .answer(|e| match e {
+                .answer(|event| match event {
                     ClientEvent::SearchResult { req_id, result, .. } if req_id == id => {
                         Some(result)
                     }
@@ -701,8 +705,13 @@ async fn run(cli: Cli) -> Result<()> {
                 "{} matches in {} rows (row 0 = oldest scrollback)",
                 page.total, page.total_rows
             );
-            for m in &page.matches {
-                println!("{:>7}:{:<4} {}", m.row, m.col, m.line.trim_end());
+            for found in &page.matches {
+                println!(
+                    "{:>7}:{:<4} {}",
+                    found.row,
+                    found.col,
+                    found.line.trim_end()
+                );
             }
             return Ok(());
         }
@@ -710,7 +719,7 @@ async fn run(cli: Cli) -> Result<()> {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let id = conn.client.links(pane_id, commands);
             let links = conn
-                .answer(|e| match e {
+                .answer(|event| match event {
                     ClientEvent::Links { req_id, result, .. } if req_id == id => Some(result),
                     _ => None,
                 })
@@ -766,8 +775,8 @@ async fn run(cli: Cli) -> Result<()> {
             let mut seen = 0;
             let _ = tokio::time::timeout(
                 std::time::Duration::from_millis(1500),
-                conn.answer(|e| match e {
-                    ClientEvent::InputAck { pane_id: p, .. } if p == pane_id => {
+                conn.answer(|event| match event {
+                    ClientEvent::InputAck { pane_id: acked, .. } if acked == pane_id => {
                         seen += 1;
                         (seen == acks).then_some(())
                     }
@@ -781,31 +790,35 @@ async fn run(cli: Cli) -> Result<()> {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let id = conn.client.commands(pane_id);
             let list = conn
-                .answer(|e| match e {
+                .answer(|event| match event {
                     ClientEvent::Commands { req_id, result, .. } if req_id == id => Some(result),
                     _ => None,
                 })
                 .await??;
             if conn.json {
-                let commands = list.commands.iter().map(|c| (&c.mark).into()).collect();
+                let commands = list
+                    .commands
+                    .iter()
+                    .map(|command| (&command.mark).into())
+                    .collect();
                 return json::print("marks", &json::Marks { commands });
             }
-            for c in &list.commands {
-                let m = &c.mark;
-                let status = match m.finished {
+            for command in &list.commands {
+                let mark = &command.mark;
+                let status = match mark.finished {
                     None => "running".to_owned(),
-                    Some(f) => format!(
+                    Some(finished) => format!(
                         "exit {} in {:.1}s",
-                        f.exit.map_or("?".into(), |e| e.to_string()),
-                        f.duration_ms as f64 / 1000.0
+                        finished.exit.map_or("?".into(), |code| code.to_string()),
+                        finished.duration_ms as f64 / 1000.0
                     ),
                 };
                 println!(
                     "{:>4}  {:<22} {}  [{}]",
-                    m.command_id,
+                    mark.command_id,
                     status,
-                    m.command.as_deref().unwrap_or("?"),
-                    m.cwd.as_deref().unwrap_or("")
+                    mark.command.as_deref().unwrap_or("?"),
+                    mark.cwd.as_deref().unwrap_or("")
                 );
             }
             return Ok(());
@@ -813,8 +826,8 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Output { command, pane } => {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let id = conn.client.command_output(pane_id, command);
-            let out = conn
-                .answer(|e| match e {
+            let output = conn
+                .answer(|event| match event {
                     ClientEvent::CommandOutput { req_id, result, .. } if req_id == id => {
                         Some(result)
                     }
@@ -823,18 +836,18 @@ async fn run(cli: Cli) -> Result<()> {
                 .await??;
             if conn.json {
                 let doc = json::Output {
-                    command: (&out.mark).into(),
-                    text: out.text,
-                    truncated: out.truncated,
+                    command: (&output.mark).into(),
+                    text: output.text,
+                    truncated: output.truncated,
                 };
                 return json::print("output", &doc);
             }
-            println!("{}", out.text);
+            println!("{}", output.text);
             return Ok(());
         }
         Cmd::Ls => {
             conn.client.list_sessions();
-            conn.wait("session list", |c| !c.sessions.is_empty())
+            conn.wait("session list", |conn| !conn.sessions.is_empty())
                 .await?;
             if conn.json {
                 return json::print("ls", &json::Ls::new(&conn.sessions, conn.layout()));
@@ -851,8 +864,8 @@ async fn run(cli: Cli) -> Result<()> {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let launch = match agent {
                 None => PaneLaunch::Shell { cwd },
-                Some(a) => PaneLaunch::Agent {
-                    agent: match a {
+                Some(agent) => PaneLaunch::Agent {
+                    agent: match agent {
                         Agent::Claude => AgentKind::Claude,
                         Agent::Codex => AgentKind::Codex,
                     },
@@ -917,9 +930,9 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Tab { action } => {
             let session_id = conn.layout().session_id;
-            let tabs: Vec<_> = conn.layout().tabs.iter().map(|t| t.tab_id).collect();
+            let tabs: Vec<_> = conn.layout().tabs.iter().map(|tab| tab.tab_id).collect();
             let current = conn.tab()?.tab_id;
-            let pos = tabs.iter().position(|&t| t == current).unwrap_or(0);
+            let position = tabs.iter().position(|&tab| tab == current).unwrap_or(0);
             match action {
                 TabCmd::New { name } => {
                     conn.op(LayoutOp::NewTab {
@@ -931,10 +944,10 @@ async fn run(cli: Cli) -> Result<()> {
                 }
                 TabCmd::Close => conn.op(LayoutOp::CloseTab { tab_id: current }).await?,
                 TabCmd::Next | TabCmd::Prev => {
-                    let n = tabs.len();
+                    let count = tabs.len();
                     let next = match action {
-                        TabCmd::Next => (pos + 1) % n,
-                        _ => (pos + n - 1) % n,
+                        TabCmd::Next => (position + 1) % count,
+                        _ => (position + count - 1) % count,
                     };
                     conn.op(LayoutOp::SelectTab { tab_id: tabs[next] }).await?
                 }
@@ -998,10 +1011,14 @@ async fn run(cli: Cli) -> Result<()> {
         OpOutcome::PaneCreated { pane_id } => println!("pane {pane_id}"),
         OpOutcome::TabCreated { tab_id, pane_id } => {
             // Print the tab's position, which is what `tab select` takes, not its internal id.
-            let has_tab = |c: &Conn| c.layout().tabs.iter().any(|t| t.tab_id == tab_id);
+            let has_tab = |conn: &Conn| conn.layout().tabs.iter().any(|tab| tab.tab_id == tab_id);
             conn.wait("the new tab", has_tab).await?;
             let tabs = &conn.layout().tabs;
-            let position = tabs.iter().position(|t| t.tab_id == tab_id).unwrap_or(0) + 1;
+            let position = tabs
+                .iter()
+                .position(|tab| tab.tab_id == tab_id)
+                .unwrap_or(0)
+                + 1;
             println!("tab {position} of {}, pane {pane_id}", tabs.len());
         }
         OpOutcome::SessionCreated {
@@ -1022,9 +1039,9 @@ async fn events(mut conn: Conn, types: &[String]) -> Result<()> {
     if let Some(layout) = conn.layout.clone() {
         mapper.feed(&ClientEvent::Layout { layout });
     }
-    let wanted = |e: &ScriptEvent| {
-        let kind = serde_json::to_value(&e.kind).unwrap_or_default();
-        types.is_empty() || types.iter().any(|t| kind["type"] == t.as_str())
+    let wanted = |event: &ScriptEvent| {
+        let kind = serde_json::to_value(&event.kind).unwrap_or_default();
+        types.is_empty() || types.iter().any(|wanted| kind["type"] == wanted.as_str())
     };
     let mut out = std::io::stdout().lock();
     loop {
@@ -1032,22 +1049,22 @@ async fn events(mut conn: Conn, types: &[String]) -> Result<()> {
             event = conn.next() => event?,
             _ = tokio::signal::ctrl_c() => return Ok(()),
         };
-        for e in mapper.feed(&event).into_iter().filter(|e| wanted(e)) {
+        for script_event in mapper.feed(&event).into_iter().filter(|e| wanted(e)) {
             if conn.json {
-                writeln!(out, "{}", serde_json::to_string(&e)?)?;
+                writeln!(out, "{}", serde_json::to_string(&script_event)?)?;
             } else {
-                let kind = serde_json::to_value(&e.kind)?;
+                let kind = serde_json::to_value(&script_event.kind)?;
                 writeln!(
                     out,
                     "{:>5} {:<16} {:<5} {}",
-                    e.seq,
+                    script_event.seq,
                     kind["type"].as_str().unwrap_or("?"),
-                    e.pane.as_deref().unwrap_or("-"),
+                    script_event.pane.as_deref().unwrap_or("-"),
                     kind.as_object()
-                        .map(|o| o
+                        .map(|fields| fields
                             .iter()
-                            .filter(|(k, _)| *k != "type")
-                            .map(|(k, v)| format!("{k}={v}"))
+                            .filter(|(key, _)| *key != "type")
+                            .map(|(key, value)| format!("{key}={value}"))
                             .collect::<Vec<_>>()
                             .join(" "))
                         .unwrap_or_default()
@@ -1059,16 +1076,16 @@ async fn events(mut conn: Conn, types: &[String]) -> Result<()> {
 }
 
 fn print_ls(conn: &Conn) {
-    let attached: Option<SessionId> = conn.layout.as_ref().map(|l| l.session_id);
-    for s in &conn.sessions {
-        let mark = if Some(s.session_id) == attached {
+    let attached: Option<SessionId> = conn.layout.as_ref().map(|layout| layout.session_id);
+    for session in &conn.sessions {
+        let mark = if Some(session.session_id) == attached {
             "*"
         } else {
             " "
         };
         println!(
             "{mark} {} ({} tabs, {} panes, {} clients)",
-            s.name, s.tabs, s.panes, s.clients
+            session.name, session.tabs, session.panes, session.clients
         );
     }
     let layout = conn.layout();
@@ -1084,7 +1101,7 @@ fn print_ls(conn: &Conn) {
             i + 1,
             describe(&tab.root, tab.focused),
             tab.zoomed
-                .map(|z| format!(" (zoomed {z})"))
+                .map(|zoomed| format!(" (zoomed {zoomed})"))
                 .unwrap_or_default()
         );
     }
@@ -1093,20 +1110,20 @@ fn print_ls(conn: &Conn) {
 fn describe(node: &client_core::proto::LayoutNode, focused: PaneId) -> String {
     use client_core::proto::LayoutNode;
     match node {
-        LayoutNode::Leaf(p) if *p == focused => format!("[{p}]"),
-        LayoutNode::Leaf(p) => p.to_string(),
+        LayoutNode::Leaf(pane) if *pane == focused => format!("[{pane}]"),
+        LayoutNode::Leaf(pane) => pane.to_string(),
         LayoutNode::Split {
             axis,
             ratio,
             first,
             second,
         } => {
-            let sep = match axis {
+            let separator = match axis {
                 Axis::Horizontal => "|",
                 Axis::Vertical => "/",
             };
             format!(
-                "({} {sep}{:.0}% {})",
+                "({} {separator}{:.0}% {})",
                 describe(first, focused),
                 ratio * 100.0,
                 describe(second, focused)
@@ -1140,12 +1157,12 @@ impl Drop for RawMode {
 }
 
 fn local_size() -> PaneSize {
-    let ws = rustix::termios::tcgetwinsize(rustix::stdio::stdout()).ok();
+    let size = rustix::termios::tcgetwinsize(rustix::stdio::stdout()).ok();
     PaneSize {
-        cols: ws.map_or(80, |w| w.ws_col.max(1)),
-        rows: ws.map_or(24, |w| w.ws_row.max(1)),
-        width_px: ws.map_or(0, |w| w.ws_xpixel),
-        height_px: ws.map_or(0, |w| w.ws_ypixel),
+        cols: size.map_or(80, |size| size.ws_col.max(1)),
+        rows: size.map_or(24, |size| size.ws_row.max(1)),
+        width_px: size.map_or(0, |size| size.ws_xpixel),
+        height_px: size.map_or(0, |size| size.ws_ypixel),
     }
 }
 
@@ -1159,7 +1176,7 @@ fn write_out(bytes: &[u8]) {
 async fn attach(mut conn: Conn) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
 
-    let _raw = RawMode::enter()?;
+    let raw_mode = RawMode::enter()?;
     let mut winch = signal(SignalKind::window_change())?;
     let mut stdin = tokio::io::stdin();
     let mut buf = [0u8; 4096];
@@ -1169,15 +1186,15 @@ async fn attach(mut conn: Conn) -> Result<()> {
 
     loop {
         tokio::select! {
-            n = stdin.read(&mut buf) => {
-                let n = n?;
-                if n == 0 {
+            read = stdin.read(&mut buf) => {
+                let read = read?;
+                if read == 0 {
                     break;
                 }
-                let input = &buf[..n];
-                if let Some(i) = detach_position(input) {
-                    if i > 0 {
-                        conn.client.send_input(pane, input[..i].to_vec());
+                let input = &buf[..read];
+                if let Some(detach_at) = detach_position(input) {
+                    if detach_at > 0 {
+                        conn.client.send_input(pane, input[..detach_at].to_vec());
                     }
                     break;
                 }
@@ -1197,8 +1214,8 @@ async fn attach(mut conn: Conn) -> Result<()> {
                     let focused = layout
                         .tabs
                         .iter()
-                        .find(|t| Some(t.tab_id) == layout.active_tab)
-                        .map(|t| t.focused);
+                        .find(|tab| Some(tab.tab_id) == layout.active_tab)
+                        .map(|tab| tab.focused);
                     if let Some(focused) = focused && focused != pane {
                         conn.client.unsubscribe(pane);
                         pane = focused;
@@ -1216,12 +1233,12 @@ async fn attach(mut conn: Conn) -> Result<()> {
                     let next = tokio::time::timeout(Duration::from_secs(2), async {
                         loop {
                             if let ClientEvent::Layout { layout } = conn.next().await? {
-                                let f = layout
+                                let focused = layout
                                     .tabs
                                     .iter()
-                                    .find(|t| Some(t.tab_id) == layout.active_tab)
-                                    .map(|t| t.focused);
-                                return anyhow::Ok(f);
+                                    .find(|tab| Some(tab.tab_id) == layout.active_tab)
+                                    .map(|tab| tab.focused);
+                                return anyhow::Ok(focused);
                             }
                         }
                     })
@@ -1246,7 +1263,7 @@ async fn attach(mut conn: Conn) -> Result<()> {
         rustix::stdio::stdin(),
         rustix::termios::QueueSelector::IFlush,
     );
-    drop(_raw);
+    drop(raw_mode);
     println!("\r\n[detached]");
     Ok(())
 }
@@ -1264,7 +1281,7 @@ fn show_position(layout: &SessionLayout, pane: PaneId) {
         .tabs
         .iter()
         .enumerate()
-        .find(|(_, t)| Some(t.tab_id) == layout.active_tab)
+        .find(|(_, tab)| Some(tab.tab_id) == layout.active_tab)
     else {
         return;
     };
@@ -1301,7 +1318,7 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
         let mut info = None;
         loop {
             match events.recv().await.context("client stopped")? {
-                ClientEvent::DaemonInfo { info: i } => info = Some(i),
+                ClientEvent::DaemonInfo { info: reported } => info = Some(reported),
                 ClientEvent::Connected { .. } => return anyhow::Ok(info.flatten()),
                 ClientEvent::Incompatible { reason } => {
                     incompatible = Some(reason);
@@ -1316,7 +1333,7 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
     .context("timed out connecting to the daemon")??;
     match action {
         DaemonCmd::Info => {
-            let Some(i) = info else {
+            let Some(info) = info else {
                 if cli.json {
                     return json::print("daemon.info", &serde_json::json!({ "info": null }));
                 }
@@ -1324,26 +1341,27 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
                 return Ok(());
             };
             if cli.json {
-                return json::print("daemon.info", &json::Info::from(&i));
+                return json::print("daemon.info", &json::Info::from(&info));
             }
             println!(
                 "{} {} ({}, built {})",
                 brand::DAEMON_BIN,
-                i.version,
-                i.build,
-                i.built_unix
+                info.version,
+                info.build,
+                info.built_unix
             );
             println!(
                 "protocol:  {} (this client {}; serves clients from {})",
-                i.protocol,
+                info.protocol,
                 client_core::proto::PROTOCOL_LEVEL,
-                i.min_client_protocol
+                info.min_client_protocol
             );
-            println!("platform:  {} {} {}", i.os, i.arch, i.os_name);
-            println!("host name: {}", i.hostname);
+            println!("platform:  {} {} {}", info.os, info.arch, info.os_name);
+            println!("host name: {}", info.hostname);
             println!(
                 "self upgrade: {}",
-                if i.features
+                if info
+                    .features
                     .contains(client_core::proto::DaemonFeatures::SELF_UPGRADE)
                 {
                     "yes"
@@ -1366,11 +1384,11 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
             build.downgrade = *allow_downgrade;
             let size = build.data.len();
             let started = std::time::Instant::now();
-            let new = client.upgrade_daemon(build, None).await?;
+            let installed = client.upgrade_daemon(build, None).await?;
             println!(
                 "installed {} {} ({} bytes sent in {:.1}s); the daemon is restarting",
-                new.version,
-                new.build,
+                installed.version,
+                installed.build,
                 size,
                 started.elapsed().as_secs_f64()
             );

@@ -33,9 +33,9 @@ impl Recorder {
 
 #[test]
 fn connect_attach_split_echo() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let daemon = rt.block_on(async {
+    let daemon = runtime.block_on(async {
         let mut config = daemon::Config::new(dir.path());
         config.relay = daemon::RelayMode::Disabled;
         config.bind = Some("127.0.0.1:0".parse().unwrap());
@@ -66,7 +66,7 @@ fn connect_attach_split_echo() {
     });
     client.attach(None);
     let layout = events.wait("layout", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ClientEvent::Layout { layout } => Some(layout.clone()),
             _ => None,
         })
@@ -101,7 +101,7 @@ fn connect_attach_split_echo() {
         .lock()
         .unwrap()
         .iter()
-        .map(|e| match e {
+        .map(|event| match event {
             ClientEvent::PaneBytes { data, .. } => data.len(),
             _ => 0,
         })
@@ -114,7 +114,7 @@ fn connect_attach_split_echo() {
         launch: PaneLaunch::Shell { cwd: None },
     });
     let outcome = events.wait("op result", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ClientEvent::OpResult { op_id: id, outcome } if *id == op_id => Some(outcome.clone()),
             _ => None,
         })
@@ -124,7 +124,7 @@ fn connect_attach_split_echo() {
         "{outcome:?}"
     );
     let layout = events.wait("two panes", |all| {
-        all.iter().rev().find_map(|e| match e {
+        all.iter().rev().find_map(|event| match event {
             ClientEvent::Layout { layout } if layout.tabs[0].nodes.len() == 3 => {
                 Some(layout.clone())
             }
@@ -142,5 +142,5 @@ fn connect_attach_split_echo() {
     ));
 
     drop(client);
-    rt.block_on(daemon.shutdown());
+    runtime.block_on(daemon.shutdown());
 }

@@ -13,8 +13,8 @@ use crate::mcp::{Backend, SocketBackend};
 pub fn cli(args: &[String]) -> i32 {
     match SocketBackend::from_args(&[]) {
         Ok(mut backend) => crate::browser_tools::cli(args, &mut backend),
-        Err(e) => {
-            eprintln!("{}: {e}", brand::HOOK_BIN);
+        Err(error) => {
+            eprintln!("{}: {error}", brand::HOOK_BIN);
             2
         }
     }
@@ -22,7 +22,7 @@ pub fn cli(args: &[String]) -> i32 {
 
 /// Opens every URL in `args`; returns the exit status.
 pub fn open_url(args: &[String]) -> i32 {
-    let urls: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let urls: Vec<&String> = args.iter().filter(|arg| !arg.starts_with('-')).collect();
     if urls.is_empty() {
         eprintln!("usage: {} open-url <url>…", brand::HOOK_BIN);
         return 2;
@@ -32,7 +32,7 @@ pub fn open_url(args: &[String]) -> i32 {
     for url in urls {
         let reply = backend
             .as_mut()
-            .map(|b| b.browser(BrowserAsk::Open { url: url.clone() }));
+            .map(|backend| backend.browser(BrowserAsk::Open { url: url.clone() }));
         match reply {
             Some(Ok(BrowserReply::Opened)) => {}
             Some(Ok(BrowserReply::Error(why))) => {
@@ -74,7 +74,7 @@ fn system_open(url: &str) -> bool {
         .env_remove("BROWSER")
         .stdin(Stdio::null())
         .status()
-        .is_ok_and(|s| s.success())
+        .is_ok_and(|status| status.success())
 }
 
 /// An `http`/`https` URL with a host and no control characters.
@@ -98,7 +98,7 @@ mod tests {
     fn the_system_opener_gets_web_urls_only() {
         assert!(is_web_url("https://claude.ai/oauth?x=1"));
         assert!(is_web_url("HTTP://localhost:3000/"));
-        assert!(!is_web_url("file:///Users/me/Downloads/run.command"));
+        assert!(!is_web_url("file:///home/me/Downloads/run.command"));
         assert!(!is_web_url("/Applications/Calculator.app"));
         assert!(!is_web_url(
             "x-apple.systempreferences:com.apple.preference"

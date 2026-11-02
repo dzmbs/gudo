@@ -2,7 +2,7 @@
 # Runs DeadHostPairingUITests on an iPad simulator: pairs a local gudo-hostd (daemon 1),
 # stops it, then pairs a fresh one on another port (daemon 2) with daemon 1 dead in the app's
 # saved hosts and window state, as consecutive UI suites do. Daemon 2's ticket is minted
-# together with others (the race that lost tickets and failed those suites).
+# together with others.
 #
 #   apple/scripts/dead-host-ui-test.sh [simulator-udid]
 #
@@ -34,8 +34,8 @@ run test1PairFirstHost "TEST_RUNNER_PAIR_TICKET_FIRST=$ticket" || status=$?
 PORT=$port "$apple/scripts/local-daemon.sh" stop "$first"
 if [[ $status -eq 0 ]]; then
   PORT=$((port + 1)) "$apple/scripts/local-daemon.sh" start "$second" >/dev/null
-  # Daemon 2's ticket is minted alongside others, as `pair` racing the daemon's own startup
-  # ticket did: a daemon that loses one of them refuses the app with InvalidGrant.
+  # Daemon 2's ticket is minted alongside others: a daemon that loses one of them refuses
+  # the app with InvalidGrant.
   for i in 1 2 3 4 5 6 7 8; do "$bin" --state-dir "$second" pair --json >"$second/mint$i" 2>/dev/null & done
   wait
   ticket="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ticket"])' "$second/mint1")"

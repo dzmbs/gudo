@@ -1,3 +1,4 @@
+//! SVG export from vector elements (Apple platforms have no SVG export API).
 //!
 //! Output is deterministic (same scene, same bytes), so it can be golden-tested:
 //!
@@ -26,20 +27,24 @@ pub const CELL_H: f32 = 18.0;
 const PAD: f32 = 8.0;
 
 /// Formats a number with at most two decimals, trailing zeros trimmed.
-fn num(v: f32) -> String {
-    let v = if v.is_finite() { v } else { 0.0 };
-    let s = format!("{:.2}", (v * 100.0).round() / 100.0);
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.into() }
+fn num(value: f32) -> String {
+    let value = if value.is_finite() { value } else { 0.0 };
+    let formatted = format!("{:.2}", (value * 100.0).round() / 100.0);
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+    if trimmed == "-0" {
+        "0".into()
+    } else {
+        trimmed.into()
+    }
 }
 
 fn color(rgba: u32) -> (String, f32) {
     (format!("#{:06x}", rgba >> 8), (rgba & 0xff) as f32 / 255.0)
 }
 
-fn escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
+fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
@@ -61,77 +66,83 @@ pub fn to_svg(
     title: &str,
     image_href: &dyn Fn(&ImageRef) -> Option<String>,
 ) -> String {
-    let (sx, sy) = match space {
+    let (scale_x, scale_y) = match space {
         CoordSpace::Canvas => (1.0, 1.0),
         CoordSpace::Cells => (CELL_W, CELL_H),
     };
     let (lo, hi) = scene
         .bounds()
-        .map(|(lo, hi)| ((lo.x * sx, lo.y * sy), (hi.x * sx, hi.y * sy)))
+        .map(|(lo, hi)| {
+            (
+                (lo.x * scale_x, lo.y * scale_y),
+                (hi.x * scale_x, hi.y * scale_y),
+            )
+        })
         .unwrap_or(((0.0, 0.0), (0.0, 0.0)));
     let (x0, y0) = (lo.0 - PAD, lo.1 - PAD);
-    let (w, h) = (hi.0 - lo.0 + 2.0 * PAD, hi.1 - lo.1 + 2.0 * PAD);
+    let (view_w, view_h) = (hi.0 - lo.0 + 2.0 * PAD, hi.1 - lo.1 + 2.0 * PAD);
     let mut out = String::new();
     let _ = writeln!(
         out,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="{}" height="{}">"#,
         num(x0),
         num(y0),
-        num(w),
-        num(h),
-        num(w),
-        num(h)
+        num(view_w),
+        num(view_h),
+        num(view_w),
+        num(view_h)
     );
     if !title.is_empty() {
         let _ = writeln!(out, "<title>{}</title>", escape(title));
     }
-    for e in scene.draw_order() {
-        let (stroke, opacity) = color(e.style.color);
+    for element in scene.draw_order() {
+        let (stroke, opacity) = color(element.style.color);
         // Widths are in x units (columns for cell-space ink).
-        let width = e.style.width.max(0.0) * sx;
-        let opacity_attr = |o: f32| {
-            if o < 1.0 {
-                format!(r#" stroke-opacity="{}""#, num(o))
+        let width = element.style.width.max(0.0) * scale_x;
+        let opacity_attr = |alpha: f32| {
+            if alpha < 1.0 {
+                format!(r#" stroke-opacity="{}""#, num(alpha))
             } else {
                 String::new()
             }
         };
-        match &e.kind {
-            ElementKind::Stroke(s) => {
-                let pts = unpack(&s.points).unwrap_or_default();
-                if pts.is_empty() {
+        match &element.kind {
+            ElementKind::Stroke(ink) => {
+                let points = unpack(&ink.points).unwrap_or_default();
+                if points.is_empty() {
                     continue;
                 }
-                let mean_p = pts.iter().map(|p| p.pressure).sum::<f32>() / pts.len() as f32;
-                let (w, o, cap) = match s.tool {
-                    Tool::Pen => (width * mean_p.max(0.1), opacity, "round"),
+                let mean_pressure =
+                    points.iter().map(|point| point.pressure).sum::<f32>() / points.len() as f32;
+                let (stroke_width, stroke_opacity, cap) = match ink.tool {
+                    Tool::Pen => (width * mean_pressure.max(0.1), opacity, "round"),
                     Tool::Marker => (width, opacity, "round"),
                     Tool::Highlighter => (width, opacity * 0.35, "square"),
                 };
-                let p = |i: usize| (pts[i].x * sx, pts[i].y * sy);
-                let mut d = format!("M{} {}", num(p(0).0), num(p(0).1));
-                if pts.len() == 1 {
-                    let _ = write!(d, "L{} {}", num(p(0).0), num(p(0).1));
+                let at = |i: usize| (points[i].x * scale_x, points[i].y * scale_y);
+                let mut path = format!("M{} {}", num(at(0).0), num(at(0).1));
+                if points.len() == 1 {
+                    let _ = write!(path, "L{} {}", num(at(0).0), num(at(0).1));
                 } else {
-                    for i in 1..pts.len() - 1 {
-                        let (c, n) = (p(i), p(i + 1));
+                    for i in 1..points.len() - 1 {
+                        let (control, next) = (at(i), at(i + 1));
                         let _ = write!(
-                            d,
+                            path,
                             "Q{} {} {} {}",
-                            num(c.0),
-                            num(c.1),
-                            num((c.0 + n.0) / 2.0),
-                            num((c.1 + n.1) / 2.0)
+                            num(control.0),
+                            num(control.1),
+                            num((control.0 + next.0) / 2.0),
+                            num((control.1 + next.1) / 2.0)
                         );
                     }
-                    let last = p(pts.len() - 1);
-                    let _ = write!(d, "L{} {}", num(last.0), num(last.1));
+                    let last = at(points.len() - 1);
+                    let _ = write!(path, "L{} {}", num(last.0), num(last.1));
                 }
                 let _ = writeln!(
                     out,
-                    r#"<path d="{d}" fill="none" stroke="{stroke}" stroke-width="{}" stroke-linecap="{cap}" stroke-linejoin="round"{}/>"#,
-                    num(w),
-                    opacity_attr(o)
+                    r#"<path d="{path}" fill="none" stroke="{stroke}" stroke-width="{}" stroke-linecap="{cap}" stroke-linejoin="round"{}/>"#,
+                    num(stroke_width),
+                    opacity_attr(stroke_opacity)
                 );
             }
             ElementKind::Shape {
@@ -140,7 +151,12 @@ pub fn to_svg(
                 to,
                 filled,
             } => {
-                let (ax, ay, bx, by) = (from.x * sx, from.y * sy, to.x * sx, to.y * sy);
+                let (ax, ay, bx, by) = (
+                    from.x * scale_x,
+                    from.y * scale_y,
+                    to.x * scale_x,
+                    to.y * scale_y,
+                );
                 let paint = if *filled {
                     format!(
                         r#"fill="{stroke}"{}"#,
@@ -190,16 +206,16 @@ pub fn to_svg(
                             opacity_attr(opacity)
                         );
                         if *shape == ShapeKind::Arrow {
-                            let [l, r] = arrow_head((ax, ay), (bx, by), width);
+                            let [left, right] = arrow_head((ax, ay), (bx, by), width);
                             let _ = writeln!(
                                 out,
                                 r#"<path d="M{} {}L{} {}L{} {}Z" fill="{stroke}"/>"#,
                                 num(bx),
                                 num(by),
-                                num(l.0),
-                                num(l.1),
-                                num(r.0),
-                                num(r.1)
+                                num(left.0),
+                                num(left.1),
+                                num(right.0),
+                                num(right.1)
                             );
                         }
                     }
@@ -207,12 +223,12 @@ pub fn to_svg(
             }
             ElementKind::Text { at, text, size } => {
                 // Cell-space text sizes are in rows.
-                let size = size * sy;
+                let size = size * scale_y;
                 let _ = write!(
                     out,
                     r#"<text x="{}" y="{}" font-family="ui-monospace, monospace" font-size="{}" fill="{stroke}">"#,
-                    num(at.x * sx),
-                    num(at.y * sy + size),
+                    num(at.x * scale_x),
+                    num(at.y * scale_y + size),
                     num(size)
                 );
                 for (i, line) in text.split('\n').enumerate() {
@@ -220,15 +236,18 @@ pub fn to_svg(
                     let _ = write!(
                         out,
                         r#"<tspan x="{}" dy="{dy}">{}</tspan>"#,
-                        num(at.x * sx),
+                        num(at.x * scale_x),
                         escape(line)
                     );
                 }
                 out.push_str("</text>\n");
             }
             ElementKind::Image { image, from, to } => {
-                let (x, y) = (from.x.min(to.x) * sx, from.y.min(to.y) * sy);
-                let (w, h) = ((to.x - from.x).abs() * sx, (to.y - from.y).abs() * sy);
+                let (x, y) = (from.x.min(to.x) * scale_x, from.y.min(to.y) * scale_y);
+                let (w, h) = (
+                    (to.x - from.x).abs() * scale_x,
+                    (to.y - from.y).abs() * scale_y,
+                );
                 match image_href(image) {
                     Some(href) => {
                         let _ = writeln!(
@@ -262,12 +281,12 @@ pub fn to_svg(
 /// The two back corners of an arrow head at `b` pointing from `a`.
 pub(crate) fn arrow_head(a: (f32, f32), b: (f32, f32), width: f32) -> [(f32, f32); 2] {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-    let (ux, uy) = (dx / len, dy / len);
-    let size = (width * 4.0).max(8.0).min(len);
-    let (bx, by) = (b.0 - ux * size, b.1 - uy * size);
+    let length = (dx * dx + dy * dy).sqrt().max(1e-3);
+    let (ux, uy) = (dx / length, dy / length);
+    let size = (width * 4.0).max(8.0).min(length);
+    let (base_x, base_y) = (b.0 - ux * size, b.1 - uy * size);
     let (px, py) = (-uy * size * 0.5, ux * size * 0.5);
-    [(bx + px, by + py), (bx - px, by - py)]
+    [(base_x + px, base_y + py), (base_x - px, base_y - py)]
 }
 
 /// A data URI for an image blob's bytes.

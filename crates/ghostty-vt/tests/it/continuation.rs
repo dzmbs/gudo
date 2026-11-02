@@ -19,7 +19,7 @@ use crate::Rng;
 
 const COLS: u16 = 20;
 const ROWS: u16 = 6;
-/// Streams per test run; override with `SPIKE_B_SEEDS` for a longer soak.
+/// Streams per test run; override with `SNAPSHOT_FUZZ_SEEDS` for a longer soak.
 const DEFAULT_SEEDS: u64 = 32;
 const TOKENS_PER_STREAM: usize = 90;
 
@@ -30,7 +30,7 @@ fn new_terminal() -> Result<Terminal, Error> {
 }
 
 /// Appends one random VT token: text, UTF-8, control, CSI, OSC, DCS or a mode switch.
-fn push_token(rng: &mut Rng, out: &mut Vec<u8>) {
+fn push_token(rng: &mut Rng, bytes: &mut Vec<u8>) {
     const UTF8: &[&str] = &[
         "é",
         "ñ",
@@ -103,9 +103,9 @@ fn push_token(rng: &mut Rng, out: &mut Vec<u8>) {
         0..=2 => {
             let max = if rng.below(4) == 0 { 40 } else { 8 };
             let len = 1 + rng.below(max);
-            out.extend((0..len).map(|_| b' ' + rng.below(95) as u8));
+            bytes.extend((0..len).map(|_| b' ' + rng.below(95) as u8));
         }
-        3 => out.extend_from_slice(rng.pick(UTF8).as_bytes()),
+        3 => bytes.extend_from_slice(rng.pick(UTF8).as_bytes()),
         4 => {
             let sgr = match rng.below(3) {
                 0 => format!("\x1b[38;5;{}m", rng.below(256)),
@@ -120,27 +120,30 @@ fn push_token(rng: &mut Rng, out: &mut Vec<u8>) {
                     rng.pick(&[1, 2, 3, 5, 9, 22, 39, 49, 53, 91, 107])
                 ),
             };
-            out.extend_from_slice(sgr.as_bytes());
+            bytes.extend_from_slice(sgr.as_bytes());
         }
         5 => {
-            let n = 1 + rng.below(usize::from(ROWS) + 2);
-            let m = 1 + rng.below(usize::from(COLS) + 2);
+            let row = 1 + rng.below(usize::from(ROWS) + 2);
+            let col = 1 + rng.below(usize::from(COLS) + 2);
             let csi = match rng.below(9) {
-                0 => format!("\x1b[{n};{m}H"),
-                1 => format!("\x1b[{n}A"),
-                2 => format!("\x1b[{n}B"),
-                3 => format!("\x1b[{m}C"),
-                4 => format!("\x1b[{m}D"),
-                5 => format!("\x1b[{n};{}r", n + rng.below(4)),
-                6 => format!("\x1b[{n}L"),
-                7 => format!("\x1b[{n}M"),
-                _ => format!("\x1b[{m}{}", rng.pick(&["@", "P", "X", "G", "S", "T", "d"])),
+                0 => format!("\x1b[{row};{col}H"),
+                1 => format!("\x1b[{row}A"),
+                2 => format!("\x1b[{row}B"),
+                3 => format!("\x1b[{col}C"),
+                4 => format!("\x1b[{col}D"),
+                5 => format!("\x1b[{row};{}r", row + rng.below(4)),
+                6 => format!("\x1b[{row}L"),
+                7 => format!("\x1b[{row}M"),
+                _ => format!(
+                    "\x1b[{col}{}",
+                    rng.pick(&["@", "P", "X", "G", "S", "T", "d"])
+                ),
             };
-            out.extend_from_slice(csi.as_bytes());
+            bytes.extend_from_slice(csi.as_bytes());
         }
         6 => {
             // Invalid or truncated UTF-8 and stray C1 bytes.
-            let bytes: &[&[u8]] = &[
+            let invalid: &[&[u8]] = &[
                 b"\xff",
                 b"\xc3",
                 b"\xe2\x82",
@@ -148,19 +151,19 @@ fn push_token(rng: &mut Rng, out: &mut Vec<u8>) {
                 b"\x9b",
                 b"\x1b\x1b",
             ];
-            out.extend_from_slice(rng.pick(bytes));
+            bytes.extend_from_slice(rng.pick(invalid));
         }
-        _ => out.extend_from_slice(rng.pick(FIXED).as_bytes()),
+        _ => bytes.extend_from_slice(rng.pick(FIXED).as_bytes()),
     }
 }
 
 fn stream(seed: u64) -> Vec<u8> {
     let mut rng = Rng::new(seed);
-    let mut out = Vec::new();
+    let mut bytes = Vec::new();
     for _ in 0..TOKENS_PER_STREAM {
-        push_token(&mut rng, &mut out);
+        push_token(&mut rng, &mut bytes);
     }
-    out
+    bytes
 }
 
 /// Everything a reconnecting client must agree on.
@@ -194,46 +197,46 @@ impl State {
 
     /// Describes each differing field, with context around the first differing character.
     fn diff(&self, want: &Self) -> String {
-        fn text(name: &str, got: &str, want: &str, out: &mut String) {
+        fn text(name: &str, got: &str, want: &str, report: &mut String) {
             if got == want {
                 return;
             }
             let at = got
                 .char_indices()
                 .zip(want.chars())
-                .find(|((_, a), b)| a != b)
-                .map_or(got.len().min(want.len()), |((i, _), _)| i);
-            let window = |s: &str| {
-                let start = s.floor_char_boundary(at.saturating_sub(60));
-                let end = s.ceil_char_boundary((at + 60).min(s.len()));
-                format!("{:?}", &s[start..end])
+                .find(|((_, got_char), want_char)| got_char != want_char)
+                .map_or(got.len().min(want.len()), |((index, _), _)| index);
+            let window = |text: &str| {
+                let start = text.floor_char_boundary(at.saturating_sub(60));
+                let end = text.ceil_char_boundary((at + 60).min(text.len()));
+                format!("{:?}", &text[start..end])
             };
             writeln!(
-                out,
+                report,
                 "  {name} differs at byte {at}:\n    got:  {}\n    want: {}",
                 window(got),
                 window(want)
             )
             .ok();
         }
-        let mut out = String::new();
-        text("active", &self.active, &want.active, &mut out);
+        let mut report = String::new();
+        text("active", &self.active, &want.active, &mut report);
         text(
             "all",
             self.all.as_deref().unwrap_or(""),
             want.all.as_deref().unwrap_or(""),
-            &mut out,
+            &mut report,
         );
-        text("vt", &self.vt, &want.vt, &mut out);
+        text("vt", &self.vt, &want.vt, &mut report);
         if (self.cursor, self.screen) != (want.cursor, want.screen) {
             writeln!(
-                out,
+                report,
                 "  cursor/screen: got {:?} {:?}, want {:?} {:?}",
                 self.cursor, self.screen, want.cursor, want.screen
             )
             .ok();
         }
-        out
+        report
     }
 }
 
@@ -245,7 +248,7 @@ impl State {
 /// already open is dropped. The set of linked cells is unchanged.
 fn canonical_hyperlinks(vt: &str) -> String {
     const CLOSE: &str = "\x1b]8;;\x1b\\";
-    let mut out = String::with_capacity(vt.len());
+    let mut canonical = String::with_capacity(vt.len());
     let mut open: Option<&str> = None;
     let mut pending_close = false;
     let mut rest = vt;
@@ -257,10 +260,10 @@ fn canonical_hyperlinks(vt: &str) -> String {
         }
         if c != '\x1b' {
             if pending_close && c != '\r' && c != '\n' {
-                out.push_str(CLOSE);
+                canonical.push_str(CLOSE);
                 (open, pending_close) = (None, false);
             }
-            out.push(c);
+            canonical.push(c);
             rest = &rest[c.len_utf8()..];
             continue;
         }
@@ -270,12 +273,12 @@ fn canonical_hyperlinks(vt: &str) -> String {
             Some(b'[') => {
                 2 + bytes[2..]
                     .iter()
-                    .position(|b| (0x40..=0x7e).contains(b))
-                    .map_or(0, |i| i + 1)
+                    .position(|byte| (0x40..=0x7e).contains(byte))
+                    .map_or(0, |index| index + 1)
             }
             Some(b']') => {
-                let st = rest.find("\x1b\\").map(|i| i + 2);
-                let bel = rest.find('\x07').map(|i| i + 1);
+                let st = rest.find("\x1b\\").map(|index| index + 2);
+                let bel = rest.find('\x07').map(|index| index + 1);
                 st.into_iter().chain(bel).min().unwrap_or(rest.len())
             }
             Some(b'(' | b')') => 3,
@@ -290,12 +293,12 @@ fn canonical_hyperlinks(vt: &str) -> String {
             }
             (open, pending_close) = (Some(sequence), false);
         }
-        out.push_str(sequence);
+        canonical.push_str(sequence);
     }
     if pending_close {
-        out.push_str(CLOSE);
+        canonical.push_str(CLOSE);
     }
-    out
+    canonical
 }
 
 fn escape(bytes: &[u8]) -> String {
@@ -305,14 +308,14 @@ fn escape(bytes: &[u8]) -> String {
 /// Splits a snapshot into `(tag, payload)` records after the 10-byte envelope.
 fn records(snapshot: &[u8]) -> Vec<(u16, &[u8])> {
     let mut rest = &snapshot[10..];
-    let mut out = Vec::new();
+    let mut records = Vec::new();
     while rest.len() >= 10 {
         let tag = u16::from_le_bytes([rest[0], rest[1]]);
         let len = u32::from_le_bytes([rest[2], rest[3], rest[4], rest[5]]) as usize;
-        out.push((tag, &rest[10..10 + len]));
+        records.push((tag, &rest[10..10 + len]));
         rest = &rest[10 + len..];
     }
-    out
+    records
 }
 
 /// Describes the first record that differs between two snapshots, if any.
@@ -324,7 +327,7 @@ fn record_diff(got: &[u8], want: &[u8]) -> Option<String> {
     let index = got
         .iter()
         .zip(&want)
-        .position(|(a, b)| a != b)
+        .position(|(got_record, want_record)| got_record != want_record)
         .unwrap_or(got.len().min(want.len()));
     let (Some((got_tag, got_payload)), Some((want_tag, want_payload))) =
         (got.get(index), want.get(index))
@@ -334,7 +337,7 @@ fn record_diff(got: &[u8], want: &[u8]) -> Option<String> {
     let byte = got_payload
         .iter()
         .zip(*want_payload)
-        .position(|(a, b)| a != b);
+        .position(|(got_byte, want_byte)| got_byte != want_byte);
     Some(format!(
         "record {index}: tag {got_tag} ({} B) vs tag {want_tag} ({} B), first differing byte {byte:?}",
         got_payload.len(),
@@ -451,8 +454,8 @@ fn snapshot_at_every_cut_point_continues_identically() {
             .and_then(|value| value.parse().ok())
             .unwrap_or(default)
     };
-    let first = env("SPIKE_B_FIRST_SEED", 0);
-    let seeds = env("SPIKE_B_SEEDS", DEFAULT_SEEDS);
+    let first = env("SNAPSHOT_FUZZ_FIRST_SEED", 0);
+    let seeds = env("SNAPSHOT_FUZZ_SEEDS", DEFAULT_SEEDS);
     let mut stats = Stats::default();
     for seed in first..first + seeds {
         if let Err(failure) = check_stream(seed, &mut stats) {

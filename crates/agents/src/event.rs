@@ -1,3 +1,4 @@
+//! The unified `AgentEvent` schema.
 //!
 //! One schema covers the PTY lane and the structured lane, so the inbox never needs to know which
 //! lane a session runs on. Every enum here serializes as a `snake_case` string; the wire format is
@@ -16,12 +17,10 @@ macro_rules! string_id {
         pub struct $name(String);
 
         impl $name {
-            /// Wraps an identifier.
             pub fn new(id: impl Into<String>) -> Self {
                 Self(id.into())
             }
 
-            /// Returns the identifier as a string slice.
             pub fn as_str(&self) -> &str {
                 &self.0
             }
@@ -48,6 +47,7 @@ string_id! {
     RequestId
 }
 string_id! {
+    /// The principal (person) who acted.
     ActorId
 }
 string_id! {
@@ -71,8 +71,8 @@ pub struct UnixMillis(pub u64);
 impl UnixMillis {
     /// Returns this instant moved forward by `duration`, saturating at the maximum.
     pub fn saturating_add(self, duration: std::time::Duration) -> Self {
-        let ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-        Self(self.0.saturating_add(ms))
+        let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        Self(self.0.saturating_add(millis))
     }
 
     /// Returns the time elapsed from `earlier` to `self`, or zero if `earlier` is later.
@@ -101,12 +101,12 @@ impl Serialize for SchemaVersion {
 
 impl<'de> Deserialize<'de> for SchemaVersion {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = u32::deserialize(deserializer)?;
-        if v == Self::CURRENT {
+        let version = u32::deserialize(deserializer)?;
+        if version == Self::CURRENT {
             Ok(Self)
         } else {
             Err(serde::de::Error::custom(format!(
-                "unsupported AgentEvent schema version {v}, expected {}",
+                "unsupported AgentEvent schema version {version}, expected {}",
                 Self::CURRENT
             )))
         }
@@ -178,7 +178,6 @@ pub enum Confidence {
     Authoritative,
 }
 
-/// What happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -257,14 +256,12 @@ pub enum ApprovalChoice {
 /// A choice offered for a blocker, with the label the agent's UI uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalOption {
-    /// The machine-readable choice.
     pub id: ApprovalChoice,
     /// Text to show on the button.
     pub label: String,
 }
 
 impl ApprovalOption {
-    /// Creates an option.
     pub fn new(id: ApprovalChoice, label: impl Into<String>) -> Self {
         Self {
             id,
@@ -288,7 +285,6 @@ pub enum AnswerPath {
 /// What an agent is blocked on, as reported by a source, before the arbiter assigns a request id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Blocker {
-    /// Why the agent is blocked.
     pub reason: BlockedReason,
     /// The tool that needs approval, e.g. `Bash`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,7 +304,6 @@ pub struct Blocker {
 }
 
 impl Blocker {
-    /// Creates a blocker with only a reason.
     pub fn new(reason: BlockedReason) -> Self {
         Self {
             reason,
@@ -325,8 +320,8 @@ impl Blocker {
     /// Sources see different parts of one dialog (the hook knows the tool, the screen knows
     /// nothing), so a missing field or an `Other` reason never counts as a difference.
     pub(crate) fn is_compatible(&self, other: &Self) -> bool {
-        fn agree<T: PartialEq>(a: Option<&T>, b: Option<&T>) -> bool {
-            a.zip(b).is_none_or(|(a, b)| a == b)
+        fn agree<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
+            left.zip(right).is_none_or(|(left, right)| left == right)
         }
         let reasons = self.reason == other.reason
             || self.reason == BlockedReason::Other
@@ -360,7 +355,6 @@ impl Blocker {
 pub struct Blocked {
     /// Stable for as long as the same dialog is showing.
     pub request_id: RequestId,
-    /// The blocker details.
     #[serde(flatten)]
     pub blocker: Blocker,
 }
@@ -368,6 +362,7 @@ pub struct Blocked {
 /// The effective state of an agent, carrying blocker details when blocked.
 ///
 /// Serializes as `{"state": "blocked", "blocked": {…}}` or `{"state": "idle"}`, matching the
+/// `state` and `blocked` fields of the event, without allowing `blocked` on other states.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", content = "blocked", rename_all = "snake_case")]
 pub enum Status {
@@ -384,7 +379,6 @@ pub enum Status {
 }
 
 impl Status {
-    /// Returns the coarse state.
     pub fn state(&self) -> AgentState {
         match self {
             Self::Working => AgentState::Working,
@@ -395,7 +389,6 @@ impl Status {
         }
     }
 
-    /// Returns the blocker if blocked.
     pub fn blocked(&self) -> Option<&Blocked> {
         match self {
             Self::Blocked(blocked) => Some(blocked),
@@ -419,7 +412,6 @@ pub enum TurnOutcome {
 /// Details of a finished turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Turn {
-    /// How the turn ended.
     pub outcome: TurnOutcome,
     /// The last assistant message or error text, truncated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -429,7 +421,6 @@ pub struct Turn {
 /// A subagent inside a lead session. Subagent events never change the lead's state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subagent {
-    /// The subagent id.
     pub id: SubagentId,
     /// The subagent type, e.g. `Explore`.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
@@ -439,7 +430,6 @@ pub struct Subagent {
 /// The session an event belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
-    /// Which agent runs the session.
     pub agent: AgentKind,
     /// The agent's own session id, once known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -447,10 +437,8 @@ pub struct SessionInfo {
     /// The transcript file, if the agent reported one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<PathBuf>,
-    /// The session's working directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    /// How the daemon talks to the session.
     pub lane: Lane,
     /// The argv that resumes this session, for display. Persist the native id and rebuild the
     /// argv with the adapter instead, since it re-passes per-launch flags such as `--settings`.
@@ -475,11 +463,9 @@ impl SessionInfo {
 /// One entry in a session's append-only event log. The inbox state is derived from it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentEvent {
-    /// Schema version.
     pub v: SchemaVersion,
     /// The pane, or `None` for structured-lane sessions.
     pub pane_id: Option<PaneId>,
-    /// The session.
     pub session: SessionInfo,
     /// The originating source's sequence number, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -488,7 +474,6 @@ pub struct AgentEvent {
     pub source: Source,
     /// How far that source is trusted.
     pub confidence: Confidence,
-    /// What happened.
     pub kind: EventKind,
     /// The effective state after this event (`state`, plus `blocked` when blocked).
     #[serde(flatten)]
@@ -508,9 +493,7 @@ pub struct AgentEvent {
 pub struct Decision {
     /// The blocker being answered.
     pub request_id: RequestId,
-    /// The chosen option.
     pub choice: ApprovalChoice,
-    /// Who decided.
     pub actor: ActorId,
 }
 
@@ -519,9 +502,7 @@ pub struct Decision {
 pub struct Decided {
     /// The blocker that was answered.
     pub request_id: RequestId,
-    /// The accepted choice.
     pub choice: ApprovalChoice,
-    /// Who decided.
     pub decided_by: ActorId,
     /// When the daemon accepted it.
     pub at: UnixMillis,
@@ -617,8 +598,8 @@ mod tests {
             Source::Keypress,
         ]
         .iter()
-        .map(|s| {
-            serde_json::to_value(s)
+        .map(|source| {
+            serde_json::to_value(source)
                 .unwrap()
                 .as_str()
                 .unwrap()
@@ -665,10 +646,10 @@ mod tests {
 
     #[test]
     fn different_tools_are_different_blockers() {
-        let mut a = Blocker::new(BlockedReason::Permission);
-        a.tool = Some("Bash".into());
-        let mut b = a.clone();
-        b.tool = Some("Write".into());
-        assert!(!a.is_compatible(&b));
+        let mut bash = Blocker::new(BlockedReason::Permission);
+        bash.tool = Some("Bash".into());
+        let mut write = bash.clone();
+        write.tool = Some("Write".into());
+        assert!(!bash.is_compatible(&write));
     }
 }

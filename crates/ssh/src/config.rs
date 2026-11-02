@@ -121,7 +121,7 @@ impl SshConfig {
     pub fn load(path: impl AsRef<Path>, home: Option<PathBuf>) -> Result<Self, SshError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path)
-            .map_err(|e| SshError::io(format!("reading {}", path.display()), e))?;
+            .map_err(|error| SshError::io(format!("reading {}", path.display()), error))?;
         let mut config = Self {
             home,
             ..Self::default()
@@ -179,19 +179,19 @@ impl SshConfig {
     /// assert_eq!(config.host_aliases(), ["box", "db"]);
     /// ```
     pub fn host_aliases(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
+        let mut aliases: Vec<String> = Vec::new();
         for condition in &self.conditions {
             let Condition::Host(patterns) = condition else {
                 continue;
             };
-            for p in patterns {
-                let concrete = !p.negated && !p.glob.contains(['*', '?']);
-                if concrete && !out.contains(&p.glob) {
-                    out.push(p.glob.clone());
+            for pattern in patterns {
+                let concrete = !pattern.negated && !pattern.glob.contains(['*', '?']);
+                if concrete && !aliases.contains(&pattern.glob) {
+                    aliases.push(pattern.glob.clone());
                 }
             }
         }
-        out
+        aliases
     }
 
     fn read_text(
@@ -204,32 +204,35 @@ impl SshConfig {
         if self.conditions.is_empty() {
             self.conditions.push(Condition::Always);
         }
-        let origin = path.map_or_else(|| "config".to_owned(), |p| p.display().to_string());
-        for (n, line) in text.lines().enumerate() {
-            let at = || format!("{origin}:{}", n + 1);
-            let Some((key, args)) =
-                split_line(line).map_err(|e| SshError::Config(format!("{}: {e}", at())))?
+        let origin = path.map_or_else(|| "config".to_owned(), |path| path.display().to_string());
+        for (index, line) in text.lines().enumerate() {
+            let location = || format!("{origin}:{}", index + 1);
+            let Some((key, args)) = split_line(line)
+                .map_err(|error| SshError::Config(format!("{}: {error}", location())))?
             else {
                 continue;
             };
             match key.as_str() {
                 "host" => {
                     if args.is_empty() {
-                        return Err(SshError::Config(format!("{}: Host needs a pattern", at())));
+                        return Err(SshError::Config(format!(
+                            "{}: Host needs a pattern",
+                            location()
+                        )));
                     }
                     self.conditions.push(Condition::Host(
-                        args.iter().flat_map(|a| patterns(a)).collect(),
+                        args.iter().flat_map(|arg| patterns(arg)).collect(),
                     ));
                     condition = self.conditions.len() - 1;
                 }
                 "match" => {
                     let criteria = parse_match(&args)
-                        .map_err(|e| SshError::Config(format!("{}: {e}", at())))?;
-                    for c in &criteria {
-                        if let Criterion::Unsupported(name) = c {
+                        .map_err(|error| SshError::Config(format!("{}: {error}", location())))?;
+                    for criterion in &criteria {
+                        if let Criterion::Unsupported(name) = criterion {
                             self.warnings.push(format!(
                                 "{}: Match {name} is not supported; the block never matches",
-                                at()
+                                location()
                             ));
                         }
                     }
@@ -274,9 +277,9 @@ impl SshConfig {
                 // A Host or Match line in the included file replaces the condition for the
                 // rest of that file only; the caller's condition resumes after it (OpenSSH).
                 Ok(text) => self.read_text(&text, condition, Some(&file), depth + 1)?,
-                Err(e) => self
+                Err(error) => self
                     .warnings
-                    .push(format!("Include {}: {e}", file.display())),
+                    .push(format!("Include {}: {error}", file.display())),
             }
         }
         Ok(())
@@ -286,33 +289,32 @@ impl SshConfig {
     pub fn resolve(&self, alias: &str) -> HostConfig {
         let original = alias.to_ascii_lowercase();
         let mut values: HashMap<&str, &[String]> = HashMap::new();
-        let mut identity: Vec<&str> = Vec::new();
+        let mut identity_files: Vec<&str> = Vec::new();
         let mut set_env: Vec<(String, String)> = Vec::new();
         let mut ignored: Vec<String> = Vec::new();
         let mut matched: Vec<Option<bool>> = vec![None; self.conditions.len()];
-        for d in &self.directives {
-            let is_match = *matched[d.condition].get_or_insert_with(|| {
+        for directive in &self.directives {
+            let is_match = *matched[directive.condition].get_or_insert_with(|| {
                 let host_name = values
                     .get("hostname")
-                    .and_then(|v| v.first())
-                    .map_or_else(|| original.clone(), |h| h.replace("%h", &original));
+                    .and_then(|args| args.first())
+                    .map_or_else(|| original.clone(), |name| name.replace("%h", &original));
                 let user = values
                     .get("user")
-                    .and_then(|v| v.first())
+                    .and_then(|args| args.first())
                     .map(String::as_str)
                     .or(self.local_user.as_deref());
-                self.conditions[d.condition].matches(&original, &host_name, user)
+                self.conditions[directive.condition].matches(&original, &host_name, user)
             });
             if !is_match {
                 continue;
             }
-            match d.key.as_str() {
-                "identityfile" => identity.extend(d.args.iter().map(String::as_str)),
-                "setenv" => {
-                    set_env.extend(d.args.iter().filter_map(|a| {
-                        a.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    }))
-                }
+            match directive.key.as_str() {
+                "identityfile" => identity_files.extend(directive.args.iter().map(String::as_str)),
+                "setenv" => set_env.extend(directive.args.iter().filter_map(|arg| {
+                    arg.split_once('=')
+                        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                })),
                 "hostname"
                 | "user"
                 | "port"
@@ -322,28 +324,37 @@ impl SshConfig {
                 | "connecttimeout"
                 | "hostkeyalias"
                 | "forwardagent" => {
-                    values.entry(d.key.as_str()).or_insert(&d.args);
+                    values
+                        .entry(directive.key.as_str())
+                        .or_insert(&directive.args);
                 }
                 other => {
-                    if !ignored.iter().any(|k| k == other) {
+                    if !ignored.iter().any(|key| key == other) {
                         ignored.push(other.to_owned());
                     }
                 }
             }
         }
-        let first = |key: &str| values.get(key).and_then(|v| v.first()).map(String::as_str);
-        let host_name = first("hostname")
-            .map_or_else(|| alias.to_owned(), |h| expand_percent(h, &[('h', alias)]));
+        let first = |key: &str| {
+            values
+                .get(key)
+                .and_then(|args| args.first())
+                .map(String::as_str)
+        };
+        let host_name = first("hostname").map_or_else(
+            || alias.to_owned(),
+            |name| expand_percent(name, &[('h', alias)]),
+        );
         let user = first("user").map(ToOwned::to_owned);
         let port = first("port")
-            .and_then(|p| p.parse().ok())
+            .and_then(|port| port.parse().ok())
             .unwrap_or(DEFAULT_PORT);
         let home = self
             .home
             .as_ref()
-            .map(|h| h.display().to_string())
+            .map(|home| home.display().to_string())
             .unwrap_or_default();
-        let port_s = port.to_string();
+        let port_text = port.to_string();
         let local_user = self.local_user.clone().unwrap_or_default();
         let remote_user = user.clone().unwrap_or_else(|| local_user.clone());
         let tokens = [
@@ -352,30 +363,35 @@ impl SshConfig {
             ('h', host_name.as_str()),
             ('n', alias),
             ('r', remote_user.as_str()),
-            ('p', port_s.as_str()),
+            ('p', port_text.as_str()),
         ];
-        let identity_files = identity
+        let identity_files = identity_files
             .iter()
-            .map(|f| {
-                let f = expand_percent(f, &tokens);
+            .map(|file| {
+                let file = expand_percent(file, &tokens);
                 match &self.home {
-                    Some(h) => expand_tilde(&f, h),
-                    None => f,
+                    Some(home) => expand_tilde(&file, home),
+                    None => file,
                 }
             })
             .collect();
         let proxy_jump = match values.get("proxyjump") {
-            Some(args) if !args.first().is_some_and(|a| a.eq_ignore_ascii_case("none")) => args
-                .iter()
-                .flat_map(|a| a.split(','))
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| expand_percent(s, &tokens).parse().ok())
-                .collect(),
+            Some(args)
+                if !args
+                    .first()
+                    .is_some_and(|arg| arg.eq_ignore_ascii_case("none")) =>
+            {
+                args.iter()
+                    .flat_map(|arg| arg.split(','))
+                    .filter(|hop| !hop.is_empty())
+                    .filter_map(|hop| expand_percent(hop, &tokens).parse().ok())
+                    .collect()
+            }
             _ => Vec::new(),
         };
         let seconds = |key: &str| {
             first(key)
-                .and_then(|v| v.parse().ok())
+                .and_then(|value| value.parse().ok())
                 .map(Duration::from_secs)
         };
         HostConfig {
@@ -386,10 +402,12 @@ impl SshConfig {
             identity_files,
             proxy_jump,
             server_alive_interval: seconds("serveraliveinterval"),
-            server_alive_count_max: first("serveralivecountmax").and_then(|v| v.parse().ok()),
+            server_alive_count_max: first("serveralivecountmax")
+                .and_then(|value| value.parse().ok()),
             connect_timeout: seconds("connecttimeout"),
             host_key_alias: first("hostkeyalias").map(ToOwned::to_owned),
-            forward_agent: first("forwardagent").is_some_and(|v| v.eq_ignore_ascii_case("yes")),
+            forward_agent: first("forwardagent")
+                .is_some_and(|value| value.eq_ignore_ascii_case("yes")),
             set_env,
             ignored,
         }
@@ -415,21 +433,24 @@ impl SshConfig {
     /// assert_eq!(target.to_string(), "me@10.0.0.5 via admin@bastion:2222");
     /// ```
     pub fn target(&self, destination: &str, default_user: &str) -> Result<Target, SshError> {
-        let dest: Destination = destination.parse()?;
-        self.route(&dest, default_user, 0)
+        let destination: Destination = destination.parse()?;
+        self.route(&destination, default_user, 0)
     }
 
     fn route(
         &self,
-        dest: &Destination,
+        destination: &Destination,
         default_user: &str,
         depth: usize,
     ) -> Result<Target, SshError> {
         if depth > MAX_JUMPS {
-            return Err(SshError::Config(format!("ProxyJump loop at {}", dest.host)));
+            return Err(SshError::Config(format!(
+                "ProxyJump loop at {}",
+                destination.host
+            )));
         }
-        let config = self.resolve(&dest.host);
-        let host = self.spec(dest, &config, default_user);
+        let config = self.resolve(&destination.host);
+        let host = host_spec(destination, &config, default_user);
         let mut jumps = Vec::new();
         if let Some((first, rest)) = config.proxy_jump.split_first() {
             let first_route = self.route(first, default_user, depth + 1)?;
@@ -437,29 +458,29 @@ impl SshConfig {
             jumps.push(first_route.host);
             for hop in rest {
                 let hop_config = self.resolve(&hop.host);
-                jumps.push(self.spec(hop, &hop_config, default_user));
+                jumps.push(host_spec(hop, &hop_config, default_user));
             }
             if jumps.len() > MAX_JUMPS {
                 return Err(SshError::Config(format!(
                     "too many jump hosts for {}",
-                    dest.host
+                    destination.host
                 )));
             }
         }
         Ok(Target { jumps, host })
     }
+}
 
-    fn spec(&self, dest: &Destination, config: &HostConfig, default_user: &str) -> HostSpec {
-        HostSpec {
-            host: config.host_name.clone(),
-            port: dest.port.unwrap_or(config.port),
-            user: dest
-                .user
-                .clone()
-                .or_else(|| config.user.clone())
-                .unwrap_or_else(|| default_user.to_owned()),
-            host_key_alias: config.host_key_alias.clone(),
-        }
+fn host_spec(destination: &Destination, config: &HostConfig, default_user: &str) -> HostSpec {
+    HostSpec {
+        host: config.host_name.clone(),
+        port: destination.port.unwrap_or(config.port),
+        user: destination
+            .user
+            .clone()
+            .or_else(|| config.user.clone())
+            .unwrap_or_else(|| default_user.to_owned()),
+        host_key_alias: config.host_key_alias.clone(),
     }
 }
 
@@ -468,11 +489,11 @@ impl Condition {
         match self {
             Self::Always => true,
             Self::Host(patterns) => match_list(patterns, original),
-            Self::Match(criteria) => criteria.iter().all(|c| match c {
+            Self::Match(criteria) => criteria.iter().all(|criterion| match criterion {
                 Criterion::All => true,
-                Criterion::Host(p) => match_list(p, &host_name.to_ascii_lowercase()),
-                Criterion::OriginalHost(p) => match_list(p, original),
-                Criterion::User(p) => user.is_some_and(|u| match_list(p, u)),
+                Criterion::Host(patterns) => match_list(patterns, &host_name.to_ascii_lowercase()),
+                Criterion::OriginalHost(patterns) => match_list(patterns, original),
+                Criterion::User(patterns) => user.is_some_and(|user| match_list(patterns, user)),
                 Criterion::Unsupported(_) => false,
             }),
         }
@@ -482,9 +503,9 @@ impl Condition {
 /// OpenSSH pattern-list semantics: any negated match vetoes; otherwise any positive match.
 fn match_list(patterns: &[Pattern], text: &str) -> bool {
     let mut positive = false;
-    for p in patterns {
-        if wildcard::matches(&p.glob, text) {
-            if p.negated {
+    for pattern in patterns {
+        if wildcard::matches(&pattern.glob, text) {
+            if pattern.negated {
                 return false;
             }
             positive = true;
@@ -495,15 +516,15 @@ fn match_list(patterns: &[Pattern], text: &str) -> bool {
 
 fn patterns(arg: &str) -> Vec<Pattern> {
     arg.split(',')
-        .filter(|s| !s.is_empty())
-        .map(|s| match s.strip_prefix('!') {
+        .filter(|pattern| !pattern.is_empty())
+        .map(|pattern| match pattern.strip_prefix('!') {
             Some(rest) => Pattern {
                 negated: true,
                 glob: rest.to_ascii_lowercase(),
             },
             None => Pattern {
                 negated: false,
-                glob: s.to_ascii_lowercase(),
+                glob: pattern.to_ascii_lowercase(),
             },
         })
         .collect()
@@ -511,11 +532,11 @@ fn patterns(arg: &str) -> Vec<Pattern> {
 
 fn parse_match(args: &[String]) -> Result<Vec<Criterion>, String> {
     let mut criteria = Vec::new();
-    let mut it = args.iter();
-    while let Some(word) = it.next() {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
         let lower = word.to_ascii_lowercase();
         let (negate, name) = match lower.strip_prefix('!') {
-            Some(n) => (true, n.to_owned()),
+            Some(rest) => (true, rest.to_owned()),
             None => (false, lower),
         };
         let criterion = match name.as_str() {
@@ -523,14 +544,14 @@ fn parse_match(args: &[String]) -> Result<Vec<Criterion>, String> {
             "canonical" | "final" => Criterion::Unsupported(name),
             "host" | "originalhost" | "user" | "localuser" | "exec" | "localnetwork" | "tagged"
             | "version" | "sessiontype" | "command" => {
-                let arg = it
+                let arg = words
                     .next()
                     .ok_or_else(|| format!("Match {name} needs an argument"))?;
-                let p = patterns(arg);
+                let patterns = patterns(arg);
                 match name.as_str() {
-                    "host" => Criterion::Host(p),
-                    "originalhost" => Criterion::OriginalHost(p),
-                    "user" => Criterion::User(p),
+                    "host" => Criterion::Host(patterns),
+                    "originalhost" => Criterion::OriginalHost(patterns),
+                    "user" => Criterion::User(patterns),
                     _ => Criterion::Unsupported(name),
                 }
             }
@@ -540,10 +561,10 @@ fn parse_match(args: &[String]) -> Result<Vec<Criterion>, String> {
             // A negated criterion we can evaluate is folded into a single-pattern list.
             match criterion {
                 Criterion::All => Criterion::Unsupported("!all".into()),
-                Criterion::Host(p) => Criterion::Host(negate_all(p)),
-                Criterion::OriginalHost(p) => Criterion::OriginalHost(negate_all(p)),
-                Criterion::User(p) => Criterion::User(negate_all(p)),
-                u @ Criterion::Unsupported(_) => u,
+                Criterion::Host(patterns) => Criterion::Host(negate_all(patterns)),
+                Criterion::OriginalHost(patterns) => Criterion::OriginalHost(negate_all(patterns)),
+                Criterion::User(patterns) => Criterion::User(negate_all(patterns)),
+                unsupported @ Criterion::Unsupported(_) => unsupported,
             }
         } else {
             criterion
@@ -557,18 +578,18 @@ fn parse_match(args: &[String]) -> Result<Vec<Criterion>, String> {
 
 /// `!host a,b` matches when neither matches: negate each and add a catch-all positive.
 fn negate_all(patterns: Vec<Pattern>) -> Vec<Pattern> {
-    let mut out: Vec<Pattern> = patterns
+    let mut negated: Vec<Pattern> = patterns
         .into_iter()
-        .map(|p| Pattern {
-            negated: !p.negated,
-            glob: p.glob,
+        .map(|pattern| Pattern {
+            negated: !pattern.negated,
+            glob: pattern.glob,
         })
         .collect();
-    out.push(Pattern {
+    negated.push(Pattern {
         negated: false,
         glob: "*".into(),
     });
-    out
+    negated
 }
 
 /// Splits a config line into a lower-cased key and its arguments. `None` for blank lines
@@ -583,8 +604,8 @@ fn split_line(line: &str) -> Result<Option<(String, Vec<String>)>, String> {
         .unwrap_or(line.len());
     let key = line[..key_end].to_ascii_lowercase();
     let mut rest = line[key_end..].trim_start();
-    if let Some(r) = rest.strip_prefix('=') {
-        rest = r.trim_start();
+    if let Some(value) = rest.strip_prefix('=') {
+        rest = value.trim_start();
     }
     let mut args = Vec::new();
     let mut chars = rest.chars().peekable();
@@ -630,27 +651,27 @@ fn expand_tilde(path: &str, home: &Path) -> String {
     }
 }
 
-fn expand_percent(s: &str, tokens: &[(char, &str)]) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
+fn expand_percent(text: &str, tokens: &[(char, &str)]) -> String {
+    let mut expanded = String::with_capacity(text.len());
+    let mut chars = text.chars();
     while let Some(c) = chars.next() {
         if c != '%' {
-            out.push(c);
+            expanded.push(c);
             continue;
         }
         match chars.next() {
-            Some('%') => out.push('%'),
-            Some(t) => match tokens.iter().find(|(k, _)| *k == t) {
-                Some((_, v)) => out.push_str(v),
+            Some('%') => expanded.push('%'),
+            Some(token) => match tokens.iter().find(|(name, _)| *name == token) {
+                Some((_, value)) => expanded.push_str(value),
                 None => {
-                    out.push('%');
-                    out.push(t);
+                    expanded.push('%');
+                    expanded.push(token);
                 }
             },
-            None => out.push('%'),
+            None => expanded.push('%'),
         }
     }
-    out
+    expanded
 }
 
 /// Expands `*`/`?` in any path component.
@@ -659,8 +680,8 @@ fn glob(pattern: &Path) -> Vec<PathBuf> {
     for component in pattern.components() {
         let part = component.as_os_str().to_string_lossy();
         if !part.contains(['*', '?']) {
-            for p in &mut paths {
-                p.push(component);
+            for path in &mut paths {
+                path.push(component);
             }
             continue;
         }
@@ -678,7 +699,7 @@ fn glob(pattern: &Path) -> Vec<PathBuf> {
         }
         paths = next;
     }
-    paths.retain(|p| p.is_file());
+    paths.retain(|path| path.is_file());
     paths
 }
 
@@ -718,35 +739,35 @@ Host *
 "#;
 
     fn config() -> SshConfig {
-        let mut c = SshConfig::parse(SAMPLE).unwrap();
-        c.home = Some(PathBuf::from("/home/me"));
-        c
+        let mut config = SshConfig::parse(SAMPLE).unwrap();
+        config.home = Some(PathBuf::from("/home/me"));
+        config
     }
 
     #[test]
     fn first_value_wins_and_identity_accumulates() {
-        let h = config().resolve("box");
-        assert_eq!(h.host_name, "10.0.0.5");
-        assert_eq!(h.port, 2222);
-        assert_eq!(h.user.as_deref(), Some("alice"));
-        assert_eq!(h.server_alive_interval, Some(Duration::from_secs(20)));
-        assert_eq!(h.server_alive_count_max, Some(4));
+        let host = config().resolve("box");
+        assert_eq!(host.host_name, "10.0.0.5");
+        assert_eq!(host.port, 2222);
+        assert_eq!(host.user.as_deref(), Some("alice"));
+        assert_eq!(host.server_alive_interval, Some(Duration::from_secs(20)));
+        assert_eq!(host.server_alive_count_max, Some(4));
         assert_eq!(
-            h.identity_files,
+            host.identity_files,
             ["/home/me/.ssh/box_key", "/home/me/.ssh/id_10.0.0.5"]
         );
-        assert_eq!(h.ignored, ["compression"]);
+        assert_eq!(host.ignored, ["compression"]);
     }
 
     #[test]
     fn negation_and_wildcards() {
-        let h = config().resolve("db.corp");
-        assert_eq!(h.user.as_deref(), Some("corp_user"));
-        assert_eq!(h.proxy_jump.len(), 1);
-        let g = config().resolve("gateway.corp");
-        assert_eq!(g.user.as_deref(), Some("jumper"));
-        assert!(g.proxy_jump.is_empty());
-        assert_eq!(g.host_name, "gw.example.com");
+        let host = config().resolve("db.corp");
+        assert_eq!(host.user.as_deref(), Some("corp_user"));
+        assert_eq!(host.proxy_jump.len(), 1);
+        let gateway = config().resolve("gateway.corp");
+        assert_eq!(gateway.user.as_deref(), Some("jumper"));
+        assert!(gateway.proxy_jump.is_empty());
+        assert_eq!(gateway.host_name, "gw.example.com");
         let other = config().resolve("unknown");
         assert_eq!(other.user.as_deref(), Some("default_user"));
         assert_eq!(other.port, 22);
@@ -760,62 +781,65 @@ Host *
 
     #[test]
     fn jump_chain_resolves_through_config() {
-        let t = config().target("db.corp", "me").unwrap();
-        assert_eq!(t.to_string(), "corp_user@db.corp via jumper@gw.example.com");
-        let t = config().target("deep", "me").unwrap();
+        let target = config().target("db.corp", "me").unwrap();
+        assert_eq!(
+            target.to_string(),
+            "corp_user@db.corp via jumper@gw.example.com"
+        );
+        let target = config().target("deep", "me").unwrap();
         // hop1's own ProxyJump (hop0) is followed; hop2's settings come from `Host *`.
         assert_eq!(
-            t.to_string(),
+            target.to_string(),
             "default_user@deep via default_user@hop0,default_user@hop1,bob@hop2:2200"
         );
-        let t = config().target("root@box:22", "me").unwrap();
-        assert_eq!(t.host.user, "root");
-        assert_eq!(t.host.port, 22);
+        let target = config().target("root@box:22", "me").unwrap();
+        assert_eq!(target.host.user, "root");
+        assert_eq!(target.host.port, 22);
     }
 
     #[test]
     fn jump_loop_is_an_error() {
-        let c = SshConfig::parse("Host a\n ProxyJump b\nHost b\n ProxyJump a\n").unwrap();
-        assert!(c.target("a", "me").is_err());
+        let config = SshConfig::parse("Host a\n ProxyJump b\nHost b\n ProxyJump a\n").unwrap();
+        assert!(config.target("a", "me").is_err());
     }
 
     #[test]
     fn proxy_jump_none() {
-        let c = SshConfig::parse("Host x\n ProxyJump none\nHost *\n ProxyJump j\n").unwrap();
-        assert!(c.resolve("x").proxy_jump.is_empty());
-        assert_eq!(c.resolve("y").proxy_jump.len(), 1);
+        let config = SshConfig::parse("Host x\n ProxyJump none\nHost *\n ProxyJump j\n").unwrap();
+        assert!(config.resolve("x").proxy_jump.is_empty());
+        assert_eq!(config.resolve("y").proxy_jump.len(), 1);
     }
 
     #[test]
     fn hostname_percent_h() {
-        let c = SshConfig::parse("Host *.l\n HostName %h.example.com\n").unwrap();
-        assert_eq!(c.resolve("a.l").host_name, "a.l.example.com");
+        let config = SshConfig::parse("Host *.l\n HostName %h.example.com\n").unwrap();
+        assert_eq!(config.resolve("a.l").host_name, "a.l.example.com");
     }
 
     #[test]
     fn match_blocks() {
-        let c = SshConfig::parse(
+        let config = SshConfig::parse(
             "Match host 10.*\n User ten\nMatch originalhost foo !host bar\n Port 7\n\
              Match exec \"true\"\n Port 9\nMatch all\n User all\n",
         )
         .unwrap();
-        assert_eq!(c.resolve("10.1.2.3").user.as_deref(), Some("ten"));
-        assert_eq!(c.resolve("foo").port, 7);
-        assert_eq!(c.resolve("foo").user.as_deref(), Some("all"));
-        assert_eq!(c.resolve("other").port, 22);
+        assert_eq!(config.resolve("10.1.2.3").user.as_deref(), Some("ten"));
+        assert_eq!(config.resolve("foo").port, 7);
+        assert_eq!(config.resolve("foo").user.as_deref(), Some("all"));
+        assert_eq!(config.resolve("other").port, 22);
     }
 
     #[test]
     fn quoting_equals_and_comments() {
-        let (k, a) = split_line(r#"  IdentityFile "/path/with space/key" # trailing"#)
+        let (key, args) = split_line(r#"  IdentityFile "/path/with space/key" # trailing"#)
             .unwrap()
             .unwrap();
         assert_eq!(
-            (k.as_str(), a.as_slice()),
+            (key.as_str(), args.as_slice()),
             ("identityfile", &["/path/with space/key".to_owned()][..])
         );
-        let (k, a) = split_line("Port=2222").unwrap().unwrap();
-        assert_eq!((k.as_str(), a[0].as_str()), ("port", "2222"));
+        let (key, args) = split_line("Port=2222").unwrap().unwrap();
+        assert_eq!((key.as_str(), args[0].as_str()), ("port", "2222"));
         assert!(split_line("Host \"unterminated").is_err());
         assert!(split_line("   # just a comment").unwrap().is_none());
         assert!(SshConfig::parse("Host\n").is_err());
@@ -837,26 +861,26 @@ Host *
             "Host top\n Include conf.d/*.conf\n Port 1\nHost *\n User fallback\n",
         )
         .unwrap();
-        let c = SshConfig::load(ssh.join("config"), Some(home.path().to_owned())).unwrap();
+        let config = SshConfig::load(ssh.join("config"), Some(home.path().to_owned())).unwrap();
         // Lines before the included file's first Host line inherit `Host top`.
-        assert_eq!(c.resolve("top").user.as_deref(), Some("from_include"));
+        assert_eq!(config.resolve("top").user.as_deref(), Some("from_include"));
         // After the include, `Host top` is in effect again for `Port 1`.
-        assert_eq!(c.resolve("top").port, 1);
-        assert_eq!(c.resolve("inc").host_name, "included.example");
-        assert_eq!(c.resolve("inc").user.as_deref(), Some("fallback"));
-        assert_eq!(c.resolve("b").port, 2);
-        assert!(c.warnings().is_empty());
+        assert_eq!(config.resolve("top").port, 1);
+        assert_eq!(config.resolve("inc").host_name, "included.example");
+        assert_eq!(config.resolve("inc").user.as_deref(), Some("fallback"));
+        assert_eq!(config.resolve("b").port, 2);
+        assert!(config.warnings().is_empty());
         let text_only = SshConfig::parse("Include foo\n").unwrap();
         assert_eq!(text_only.warnings().len(), 1);
     }
 
     #[test]
     fn set_env_and_forward_agent() {
-        let c = SshConfig::parse("Host *\n SetEnv A=1 B=two\n ForwardAgent yes\n").unwrap();
-        let h = c.resolve("x");
-        assert!(h.forward_agent);
+        let config = SshConfig::parse("Host *\n SetEnv A=1 B=two\n ForwardAgent yes\n").unwrap();
+        let host = config.resolve("x");
+        assert!(host.forward_agent);
         assert_eq!(
-            h.set_env,
+            host.set_env,
             [("A".into(), "1".into()), ("B".into(), "two".into())]
         );
     }

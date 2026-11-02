@@ -20,11 +20,9 @@ pub fn system_account_id() -> String {
 /// Who an account is signed in as (display facts, never a credential).
 #[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
 pub struct AccountIdentity {
-    /// Email address.
     pub email: Option<String>,
     /// Plan (`max`, `pro`, `plus`, `team`).
     pub plan: Option<String>,
-    /// Organization or workspace.
     pub organization: Option<String>,
     /// How it signed in (`claude.ai`, `api_key`, `chatgpt`, `apiKey`).
     pub method: Option<String>,
@@ -37,14 +35,11 @@ pub enum AccountStatus {
     Unknown,
     /// No sign-in.
     SignedOut,
-    /// Signed in.
     SignedIn {
-        /// As whom.
         identity: AccountIdentity,
     },
     /// Asking failed.
     Failed {
-        /// Why, in words.
         message: String,
     },
 }
@@ -54,39 +49,31 @@ pub enum AccountStatus {
 pub struct AgentAccount {
     /// `system_account_id()` or a daemon-minted id.
     pub id: String,
-    /// The agent.
     pub agent: AgentKind,
     /// "Personal", "Work"; "System" for the host user's own.
     pub label: String,
     /// Palette index 0…7.
     pub color: u8,
-    /// Its sign-in.
     pub status: AccountStatus,
 }
 
 /// A host or project default.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AccountDefault {
-    /// The agent.
     pub agent: AgentKind,
     /// The project id; `nil` is the host's default.
     pub project: Option<String>,
-    /// The account.
     pub account: String,
 }
 
 /// The account a daemon-launched agent pane runs under.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PaneAccount {
-    /// The pane.
     pub pane_id: u64,
-    /// Its agent.
     pub agent: AgentKind,
-    /// The account.
     pub account: String,
 }
 
-/// The host's accounts.
 #[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
 pub struct AccountsReport {
     /// Every account; each agent's system account leads its own.
@@ -97,16 +84,13 @@ pub struct AccountsReport {
     pub panes: Vec<PaneAccount>,
 }
 
-/// One account's usage.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AccountUsage {
-    /// The account.
     pub account: String,
     /// Its usage (`usage.agent` is the account's agent).
     pub usage: AgentUsage,
 }
 
-/// Usage per account.
 #[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
 pub struct AccountUsageReport {
     /// One entry per account.
@@ -114,59 +98,65 @@ pub struct AccountUsageReport {
 }
 
 impl From<proto::AccountIdentity> for AccountIdentity {
-    fn from(i: proto::AccountIdentity) -> Self {
+    fn from(account_identity: proto::AccountIdentity) -> Self {
         Self {
-            email: i.email,
-            plan: i.plan,
-            organization: i.organization,
-            method: i.method,
+            email: account_identity.email,
+            plan: account_identity.plan,
+            organization: account_identity.organization,
+            method: account_identity.method,
         }
     }
 }
 
 impl From<proto::AccountStatus> for AccountStatus {
-    fn from(s: proto::AccountStatus) -> Self {
-        match s {
+    fn from(account_status: proto::AccountStatus) -> Self {
+        match account_status {
             proto::AccountStatus::Unknown => Self::Unknown,
             proto::AccountStatus::SignedOut => Self::SignedOut,
-            proto::AccountStatus::SignedIn(i) => Self::SignedIn { identity: i.into() },
+            proto::AccountStatus::SignedIn(identity) => Self::SignedIn {
+                identity: identity.into(),
+            },
             proto::AccountStatus::Failed(message) => Self::Failed { message },
         }
     }
 }
 
 impl From<proto::AgentAccount> for AgentAccount {
-    fn from(a: proto::AgentAccount) -> Self {
+    fn from(agent_account: proto::AgentAccount) -> Self {
         Self {
-            id: a.id,
-            agent: a.agent.into(),
-            label: a.label,
-            color: a.color,
-            status: a.status.into(),
+            id: agent_account.id,
+            agent: agent_account.agent.into(),
+            label: agent_account.label,
+            color: agent_account.color,
+            status: agent_account.status.into(),
         }
     }
 }
 
 impl From<proto::AccountsReport> for AccountsReport {
-    fn from(r: proto::AccountsReport) -> Self {
+    fn from(accounts_report: proto::AccountsReport) -> Self {
         Self {
-            accounts: r.accounts.into_iter().map(Into::into).collect(),
-            defaults: r
+            accounts: accounts_report
+                .accounts
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            defaults: accounts_report
                 .defaults
                 .into_iter()
-                .map(|d| AccountDefault {
-                    agent: d.agent.into(),
-                    project: d.project,
-                    account: d.account,
+                .map(|default| AccountDefault {
+                    agent: default.agent.into(),
+                    project: default.project,
+                    account: default.account,
                 })
                 .collect(),
-            panes: r
+            panes: accounts_report
                 .panes
                 .into_iter()
-                .map(|p| PaneAccount {
-                    pane_id: p.pane_id.0,
-                    agent: p.agent.into(),
-                    account: p.account,
+                .map(|pane| PaneAccount {
+                    pane_id: pane.pane_id.0,
+                    agent: pane.agent.into(),
+                    account: pane.account,
                 })
                 .collect(),
         }
@@ -174,14 +164,14 @@ impl From<proto::AccountsReport> for AccountsReport {
 }
 
 impl From<proto::AccountUsageReport> for AccountUsageReport {
-    fn from(r: proto::AccountUsageReport) -> Self {
+    fn from(account_usage_report: proto::AccountUsageReport) -> Self {
         Self {
-            accounts: r
+            accounts: account_usage_report
                 .accounts
                 .into_iter()
-                .map(|a| AccountUsage {
-                    account: a.account,
-                    usage: a.usage.into(),
+                .map(|usage| AccountUsage {
+                    account: usage.account,
+                    usage: usage.usage.into(),
                 })
                 .collect(),
         }
@@ -198,8 +188,10 @@ impl DaemonClient {
     /// `Unavailable` from a daemon without accounts (nothing is sent); else the daemon's
     /// [`WorkspaceError`] (owners only).
     pub async fn accounts(&self) -> Result<AccountsReport, WorkspaceError> {
-        let r: proto::AccountsReport = self.ws_call(|c| async move { c.accounts().await }).await?;
-        Ok(r.into())
+        let report: proto::AccountsReport = self
+            .ws_call(|client| async move { client.accounts().await })
+            .await?;
+        Ok(report.into())
     }
 
     /// Makes an account, signed out; then sign in with [`Self::account_sign_in`].
@@ -218,10 +210,10 @@ impl DaemonClient {
             label,
             color,
         };
-        let a: proto::AgentAccount = self
-            .ws_call(move |c| async move { c.account_add(add).await })
+        let account: proto::AgentAccount = self
+            .ws_call(move |client| async move { client.account_add(add).await })
             .await?;
-        Ok(a.into())
+        Ok(account.into())
     }
 
     /// Renames or recolours an account.
@@ -237,10 +229,12 @@ impl DaemonClient {
         color: u8,
     ) -> Result<AccountsReport, WorkspaceError> {
         let agent = agent.into();
-        let r: proto::AccountsReport = self
-            .ws_call(move |c| async move { c.account_edit(agent, account, label, color).await })
+        let report: proto::AccountsReport = self
+            .ws_call(move |client| async move {
+                client.account_edit(agent, account, label, color).await
+            })
             .await?;
-        Ok(r.into())
+        Ok(report.into())
     }
 
     /// Signs an account out with the agent's own logout on the host and deletes it.
@@ -254,10 +248,10 @@ impl DaemonClient {
         account: String,
     ) -> Result<AccountsReport, WorkspaceError> {
         let agent = agent.into();
-        let r: proto::AccountsReport = self
-            .ws_call(move |c| async move { c.account_remove(agent, account).await })
+        let report: proto::AccountsReport = self
+            .ws_call(move |client| async move { client.account_remove(agent, account).await })
             .await?;
-        Ok(r.into())
+        Ok(report.into())
     }
 
     /// Asks the agent on the host whether an account is signed in, and as whom.
@@ -271,10 +265,10 @@ impl DaemonClient {
         account: String,
     ) -> Result<AgentAccount, WorkspaceError> {
         let agent = agent.into();
-        let a: proto::AgentAccount = self
-            .ws_call(move |c| async move { c.account_check(agent, account).await })
+        let checked: proto::AgentAccount = self
+            .ws_call(move |client| async move { client.account_check(agent, account).await })
             .await?;
-        Ok(a.into())
+        Ok(checked.into())
     }
 
     /// Sets or clears an agent's default account on the host (`project` nil) or in a project.
@@ -289,10 +283,12 @@ impl DaemonClient {
         account: Option<String>,
     ) -> Result<AccountsReport, WorkspaceError> {
         let agent = agent.into();
-        let r: proto::AccountsReport = self
-            .ws_call(move |c| async move { c.account_set_default(agent, project, account).await })
+        let report: proto::AccountsReport = self
+            .ws_call(move |client| async move {
+                client.account_set_default(agent, project, account).await
+            })
             .await?;
-        Ok(r.into())
+        Ok(report.into())
     }
 
     /// Opens a new tab in `session` running the agent's own sign-in for `account` (`claude

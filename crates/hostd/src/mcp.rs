@@ -1,5 +1,5 @@
 //! `gudo-hook mcp`: a stdio MCP server through which an agent drives the terminal it runs in
-//! (`term_tools`), reads the drawings of its terminal session (docs/DAEMON.md §7.12) and uses
+//! (`term_tools`), reads the drawings of its terminal session and uses
 //! the browser pane beside its terminal in the app (`browser_tools`).
 //!
 //! JSON-RPC 2.0, one message per line. Each tool call becomes one [`PullCall`] on the daemon's
@@ -91,7 +91,6 @@ pub trait Peer {
     fn request(&mut self, method: &str, params: Value) -> Option<Value>;
 }
 
-/// No client to ask.
 #[cfg(test)]
 pub struct NoPeer;
 
@@ -102,7 +101,6 @@ impl Peer for NoPeer {
     }
 }
 
-/// stdin and stdout.
 struct Stdio<'a> {
     lines: io::Lines<io::StdinLock<'a>>,
     stdout: io::StdoutLock<'a>,
@@ -110,8 +108,8 @@ struct Stdio<'a> {
 }
 
 impl Stdio<'_> {
-    fn write(&mut self, msg: &Value) -> io::Result<()> {
-        let mut out = msg.to_string();
+    fn write(&mut self, message: &Value) -> io::Result<()> {
+        let mut out = message.to_string();
         out.push('\n');
         self.stdout.write_all(out.as_bytes())?;
         self.stdout.flush()
@@ -126,13 +124,13 @@ impl Peer for Stdio<'_> {
             .ok()?;
         // Pings are answered meanwhile; anything else waits its turn as busy.
         while let Some(Ok(line)) = self.lines.next() {
-            let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
-            if msg.get("id") == Some(&json!(id)) {
-                return msg.get("result").cloned();
+            if message.get("id") == Some(&json!(id)) {
+                return message.get("result").cloned();
             }
-            if let (Some(method), Some(other)) = (msg["method"].as_str(), msg.get("id")) {
+            if let (Some(method), Some(other)) = (message["method"].as_str(), message.get("id")) {
                 let reply = if method == "ping" {
                     json!({ "jsonrpc": "2.0", "id": other, "result": {} })
                 } else {
@@ -148,10 +146,10 @@ impl Peer for Stdio<'_> {
 /// Runs the server with the arguments after `mcp`; returns the exit status.
 pub fn main(args: &[String]) -> i32 {
     let mut backend = match SocketBackend::from_args(args) {
-        Ok(b) => b,
-        Err(e) => {
+        Ok(backend) => backend,
+        Err(error) => {
             eprintln!(
-                "{}: {e}\nusage: {} mcp [--state <dir>] [--pane <id>]",
+                "{}: {error}\nusage: {} mcp [--state <dir>] [--pane <id>]",
                 brand::HOOK_BIN,
                 brand::HOOK_BIN
             );
@@ -169,7 +167,7 @@ pub fn main(args: &[String]) -> i32 {
             continue;
         }
         let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(msg) => handle_in(&msg, &mut backend, &mut session, &mut io),
+            Ok(message) => handle_in(&message, &mut backend, &mut session, &mut io),
             Err(_) => Some(error(Value::Null, -32700, "Parse error")),
         };
         if let Some(reply) = reply
@@ -185,7 +183,7 @@ pub fn main(args: &[String]) -> i32 {
 #[cfg(test)]
 pub fn handle_line(line: &str, backend: &mut dyn Backend) -> Option<Value> {
     match serde_json::from_str::<Value>(line) {
-        Ok(msg) => handle(&msg, backend),
+        Ok(message) => handle(&message, backend),
         Err(_) => Some(error(Value::Null, -32700, "Parse error")),
     }
 }
@@ -193,27 +191,27 @@ pub fn handle_line(line: &str, backend: &mut dyn Backend) -> Option<Value> {
 /// Answers one JSON-RPC message without a client to ask; `None` for notifications and
 /// responses.
 #[cfg(test)]
-pub fn handle(msg: &Value, backend: &mut dyn Backend) -> Option<Value> {
-    handle_in(msg, backend, &mut Session::default(), &mut NoPeer)
+pub fn handle(message: &Value, backend: &mut dyn Backend) -> Option<Value> {
+    handle_in(message, backend, &mut Session::default(), &mut NoPeer)
 }
 
 /// Answers one JSON-RPC message of `session`'s client.
 pub fn handle_in(
-    msg: &Value,
+    message: &Value,
     backend: &mut dyn Backend,
     session: &mut Session,
     peer: &mut dyn Peer,
 ) -> Option<Value> {
-    let Some(method) = msg.get("method").and_then(Value::as_str) else {
-        // A response to us (we send no requests) is dropped; anything else is malformed.
-        let is_response = msg.get("result").is_some() || msg.get("error").is_some();
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        // A stray response is dropped; anything else is malformed.
+        let is_response = message.get("result").is_some() || message.get("error").is_some();
         return (!is_response).then(|| {
-            let id = msg.get("id").cloned().unwrap_or(Value::Null);
+            let id = message.get("id").cloned().unwrap_or(Value::Null);
             error(id, -32600, "Invalid Request")
         });
     };
-    let id = msg.get("id")?.clone();
-    let params = msg.get("params").unwrap_or(&Value::Null);
+    let id = message.get("id")?.clone();
+    let params = message.get("params").unwrap_or(&Value::Null);
     let result = match method {
         "initialize" => {
             session.elicits = params.pointer("/capabilities/elicitation").is_some();
@@ -317,7 +315,7 @@ fn error(id: Value, code: i32, message: &str) -> Value {
 fn initialize(params: &Value) -> Value {
     let asked = params.get("protocolVersion").and_then(Value::as_str);
     let version = asked
-        .filter(|v| PROTOCOL_VERSIONS.contains(v))
+        .filter(|version| PROTOCOL_VERSIONS.contains(version))
         .unwrap_or(PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.len() - 1]);
     json!({
         "protocolVersion": version,
@@ -331,7 +329,7 @@ fn initialize(params: &Value) -> Value {
 }
 
 fn tools() -> Value {
-    let formats: Vec<&str> = PULL_FORMATS.iter().map(|f| f.name).collect();
+    let formats: Vec<&str> = PULL_FORMATS.iter().map(|format| format.name).collect();
     let read_only = json!({ "readOnlyHint": true, "openWorldHint": false });
     let mut tools = json!([]);
     if let Some(list) = tools.as_array_mut() {
@@ -380,28 +378,31 @@ fn call_tool(name: &str, args: &Value, backend: &mut dyn Backend) -> Option<Valu
         _ => return None,
     };
     let result = op.and_then(|op| {
-        backend
-            .pull(op)
-            .map_err(|e| format!("the {} daemon is not reachable: {e}", brand::PRODUCT_NAME))
+        backend.pull(op).map_err(|error| {
+            format!(
+                "the {} daemon is not reachable: {error}",
+                brand::PRODUCT_NAME
+            )
+        })
     });
     Some(match result {
         Ok(PullReply::List { session, artifacts }) => list_result(session, &artifacts),
         Ok(PullReply::Export(export)) => export_result(&export),
-        Ok(PullReply::Error(e)) | Err(e) => tool_error(&e),
+        Ok(PullReply::Error(message)) | Err(message) => tool_error(&message),
     })
 }
 
 fn get_op(args: &Value) -> Result<PullOp, String> {
     let int = |key: &str| match args.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v
+        Some(value) => value
             .as_u64()
             .map(Some)
             .ok_or_else(|| format!("`{key}` must be a non-negative integer")),
     };
     let format = match args.get("format") {
         None | Some(Value::Null) => None,
-        Some(Value::String(f)) => Some(f.clone()),
+        Some(Value::String(format)) => Some(format.clone()),
         Some(_) => return Err("`format` must be a string".into()),
     };
     Ok(PullOp::Get {
@@ -418,7 +419,7 @@ fn tool_error(message: &str) -> Value {
 fn list_result(session: u64, artifacts: &[PullSummary]) -> Value {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64);
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
     let mut text = if artifacts.is_empty() {
         format!("No drawings in session {session} yet.\n")
     } else {
@@ -427,23 +428,23 @@ fn list_result(session: u64, artifacts: &[PullSummary]) -> Value {
             count(artifacts.len())
         )
     };
-    for a in artifacts {
-        text.push_str(&format!("- #{} {} ", a.id, a.kind));
-        if !a.title.is_empty() {
-            text.push_str(&format!("{:?} ", a.title));
+    for artifact in artifacts {
+        text.push_str(&format!("- #{} {} ", artifact.id, artifact.kind));
+        if !artifact.title.is_empty() {
+            text.push_str(&format!("{:?} ", artifact.title));
         }
-        text.push_str(&format!("v{}, ", a.version));
-        if a.kind != "image" {
-            text.push_str(&format!("{} elements, ", a.elements));
+        text.push_str(&format!("v{}, ", artifact.version));
+        if artifact.kind != "image" {
+            text.push_str(&format!("{} elements, ", artifact.elements));
         }
-        if let (Some(w), Some(h)) = (a.width, a.height) {
-            text.push_str(&format!("{w}×{h} px, "));
+        if let (Some(width), Some(height)) = (artifact.width, artifact.height) {
+            text.push_str(&format!("{width}×{height} px, "));
         }
         text.push_str(&format!(
             "changed {}",
-            ago(now.saturating_sub(a.updated_at))
+            ago(now.saturating_sub(artifact.updated_at))
         ));
-        if let Some(pane) = a.ink_over {
+        if let Some(pane) = artifact.ink_over {
             text.push_str(&format!(", drawn over pane {pane}"));
         }
         text.push('\n');
@@ -458,38 +459,38 @@ fn list_result(session: u64, artifacts: &[PullSummary]) -> Value {
     })
 }
 
-fn count(n: usize) -> String {
-    if n == 1 {
+fn count(drawings: usize) -> String {
+    if drawings == 1 {
         "1 drawing".into()
     } else {
-        format!("{n} drawings")
+        format!("{drawings} drawings")
     }
 }
 
 fn ago(ms: u64) -> String {
     match ms / 1000 {
-        s @ 0..60 => format!("{s} s ago"),
-        s @ 60..3600 => format!("{} min ago", s / 60),
-        s @ 3600..86_400 => format!("{} h ago", s / 3600),
-        s => format!("{} days ago", s / 86_400),
+        secs @ 0..60 => format!("{secs} s ago"),
+        secs @ 60..3600 => format!("{} min ago", secs / 60),
+        secs @ 3600..86_400 => format!("{} h ago", secs / 3600),
+        secs => format!("{} days ago", secs / 86_400),
     }
 }
 
-fn export_result(e: &PullExport) -> Value {
-    let title = if e.title.is_empty() {
+fn export_result(export: &PullExport) -> Value {
+    let title = if export.title.is_empty() {
         String::new()
     } else {
-        format!(" {:?}", e.title)
+        format!(" {:?}", export.title)
     };
     let caption = format!(
         "Drawing #{}{title}, version {}, {}:",
-        e.id, e.version, e.format
+        export.id, export.version, export.format
     );
     // Binary formats are images; text formats (SVG, ASCII) are read as they are.
-    let body = if e.base64 {
-        json!({ "type": "image", "data": e.data, "mimeType": e.mime })
+    let body = if export.base64 {
+        json!({ "type": "image", "data": export.data, "mimeType": export.mime })
     } else {
-        json!({ "type": "text", "text": e.data })
+        json!({ "type": "text", "text": export.data })
     };
     json!({ "content": [{ "type": "text", "text": caption }, body] })
 }
@@ -522,7 +523,7 @@ fn own_token(
     (env_pane == Some(pane))
         .then(env_token)
         .flatten()
-        .filter(|t| !t.is_empty())
+        .filter(|token| !token.is_empty())
 }
 
 /// The daemon's hook socket.
@@ -542,10 +543,10 @@ impl SocketBackend {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
         let mut state = None;
         let mut pane = None;
-        let mut it = args.iter();
-        while let Some(arg) = it.next() {
+        let mut rest = args.iter();
+        while let Some(arg) = rest.next() {
             let (flag, inline) = match arg.split_once('=') {
-                Some((f, v)) => (f, Some(v.to_owned())),
+                Some((flag, value)) => (flag, Some(value.to_owned())),
                 None => (arg.as_str(), None),
             };
             let slot = match flag {
@@ -555,7 +556,7 @@ impl SocketBackend {
             };
             *slot = Some(
                 inline
-                    .or_else(|| it.next().cloned())
+                    .or_else(|| rest.next().cloned())
                     .ok_or_else(|| format!("{flag} needs a value"))?,
             );
         }
@@ -583,8 +584,8 @@ impl SocketBackend {
             return Ok(from_state(dir.into()));
         }
         let endpoint = env("ENDPOINT_FILE")
-            .map(|f| Endpoint::File(f.into()))
-            .or_else(|| env("SOCK").map(|s| Endpoint::Socket(s.into())));
+            .map(|file| Endpoint::File(file.into()))
+            .or_else(|| env("SOCK").map(|socket| Endpoint::Socket(socket.into())));
         Ok(match (endpoint, env("TOKEN")) {
             (Some(endpoint), Some(token)) => Self {
                 endpoint,
@@ -597,15 +598,15 @@ impl SocketBackend {
 
     fn socket(&self) -> io::Result<PathBuf> {
         match &self.endpoint {
-            Endpoint::File(f) => Ok(PathBuf::from(std::fs::read_to_string(f)?.trim())),
-            Endpoint::Socket(s) => Ok(s.clone()),
+            Endpoint::File(file) => Ok(PathBuf::from(std::fs::read_to_string(file)?.trim())),
+            Endpoint::Socket(socket) => Ok(socket.clone()),
         }
     }
 
     fn token(&self) -> io::Result<String> {
         match &self.token {
-            Token::File(f) => Ok(std::fs::read_to_string(f)?.trim().to_owned()),
-            Token::Value(t) => Ok(t.clone()),
+            Token::File(file) => Ok(std::fs::read_to_string(file)?.trim().to_owned()),
+            Token::Value(token) => Ok(token.clone()),
         }
     }
 }
@@ -706,14 +707,26 @@ mod tests {
         }
     }
 
-    /// A client that answers elicitations with `allow`.
-    struct Asks(Option<bool>, Vec<Value>);
+    /// A client that answers elicitations with `allow` and records what it was asked.
+    struct Asks {
+        allow: Option<bool>,
+        asked: Vec<Value>,
+    }
+
+    impl Asks {
+        fn answering(allow: bool) -> Self {
+            Self {
+                allow: Some(allow),
+                asked: vec![],
+            }
+        }
+    }
 
     impl Peer for Asks {
         fn request(&mut self, method: &str, params: Value) -> Option<Value> {
             assert_eq!(method, "elicitation/create");
-            self.1.push(params);
-            self.0
+            self.asked.push(params);
+            self.allow
                 .map(|allow| json!({ "action": "accept", "content": { "allow": allow } }))
         }
     }
@@ -739,18 +752,18 @@ mod tests {
         handle_in(&init, &mut fake, &mut session, &mut NoPeer);
         let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": { "name": "browser_click", "arguments": { "target": { "type": "ref", "ref": "ref_2" } } } });
-        let mut client = Asks(Some(true), vec![]);
-        let r = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
-        assert_eq!(r["result"]["content"][0]["text"], "Done.");
-        assert_eq!(client.1[0]["message"], "Press “Pay now”?");
+        let mut client = Asks::answering(true);
+        let reply = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
+        assert_eq!(reply["result"]["content"][0]["text"], "Done.");
+        assert_eq!(client.asked[0]["message"], "Press “Pay now”?");
         assert_eq!(fake.browser_asked[0]["approval_by"], "client");
         assert_eq!(fake.browser_asked[1]["approved"], true);
 
         // Declined: the step does not run.
         fake.browser_replies = approval_then_done();
-        let mut client = Asks(Some(false), vec![]);
-        let r = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
-        assert_eq!(r["result"]["isError"], true);
+        let mut client = Asks::answering(false);
+        let reply = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
+        assert_eq!(reply["result"]["isError"], true);
         assert_eq!(fake.browser_asked.len(), 3);
     }
 
@@ -764,27 +777,27 @@ mod tests {
         let meta = json!({ "io.modelcontextprotocol/clientCapabilities": { "elicitation": { "form": {} } } });
         let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": { "name": "browser_click", "arguments": { "target": { "type": "ref", "ref": "ref_2" } }, "_meta": meta } });
-        let r = handle_in(&call, &mut fake, &mut session, &mut NoPeer).unwrap();
-        assert_eq!(r["result"]["resultType"], "input_required");
+        let reply = handle_in(&call, &mut fake, &mut session, &mut NoPeer).unwrap();
+        assert_eq!(reply["result"]["resultType"], "input_required");
         assert_eq!(
-            r["result"]["inputRequests"]["approve"]["method"],
+            reply["result"]["inputRequests"]["approve"]["method"],
             "elicitation/create"
         );
-        let state = r["result"]["requestState"].clone();
+        let state = reply["result"]["requestState"].clone();
         let retry = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": { "name": "browser_click", "arguments": { "target": { "type": "ref", "ref": "ref_2" } }, "_meta": meta,
                 "requestState": state, "inputResponses": { "approve": { "action": "accept", "content": { "allow": true } } } } });
-        let r = handle_in(&retry, &mut fake, &mut session, &mut NoPeer).unwrap();
-        assert_eq!(r["result"]["content"][0]["text"], "Done.");
+        let reply = handle_in(&retry, &mut fake, &mut session, &mut NoPeer).unwrap();
+        assert_eq!(reply["result"]["content"][0]["text"], "Done.");
         assert_eq!(fake.browser_asked[1]["approved"], true);
         // A state is used once.
-        let r = handle_in(&retry, &mut fake, &mut session, &mut NoPeer).unwrap();
-        assert_eq!(r["result"]["isError"], true);
+        let reply = handle_in(&retry, &mut fake, &mut session, &mut NoPeer).unwrap();
+        assert_eq!(reply["result"]["isError"], true);
     }
 
     fn rpc(fake: &mut Fake, method: &str, params: Value) -> Value {
-        let msg = json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params });
-        handle(&msg, fake).expect("a request is answered")
+        let message = json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params });
+        handle(&message, fake).expect("a request is answered")
     }
 
     fn summary(id: u64) -> PullSummary {
@@ -806,21 +819,21 @@ mod tests {
     #[test]
     fn initialize_echoes_a_known_protocol_version() {
         let mut fake = Fake::default();
-        let r = rpc(
+        let reply = rpc(
             &mut fake,
             "initialize",
             json!({ "protocolVersion": "2025-03-26" }),
         );
-        assert_eq!(r["id"], 7);
-        assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
-        assert_eq!(r["result"]["capabilities"], json!({ "tools": {} }));
-        assert_eq!(r["result"]["serverInfo"]["name"], "Gudo-drawings");
-        let r = rpc(
+        assert_eq!(reply["id"], 7);
+        assert_eq!(reply["result"]["protocolVersion"], "2025-03-26");
+        assert_eq!(reply["result"]["capabilities"], json!({ "tools": {} }));
+        assert_eq!(reply["result"]["serverInfo"]["name"], "Gudo-drawings");
+        let reply = rpc(
             &mut fake,
             "initialize",
             json!({ "protocolVersion": "2099-01-01" }),
         );
-        assert_eq!(r["result"]["protocolVersion"], "2025-11-25");
+        assert_eq!(reply["result"]["protocolVersion"], "2025-11-25");
     }
 
     #[test]
@@ -845,12 +858,18 @@ mod tests {
 
     #[test]
     fn tools_are_listed_with_the_daemons_formats() {
-        let r = rpc(&mut Fake::default(), "tools/list", Value::Null);
-        let tools = r["result"]["tools"].as_array().unwrap();
-        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let reply = rpc(&mut Fake::default(), "tools/list", Value::Null);
+        let tools = reply["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
         assert_eq!(names[..2], ["whoami", "pane_list"]);
         assert!(names.contains(&"list_drawings") && names.contains(&"browser_snapshot"));
-        let get = tools.iter().find(|t| t["name"] == "get_drawing").unwrap();
+        let get = tools
+            .iter()
+            .find(|tool| tool["name"] == "get_drawing")
+            .unwrap();
         let format = &get["inputSchema"]["properties"]["format"];
         assert_eq!(format["enum"], json!(["png", "svg", "ascii", "excalidraw"]));
         assert_eq!(format["default"], "png");
@@ -865,13 +884,13 @@ mod tests {
             }),
             ..Fake::default()
         };
-        let r = rpc(
+        let reply = rpc(
             &mut fake,
             "tools/call",
             json!({ "name": "list_drawings", "arguments": {} }),
         );
         assert_eq!(fake.asked, [PullOp::List]);
-        let content = &r["result"]["content"];
+        let content = &reply["result"]["content"];
         let text = content[0]["text"].as_str().unwrap();
         assert!(text.starts_with("1 drawing in session 2"), "{text}");
         assert!(
@@ -880,7 +899,7 @@ mod tests {
         );
         let json: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
         assert_eq!(json["drawings"][0]["id"], 5);
-        assert_eq!(r["result"].get("isError"), None);
+        assert_eq!(reply["result"].get("isError"), None);
     }
 
     #[test]
@@ -900,7 +919,7 @@ mod tests {
             reply: export("png", "image/png", "iVBORw0K", true),
             ..Fake::default()
         };
-        let r = rpc(
+        let reply = rpc(
             &mut fake,
             "tools/call",
             json!({ "name": "get_drawing", "arguments": { "id": 5 } }),
@@ -914,12 +933,12 @@ mod tests {
             }]
         );
         assert_eq!(
-            r["result"]["content"][1],
+            reply["result"]["content"][1],
             json!({ "type": "image", "data": "iVBORw0K", "mimeType": "image/png" })
         );
 
         fake.reply = export("ascii", "text/plain", "┌──┐", false);
-        let r = rpc(
+        let reply = rpc(
             &mut fake,
             "tools/call",
             json!({ "name": "get_drawing", "arguments": { "format": "ascii", "version": 2 } }),
@@ -933,7 +952,7 @@ mod tests {
             }
         );
         assert_eq!(
-            r["result"]["content"][1],
+            reply["result"]["content"][1],
             json!({ "type": "text", "text": "┌──┐" })
         );
     }
@@ -947,14 +966,17 @@ mod tests {
 
     #[test]
     fn terminal_tools_return_structured_results() {
-        let r = rpc(
+        let reply = rpc(
             &mut Fake::default(),
             "tools/call",
             json!({ "name": "cmd_run", "arguments": { "command": "ls" } }),
         );
-        assert_eq!(r["result"]["structuredContent"]["asked"], "cmd_run");
-        assert_eq!(r["result"]["structuredContent"]["args"]["command"], "ls");
-        assert!(r["result"]["content"][0]["text"].is_string());
+        assert_eq!(reply["result"]["structuredContent"]["asked"], "cmd_run");
+        assert_eq!(
+            reply["result"]["structuredContent"]["args"]["command"],
+            "ls"
+        );
+        assert!(reply["result"]["content"][0]["text"].is_string());
     }
 
     #[test]
@@ -971,19 +993,22 @@ mod tests {
             )["result"]
                 .clone()
         };
-        let r = call(&mut fake, json!({ "id": 9 }));
-        assert_eq!(r["isError"], true);
-        assert_eq!(r["content"][0]["text"], "no artifact 9 in this session");
+        let result = call(&mut fake, json!({ "id": 9 }));
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["content"][0]["text"],
+            "no artifact 9 in this session"
+        );
         // Bad arguments never reach the daemon.
-        let r = call(&mut fake, json!({ "id": "nine" }));
-        assert_eq!(r["isError"], true);
+        let result = call(&mut fake, json!({ "id": "nine" }));
+        assert_eq!(result["isError"], true);
         assert_eq!(fake.asked.len(), 1);
         // Nor does a missing daemon break the protocol.
         fake.reply = None;
-        let r = call(&mut fake, json!({}));
-        assert_eq!(r["isError"], true);
+        let result = call(&mut fake, json!({}));
+        assert_eq!(result["isError"], true);
         assert!(
-            r["content"][0]["text"]
+            result["content"][0]["text"]
                 .as_str()
                 .unwrap()
                 .contains("not reachable")
@@ -992,24 +1017,30 @@ mod tests {
 
     #[test]
     fn arguments_pick_state_files_and_pane() {
-        let b = SocketBackend::from_args(&["--state".into(), "/s t".into(), "--pane=12".into()])
-            .unwrap();
-        assert_eq!(b.pane, "12");
+        let backend =
+            SocketBackend::from_args(&["--state".into(), "/s t".into(), "--pane=12".into()])
+                .unwrap();
+        assert_eq!(backend.pane, "12");
         assert!(
-            matches!(&b.endpoint, Endpoint::File(f) if f == &PathBuf::from("/s t/hook.endpoint"))
+            matches!(&backend.endpoint, Endpoint::File(file) if file == &PathBuf::from("/s t/hook.endpoint"))
         );
-        assert!(matches!(&b.token, Token::File(f) if f == &PathBuf::from("/s t/hook.token")));
+        assert!(
+            matches!(&backend.token, Token::File(file) if file == &PathBuf::from("/s t/hook.token"))
+        );
         assert!(SocketBackend::from_args(&["--bogus".into()]).is_err());
         assert!(SocketBackend::from_args(&["--pane".into()]).is_err());
     }
 
     #[test]
     fn the_panes_own_token_is_preferred_over_the_daemons() {
-        let tok = || Some("pane-token".to_owned());
-        assert_eq!(own_token("12", Some("12"), tok), Some("pane-token".into()));
+        let token = || Some("pane-token".to_owned());
+        assert_eq!(
+            own_token("12", Some("12"), token),
+            Some("pane-token".into())
+        );
         // Another pane's environment cannot speak for this one.
-        assert_eq!(own_token("12", Some("13"), tok), None);
-        assert_eq!(own_token("12", None, tok), None);
+        assert_eq!(own_token("12", Some("13"), token), None);
+        assert_eq!(own_token("12", None, token), None);
         assert_eq!(own_token("12", Some("12"), || Some(String::new())), None);
     }
 }

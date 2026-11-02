@@ -1,3 +1,4 @@
+//! Developer-workflow API: port forwards to TCP ports or Unix sockets, detected ports,
 //! the editor server, git status and diffs, agent-turn changes, review notes, worktrees,
 //! files (with streamed upload and download) and the attention feed.
 //!
@@ -36,59 +37,31 @@ use crate::{Client, ClientError, Inner, lock};
 /// How long a request waits for its answer (a large diff or a first editor start can take a
 /// while; `code serve-web` downloads its server on first use).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
-/// Copy buffer for forwards and transfers.
-const BUF: usize = 64 << 10;
+const COPY_CHUNK: usize = 64 << 10;
 
 /// A push from the daemon about the workspace.
 #[derive(Debug, Clone)]
 pub enum WorkspaceEvent {
     /// The listening ports in panes (the whole list).
-    PortsChanged {
-        /// Every detected port.
-        ports: Vec<PortInfo>,
-    },
+    PortsChanged { ports: Vec<PortInfo> },
     /// A watched directory changed ([`Client::fs_watch`]).
-    FsChanged {
-        /// What changed.
-        change: FsChange,
-    },
+    FsChanged { change: FsChange },
     /// The attention feed changed.
-    Attention {
-        /// The change.
-        update: AttentionUpdate,
-    },
+    Attention { update: AttentionUpdate },
     /// The host's VS Code tunnel changed state: show a device code
     /// ([`TunnelState::NeedsLogin`](proto::TunnelState::NeedsLogin)), connected, failed.
-    VsCodeTunnel {
-        /// The whole status.
-        status: VsCodeTunnelStatus,
-    },
+    VsCodeTunnel { status: VsCodeTunnelStatus },
     /// Agent plan usage changed (while watching, [`Client::usage_watch`]).
-    AgentUsage {
-        /// The whole report.
-        report: AgentUsageReport,
-    },
+    AgentUsage { report: AgentUsageReport },
     /// The host's agent accounts or the panes' accounts changed (owner devices).
-    Accounts {
-        /// The whole report.
-        report: proto::AccountsReport,
-    },
+    Accounts { report: proto::AccountsReport },
     /// Plan usage per account changed (owner devices, while watching usage).
-    AccountUsage {
-        /// The whole report.
-        report: proto::AccountUsageReport,
-    },
+    AccountUsage { report: proto::AccountUsageReport },
     /// The repositories, worktrees, branches and pull requests of the panes (the whole
     /// snapshot; only with [`ClientConfig::repo_status`](crate::ClientConfig::repo_status)).
-    Repos {
-        /// The snapshot.
-        snapshot: RepoSnapshot,
-    },
+    Repos { snapshot: RepoSnapshot },
     /// A workflow file the daemon listed changed: list again ([`Client::workflow_list`]).
-    WorkflowsChanged {
-        /// The new revision.
-        rev: u64,
-    },
+    WorkflowsChanged { rev: u64 },
 }
 
 /// Receives [`WorkspaceEvent`]s. Must return quickly; it runs on the network threads.
@@ -163,8 +136,8 @@ impl WsState {
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
-        if let Some(l) = listener {
-            l.on_workspace_event(event);
+        if let Some(listener) = listener {
+            listener.on_workspace_event(event);
         }
         None
     }
@@ -177,13 +150,13 @@ impl WsState {
     }
 }
 
-fn failed(e: impl std::fmt::Display) -> WsError {
-    WsError::Failed(e.to_string())
+fn failed(err: impl std::fmt::Display) -> WsError {
+    WsError::Failed(err.to_string())
 }
 
 macro_rules! expect {
-    ($resp:expr, $pat:pat => $out:expr) => {
-        match $resp {
+    ($response:expr, $pat:pat => $out:expr) => {
+        match $response {
             $pat => Ok($out),
             other => Err(WsError::Failed(format!("unexpected answer {other:?}"))),
         }
@@ -207,14 +180,17 @@ impl Client {
     ///
     /// The daemon's [`WsError`], or [`WsError::Disconnected`] if the connection dropped (or
     /// nothing came back within five minutes).
-    pub async fn workspace(&self, req: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
+    pub async fn workspace(&self, request: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
         let req_id = self
             .inner
             .next_op
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         lock(&self.inner.ws.pending).insert(req_id, tx);
-        self.inner.send(proto::ClientCtl::Workspace { req_id, req });
+        self.inner.send(proto::ClientCtl::Workspace {
+            req_id,
+            req: request,
+        });
         let inner = Arc::clone(&self.inner);
         // The timer runs on the client's runtime, so any executor can await this.
         self.handle
@@ -231,12 +207,10 @@ impl Client {
             .unwrap_or(Err(WsError::Disconnected))
     }
 
-    // --- ports and forwards ---------------------------------------------------------------
-
     /// Listening ports in the daemon's panes, scanned now.
     pub async fn list_ports(&self) -> Result<Vec<PortInfo>, WsError> {
         let ports = expect!(self.workspace(WorkspaceRequest::ListPorts).await?,
-            WorkspaceResponse::Ports(p) => p)?;
+            WorkspaceResponse::Ports(ports) => ports)?;
         lock(&self.inner.ws.ports).clone_from(&ports);
         Ok(ports)
     }
@@ -298,23 +272,21 @@ impl Client {
     pub fn forwards(&self) -> Vec<(u16, ForwardTarget)> {
         lock(&self.inner.ws.forwards)
             .iter()
-            .map(|(&p, (t, _))| (p, t.clone()))
+            .map(|(&port, (target, _))| (port, target.clone()))
             .collect()
     }
-
-    // --- editor ---------------------------------------------------------------------------
 
     /// Editors the host can run, and the running ones.
     pub async fn editor_status(&self) -> Result<EditorList, WsError> {
         expect!(self.workspace(WorkspaceRequest::EditorStatus).await?,
-            WorkspaceResponse::Editors(e) => e)
+            WorkspaceResponse::Editors(editors) => editors)
     }
 
     /// Starts (or reuses) the editor server for a folder. Open
     /// `http://localhost:<port><url_path>` through [`forward`](Self::forward).
     pub async fn editor_launch(&self, launch: EditorLaunch) -> Result<EditorInstance, WsError> {
         expect!(self.workspace(WorkspaceRequest::EditorLaunch(launch)).await?,
-            WorkspaceResponse::Editor(e) => e)
+            WorkspaceResponse::Editor(editor) => editor)
     }
 
     /// Stops the editor serving `folder`.
@@ -331,16 +303,14 @@ impl Client {
         line: Option<u32>,
         column: Option<u32>,
     ) -> Result<EditorOpened, WsError> {
-        let req = WorkspaceRequest::EditorOpen {
+        let request = WorkspaceRequest::EditorOpen {
             folder,
             path,
             line,
             column,
         };
-        expect!(self.workspace(req).await?, WorkspaceResponse::EditorOpened(o) => o)
+        expect!(self.workspace(request).await?, WorkspaceResponse::EditorOpened(opened) => opened)
     }
-
-    // --- agent usage ----------------------------------------------------------------------
 
     /// Agent plan usage on the host now, and its changes as [`WorkspaceEvent::AgentUsage`]
     /// until [`Client::usage_unwatch`]. Only for daemons offering
@@ -351,10 +321,10 @@ impl Client {
     ///
     /// The daemon's [`WsError`] (owners only).
     pub async fn usage_watch(&self) -> Result<AgentUsageReport, WsError> {
-        let req = WorkspaceRequest::UsageWatch(proto::UsageWatch {
+        let request = WorkspaceRequest::UsageWatch(proto::UsageWatch {
             api_fallback: false,
         });
-        expect!(self.workspace(req).await?, WorkspaceResponse::AgentUsage(r) => r)
+        expect!(self.workspace(request).await?, WorkspaceResponse::AgentUsage(usage) => usage)
     }
 
     /// Stops this connection's usage pushes.
@@ -403,8 +373,6 @@ impl Client {
             WorkspaceResponse::AgentMcpCommands(list) => list)
     }
 
-    // --- agent accounts (proto::account) -------------------------------------------------
-
     fn accounts_offered(&self) -> Result<(), WsError> {
         if self.daemon_has(proto::DaemonFeatures::ACCOUNTS) {
             Ok(())
@@ -425,7 +393,7 @@ impl Client {
     pub async fn accounts(&self) -> Result<proto::AccountsReport, WsError> {
         self.accounts_offered()?;
         expect!(self.workspace(WorkspaceRequest::Accounts).await?,
-            WorkspaceResponse::Accounts(r) => r)
+            WorkspaceResponse::Accounts(accounts) => accounts)
     }
 
     /// Makes an account, signed out; sign in with
@@ -440,7 +408,7 @@ impl Client {
     ) -> Result<proto::AgentAccount, WsError> {
         self.accounts_offered()?;
         expect!(self.workspace(WorkspaceRequest::AccountAdd(add)).await?,
-            WorkspaceResponse::Account(a) => a)
+            WorkspaceResponse::Account(account) => account)
     }
 
     /// Renames or recolours an account.
@@ -456,13 +424,13 @@ impl Client {
         color: u8,
     ) -> Result<proto::AccountsReport, WsError> {
         self.accounts_offered()?;
-        let req = WorkspaceRequest::AccountEdit {
+        let request = WorkspaceRequest::AccountEdit {
             agent,
             account,
             label,
             color,
         };
-        expect!(self.workspace(req).await?, WorkspaceResponse::Accounts(r) => r)
+        expect!(self.workspace(request).await?, WorkspaceResponse::Accounts(accounts) => accounts)
     }
 
     /// Signs an account out with the agent's own logout and deletes it.
@@ -477,7 +445,7 @@ impl Client {
     ) -> Result<proto::AccountsReport, WsError> {
         self.accounts_offered()?;
         expect!(self.workspace(WorkspaceRequest::AccountRemove { agent, account }).await?,
-            WorkspaceResponse::Accounts(r) => r)
+            WorkspaceResponse::Accounts(accounts) => accounts)
     }
 
     /// Asks the agent whether an account is signed in, and as whom.
@@ -492,7 +460,7 @@ impl Client {
     ) -> Result<proto::AgentAccount, WsError> {
         self.accounts_offered()?;
         expect!(self.workspace(WorkspaceRequest::AccountCheck { agent, account }).await?,
-            WorkspaceResponse::Account(a) => a)
+            WorkspaceResponse::Account(account) => account)
     }
 
     /// Sets or clears an agent's default account on the host (`project` `None`) or in a
@@ -508,19 +476,18 @@ impl Client {
         account: Option<String>,
     ) -> Result<proto::AccountsReport, WsError> {
         self.accounts_offered()?;
-        let req = WorkspaceRequest::AccountSetDefault {
+        let request = WorkspaceRequest::AccountSetDefault {
             agent,
             project,
             account,
         };
-        expect!(self.workspace(req).await?, WorkspaceResponse::Accounts(r) => r)
+        expect!(self.workspace(request).await?, WorkspaceResponse::Accounts(accounts) => accounts)
     }
-
 
     /// The host's VS Code tunnel and `code` CLI.
     pub async fn vscode_tunnel_status(&self) -> Result<VsCodeTunnelStatus, WsError> {
         expect!(self.workspace(WorkspaceRequest::VsCodeTunnelStatus).await?,
-            WorkspaceResponse::VsCodeTunnel(s) => s)
+            WorkspaceResponse::VsCodeTunnel(status) => status)
     }
 
     /// Has the daemon download Microsoft's `code` CLI from Microsoft's update service. Show
@@ -530,8 +497,8 @@ impl Client {
         &self,
         accept_license: bool,
     ) -> Result<VsCodeTunnelStatus, WsError> {
-        let req = WorkspaceRequest::VsCodeCliInstall(VsCodeCliInstall { accept_license });
-        expect!(self.workspace(req).await?, WorkspaceResponse::VsCodeTunnel(s) => s)
+        let request = WorkspaceRequest::VsCodeCliInstall(VsCodeCliInstall { accept_license });
+        expect!(self.workspace(request).await?, WorkspaceResponse::VsCodeTunnel(status) => status)
     }
 
     /// Starts (or reuses) the host's tunnel. Show
@@ -542,13 +509,13 @@ impl Client {
         start: VsCodeTunnelStart,
     ) -> Result<VsCodeTunnelStatus, WsError> {
         expect!(self.workspace(WorkspaceRequest::VsCodeTunnelStart(start)).await?,
-            WorkspaceResponse::VsCodeTunnel(s) => s)
+            WorkspaceResponse::VsCodeTunnel(status) => status)
     }
 
     /// Stops the tunnel the daemon runs.
     pub async fn vscode_tunnel_stop(&self) -> Result<VsCodeTunnelStatus, WsError> {
         expect!(self.workspace(WorkspaceRequest::VsCodeTunnelStop).await?,
-            WorkspaceResponse::VsCodeTunnel(s) => s)
+            WorkspaceResponse::VsCodeTunnel(status) => status)
     }
 
     /// The vscode.dev URL and desktop URI for a folder or `path` at a line; opens the file in
@@ -558,27 +525,25 @@ impl Client {
         open: VsCodeTunnelOpen,
     ) -> Result<VsCodeTunnelOpened, WsError> {
         expect!(self.workspace(WorkspaceRequest::VsCodeTunnelOpen(open)).await?,
-            WorkspaceResponse::VsCodeTunnelOpened(o) => o)
+            WorkspaceResponse::VsCodeTunnelOpened(opened) => opened)
     }
-
-    // --- git ------------------------------------------------------------------------------
 
     /// Branch, upstream, ahead/behind and changed files of the repository containing `path`.
     pub async fn git_status(&self, path: String) -> Result<GitStatus, WsError> {
         expect!(self.workspace(WorkspaceRequest::GitStatus { path }).await?,
-            WorkspaceResponse::GitStatus(s) => s)
+            WorkspaceResponse::GitStatus(status) => status)
     }
 
     /// A diff, file by file (renames detected, binaries flagged, large patches capped).
-    pub async fn git_diff(&self, req: GitDiffRequest) -> Result<GitDiff, WsError> {
-        expect!(self.workspace(WorkspaceRequest::GitDiff(req)).await?,
-            WorkspaceResponse::GitDiff(d) => d)
+    pub async fn git_diff(&self, request: GitDiffRequest) -> Result<GitDiff, WsError> {
+        expect!(self.workspace(WorkspaceRequest::GitDiff(request)).await?,
+            WorkspaceResponse::GitDiff(diff) => diff)
     }
 
     /// The agent turns recorded for a pane.
     pub async fn list_turns(&self, pane_id: PaneId) -> Result<Vec<TurnInfo>, WsError> {
         expect!(self.workspace(WorkspaceRequest::ListTurns { pane_id }).await?,
-            WorkspaceResponse::Turns(t) => t)
+            WorkspaceResponse::Turns(turns) => turns)
     }
 
     /// What an agent turn changed (`turn` `None`: the latest).
@@ -589,13 +554,13 @@ impl Client {
         context: u32,
         hunks: bool,
     ) -> Result<GitDiff, WsError> {
-        let req = WorkspaceRequest::TurnDiff {
+        let request = WorkspaceRequest::TurnDiff {
             pane_id,
             turn,
             context,
             hunks,
         };
-        expect!(self.workspace(req).await?, WorkspaceResponse::GitDiff(d) => d)
+        expect!(self.workspace(request).await?, WorkspaceResponse::GitDiff(diff) => diff)
     }
 
     /// Formats review notes into a prompt and types it into the agent pane. Returns the
@@ -605,18 +570,16 @@ impl Client {
             WorkspaceResponse::ReviewSent { prompt } => prompt)
     }
 
-    // --- worktrees ------------------------------------------------------------------------
-
     /// Creates a worktree on a new branch (and allocates its `PORT`).
     pub async fn worktree_create(&self, create: WorktreeCreate) -> Result<WorktreeInfo, WsError> {
         expect!(self.workspace(WorkspaceRequest::WorktreeCreate(create)).await?,
-            WorkspaceResponse::Worktree(w) => w)
+            WorkspaceResponse::Worktree(worktree) => worktree)
     }
 
     /// The repository's worktrees.
     pub async fn worktree_list(&self, repo: String) -> Result<Vec<WorktreeInfo>, WsError> {
         expect!(self.workspace(WorkspaceRequest::WorktreeList { repo }).await?,
-            WorkspaceResponse::Worktrees(w) => w)
+            WorkspaceResponse::Worktrees(worktrees) => worktrees)
     }
 
     /// Removes a worktree (refused with [`WsError::Conflict`] when dirty, unless `force`).
@@ -626,12 +589,12 @@ impl Client {
         force: bool,
         delete_branch: bool,
     ) -> Result<(), WsError> {
-        let req = WorkspaceRequest::WorktreeRemove {
+        let request = WorkspaceRequest::WorktreeRemove {
             path,
             force,
             delete_branch,
         };
-        expect!(self.workspace(req).await?, WorkspaceResponse::Done => ())
+        expect!(self.workspace(request).await?, WorkspaceResponse::Done => ())
     }
 
     /// Splits `split_from` and starts a shell or an agent in the worktree, with its `PORT`.
@@ -642,45 +605,43 @@ impl Client {
         axis: Axis,
         agent: Option<proto::AgentKind>,
     ) -> Result<PaneId, WsError> {
-        let req = WorkspaceRequest::WorktreeLaunch {
+        let request = WorkspaceRequest::WorktreeLaunch {
             path,
             split_from,
             axis,
             agent,
         };
-        expect!(self.workspace(req).await?, WorkspaceResponse::PaneCreated { pane_id } => pane_id)
+        expect!(self.workspace(request).await?, WorkspaceResponse::PaneCreated { pane_id } => pane_id)
     }
-
-    // --- files ----------------------------------------------------------------------------
 
     /// Lists a directory.
     pub async fn fs_list(&self, path: String, show_hidden: bool) -> Result<DirListing, WsError> {
         expect!(self.workspace(WorkspaceRequest::FsList { path, show_hidden }).await?,
-            WorkspaceResponse::Dir(d) => d)
+            WorkspaceResponse::Dir(listing) => listing)
     }
 
     /// `lstat` of a path.
     pub async fn fs_stat(&self, path: String) -> Result<FileStat, WsError> {
         expect!(self.workspace(WorkspaceRequest::FsStat { path }).await?,
-            WorkspaceResponse::Stat(s) => s)
+            WorkspaceResponse::Stat(stat) => stat)
     }
 
     /// Reads up to 1 MiB of a file.
     pub async fn fs_read(&self, path: String, offset: u64, len: u32) -> Result<FileChunk, WsError> {
         expect!(self.workspace(WorkspaceRequest::FsRead { path, offset, len }).await?,
-            WorkspaceResponse::FileData(c) => c)
+            WorkspaceResponse::FileData(chunk) => chunk)
     }
 
     /// Writes a small file (up to 1 MiB) atomically.
     pub async fn fs_write(&self, target: WriteTarget, data: Vec<u8>) -> Result<FileStat, WsError> {
         expect!(self.workspace(WorkspaceRequest::FsWrite { target, data }).await?,
-            WorkspaceResponse::Stat(s) => s)
+            WorkspaceResponse::Stat(stat) => stat)
     }
 
     /// Creates a directory.
     pub async fn fs_mkdir(&self, path: String, parents: bool) -> Result<FileStat, WsError> {
         expect!(self.workspace(WorkspaceRequest::FsMkdir { path, parents }).await?,
-            WorkspaceResponse::Stat(s) => s)
+            WorkspaceResponse::Stat(stat) => stat)
     }
 
     /// Renames or moves.
@@ -691,7 +652,7 @@ impl Client {
         overwrite: bool,
     ) -> Result<FileStat, WsError> {
         expect!(self.workspace(WorkspaceRequest::FsRename { from, to, overwrite }).await?,
-            WorkspaceResponse::Stat(s) => s)
+            WorkspaceResponse::Stat(stat) => stat)
     }
 
     /// Deletes, or moves to the trash.
@@ -701,12 +662,12 @@ impl Client {
         mode: DeleteMode,
         recursive: bool,
     ) -> Result<(), WsError> {
-        let req = WorkspaceRequest::FsDelete {
+        let request = WorkspaceRequest::FsDelete {
             path,
             mode,
             recursive,
         };
-        expect!(self.workspace(req).await?, WorkspaceResponse::Done => ())
+        expect!(self.workspace(request).await?, WorkspaceResponse::Done => ())
     }
 
     /// Watches a directory; changes arrive as [`WorkspaceEvent::FsChanged`]. Watches end with
@@ -735,12 +696,12 @@ impl Client {
             .spawn(async move {
                 let file = tokio::fs::File::open(&local_path)
                     .await
-                    .map_err(|e| WsError::NotFound(format!("{local_path}: {e}")))?;
+                    .map_err(|err| WsError::NotFound(format!("{local_path}: {err}")))?;
                 let size = file.metadata().await.map_err(failed)?.len();
                 upload(&inner, file, size, target, progress).await
             })
             .await
-            .unwrap_or_else(|e| Err(failed(e)))
+            .unwrap_or_else(|err| Err(failed(err)))
     }
 
     /// Uploads bytes held in memory (see [`upload_file`](Self::upload_file)).
@@ -756,7 +717,7 @@ impl Client {
                 async move { upload(&inner, std::io::Cursor::new(data), size, target, None).await },
             )
             .await
-            .unwrap_or_else(|e| Err(failed(e)))
+            .unwrap_or_else(|err| Err(failed(err)))
     }
 
     /// Downloads a remote file to `local_path` (written to a temporary file next to it, then
@@ -780,24 +741,20 @@ impl Client {
                 download(&inner, header, PathBuf::from(local_path), progress).await
             })
             .await
-            .unwrap_or_else(|e| Err(failed(e)))
+            .unwrap_or_else(|err| Err(failed(err)))
     }
-
-    // --- attention ------------------------------------------------------------------------
 
     /// The attention feed (the inbox) and its unseen count.
     pub async fn attention_list(&self) -> Result<AttentionList, WsError> {
         expect!(self.workspace(WorkspaceRequest::AttentionList).await?,
-            WorkspaceResponse::Attention(a) => a)
+            WorkspaceResponse::Attention(attention) => attention)
     }
 
     /// Marks items seen on every device; returns the feed after the change.
     pub async fn attention_seen(&self, seen: AttentionSeen) -> Result<AttentionList, WsError> {
         expect!(self.workspace(WorkspaceRequest::AttentionSeen(seen)).await?,
-            WorkspaceResponse::Attention(a) => a)
+            WorkspaceResponse::Attention(attention) => attention)
     }
-
-    // --- git-native workspace (proto::repo) -----------------------------------------------
 
     /// The last repository snapshot the daemon pushed.
     pub fn repos(&self) -> Option<RepoSnapshot> {
@@ -808,7 +765,7 @@ impl Client {
     /// `None`).
     pub async fn repo_refresh(&self, path: Option<String>) -> Result<RepoSnapshot, WsError> {
         let snapshot = expect!(self.workspace(WorkspaceRequest::RepoRefresh { path }).await?,
-            WorkspaceResponse::Repos(s) => s)?;
+            WorkspaceResponse::Repos(snapshot) => snapshot)?;
         *lock(&self.inner.ws.repos) = Some(snapshot.clone());
         Ok(snapshot)
     }
@@ -816,25 +773,25 @@ impl Client {
     /// Merges a worktree's pull request; the pull request after merging.
     pub async fn pr_merge(&self, merge: PrMerge) -> Result<Option<PullRequest>, WsError> {
         expect!(self.workspace(WorkspaceRequest::PrMerge(merge)).await?,
-            WorkspaceResponse::Pr(p) => p)
+            WorkspaceResponse::Pr(pull_request) => pull_request)
     }
 
     /// Re-runs the failed jobs of a worktree's pull request.
     pub async fn pr_rerun_failed(&self, path: String) -> Result<Option<PullRequest>, WsError> {
         expect!(self.workspace(WorkspaceRequest::PrRerunFailed { path }).await?,
-            WorkspaceResponse::Pr(p) => p)
+            WorkspaceResponse::Pr(pull_request) => pull_request)
     }
 
     /// Pushes the branch and opens a pull request.
     pub async fn pr_create(&self, create: PrCreate) -> Result<Option<PullRequest>, WsError> {
         expect!(self.workspace(WorkspaceRequest::PrCreate(create)).await?,
-            WorkspaceResponse::Pr(p) => p)
+            WorkspaceResponse::Pr(pull_request) => pull_request)
     }
 
     /// Checks a pull request out into a new worktree.
     pub async fn pr_checkout(&self, checkout: PrCheckout) -> Result<WorktreeInfo, WsError> {
         expect!(self.workspace(WorkspaceRequest::PrCheckout(checkout)).await?,
-            WorkspaceResponse::Worktree(w) => w)
+            WorkspaceResponse::Worktree(worktree) => worktree)
     }
 
     /// Archives a worktree (its commits and, with `force`, its changes are kept).
@@ -849,13 +806,13 @@ impl Client {
         repo: Option<String>,
     ) -> Result<Vec<ArchivedWorktree>, WsError> {
         expect!(self.workspace(WorkspaceRequest::WorktreeArchived { repo }).await?,
-            WorkspaceResponse::Archived(a) => a)
+            WorkspaceResponse::Archived(archived) => archived)
     }
 
     /// Restores an archived worktree.
     pub async fn worktree_restore(&self, id: u64) -> Result<WorktreeInfo, WsError> {
         expect!(self.workspace(WorkspaceRequest::WorktreeRestore { id }).await?,
-            WorkspaceResponse::Worktree(w) => w)
+            WorkspaceResponse::Worktree(worktree) => worktree)
     }
 
     /// Reads (`None`) or changes the worktree housekeeping.
@@ -864,14 +821,14 @@ impl Client {
         set: Option<WorktreeSettings>,
     ) -> Result<WorktreeSettings, WsError> {
         expect!(self.workspace(WorkspaceRequest::WorktreeSettings(set)).await?,
-            WorkspaceResponse::WorktreeSettings(s) => s)
+            WorkspaceResponse::WorktreeSettings(settings) => settings)
     }
 
     /// A repository's setup and teardown commands and whether the owner trusts them (only
     /// trusted ones run).
     pub async fn repo_hooks(&self, of: RepoHooksFor) -> Result<RepoHooksTrust, WsError> {
         expect!(self.workspace(WorkspaceRequest::RepoHooks(of)).await?,
-            WorkspaceResponse::RepoHooks(t) => t)
+            WorkspaceResponse::RepoHooks(trust) => trust)
     }
 
     /// Trusts a repository's commands (`RepoHooksTrust::repo` and `hash`): they run from now
@@ -884,7 +841,7 @@ impl Client {
     /// A new task: worktree, branch, and a tab with a shell or agent in it.
     pub async fn task_create(&self, task: TaskCreate) -> Result<TaskCreated, WsError> {
         expect!(self.workspace(WorkspaceRequest::TaskCreate(task)).await?,
-            WorkspaceResponse::TaskCreated(t) => t)
+            WorkspaceResponse::TaskCreated(created) => created)
     }
 
     /// Runs a script in a new tab; its pane.
@@ -915,7 +872,7 @@ impl Client {
     pub async fn workflow_save(&self, save: WorkflowSave) -> Result<Workflow, WsError> {
         self.require_workflows()?;
         expect!(self.workspace(WorkspaceRequest::WorkflowSave(save)).await?,
-            WorkspaceResponse::WorkflowSaved(w) => w)
+            WorkspaceResponse::WorkflowSaved(workflow) => workflow)
     }
 
     fn require_workflows(&self) -> Result<(), WsError> {
@@ -929,13 +886,11 @@ impl Client {
     }
 }
 
-// --- streams --------------------------------------------------------------------------------
-
 /// The live connection, waiting while the client is between reconnects.
 async fn connection(inner: &Inner) -> iroh::endpoint::Connection {
     loop {
-        if let Some(c) = lock(&inner.connection).clone() {
-            return c;
+        if let Some(conn) = lock(&inner.connection).clone() {
+            return conn;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -945,8 +900,8 @@ async fn send_frame<T: serde::Serialize>(
     stream: &mut iroh::endpoint::SendStream,
     msg: &T,
 ) -> Result<(), WsError> {
-    let buf = proto::frame::to_vec(msg).map_err(failed)?;
-    stream.write_all(&buf).await.map_err(failed)
+    let frame = proto::frame::to_vec(msg).map_err(failed)?;
+    stream.write_all(&frame).await.map_err(failed)
 }
 
 async fn recv_frame<T: serde::de::DeserializeOwned>(
@@ -956,7 +911,7 @@ async fn recv_frame<T: serde::de::DeserializeOwned>(
     match stream.read_exact(&mut prefix).await {
         Ok(()) => {}
         Err(iroh::endpoint::ReadExactError::FinishedEarly(0)) => return Ok(None),
-        Err(e) => return Err(failed(e)),
+        Err(err) => return Err(failed(err)),
     }
     let len = proto::frame::body_len(prefix, proto::MAX_FRAME_LEN).map_err(failed)?;
     let mut body = vec![0; len];
@@ -967,9 +922,9 @@ async fn recv_frame<T: serde::de::DeserializeOwned>(
 /// Accepts local TCP connections and tunnels each over a forward stream.
 async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, target: ForwardTarget) {
     let mut listener = match LocalListener::new(listener, inner.resumed.subscribe()) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!("port forward listener: {e}");
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::warn!("port forward listener: {err}");
             return;
         }
     };
@@ -978,8 +933,8 @@ async fn serve_forward(inner: Arc<Inner>, listener: StdTcpListener, target: Forw
         let inner = Arc::clone(&inner);
         let target = target.clone();
         tokio::spawn(async move {
-            if let Err(e) = forward_one(&inner, tcp, target).await {
-                tracing::debug!("port forward: {e}");
+            if let Err(err) = forward_one(&inner, tcp, target).await {
+                tracing::debug!("port forward: {err}");
             }
         });
     }
@@ -991,12 +946,12 @@ async fn forward_one(
     target: ForwardTarget,
 ) -> Result<(), WsError> {
     let _ = tcp.set_nodelay(true);
-    let (mut tcp_r, mut tcp_w) = tcp.into_split();
-    let end = forward_stream(inner, target, &mut tcp_r, &mut tcp_w).await;
+    let (mut tcp_read, mut tcp_write) = tcp.into_split();
+    let end = forward_stream(inner, target, &mut tcp_read, &mut tcp_write).await;
     if !matches!(end, Ok(Ended::Clean)) {
         // A reset, not an orderly close: the local client (a browser's websocket) must see
         // the link broke and reconnect, rather than take it for the server's own goodbye.
-        if let Ok(tcp) = tcp_r.reunite(tcp_w) {
+        if let Ok(tcp) = tcp_read.reunite(tcp_write) {
             let _ = tcp.set_zero_linger();
         }
     }
@@ -1024,21 +979,21 @@ async fn open_forward(
 ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream), WsError> {
     let conn = connection(inner).await;
     let first = try_open_forward(&conn, target).await;
-    let Err(OpenError::Link(e)) = first else {
+    let Err(OpenError::Link(link_error)) = first else {
         return first.map_err(OpenError::into_ws);
     };
     let dead = conn.stable_id();
     let next = tokio::time::timeout(LINK_WAIT, async {
         loop {
-            let c = connection(inner).await;
-            if c.stable_id() != dead && c.close_reason().is_none() {
-                return c;
+            let candidate = connection(inner).await;
+            if candidate.stable_id() != dead && candidate.close_reason().is_none() {
+                return candidate;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .map_err(|_| e)?;
+    .map_err(|_| link_error)?;
     try_open_forward(&next, target)
         .await
         .map_err(OpenError::into_ws)
@@ -1054,7 +1009,7 @@ enum OpenError {
 impl OpenError {
     fn into_ws(self) -> WsError {
         match self {
-            Self::Link(e) | Self::Refused(e) => e,
+            Self::Link(err) | Self::Refused(err) => err,
         }
     }
 }
@@ -1063,8 +1018,9 @@ async fn try_open_forward(
     conn: &iroh::endpoint::Connection,
     target: &ForwardTarget,
 ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream), OpenError> {
-    let link = |e: WsError| OpenError::Link(e);
-    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| link(failed(e)))?;
+    let link = OpenError::Link;
+    let (mut send, mut recv) = conn.open_bi().await.map_err(|err| link(failed(err)))?;
+    // Below the focused pane (80), above bulk (1).
     let _ = send.set_priority(40);
     let header = StreamHeader::Forward {
         target: target.clone(),
@@ -1077,28 +1033,28 @@ async fn try_open_forward(
     }
 }
 
-/// Opens one forward stream to `target` and copies `tcp_r` into it and it into `tcp_w`
-/// until both directions finish.
+/// Opens one forward stream to `target` and copies `tcp_read` into it and it into
+/// `tcp_write` until both directions finish.
 async fn forward_stream(
     inner: &Inner,
     target: ForwardTarget,
-    mut tcp_r: impl tokio::io::AsyncRead + Unpin,
-    mut tcp_w: impl tokio::io::AsyncWrite + Unpin,
+    mut tcp_read: impl tokio::io::AsyncRead + Unpin,
+    mut tcp_write: impl tokio::io::AsyncWrite + Unpin,
 ) -> Result<Ended, WsError> {
     let (mut send, mut recv) = open_forward(inner, &target).await?;
     // Half-close both ways; each direction only reads after the previous write completed, so
     // a slow side throttles the other (QUIC flow control / TCP window). A failure resets the
     // other side instead of finishing it.
     let up = async {
-        let mut buf = vec![0; BUF];
+        let mut chunk = vec![0; COPY_CHUNK];
         loop {
-            match tcp_r.read(&mut buf).await {
+            match tcp_read.read(&mut chunk).await {
                 Ok(0) => {
                     let _ = send.finish();
                     return Ended::Clean;
                 }
-                Ok(n) => {
-                    if send.write_all(&buf[..n]).await.is_err() {
+                Ok(read) => {
+                    if send.write_all(&chunk[..read]).await.is_err() {
                         return Ended::Broken;
                     }
                 }
@@ -1110,17 +1066,17 @@ async fn forward_stream(
         }
     };
     let down = async {
-        let mut buf = vec![0; BUF];
+        let mut chunk = vec![0; COPY_CHUNK];
         loop {
-            match recv.read(&mut buf).await {
-                Ok(Some(n)) => {
-                    if tcp_w.write_all(&buf[..n]).await.is_err() {
+            match recv.read(&mut chunk).await {
+                Ok(Some(read)) => {
+                    if tcp_write.write_all(&chunk[..read]).await.is_err() {
                         let _ = recv.stop(0u32.into());
                         return Ended::Broken;
                     }
                 }
                 Ok(None) => {
-                    let _ = tcp_w.shutdown().await;
+                    let _ = tcp_write.shutdown().await;
                     return Ended::Clean;
                 }
                 Err(_) => return Ended::Broken,
@@ -1145,8 +1101,8 @@ async fn splice_ends(
     let (mut up_done, mut down_done) = (false, false);
     while !(up_done && down_done) {
         let ended = tokio::select! {
-            e = &mut up, if !up_done => { up_done = true; e }
-            e = &mut down, if !down_done => { down_done = true; e }
+            ended = &mut up, if !up_done => { up_done = true; ended }
+            ended = &mut down, if !down_done => { down_done = true; ended }
         };
         if ended == Ended::Broken {
             return Ended::Broken;
@@ -1172,32 +1128,32 @@ async fn upload(
     .await?;
     match recv_frame::<TransferReply>(&mut recv).await? {
         Some(TransferReply::Ready { .. }) => {}
-        Some(TransferReply::Failed(e)) => return Err(e),
+        Some(TransferReply::Failed(err)) => return Err(err),
         other => return Err(WsError::Failed(format!("unexpected reply {other:?}"))),
     }
-    let mut buf = vec![0; BUF];
+    let mut chunk = vec![0; COPY_CHUNK];
     let mut done = 0u64;
     while done < size {
-        let want = buf.len().min((size - done) as usize);
-        let n = source.read(&mut buf[..want]).await.map_err(failed)?;
-        if n == 0 {
+        let want = chunk.len().min((size - done) as usize);
+        let read = source.read(&mut chunk[..want]).await.map_err(failed)?;
+        if read == 0 {
             return Err(WsError::Failed(
                 "the local file shrank during the upload".into(),
             ));
         }
-        if send.write_all(&buf[..n]).await.is_err() {
+        if send.write_all(&chunk[..read]).await.is_err() {
             // The daemon stopped reading: its reply says why.
             break;
         }
-        done += n as u64;
-        if let Some(p) = &progress {
-            p.on_progress(done, size);
+        done += read as u64;
+        if let Some(progress) = &progress {
+            progress.on_progress(done, size);
         }
     }
     let _ = send.finish();
     match recv_frame::<TransferReply>(&mut recv).await? {
         Some(TransferReply::Done(stat)) => Ok(stat),
-        Some(TransferReply::Failed(e)) => Err(e),
+        Some(TransferReply::Failed(err)) => Err(err),
         other => Err(WsError::Failed(format!("unexpected reply {other:?}"))),
     }
 }
@@ -1205,7 +1161,7 @@ async fn upload(
 async fn download(
     inner: &Inner,
     header: DownloadHeader,
-    local: PathBuf,
+    local_path: PathBuf,
     progress: Option<Arc<dyn TransferProgress>>,
 ) -> Result<FileStat, WsError> {
     let conn = connection(inner).await;
@@ -1218,44 +1174,46 @@ async fn download(
             stat: Some(stat),
             len,
         }) => (stat, len),
-        Some(TransferReply::Failed(e)) => return Err(e),
+        Some(TransferReply::Failed(err)) => return Err(err),
         other => return Err(WsError::Failed(format!("unexpected reply {other:?}"))),
     };
-    let name = local
+    let name = local_path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = local.with_file_name(format!(".{name}.download"));
-    let mut file = tokio::fs::File::create(&tmp)
+    let partial_path = local_path.with_file_name(format!(".{name}.download"));
+    let mut file = tokio::fs::File::create(&partial_path)
         .await
-        .map_err(|e| WsError::Failed(format!("{}: {e}", tmp.display())))?;
-    let mut buf = vec![0; BUF];
+        .map_err(|err| WsError::Failed(format!("{}: {err}", partial_path.display())))?;
+    let mut chunk = vec![0; COPY_CHUNK];
     let mut done = 0u64;
     let result = loop {
-        match recv.read(&mut buf).await {
-            Ok(Some(n)) => {
-                if let Err(e) = file.write_all(&buf[..n]).await {
-                    break Err(failed(e));
+        match recv.read(&mut chunk).await {
+            Ok(Some(read)) => {
+                if let Err(err) = file.write_all(&chunk[..read]).await {
+                    break Err(failed(err));
                 }
-                done += n as u64;
-                if let Some(p) = &progress {
-                    p.on_progress(done, len);
+                done += read as u64;
+                if let Some(progress) = &progress {
+                    progress.on_progress(done, len);
                 }
             }
             Ok(None) if done == len => break Ok(()),
             Ok(None) => break Err(WsError::Failed(format!("got {done} of {len} bytes"))),
-            Err(e) => break Err(failed(e)),
+            Err(err) => break Err(failed(err)),
         }
     };
     let result = match result {
         Ok(()) => match file.sync_all().await {
-            Ok(()) => tokio::fs::rename(&tmp, &local).await.map_err(failed),
-            Err(e) => Err(failed(e)),
+            Ok(()) => tokio::fs::rename(&partial_path, &local_path)
+                .await
+                .map_err(failed),
+            Err(err) => Err(failed(err)),
         },
-        Err(e) => Err(e),
+        Err(err) => Err(err),
     };
     if result.is_err() {
-        let _ = tokio::fs::remove_file(&tmp).await;
+        let _ = tokio::fs::remove_file(&partial_path).await;
     }
     result.map(|()| stat)
 }

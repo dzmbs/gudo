@@ -1,3 +1,4 @@
+//! Drawings and images: requests, live ink, blobs, and a local scene cache that stays
 //! in step with the daemon.
 //!
 //! - Requests are `async` and return the daemon's answer or an [`ArtifactError`].
@@ -39,9 +40,7 @@ pub enum ArtifactUpdate {
     /// The cached scene of an artifact was (re)fetched and is now at `version`: after a gap,
     /// a reconnect, or for an artifact first seen.
     Synced {
-        /// The artifact.
         artifact_id: ArtifactId,
-        /// Its version now.
         version: u64,
     },
 }
@@ -81,7 +80,6 @@ struct Cached {
     scene: Scene,
 }
 
-/// Artifact state kept by the client.
 #[derive(Default)]
 pub(crate) struct ArtState {
     pending: Mutex<HashMap<u64, Pending>>,
@@ -90,8 +88,7 @@ pub(crate) struct ArtState {
     listener: Mutex<Option<Arc<dyn ArtifactListener>>>,
     cache: Mutex<HashMap<ArtifactId, Cached>>,
     canvases: Mutex<HashMap<SessionId, Vec<CanvasPane>>>,
-    /// Excalidraw scenes seen.
-    ex: Mutex<HashMap<ArtifactId, drawing::ExScene>>,
+    excalidraw: Mutex<HashMap<ArtifactId, drawing::ExScene>>,
     /// Inline placements by pane.
     placements: Mutex<HashMap<PaneId, std::collections::BTreeMap<u64, proto::Placement>>>,
 }
@@ -99,24 +96,25 @@ pub(crate) struct ArtState {
 impl ArtState {
     fn notify(&self, update: ArtifactUpdate) {
         let listener = lock(&self.listener).clone();
-        if let Some(l) = listener {
-            l.on_artifact(update);
+        if let Some(listener) = listener {
+            listener.on_artifact(update);
         }
     }
 
     /// Applies a scene answer to the cache; returns the version if it changed the cache.
     fn absorb(&self, scene: &ArtifactScene) -> Option<u64> {
-        // Excalidraw scenes live in `ex`: an op-log entry for one would be resynced with
+        // Excalidraw scenes live in `excalidraw`: an op-log entry for one would be resynced with
         // `Get` on every reconnect and report a `Synced` before its elements are back.
         if scene.info.kind == proto::ArtifactKind::Excalidraw {
             return None;
         }
         let mut cache = lock(&self.cache);
-        let id = scene.info.artifact_id;
-        let entry = cache.entry(id).or_insert_with(|| Cached {
-            info: scene.info.clone(),
-            scene: Scene::new(),
-        });
+        let entry = cache
+            .entry(scene.info.artifact_id)
+            .or_insert_with(|| Cached {
+                info: scene.info.clone(),
+                scene: Scene::new(),
+            });
         entry.info = scene.info.clone();
         if let Some(elements) = &scene.elements {
             entry.scene = Scene::from_elements(scene.info.version, elements.clone());
@@ -136,30 +134,30 @@ impl ArtState {
             ServerCtl::ArtifactResult { req_id, result } => {
                 if let Ok(ArtifactResponse::Excalidraw(scene)) = &result {
                     let version = scene.info.version;
-                    let id = scene.info.artifact_id;
+                    let artifact_id = scene.info.artifact_id;
                     {
-                        let mut ex = lock(&self.ex);
-                        let cached = ex.entry(id).or_default();
+                        let mut scenes = lock(&self.excalidraw);
+                        let cached = scenes.entry(artifact_id).or_default();
                         cached.absorb(scene.elements.clone(), version);
                         if scene.app_state.is_some() {
                             cached.app_state.clone_from(&scene.app_state);
                         }
-                        for f in &scene.files {
-                            cached.files.insert(f.file_id.clone(), f.clone());
+                        for file in &scene.files {
+                            cached.files.insert(file.file_id.clone(), file.clone());
                         }
                     }
                     if lock(&self.resync).remove(&req_id) {
                         self.notify(ArtifactUpdate::Synced {
-                            artifact_id: id,
+                            artifact_id,
                             version,
                         });
                     }
                 } else if let Ok(ArtifactResponse::Placements(list)) = &result {
-                    for p in list {
+                    for placement in list {
                         lock(&self.placements)
-                            .entry(p.pane_id)
+                            .entry(placement.pane_id)
                             .or_default()
-                            .insert(p.placement_id, p.clone());
+                            .insert(placement.placement_id, placement.clone());
                     }
                 }
                 if let Ok(ArtifactResponse::Scene(scene)) = &result
@@ -192,10 +190,10 @@ impl ArtState {
     fn track(&self, inner: &Inner, event: &ArtifactEvent) {
         match event {
             ArtifactEvent::Created(info) if info.kind == proto::ArtifactKind::Excalidraw => {
-                let fresh = !lock(&self.ex).contains_key(&info.artifact_id);
-                lock(&self.ex).entry(info.artifact_id).or_default();
+                let fresh = !lock(&self.excalidraw).contains_key(&info.artifact_id);
+                lock(&self.excalidraw).entry(info.artifact_id).or_default();
                 if fresh && info.version > 0 {
-                    self.fetch_ex(inner, info.artifact_id, 0);
+                    self.fetch_excalidraw(inner, info.artifact_id, 0);
                 }
             }
             ArtifactEvent::Created(info) => {
@@ -231,13 +229,13 @@ impl ArtState {
                 }
             }
             ArtifactEvent::Info(info) => {
-                if let Some(c) = lock(&self.cache).get_mut(&info.artifact_id) {
-                    c.info = info.clone();
+                if let Some(cached) = lock(&self.cache).get_mut(&info.artifact_id) {
+                    cached.info = info.clone();
                 }
             }
             ArtifactEvent::Deleted { artifact_id, .. } => {
                 lock(&self.cache).remove(artifact_id);
-                lock(&self.ex).remove(artifact_id);
+                lock(&self.excalidraw).remove(artifact_id);
             }
             ArtifactEvent::Canvases {
                 session_id,
@@ -253,28 +251,28 @@ impl ArtState {
                 app_state,
                 files,
             } => {
-                let mut ex = lock(&self.ex);
-                let cached = ex.entry(*artifact_id).or_default();
+                let mut scenes = lock(&self.excalidraw);
+                let cached = scenes.entry(*artifact_id).or_default();
                 cached.absorb(elements.clone(), *version);
                 if app_state.is_some() {
                     cached.app_state.clone_from(app_state);
                 }
-                for f in files {
-                    cached.files.insert(f.file_id.clone(), f.clone());
+                for file in files {
+                    cached.files.insert(file.file_id.clone(), file.clone());
                 }
             }
-            ArtifactEvent::Placed(p) => {
+            ArtifactEvent::Placed(placement) => {
                 lock(&self.placements)
-                    .entry(p.pane_id)
+                    .entry(placement.pane_id)
                     .or_default()
-                    .insert(p.placement_id, p.clone());
+                    .insert(placement.placement_id, placement.clone());
             }
             ArtifactEvent::Unplaced {
                 pane_id,
                 placement_id,
             } => {
-                if let Some(m) = lock(&self.placements).get_mut(pane_id) {
-                    m.remove(placement_id);
+                if let Some(by_id) = lock(&self.placements).get_mut(pane_id) {
+                    by_id.remove(placement_id);
                 }
             }
         }
@@ -292,7 +290,7 @@ impl ArtState {
         });
     }
 
-    fn fetch_ex(&self, inner: &Inner, artifact_id: ArtifactId, since: u64) {
+    fn fetch_excalidraw(&self, inner: &Inner, artifact_id: ArtifactId, since: u64) {
         let req_id = inner
             .next_op
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -305,21 +303,21 @@ impl ArtState {
 
     /// After (re)connecting: catch every cached scene up.
     pub(crate) fn on_connected(&self, inner: &Inner) {
-        let ex: Vec<(ArtifactId, u64)> = lock(&self.ex)
+        let scenes: Vec<(ArtifactId, u64)> = lock(&self.excalidraw)
             .iter()
-            .map(|(id, s)| (*id, s.revision))
+            .map(|(&artifact_id, scene)| (artifact_id, scene.revision))
             .collect();
-        for (id, rev) in ex {
-            self.fetch_ex(inner, id, rev);
+        for (artifact_id, revision) in scenes {
+            self.fetch_excalidraw(inner, artifact_id, revision);
         }
         // Placements come again with the attach; stale ones go.
         lock(&self.placements).clear();
         let wanted: Vec<(ArtifactId, u64)> = lock(&self.cache)
             .iter()
-            .map(|(id, c)| (*id, c.scene.version))
+            .map(|(&artifact_id, cached)| (artifact_id, cached.scene.version))
             .collect();
-        for (id, version) in wanted {
-            self.fetch(inner, id, version);
+        for (artifact_id, version) in wanted {
+            self.fetch(inner, artifact_id, version);
         }
     }
 
@@ -332,13 +330,13 @@ impl ArtState {
     }
 }
 
-fn failed(e: impl std::fmt::Display) -> ArtifactError {
-    ArtifactError::Failed(e.to_string())
+fn failed(err: impl std::fmt::Display) -> ArtifactError {
+    ArtifactError::Failed(err.to_string())
 }
 
 macro_rules! expect {
-    ($resp:expr, $pat:pat => $out:expr) => {
-        match $resp {
+    ($response:expr, $pat:pat => $out:expr) => {
+        match $response {
             $pat => Ok($out),
             other => Err(ArtifactError::Failed(format!(
                 "unexpected answer {other:?}"
@@ -359,14 +357,20 @@ impl Client {
     ///
     /// The daemon's [`ArtifactError`], or [`ArtifactError::Disconnected`] if the connection
     /// dropped (or nothing came back within two minutes).
-    pub async fn artifact(&self, req: ArtifactRequest) -> Result<ArtifactResponse, ArtifactError> {
+    pub async fn artifact(
+        &self,
+        request: ArtifactRequest,
+    ) -> Result<ArtifactResponse, ArtifactError> {
         let req_id = self
             .inner
             .next_op
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         lock(&self.inner.art.pending).insert(req_id, tx);
-        self.inner.send(ClientCtl::Artifact { req_id, req });
+        self.inner.send(ClientCtl::Artifact {
+            req_id,
+            req: request,
+        });
         let inner = Arc::clone(&self.inner);
         self.handle
             .spawn(async move {
@@ -388,7 +392,7 @@ impl Client {
         session_id: SessionId,
     ) -> Result<Vec<ArtifactInfo>, ArtifactError> {
         expect!(self.artifact(ArtifactRequest::List { session_id }).await?,
-            ArtifactResponse::List(l) => l)
+            ArtifactResponse::List(artifacts) => artifacts)
     }
 
     /// Creates a drawing or image.
@@ -397,9 +401,9 @@ impl Client {
         create: ArtifactCreate,
     ) -> Result<ArtifactInfo, ArtifactError> {
         let info = expect!(self.artifact(ArtifactRequest::Create(create)).await?,
-            ArtifactResponse::Created(i) => i)?;
+            ArtifactResponse::Created(info) => info)?;
         if info.kind == proto::ArtifactKind::Excalidraw {
-            lock(&self.inner.art.ex)
+            lock(&self.inner.art.excalidraw)
                 .entry(info.artifact_id)
                 .or_default();
         } else if info.version > 0 {
@@ -424,7 +428,7 @@ impl Client {
         since: u64,
     ) -> Result<ArtifactScene, ArtifactError> {
         expect!(self.artifact(ArtifactRequest::Get { artifact_id, since }).await?,
-            ArtifactResponse::Scene(s) => s)
+            ArtifactResponse::Scene(scene) => scene)
     }
 
     /// Commits ops as one batch; returns the new version. The batch also arrives as an
@@ -452,7 +456,7 @@ impl Client {
         anchor: Option<AnchorRequest>,
     ) -> Result<ArtifactInfo, ArtifactError> {
         expect!(self.artifact(ArtifactRequest::SetAnchor { artifact_id, anchor }).await?,
-            ArtifactResponse::Info(i) => i)
+            ArtifactResponse::Info(info) => info)
     }
 
     /// Uploads this device's PNG render of a drawing version as its preview.
@@ -465,7 +469,7 @@ impl Client {
         let session = self.artifact_session(artifact_id).await?;
         let image = self.blob_upload(session, png).await?;
         expect!(self.artifact(ArtifactRequest::SetPreview { artifact_id, version, png: image.hash }).await?,
-            ArtifactResponse::Info(i) => i)
+            ArtifactResponse::Info(info) => info)
     }
 
     /// Exports PNG (the image, or the drawing's preview / the daemon's render) or SVG;
@@ -483,7 +487,7 @@ impl Client {
             ..
         } = expect!(self
             .artifact(ArtifactRequest::Export { artifact_id, version, format })
-            .await?, ArtifactResponse::Exported(e) => e)?;
+            .await?, ArtifactResponse::Exported(exported) => exported)?;
         match blob {
             Some(hash) => Ok((version, self.blob_download(hash).await?.1)),
             None => Ok((version, data)),
@@ -509,14 +513,14 @@ impl Client {
             Some(bytes) if bytes.len() <= 1 << 20 => PngSource::Inline(bytes),
             Some(bytes) => {
                 let session = match artifact_id {
-                    Some(id) => self.artifact_session(id).await?,
+                    Some(artifact_id) => self.artifact_session(artifact_id).await?,
                     None => self.session_of(pane_id)?,
                 };
                 PngSource::Blob(self.blob_upload(session, bytes).await?.hash)
             }
         };
         expect!(self.artifact(ArtifactRequest::Send(ArtifactSend { pane_id, artifact_id, version, png })).await?,
-            ArtifactResponse::Sent(s) => s)
+            ArtifactResponse::Sent(sent) => sent)
     }
 
     /// An Excalidraw scene (or what changed after `since`); the cache is updated too.
@@ -526,7 +530,7 @@ impl Client {
         since: u64,
     ) -> Result<proto::ExcalidrawScene, ArtifactError> {
         expect!(self.artifact(ArtifactRequest::ExcalidrawGet { artifact_id, since }).await?,
-            ArtifactResponse::Excalidraw(s) => s)
+            ArtifactResponse::Excalidraw(scene) => scene)
     }
 
     /// Offers changed Excalidraw elements (whole elements, as the editor's `onChange`
@@ -539,9 +543,9 @@ impl Client {
         app_state: Option<String>,
         files: Vec<proto::ExFile>,
     ) -> Result<(u64, Vec<proto::ExElement>), ArtifactError> {
-        let base = lock(&self.inner.art.ex)
+        let base = lock(&self.inner.art.excalidraw)
             .get(&artifact_id)
-            .map_or(0, |s| s.revision);
+            .map_or(0, |scene| scene.revision);
         let offered = elements.clone();
         let (version, rejected) = expect!(self
             .artifact(ArtifactRequest::ExcalidrawPut(proto::ExcalidrawPut {
@@ -552,42 +556,45 @@ impl Client {
                 files: files.clone(),
             }))
             .await?, ArtifactResponse::ExcalidrawApplied { version, rejected, .. } => (version, rejected))?;
-        let mut ex = lock(&self.inner.art.ex);
-        let cached = ex.entry(artifact_id).or_default();
+        let mut scenes = lock(&self.inner.art.excalidraw);
+        let cached = scenes.entry(artifact_id).or_default();
         cached.absorb(offered, version);
         cached.absorb(rejected.clone(), version);
         if app_state.is_some() {
             cached.app_state = app_state;
         }
-        for f in files {
-            cached.files.insert(f.file_id.clone(), f);
+        for file in files {
+            cached.files.insert(file.file_id.clone(), file);
         }
         Ok((version, rejected))
     }
 
     /// The cached Excalidraw scene of an artifact.
     pub fn excalidraw_scene(&self, artifact_id: ArtifactId) -> Option<drawing::ExScene> {
-        lock(&self.inner.art.ex).get(&artifact_id).cloned()
+        lock(&self.inner.art.excalidraw).get(&artifact_id).cloned()
     }
 
     /// Shows an artifact inline in a terminal pane (the overlay's "done"): at `anchor`'s row,
     /// or the cursor row. `png` is this device's render (uploaded first), else the daemon
     /// uses the image, the preview, or its own render. `replace` swaps out the placement the
     /// overlay was re-opened from.
-    pub async fn place(&self, req: proto::PlaceRequest) -> Result<proto::Placement, ArtifactError> {
-        expect!(self.artifact(ArtifactRequest::Place(req)).await?,
-            ArtifactResponse::Placed(p) => p)
+    pub async fn place(
+        &self,
+        request: proto::PlaceRequest,
+    ) -> Result<proto::Placement, ArtifactError> {
+        expect!(self.artifact(ArtifactRequest::Place(request)).await?,
+            ArtifactResponse::Placed(placement) => placement)
     }
 
     /// Like [`place`](Self::place), uploading `png` (this device's render) first.
     pub async fn place_png(
         &self,
-        mut req: proto::PlaceRequest,
+        mut request: proto::PlaceRequest,
         png: Vec<u8>,
     ) -> Result<proto::Placement, ArtifactError> {
-        let session = self.artifact_session(req.artifact_id).await?;
-        req.png = Some(self.blob_upload(session, png).await?.hash);
-        self.place(req).await
+        let session = self.artifact_session(request.artifact_id).await?;
+        request.png = Some(self.blob_upload(session, png).await?.hash);
+        self.place(request).await
     }
 
     /// A drawing's finished versions, newest first (none for images).
@@ -603,7 +610,7 @@ impl Client {
     ) -> Result<Vec<proto::ArtifactVersion>, ArtifactError> {
         self.require_history()?;
         expect!(self.artifact(ArtifactRequest::History { artifact_id }).await?,
-            ArtifactResponse::History(h) => h)
+            ArtifactResponse::History(history) => history)
     }
 
     /// Brings a drawing back to `version` from its history, as a new version on top; open
@@ -625,9 +632,10 @@ impl Client {
     }
 
     fn require_history(&self) -> Result<(), ArtifactError> {
-        let offered = self
-            .daemon_info()
-            .is_some_and(|i| i.features.contains(proto::DaemonFeatures::ARTIFACT_HISTORY));
+        let offered = self.daemon_info().is_some_and(|info| {
+            info.features
+                .contains(proto::DaemonFeatures::ARTIFACT_HISTORY)
+        });
         if offered {
             Ok(())
         } else {
@@ -650,9 +658,9 @@ impl Client {
             (proto::ArtifactKind::Excalidraw, _) => {
                 let scene = self.excalidraw_get(artifact_id, 0).await?;
                 let mut files = Vec::with_capacity(scene.files.len());
-                for f in scene.files {
-                    let (image, bytes) = self.blob_download(f.image.hash).await?;
-                    files.push((f.file_id, image.media.mime().to_owned(), bytes));
+                for file in scene.files {
+                    let (image, bytes) = self.blob_download(file.image.hash).await?;
+                    files.push((file.file_id, image.media.mime().to_owned(), bytes));
                 }
                 drawing::ExcalidrawFile {
                     elements: scene.elements,
@@ -691,14 +699,14 @@ impl Client {
         pane_id: PaneId,
     ) -> Result<Vec<proto::Placement>, ArtifactError> {
         expect!(self.artifact(ArtifactRequest::Placements { pane_id }).await?,
-            ArtifactResponse::Placements(p) => p)
+            ArtifactResponse::Placements(placements) => placements)
     }
 
     /// A pane's inline placements as last pushed, oldest first.
     pub fn placements(&self, pane_id: PaneId) -> Vec<proto::Placement> {
         lock(&self.inner.art.placements)
             .get(&pane_id)
-            .map(|m| m.values().cloned().collect())
+            .map(|by_id| by_id.values().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -720,7 +728,7 @@ impl Client {
             (data, None)
         };
         expect!(self.artifact(ArtifactRequest::Import(proto::ImportRequest { pane_id, name, data, blob })).await?,
-            ArtifactResponse::Placed(p) => p)
+            ArtifactResponse::Placed(placement) => placement)
     }
 
     /// Streams points of a stroke being drawn to the session's other clients (fire and
@@ -733,7 +741,7 @@ impl Client {
     pub fn artifact_scene(&self, artifact_id: ArtifactId) -> Option<(ArtifactInfo, Scene)> {
         lock(&self.inner.art.cache)
             .get(&artifact_id)
-            .map(|c| (c.info.clone(), c.scene.clone()))
+            .map(|cached| (cached.info.clone(), cached.scene.clone()))
     }
 
     /// The canvas panes of a session, as last pushed.
@@ -745,8 +753,8 @@ impl Client {
     }
 
     async fn artifact_session(&self, artifact_id: ArtifactId) -> Result<SessionId, ArtifactError> {
-        if let Some(c) = lock(&self.inner.art.cache).get(&artifact_id) {
-            return Ok(c.info.session_id);
+        if let Some(cached) = lock(&self.inner.art.cache).get(&artifact_id) {
+            return Ok(cached.info.session_id);
         }
         Ok(self
             .artifact_get(artifact_id, u64::MAX)
@@ -800,7 +808,7 @@ impl Client {
                     .map_err(failed)?
                 {
                     Some(BlobReply::Ready) => {}
-                    Some(BlobReply::Failed(e)) => return Err(e),
+                    Some(BlobReply::Failed(err)) => return Err(err),
                     other => return Err(failed(format!("unexpected {other:?}"))),
                 }
                 // QUIC flow control paces the upload.
@@ -809,8 +817,8 @@ impl Client {
                 for chunk in bytes.chunks(CHUNK) {
                     send.write_all(chunk).await.map_err(failed)?;
                     done += chunk.len() as u64;
-                    if let Some(p) = &progress {
-                        p.on_progress(done, total);
+                    if let Some(progress) = &progress {
+                        progress.on_progress(done, total);
                     }
                 }
                 let _ = send.finish();
@@ -819,12 +827,12 @@ impl Client {
                     .map_err(failed)?
                 {
                     Some(BlobReply::Stored(image)) => Ok(image),
-                    Some(BlobReply::Failed(e)) => Err(e),
+                    Some(BlobReply::Failed(err)) => Err(err),
                     other => Err(failed(format!("unexpected {other:?}"))),
                 }
             })
             .await
-            .unwrap_or_else(|e| Err(failed(e)))
+            .unwrap_or_else(|err| Err(failed(err)))
     }
 
     /// Reads an image blob from the host.
@@ -856,7 +864,7 @@ impl Client {
                     .map_err(failed)?
                 {
                     Some(BlobReply::Found(image)) => image,
-                    Some(BlobReply::Failed(e)) => return Err(e),
+                    Some(BlobReply::Failed(err)) => return Err(err),
                     other => return Err(failed(format!("unexpected {other:?}"))),
                 };
                 let mut bytes = vec![0; image.size as usize];
@@ -865,21 +873,21 @@ impl Client {
                 for chunk in bytes.chunks_mut(CHUNK) {
                     recv.read_exact(chunk).await.map_err(failed)?;
                     done += chunk.len() as u64;
-                    if let Some(p) = &progress {
-                        p.on_progress(done, total);
+                    if let Some(progress) = &progress {
+                        progress.on_progress(done, total);
                     }
                 }
                 Ok((image, bytes))
             })
             .await
-            .unwrap_or_else(|e| Err(failed(e)))
+            .unwrap_or_else(|err| Err(failed(err)))
     }
 }
 
 async fn connection(inner: &Inner) -> iroh::endpoint::Connection {
     loop {
-        if let Some(c) = lock(&inner.connection).clone() {
-            return c;
+        if let Some(conn) = lock(&inner.connection).clone() {
+            return conn;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

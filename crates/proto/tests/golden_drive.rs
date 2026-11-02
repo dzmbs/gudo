@@ -22,7 +22,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -67,13 +67,13 @@ fn ask(action: DriveAction) -> DriveAsk {
 
 #[test]
 fn drive_requests_are_frozen() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: Vec::new(),
     };
     assert_eq!(Caps::DRIVE_ASKS.0, 1 << 22);
     assert_eq!(DaemonFeatures::DRIVE_ASKS.0, 1 << 17);
-    c.check(
+    checker.check(
         "ServerCtl::Approval(Drive(Open(Type)))",
         ServerCtl::Approval(ApprovalPush::Drive(DrivePush::Open(ask(DriveAction::Type {
             text: Some("ls".into()),
@@ -82,7 +82,7 @@ fn drive_requests_are_frozen() {
         })))),
         "2a0000000131020007030406436c617564650c7e2f61706920c2b7207a73680001026c730105656e74657201e807",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Approval(Drive(Open(Run)))",
         ServerCtl::Approval(ApprovalPush::Drive(DrivePush::Open(ask(
             DriveAction::Run {
@@ -91,33 +91,37 @@ fn drive_requests_are_frozen() {
         )))),
         "270000000131020007030406436c617564650c7e2f61706920c2b7207a736801086e706d2074657374e807",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Approval(Drive(Open(Prompt)))",
         ServerCtl::Approval(ApprovalPush::Drive(DrivePush::Open(ask(
             DriveAction::Prompt { text: "go".into() },
         )))),
         "210000000131020007030406436c617564650c7e2f61706920c2b7207a73680202676fe807",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Approval(Drive(Open(Close)))",
         ServerCtl::Approval(ApprovalPush::Drive(DrivePush::Open(ask(
             DriveAction::Close,
         )))),
         "1e0000000131020007030406436c617564650c7e2f61706920c2b7207a736803e807",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Approval(Drive(Closed))",
         ServerCtl::Approval(ApprovalPush::Drive(DrivePush::Closed {
             request_id: RequestId(7),
         })),
         "050000000131020107",
     );
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }
 
 #[test]
 fn script_events_keep_their_json() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: Vec::new(),
     };
@@ -129,17 +133,17 @@ fn script_events_keep_their_json() {
         pane: pane.map(str::to_owned),
         kind,
     };
-    c.json(
+    checker.json(
         "pane.opened",
         event(Some("p4"), ScriptEventKind::PaneOpened { tab: Some("t2".into()) }),
         r#"{"v":1,"seq":12,"at":1700000000000,"session":"s1","pane":"p4","type":"pane.opened","tab":"t2"}"#,
     );
-    c.json(
+    checker.json(
         "pane.closed",
         event(Some("p4"), ScriptEventKind::PaneClosed),
         r#"{"v":1,"seq":12,"at":1700000000000,"session":"s1","pane":"p4","type":"pane.closed"}"#,
     );
-    c.json(
+    checker.json(
         "command.started",
         event(
             Some("p4"),
@@ -151,7 +155,7 @@ fn script_events_keep_their_json() {
         ),
         r#"{"v":1,"seq":12,"at":1700000000000,"session":"s1","pane":"p4","type":"command.started","id":3,"command":"cargo test","cwd":"/src"}"#,
     );
-    c.json(
+    checker.json(
         "command.finished",
         event(
             Some("p4"),
@@ -164,7 +168,7 @@ fn script_events_keep_their_json() {
         ),
         r#"{"v":1,"seq":12,"at":1700000000000,"session":"s1","pane":"p4","type":"command.finished","id":3,"command":"cargo test","exitCode":101,"durationMs":2500}"#,
     );
-    c.json(
+    checker.json(
         "agent.state",
         event(
             Some("p5"),
@@ -176,12 +180,12 @@ fn script_events_keep_their_json() {
         ),
         r#"{"v":1,"seq":12,"at":1700000000000,"session":"s1","pane":"p5","type":"agent.state","state":"blocked","kind":"permission","app":"claude"}"#,
     );
-    c.json(
+    checker.json(
         "layout.changed",
         event(None, ScriptEventKind::LayoutChanged),
         r#"{"v":1,"seq":12,"at":1700000000000,"session":"s1","type":"layout.changed"}"#,
     );
-    c.json(
+    checker.json(
         "events.lost",
         ScriptEvent {
             session: None,
@@ -189,7 +193,11 @@ fn script_events_keep_their_json() {
         },
         r#"{"v":1,"seq":12,"at":1700000000000,"type":"events.lost","missed":40}"#,
     );
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }
 
 #[test]

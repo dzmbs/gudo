@@ -1,10 +1,10 @@
+//! Multiplayer API: invites and attenuated grants, roles, take control,
 //! presence, prompts through the composer path, revocation and the audit log.
 //!
-//! Join a daemon with an invite through [`Client::join`]; the paired-device path
-//! ([`Client::connect`]) is unchanged. Requests are `async` like the workspace API. Pushes —
+//! Join a daemon with an invite through [`Client::join`]. Requests are `async` like the workspace API. Pushes —
 //! who is connected, leases, someone asking for control, refusals, decisions — go to a
 //! [`MultiplayerListener`] set with [`Client::set_multiplayer_listener`], separate from
-//! [`ClientListener`](crate::ClientListener) so existing event handling is unaffected.
+//! [`ClientListener`](crate::ClientListener).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -28,57 +28,36 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone)]
 pub enum MultiplayerEvent {
     /// Who this connection is (after every handshake).
-    Joined {
-        /// Identity, roles, scope.
-        info: JoinInfo,
-    },
+    Joined { info: JoinInfo },
     /// Everyone connected (the whole list).
     Participants {
         /// One entry per device.
         participants: Vec<Participant>,
     },
     /// Another participant's presence (typing, cursor, focus).
-    Presence {
-        /// The update.
-        presence: Presence,
-    },
+    Presence { presence: Presence },
     /// A pane's control lease changed.
-    Lease {
-        /// The lease.
-        lease: Lease,
-    },
+    Lease { lease: Lease },
     /// Someone asks for a lease this principal holds; answer with
     /// [`Client::answer_control`].
     LeaseRequested {
-        /// The pane.
         pane_id: PaneId,
         /// Who asks.
         by: Actor,
-        /// Their name.
+        /// Their display name.
         name: String,
     },
     /// Input was refused (no lease, role, scope).
     InputRejected {
-        /// The pane.
         pane_id: PaneId,
-        /// Why.
         reason: InputRejectReason,
     },
     /// A ctl message was refused by policy.
-    Forbidden {
-        /// What.
-        what: String,
-        /// Why.
-        reason: String,
-    },
+    Forbidden { what: String, reason: String },
     /// An approval was decided (by anyone).
-    Decided {
-        /// The decision.
-        decided: Decided,
-    },
+    Decided { decided: Decided },
     /// This client's decision lost to an earlier one.
     AlreadyDecided {
-        /// The request.
         request_id: RequestId,
         /// Who won.
         by: Actor,
@@ -87,34 +66,20 @@ pub enum MultiplayerEvent {
     Revoked,
     /// Another owner device just paired with the host (owner devices only). Show it: a
     /// pairing the owner did not make is revoked from the device list.
-    DevicePaired {
-        /// The new device.
-        device: DeviceInfo,
-    },
+    DevicePaired { device: DeviceInfo },
     /// The host's access control needs its owner (owner devices only), e.g. its grant store
     /// was reset. Sent on every connection while it stands: show each alert once.
-    HostAlert {
-        /// The alert.
-        alert: proto::HostAlert,
-    },
+    HostAlert { alert: proto::HostAlert },
     /// Someone knocked, or a knock ended (owner devices only). The current list is
     /// [`Client::pending_knocks`].
-    Knock {
-        /// The change.
-        update: KnockUpdate,
-    },
+    Knock { update: KnockUpdate },
     /// The attached session's approval policy (after attaching and on every change).
     ApprovalPolicy {
-        /// The session.
         session_id: SessionId,
-        /// The rules.
         policy: ApprovalPolicy,
     },
     /// An open approval request's votes or claim changed.
-    ApprovalStatus {
-        /// Where it stands.
-        status: ApprovalStatus,
-    },
+    ApprovalStatus { status: ApprovalStatus },
     /// Everyone's live presence, whole (after joining, and when someone joins or leaves).
     Peers {
         /// This connection.
@@ -123,10 +88,7 @@ pub enum MultiplayerEvent {
         peers: Vec<Peer>,
     },
     /// One connection's live presence changed (draft, viewport, focus, typing, state).
-    PeerChanged {
-        /// Its new state.
-        peer: Peer,
-    },
+    PeerChanged { peer: Peer },
 }
 
 /// Receives [`MultiplayerEvent`]s. Must return quickly; it runs on the network threads.
@@ -170,7 +132,6 @@ pub(crate) struct MpState {
     approvals: Mutex<HashMap<RequestId, ApprovalStatus>>,
     /// The invite this client joined with (guests).
     pub(crate) invite: Option<Invite>,
-    /// Live presence, both ways.
     pub(crate) peers: crate::peer::PeerState,
 }
 
@@ -184,11 +145,11 @@ impl MpState {
 
     /// Handles a multiplayer message from `ctl`; returns it back if it is not one (or if the
     /// connection loop must see it too).
-    pub(crate) fn dispatch(&self, msg: ServerCtl) -> Option<ServerCtl> {
-        let (event, pass) = match msg {
+    pub(crate) fn dispatch(&self, message: ServerCtl) -> Option<ServerCtl> {
+        let (event, pass) = match message {
             ServerCtl::MultiplayerResult { req_id, result } => {
-                if let Some(tx) = lock(&self.pending).remove(&req_id) {
-                    let _ = tx.send(result);
+                if let Some(reply) = lock(&self.pending).remove(&req_id) {
+                    let _ = reply.send(result);
                 }
                 return None;
             }
@@ -222,11 +183,11 @@ impl MpState {
                 let mut knocks = lock(&self.knocks);
                 match &update {
                     KnockUpdate::Added(knock) => {
-                        knocks.retain(|k| k.knock_id != knock.knock_id);
+                        knocks.retain(|known| known.knock_id != knock.knock_id);
                         knocks.push(knock.clone());
                     }
                     KnockUpdate::Gone { knock_id, .. } => {
-                        knocks.retain(|k| k.knock_id != *knock_id)
+                        knocks.retain(|known| known.knock_id != *knock_id)
                     }
                 }
                 (MultiplayerEvent::Knock { update }, None)
@@ -246,14 +207,14 @@ impl MpState {
                 (MultiplayerEvent::AlreadyDecided { request_id, by }, None)
             }
             ServerCtl::Peers(push) => (self.peers.apply(push)?, None),
-            msg @ ServerCtl::Revoked { .. } => (MultiplayerEvent::Revoked, Some(msg)),
+            revoked @ ServerCtl::Revoked { .. } => (MultiplayerEvent::Revoked, Some(revoked)),
             ServerCtl::DevicePaired(device) => (MultiplayerEvent::DevicePaired { device }, None),
             ServerCtl::HostAlert(alert) => (MultiplayerEvent::HostAlert { alert }, None),
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
-        if let Some(l) = listener {
-            l.on_multiplayer_event(event);
+        if let Some(listener) = listener {
+            listener.on_multiplayer_event(event);
         }
         pass
     }
@@ -267,15 +228,15 @@ impl MpState {
 
     /// The connection dropped: requests in flight will not be answered.
     pub(crate) fn fail_pending(&self) {
-        for (_, tx) in lock(&self.pending).drain() {
-            let _ = tx.send(Err(MpError::Disconnected));
+        for (_, reply) in lock(&self.pending).drain() {
+            let _ = reply.send(Err(MpError::Disconnected));
         }
     }
 }
 
 macro_rules! expect {
-    ($resp:expr, $pat:pat => $out:expr) => {
-        match $resp {
+    ($response:expr, $pat:pat => $out:expr) => {
+        match $response {
             $pat => Ok($out),
             other => Err(MpError::Failed(format!("unexpected answer {other:?}"))),
         }
@@ -287,7 +248,7 @@ pub fn now_millis() -> UnixMillis {
     UnixMillis(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64),
+            .map_or(0, |elapsed| elapsed.as_millis() as u64),
     )
 }
 
@@ -397,7 +358,7 @@ impl Client {
             .as_ref()?
             .chain
             .leaf()
-            .map(|g| g.issuer)
+            .map(|grant| grant.issuer)
     }
 
     /// The last participant list the daemon pushed.
@@ -415,19 +376,21 @@ impl Client {
     /// # Errors
     ///
     /// The daemon's [`MpError`], or [`MpError::Disconnected`].
-    pub async fn multiplayer(&self, req: MpRequest) -> Result<MpResponse, MpError> {
+    pub async fn multiplayer(&self, request: MpRequest) -> Result<MpResponse, MpError> {
         let req_id = self
             .inner
             .next_op
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        lock(&self.inner.mp.pending).insert(req_id, tx);
-        self.inner
-            .send(proto::ClientCtl::Multiplayer { req_id, req });
+        let (reply_tx, reply_rx) = oneshot::channel();
+        lock(&self.inner.mp.pending).insert(req_id, reply_tx);
+        self.inner.send(proto::ClientCtl::Multiplayer {
+            req_id,
+            req: request,
+        });
         let inner = Arc::clone(&self.inner);
         self.handle
             .spawn(async move {
-                match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                match tokio::time::timeout(REQUEST_TIMEOUT, reply_rx).await {
                     Ok(Ok(result)) => result,
                     _ => {
                         lock(&inner.mp.pending).remove(&req_id);
@@ -441,13 +404,13 @@ impl Client {
 
     /// This connection's identity, asked now.
     pub async fn who_am_i(&self) -> Result<JoinInfo, MpError> {
-        expect!(self.multiplayer(MpRequest::WhoAmI).await?, MpResponse::Me(i) => i)
+        expect!(self.multiplayer(MpRequest::WhoAmI).await?, MpResponse::Me(info) => info)
     }
 
     /// Everyone connected, with presence.
     pub async fn participants(&self) -> Result<Vec<Participant>, MpError> {
         expect!(self.multiplayer(MpRequest::Participants).await?,
-            MpResponse::Participants(p) => p)
+            MpResponse::Participants(participants) => participants)
     }
 
     /// Sets this connection's display name.
@@ -459,7 +422,8 @@ impl Client {
     ///
     /// A paired owner device signs a root grant; a guest that joined with an invite signs a
     /// narrower child of its own grant (only if that grant allows delegation, and never
-    /// wider; a later expiry or more uses than the parent's are capped). The invite carries the daemon's addresses from this client's ticket or invite.
+    /// wider; a later expiry or more uses than the parent's are capped). The invite carries
+    /// the daemon's addresses from this client's ticket or invite.
     ///
     /// # Errors
     ///
@@ -490,7 +454,7 @@ impl Client {
             ));
         }
         let key = DeviceKey::from_seed(&self.inner.config.secret_key)
-            .map_err(|e| MpError::Invalid(e.to_string()))?;
+            .map_err(|err| MpError::Invalid(err.to_string()))?;
         let ticket = &self.inner.ticket;
         let chain = match &self.inner.mp.invite {
             Some(invite) => {
@@ -498,16 +462,16 @@ impl Client {
                 // scope must be narrowed by the caller.
                 if let Some(parent) = invite.chain.leaf() {
                     spec.expires = match (parent.expires, spec.expires) {
-                        (Some(p), Some(c)) => Some(p.min(c)),
-                        (p, c) => p.or(c),
+                        (Some(parent), Some(child)) => Some(parent.min(child)),
+                        (parent, child) => parent.or(child),
                     };
                     spec.max_uses = match (parent.max_uses, spec.max_uses) {
-                        (Some(p), Some(c)) => Some(p.min(c)),
-                        (p, c) => p.or(c),
+                        (Some(parent), Some(child)) => Some(parent.min(child)),
+                        (parent, child) => parent.or(child),
                     };
                 }
                 grants::attenuate(&invite.chain, &key, &spec, now_millis())
-                    .map_err(|e| MpError::Invalid(e.to_string()))?
+                    .map_err(|err| MpError::Invalid(err.to_string()))?
             }
             None => grants::issue(&key, ticket.daemon_id, &spec, now_millis()),
         };
@@ -531,7 +495,7 @@ impl Client {
     pub(crate) fn daemon_has(&self, feature: proto::DaemonFeatures) -> bool {
         lock(&self.inner.daemon_info)
             .as_ref()
-            .is_some_and(|i| i.features.contains(feature))
+            .is_some_and(|info| info.features.contains(feature))
     }
 
     /// Knocks waiting for an owner, as last pushed (owner devices).
@@ -551,7 +515,7 @@ impl Client {
 
     /// Knocks waiting for an owner, asked now (owner only).
     pub async fn knocks(&self) -> Result<Vec<Knock>, MpError> {
-        expect!(self.multiplayer(MpRequest::Knocks).await?, MpResponse::Knocks(k) => k)
+        expect!(self.multiplayer(MpRequest::Knocks).await?, MpResponse::Knocks(knocks) => knocks)
     }
 
     /// Admits a knock with `admit`'s roles (`Some`), or turns it away (`None`). Returns the
@@ -574,7 +538,7 @@ impl Client {
     /// A session's approval policy, asked now.
     pub async fn approval_policy(&self, session_id: SessionId) -> Result<ApprovalPolicy, MpError> {
         expect!(self.multiplayer(MpRequest::GetApprovalPolicy { session_id }).await?,
-            MpResponse::ApprovalPolicy(p) => p)
+            MpResponse::ApprovalPolicy(policy) => policy)
     }
 
     /// Sets a session's approval policy (owner only).
@@ -584,7 +548,7 @@ impl Client {
         policy: ApprovalPolicy,
     ) -> Result<ApprovalPolicy, MpError> {
         expect!(self.multiplayer(MpRequest::SetApprovalPolicy { session_id, policy }).await?,
-            MpResponse::ApprovalPolicy(p) => p)
+            MpResponse::ApprovalPolicy(policy) => policy)
     }
 
     /// Claims an open approval request ("I'll take this one"), or releases the claim.
@@ -594,18 +558,18 @@ impl Client {
         claim: bool,
     ) -> Result<ApprovalStatus, MpError> {
         expect!(self.multiplayer(MpRequest::Claim { request_id, claim }).await?,
-            MpResponse::Approval(s) => s)
+            MpResponse::Approval(status) => status)
     }
 
     /// Records a signed grant with the daemon so it is listed and revocable before use.
     pub async fn register_grant(&self, chain: GrantChain) -> Result<GrantInfo, MpError> {
         expect!(self.multiplayer(MpRequest::RegisterGrant(chain)).await?,
-            MpResponse::Grant(g) => g)
+            MpResponse::Grant(grant) => grant)
     }
 
     /// Grants the daemon knows (owner only).
     pub async fn list_grants(&self) -> Result<Vec<GrantInfo>, MpError> {
-        expect!(self.multiplayer(MpRequest::ListGrants).await?, MpResponse::Grants(g) => g)
+        expect!(self.multiplayer(MpRequest::ListGrants).await?, MpResponse::Grants(grants) => grants)
     }
 
     /// The shareable link of a registered grant, as [`create_invite_with_terms`] made it,
@@ -639,14 +603,14 @@ impl Client {
 
     /// Owner and guest devices (owner only).
     pub async fn list_devices(&self) -> Result<Vec<DeviceInfo>, MpError> {
-        expect!(self.multiplayer(MpRequest::ListDevices).await?, MpResponse::Devices(d) => d)
+        expect!(self.multiplayer(MpRequest::ListDevices).await?, MpResponse::Devices(devices) => devices)
     }
 
     /// Revokes a grant (and its descendants), a device or a principal, disconnecting them
     /// at once (owner only). Returns the response's grants, devices and connection count.
     pub async fn revoke(&self, target: RevokeTarget) -> Result<MpResponse, MpError> {
-        let r = self.multiplayer(MpRequest::Revoke(target)).await?;
-        expect!(r, r @ MpResponse::Revoked { .. } => r)
+        let response = self.multiplayer(MpRequest::Revoke(target)).await?;
+        expect!(response, revoked @ MpResponse::Revoked { .. } => revoked)
     }
 
     /// Asks for a pane's control lease; `force` (owner) takes it now.
@@ -656,7 +620,7 @@ impl Client {
         force: bool,
     ) -> Result<LeaseOutcome, MpError> {
         expect!(self.multiplayer(MpRequest::TakeControl { pane_id, force }).await?,
-            MpResponse::Lease(l) => l)
+            MpResponse::Lease(outcome) => outcome)
     }
 
     /// Gives up a lease this principal holds.
@@ -672,7 +636,7 @@ impl Client {
         give: bool,
     ) -> Result<LeaseOutcome, MpError> {
         expect!(self.multiplayer(MpRequest::AnswerControl { pane_id, give }).await?,
-            MpResponse::Lease(l) => l)
+            MpResponse::Lease(outcome) => outcome)
     }
 
     /// Hands a lease to another connected driver (holder or owner).
@@ -682,12 +646,12 @@ impl Client {
         to: PrincipalId,
     ) -> Result<LeaseOutcome, MpError> {
         expect!(self.multiplayer(MpRequest::GiveControl { pane_id, to }).await?,
-            MpResponse::Lease(l) => l)
+            MpResponse::Lease(outcome) => outcome)
     }
 
     /// Every pane's lease within scope.
     pub async fn leases(&self) -> Result<Vec<Lease>, MpError> {
-        expect!(self.multiplayer(MpRequest::Leases).await?, MpResponse::Leases(l) => l)
+        expect!(self.multiplayer(MpRequest::Leases).await?, MpResponse::Leases(leases) => leases)
     }
 
     /// Sends a prompt to an agent pane through the composer path (bracketed paste, then
@@ -705,7 +669,7 @@ impl Client {
     /// Audit log records (owner only).
     pub async fn audit(&self, after: Option<u64>, limit: u32) -> Result<AuditPage, MpError> {
         expect!(self.multiplayer(MpRequest::Audit(AuditQuery { after, limit })).await?,
-            MpResponse::Audit(a) => a)
+            MpResponse::Audit(page) => page)
     }
 
     /// Tells the others whether this device is typing in a pane's composer, with its focus.

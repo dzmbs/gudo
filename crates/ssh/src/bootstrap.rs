@@ -1,7 +1,7 @@
 //! Installing the host daemon over SSH and getting a pairing ticket from it, so the client
+//! can move to iroh without the user scanning anything.
 //!
-//! The flow follows herdr's remote bootstrap (Apache-2.0; 03 §3): the client picks the
-//! binary for the host's platform, verifies its SHA-256 and uploads it; the remote never
+//! The client picks the binary for the host's platform, verifies its SHA-256 and uploads it; the remote never
 //! downloads anything. Steps, each one `exec` round trip:
 //!
 //! 1. **Probe**: `uname -sm`, `gzip` presence, the SHA-256 and build of an installed binary
@@ -75,7 +75,6 @@ impl HostPlatform {
         }
     }
 
-    /// Whether this is macOS.
     pub fn is_macos(self) -> bool {
         matches!(self, Self::MacosAarch64 | Self::MacosX86_64)
     }
@@ -106,11 +105,11 @@ pub enum BinarySource {
 impl BinarySource {
     async fn load(&self) -> Result<Arc<Vec<u8>>, SshError> {
         match self {
-            Self::Bytes(b) => Ok(Arc::clone(b)),
-            Self::Path(p) => tokio::fs::read(p)
+            Self::Bytes(bytes) => Ok(Arc::clone(bytes)),
+            Self::Path(path) => tokio::fs::read(path)
                 .await
                 .map(Arc::new)
-                .map_err(|e| SshError::io(format!("reading {}", p.display()), e)),
+                .map_err(|error| SshError::io(format!("reading {}", path.display()), error)),
         }
     }
 }
@@ -131,7 +130,6 @@ pub struct HostdBinaries {
 }
 
 impl HostdBinaries {
-    /// The build for `platform`, if supplied.
     pub fn get(&self, platform: HostPlatform) -> Option<&BinarySource> {
         match platform {
             HostPlatform::LinuxAarch64 => self.linux_aarch64.as_ref(),
@@ -148,12 +146,7 @@ pub enum BootstrapStep {
     /// Detecting the platform and any existing install.
     Probing,
     /// Uploading the daemon (`size` bytes of binary, `sent` on the wire).
-    Uploading {
-        /// Binary size.
-        size: u64,
-        /// Bytes on the wire (compressed).
-        sent: u64,
-    },
+    Uploading { size: u64, sent: u64 },
     /// Installing and starting the service.
     Starting,
     /// Waiting for the daemon and minting a ticket.
@@ -162,18 +155,15 @@ pub enum BootstrapStep {
 
 /// Receives [`BootstrapStep`]s.
 pub trait BootstrapListener: Send + Sync {
-    /// Called as each step starts.
     fn on_step(&self, step: BootstrapStep);
 }
 
-/// Bootstrap settings.
 #[derive(Clone, Default)]
 pub struct BootstrapOptions {
     /// Ticket lifetime in minutes (default 10).
     pub ticket_minutes: Option<u32>,
     /// Seconds to wait for the daemon to come up (default 30).
     pub wait_secs: Option<u32>,
-    /// Progress callback.
     pub listener: Option<Arc<dyn BootstrapListener>>,
     /// Replace an installed build even when it is newer than the one supplied. Off by
     /// default: a newer installed helper is kept ([`InstallAction::KeptNewer`]).
@@ -208,11 +198,8 @@ pub enum ServiceMode {
 /// The outcome of [`bootstrap`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapReport {
-    /// The host's platform.
     pub platform: HostPlatform,
-    /// What happened to the binary.
     pub action: InstallAction,
-    /// How the daemon runs.
     pub service: ServiceMode,
     /// Absolute install path on the host.
     pub install_path: String,
@@ -245,7 +232,7 @@ struct PairJson {
     daemon_id: String,
 }
 
-/// Installs (or reuses) the daemon on the host behind `conn`, makes sure it runs, and
+/// Installs (or reuses) the daemon on the host behind `connection`, makes sure it runs, and
 /// returns a fresh pairing ticket for it.
 ///
 /// # Errors
@@ -254,17 +241,17 @@ struct PairJson {
 /// [`SshError::ChecksumMismatch`] if the upload arrived corrupted, [`SshError::Remote`]
 /// if a remote step fails.
 pub async fn bootstrap(
-    conn: &Connection,
+    connection: &Connection,
     binaries: &HostdBinaries,
     options: &BootstrapOptions,
 ) -> Result<BootstrapReport, SshError> {
-    let step = |s: BootstrapStep| {
-        if let Some(l) = &options.listener {
-            l.on_step(s);
+    let step = |step: BootstrapStep| {
+        if let Some(listener) = &options.listener {
+            listener.on_step(step);
         }
     };
     step(BootstrapStep::Probing);
-    let probe = probe(conn).await?;
+    let probe = probe(connection).await?;
     let platform = HostPlatform::from_uname(&probe.os, &probe.arch).ok_or_else(|| {
         SshError::Bootstrap(format!("unsupported platform {} {}", probe.os, probe.arch))
     })?;
@@ -277,12 +264,12 @@ pub async fn bootstrap(
     })?;
     let binary = source.load().await?;
     let sha256 = sha256_hex(&binary);
-    let rel = platform.install_path();
-    let install_path = format!("{}/{rel}", probe.home);
-    let bin = format!("\"$HOME\"/{}", shell_quote(&rel));
+    let relative_path = platform.install_path();
+    let install_path = format!("{}/{relative_path}", probe.home);
+    let hostd = format!("\"$HOME\"/{}", shell_quote(&relative_path));
 
     let mut action = match &probe.sha256 {
-        Some(h) if *h == sha256 => InstallAction::Reused,
+        Some(installed_sha256) if *installed_sha256 == sha256 => InstallAction::Reused,
         Some(_) => InstallAction::Upgraded,
         None => InstallAction::Installed,
     };
@@ -293,14 +280,17 @@ pub async fn bootstrap(
             UploadEncoding::Raw
         };
         // Over a build that reports its version, stage first and compare.
-        let staged = probe.installed.as_ref().map(|_| staged_path(&rel));
+        let staged = probe
+            .installed
+            .as_ref()
+            .map(|_| staged_path(&relative_path));
         step(BootstrapStep::Uploading {
             size: binary.len() as u64,
             sent: 0,
         });
-        let report = conn
+        let report = connection
             .upload(
-                &format!("~/{}", staged.as_deref().unwrap_or(&rel)),
+                &format!("~/{}", staged.as_deref().unwrap_or(&relative_path)),
                 &binary,
                 0o755,
                 encoding,
@@ -311,7 +301,8 @@ pub async fn bootstrap(
             sent: report.sent,
         });
         if let (Some(staged), Some(installed)) = (&staged, &probe.installed) {
-            action = replace_unless_older(conn, staged, &rel, installed, options).await?;
+            action = replace_unless_older(connection, staged, &relative_path, installed, options)
+                .await?;
         }
     }
 
@@ -328,26 +319,26 @@ pub async fn bootstrap(
         ServiceMode::AlreadyRunning
     } else {
         step(BootstrapStep::Starting);
-        let out = conn
-            .exec(&sh_command(&format!("{bin} service install 2>&1")))
+        let output = connection
+            .exec(&sh_command(&format!("{hostd} service install 2>&1")))
             .await?;
-        if out.success() {
+        if output.success() {
             ServiceMode::Service
         } else {
             tracing::info!(
                 "service install failed, starting detached: {}",
-                out.stdout_text().trim()
+                output.stdout_text().trim()
             );
             notes.push(format!(
                 "No usable service manager ({}); the daemon was started in the background and \
                  will not restart after a reboot.",
-                out.stdout_text().lines().last().unwrap_or("").trim()
+                output.stdout_text().lines().last().unwrap_or("").trim()
             ));
             let start = format!(
-                "cd ~ && (command -v setsid >/dev/null 2>&1 && exec setsid {bin} run || exec {bin} run) \
-                 </dev/null >>\"$(dirname {bin})/hostd.log\" 2>&1 &"
+                "cd ~ && (command -v setsid >/dev/null 2>&1 && exec setsid {hostd} run || exec {hostd} run) \
+                 </dev/null >>\"$(dirname {hostd})/hostd.log\" 2>&1 &"
             );
-            conn.exec(&sh_command(&start)).await?.check()?;
+            connection.exec(&sh_command(&start)).await?.check()?;
             ServiceMode::Detached
         }
     };
@@ -355,7 +346,7 @@ pub async fn bootstrap(
     if !platform.is_macos()
         && user_service
         && probe.linger == Some(false)
-        && !enable_linger(conn).await?
+        && !enable_linger(connection).await?
     {
         notes.push(
             "Lingering is off, so the daemon stops when you log out. Run once: \
@@ -367,21 +358,23 @@ pub async fn bootstrap(
     step(BootstrapStep::Pairing);
     let minutes = options.ticket_minutes.unwrap_or(10);
     let wait = options.wait_secs.unwrap_or(30);
-    let out = conn
+    let output = connection
         .exec(&sh_command(&format!(
-            "{bin} pair --json --wait {wait} --minutes {minutes}"
+            "{hostd} pair --json --wait {wait} --minutes {minutes}"
         )))
         .await?
         .check()?;
-    let json = out
+    let json = output
         .stdout_text()
         .lines()
         .rev()
-        .find(|l| l.trim_start().starts_with('{'))
+        .find(|line| line.trim_start().starts_with('{'))
         .map(str::to_owned)
-        .ok_or_else(|| SshError::Bootstrap(format!("no JSON from pair: {}", out.stdout_text())))?;
+        .ok_or_else(|| {
+            SshError::Bootstrap(format!("no JSON from pair: {}", output.stdout_text()))
+        })?;
     let pair: PairJson = serde_json::from_str(&json)
-        .map_err(|e| SshError::Bootstrap(format!("bad JSON from pair ({e}): {json}")))?;
+        .map_err(|error| SshError::Bootstrap(format!("bad JSON from pair ({error}): {json}")))?;
     let sha256 = match action {
         InstallAction::KeptNewer => probe.sha256.unwrap_or_default(),
         _ => sha256,
@@ -398,50 +391,57 @@ pub async fn bootstrap(
     })
 }
 
-/// Where a build is staged next to the installed one (`rel` is relative to `$HOME`).
-fn staged_path(rel: &str) -> String {
-    match rel.rsplit_once('/') {
+/// Where a build is staged next to the installed one (paths relative to `$HOME`).
+fn staged_path(relative_path: &str) -> String {
+    match relative_path.rsplit_once('/') {
         Some((dir, name)) => format!("{dir}/.{name}.new"),
-        None => format!(".{rel}.new"),
+        None => format!(".{relative_path}.new"),
     }
 }
 
 /// Moves the staged build over the installed one unless it is older (and no downgrade was
 /// asked for), in which case it is deleted and the installed build stays.
 async fn replace_unless_older(
-    conn: &Connection,
+    connection: &Connection,
     staged: &str,
-    rel: &str,
+    relative_path: &str,
     installed: &proto::DaemonInfo,
     options: &BootstrapOptions,
 ) -> Result<InstallAction, SshError> {
-    let staged_q = format!("\"$HOME\"/{}", shell_quote(staged));
-    let out = conn
-        .exec(&sh_command(&format!("{staged_q} build-info --json 2>&1")))
+    let staged_quoted = format!("\"$HOME\"/{}", shell_quote(staged));
+    let output = connection
+        .exec(&sh_command(&format!(
+            "{staged_quoted} build-info --json 2>&1"
+        )))
         .await?;
-    let new = out
+    let supplied = output
         .success()
-        .then(|| build_info(&out.stdout_text()))
+        .then(|| build_info(&output.stdout_text()))
         .flatten();
-    let Some(new) = new else {
-        conn.exec(&sh_command(&format!("rm -f {staged_q}"))).await?;
+    let Some(supplied) = supplied else {
+        connection
+            .exec(&sh_command(&format!("rm -f {staged_quoted}")))
+            .await?;
         return Err(SshError::Bootstrap(format!(
             "the {} build does not run on this host: {}",
             brand::DAEMON_BIN,
-            out.stdout_text().trim()
+            output.stdout_text().trim()
         )));
     };
-    if new.is_older_than(installed) && !options.allow_downgrade {
-        tracing::info!(installed = %installed.build, supplied = %new.build, "keeping the newer installed daemon");
-        conn.exec(&sh_command(&format!("rm -f {staged_q}"))).await?;
+    if supplied.is_older_than(installed) && !options.allow_downgrade {
+        tracing::info!(installed = %installed.build, supplied = %supplied.build, "keeping the newer installed daemon");
+        connection
+            .exec(&sh_command(&format!("rm -f {staged_quoted}")))
+            .await?;
         return Ok(InstallAction::KeptNewer);
     }
-    conn.exec(&sh_command(&format!(
-        "mv -f {staged_q} \"$HOME\"/{}",
-        shell_quote(rel)
-    )))
-    .await?
-    .check()?;
+    connection
+        .exec(&sh_command(&format!(
+            "mv -f {staged_quoted} \"$HOME\"/{}",
+            shell_quote(relative_path)
+        )))
+        .await?
+        .check()?;
     Ok(InstallAction::Upgraded)
 }
 
@@ -450,19 +450,20 @@ fn build_info(text: &str) -> Option<proto::DaemonInfo> {
     let line = text
         .lines()
         .rev()
-        .find(|l| l.trim_start().starts_with('{'))?;
+        .find(|line| line.trim_start().starts_with('{'))?;
     serde_json::from_str(line).ok()
 }
 
 /// Detects the platform with `uname -sm` (separately, so odd `uname` output stays
 /// parseable).
-pub async fn detect_platform(conn: &Connection) -> Result<HostPlatform, SshError> {
-    let p = probe(conn).await?;
-    HostPlatform::from_uname(&p.os, &p.arch)
-        .ok_or_else(|| SshError::Bootstrap(format!("unsupported platform {} {}", p.os, p.arch)))
+pub async fn detect_platform(connection: &Connection) -> Result<HostPlatform, SshError> {
+    let probe = probe(connection).await?;
+    HostPlatform::from_uname(&probe.os, &probe.arch).ok_or_else(|| {
+        SshError::Bootstrap(format!("unsupported platform {} {}", probe.os, probe.arch))
+    })
 }
 
-async fn probe(conn: &Connection) -> Result<Probe, SshError> {
+async fn probe(connection: &Connection) -> Result<Probe, SshError> {
     let script = format!(
         r#"echo "os=$(uname -s)"
 echo "arch=$(uname -m)"
@@ -484,46 +485,46 @@ true"#,
         mac = HostPlatform::MacosAarch64.install_path(),
         linux = HostPlatform::LinuxAarch64.install_path(),
     );
-    let out = conn.exec(&sh_command(&script)).await?.check()?;
-    Ok(parse_probe(&out.stdout_text()))
+    let output = connection.exec(&sh_command(&script)).await?.check()?;
+    Ok(parse_probe(&output.stdout_text()))
 }
 
 fn parse_probe(text: &str) -> Probe {
-    let mut p = Probe::default();
+    let mut probe = Probe::default();
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
         let value = value.trim();
         match key {
-            "os" => p.os = value.to_owned(),
-            "arch" => p.arch = value.to_owned(),
-            "home" => p.home = value.to_owned(),
-            "gzip" => p.gzip = value == "1",
-            "sha256" if value.len() == 64 => p.sha256 = Some(value.to_ascii_lowercase()),
-            "status" => p.running = value.starts_with("running"),
-            "info" => p.installed = build_info(value),
-            "linger" => p.linger = Some(value == "yes"),
+            "os" => probe.os = value.to_owned(),
+            "arch" => probe.arch = value.to_owned(),
+            "home" => probe.home = value.to_owned(),
+            "gzip" => probe.gzip = value == "1",
+            "sha256" if value.len() == 64 => probe.sha256 = Some(value.to_ascii_lowercase()),
+            "status" => probe.running = value.starts_with("running"),
+            "info" => probe.installed = build_info(value),
+            "linger" => probe.linger = Some(value == "yes"),
             _ => {}
         }
     }
-    p
+    probe
 }
 
 /// Without lingering, systemd stops a user's services (the daemon) when their last session
 /// ends, which is the SSH session that installed it. Most distributions' polkit rules let a
 /// user enable lingering for themselves without a password, so try that before falling back
 /// to a note (`--no-ask-password`: never prompt). Returns whether lingering is now on.
-async fn enable_linger(conn: &Connection) -> Result<bool, SshError> {
-    let out = conn
+async fn enable_linger(connection: &Connection) -> Result<bool, SshError> {
+    let output = connection
         .exec(&sh_command(
             "loginctl --no-ask-password enable-linger \"$(id -un)\" >/dev/null 2>&1; \
              loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null",
         ))
         .await?;
-    let on = out.stdout_text().trim() == "yes";
-    tracing::info!(on, "enabling lingering");
-    Ok(on)
+    let enabled = output.stdout_text().trim() == "yes";
+    tracing::info!(enabled, "enabling lingering");
+    Ok(enabled)
 }
 
 #[cfg(test)]
@@ -532,30 +533,31 @@ mod tests {
 
     #[test]
     fn probe_parsing() {
-        let p = parse_probe(
+        let probe = parse_probe(
             "os=Linux\narch=aarch64\nhome=/home/u\ngzip=1\nsha256=ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n\
              status=running (pid 12, state dir /x)\nlinger=no\n",
         );
         assert_eq!(
-            HostPlatform::from_uname(&p.os, &p.arch),
+            HostPlatform::from_uname(&probe.os, &probe.arch),
             Some(HostPlatform::LinuxAarch64)
         );
-        assert_eq!(p.home, "/home/u");
-        assert!(p.gzip && p.running);
-        assert_eq!(p.sha256.unwrap().len(), 64);
-        assert_eq!(p.linger, Some(false));
-        let q = parse_probe("os=Darwin\narch=arm64\nhome=/Users/u\nstatus=not running (pid 3)\n");
-        assert!(!q.running && !q.gzip && q.sha256.is_none());
+        assert_eq!(probe.home, "/home/u");
+        assert!(probe.gzip && probe.running);
+        assert_eq!(probe.sha256.unwrap().len(), 64);
+        assert_eq!(probe.linger, Some(false));
+        let macos =
+            parse_probe("os=Darwin\narch=arm64\nhome=/Users/u\nstatus=not running (pid 3)\n");
+        assert!(!macos.running && !macos.gzip && macos.sha256.is_none());
     }
 
     #[test]
     fn probe_reads_the_installed_build() {
-        let p = parse_probe(concat!(
+        let probe = parse_probe(concat!(
             "os=Linux\narch=x86_64\nhome=/h\n",
             r#"info={"version":"0.1.0","build":"abc=1","built_unix":5,"protocol":1,"min_client_protocol":0,"features":0,"hostname":"h","os":"linux","os_name":"","arch":"x86_64"}"#,
             "\n"
         ));
-        let info = p.installed.expect("installed build");
+        let info = probe.installed.expect("installed build");
         assert_eq!((info.build.as_str(), info.built_unix), ("abc=1", 5));
         assert!(parse_probe("info=not json\n").installed.is_none());
     }

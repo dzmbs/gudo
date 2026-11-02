@@ -1,3 +1,4 @@
+//! Drawings and images as daemon-owned session artifacts.
 //!
 //! An artifact belongs to a session. A **drawing** is an ordered op log ([`DrawOp`] batches,
 //! one [`OpBatch`] per committed change, numbered by `version`) that materialises into
@@ -21,8 +22,6 @@
 //! Coordinates are canvas units ([`CoordSpace::Canvas`], points) or, for ink over a terminal,
 //! cells ([`CoordSpace::Cells`]: `x` in columns, `y` in rows below the anchor row, both
 //! fractional), so ink stays on its text across fonts and devices.
-//!
-//! Same compatibility rules as the rest of the crate: append only.
 
 use std::fmt;
 
@@ -59,9 +58,9 @@ impl BlobHash {
     }
 
     /// Parses 64 hex digits.
-    pub fn from_hex(s: &str) -> Option<Self> {
+    pub fn from_hex(hex: &str) -> Option<Self> {
         let bytes = data_encoding::HEXLOWER_PERMISSIVE
-            .decode(s.as_bytes())
+            .decode(hex.as_bytes())
             .ok()?;
         Some(Self(bytes.try_into().ok()?))
     }
@@ -103,9 +102,7 @@ pub enum CoordSpace {
 /// Image encodings the daemon stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MediaType {
-    /// PNG.
     Png,
-    /// JPEG.
     Jpeg,
 }
 
@@ -130,9 +127,7 @@ impl MediaType {
 /// A stored image blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ImageRef {
-    /// Content hash.
     pub hash: BlobHash,
-    /// Encoding.
     pub media: MediaType,
     /// Size in bytes.
     pub size: u64,
@@ -141,10 +136,6 @@ pub struct ImageRef {
     /// Pixel height.
     pub height: u32,
 }
-
-// ---------------------------------------------------------------------------------------------
-// Elements and ops
-// ---------------------------------------------------------------------------------------------
 
 /// Stroke points, packed (see the `drawing` crate): version byte `1`, then per point the
 /// zig-zag varint deltas of `x` and `y` in 1/32 units, pressure, altitude and azimuth as one
@@ -175,9 +166,7 @@ pub struct Style {
 /// A freehand stroke.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stroke {
-    /// The pen.
     pub tool: Tool,
-    /// The points.
     pub points: PackedPoints,
 }
 
@@ -197,9 +186,7 @@ pub enum ShapeKind {
 /// A point in the drawing's units.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Pt {
-    /// x.
     pub x: f32,
-    /// y.
     pub y: f32,
 }
 
@@ -210,7 +197,6 @@ pub enum ElementKind {
     Stroke(Stroke),
     /// A shape from `from` to `to`.
     Shape {
-        /// The shape.
         shape: ShapeKind,
         /// First corner or start.
         from: Pt,
@@ -221,7 +207,6 @@ pub enum ElementKind {
     },
     /// A text box; `at` is the top-left of the first line.
     Text {
-        /// Position.
         at: Pt,
         /// The text (newlines allowed).
         text: String,
@@ -230,7 +215,6 @@ pub enum ElementKind {
     },
     /// An image blob placed in `from`..`to`.
     Image {
-        /// The image.
         image: ImageRef,
         /// Top-left.
         from: Pt,
@@ -242,13 +226,9 @@ pub enum ElementKind {
 /// One element of a drawing. Higher `z` draws on top; ties keep insertion order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
-    /// Its id.
     pub id: ElementId,
-    /// Stacking order.
     pub z: i32,
-    /// Colour and width.
     pub style: Style,
-    /// What it is.
     pub kind: ElementKind,
 }
 
@@ -260,7 +240,6 @@ pub enum DrawOp {
     Add(Element),
     /// Moves an element by `(dx, dy)`.
     Move {
-        /// The element.
         id: ElementId,
         /// Offset x.
         dx: f32,
@@ -268,24 +247,11 @@ pub enum DrawOp {
         dy: f32,
     },
     /// Changes an element's style.
-    Restyle {
-        /// The element.
-        id: ElementId,
-        /// New style.
-        style: Style,
-    },
+    Restyle { id: ElementId, style: Style },
     /// Changes an element's stacking order.
-    SetZ {
-        /// The element.
-        id: ElementId,
-        /// New z.
-        z: i32,
-    },
+    SetZ { id: ElementId, z: i32 },
     /// Removes an element (no-op if absent).
-    Delete {
-        /// The element.
-        id: ElementId,
-    },
+    Delete { id: ElementId },
     /// Removes every element.
     Clear,
     /// Renames the artifact.
@@ -301,13 +267,8 @@ pub struct OpBatch {
     pub actor: Actor,
     /// When the daemon accepted it.
     pub at: UnixMillis,
-    /// The ops.
     pub ops: Vec<DrawOp>,
 }
-
-// ---------------------------------------------------------------------------------------------
-// Anchors
-// ---------------------------------------------------------------------------------------------
 
 /// Where on a terminal's output an anchor is asked for: the row `from_bottom` rows above the
 /// bottom row of the pane's screen (scrollback included) as the client saw it after applying
@@ -338,7 +299,6 @@ pub enum DetachReason {
     RowGone,
     /// The full-screen program left the alternate screen.
     AltScreenExited,
-    /// The pane closed.
     PaneClosed,
     /// The daemon restarted (terminal state does not survive a restart).
     DaemonRestart,
@@ -353,16 +313,15 @@ pub enum AnchorState {
     Detached(DetachReason),
 }
 
-/// reference on the daemon's terminal, mirrored by each client's own VT).
+/// An ink overlay's anchor on a terminal pane: a libghostty-vt tracked grid reference on the
+/// daemon's terminal, mirrored by each client's own VT.
 ///
 /// The row is given as `from_bottom` at `at_seq`, the same convention as search results: a
 /// client whose VT has applied output up to `at_seq` finds the row `from_bottom` rows above
 /// its bottom row and tracks it itself from then on (same library, same bytes, same reflow).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RowAnchor {
-    /// The pane.
     pub pane_id: PaneId,
-    /// Which screen.
     pub screen: AnchorScreen,
     /// Output offset the position refers to.
     pub at_seq: Seq,
@@ -370,38 +329,29 @@ pub struct RowAnchor {
     pub from_bottom: u64,
     /// The shell-integration command (OSC 133) whose block holds the row, if any.
     pub command_id: Option<u64>,
-    /// Live or detached.
     pub state: AnchorState,
 }
-
-// ---------------------------------------------------------------------------------------------
-// Artifacts, requests and pushes
-// ---------------------------------------------------------------------------------------------
 
 /// Everything a client lists about an artifact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactInfo {
-    /// The artifact.
     pub artifact_id: ArtifactId,
-    /// Its session.
     pub session_id: SessionId,
     /// Drawing or image.
     pub kind: ArtifactKind,
-    /// Title (may be empty).
+    /// May be empty.
     pub title: String,
     /// Element coordinates.
     pub space: CoordSpace,
     /// Who created it.
     pub created_by: Actor,
-    /// When.
     pub created_at: UnixMillis,
     /// Last change.
     pub updated_at: UnixMillis,
     /// Number of committed batches (0 for a new drawing and for images).
     pub version: u64,
-    /// Elements now.
+    /// Current element count.
     pub elements: u32,
-    /// For images: the image.
     pub image: Option<ImageRef>,
     /// The last PNG a client rendered (or the daemon made) and the version it shows.
     pub preview: Option<Preview>,
@@ -427,7 +377,6 @@ pub struct ArtifactCreate {
     pub session_id: SessionId,
     /// Drawing or image.
     pub kind: ArtifactKind,
-    /// Title.
     pub title: String,
     /// Coordinate space (`Cells` for ink over a terminal).
     pub space: CoordSpace,
@@ -446,7 +395,7 @@ pub enum ExportFormat {
     Png,
     /// SVG written by the daemon from the vector elements.
     Svg,
-    /// Text: box-drawing glyphs for shapes and arrows (termdraw style), text as is, ink as
+    /// Text: box-drawing glyphs for shapes and arrows, text as is, ink as
     /// dots. For terminals without graphics and for agents that read text.
     Ascii,
 }
@@ -473,7 +422,6 @@ pub struct ArtifactSend {
     pub artifact_id: Option<ArtifactId>,
     /// The drawing version the PNG shows (pinned in the file name); `None` = current.
     pub version: Option<u64>,
-    /// The PNG.
     pub png: PngSource,
 }
 
@@ -481,16 +429,12 @@ pub struct ArtifactSend {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ArtifactRequest {
     /// The session's artifacts → [`ArtifactResponse::List`].
-    List {
-        /// The session.
-        session_id: SessionId,
-    },
+    List { session_id: SessionId },
     /// → [`ArtifactResponse::Created`].
     Create(ArtifactCreate),
     /// A drawing's elements → [`ArtifactResponse::Scene`]: the batches after `since` when
     /// the client holds version `since`, else every element at the current version.
     Get {
-        /// The artifact.
         artifact_id: ArtifactId,
         /// Version the client already has (0 = none).
         since: u64,
@@ -498,21 +442,15 @@ pub enum ArtifactRequest {
     /// Commits ops as one batch → [`ArtifactResponse::Applied`]. `base` is the version the
     /// client drew on (informational; ops apply last-writer-wins on top of the current one).
     Apply {
-        /// The drawing.
         artifact_id: ArtifactId,
         /// Version the client saw.
         base: u64,
-        /// The ops.
         ops: Vec<DrawOp>,
     },
     /// → [`ArtifactResponse::Done`].
-    Delete {
-        /// The artifact.
-        artifact_id: ArtifactId,
-    },
+    Delete { artifact_id: ArtifactId },
     /// Anchors a drawing to a terminal row, or unanchors it → [`ArtifactResponse::Info`].
     SetAnchor {
-        /// The drawing.
         artifact_id: ArtifactId,
         /// The row, or `None`.
         anchor: Option<AnchorRequest>,
@@ -520,20 +458,16 @@ pub enum ArtifactRequest {
     /// Records a client-rendered PNG of a drawing version (an uploaded blob) →
     /// [`ArtifactResponse::Info`].
     SetPreview {
-        /// The drawing.
         artifact_id: ArtifactId,
         /// The version it shows.
         version: u64,
-        /// The PNG blob.
         png: BlobHash,
     },
     /// → [`ArtifactResponse::Exported`].
     Export {
-        /// The artifact.
         artifact_id: ArtifactId,
         /// Version (`None` = current).
         version: Option<u64>,
-        /// Format.
         format: ExportFormat,
     },
     /// → [`ArtifactResponse::Sent`].
@@ -541,7 +475,6 @@ pub enum ArtifactRequest {
     /// An Excalidraw scene's elements changed after `since` (0 = all) →
     /// [`ArtifactResponse::Excalidraw`].
     ExcalidrawGet {
-        /// The scene.
         artifact_id: ArtifactId,
         /// Revision the client has (0 = none).
         since: u64,
@@ -555,15 +488,9 @@ pub enum ArtifactRequest {
     /// [`ArtifactResponse::Placed`]. Replaces `replace` (re-opened and edited in place).
     Place(PlaceRequest),
     /// Removes an inline placement → [`ArtifactResponse::Done`].
-    Unplace {
-        /// The placement.
-        placement_id: u64,
-    },
+    Unplace { placement_id: u64 },
     /// A pane's inline placements → [`ArtifactResponse::Placements`].
-    Placements {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    Placements { pane_id: PaneId },
     /// An image (PNG, JPEG) or an `.excalidraw` file pasted or dropped onto a terminal pane:
     /// it becomes an artifact placed inline at the cursor row → [`ArtifactResponse::Placed`].
     Import(ImportRequest),
@@ -572,16 +499,12 @@ pub enum ArtifactRequest {
     /// [`ArtifactResponse::History`]. Only daemons offering
     /// [`DaemonFeatures::ARTIFACT_HISTORY`](crate::DaemonFeatures::ARTIFACT_HISTORY)
     /// understand it; older ones drop a connection that sends it.
-    History {
-        /// The drawing.
-        artifact_id: ArtifactId,
-    },
+    History { artifact_id: ArtifactId },
     /// Brings a drawing back to a version from its history, as a new version on top (nothing
     /// is lost: the version it replaces stays in the history) → [`ArtifactResponse::Restored`].
     /// Open editors get the change as ordinary pushes, and every placement of the drawing
     /// shows the restored render. Same feature gate as [`ArtifactRequest::History`].
     Restore {
-        /// The drawing.
         artifact_id: ArtifactId,
         /// A version from its history.
         version: u64,
@@ -615,7 +538,6 @@ pub struct ExFile {
 /// Changed elements, app state and files of an Excalidraw scene.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExcalidrawPut {
-    /// The scene.
     pub artifact_id: ArtifactId,
     /// Revision the client last saw (informational).
     pub base: u64,
@@ -645,18 +567,18 @@ pub struct ExcalidrawScene {
 pub enum PlacementSource {
     /// A person finished drawing on the pane, or placed / imported an artifact.
     User,
-    /// No longer made: kitty graphics images live in the VTs now (docs/DAEMON.md §7.10). Kept
-    /// so placements stored or sent by older daemons still decode.
+    /// Retired: kitty graphics images live in the VTs (docs/DAEMON.md §7.10). Kept so
+    /// placements stored or sent by older daemons still decode.
     Kitty,
 }
 
 /// An artifact shown inline in a terminal pane: a `cols × rows` cell box whose top-left cell
 /// is column `col` of the anchored row. It scrolls with the output (the anchor is a tracked
+/// row) and is drawn by clients over the cells, like kitty graphics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
     /// Daemon-assigned id, never reused.
     pub placement_id: u64,
-    /// The pane.
     pub pane_id: PaneId,
     /// What is shown.
     pub artifact_id: ArtifactId,
@@ -664,7 +586,6 @@ pub struct Placement {
     pub version: u64,
     /// The image drawn: the artifact's image, or a render of `version`.
     pub image: ImageRef,
-    /// The row.
     pub anchor: RowAnchor,
     /// First column.
     pub col: u16,
@@ -674,20 +595,17 @@ pub struct Placement {
     pub rows: u16,
     /// Who placed it.
     pub source: PlacementSource,
-    /// When.
     pub at: UnixMillis,
 }
 
 /// Places an artifact inline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaceRequest {
-    /// The pane.
     pub pane_id: PaneId,
-    /// The artifact.
     pub artifact_id: ArtifactId,
     /// The version (`None` = current).
     pub version: Option<u64>,
-    /// The row; `None` = the cursor's row now.
+    /// The row; `None` = the cursor's current row.
     pub anchor: Option<AnchorRequest>,
     /// First column.
     pub col: u16,
@@ -705,7 +623,6 @@ pub struct PlaceRequest {
 /// A file pasted or dropped onto a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportRequest {
-    /// The pane.
     pub pane_id: PaneId,
     /// The file name (its extension picks the kind: `.excalidraw` / `.json` scene, else an
     /// image sniffed from its bytes).
@@ -720,7 +637,7 @@ pub struct ImportRequest {
 /// One change log slice or a full scene.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactScene {
-    /// The artifact now.
+    /// The artifact's current state.
     pub info: ArtifactInfo,
     /// Every element at `info.version` (in drawing order), when the client must replace its
     /// state; `None` when `batches` continue the client's version.
@@ -732,7 +649,6 @@ pub struct ArtifactScene {
 /// An exported file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Exported {
-    /// Format.
     pub format: ExportFormat,
     /// The version it shows.
     pub version: u64,
@@ -781,32 +697,27 @@ pub struct Sent {
 pub enum ArtifactResponse {
     /// Artifacts visible to the caller, oldest first.
     List(Vec<ArtifactInfo>),
-    /// The new artifact.
     Created(ArtifactInfo),
     /// Elements or batches.
     Scene(ArtifactScene),
     /// The batch was committed as `version`.
     Applied {
-        /// The artifact.
         artifact_id: ArtifactId,
         /// The new version.
         version: u64,
     },
     /// The artifact after the change.
     Info(ArtifactInfo),
-    /// Exported content.
     Exported(Exported),
     /// Sent to the agent.
     Sent(Sent),
-    /// Done.
     Done,
     /// An Excalidraw scene or its changes.
     Excalidraw(ExcalidrawScene),
     /// Elements offered by [`ArtifactRequest::ExcalidrawPut`] were reconciled.
     ExcalidrawApplied {
-        /// The scene.
         artifact_id: ArtifactId,
-        /// The scene's revision now.
+        /// The scene's current revision.
         version: u64,
         /// Offered elements that lost, as the stored winners (apply them locally).
         rejected: Vec<ExElement>,
@@ -819,7 +730,6 @@ pub enum ArtifactResponse {
     History(Vec<ArtifactVersion>),
     /// The drawing after a restore, and the history entry the restore made.
     Restored {
-        /// The artifact now.
         info: ArtifactInfo,
         /// The new version (its `restored_from` names the version brought back).
         version: ArtifactVersion,
@@ -875,7 +785,6 @@ pub struct InkLive {
     pub chunk: u32,
     /// Pen and style (repeated in every chunk, so a peer joining mid-stroke can draw).
     pub tool: Tool,
-    /// Style.
     pub style: Style,
     /// New points ([`PackedPoints`], deltas restart in every chunk).
     pub points: PackedPoints,
@@ -895,7 +804,6 @@ pub struct CanvasPane {
 /// Pushed to clients attached to the artifact's session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ArtifactEvent {
-    /// A new artifact.
     Created(ArtifactInfo),
     /// A batch was committed.
     Changed {
@@ -906,25 +814,20 @@ pub enum ArtifactEvent {
     },
     /// Metadata changed without a batch (anchor moved or detached, preview, canvas panes).
     Info(ArtifactInfo),
-    /// Deleted.
     Deleted {
-        /// Its session.
         session_id: SessionId,
-        /// The artifact.
         artifact_id: ArtifactId,
     },
     /// Someone else's live stroke.
     Ink(InkLive),
     /// The session's canvas panes (whole list).
     Canvases {
-        /// The session.
         session_id: SessionId,
         /// Every canvas pane in it.
         canvases: Vec<CanvasPane>,
     },
     /// Excalidraw elements someone else changed (apply with the same reconciliation).
     Excalidraw {
-        /// The scene.
         artifact_id: ArtifactId,
         /// Its revision after the change.
         version: u64,
@@ -939,9 +842,7 @@ pub enum ArtifactEvent {
     Placed(Placement),
     /// An inline placement was removed.
     Unplaced {
-        /// The pane.
         pane_id: PaneId,
-        /// The placement.
         placement_id: u64,
     },
 }
@@ -955,16 +856,12 @@ pub enum BlobHeader {
     Put {
         /// The session the blob is for (caps are per session).
         session_id: SessionId,
-        /// Exact size.
         size: u64,
         /// Encoding (checked against the bytes).
         media: MediaType,
     },
     /// Client → daemon: read a blob. Answered [`BlobReply::Found`], then the bytes and FIN.
-    Get {
-        /// The blob.
-        hash: BlobHash,
-    },
+    Get { hash: BlobHash },
 }
 
 /// The daemon's answers on a blob stream.

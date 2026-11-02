@@ -1,3 +1,4 @@
+//! Live presence (`proto::peer`): this device's draft, viewport, follow target and
 //! activity going out, everyone's coming in.
 //!
 //! Outgoing state is kept, not queued: a sender task per connection sends what changed, the
@@ -22,7 +23,7 @@ pub const MIN_INTERVAL: Duration = Duration::from_millis(33);
 
 /// What this device reports, and which parts the daemon has not heard yet.
 #[derive(Default)]
-struct Out {
+struct OutgoingPresence {
     device: Option<DeviceClass>,
     state: Option<PresenceState>,
     viewport: Option<Option<PeerViewport>>,
@@ -43,7 +44,7 @@ struct Dirty {
 /// Presence state kept by the client.
 #[derive(Default)]
 pub(crate) struct PeerState {
-    out: Mutex<Out>,
+    outgoing: Mutex<OutgoingPresence>,
     changed: Notify,
     you: Mutex<Option<PeerId>>,
     peers: Mutex<BTreeMap<PeerId, Peer>>,
@@ -55,15 +56,18 @@ impl PeerState {
         match push {
             PeerPush::All { you, peers } => {
                 *lock(&self.you) = Some(you);
-                *lock(&self.peers) = peers.iter().map(|p| (p.peer, p.clone())).collect();
+                *lock(&self.peers) = peers.iter().map(|peer| (peer.peer, peer.clone())).collect();
                 Some(crate::MultiplayerEvent::Peers { you, peers })
             }
             PeerPush::Changed(peer) => {
-                let mut all = lock(&self.peers);
-                if all.get(&peer.peer).is_some_and(|held| held.rev >= peer.rev) {
+                let mut known = lock(&self.peers);
+                if known
+                    .get(&peer.peer)
+                    .is_some_and(|held| held.rev >= peer.rev)
+                {
                     return None;
                 }
-                all.insert(peer.peer, peer.clone());
+                known.insert(peer.peer, peer.clone());
                 Some(crate::MultiplayerEvent::PeerChanged { peer })
             }
         }
@@ -73,54 +77,54 @@ impl PeerState {
     pub(crate) fn reset_for_connection(&self) {
         lock(&self.peers).clear();
         *lock(&self.you) = None;
-        let mut out = lock(&self.out);
-        out.dirty = Dirty {
-            device: out.device.is_some(),
-            state: out.state.is_some(),
-            viewport: out.viewport.is_some(),
-            draft: out.draft.is_some(),
-            follow: out.follow.is_some(),
+        let mut outgoing = lock(&self.outgoing);
+        outgoing.dirty = Dirty {
+            device: outgoing.device.is_some(),
+            state: outgoing.state.is_some(),
+            viewport: outgoing.viewport.is_some(),
+            draft: outgoing.draft.is_some(),
+            follow: outgoing.follow.is_some(),
         };
-        drop(out);
+        drop(outgoing);
         self.changed.notify_one();
     }
 
-    fn update(&self, f: impl FnOnce(&mut Out)) {
-        f(&mut lock(&self.out));
+    fn update(&self, change: impl FnOnce(&mut OutgoingPresence)) {
+        change(&mut lock(&self.outgoing));
         self.changed.notify_one();
     }
 
     /// The pending updates, oldest kind first; marks them sent.
     fn take(&self) -> Vec<PeerUpdate> {
-        let mut out = lock(&self.out);
-        let dirty = std::mem::take(&mut out.dirty);
-        let mut msgs = Vec::new();
+        let mut outgoing = lock(&self.outgoing);
+        let dirty = std::mem::take(&mut outgoing.dirty);
+        let mut updates = Vec::new();
         if dirty.device
-            && let Some(d) = out.device
+            && let Some(device) = outgoing.device
         {
-            msgs.push(PeerUpdate::Device(d));
+            updates.push(PeerUpdate::Device(device));
         }
         if dirty.state
-            && let Some(s) = out.state
+            && let Some(state) = outgoing.state
         {
-            msgs.push(PeerUpdate::State(s));
+            updates.push(PeerUpdate::State(state));
         }
         if dirty.follow
-            && let Some(f) = out.follow
+            && let Some(follow) = outgoing.follow
         {
-            msgs.push(PeerUpdate::Follow(f));
+            updates.push(PeerUpdate::Follow(follow));
         }
         if dirty.viewport
-            && let Some(v) = out.viewport
+            && let Some(viewport) = outgoing.viewport
         {
-            msgs.push(PeerUpdate::Viewport(v));
+            updates.push(PeerUpdate::Viewport(viewport));
         }
         if dirty.draft
-            && let Some(d) = out.draft.clone()
+            && let Some(draft) = outgoing.draft.clone()
         {
-            msgs.push(PeerUpdate::Draft(d));
+            updates.push(PeerUpdate::Draft(draft));
         }
-        msgs
+        updates
     }
 }
 
@@ -132,25 +136,25 @@ pub(crate) async fn send_presence(
 ) -> String {
     let supported = lock(&inner.daemon_info)
         .as_ref()
-        .is_some_and(|i| i.features.contains(DaemonFeatures::PRESENCE));
+        .is_some_and(|info| info.features.contains(DaemonFeatures::PRESENCE));
     if !supported {
         return std::future::pending().await;
     }
     let state = &inner.mp.peers;
     let heartbeat = Duration::from_secs(PeerUpdate::HEARTBEAT_SECS);
     loop {
-        let mut msgs = state.take();
-        if msgs.is_empty() {
+        let mut updates = state.take();
+        if updates.is_empty() {
             if tokio::time::timeout(heartbeat, state.changed.notified())
                 .await
                 .is_ok()
             {
                 continue;
             }
-            msgs.push(PeerUpdate::Heartbeat);
+            updates.push(PeerUpdate::Heartbeat);
         }
-        for msg in msgs {
-            if ctl.send(ClientCtl::Peer(msg)).is_err() {
+        for update in updates {
+            if ctl.send(ClientCtl::Peer(update)).is_err() {
                 return "ctl closed".into();
             }
         }
@@ -167,48 +171,48 @@ impl Client {
     /// The draft being composed for a pane, or `None` once it is sent or discarded. Others
     /// see it as it is typed; it is never written anywhere.
     pub fn set_draft(&self, draft: Option<Draft>) {
-        self.inner.mp.peers.update(|o| {
-            if o.draft.as_ref() != Some(&draft) {
-                o.draft = Some(draft);
-                o.dirty.draft = true;
+        self.inner.mp.peers.update(|outgoing| {
+            if outgoing.draft.as_ref() != Some(&draft) {
+                outgoing.draft = Some(draft);
+                outgoing.dirty.draft = true;
             }
         });
     }
 
     /// The rows of the focused pane on screen.
     pub fn set_viewport(&self, viewport: Option<PeerViewport>) {
-        self.inner.mp.peers.update(|o| {
-            if o.viewport != Some(viewport) {
-                o.viewport = Some(viewport);
-                o.dirty.viewport = true;
+        self.inner.mp.peers.update(|outgoing| {
+            if outgoing.viewport != Some(viewport) {
+                outgoing.viewport = Some(viewport);
+                outgoing.dirty.viewport = true;
             }
         });
     }
 
     /// Follows a person (their most recently active device), or stops (`None`).
     pub fn follow(&self, principal: Option<PrincipalId>) {
-        self.inner.mp.peers.update(|o| {
-            if o.follow != Some(principal) {
-                o.follow = Some(principal);
-                o.dirty.follow = true;
+        self.inner.mp.peers.update(|outgoing| {
+            if outgoing.follow != Some(principal) {
+                outgoing.follow = Some(principal);
+                outgoing.dirty.follow = true;
             }
         });
     }
 
     /// This device's kind, said once per connection.
     pub fn set_device_class(&self, device: DeviceClass) {
-        self.inner.mp.peers.update(|o| {
-            o.device = Some(device);
-            o.dirty.device = true;
+        self.inner.mp.peers.update(|outgoing| {
+            outgoing.device = Some(device);
+            outgoing.dirty.device = true;
         });
     }
 
     /// `Away` while the app is in the background, `Active` when it is back.
     pub fn set_presence_state(&self, state: PresenceState) {
-        self.inner.mp.peers.update(|o| {
-            if o.state != Some(state) {
-                o.state = Some(state);
-                o.dirty.state = true;
+        self.inner.mp.peers.update(|outgoing| {
+            if outgoing.state != Some(state) {
+                outgoing.state = Some(state);
+                outgoing.dirty.state = true;
             }
         });
     }
@@ -275,11 +279,11 @@ mod tests {
     #[test]
     fn a_reconnect_sends_everything_again_and_only_once() {
         let state = PeerState::default();
-        state.update(|o| {
-            o.draft = Some(peer(1, 1, "hi").draft);
-            o.dirty.draft = true;
-            o.follow = Some(None);
-            o.dirty.follow = true;
+        state.update(|outgoing| {
+            outgoing.draft = Some(peer(1, 1, "hi").draft);
+            outgoing.dirty.draft = true;
+            outgoing.follow = Some(None);
+            outgoing.dirty.follow = true;
         });
         assert_eq!(state.take().len(), 2);
         assert!(state.take().is_empty());

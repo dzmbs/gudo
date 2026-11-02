@@ -111,11 +111,11 @@ fn rust_crates(manifest: &str) -> Result<String> {
 /// `dev` includes development dependencies (a bundle whose packages are all build inputs);
 /// esbuild, the bundler, never is.
 fn npm_packages(name: &str, dev: bool) -> Result<String> {
-    let src = root().join("apple/scripts").join(name);
+    let source = root().join("apple/scripts").join(name);
     let work = target_dir().join("notices").join(name);
     fs::create_dir_all(&work)?;
     for file in ["package.json", "package-lock.json"] {
-        fs::copy(src.join(file), work.join(file))?;
+        fs::copy(source.join(file), work.join(file))?;
     }
     run(std::process::Command::new("npm").current_dir(&work).args([
         "ci",
@@ -132,14 +132,15 @@ fn npm_packages(name: &str, dev: bool) -> Result<String> {
         .context("package-lock.json has no packages")?;
     let mut by_text: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (path, meta) in packages {
-        let Some(pkg) = path
+        let Some(package) = path
             .rsplit("node_modules/")
             .next()
             .filter(|_| !path.is_empty())
         else {
             continue;
         };
-        if pkg == "esbuild" || pkg.starts_with("@esbuild/") || (!dev && meta["dev"] == true) {
+        if package == "esbuild" || package.starts_with("@esbuild/") || (!dev && meta["dev"] == true)
+        {
             continue;
         }
         let version = meta["version"].as_str().unwrap_or("?");
@@ -149,7 +150,7 @@ fn npm_packages(name: &str, dev: bool) -> Result<String> {
         by_text
             .entry(text)
             .or_default()
-            .push(format!("  {pkg} {version} ({licence})"));
+            .push(format!("  {package} {version} ({licence})"));
     }
     ensure!(!by_text.is_empty(), "{name}: no packages");
     let mut groups: Vec<(Vec<String>, String)> = by_text
@@ -172,14 +173,15 @@ fn npm_packages(name: &str, dev: bool) -> Result<String> {
 /// id) get the standard text for that id.
 fn licence_text(dir: &Path) -> Result<String> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            let n = p
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            let name = path
                 .file_name()
-                .and_then(|n| n.to_str())
+                .and_then(|name| name.to_str())
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            p.is_file() && (n.starts_with("license") || n.starts_with("licence") || n == "copying")
+            path.is_file()
+                && (name.starts_with("license") || name.starts_with("licence") || name == "copying")
         })
         .collect();
     files.sort();
@@ -189,10 +191,10 @@ fn licence_text(dir: &Path) -> Result<String> {
     let meta: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dir.join("package.json"))?)?;
     let author = match &meta["author"] {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Object(o) => o
+        serde_json::Value::String(name) => name.clone(),
+        serde_json::Value::Object(person) => person
             .get("name")
-            .and_then(|n| n.as_str())
+            .and_then(|name| name.as_str())
             .unwrap_or_default()
             .to_owned(),
         _ => String::new(),

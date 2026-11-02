@@ -1,3 +1,4 @@
+//! Plan usage and rate limits of the coding agents on the host.
 //!
 //! A client with [`Caps::AGENT_USAGE`](crate::Caps::AGENT_USAGE) sends
 //! [`WorkspaceRequest::UsageWatch`](crate::WorkspaceRequest::UsageWatch) to a daemon offering
@@ -18,8 +19,7 @@ use crate::layout::AgentKind;
 /// How a client watches agent usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageWatch {
-    /// Unused: kept for wire compatibility. Clients send `false`; daemons ignore it (they used
-    /// to ask the providers' undocumented usage endpoints with the host's sign-in when set).
+    /// Unused: kept for wire compatibility. Clients send `false`; daemons ignore it.
     pub api_fallback: bool,
 }
 
@@ -34,7 +34,6 @@ pub struct AgentUsageReport {
 /// One agent's plan and limit windows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentUsage {
-    /// The agent.
     pub agent: AgentKind,
     /// The plan as the tool names it (`plus`, `pro`, `max`), if it says.
     pub plan: Option<String>,
@@ -76,6 +75,6 @@ pub enum UsageSource {
     /// The tool's own documented command: `claude -p /usage` (stream-json `usage_report`),
     /// `codex app-server` (`account/rateLimits/read`).
     Cli,
-    /// Unused: kept for wire compatibility (older daemons' undocumented-endpoint fallback).
+    /// Unused: kept for wire compatibility.
     Api,
 }

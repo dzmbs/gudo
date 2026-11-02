@@ -28,7 +28,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -77,7 +77,7 @@ fn peer() -> Peer {
 
 #[test]
 fn presence_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
@@ -126,9 +126,9 @@ fn presence_messages_match_their_frozen_bytes() {
         ),
     ];
     for (name, msg, golden) in cases {
-        c.check(name, msg, golden);
+        checker.check(name, msg, golden);
     }
-    c.check(
+    checker.check(
         "PeerPush::All",
         ServerCtl::Peers(PeerPush::All {
             you: PeerId(4),
@@ -136,7 +136,7 @@ fn presence_messages_match_their_frozen_bytes() {
         }),
         "6300000001340004010409111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222034b696d04020101010301030c28010301030106666978206974060177777777777777777777777777777777",
     );
-    c.check(
+    checker.check(
         "PeerPush::Changed",
         ServerCtl::Peers(PeerPush::Changed(Peer {
             viewport: None,
@@ -147,5 +147,9 @@ fn presence_messages_match_their_frozen_bytes() {
         })),
         "430000000134010409111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222034b696d04020101010300000000",
     );
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }

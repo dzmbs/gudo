@@ -19,7 +19,6 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{Client, lock};
 
-/// How long a request waits for its answer.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A change in approvals.
@@ -29,9 +28,7 @@ pub enum ApprovalEvent {
     Request(ApprovalInfo),
     /// The rules in force on a pane (empty when none are left).
     Rules {
-        /// The pane.
         pane_id: PaneId,
-        /// Its rules.
         rules: Vec<ActiveRule>,
     },
     /// An agent asks to drive one of the user's panes, or such a request closed. Answer with
@@ -83,11 +80,11 @@ pub(crate) struct ApprovalState {
 
 impl ApprovalState {
     /// Handles an approval message from `ctl`; returns it back if it is not one.
-    pub(crate) fn dispatch(&self, msg: ServerCtl) -> Option<ServerCtl> {
-        let event = match msg {
+    pub(crate) fn dispatch(&self, message: ServerCtl) -> Option<ServerCtl> {
+        let event = match message {
             ServerCtl::ApprovalResult { req_id, result } => {
-                if let Some(tx) = lock(&self.pending).remove(&req_id) {
-                    let _ = tx.send(result);
+                if let Some(reply) = lock(&self.pending).remove(&req_id) {
+                    let _ = reply.send(result);
                 }
                 return None;
             }
@@ -122,27 +119,26 @@ impl ApprovalState {
 
     fn emit(&self, event: ApprovalEvent) {
         let listener = lock(&self.listener).clone();
-        if let Some(l) = listener {
-            l.on_approval_event(event);
+        if let Some(listener) = listener {
+            listener.on_approval_event(event);
         }
     }
 
-    /// The connection dropped.
     pub(crate) fn fail_pending(&self) {
-        for (_, tx) in lock(&self.pending).drain() {
-            let _ = tx.send(Err(ApprovalError::Disconnected));
+        for (_, reply) in lock(&self.pending).drain() {
+            let _ = reply.send(Err(ApprovalError::Disconnected));
         }
-        let had = {
+        let had_state = {
             let mut requests = lock(&self.requests);
             let mut rules = lock(&self.rules);
             let mut drives = lock(&self.drives);
-            let had = !requests.is_empty() || !rules.is_empty() || !drives.is_empty();
+            let had_state = !requests.is_empty() || !rules.is_empty() || !drives.is_empty();
             requests.clear();
             rules.clear();
             drives.clear();
-            had
+            had_state
         };
-        if had {
+        if had_state {
             self.emit(ApprovalEvent::Reset);
         }
     }
@@ -160,20 +156,20 @@ impl Client {
             .values()
             .cloned()
             .collect();
-        asks.sort_by_key(|a| a.request_id);
+        asks.sort_by_key(|ask| ask.request_id);
         asks
     }
 
-    /// What may be done with the request `pane` is blocked on, if the daemon said. Check that
-    /// its `request_id` is the one the pane's agent state names: it may be stale.
-    pub fn approval_info(&self, pane: PaneId) -> Option<ApprovalInfo> {
-        lock(&self.inner.approvals.requests).get(&pane).cloned()
+    /// What may be done with the request `pane_id` is blocked on, if the daemon said. Check
+    /// that its `request_id` is the one the pane's agent state names: it may be stale.
+    pub fn approval_info(&self, pane_id: PaneId) -> Option<ApprovalInfo> {
+        lock(&self.inner.approvals.requests).get(&pane_id).cloned()
     }
 
-    /// The auto-approve rules in force on `pane`, oldest first.
-    pub fn auto_approve_rules(&self, pane: PaneId) -> Vec<ActiveRule> {
+    /// The auto-approve rules in force on `pane_id`, oldest first.
+    pub fn auto_approve_rules(&self, pane_id: PaneId) -> Vec<ActiveRule> {
         lock(&self.inner.approvals.rules)
-            .get(&pane)
+            .get(&pane_id)
             .cloned()
             .unwrap_or_default()
     }
@@ -184,18 +180,24 @@ impl Client {
     ///
     /// The daemon's [`ApprovalError`], or [`ApprovalError::Disconnected`] if the connection
     /// dropped (or nothing came back in time).
-    pub async fn approval(&self, req: ApprovalRequest) -> Result<ApprovalResponse, ApprovalError> {
+    pub async fn approval(
+        &self,
+        request: ApprovalRequest,
+    ) -> Result<ApprovalResponse, ApprovalError> {
         let req_id = self
             .inner
             .next_op
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        lock(&self.inner.approvals.pending).insert(req_id, tx);
-        self.inner.send(proto::ClientCtl::Approval { req_id, req });
+        let (reply_tx, reply_rx) = oneshot::channel();
+        lock(&self.inner.approvals.pending).insert(req_id, reply_tx);
+        self.inner.send(proto::ClientCtl::Approval {
+            req_id,
+            req: request,
+        });
         let inner = Arc::clone(&self.inner);
         self.handle
             .spawn(async move {
-                match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                match tokio::time::timeout(REQUEST_TIMEOUT, reply_rx).await {
                     Ok(Ok(result)) => result,
                     _ => {
                         lock(&inner.approvals.pending).remove(&req_id);
@@ -234,7 +236,7 @@ impl Client {
             .map(|_| ())
     }
 
-    /// Adds a rule approving requests on `pane` that `matcher` covers, for `ttl` and at most
+    /// Adds a rule approving requests on `pane_id` that `matcher` covers, for `ttl` and at most
     /// `max_turns` agent turns (the current one included), signed with this device's key.
     /// With `request_id`, that open request is approved too. Returns the rule's id.
     ///
@@ -244,7 +246,7 @@ impl Client {
     /// [`approval`](Self::approval).
     pub async fn add_auto_approve(
         &self,
-        pane: PaneId,
+        pane_id: PaneId,
         request_id: Option<RequestId>,
         matcher: RuleMatch,
         ttl: Duration,
@@ -255,7 +257,7 @@ impl Client {
         let expires = crate::now_millis().0.saturating_add(ttl.as_millis() as u64);
         let mut rule = AutoApproveRule {
             rule_id: RuleId(grants::random()),
-            pane_id: pane,
+            pane_id,
             request_id,
             matcher,
             expires_at: UnixMillis(expires),
@@ -264,19 +266,19 @@ impl Client {
             sig: Vec::new(),
         };
         grants::sign_auto_approve(&key, self.inner.ticket.daemon_id, &mut rule);
-        let id = rule.rule_id;
+        let rule_id = rule.rule_id;
         self.approval(ApprovalRequest::AddRule(rule)).await?;
-        Ok(id)
+        Ok(rule_id)
     }
 
-    /// Revokes rule `id`.
+    /// Revokes rule `rule_id`.
     ///
     /// # Errors
     ///
     /// [`ApprovalError::NotFound`] if it already ended; otherwise as
     /// [`approval`](Self::approval).
-    pub async fn revoke_auto_approve(&self, id: RuleId) -> Result<(), ApprovalError> {
-        self.approval(ApprovalRequest::RevokeRule { rule_id: id })
+    pub async fn revoke_auto_approve(&self, rule_id: RuleId) -> Result<(), ApprovalError> {
+        self.approval(ApprovalRequest::RevokeRule { rule_id })
             .await
             .map(|_| ())
     }

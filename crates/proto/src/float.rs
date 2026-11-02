@@ -1,8 +1,8 @@
 //! Floating panes: windows of panes shown as cards over their tab's split tree.
 //!
 //! A floating window's panes stay a subtree of its tab's tree: where it docks back to, where its
-//! own splits live, and where clients without [`Caps::FLOATS`](crate::Caps::FLOATS) keep showing it as an ordinary split. What
-//! floats, and where, is pushed separately as [`ServerCtl::Floats`](crate::ServerCtl::Floats)
+//! own splits live, and where clients without [`Caps::FLOATS`](crate::Caps::FLOATS) keep
+//! showing it as an ordinary split. What floats, and where, is pushed separately as [`ServerCtl::Floats`](crate::ServerCtl::Floats)
 //! right after every [`ServerCtl::LayoutChanged`](crate::ServerCtl::LayoutChanged), so the
 //! layout message itself is unchanged.
 //!
@@ -55,13 +55,13 @@ impl FloatFrame {
     /// ```
     /// use proto::FloatFrame;
     ///
-    /// let f = FloatFrame { x: 0.9, y: -0.2, w: 0.5, h: 2.0 }.clamped().unwrap();
-    /// assert_eq!(f, FloatFrame { x: 0.5, y: 0.0, w: 0.5, h: 1.0 });
-    /// assert!(FloatFrame { x: f32::NAN, ..f }.clamped().is_none());
+    /// let frame = FloatFrame { x: 0.9, y: -0.2, w: 0.5, h: 2.0 }.clamped().unwrap();
+    /// assert_eq!(frame, FloatFrame { x: 0.5, y: 0.0, w: 0.5, h: 1.0 });
+    /// assert!(FloatFrame { x: f32::NAN, ..frame }.clamped().is_none());
     /// ```
     pub fn clamped(self) -> Option<Self> {
         let Self { x, y, w, h } = self;
-        if ![x, y, w, h].iter().all(|v| v.is_finite()) {
+        if ![x, y, w, h].iter().all(|value| value.is_finite()) {
             return None;
         }
         let w = w.clamp(MIN_FLOAT_SIDE, 1.0);
@@ -96,11 +96,9 @@ pub struct FloatId(pub u64);
 /// window's own layout, and the tab's tiled layout is the tree without it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FloatWindow {
-    /// The window.
     pub id: FloatId,
     /// Its panes, in the order of the tab's tree.
     pub panes: Vec<PaneId>,
-    /// Where it sits.
     pub frame: FloatFrame,
     /// Stacking order within the session; higher is in front.
     pub z: u32,
@@ -117,14 +115,12 @@ pub struct FloatWindow {
 pub struct DockTarget {
     /// The tiled pane it goes beside (in the same session).
     pub pane_id: PaneId,
-    /// Which side of it.
     pub side: Direction,
 }
 
 /// A session's floating panes, in [`ServerCtl::Floats`](crate::ServerCtl::Floats).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionFloats {
-    /// The session.
     pub session_id: SessionId,
     /// The session's layout revision these belong to.
     pub revision: u64,

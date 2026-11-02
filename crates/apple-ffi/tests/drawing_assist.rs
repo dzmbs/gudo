@@ -1,3 +1,4 @@
+//! The drawing and input-assistance FFI surface against a real daemon
 //! (relays off, loopback), driven the way Swift drives it: plain threads, listener objects,
 //! `async` methods awaited from a foreign executor.
 
@@ -86,24 +87,24 @@ fn until<U>(what: &str, mut f: impl FnMut() -> Option<U>) -> U {
 /// A daemon running `shell` with `$HOME` (and `ZDOTDIR`) in a temporary directory that the
 /// path policy allows, plus the runtime the test awaits on.
 struct Host {
-    rt: tokio::runtime::Runtime,
+    runtime: tokio::runtime::Runtime,
     daemon: Option<daemon::Daemon>,
     home: PathBuf,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
-fn s(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+fn path_text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 impl Host {
     fn start(shell: &str) -> Self {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
         let state_dir = tempfile::tempdir().unwrap();
         let home_dir = tempfile::tempdir().unwrap();
         let state = state_dir.path().canonicalize().unwrap();
         let home = home_dir.path().canonicalize().unwrap();
-        let daemon = rt.block_on(async {
+        let daemon = runtime.block_on(async {
             let mut config = daemon::Config::new(&state);
             config.relay = daemon::RelayMode::Disabled;
             config.bind = Some("127.0.0.1:0".parse().unwrap());
@@ -111,14 +112,14 @@ impl Host {
             config.pane_env = vec![
                 ("PS1".into(), "$ ".into()),
                 ("ENV".into(), String::new()),
-                ("HOME".into(), s(&home)),
-                ("ZDOTDIR".into(), s(&home)),
+                ("HOME".into(), path_text(&home)),
+                ("ZDOTDIR".into(), path_text(&home)),
             ];
             config.fs_allow.push(home.clone());
             daemon::Daemon::start(config).await.unwrap()
         });
         Self {
-            rt,
+            runtime,
             daemon: Some(daemon),
             home,
             _dirs: (state_dir, home_dir),
@@ -151,14 +152,14 @@ impl Host {
     }
 
     fn block_on<F: Future>(&self, f: F) -> F::Output {
-        self.rt.block_on(f)
+        self.runtime.block_on(f)
     }
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        if let Some(d) = self.daemon.take() {
-            self.rt.block_on(d.shutdown());
+        if let Some(daemon) = self.daemon.take() {
+            self.runtime.block_on(daemon.shutdown());
         }
     }
 }
@@ -167,13 +168,13 @@ impl Drop for Host {
 fn attach(client: &DaemonClient, events: &Recorder<ClientEvent>) -> (u64, u64) {
     client.attach(None);
     let session = events.wait("attached", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ClientEvent::Attached { session_id, .. } => Some(*session_id),
             _ => None,
         })
     });
     let layout = events.wait("layout", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ClientEvent::Layout { layout } => Some(layout.clone()),
             _ => None,
         })
@@ -234,19 +235,22 @@ fn assist_prompt_submit_history_completion_files() {
     });
 
     // Foreground program and profile: the shell.
-    let fg = until("foreground", || {
+    let shell_program = until("foreground", || {
         host.block_on(client.pane_assist(pane))
             .unwrap()
             .foreground
             .filter(|f| f.profile == ProgramProfile::Shell)
     });
-    assert!(fg.name.contains("zsh"), "{fg:?}");
-    assert_eq!(client.foreground(pane).map(|f| f.pid), Some(fg.pid));
+    assert!(shell_program.name.contains("zsh"), "{shell_program:?}");
+    assert_eq!(
+        client.foreground(pane).map(|f| f.pid),
+        Some(shell_program.pid)
+    );
 
     // Typed partially, then completed by hand: the prompt state follows, pushed.
     client.send_input(pane, b"echo h");
     assist.wait("partial line pushed", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             AssistEvent::Prompt { state } => {
                 at_prompt(state).filter(|(t, _)| t == "echo h").map(|_| ())
             }
@@ -329,7 +333,7 @@ fn assist_prompt_submit_history_completion_files() {
 
     // File search finds the temporary file; outside the allowed roots is denied.
     let found = host
-        .block_on(client.file_search("needtarg".into(), s(&work), 20))
+        .block_on(client.file_search("needtarg".into(), path_text(&work), 20))
         .unwrap();
     assert_eq!(
         found.matches.first().map(|m| m.path.as_str()),
@@ -395,19 +399,19 @@ fn rect(id: u64) -> DrawElement {
 #[test]
 fn drawing_two_clients_ink_export_place_send() {
     let host = Host::start("/bin/sh");
-    let (a, a_events) = host.client();
-    let (b, b_events) = host.client();
+    let (alice, alice_events) = host.client();
+    let (bob, bob_events) = host.client();
     let b_art = Recorder::<ArtifactEvent>::new();
-    b.set_artifact_listener(b_art.clone());
+    bob.set_artifact_listener(b_art.clone());
     let a_art = Recorder::<ArtifactEvent>::new();
-    a.set_artifact_listener(a_art.clone());
-    let (session, pane) = attach(&a, &a_events);
-    let (b_session, b_pane) = attach(&b, &b_events);
+    alice.set_artifact_listener(a_art.clone());
+    let (session, pane) = attach(&alice, &alice_events);
+    let (b_session, b_pane) = attach(&bob, &bob_events);
     assert_eq!((b_session, b_pane), (session, pane));
 
     // Create: the other client hears it.
     let info = host
-        .block_on(a.artifact_create(ArtifactCreate {
+        .block_on(alice.artifact_create(ArtifactCreate {
             session_id: session,
             kind: ArtifactKind::Drawing,
             title: "sketch".into(),
@@ -441,7 +445,7 @@ fn drawing_two_clients_ink_export_place_send() {
     assert_eq!(simplify_ink_points(pts.clone(), 0.5).len(), 2);
     let packed = pack_ink_points(pts.clone());
     assert_eq!(unpack_ink_points(packed.clone()).unwrap(), pts);
-    a.ink_live(InkChunk {
+    alice.ink_live(InkChunk {
         artifact_id: id,
         stroke_id: 7,
         chunk: 0,
@@ -454,19 +458,19 @@ fn drawing_two_clients_ink_export_place_send() {
         done: true,
     });
     let ink = b_art.wait("live ink", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ArtifactEvent::Ink { ink } if ink.stroke_id == 7 => Some(ink.clone()),
             _ => None,
         })
     });
     assert_eq!(ink.artifact_id, id);
     assert_eq!(unpack_ink_points(ink.points).unwrap().len(), 40);
-    assert_eq!(ink.actor, a.me().unwrap().actor);
+    assert_eq!(ink.actor, alice.me().unwrap().actor);
 
     // A stroke and a rectangle as one batch: the other client gets the change and its
     // cached scene follows.
     let version = host
-        .block_on(a.artifact_apply(
+        .block_on(alice.artifact_apply(
             id,
             0,
             vec![
@@ -479,7 +483,7 @@ fn drawing_two_clients_ink_export_place_send() {
         .unwrap();
     assert_eq!(version, 1);
     let batch = b_art.wait("changed", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ArtifactEvent::Changed { info, batch } if info.artifact_id == id => Some(batch.clone()),
             _ => None,
         })
@@ -487,13 +491,13 @@ fn drawing_two_clients_ink_export_place_send() {
     assert_eq!(batch.version, 1);
     assert_eq!(batch.ops.len(), 2);
     let cached = until("b's cache", || {
-        b.artifact_scene(id).filter(|c| c.version == 1)
+        bob.artifact_scene(id).filter(|c| c.version == 1)
     });
     assert_eq!(
         cached.elements.iter().map(|e| e.id).collect::<Vec<_>>(),
         [7, 8]
     );
-    let scene = host.block_on(b.artifact_get(id, 0)).unwrap();
+    let scene = host.block_on(bob.artifact_get(id, 0)).unwrap();
     assert_eq!(scene.info.version, 1);
     assert!(
         a_art
@@ -504,13 +508,13 @@ fn drawing_two_clients_ink_export_place_send() {
 
     // Export: SVG and ASCII from the daemon; ASCII on the device matches.
     let svg = host
-        .block_on(b.artifact_export(id, None, ExportFormat::Svg))
+        .block_on(bob.artifact_export(id, None, ExportFormat::Svg))
         .unwrap();
     assert_eq!(svg.version, 1);
     let svg = String::from_utf8(svg.data.0).unwrap();
     assert!(svg.contains("<svg") && svg.contains("<path"), "{svg}");
     let ascii = host
-        .block_on(b.artifact_export(id, Some(1), ExportFormat::Ascii))
+        .block_on(bob.artifact_export(id, Some(1), ExportFormat::Ascii))
         .unwrap();
     let ascii = String::from_utf8(ascii.data.0).unwrap();
     assert!(ascii.contains('┌') && ascii.contains('┘'), "{ascii}");
@@ -529,13 +533,13 @@ fn drawing_two_clients_ink_export_place_send() {
     assert!(sniffed.width > 100, "{sniffed:?}");
     let up = Recorder::<(u64, u64)>::new();
     let image = host
-        .block_on(a.blob_upload(session, png.clone(), Some(up.clone())))
+        .block_on(alice.blob_upload(session, png.clone(), Some(up.clone())))
         .unwrap();
     assert_eq!(image.size, png.len() as u64);
     assert_eq!(up.all().last(), Some(&(png.len() as u64, png.len() as u64)));
     let down = Recorder::<(u64, u64)>::new();
     let blob = host
-        .block_on(b.blob_download(image.hash.clone(), Some(down.clone())))
+        .block_on(bob.blob_download(image.hash.clone(), Some(down.clone())))
         .unwrap();
     assert_eq!(blob.data, png);
     assert_eq!(
@@ -545,7 +549,7 @@ fn drawing_two_clients_ink_export_place_send() {
 
     // Place the device's render inline in the pane: the other client sees it placed.
     let placed = host
-        .block_on(a.place_png(
+        .block_on(alice.place_png(
             PlaceRequest {
                 pane_id: pane,
                 artifact_id: id,
@@ -562,39 +566,39 @@ fn drawing_two_clients_ink_export_place_send() {
     assert_eq!(placed.image.hash, image.hash);
     assert_eq!((placed.col, placed.cols), (2, 20));
     let seen = b_art.wait("placed", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ArtifactEvent::Placed { placement } => Some(placement.clone()),
             _ => None,
         })
     });
     assert_eq!(seen.placement_id, placed.placement_id);
-    assert_eq!(b.placements(pane), vec![seen.clone()]);
+    assert_eq!(bob.placements(pane), vec![seen.clone()]);
     assert_eq!(
-        host.block_on(b.list_placements(pane)).unwrap(),
+        host.block_on(bob.list_placements(pane)).unwrap(),
         vec![seen.clone()]
     );
-    host.block_on(a.unplace(placed.placement_id)).unwrap();
+    host.block_on(alice.unplace(placed.placement_id)).unwrap();
     b_art.wait("unplaced", |all| {
         all.iter()
-            .any(|e| {
-                matches!(e, ArtifactEvent::Unplaced { placement_id, .. }
+            .any(|event| {
+                matches!(event, ArtifactEvent::Unplaced { placement_id, .. }
                     if *placement_id == placed.placement_id)
             })
             .then_some(())
     });
     until("placements emptied", || {
-        b.placements(pane).is_empty().then_some(())
+        bob.placements(pane).is_empty().then_some(())
     });
 
     // Send to agent into a shell pane: typed refusal.
     let err = host
-        .block_on(a.send_to_agent(pane, Some(id), None, None))
+        .block_on(alice.send_to_agent(pane, Some(id), None, None))
         .unwrap_err();
     assert_eq!(err, ArtifactError::NotAgentPane);
 
     // An Excalidraw scene: a put reaches the other client and its cache.
-    let ex = host
-        .block_on(a.artifact_create(ArtifactCreate {
+    let scene = host
+        .block_on(alice.artifact_create(ArtifactCreate {
             session_id: session,
             kind: ArtifactKind::Excalidraw,
             title: String::new(),
@@ -608,37 +612,39 @@ fn drawing_two_clients_ink_export_place_send() {
     let element = excalidraw_element(json.into()).unwrap();
     assert_eq!((element.id.as_str(), element.version), ("r1", 2));
     let applied = host
-        .block_on(a.excalidraw_put(ex.artifact_id, vec![element.clone()], None, vec![]))
+        .block_on(alice.excalidraw_put(scene.artifact_id, vec![element.clone()], None, vec![]))
         .unwrap();
     assert!(applied.rejected.is_empty());
     b_art.wait("excalidraw push", |all| {
         all.iter()
-            .any(|e| {
-                matches!(e, ArtifactEvent::Excalidraw { artifact_id, elements, .. }
-                    if *artifact_id == ex.artifact_id && elements.iter().any(|x| x.id == "r1"))
+            .any(|event| {
+                matches!(event, ArtifactEvent::Excalidraw { artifact_id, elements, .. }
+                    if *artifact_id == scene.artifact_id && elements.iter().any(|x| x.id == "r1"))
             })
             .then_some(())
     });
     let cached = until("b's excalidraw cache", || {
-        b.excalidraw_scene(ex.artifact_id)
+        bob.excalidraw_scene(scene.artifact_id)
             .filter(|s| s.elements.iter().any(|e| e.id == "r1"))
     });
     assert_eq!(cached.revision, applied.version);
-    let fetched = host.block_on(b.excalidraw_get(ex.artifact_id, 0)).unwrap();
+    let fetched = host
+        .block_on(bob.excalidraw_get(scene.artifact_id, 0))
+        .unwrap();
     assert_eq!(fetched.elements, vec![element]);
 
     // List and delete.
-    let list = host.block_on(b.list_artifacts(session)).unwrap();
+    let list = host.block_on(bob.list_artifacts(session)).unwrap();
     assert!(
         list.iter()
             .any(|i| i.artifact_id == id && i.title == "sketch")
     );
-    host.block_on(a.artifact_delete(id)).unwrap();
+    host.block_on(alice.artifact_delete(id)).unwrap();
     b_art.wait("deleted", |all| {
         all.iter()
             .any(|e| matches!(e, ArtifactEvent::Deleted { artifact_id, .. } if *artifact_id == id))
             .then_some(())
     });
-    let gone = host.block_on(b.artifact_get(id, 0)).unwrap_err();
+    let gone = host.block_on(bob.artifact_get(id, 0)).unwrap_err();
     assert!(matches!(gone, ArtifactError::NotFound { .. }), "{gone:?}");
 }

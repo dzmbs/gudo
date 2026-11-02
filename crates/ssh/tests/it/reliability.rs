@@ -21,25 +21,25 @@ fn fast_keepalive() -> Keepalive {
 
 async fn via_proxy(proxy: &Proxy, keepalive: Keepalive) -> (Connection, ConnectOptions, Target) {
     let env = env();
-    let mut options = env.options(env.key_creds());
+    let mut options = env.options(env.key_credentials());
     options.keepalive = keepalive;
     let target = Target::direct(proxy.spec(&env.user));
-    let conn = Connection::connect(&target, &options).await.unwrap();
-    (conn, options, target)
+    let connection = Connection::connect(&target, &options).await.unwrap();
+    (connection, options, target)
 }
 
 #[tokio::test]
 #[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn keepalives_keep_an_idle_connection_and_measure_rtt() {
     let env = env();
-    let mut options = env.options(env.key_creds());
+    let mut options = env.options(env.key_credentials());
     options.keepalive = fast_keepalive();
-    let conn = Connection::connect(&env.target(), &options).await.unwrap();
+    let connection = Connection::connect(&env.target(), &options).await.unwrap();
     tokio::time::sleep(Duration::from_millis(3500)).await;
-    assert!(!conn.is_dead());
-    let rtt = conn.rtt().expect("keepalives were answered");
-    assert!(conn.since_last_reply() < Duration::from_millis(1500));
-    let ping = conn.ping(Duration::from_secs(2)).await.unwrap();
+    assert!(!connection.is_dead());
+    let rtt = connection.rtt().expect("keepalives were answered");
+    assert!(connection.since_last_reply() < Duration::from_millis(1500));
+    let ping = connection.ping(Duration::from_secs(2)).await.unwrap();
     eprintln!("keepalive rtt {rtt:?}, ping {ping:?}");
 }
 
@@ -48,14 +48,14 @@ async fn keepalives_keep_an_idle_connection_and_measure_rtt() {
 async fn silent_drop_is_detected_by_keepalives() {
     let env = env();
     let proxy = Proxy::start(format!("{}:22", env.host)).await;
-    let (conn, ..) = via_proxy(&proxy, fast_keepalive()).await;
-    assert!(conn.exec("true").await.unwrap().success());
+    let (connection, ..) = via_proxy(&proxy, fast_keepalive()).await;
+    assert!(connection.exec("true").await.unwrap().success());
     proxy.blackhole(true);
-    let t = Instant::now();
-    let why = tokio::time::timeout(Duration::from_secs(10), conn.closed())
+    let started = Instant::now();
+    let why = tokio::time::timeout(Duration::from_secs(10), connection.closed())
         .await
         .expect("dead peer not detected");
-    let took = t.elapsed();
+    let took = started.elapsed();
     eprintln!("idle silent drop detected in {took:?}: {why}");
     assert!(why.contains("keepalives unanswered"), "{why}");
     // interval × count_max after the last answer, plus at most one interval of phase.
@@ -63,10 +63,10 @@ async fn silent_drop_is_detected_by_keepalives() {
         took >= Duration::from_secs(2) && took <= Duration::from_millis(4500),
         "{took:?}"
     );
-    assert!(conn.is_dead());
+    assert!(connection.is_dead());
     // Work on a dead connection fails instead of hanging.
-    let r = tokio::time::timeout(Duration::from_secs(5), conn.exec("true")).await;
-    assert!(matches!(r, Ok(Err(_))), "{r:?}");
+    let result = tokio::time::timeout(Duration::from_secs(5), connection.exec("true")).await;
+    assert!(matches!(result, Ok(Err(_))), "{result:?}");
 }
 
 #[tokio::test]
@@ -80,16 +80,16 @@ async fn fast_probe_and_input_after_silence() {
         count_max: 3,
         probe_timeout: Duration::from_millis(1000),
     };
-    let (conn, ..) = via_proxy(&proxy, keepalive).await;
-    conn.ping(Duration::from_secs(2)).await.unwrap();
+    let (connection, ..) = via_proxy(&proxy, keepalive).await;
+    connection.ping(Duration::from_secs(2)).await.unwrap();
     proxy.blackhole(true);
-    let t = Instant::now();
-    conn.probe(); // what the app does on foreground / network change
-    let why = tokio::time::timeout(Duration::from_secs(5), conn.closed())
+    let started = Instant::now();
+    connection.probe(); // what the app does on foreground / network change
+    let why = tokio::time::timeout(Duration::from_secs(5), connection.closed())
         .await
         .expect("probe did not detect the dead peer");
-    eprintln!("probe detected the drop in {:?}: {why}", t.elapsed());
-    assert!(t.elapsed() < Duration::from_millis(1600));
+    eprintln!("probe detected the drop in {:?}: {why}", started.elapsed());
+    assert!(started.elapsed() < Duration::from_millis(1600));
     assert!(why.contains("probe"), "{why}");
 
     // Typing into a shell after a keepalive interval of silence triggers the same probe.
@@ -99,21 +99,21 @@ async fn fast_probe_and_input_after_silence() {
         count_max: 100,
         probe_timeout: Duration::from_millis(1000),
     };
-    let (conn, ..) = via_proxy(&proxy, keepalive).await;
-    let (shell, _out) = conn
+    let (connection, ..) = via_proxy(&proxy, keepalive).await;
+    let (shell, _out) = connection
         .open_shell(&ssh::PtyRequest::new(80, 24))
         .await
         .unwrap();
     proxy.blackhole(true);
     tokio::time::sleep(Duration::from_millis(2500)).await;
-    let t = Instant::now();
+    let started = Instant::now();
     let _ = shell.write(b"ls\n").await;
-    tokio::time::timeout(Duration::from_secs(3), conn.closed())
+    tokio::time::timeout(Duration::from_secs(3), connection.closed())
         .await
         .expect("input after silence did not probe");
     eprintln!(
         "input-triggered probe detected the drop in {:?}",
-        t.elapsed()
+        started.elapsed()
     );
 }
 
@@ -121,11 +121,11 @@ async fn fast_probe_and_input_after_silence() {
 #[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn frozen_sshd_is_detected() {
     let env = env();
-    let mut options = env.options(env.key_creds());
+    let mut options = env.options(env.key_credentials());
     options.keepalive = fast_keepalive();
-    let conn = Connection::connect(&env.target(), &options).await.unwrap();
+    let connection = Connection::connect(&env.target(), &options).await.unwrap();
     // The shell's parent is this connection's unprivileged sshd process.
-    let pid = conn
+    let pid = connection
         .exec("echo $PPID")
         .await
         .unwrap()
@@ -141,15 +141,15 @@ async fn frozen_sshd_is_detected() {
         .unwrap()
         .check()
         .unwrap();
-    let t = Instant::now();
-    let why = tokio::time::timeout(Duration::from_secs(10), conn.closed()).await;
+    let started = Instant::now();
+    let why = tokio::time::timeout(Duration::from_secs(10), connection.closed()).await;
     admin
         .exec(&format!("kill -CONT {pid}; kill {pid}"))
         .await
         .unwrap();
     let why = why.expect("frozen server not detected");
-    eprintln!("frozen sshd detected in {:?}: {why}", t.elapsed());
-    assert!(t.elapsed() <= Duration::from_millis(4500));
+    eprintln!("frozen sshd detected in {:?}: {why}", started.elapsed());
+    assert!(started.elapsed() <= Duration::from_millis(4500));
 }
 
 #[derive(Default)]
@@ -166,7 +166,7 @@ impl ssh::SessionListener for States {
 async fn session_reconnects_after_a_drop_and_reports_states() {
     let env = env();
     let proxy = Proxy::start(format!("{}:22", env.host)).await;
-    let mut options = env.options(env.key_creds());
+    let mut options = env.options(env.key_credentials());
     options.keepalive = fast_keepalive();
     options.timeouts.handshake = Duration::from_secs(2);
     let states = Arc::new(States::default());
@@ -181,20 +181,22 @@ async fn session_reconnects_after_a_drop_and_reports_states() {
     );
     let first = session.connected().await.unwrap();
     assert!(first.exec("true").await.unwrap().success());
-    let mut rx = session.subscribe();
+    let mut state_changes = session.subscribe();
 
     // Drop the path silently; the session notices, retries (the proxy still swallows new
     // connections' bytes, so attempts time out), and comes back once the path heals.
     proxy.blackhole(true);
-    let t = Instant::now();
-    rx.wait_for(|s| matches!(s, ConnectionState::Reconnecting { .. }))
+    let started = Instant::now();
+    state_changes
+        .wait_for(|state| matches!(state, ConnectionState::Reconnecting { .. }))
         .await
         .unwrap();
-    let detected = t.elapsed();
+    let detected = started.elapsed();
     tokio::time::sleep(Duration::from_secs(3)).await;
     proxy.blackhole(false);
     let healed = Instant::now();
-    rx.wait_for(|s| matches!(s, ConnectionState::Connected { generation: 2.. }))
+    state_changes
+        .wait_for(|state| matches!(state, ConnectionState::Connected { generation: 2.. }))
         .await
         .unwrap();
     eprintln!(
@@ -207,11 +209,13 @@ async fn session_reconnects_after_a_drop_and_reports_states() {
 
     // reconnect_now swaps the connection at once.
     session.reconnect_now();
-    rx.wait_for(|s| matches!(s, ConnectionState::Connected { generation: 3.. }))
+    state_changes
+        .wait_for(|state| matches!(state, ConnectionState::Connected { generation: 3.. }))
         .await
         .unwrap();
     session.close();
-    rx.wait_for(|s| matches!(s, ConnectionState::Closed))
+    state_changes
+        .wait_for(|state| matches!(state, ConnectionState::Closed))
         .await
         .unwrap();
 
@@ -220,8 +224,8 @@ async fn session_reconnects_after_a_drop_and_reports_states() {
         .lock()
         .unwrap()
         .iter()
-        .map(|(_, s)| {
-            format!("{s:?}")
+        .map(|(_, state)| {
+            format!("{state:?}")
                 .split([' ', '{'])
                 .next()
                 .unwrap()
@@ -230,7 +234,7 @@ async fn session_reconnects_after_a_drop_and_reports_states() {
         .collect();
     eprintln!("states: {log:?}");
     assert_eq!(log.first().map(String::as_str), Some("Connecting"));
-    assert!(log.iter().any(|s| s == "Reconnecting"));
+    assert!(log.iter().any(|name| name == "Reconnecting"));
     assert_eq!(log.last().map(String::as_str), Some("Closed"));
 }
 

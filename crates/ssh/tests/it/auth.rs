@@ -11,11 +11,11 @@ use ssh::{
 
 use crate::common::env;
 
-async fn whoami(creds: Credentials) -> Result<String, SshError> {
+async fn whoami(credentials: Credentials) -> Result<String, SshError> {
     let env = env();
-    let conn = Connection::connect(&env.target(), &env.options(creds)).await?;
-    let out = conn.exec("whoami").await?.check()?;
-    Ok(out.stdout_text().trim().to_owned())
+    let connection = Connection::connect(&env.target(), &env.options(credentials)).await?;
+    let output = connection.exec("whoami").await?.check()?;
+    Ok(output.stdout_text().trim().to_owned())
 }
 
 #[tokio::test]
@@ -40,7 +40,7 @@ async fn every_key_type() {
     for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
         let user = whoami(Credentials::new().with(AuthMethod::Key(env.key(name))))
             .await
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(user, env.user, "{name}");
     }
     let pem = std::fs::read_to_string(env.keys.join("id_ed25519_enc")).unwrap();
@@ -66,10 +66,10 @@ async fn falls_through_to_the_next_method() {
     // An unknown key first, then the right one.
     let stranger =
         SecretKey::decode(&ssh::generate_ed25519("x").unwrap().private_key, None).unwrap();
-    let creds = Credentials::new()
+    let credentials = Credentials::new()
         .with(AuthMethod::Key(stranger))
         .with(AuthMethod::Key(env.key("id_ecdsa")));
-    assert_eq!(whoami(creds).await.unwrap(), env.user);
+    assert_eq!(whoami(credentials).await.unwrap(), env.user);
 }
 
 #[tokio::test]
@@ -77,24 +77,24 @@ async fn falls_through_to_the_next_method() {
 async fn ssh_agent() {
     let env = env();
     let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("agent.sock");
+    let socket = dir.path().join("agent.sock");
     let mut agent = tokio::process::Command::new("ssh-agent")
         .args(["-D", "-a"])
-        .arg(&sock)
+        .arg(&socket)
         .stdout(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .unwrap();
-    assert!(crate::common::eventually(std::time::Duration::from_secs(5), || sock.exists()).await);
+    assert!(crate::common::eventually(std::time::Duration::from_secs(5), || socket.exists()).await);
     let status = tokio::process::Command::new("ssh-add")
         .arg(env.keys.join("id_ed25519"))
-        .env("SSH_AUTH_SOCK", &sock)
+        .env("SSH_AUTH_SOCK", &socket)
         .stderr(std::process::Stdio::null())
         .status()
         .await
         .unwrap();
     assert!(status.success());
-    let user = whoami(Credentials::new().with(AuthMethod::Agent(Some(sock.clone()))))
+    let user = whoami(Credentials::new().with(AuthMethod::Agent(Some(socket.clone()))))
         .await
         .unwrap();
     assert_eq!(user, env.user);
@@ -134,11 +134,11 @@ impl ExternalSigner for SoftEnclave {
 
     fn sign(&self, data: Vec<u8>) -> Result<Vec<u8>, SignerError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let sig: p256::ecdsa::Signature = self.key.sign(&data);
+        let signature: p256::ecdsa::Signature = self.key.sign(&data);
         Ok(if self.der {
-            sig.to_der().as_bytes().to_vec()
+            signature.to_der().as_bytes().to_vec()
         } else {
-            sig.to_bytes().to_vec()
+            signature.to_bytes().to_vec()
         })
     }
 }
@@ -206,14 +206,14 @@ async fn host_keys_tofu_pin_and_mismatch() {
     let env = env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("known_hosts");
-    let known = Arc::new(KnownHosts::open(&path).unwrap());
+    let known_hosts = Arc::new(KnownHosts::open(&path).unwrap());
 
     // Refused on first sight: nothing is recorded and no credentials are sent.
-    let no = Arc::new(Prompt::default());
+    let refusing = Arc::new(Prompt::default());
     let options = ConnectOptions::new(
-        env.key_creds(),
-        Arc::clone(&known),
-        HostKeyPolicy::Ask(no.clone()),
+        env.key_credentials(),
+        Arc::clone(&known_hosts),
+        HostKeyPolicy::Ask(refusing.clone()),
     );
     match Connection::connect(&env.target(), &options).await {
         Err(SshError::HostKeyRejected { host, fingerprint }) => {
@@ -222,53 +222,53 @@ async fn host_keys_tofu_pin_and_mismatch() {
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(no.seen.lock().unwrap().len(), 1);
-    assert!(known.to_text().is_empty());
+    assert_eq!(refusing.seen.lock().unwrap().len(), 1);
+    assert!(known_hosts.to_text().is_empty());
 
     // Trusted on first sight: asked once, then remembered (in the file too).
-    let yes = Arc::new(Prompt {
+    let accepting = Arc::new(Prompt {
         answer: true,
         ..Prompt::default()
     });
     let options = ConnectOptions::new(
-        env.key_creds(),
-        Arc::clone(&known),
-        HostKeyPolicy::Ask(yes.clone()),
+        env.key_credentials(),
+        Arc::clone(&known_hosts),
+        HostKeyPolicy::Ask(accepting.clone()),
     );
     Connection::connect(&env.target(), &options).await.unwrap();
     Connection::connect(&env.target(), &options).await.unwrap();
-    assert_eq!(yes.seen.lock().unwrap().len(), 1);
-    let real = yes.seen.lock().unwrap()[0].clone();
+    assert_eq!(accepting.seen.lock().unwrap().len(), 1);
+    let real = accepting.seen.lock().unwrap()[0].clone();
     let reopened = KnownHosts::open(&path).unwrap();
     assert!(reopened.to_text().contains(&real.public_key));
 
     // Pinned to another key: a hard mismatch carrying both fingerprints.
     let other = ssh::generate_ed25519("").unwrap();
-    known.pin(&env.host, 22, &other.public_key).unwrap();
+    known_hosts.pin(&env.host, 22, &other.public_key).unwrap();
     match Connection::connect(&env.target(), &options).await {
-        Err(e @ SshError::HostKeyMismatch { .. }) => {
+        Err(error @ SshError::HostKeyMismatch { .. }) => {
             let SshError::HostKeyMismatch {
                 expected, actual, ..
-            } = &e
+            } = &error
             else {
                 unreachable!()
             };
             assert_eq!(expected, std::slice::from_ref(&other.fingerprint));
             assert_eq!(actual, &real.fingerprint);
-            assert!(e.is_fatal());
-            assert!(e.to_string().contains(&other.fingerprint));
+            assert!(error.is_fatal());
+            assert!(error.to_string().contains(&other.fingerprint));
         }
         other => panic!("{other:?}"),
     }
     assert_eq!(
-        yes.seen.lock().unwrap().len(),
+        accepting.seen.lock().unwrap().len(),
         1,
         "a mismatch never prompts"
     );
 
     // Strict refuses unknown hosts outright.
     let strict = ConnectOptions::new(
-        env.key_creds(),
+        env.key_credentials(),
         Arc::new(KnownHosts::in_memory()),
         HostKeyPolicy::Strict,
     );

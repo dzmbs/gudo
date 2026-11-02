@@ -29,13 +29,11 @@ pub struct RepoSnapshot {
 /// A pane and its worktree.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PaneRepo {
-    /// The pane.
     pub pane_id: u64,
     /// [`WorktreeState::path`].
     pub worktree: String,
 }
 
-/// One worktree.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct WorktreeState {
     /// Top level.
@@ -46,17 +44,14 @@ pub struct WorktreeState {
     pub repo_name: String,
     /// The worktree's directory name.
     pub name: String,
-    /// The main worktree.
     pub main: bool,
     /// Branch; `nil` when detached.
     pub branch: Option<String>,
     /// `HEAD`.
     pub head: Option<String>,
-    /// Upstream branch.
     pub upstream: Option<String>,
     /// Commits ahead of the upstream.
     pub ahead: u32,
-    /// Commits behind.
     pub behind: u32,
     /// Lines added since `HEAD` (untracked files included).
     pub added: u32,
@@ -82,24 +77,16 @@ pub struct WorktreeState {
     pub updated_at_ms: u64,
 }
 
-/// A pull request.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PullRequest {
-    /// Number.
     pub number: u32,
-    /// Title.
     pub title: String,
-    /// State.
     pub state: PrState,
-    /// Draft.
     pub draft: bool,
     /// Web page.
     pub url: String,
-    /// Head branch.
     pub head_ref: String,
-    /// Lines added.
     pub additions: u32,
-    /// Lines removed.
     pub deletions: u32,
     /// Whether it can be merged now.
     pub merge_state: MergeState,
@@ -109,14 +96,11 @@ pub struct PullRequest {
     pub fetched_at_ms: u64,
 }
 
-/// A pull request's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum PrState {
-    /// Open.
     Open,
     /// Closed without merging.
     Closed,
-    /// Merged.
     Merged,
 }
 
@@ -133,41 +117,29 @@ pub enum MergeState {
     Behind,
     /// Blocked by reviews or required checks.
     Blocked,
-    /// Merge conflicts.
     Dirty,
-    /// A draft.
     Draft,
     /// Not computed yet.
     Unknown,
 }
 
-/// One check.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PrCheck {
-    /// Name.
     pub name: String,
     /// Where it stands.
     pub status: CheckStatus,
-    /// Its page.
     pub url: Option<String>,
-    /// Its workflow.
     pub workflow: Option<String>,
 }
 
-/// Where a check stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum CheckStatus {
     /// Queued or running.
     Pending,
-    /// Passed.
     Success,
-    /// Failed.
     Failure,
-    /// Neutral.
     Neutral,
-    /// Skipped.
     Skipped,
-    /// Cancelled.
     Cancelled,
 }
 
@@ -177,10 +149,7 @@ pub enum GhStatus {
     /// Not checked yet.
     Unknown,
     /// Installed and signed in.
-    Ready {
-        /// The account.
-        account: Option<String>,
-    },
+    Ready { account: Option<String> },
     /// Not installed on the host.
     Missing,
     /// Not signed in (`gh auth login`).
@@ -190,10 +159,8 @@ pub enum GhStatus {
     },
 }
 
-/// A named command.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RepoScript {
-    /// Title.
     pub name: String,
     /// Shell command line.
     pub command: String,
@@ -208,36 +175,26 @@ pub struct RepoScript {
 /// How a pull request is merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MergeStrategy {
-    /// Merge commit.
     Merge,
-    /// Squash.
     Squash,
-    /// Rebase.
     Rebase,
 }
 
-/// An archived worktree.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ArchivedWorktree {
     /// Id for [`DaemonClient::worktree_restore`].
     pub id: u64,
-    /// Repository.
     pub repo: String,
-    /// Repository name.
     pub repo_name: String,
     /// Where it was.
     pub path: String,
-    /// Its branch.
     pub branch: Option<String>,
-    /// Its commit.
     pub head: Option<String>,
     /// Uncommitted changes were kept.
     pub saved_changes: bool,
-    /// When.
     pub archived_at_ms: u64,
 }
 
-/// A new task.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct TaskCreate {
     /// Any directory in the repository.
@@ -277,13 +234,13 @@ pub struct RepoHooksTrust {
 }
 
 impl From<proto::RepoHooksTrust> for RepoHooksTrust {
-    fn from(t: proto::RepoHooksTrust) -> Self {
+    fn from(repo_hooks_trust: proto::RepoHooksTrust) -> Self {
         Self {
-            repo: t.repo,
-            setup: t.hooks.setup,
-            teardown: t.hooks.teardown,
-            hash: t.hash,
-            trusted: t.trusted,
+            repo: repo_hooks_trust.repo,
+            setup: repo_hooks_trust.hooks.setup,
+            teardown: repo_hooks_trust.hooks.teardown,
+            hash: repo_hooks_trust.hash,
+            trusted: repo_hooks_trust.trusted,
         }
     }
 }
@@ -298,11 +255,8 @@ impl RepoHooksTrust {
 /// What [`DaemonClient::task_create`] made.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct TaskCreated {
-    /// The worktree.
     pub worktree: WorktreeInfo,
-    /// The tab.
     pub tab_id: u64,
-    /// Its pane.
     pub pane_id: u64,
     /// The setup command that runs first.
     pub setup: Option<String>,
@@ -311,77 +265,81 @@ pub struct TaskCreated {
 }
 
 impl From<proto::RepoSnapshot> for RepoSnapshot {
-    fn from(s: proto::RepoSnapshot) -> Self {
+    fn from(repo_snapshot: proto::RepoSnapshot) -> Self {
         Self {
-            rev: s.rev,
-            panes: s
+            rev: repo_snapshot.rev,
+            panes: repo_snapshot
                 .panes
                 .into_iter()
-                .map(|p| PaneRepo {
-                    pane_id: p.pane_id.0,
-                    worktree: p.worktree,
+                .map(|pane| PaneRepo {
+                    pane_id: pane.pane_id.0,
+                    worktree: pane.worktree,
                 })
                 .collect(),
-            worktrees: s.worktrees.into_iter().map(Into::into).collect(),
-            gh: s.gh.into(),
+            worktrees: repo_snapshot
+                .worktrees
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            gh: repo_snapshot.gh.into(),
         }
     }
 }
 
 impl From<proto::WorktreeState> for WorktreeState {
-    fn from(w: proto::WorktreeState) -> Self {
+    fn from(worktree_state: proto::WorktreeState) -> Self {
         Self {
-            path: w.path,
-            repo: w.repo,
-            repo_name: w.repo_name,
-            name: w.name,
-            main: w.main,
-            branch: w.branch,
-            head: w.head,
-            upstream: w.upstream,
-            ahead: w.ahead,
-            behind: w.behind,
-            added: w.added,
-            removed: w.removed,
-            changed_files: w.changed_files,
-            dirty: w.dirty,
-            pr: w.pr.map(Into::into),
-            scripts: w
+            path: worktree_state.path,
+            repo: worktree_state.repo,
+            repo_name: worktree_state.repo_name,
+            name: worktree_state.name,
+            main: worktree_state.main,
+            branch: worktree_state.branch,
+            head: worktree_state.head,
+            upstream: worktree_state.upstream,
+            ahead: worktree_state.ahead,
+            behind: worktree_state.behind,
+            added: worktree_state.added,
+            removed: worktree_state.removed,
+            changed_files: worktree_state.changed_files,
+            dirty: worktree_state.dirty,
+            pr: worktree_state.pr.map(Into::into),
+            scripts: worktree_state
                 .scripts
                 .into_iter()
-                .map(|s| RepoScript {
-                    name: s.name,
-                    command: s.command,
-                    icon: s.icon,
-                    tint: s.tint,
-                    is_default: s.default,
+                .map(|script| RepoScript {
+                    name: script.name,
+                    command: script.command,
+                    icon: script.icon,
+                    tint: script.tint,
+                    is_default: script.default,
                 })
                 .collect(),
-            setup: w.hooks.setup,
-            teardown: w.hooks.teardown,
-            managed: w.managed,
-            merged_at_ms: w.merged_at.map(|t| t.0),
-            updated_at_ms: w.updated_at.0,
+            setup: worktree_state.hooks.setup,
+            teardown: worktree_state.hooks.teardown,
+            managed: worktree_state.managed,
+            merged_at_ms: worktree_state.merged_at.map(|t| t.0),
+            updated_at_ms: worktree_state.updated_at.0,
         }
     }
 }
 
 impl From<proto::PullRequest> for PullRequest {
-    fn from(p: proto::PullRequest) -> Self {
+    fn from(pull_request: proto::PullRequest) -> Self {
         Self {
-            number: p.number,
-            title: p.title,
-            state: match p.state {
+            number: pull_request.number,
+            title: pull_request.title,
+            state: match pull_request.state {
                 proto::PrState::Open => PrState::Open,
                 proto::PrState::Closed => PrState::Closed,
                 proto::PrState::Merged => PrState::Merged,
             },
-            draft: p.draft,
-            url: p.url,
-            head_ref: p.head_ref,
-            additions: p.additions,
-            deletions: p.deletions,
-            merge_state: match p.merge_state {
+            draft: pull_request.draft,
+            url: pull_request.url,
+            head_ref: pull_request.head_ref,
+            additions: pull_request.additions,
+            deletions: pull_request.deletions,
+            merge_state: match pull_request.merge_state {
                 proto::MergeState::Clean => MergeState::Clean,
                 proto::MergeState::Unstable => MergeState::Unstable,
                 proto::MergeState::HasHooks => MergeState::HasHooks,
@@ -391,12 +349,12 @@ impl From<proto::PullRequest> for PullRequest {
                 proto::MergeState::Draft => MergeState::Draft,
                 proto::MergeState::Unknown => MergeState::Unknown,
             },
-            checks: p
+            checks: pull_request
                 .checks
                 .into_iter()
-                .map(|c| PrCheck {
-                    name: c.name,
-                    status: match c.status {
+                .map(|check| PrCheck {
+                    name: check.name,
+                    status: match check.status {
                         proto::CheckStatus::Pending => CheckStatus::Pending,
                         proto::CheckStatus::Success => CheckStatus::Success,
                         proto::CheckStatus::Failure => CheckStatus::Failure,
@@ -404,18 +362,18 @@ impl From<proto::PullRequest> for PullRequest {
                         proto::CheckStatus::Skipped => CheckStatus::Skipped,
                         proto::CheckStatus::Cancelled => CheckStatus::Cancelled,
                     },
-                    url: c.url,
-                    workflow: c.workflow,
+                    url: check.url,
+                    workflow: check.workflow,
                 })
                 .collect(),
-            fetched_at_ms: p.fetched_at.0,
+            fetched_at_ms: pull_request.fetched_at.0,
         }
     }
 }
 
 impl From<proto::GhStatus> for GhStatus {
-    fn from(g: proto::GhStatus) -> Self {
-        match g {
+    fn from(gh_status: proto::GhStatus) -> Self {
+        match gh_status {
             proto::GhStatus::Unknown => Self::Unknown,
             proto::GhStatus::Ready { account } => Self::Ready { account },
             proto::GhStatus::Missing => Self::Missing,
@@ -425,8 +383,8 @@ impl From<proto::GhStatus> for GhStatus {
 }
 
 impl From<MergeStrategy> for proto::MergeStrategy {
-    fn from(m: MergeStrategy) -> Self {
-        match m {
+    fn from(merge_strategy: MergeStrategy) -> Self {
+        match merge_strategy {
             MergeStrategy::Merge => Self::Merge,
             MergeStrategy::Squash => Self::Squash,
             MergeStrategy::Rebase => Self::Rebase,
@@ -435,16 +393,16 @@ impl From<MergeStrategy> for proto::MergeStrategy {
 }
 
 impl From<proto::ArchivedWorktree> for ArchivedWorktree {
-    fn from(a: proto::ArchivedWorktree) -> Self {
+    fn from(archived_worktree: proto::ArchivedWorktree) -> Self {
         Self {
-            id: a.id,
-            repo: a.repo,
-            repo_name: a.repo_name,
-            path: a.path,
-            branch: a.branch,
-            head: a.head,
-            saved_changes: a.saved_changes,
-            archived_at_ms: a.archived_at.0,
+            id: archived_worktree.id,
+            repo: archived_worktree.repo,
+            repo_name: archived_worktree.repo_name,
+            path: archived_worktree.path,
+            branch: archived_worktree.branch,
+            head: archived_worktree.head,
+            saved_changes: archived_worktree.saved_changes,
+            archived_at_ms: archived_worktree.archived_at.0,
         }
     }
 }
@@ -462,7 +420,7 @@ impl DaemonClient {
             return Ok(None);
         }
         let trust: proto::RepoHooksTrust = self
-            .ws_call(|c| async move { c.repo_hooks(of).await })
+            .ws_call(|client| async move { client.repo_hooks(of).await })
             .await?;
         Ok(Some(RepoHooksTrust::from(trust)).filter(RepoHooksTrust::needs_asking))
     }
@@ -481,7 +439,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn repo_refresh(&self, path: Option<String>) -> Result<RepoSnapshot, WorkspaceError> {
-        self.ws_call(|c| async move { c.repo_refresh(path).await })
+        self.ws_call(|client| async move { client.repo_refresh(path).await })
             .await
     }
 
@@ -499,13 +457,14 @@ impl DaemonClient {
         strategy: MergeStrategy,
     ) -> Result<Option<PullRequest>, WorkspaceError> {
         let pr: Option<proto::PullRequest> = self
-            .ws_call(|c| async move {
-                c.pr_merge(proto::PrMerge {
-                    path,
-                    number,
-                    strategy: strategy.into(),
-                })
-                .await
+            .ws_call(|client| async move {
+                client
+                    .pr_merge(proto::PrMerge {
+                        path,
+                        number,
+                        strategy: strategy.into(),
+                    })
+                    .await
             })
             .await?;
         Ok(pr.map(Into::into))
@@ -521,7 +480,7 @@ impl DaemonClient {
         path: String,
     ) -> Result<Option<PullRequest>, WorkspaceError> {
         let pr: Option<proto::PullRequest> = self
-            .ws_call(|c| async move { c.pr_rerun_failed(path).await })
+            .ws_call(|client| async move { client.pr_rerun_failed(path).await })
             .await?;
         Ok(pr.map(Into::into))
     }
@@ -538,7 +497,11 @@ impl DaemonClient {
         base: Option<String>,
     ) -> Result<Option<PullRequest>, WorkspaceError> {
         let pr: Option<proto::PullRequest> = self
-            .ws_call(|c| async move { c.pr_create(proto::PrCreate { path, draft, base }).await })
+            .ws_call(|client| async move {
+                client
+                    .pr_create(proto::PrCreate { path, draft, base })
+                    .await
+            })
             .await?;
         Ok(pr.map(Into::into))
     }
@@ -553,8 +516,10 @@ impl DaemonClient {
         repo: String,
         number: u32,
     ) -> Result<WorktreeInfo, WorkspaceError> {
-        self.ws_call(|c| async move { c.pr_checkout(proto::PrCheckout { repo, number }).await })
-            .await
+        self.ws_call(|client| async move {
+            client.pr_checkout(proto::PrCheckout { repo, number }).await
+        })
+        .await
     }
 
     /// Archives a worktree: its commits stay under a ref, and with `force` its uncommitted
@@ -564,7 +529,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn worktree_archive(&self, path: String, force: bool) -> Result<(), WorkspaceError> {
-        self.ws_call(|c| async move { c.worktree_archive(path, force).await })
+        self.ws_call(|client| async move { client.worktree_archive(path, force).await })
             .await
     }
 
@@ -578,7 +543,7 @@ impl DaemonClient {
         repo: Option<String>,
     ) -> Result<Vec<ArchivedWorktree>, WorkspaceError> {
         let all: Vec<proto::ArchivedWorktree> = self
-            .ws_call(|c| async move { c.worktree_archived(repo).await })
+            .ws_call(|client| async move { client.worktree_archived(repo).await })
             .await?;
         Ok(all.into_iter().map(Into::into).collect())
     }
@@ -589,7 +554,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn worktree_restore(&self, id: u64) -> Result<WorktreeInfo, WorkspaceError> {
-        self.ws_call(|c| async move { c.worktree_restore(id).await })
+        self.ws_call(|client| async move { client.worktree_restore(id).await })
             .await
     }
 
@@ -600,15 +565,16 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`] (changing it needs the owner).
     pub async fn worktree_auto_delete_days(&self, set: Option<u32>) -> Result<u32, WorkspaceError> {
-        let s: proto::WorktreeSettings = self
-            .ws_call(|c| async move {
-                c.worktree_settings(set.map(|d| proto::WorktreeSettings {
-                    auto_delete_merged_days: d,
-                }))
-                .await
+        let settings: proto::WorktreeSettings = self
+            .ws_call(|client| async move {
+                client
+                    .worktree_settings(set.map(|desired| proto::WorktreeSettings {
+                        auto_delete_merged_days: desired,
+                    }))
+                    .await
             })
             .await?;
-        Ok(s.auto_delete_merged_days)
+        Ok(settings.auto_delete_merged_days)
     }
 
     /// A new task: a worktree on a new branch and a tab running a shell or an agent there
@@ -629,7 +595,7 @@ impl DaemonClient {
             agent: task.agent.map(Into::into),
         };
         let made: proto::TaskCreated = self
-            .ws_call(|c| async move { c.task_create(req).await })
+            .ws_call(|client| async move { client.task_create(req).await })
             .await?;
         let mut out = TaskCreated {
             worktree: made.worktree.into(),
@@ -687,7 +653,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`] (`Denied` for a guest).
     pub async fn repo_trust(&self, repo: String, hash: String) -> Result<(), WorkspaceError> {
-        self.ws_call(|c| async move { c.repo_trust(repo, hash).await })
+        self.ws_call(|client| async move { client.repo_trust(repo, hash).await })
             .await
     }
 
@@ -704,14 +670,15 @@ impl DaemonClient {
         command: String,
     ) -> Result<u64, WorkspaceError> {
         let pane: proto::PaneId = self
-            .ws_call(|c| async move {
-                c.script_run(proto::ScriptRun {
-                    cwd,
-                    session_id: proto::SessionId(session_id),
-                    name,
-                    command,
-                })
-                .await
+            .ws_call(|client| async move {
+                client
+                    .script_run(proto::ScriptRun {
+                        cwd,
+                        session_id: proto::SessionId(session_id),
+                        name,
+                        command,
+                    })
+                    .await
             })
             .await?;
         Ok(pane.0)

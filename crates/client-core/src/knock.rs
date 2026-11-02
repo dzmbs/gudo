@@ -1,3 +1,4 @@
+//! Knock to join: with an invite whose owner wants to be asked first, the
 //! guest dials the daemon, waits in the lobby while an owner decides, and on admission gets a
 //! grant of its own to join with. A one-shot connection like [`crate::push::send_action`]:
 //! nothing is attached or streamed while waiting.
@@ -64,16 +65,16 @@ pub async fn knock(
         .map_err(|_| crate::ClientError::Key)?;
     let secret = iroh::SecretKey::from_bytes(&key);
     let device = proto::DeviceId(*secret.public().as_bytes());
-    let unreachable = |e: &dyn std::fmt::Display| KnockError::Unreachable(e.to_string());
+    let unreachable = |err: &dyn std::fmt::Display| KnockError::Unreachable(err.to_string());
     // Invites carry no relay extras: the daemon's home relay, unless this device's own
     // network settings say otherwise.
     let route = Route::new(config.relay, &proto::TicketRelays::default(), &options);
     let endpoint = endpoint_builder(&route, &options)
-        .map_err(|e| unreachable(&e))?
+        .map_err(|err| unreachable(&err))?
         .secret_key(secret)
         .bind()
         .await
-        .map_err(|e| unreachable(&e))?;
+        .map_err(|err| unreachable(&err))?;
     let ticket = Ticket {
         v: Ticket::VERSION,
         daemon_id: invite.daemon_id,
@@ -84,17 +85,17 @@ pub async fn knock(
         expires: proto::UnixMillis(0),
     };
     let result = async {
-        let addr = ticket_addr(&ticket, &route).map_err(|e| unreachable(&e))?;
-        let conn = connect_daemon(&endpoint, addr)
+        let daemon_addr = ticket_addr(&ticket, &route).map_err(|err| unreachable(&err))?;
+        let connection = connect_daemon(&endpoint, daemon_addr)
             .await
-            .map_err(|e| unreachable(&e))?;
+            .map_err(|err| unreachable(&err))?;
         // Dropping the future (the user stopped waiting) hangs up at once, so the owner's
         // request goes away now rather than after an idle timeout.
         let hangup = Hangup {
-            conn,
+            connection,
             endpoint: endpoint.clone(),
         };
-        wait(&hangup.conn, &invite, device, name, on_waiting).await
+        wait(&hangup.connection, &invite, device, name, on_waiting).await
     }
     .await;
     endpoint.close().await;
@@ -104,13 +105,13 @@ pub async fn knock(
 /// Hangs up when dropped: closes the connection and lets the endpoint send the close before
 /// it goes away (on the runtime, since `Drop` cannot wait).
 struct Hangup {
-    conn: Connection,
+    connection: Connection,
     endpoint: iroh::Endpoint,
 }
 
 impl Drop for Hangup {
     fn drop(&mut self) {
-        self.conn.close(0u32.into(), b"done");
+        self.connection.close(0u32.into(), b"done");
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let endpoint = self.endpoint.clone();
             runtime.spawn(async move { endpoint.close().await });
@@ -119,14 +120,17 @@ impl Drop for Hangup {
 }
 
 async fn wait(
-    conn: &Connection,
+    connection: &Connection,
     invite: &Invite,
     device: proto::DeviceId,
     name: Option<String>,
     on_waiting: impl FnOnce(KnockId),
 ) -> Result<KnockOutcome, KnockError> {
-    let unreachable = |e: &dyn std::fmt::Display| KnockError::Unreachable(e.to_string());
-    let (mut tx, mut rx) = conn.open_bi().await.map_err(|e| unreachable(&e))?;
+    let unreachable = |err: &dyn std::fmt::Display| KnockError::Unreachable(err.to_string());
+    let (mut send_stream, mut recv_stream) = connection
+        .open_bi()
+        .await
+        .map_err(|err| unreachable(&err))?;
     let hello = Hello {
         device_id: device,
         principal_id: grants::guest_principal(device),
@@ -141,33 +145,39 @@ async fn wait(
         link: LinkClass::Constrained,
         resume_token: None,
     };
-    send(&mut tx, &ClientCtl::Hello(hello))
+    send(&mut send_stream, &ClientCtl::Hello(hello))
         .await
-        .map_err(|e| unreachable(&e))?;
+        .map_err(|err| unreachable(&err))?;
     // Who is knocking, before the owner is asked (the daemon waits a moment for it).
-    if let Some(name) = name.as_ref().filter(|n| !n.trim().is_empty()) {
-        let req = MpRequest::SetName { name: name.clone() };
-        send(&mut tx, &ClientCtl::Multiplayer { req_id: 1, req })
-            .await
-            .map_err(|e| unreachable(&e))?;
+    if let Some(name) = name.as_ref().filter(|name| !name.trim().is_empty()) {
+        let request = MpRequest::SetName { name: name.clone() };
+        send(
+            &mut send_stream,
+            &ClientCtl::Multiplayer {
+                req_id: 1,
+                req: request,
+            },
+        )
+        .await
+        .map_err(|err| unreachable(&err))?;
     }
     let mut on_waiting = Some(on_waiting);
     let mut keepalive = tokio::time::interval(KEEPALIVE);
     keepalive.tick().await;
     let mut nonce = 0;
     loop {
-        let msg = tokio::select! {
-            msg = recv::<ServerCtl>(&mut rx) => msg.map_err(|e| unreachable(&e))?,
+        let message = tokio::select! {
+            message = recv::<ServerCtl>(&mut recv_stream) => message.map_err(|err| unreachable(&err))?,
             _ = keepalive.tick() => {
                 nonce += 1;
-                send(&mut tx, &ClientCtl::Ping { nonce }).await.map_err(|e| unreachable(&e))?;
+                send(&mut send_stream, &ClientCtl::Ping { nonce }).await.map_err(|err| unreachable(&err))?;
                 continue;
             }
         };
-        match msg {
+        match message {
             Some(ServerCtl::KnockAnswer(KnockAnswer::Waiting { knock_id })) => {
-                if let Some(f) = on_waiting.take() {
-                    f(knock_id);
+                if let Some(on_waiting) = on_waiting.take() {
+                    on_waiting(knock_id);
                 }
             }
             Some(ServerCtl::KnockAnswer(KnockAnswer::Admitted(chain))) => {
@@ -180,7 +190,7 @@ async fn wait(
             // Not a knock invite after all: it joins as it is.
             Some(ServerCtl::Welcome(_)) => {
                 let _ = send(
-                    &mut tx,
+                    &mut send_stream,
                     &ClientCtl::Bye {
                         reason: proto::ByeReason::Quit,
                     },

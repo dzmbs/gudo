@@ -1,3 +1,4 @@
+//! Launch recipes: what the daemon spawns in a pane.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -7,7 +8,6 @@ use crate::event::{NativeSessionId, PaneId};
 /// Daemon facts every launch recipe needs.
 #[derive(Debug, Clone)]
 pub struct LaunchContext {
-    /// The pane the agent runs in.
     pub pane_id: PaneId,
     /// The daemon's hook socket.
     pub socket: PathBuf,
@@ -23,7 +23,6 @@ pub struct LaunchContext {
     /// The working directory to launch in. Resume must use the session's original cwd for agents
     /// that scope sessions by directory.
     pub cwd: PathBuf,
-    /// The account the agent runs under.
     pub account: AccountContext,
 }
 
@@ -79,9 +78,7 @@ pub enum LaunchMode {
         /// later.
         session_id: Option<NativeSessionId>,
     },
-    /// Resume an existing session.
     Resume {
-        /// The agent's id for the session.
         session_id: NativeSessionId,
     },
 }
@@ -89,9 +86,7 @@ pub enum LaunchMode {
 /// A file the daemon must write before spawning, e.g. Claude's hook settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportFile {
-    /// Where to write it.
     pub path: PathBuf,
-    /// What to write.
     pub contents: String,
 }
 
@@ -104,7 +99,6 @@ pub struct LaunchSpec {
     pub args: Vec<OsString>,
     /// Variables to add to the pane's environment.
     pub env: Vec<(String, OsString)>,
-    /// The working directory.
     pub cwd: PathBuf,
     /// Files to write first. Writing is idempotent; the contents depend only on the context.
     pub files: Vec<SupportFile>,
@@ -155,15 +149,15 @@ impl LaunchSpec {
             line.push_str(&self.env_remove.join(" "));
             line.push_str("; ");
         }
-        for (k, v) in &self.env_pinned {
+        for (name, value) in &self.env_pinned {
             line.push_str(&format!(
-                "export {k}={}; ",
-                shell_quote(&v.to_string_lossy())
+                "export {name}={}; ",
+                shell_quote(&value.to_string_lossy())
             ));
         }
         let command: Vec<String> = std::iter::once(&self.program)
             .chain(&self.args)
-            .map(|a| shell_quote(&a.to_string_lossy()))
+            .map(|arg| shell_quote(&arg.to_string_lossy()))
             .collect();
         line.push_str(&command.join(" "));
         line
@@ -207,7 +201,7 @@ pub fn account_env(account: &AccountContext, own: &str) -> (Vec<String>, Vec<(St
     let remove = CREDENTIAL_VARS
         .iter()
         .chain([&other])
-        .map(|v| (*v).to_owned())
+        .map(|name| (*name).to_owned())
         .collect();
     pinned.push((own.to_owned(), dir.clone().into()));
     // The hook shim reads it: Claude may scrub its own variable from hook environments.
@@ -300,11 +294,11 @@ pub(crate) fn user_mcp_server(hook_bin: &Path, state_dir: &Path) -> Vec<String> 
     ]
 }
 
-/// Quotes `s` as a TOML basic string.
-pub(crate) fn toml_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+/// Quotes `text` as a TOML basic string.
+pub(crate) fn toml_quote(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
-    for c in s.chars() {
+    for c in text.chars() {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
@@ -319,15 +313,16 @@ pub(crate) fn toml_quote(s: &str) -> String {
     out
 }
 
-/// Quotes `s` for a POSIX shell as one word.
-pub fn shell_quote(s: &str) -> String {
-    if !s.is_empty()
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&b))
+/// Quotes `word` for a POSIX shell as one word.
+pub fn shell_quote(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&byte))
     {
-        return s.to_owned();
+        return word.to_owned();
     }
-    format!("'{}'", s.replace('\'', r"'\''"))
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 #[cfg(test)]
@@ -362,7 +357,7 @@ mod tests {
     #[test]
     fn pane_env_uses_the_brand_prefix() {
         let env = pane_env(&test_context());
-        let names: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        let names: Vec<&str> = env.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
             [
@@ -393,8 +388,8 @@ mod tests {
             r#""/opt/gudo/bin/gudo-hook""#
         );
         assert_eq!(
-            toml_quote(r#"/Users/A "B"\C/gudo-hook"#),
-            r#""/Users/A \"B\"\\C/gudo-hook""#
+            toml_quote(r#"/home/A "B"\C/gudo-hook"#),
+            r#""/home/A \"B\"\\C/gudo-hook""#
         );
         assert_eq!(toml_quote("a\nb\u{7f}"), r#""a\nb\u007F""#);
         let weird = "it's \"x\" \\ y\tz é\u{1}";
@@ -408,16 +403,13 @@ mod tests {
             shell_quote("/opt/gudo/bin/gudo-hook"),
             "/opt/gudo/bin/gudo-hook"
         );
-        assert_eq!(
-            shell_quote("/Users/A B/gudo-hook"),
-            "'/Users/A B/gudo-hook'"
-        );
+        assert_eq!(shell_quote("/home/A B/gudo-hook"), "'/home/A B/gudo-hook'");
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
         assert_eq!(shell_quote(""), "''");
     }
 
     fn names(vars: &[(String, OsString)]) -> Vec<&str> {
-        vars.iter().map(|(k, _)| k.as_str()).collect()
+        vars.iter().map(|(name, _)| name.as_str()).collect()
     }
 
     /// A named account loses every credential that outranks its sign-in, for both agents; the
@@ -427,15 +419,15 @@ mod tests {
         for own in [CLAUDE_DIR_VAR, CODEX_DIR_VAR] {
             let (remove, _) = account_env(&work_context().account, own);
             for var in CREDENTIAL_VARS {
-                assert!(remove.iter().any(|r| r == var), "{own}: {var} kept");
+                assert!(remove.iter().any(|name| name == var), "{own}: {var} kept");
             }
             let other = if own == CLAUDE_DIR_VAR {
                 CODEX_DIR_VAR
             } else {
                 CLAUDE_DIR_VAR
             };
-            assert!(remove.iter().any(|r| r == other));
-            assert!(!remove.iter().any(|r| r == own), "{own} removed");
+            assert!(remove.iter().any(|name| name == other));
+            assert!(!remove.iter().any(|name| name == own), "{own} removed");
             let (remove, _) = account_env(&test_context().account, own);
             assert!(
                 remove.is_empty(),

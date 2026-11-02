@@ -176,11 +176,11 @@ export class Terminal {
           if ("ok" in reply) {
             resolve(reply.ok as T);
           } else {
-            const e = reply.error;
-            reject(new TermError(e.code, e.message, e.retryable, e.hint));
+            const { code, message, retryable, hint } = reply.error;
+            reject(new TermError(code, message, retryable, hint));
           }
-        } catch (e) {
-          reject(e);
+        } catch (parseError) {
+          reject(parseError);
         }
       });
       socket.on("error", reject);
@@ -199,9 +199,9 @@ export class Terminal {
 
   readonly panes = {
     list: (scope: "tab" | "session" = "session"): Promise<Pane[]> =>
-      this.call<{ panes: Pane[] }>("pane_list", { scope }).then((r) => r.panes),
+      this.call<{ panes: Pane[] }>("pane_list", { scope }).then((result) => result.panes),
     split: (options: { of?: PaneRef; direction?: "right" | "down"; cwd?: string; command?: string; agent?: "claude" | "codex"; focus?: boolean } = {}): Promise<Pane> =>
-      this.call<{ pane: Pane }>("pane_split", options).then((r) => r.pane),
+      this.call<{ pane: Pane }>("pane_split", options).then((result) => result.pane),
     read: (pane: PaneRef, options: { since?: string; command?: number | "last"; screen?: boolean; tail?: number; grep?: string; context?: number; maxBytes?: number } = {}) =>
       this.call<{ output: Output; altScreen: boolean; atPrompt: boolean; command?: Command }>("pane_read", { pane, ...options }),
     wait: (pane: PaneRef, until: { match?: string; since?: string; prompt?: boolean; quietMs?: number; exit?: number; status?: string[]; timeoutMs?: number; maxBytes?: number }): Promise<WaitResult> =>

@@ -25,7 +25,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -73,12 +73,12 @@ fn foreground() -> Foreground {
 
 #[test]
 fn assist_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
     let req = |req| ClientCtl::Assist { req_id: 5, req };
-    c.check(
+    checker.check(
         "ClientCtl::Assist(Watch)",
         req(AssistRequest::Watch {
             pane_id: PANE,
@@ -86,12 +86,12 @@ fn assist_messages_match_their_frozen_bytes() {
         }),
         "06000000011905000301",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Assist(State)",
         req(AssistRequest::State { pane_id: PANE }),
         "050000000119050103",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Assist(SubmitLine)",
         req(AssistRequest::SubmitLine(SubmitLine {
             pane_id: PANE,
@@ -101,7 +101,7 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "0a000000011905020307026c7301",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Assist(History)",
         req(AssistRequest::History(HistoryQuery {
             cwd: Some("/w".into()),
@@ -112,7 +112,7 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "100000000119050301022f770102676900010914",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Assist(Complete)",
         req(AssistRequest::Complete(CompleteRequest {
             pane_id: PANE,
@@ -122,7 +122,7 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "0e000000011905040306636174206e6f060a",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Assist(FileSearch)",
         req(AssistRequest::FileSearch(FileSearch {
             root: "~/p".into(),
@@ -131,12 +131,12 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "0d00000001190505037e2f7003636e720a",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Assist(BlockedOptions)",
         req(AssistRequest::BlockedOptions { pane_id: PANE }),
         "050000000119050603",
     );
-    c.check(
+    checker.check(
         "ClientCtl::Assist(AnswerBlocked)",
         req(AssistRequest::AnswerBlocked(AnswerBlocked {
             pane_id: PANE,
@@ -146,20 +146,20 @@ fn assist_messages_match_their_frozen_bytes() {
         "0a00000001190507030103596573",
     );
 
-    let ok = |r| ServerCtl::AssistResult {
+    let ok = |response| ServerCtl::AssistResult {
         req_id: 5,
-        result: Ok(r),
+        result: Ok(response),
     };
-    let err = |e| ServerCtl::AssistResult {
+    let err = |error| ServerCtl::AssistResult {
         req_id: 5,
-        result: Err(e),
+        result: Err(error),
     };
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(Done)",
         ok(AssistResponse::Done),
         "050000000124050000",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(State)",
         ok(AssistResponse::State(PaneAssist {
             foreground: Some(foreground()),
@@ -167,7 +167,7 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "330000000124050001010392210376696d020376696d04612e727301e8070307ac02000667697420737406010001046174757301000102",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(Submitted)",
         ok(AssistResponse::Submitted {
             prompt_id: 7,
@@ -175,7 +175,7 @@ fn assist_messages_match_their_frozen_bytes() {
         }),
         "08000000012405000207ad02",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(History)",
         ok(AssistResponse::History(vec![HistoryEntry {
             command: "make".into(),
@@ -187,7 +187,7 @@ fn assist_messages_match_their_frozen_bytes() {
         }])),
         "16000000012405000301046d616b6501022f77010401dc0b4d03",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(Completions)",
         ok(AssistResponse::Completions(Completions {
             cwd: Some("/w".into()),
@@ -202,7 +202,7 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "22000000012405000401022f7701096e6f7465732e747874096e6f7465732e74787401000406",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(Files)",
         ok(AssistResponse::Files(FileMatches {
             root: "/w".into(),
@@ -216,7 +216,7 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "1b0000000124050005022f77010b7372632f636f6e6e2e7273000204052800",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(Blocked)",
         ok(AssistResponse::Blocked(Some(BlockedPrompt {
             pane_id: PANE,
@@ -233,7 +233,7 @@ fn assist_messages_match_their_frozen_bytes() {
         }))),
         "1800000001240500060103010902726d010359657300010001310100",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(NotAtPrompt)",
         err(AssistError::NotAtPrompt(PromptState {
             pane_id: PANE,
@@ -243,22 +243,22 @@ fn assist_messages_match_their_frozen_bytes() {
         })),
         "0b0000000124050102030890030108",
     );
-    c.check(
+    checker.check(
         "ServerCtl::AssistResult(Denied)",
         err(AssistError::Denied("driver".into())),
         "0c000000012405010006647269766572",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Assist(Foreground)",
         ServerCtl::Assist(AssistPush::Foreground(foreground())),
         "170000000125000392210376696d020376696d04612e727301e807",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Assist(Prompt)",
         ServerCtl::Assist(AssistPush::Prompt(prompt_state())),
         "1c0000000125010307ac02000667697420737406010001046174757301000102",
     );
-    c.check(
+    checker.check(
         "ServerCtl::Assist(Prompt unknown, doubtful)",
         ServerCtl::Assist(AssistPush::Prompt(PromptState {
             pane_id: PANE,
@@ -290,7 +290,11 @@ fn assist_messages_match_their_frozen_bytes() {
             "020000000108",
         ),
     ] {
-        c.check(name, profile, golden);
+        checker.check(name, profile, golden);
     }
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }

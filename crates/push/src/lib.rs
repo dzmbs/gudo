@@ -1,3 +1,4 @@
+//! Push notifications without trusting the push relay (ARCHITECTURE D16, `docs/PUSH.md`).
 //!
 //! Three formats live here, shared by the daemon (which produces them), client-core (which
 //! answers actions) and, through the test vectors in `tests/vectors/`, the Swift
@@ -87,8 +88,6 @@ pub enum PushError {
     Expired,
 }
 
-// --- keys and signatures ------------------------------------------------------------------------
-
 /// Lowercase hex.
 pub fn hex(bytes: &[u8]) -> String {
     HEXLOWER.encode(bytes)
@@ -148,8 +147,6 @@ pub fn ed25519_verify(
     )
     .map_err(|_| PushError::Signature)
 }
-
-// --- sealed payloads ----------------------------------------------------------------------------
 
 /// What a notification is about. The NSE picks the notification category from this (not from
 /// the relay's [`Category`], which it cannot trust).
@@ -227,11 +224,9 @@ pub struct Notification {
     pub daemon: String,
     /// The host's name, for display.
     pub host: String,
-    /// What happened.
     pub kind: Kind,
     /// The attention item's id (mark it seen with `AttentionSeen`).
     pub item: u64,
-    /// The pane.
     pub pane: u64,
     /// The pane's session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,8 +316,9 @@ pub fn seal_with_ephemeral(
 ) -> Result<String, PushError> {
     let sig = ed25519_sign(daemon_seed, PAYLOAD_DOMAIN, json);
     let plaintext = [&[ENVELOPE_V1][..], &sig, json].concat();
-    let (enc, ct) = hpke::seal_with_ephemeral(recipient, ephemeral, SEAL_INFO, b"", &plaintext)?;
-    let sealed = b64(&[enc.as_slice(), &ct].concat());
+    let (enc, ciphertext) =
+        hpke::seal_with_ephemeral(recipient, ephemeral, SEAL_INFO, b"", &plaintext)?;
+    let sealed = b64(&[enc.as_slice(), &ciphertext].concat());
     if sealed.len() > MAX_SEALED_LEN {
         return Err(PushError::TooLarge(sealed.len()));
     }
@@ -332,7 +328,6 @@ pub fn seal_with_ephemeral(
 /// A decrypted payload whose signature is not checked yet.
 #[derive(Debug, Clone)]
 pub struct Opened {
-    /// The JSON.
     pub json: Vec<u8>,
     sig: Vec<u8>,
 }
@@ -375,7 +370,7 @@ fn parse_key(text: &str) -> Result<[u8; 32], PushError> {
     HEXLOWER
         .decode(text.as_bytes())
         .ok()
-        .and_then(|k| k.try_into().ok())
+        .and_then(|key| key.try_into().ok())
         .ok_or(PushError::Signature)
 }
 
@@ -389,10 +384,10 @@ pub fn open(device_secret: &[u8; 32], sealed: &str) -> Result<Opened, PushError>
     if raw.len() < hpke::KEY_LEN + hpke::TAG_LEN {
         return Err(PushError::Malformed);
     }
-    let (enc, ct) = raw.split_at(hpke::KEY_LEN);
+    let (enc, ciphertext) = raw.split_at(hpke::KEY_LEN);
     let enc: [u8; 32] = enc.try_into().expect("split at 32");
-    let plain = hpke::open(device_secret, &enc, SEAL_INFO, b"", ct)?;
-    match plain.split_first() {
+    let plaintext = hpke::open(device_secret, &enc, SEAL_INFO, b"", ciphertext)?;
+    match plaintext.split_first() {
         Some((&ENVELOPE_V1, rest)) if rest.len() >= SIG_LEN => Ok(Opened {
             sig: rest[..SIG_LEN].to_vec(),
             json: rest[SIG_LEN..].to_vec(),
@@ -412,8 +407,6 @@ pub fn collapse_id(daemon_seed: &[u8; 32], pane: PaneId, category: Category) -> 
     // 32 hex chars: well under APNs' 64-byte limit.
     hex(&ring::hmac::sign(&key, &msg).as_ref()[..16])
 }
-
-// --- relay requests -----------------------------------------------------------------------------
 
 /// APNs push type of a relay request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -482,9 +475,9 @@ impl RelayRequest {
 
 /// A fresh request nonce.
 pub fn nonce() -> String {
-    let mut n = [0; 16];
-    getrandom::fill(&mut n).expect("the OS random source is available");
-    hex(&n)
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).expect("the OS random source is available");
+    hex(&bytes)
 }
 
 /// The [`SIGNATURE_HEADER`] value for a request body: base64url Ed25519 over
@@ -508,8 +501,6 @@ pub fn verify_request(body: &[u8], signature: &str) -> Result<RelayRequest, Push
     )?;
     Ok(request)
 }
-
-// --- action tokens ------------------------------------------------------------------------------
 
 /// What the daemon authorises a notification action to do. Encoded with postcard and signed
 /// by the daemon ([`issue_token`]); the device treats it as opaque bytes.
@@ -546,14 +537,15 @@ impl ActionToken {
 /// A digest of what an approval asks: the agent's own request id, the tool and the summary
 /// shown to the user. Length-prefixed, so no two different requests share an encoding.
 pub fn request_subject(agent_request: &str, tool: Option<&str>, summary: &str) -> [u8; 32] {
-    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
-    ctx.update(b"push-request-subject/v1\0");
-    ctx.update(&[u8::from(tool.is_some())]);
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+    digest.update(b"push-request-subject/v1\0");
+    digest.update(&[u8::from(tool.is_some())]);
     for part in [agent_request, tool.unwrap_or(""), summary] {
-        ctx.update(&(part.len() as u64).to_le_bytes());
-        ctx.update(part.as_bytes());
+        digest.update(&(part.len() as u64).to_le_bytes());
+        digest.update(part.as_bytes());
     }
-    ctx.finish()
+    digest
+        .finish()
         .as_ref()
         .try_into()
         .expect("SHA-256 is 32 bytes")
@@ -687,11 +679,20 @@ mod tests {
 
     #[test]
     fn request_subjects_tell_requests_apart() {
-        let a = request_subject("toolu_1", Some("Bash"), "rm -rf build");
-        assert_eq!(a, request_subject("toolu_1", Some("Bash"), "rm -rf build"));
-        assert_ne!(a, request_subject("toolu_2", Some("Bash"), "rm -rf build"));
-        assert_ne!(a, request_subject("toolu_1", Some("Bash"), "rm -rf /"));
-        assert_ne!(a, request_subject("toolu_1", None, "rm -rf build"));
+        let subject = request_subject("toolu_1", Some("Bash"), "rm -rf build");
+        assert_eq!(
+            subject,
+            request_subject("toolu_1", Some("Bash"), "rm -rf build")
+        );
+        assert_ne!(
+            subject,
+            request_subject("toolu_2", Some("Bash"), "rm -rf build")
+        );
+        assert_ne!(
+            subject,
+            request_subject("toolu_1", Some("Bash"), "rm -rf /")
+        );
+        assert_ne!(subject, request_subject("toolu_1", None, "rm -rf build"));
         // Moving text between fields changes the digest.
         assert_ne!(
             request_subject("ab", Some("c"), ""),
@@ -735,18 +736,18 @@ mod tests {
         let sig = sign_request(&seed, &body);
         assert_eq!(verify_request(&body, &sig).unwrap(), request);
         let mut tampered = body.clone();
-        let at = tampered.iter().position(|&b| b == b'c').unwrap();
-        tampered[at] = b'd';
+        let position = tampered.iter().position(|&byte| byte == b'c').unwrap();
+        tampered[position] = b'd';
         assert!(verify_request(&tampered, &sig).is_err());
     }
 
     #[test]
     fn collapse_ids_differ_per_pane_and_daemon() {
-        let a = collapse_id(&[1; 32], PaneId(1), Category::Done);
-        assert_eq!(a.len(), 32);
-        assert_ne!(a, collapse_id(&[1; 32], PaneId(2), Category::Done));
-        assert_ne!(a, collapse_id(&[2; 32], PaneId(1), Category::Done));
-        assert_ne!(a, collapse_id(&[1; 32], PaneId(1), Category::Approval));
+        let id = collapse_id(&[1; 32], PaneId(1), Category::Done);
+        assert_eq!(id.len(), 32);
+        assert_ne!(id, collapse_id(&[1; 32], PaneId(2), Category::Done));
+        assert_ne!(id, collapse_id(&[2; 32], PaneId(1), Category::Done));
+        assert_ne!(id, collapse_id(&[1; 32], PaneId(1), Category::Approval));
     }
 
     #[test]
@@ -780,9 +781,9 @@ mod tests {
 
         let envelope = |version: u8, domain: &[u8], json: &[u8], sig_len: usize| {
             let sig = ed25519_sign(&seed, domain, json);
-            let plain = [&[version][..], &sig[..sig_len], json].concat();
-            let (enc, ct) = hpke::seal(&public, SEAL_INFO, b"", &plain).unwrap();
-            b64(&[enc.as_slice(), &ct].concat())
+            let plaintext = [&[version][..], &sig[..sig_len], json].concat();
+            let (enc, ciphertext) = hpke::seal(&public, SEAL_INFO, b"", &plaintext).unwrap();
+            b64(&[enc.as_slice(), &ciphertext].concat())
         };
         let json = br#"{"v":1}"#;
         assert!(matches!(

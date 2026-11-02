@@ -22,7 +22,7 @@
 //! Secrets travel as [`Secret`], whose `Debug` output is redacted and whose bytes are zeroed
 //! when it is dropped. The daemon never logs or stores them.
 //!
-//! Same compatibility rules as the rest of the crate: append only. A client without
+//! A client without
 //! [`Caps::ASKPASS`](crate::Caps::ASKPASS) is never sent these messages, and the helper
 //! falls back to asking on the terminal.
 
@@ -60,9 +60,9 @@ impl Secret {
     /// ```
     /// use proto::Secret;
     ///
-    /// let s = Secret::new(b"hunter2".to_vec());
-    /// assert_eq!(s.expose(), b"hunter2");
-    /// assert_eq!(format!("{s:?}"), "Secret(7 bytes)");
+    /// let secret = Secret::new(b"hunter2".to_vec());
+    /// assert_eq!(secret.expose(), b"hunter2");
+    /// assert_eq!(format!("{secret:?}"), "Secret(7 bytes)");
     /// ```
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
@@ -73,12 +73,10 @@ impl Secret {
         &self.0
     }
 
-    /// The length in bytes.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Whether the secret is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -116,7 +114,6 @@ pub enum SecretSource {
 pub struct SecretPrompt {
     /// Answer with this id.
     pub id: AskpassId,
-    /// The pane the program runs in.
     pub pane_id: PaneId,
     /// What kind of program asks.
     pub source: SecretSource,
@@ -140,15 +137,9 @@ pub struct SecretPrompt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CloseReason {
     /// Someone answered it.
-    Answered {
-        /// Who.
-        by: PrincipalId,
-    },
+    Answered { by: PrincipalId },
     /// Someone cancelled it (`None`: the daemon, e.g. it is shutting down).
-    Cancelled {
-        /// Who.
-        by: Option<PrincipalId>,
-    },
+    Cancelled { by: Option<PrincipalId> },
     /// Nobody answered in time.
     TimedOut,
     /// The asking program went away (interrupted, or it timed out itself).
@@ -160,7 +151,6 @@ pub enum CloseReason {
 /// A password prompt the program printed itself, with echo off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectedPrompt {
-    /// The pane.
     pub pane_id: PaneId,
     /// The prompt line (`Password:`), cleaned like [`SecretPrompt::prompt`].
     pub prompt: String,
@@ -175,25 +165,18 @@ pub enum AskpassPush {
     Prompt(SecretPrompt),
     /// The prompt is over; close its sheet.
     Closed {
-        /// The prompt.
         id: AskpassId,
-        /// Its pane.
         pane_id: PaneId,
-        /// Why.
         reason: CloseReason,
     },
     /// The pane shows a password prompt with echo off.
     Detected(DetectedPrompt),
     /// The detected prompt is gone (echo is back, or the line changed).
-    DetectedGone {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    DetectedGone { pane_id: PaneId },
     /// A new prompt asked while a guest holds the pane's lease: the guest may have typed the
     /// command that asks. Sent instead of [`AskpassPush::Prompt`] to clients with
     /// [`Caps::ASKPASS_DRIVER`](crate::Caps::ASKPASS_DRIVER).
     PromptWhileGuestDrives {
-        /// The prompt.
         prompt: SecretPrompt,
         /// The guest's name.
         guest: String,
@@ -206,21 +189,16 @@ pub enum AskpassPush {
 pub enum AskpassRequest {
     /// Answers a prompt. The first answer wins; later ones get [`AskpassError::Gone`].
     Answer {
-        /// The prompt.
         id: AskpassId,
         /// The answer, without a trailing newline.
         secret: Secret,
     },
     /// Declines a prompt: the program gets no answer (its askpass fails).
-    Cancel {
-        /// The prompt.
-        id: AskpassId,
-    },
+    Cancel { id: AskpassId },
     /// Types `secret` and Return into a pane at a detected prompt. Refused with
     /// [`AskpassError::NotHidden`] (nothing written) unless the pane's echo is still off, so
     /// the secret is never echoed or run as a command.
     TypeSecret {
-        /// The pane.
         pane_id: PaneId,
         /// What to type, without the Return.
         secret: Secret,
@@ -236,7 +214,7 @@ pub enum AskpassError {
     Denied(String),
     /// The pane does not exist or is outside the grant's scope.
     UnknownPane,
-    /// The pane's terminal echoes input now; nothing was typed.
+    /// The pane's terminal echoes input; nothing was typed.
     NotHidden,
     /// Anything else; the text says why.
     Failed(String),
@@ -314,37 +292,37 @@ pub fn looks_like_password_prompt(line: &str) -> bool {
 /// assert_eq!(clean_prompt_text("abcdef", 3), "abc…");
 /// ```
 pub fn clean_prompt_text(text: &str, max: usize) -> String {
-    let mut out = String::with_capacity(text.len().min(max * 4));
-    let mut space = false;
+    let mut cleaned = String::with_capacity(text.len().min(max * 4));
+    let mut pending_space = false;
     let mut count = 0;
-    for c in text.chars() {
-        if is_invisible_format(c) {
+    for ch in text.chars() {
+        if is_invisible_format(ch) {
             continue;
         }
-        if c.is_whitespace() || c.is_control() {
-            space = !out.is_empty();
+        if ch.is_whitespace() || ch.is_control() {
+            pending_space = !cleaned.is_empty();
             continue;
         }
-        if space {
+        if pending_space {
             if count == max {
-                out.push('…');
-                return out;
+                cleaned.push('…');
+                return cleaned;
             }
-            out.push(' ');
+            cleaned.push(' ');
             count += 1;
-            space = false;
+            pending_space = false;
         }
         if count == max {
-            out.push('…');
-            return out;
+            cleaned.push('…');
+            return cleaned;
         }
-        out.push(c);
+        cleaned.push(ch);
         count += 1;
     }
-    out
+    cleaned
 }
 
-/// Whether `c` prints as nothing yet can disguise or carry text: bidi controls, zero-width
+/// Whether `ch` prints as nothing yet can disguise or carry text: bidi controls, zero-width
 /// characters, the BOM, the soft hyphen, tag characters and variation selectors (invisible to
 /// people, readable by language models), fillers and other invisible format marks.
 ///
@@ -356,9 +334,9 @@ pub fn clean_prompt_text(text: &str, max: usize) -> String {
 /// assert!(proto::is_invisible_format('\u{e0100}'));
 /// assert!(!proto::is_invisible_format('a'));
 /// ```
-pub fn is_invisible_format(c: char) -> bool {
+pub fn is_invisible_format(ch: char) -> bool {
     matches!(
-        c,
+        ch,
         '\u{00AD}'
             | '\u{034F}'
             | '\u{061C}'
@@ -412,13 +390,13 @@ mod tests {
 
     #[test]
     fn secret_debug_is_redacted() {
-        let s = Secret::new(b"hunter2".to_vec());
-        assert!(!format!("{s:?}").contains("hunter2"));
-        let req = AskpassRequest::Answer {
+        let secret = Secret::new(b"hunter2".to_vec());
+        assert!(!format!("{secret:?}").contains("hunter2"));
+        let request = AskpassRequest::Answer {
             id: AskpassId(1),
-            secret: s,
+            secret,
         };
-        assert!(!format!("{req:?}").contains("hunter2"));
+        assert!(!format!("{request:?}").contains("hunter2"));
     }
 
     #[test]

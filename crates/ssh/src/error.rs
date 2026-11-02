@@ -1,5 +1,3 @@
-//! The crate's error type.
-
 use std::io;
 use std::sync::Arc;
 
@@ -12,9 +10,7 @@ pub enum SshError {
     /// Socket-level failure (DNS, connect, read, write).
     #[error("{context}: {source}")]
     Io {
-        /// What was being done.
         context: String,
-        /// The underlying error.
         #[source]
         source: Arc<io::Error>,
     },
@@ -30,9 +26,7 @@ pub enum SshError {
     /// Every authentication method was tried and refused.
     #[error("authentication failed for {user}@{host} (tried: {tried}; server allows: {allowed})")]
     AuthFailed {
-        /// User name.
         user: String,
-        /// Host.
         host: String,
         /// Methods tried, comma-separated.
         tried: String,
@@ -84,7 +78,6 @@ pub enum SshError {
     /// An upload arrived corrupted.
     #[error("upload checksum mismatch for {path}: sent {expected}, remote has {actual}")]
     ChecksumMismatch {
-        /// Remote path.
         path: String,
         /// SHA-256 sent, hex.
         expected: String,
@@ -123,8 +116,8 @@ impl SshError {
 }
 
 impl From<russh::Error> for SshError {
-    fn from(e: russh::Error) -> Self {
-        match e {
+    fn from(error: russh::Error) -> Self {
+        match error {
             russh::Error::IO(source) => Self::io("ssh transport", source),
             russh::Error::KeepaliveTimeout => Self::Disconnected("keepalive timeout".into()),
             russh::Error::InactivityTimeout => Self::Disconnected("inactivity timeout".into()),
@@ -137,8 +130,8 @@ impl From<russh::Error> for SshError {
 }
 
 impl From<russh::keys::Error> for SshError {
-    fn from(e: russh::keys::Error) -> Self {
-        match e {
+    fn from(error: russh::keys::Error) -> Self {
+        match error {
             russh::keys::Error::KeyIsEncrypted => Self::KeyEncrypted,
             other => Self::Key(other.to_string()),
         }

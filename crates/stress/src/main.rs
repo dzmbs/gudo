@@ -21,7 +21,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    command: Cmd,
 }
 
 #[derive(Subcommand)]
@@ -174,7 +174,7 @@ fn config_dir() -> PathBuf {
         .join("gudo")
 }
 
-fn saved() -> Result<(Vec<u8>, String)> {
+fn saved_credentials() -> Result<(Vec<u8>, String)> {
     let dir = config_dir();
     let key = std::fs::read(dir.join("gudo.key")).context("gudo.key: run `gudo pair` first")?;
     let ticket = std::fs::read_to_string(dir.join("gudo.ticket"))?
@@ -183,14 +183,13 @@ fn saved() -> Result<(Vec<u8>, String)> {
     Ok((key, ticket))
 }
 
-/// A connected client and its events.
-struct Conn {
+struct Connection {
     client: Client,
     events: UnboundedReceiver<ClientEvent>,
     layout: Option<SessionLayout>,
 }
 
-impl Conn {
+impl Connection {
     fn open(
         handle: &tokio::runtime::Handle,
         key: Vec<u8>,
@@ -255,7 +254,7 @@ fn focused(layout: &SessionLayout) -> Option<(proto::TabId, PaneId)> {
     let tab = layout
         .tabs
         .iter()
-        .find(|t| Some(t.tab_id) == layout.active_tab)?;
+        .find(|tab| Some(tab.tab_id) == layout.active_tab)?;
     Some((tab.tab_id, tab.focused))
 }
 
@@ -263,7 +262,7 @@ fn leaves(node: &LayoutNode, out: &mut Vec<PaneId>) {
     let mut stack = vec![node];
     while let Some(node) = stack.pop() {
         match node {
-            LayoutNode::Leaf(p) => out.push(*p),
+            LayoutNode::Leaf(pane) => out.push(*pane),
             LayoutNode::Split { first, second, .. } => {
                 stack.push(second);
                 stack.push(first);
@@ -282,26 +281,28 @@ fn all_panes(layout: &SessionLayout) -> Vec<PaneId> {
 
 fn launch(command: &Option<String>) -> PaneLaunch {
     match command {
-        Some(c) => PaneLaunch::Command {
-            argv: vec!["/bin/sh".into(), "-c".into(), c.clone()],
+        Some(command) => PaneLaunch::Command {
+            argv: vec!["/bin/sh".into(), "-c".into(), command.clone()],
             cwd: None,
         },
         None => PaneLaunch::Shell { cwd: None },
     }
 }
 
-fn percentiles(mut v: Vec<Duration>) -> String {
-    if v.is_empty() {
+fn percentiles(mut samples: Vec<Duration>) -> String {
+    if samples.is_empty() {
         return "no samples".into();
     }
-    v.sort();
-    let at = |q: f64| v[((v.len() - 1) as f64 * q) as usize].as_secs_f64() * 1000.0;
+    samples.sort();
+    let millis_at = |quantile: f64| {
+        samples[((samples.len() - 1) as f64 * quantile) as usize].as_secs_f64() * 1000.0
+    };
     format!(
         "n={} p50={:.2}ms p99={:.2}ms max={:.2}ms",
-        v.len(),
-        at(0.5),
-        at(0.99),
-        at(1.0)
+        samples.len(),
+        millis_at(0.5),
+        millis_at(0.99),
+        millis_at(1.0)
     )
 }
 
@@ -316,8 +317,8 @@ fn main() -> Result<()> {
 }
 
 async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
-    let (key, ticket) = saved()?;
-    match cli.cmd {
+    let (key, ticket) = saved_credentials()?;
+    match cli.command {
         Cmd::Churn {
             secs,
             concurrency,
@@ -330,7 +331,7 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
             command,
         } => tabs(&handle, key, &ticket, count, canvas, command).await,
         Cmd::Spawn { command } => {
-            let mut conn = Conn::open(&handle, key, &ticket, false)?;
+            let mut conn = Connection::open(&handle, key, &ticket, false)?;
             let layout = conn.layout().await?;
             let outcome = conn
                 .op(LayoutOp::NewTab {
@@ -372,9 +373,9 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
             ticket_file,
         } => {
             let (key, ticket) = match ticket_file {
-                Some(f) => (
+                Some(path) => (
                     ClientConfig::generate_key(),
-                    std::fs::read_to_string(f)?.trim().to_owned(),
+                    std::fs::read_to_string(path)?.trim().to_owned(),
                 ),
                 None => (key, ticket),
             };
@@ -415,17 +416,17 @@ async fn churn(
     concurrency: usize,
     command: Option<String>,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let session = layout.session_id;
     let mut pending: HashMap<u64, (Instant, bool)> = HashMap::new();
     let (mut created, mut closed, mut failed) = (0u64, 0u64, 0u64);
-    let mut lat = Vec::new();
+    let mut latencies = Vec::new();
     let mut errors: HashMap<String, u64> = HashMap::new();
     let end = Instant::now() + Duration::from_secs(secs);
     let start = Instant::now();
-    let new_tab = |c: &Conn| {
-        c.client.op(LayoutOp::NewTab {
+    let new_tab = |connection: &Connection| {
+        connection.client.op(LayoutOp::NewTab {
             session_id: session,
             name: String::new(),
             launch: launch(&command),
@@ -441,16 +442,16 @@ async fn churn(
         let ClientEvent::OpResult { op_id, outcome } = event else {
             continue;
         };
-        let Some((at, create)) = pending.remove(&op_id) else {
+        let Some((sent_at, was_create)) = pending.remove(&op_id) else {
             continue;
         };
-        lat.push(at.elapsed());
+        latencies.push(sent_at.elapsed());
         let running = Instant::now() < end;
         match outcome {
             OpOutcome::TabCreated { pane_id, .. } => {
                 created += 1;
-                let id = conn.client.op(LayoutOp::ClosePane { pane_id });
-                pending.insert(id, (Instant::now(), false));
+                let close_op = conn.client.op(LayoutOp::ClosePane { pane_id });
+                pending.insert(close_op, (Instant::now(), false));
             }
             OpOutcome::Failed { code, message } => {
                 failed += 1;
@@ -460,7 +461,7 @@ async fn churn(
                 }
             }
             _ => {
-                if !create {
+                if !was_create {
                     closed += 1;
                 }
                 if running {
@@ -473,10 +474,10 @@ async fn churn(
     println!(
         "churn: created {created} closed {closed} failed {failed} in {wall:.1} s ({:.0} panes/s); op latency {}",
         created as f64 / wall,
-        percentiles(lat)
+        percentiles(latencies)
     );
-    for (e, n) in errors {
-        println!("  {n}x {e}");
+    for (error, count) in errors {
+        println!("  {count}x {error}");
     }
     Ok(())
 }
@@ -488,7 +489,7 @@ async fn deep(
     depth: usize,
     canvas: bool,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let (_, mut pane) = focused(&layout).context("no focused pane")?;
     let start = Instant::now();
@@ -535,10 +536,10 @@ async fn tabs(
     canvas: bool,
     command: Option<String>,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key.clone(), ticket, false)?;
+    let mut conn = Connection::open(handle, key.clone(), ticket, false)?;
     let session = conn.layout().await?.session_id;
-    let new_tab = |c: &Conn| {
-        c.client.op(LayoutOp::NewTab {
+    let new_tab = |connection: &Connection| {
+        connection.client.op(LayoutOp::NewTab {
             session_id: session,
             name: String::new(),
             launch: if canvas {
@@ -551,7 +552,7 @@ async fn tabs(
     let mut pending: HashMap<u64, Instant> = HashMap::new();
     let (mut asked, mut created) = (0, 0);
     let mut errors: HashMap<String, u64> = HashMap::new();
-    let mut lat = Vec::new();
+    let mut latencies = Vec::new();
     let start = Instant::now();
     while asked < count.min(16) {
         pending.insert(new_tab(&conn), Instant::now());
@@ -564,10 +565,10 @@ async fn tabs(
         let ClientEvent::OpResult { op_id, outcome } = event else {
             continue;
         };
-        let Some(at) = pending.remove(&op_id) else {
+        let Some(sent_at) = pending.remove(&op_id) else {
             continue;
         };
-        lat.push(at.elapsed());
+        latencies.push(sent_at.elapsed());
         match outcome {
             OpOutcome::TabCreated { .. } => created += 1,
             OpOutcome::Failed { code, message } => {
@@ -583,24 +584,23 @@ async fn tabs(
     println!(
         "tabs: {created} of {count} created in {:.1} s; op latency {}",
         start.elapsed().as_secs_f64(),
-        percentiles(lat)
+        percentiles(latencies)
     );
-    for (e, n) in errors {
-        println!("  {n}x {e}");
+    for (error, count) in errors {
+        println!("  {count}x {error}");
     }
-    let at = Instant::now();
-    let mut fresh = Conn::open(handle, key, ticket, false)?;
+    let fresh_start = Instant::now();
+    let mut fresh = Connection::open(handle, key, ticket, false)?;
     let layout = fresh.layout().await?;
     println!(
         "tabs: a new client had the layout ({} panes, {} KiB encoded) after {:.0} ms",
         all_panes(&layout).len(),
         proto::frame::to_vec(&layout)?.len() / 1024,
-        at.elapsed().as_secs_f64() * 1000.0
+        fresh_start.elapsed().as_secs_f64() * 1000.0
     );
     Ok(())
 }
 
-/// Opens a `cat` pane and measures send → echo for `secs`.
 async fn latency(
     handle: &tokio::runtime::Handle,
     key: Vec<u8>,
@@ -608,7 +608,7 @@ async fn latency(
     secs: u64,
     interval_ms: u64,
 ) -> Result<String> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let pane = match conn
         .op(LayoutOp::NewTab {
@@ -630,10 +630,10 @@ async fn latency(
     let mut samples = Vec::new();
     let mut lost = 0;
     let end = Instant::now() + Duration::from_secs(secs);
-    let mut n = 0u64;
+    let mut sequence = 0u64;
     while Instant::now() < end {
-        n += 1;
-        let token = format!("<{n:07}>");
+        sequence += 1;
+        let token = format!("<{sequence:07}>");
         let sent = Instant::now();
         conn.client.send_input(pane, token.clone().into_bytes());
         let seen = tokio::time::timeout(Duration::from_secs(5), async {
@@ -643,7 +643,10 @@ async fn latency(
                     && pane_id == pane
                 {
                     tail.extend_from_slice(&data);
-                    if tail.windows(token.len()).any(|w| w == token.as_bytes()) {
+                    if tail
+                        .windows(token.len())
+                        .any(|window| window == token.as_bytes())
+                    {
                         return Ok::<_, anyhow::Error>(());
                     }
                     let keep = tail.len().saturating_sub(64);
@@ -653,13 +656,13 @@ async fn latency(
         })
         .await;
         match seen {
-            Ok(r) => {
-                r?;
+            Ok(result) => {
+                result?;
                 samples.push(sent.elapsed());
             }
             Err(_) => lost += 1,
         }
-        if n.is_multiple_of(50) {
+        if sequence.is_multiple_of(50) {
             conn.client.send_input(pane, b"\n".to_vec());
         }
         tokio::time::sleep(Duration::from_millis(interval_ms)).await;
@@ -676,7 +679,7 @@ async fn clients(
 ) -> Result<()> {
     let tickets: Vec<String> = std::fs::read_to_string(tickets)?
         .lines()
-        .filter(|l| !l.is_empty())
+        .filter(|line| !line.is_empty())
         .map(str::to_owned)
         .collect();
     let connected = Arc::new(AtomicU64::new(0));
@@ -694,7 +697,7 @@ async fn clients(
             Arc::clone(&disconnects),
         );
         tasks.spawn(async move {
-            let mut conn = Conn::open(&handle, ClientConfig::generate_key(), &ticket, false)?;
+            let mut conn = Connection::open(&handle, ClientConfig::generate_key(), &ticket, false)?;
             let mut followed = None;
             let mut resize = tokio::time::interval(Duration::from_millis(
                 1000 / resize_hz.max(1),
@@ -718,22 +721,22 @@ async fn clients(
                         ClientEvent::PaneBytes { data, .. } => { bytes.fetch_add(data.len() as u64, Ordering::Relaxed); }
                         ClientEvent::PaneSnapshot { .. } => { snapshots.fetch_add(1, Ordering::Relaxed); }
                         ClientEvent::Layout { layout } => {
-                            let f = focused(&layout).map(|(_, p)| p);
-                            if f != followed && let Some(p) = f {
-                                conn.client.subscribe(p);
-                                conn.client.set_view(Some(p), vec![]);
-                                conn.client.resize(p, size);
-                                followed = Some(p);
+                            let focused_pane = focused(&layout).map(|(_, pane)| pane);
+                            if focused_pane != followed && let Some(pane) = focused_pane {
+                                conn.client.subscribe(pane);
+                                conn.client.set_view(Some(pane), vec![]);
+                                conn.client.resize(pane, size);
+                                followed = Some(pane);
                             }
                         }
                         _ => {}
                     },
                     _ = resize.tick(), if resize_hz > 0 => {
-                        if let Some(p) = followed {
+                        if let Some(pane) = followed {
                             flip = !flip;
-                            let mut s = size;
-                            s.cols += u16::from(flip);
-                            conn.client.resize(p, s);
+                            let mut jittered = size;
+                            jittered.cols += u16::from(flip);
+                            conn.client.resize(pane, jittered);
                         }
                     }
                     () = tokio::time::sleep_until(end.into()) => break,
@@ -743,11 +746,11 @@ async fn clients(
         });
     }
     let mut errors = 0;
-    while let Some(r) = tasks.join_next().await {
-        if let Ok(Err(e)) | Err(e) = r.map_err(anyhow::Error::from) {
+    while let Some(joined) = tasks.join_next().await {
+        if let Ok(Err(error)) | Err(error) = joined.map_err(anyhow::Error::from) {
             errors += 1;
             if errors < 5 {
-                println!("  client error: {e:#}");
+                println!("  client error: {error:#}");
             }
         }
     }
@@ -772,7 +775,7 @@ async fn reconnect(
     let end = Instant::now() + Duration::from_secs(secs);
     let count = Arc::new(AtomicU64::new(0));
     let mut tasks = tokio::task::JoinSet::new();
-    for w in 0..parallel {
+    for worker in 0..parallel {
         let (handle, key, ticket, count) = (
             handle.clone(),
             key.clone(),
@@ -780,28 +783,28 @@ async fn reconnect(
             Arc::clone(&count),
         );
         tasks.spawn(async move {
-            let mut i = w as u64;
+            let mut rng = worker as u64;
             while Instant::now() < end {
-                let mut conn = Conn::open(&handle, key.clone(), &ticket, true)?;
+                let mut conn = Connection::open(&handle, key.clone(), &ticket, true)?;
                 if let Ok(Ok(layout)) =
                     tokio::time::timeout(Duration::from_secs(5), conn.layout()).await
                 {
-                    for p in all_panes(&layout).into_iter().take(8) {
-                        conn.client.subscribe(p);
+                    for pane in all_panes(&layout).into_iter().take(8) {
+                        conn.client.subscribe(pane);
                     }
                 }
-                i = i
+                rng = rng
                     .wrapping_mul(6364136223846793005)
                     .wrapping_add(1442695040888963407);
-                tokio::time::sleep(Duration::from_millis((i >> 33) % max_ms.max(1))).await;
+                tokio::time::sleep(Duration::from_millis((rng >> 33) % max_ms.max(1))).await;
                 drop(conn);
                 count.fetch_add(1, Ordering::Relaxed);
             }
             Ok::<_, anyhow::Error>(())
         });
     }
-    while let Some(r) = tasks.join_next().await {
-        r??;
+    while let Some(joined) = tasks.join_next().await {
+        joined??;
     }
     println!(
         "reconnect: {} connections dropped mid-stream",
@@ -817,7 +820,7 @@ async fn keys(
     rate: u64,
     secs: u64,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let (_, pane) = focused(&layout).context("no focused pane")?;
     let start = Instant::now();
@@ -857,7 +860,7 @@ async fn paste(
     ticket: &str,
     mb: usize,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let (_, pane) = focused(&layout).context("no focused pane")?;
     let line = "paste paste paste paste paste paste paste paste paste paste paste paste paste\n";
@@ -880,10 +883,10 @@ async fn layout_storm(
     rate: u64,
     secs: u64,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let panes = all_panes(&layout);
-    let tabs: Vec<_> = layout.tabs.iter().map(|t| t.tab_id).collect();
+    let tabs: Vec<_> = layout.tabs.iter().map(|tab| tab.tab_id).collect();
     let session = layout.session_id;
     let mut tick = tokio::time::interval(Duration::from_millis(1));
     let per_tick = (rate / 1000).max(1);
@@ -934,9 +937,9 @@ async fn projects(
     rate: u64,
     secs: u64,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
-    let tabs: Vec<_> = layout.tabs.iter().map(|t| t.tab_id).collect();
+    let tabs: Vec<_> = layout.tabs.iter().map(|tab| tab.tab_id).collect();
     let session = layout.session_id;
     let mut tick = tokio::time::interval(Duration::from_millis(1));
     let per_tick = (rate / 1000).max(1);

@@ -13,8 +13,8 @@ enum Vt {
 impl Vt {
     fn terminal(&self) -> &Terminal {
         match self {
-            Self::Restoring(r) => r.terminal(),
-            Self::Done(t) => t,
+            Self::Restoring(restore) => restore.terminal(),
+            Self::Done(terminal) => terminal,
         }
     }
 }
@@ -26,9 +26,7 @@ pub(crate) struct HistoryCursor {
     pub snapshot_seq: u64,
     /// Offset of the next page in that snapshot.
     pub next_offset: u64,
-    /// No more history.
     pub done: bool,
-    /// A request is outstanding.
     pub in_flight: bool,
 }
 
@@ -67,12 +65,12 @@ impl Mirror {
                 // The daemon's own limit bounds the history a mirror can receive, so the
                 // mirror takes all of it (libghostty-vt's default would drop older pages).
                 StreamingRestore::with_image_storage_limit(snapshot, image_storage_bytes)
-                    .and_then(|mut r| {
-                        r.set_scrollback_max_bytes(None)?;
-                        Ok(r)
+                    .and_then(|mut restore| {
+                        restore.set_scrollback_max_bytes(None)?;
+                        Ok(restore)
                     })
                     .map(Vt::Restoring)
-                    .map_err(|e| tracing::warn!("decoding snapshot: {e}"))
+                    .map_err(|err| tracing::warn!("decoding snapshot: {err}"))
                     .ok()
             })
             .flatten();
@@ -105,8 +103,8 @@ impl Mirror {
         }
         let start = (self.seq - seq) as usize;
         match &mut self.vt {
-            Some(Vt::Restoring(r)) => r.write(&data[start..]),
-            Some(Vt::Done(t)) => t.write(&data[start..]),
+            Some(Vt::Restoring(restore)) => restore.write(&data[start..]),
+            Some(Vt::Done(terminal)) => terminal.write(&data[start..]),
             None => {}
         }
         self.seq = end;
@@ -127,19 +125,19 @@ impl Mirror {
         done: bool,
         records: &[u8],
     ) -> Option<u64> {
-        let h = &mut self.history;
-        if snapshot_seq != h.snapshot_seq || offset != h.next_offset || h.done {
+        let history = &mut self.history;
+        if snapshot_seq != history.snapshot_seq || offset != history.next_offset || history.done {
             return None;
         }
-        h.in_flight = false;
-        h.next_offset = next_offset;
-        h.done = done;
+        history.in_flight = false;
+        history.next_offset = next_offset;
+        history.done = done;
         let mut rows = 0;
         if let Some(Vt::Restoring(restore)) = &mut self.vt {
             match restore.push(records) {
-                Ok(pages) => rows = pages.iter().map(|p| p.rows as u64).sum(),
-                Err(e) => {
-                    tracing::warn!("restoring history: {e}");
+                Ok(pages) => rows = pages.iter().map(|page| page.rows as u64).sum(),
+                Err(err) => {
+                    tracing::warn!("restoring history: {err}");
                     self.history.done = true;
                 }
             }
@@ -155,12 +153,12 @@ impl Mirror {
 
     pub fn resize(&mut self, size: PaneSize) {
         let result = match &mut self.vt {
-            Some(Vt::Restoring(r)) => r.resize(size.cols, size.rows, size.cell_px()),
-            Some(Vt::Done(t)) => t.resize(size.cols, size.rows, size.cell_px()),
+            Some(Vt::Restoring(restore)) => restore.resize(size.cols, size.rows, size.cell_px()),
+            Some(Vt::Done(terminal)) => terminal.resize(size.cols, size.rows, size.cell_px()),
             None => Ok(()),
         };
-        if let Err(e) = result {
-            tracing::warn!("resizing mirror: {e}");
+        if let Err(err) = result {
+            tracing::warn!("resizing mirror: {err}");
         }
     }
 
@@ -186,7 +184,7 @@ impl Mirror {
             terminal
                 .kitty_placements()
                 .into_iter()
-                .map(|p| (p, terminal.kitty_image(p.image_id)))
+                .map(|placement| (placement, terminal.kitty_image(placement.image_id)))
                 .collect(),
         )
     }

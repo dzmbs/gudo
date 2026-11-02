@@ -6,12 +6,9 @@
 
 use client_core::proto;
 
-/// A pane's terminal size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct PaneSize {
-    /// Columns.
     pub cols: u16,
-    /// Rows.
     pub rows: u16,
     /// Width in pixels (0 if unknown); used for SGR-pixel mouse reports.
     #[uniffi(default = 0)]
@@ -22,23 +19,23 @@ pub struct PaneSize {
 }
 
 impl From<proto::PaneSize> for PaneSize {
-    fn from(s: proto::PaneSize) -> Self {
+    fn from(pane_size: proto::PaneSize) -> Self {
         Self {
-            cols: s.cols,
-            rows: s.rows,
-            width_px: s.width_px,
-            height_px: s.height_px,
+            cols: pane_size.cols,
+            rows: pane_size.rows,
+            width_px: pane_size.width_px,
+            height_px: pane_size.height_px,
         }
     }
 }
 
 impl From<PaneSize> for proto::PaneSize {
-    fn from(s: PaneSize) -> Self {
+    fn from(pane_size: PaneSize) -> Self {
         Self {
-            cols: s.cols,
-            rows: s.rows,
-            width_px: s.width_px,
-            height_px: s.height_px,
+            cols: pane_size.cols,
+            rows: pane_size.rows,
+            width_px: pane_size.width_px,
+            height_px: pane_size.height_px,
         }
     }
 }
@@ -53,8 +50,8 @@ pub enum Axis {
 }
 
 impl From<proto::Axis> for Axis {
-    fn from(a: proto::Axis) -> Self {
-        match a {
+    fn from(axis: proto::Axis) -> Self {
+        match axis {
             proto::Axis::Horizontal => Self::Horizontal,
             proto::Axis::Vertical => Self::Vertical,
         }
@@ -62,8 +59,8 @@ impl From<proto::Axis> for Axis {
 }
 
 impl From<Axis> for proto::Axis {
-    fn from(a: Axis) -> Self {
-        match a {
+    fn from(axis: Axis) -> Self {
+        match axis {
             Axis::Horizontal => Self::Horizontal,
             Axis::Vertical => Self::Vertical,
         }
@@ -73,19 +70,15 @@ impl From<Axis> for proto::Axis {
 /// A direction for moving focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum Direction {
-    /// Towards smaller x.
     Left,
-    /// Towards larger x.
     Right,
-    /// Towards smaller y.
     Up,
-    /// Towards larger y.
     Down,
 }
 
 impl From<Direction> for proto::Direction {
-    fn from(d: Direction) -> Self {
-        match d {
+    fn from(direction: Direction) -> Self {
+        match direction {
             Direction::Left => Self::Left,
             Direction::Right => Self::Right,
             Direction::Up => Self::Up,
@@ -97,14 +90,11 @@ impl From<Direction> for proto::Direction {
 /// One node of a flattened split tree; children are indices into [`TabLayout::nodes`].
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum LayoutNode {
-    /// A pane.
     Leaf {
-        /// The pane.
         pane_id: u64,
     },
     /// Two subtrees sharing the space along `axis`.
     Split {
-        /// How the children are arranged.
         axis: Axis,
         /// The first child's share, strictly between 0 and 1.
         ratio: f32,
@@ -115,10 +105,8 @@ pub enum LayoutNode {
     },
 }
 
-/// One tab of a session.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct TabLayout {
-    /// The tab.
     pub tab_id: u64,
     /// User-visible name; empty means "use the focused pane's title".
     pub name: String,
@@ -146,10 +134,10 @@ fn flatten(node: &proto::LayoutNode, out: &mut Vec<LayoutNode>) -> u32 {
                 first: 0,
                 second: 0,
             });
-            let a = flatten(first, out);
-            let b = flatten(second, out);
+            let first_index = flatten(first, out);
+            let second_index = flatten(second, out);
             if let LayoutNode::Split { first, second, .. } = &mut out[index as usize] {
-                (*first, *second) = (a, b);
+                (*first, *second) = (first_index, second_index);
             }
         }
     }
@@ -157,15 +145,15 @@ fn flatten(node: &proto::LayoutNode, out: &mut Vec<LayoutNode>) -> u32 {
 }
 
 impl From<proto::TabLayout> for TabLayout {
-    fn from(t: proto::TabLayout) -> Self {
+    fn from(tab_layout: proto::TabLayout) -> Self {
         let mut nodes = Vec::new();
-        flatten(&t.root, &mut nodes);
+        flatten(&tab_layout.root, &mut nodes);
         Self {
-            tab_id: t.tab_id.0,
-            name: t.name,
+            tab_id: tab_layout.tab_id.0,
+            name: tab_layout.name,
             nodes,
-            focused: t.focused.0,
-            zoomed: t.zoomed.map(|p| p.0),
+            focused: tab_layout.focused.0,
+            zoomed: tab_layout.zoomed.map(|p| p.0),
         }
     }
 }
@@ -173,9 +161,7 @@ impl From<proto::TabLayout> for TabLayout {
 /// A session's whole layout, sent again on every change.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct SessionLayout {
-    /// The session.
     pub session_id: u64,
-    /// Its name.
     pub name: String,
     /// Bumped on every change; ignore a layout older than one already applied.
     pub revision: u64,
@@ -186,13 +172,13 @@ pub struct SessionLayout {
 }
 
 impl From<proto::SessionLayout> for SessionLayout {
-    fn from(l: proto::SessionLayout) -> Self {
+    fn from(session_layout: proto::SessionLayout) -> Self {
         Self {
-            session_id: l.session_id.0,
-            name: l.name,
-            revision: l.revision,
-            active_tab: l.active_tab.map(|t| t.0),
-            tabs: l.tabs.into_iter().map(Into::into).collect(),
+            session_id: session_layout.session_id.0,
+            name: session_layout.name,
+            revision: session_layout.revision,
+            active_tab: session_layout.active_tab.map(|t| t.0),
+            tabs: session_layout.tabs.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -200,11 +186,8 @@ impl From<proto::SessionLayout> for SessionLayout {
 /// A line of the session list.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SessionSummary {
-    /// The session.
     pub session_id: u64,
-    /// Its name.
     pub name: String,
-    /// Tabs.
     pub tabs: u32,
     /// Panes across all tabs.
     pub panes: u32,
@@ -213,29 +196,26 @@ pub struct SessionSummary {
 }
 
 impl From<proto::SessionSummary> for SessionSummary {
-    fn from(s: proto::SessionSummary) -> Self {
+    fn from(session_summary: proto::SessionSummary) -> Self {
         Self {
-            session_id: s.session_id.0,
-            name: s.name,
-            tabs: s.tabs,
-            panes: s.panes,
-            clients: s.clients,
+            session_id: session_summary.session_id.0,
+            name: session_summary.name,
+            tabs: session_summary.tabs,
+            panes: session_summary.panes,
+            clients: session_summary.clients,
         }
     }
 }
 
-/// Which coding agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum AgentKind {
-    /// Claude Code.
     Claude,
-    /// Codex CLI.
     Codex,
 }
 
 impl From<AgentKind> for proto::AgentKind {
-    fn from(a: AgentKind) -> Self {
-        match a {
+    fn from(agent_kind: AgentKind) -> Self {
+        match agent_kind {
             AgentKind::Claude => Self::Claude,
             AgentKind::Codex => Self::Codex,
         }
@@ -245,38 +225,29 @@ impl From<AgentKind> for proto::AgentKind {
 /// What a new pane runs.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum PaneLaunch {
-    /// The login shell.
     Shell {
         /// Working directory; `nil` inherits from the split pane.
         cwd: Option<String>,
     },
     /// A program, run through the login shell.
     Command {
-        /// Program and arguments.
         argv: Vec<String>,
-        /// Working directory.
         cwd: Option<String>,
     },
     /// A coding agent with the daemon's launch recipe.
     Agent {
-        /// Which agent.
         agent: AgentKind,
         /// The agent's own session id to resume.
         resume: Option<String>,
-        /// Working directory.
         cwd: Option<String>,
     },
     /// A canvas pane (no process) showing a drawing or Excalidraw scene; `nil` has the daemon
     /// create a new Excalidraw scene (docs/DAEMON.md §7.2, §7.11). Which leaves are canvases
     /// comes from `ArtifactEvent.canvases`.
-    Canvas {
-        /// The artifact to show.
-        artifact_id: Option<u64>,
-    },
+    Canvas { artifact_id: Option<u64> },
     /// A pane closed earlier on this daemon, back: its agent resumes its session, else a
     /// shell in its last directory, else `cwd` (needs `DaemonInfo.reopen` and the owner).
     Reopen {
-        /// The closed pane.
         pane_id: u64,
         /// Where to start when the daemon kept no directory for it.
         cwd: Option<String>,
@@ -284,8 +255,8 @@ pub enum PaneLaunch {
 }
 
 impl From<PaneLaunch> for proto::PaneLaunch {
-    fn from(l: PaneLaunch) -> Self {
-        match l {
+    fn from(pane_launch: PaneLaunch) -> Self {
+        match pane_launch {
             PaneLaunch::Shell { cwd } => Self::Shell { cwd },
             PaneLaunch::Command { argv, cwd } => Self::Command { argv, cwd },
             PaneLaunch::Agent { agent, resume, cwd } => Self::Agent {
@@ -309,104 +280,73 @@ impl From<PaneLaunch> for proto::PaneLaunch {
 pub enum LayoutOp {
     /// Splits a pane; the new pane goes after it and takes focus.
     Split {
-        /// The pane to split.
         pane_id: u64,
-        /// Arrangement.
         axis: Axis,
-        /// What the new pane runs.
         launch: PaneLaunch,
     },
     /// Closes a pane (and its tab, if it was the last one).
     ClosePane {
-        /// The pane.
         pane_id: u64,
     },
-    /// Focuses a pane and selects its tab.
     Focus {
-        /// The pane.
         pane_id: u64,
     },
     /// Moves a tab's focus to the nearest pane in `direction`.
     FocusDirection {
-        /// The tab.
         tab_id: u64,
-        /// Where to.
         direction: Direction,
     },
     /// Grows (positive) or shrinks a pane along `axis` by moving its nearest divider.
     Resize {
-        /// The pane.
         pane_id: u64,
-        /// Dimension.
         axis: Axis,
         /// Change of the pane's share.
         delta: f32,
     },
     /// Zooms a pane to fill its tab, or unzooms it.
     ToggleZoom {
-        /// The pane.
         pane_id: u64,
     },
     /// Appends a tab with one pane and selects it.
     NewTab {
-        /// The session.
         session_id: u64,
         /// Name, empty for the default.
         name: String,
-        /// What its pane runs.
         launch: PaneLaunch,
     },
-    /// Closes a tab and its panes.
     CloseTab {
-        /// The tab.
         tab_id: u64,
     },
     /// Moves a tab to `index` (clamped).
     MoveTab {
-        /// The tab.
         tab_id: u64,
-        /// New position.
         index: u32,
     },
-    /// Shows a tab.
     SelectTab {
-        /// The tab.
         tab_id: u64,
     },
-    /// Renames a tab.
     RenameTab {
-        /// The tab.
         tab_id: u64,
-        /// New name.
         name: String,
     },
     /// Renames a session (fails if the name is taken).
     RenameSession {
-        /// The session.
         session_id: u64,
-        /// New name.
         name: String,
     },
-    /// Creates a session with one tab and pane.
     CreateSession {
-        /// Its name.
         name: String,
-        /// What its pane runs.
         launch: PaneLaunch,
     },
-    /// Closes a session and its panes.
     CloseSession {
-        /// The session.
         session_id: u64,
     },
     /// Moves a pane into a new tab after its own (daemons with `pane_moves`).
     BreakPane {
-        /// The pane.
         pane_id: u64,
     },
     /// Moves a pane beside `target` on `side` (daemons with `pane_moves`).
     MovePane {
-        /// The pane.
         pane_id: u64,
         /// The pane it goes beside.
         target: u64,
@@ -416,7 +356,6 @@ pub enum LayoutOp {
     /// Moves a tab's panes beside `target` on `side`; the tab closes (daemons with
     /// `pane_moves`).
     MergeTab {
-        /// The tab.
         tab_id: u64,
         /// The pane they go beside.
         target: u64,
@@ -426,7 +365,6 @@ pub enum LayoutOp {
     /// Puts a tab in a project defined in its session (`PutProject` first), moves it within
     /// it by `rank`, or ungroups it with `nil` (daemons with `projects`).
     SetTabProject {
-        /// The tab.
         tab_id: u64,
         /// The project, or `nil` to ungroup.
         project_id: Option<String>,
@@ -436,27 +374,21 @@ pub enum LayoutOp {
     /// Defines or updates a project in a session; an older `updated_ms` than the daemon's
     /// copy is ignored (daemons with `projects`).
     PutProject {
-        /// The session.
         session_id: u64,
-        /// The definition.
         project: DaemonProject,
     },
     /// Ungroups every tab of a project in a session and drops it (daemons with `projects`).
     RemoveProject {
-        /// The session.
         session_id: u64,
-        /// The project.
         project_id: String,
     },
     /// Opens a pane in a new floating window over `pane_id`'s tab (daemons with `floats`).
     NewFloat {
         /// A pane of the tab.
         pane_id: u64,
-        /// What it runs.
         launch: PaneLaunch,
         /// Where it sits; `nil` for a free spot.
         frame: Option<FloatFrame>,
-        /// Whether it takes focus.
         focus: bool,
         /// Closes itself once its run is done.
         close_when_done: bool,
@@ -464,7 +396,6 @@ pub enum LayoutOp {
     /// Floats a tiled pane, tears a pane out of a shared window, or moves a one-pane window
     /// (daemons with `floats`).
     FloatPane {
-        /// The pane.
         pane_id: u64,
         /// Where it sits; `nil` keeps it or picks a free spot.
         frame: Option<FloatFrame>,
@@ -473,7 +404,6 @@ pub enum LayoutOp {
     SetFloat {
         /// A pane of the window.
         pane_id: u64,
-        /// New frame.
         frame: Option<FloatFrame>,
         /// In the tray, or restored.
         minimized: Option<bool>,
@@ -492,11 +422,8 @@ pub enum LayoutOp {
     },
     /// Moves a pane along one whole edge of a tab's tiled panes (daemons with `floats`).
     MovePaneToEdge {
-        /// The pane.
         pane_id: u64,
-        /// The tab.
         tab_id: u64,
-        /// Which edge.
         side: Direction,
     },
 }
@@ -504,46 +431,40 @@ pub enum LayoutOp {
 /// Where a floating window sits, in fractions of its tab (`0,0` top left).
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
 pub struct FloatFrame {
-    /// Left edge.
     pub x: f32,
-    /// Top edge.
     pub y: f32,
-    /// Width.
     pub w: f32,
-    /// Height.
     pub h: f32,
 }
 
 impl From<FloatFrame> for proto::FloatFrame {
-    fn from(f: FloatFrame) -> Self {
+    fn from(float_frame: FloatFrame) -> Self {
         Self {
-            x: f.x,
-            y: f.y,
-            w: f.w,
-            h: f.h,
+            x: float_frame.x,
+            y: float_frame.y,
+            w: float_frame.w,
+            h: float_frame.h,
         }
     }
 }
 
 impl From<proto::FloatFrame> for FloatFrame {
-    fn from(f: proto::FloatFrame) -> Self {
+    fn from(float_frame: proto::FloatFrame) -> Self {
         Self {
-            x: f.x,
-            y: f.y,
-            w: f.w,
-            h: f.h,
+            x: float_frame.x,
+            y: float_frame.y,
+            w: float_frame.w,
+            h: float_frame.h,
         }
     }
 }
 
-/// A floating window over a tab.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct DaemonFloat {
     /// The window, unique within its session.
     pub id: u64,
     /// Its panes, a subtree of the tab's tree.
     pub panes: Vec<u64>,
-    /// Where it sits.
     pub frame: FloatFrame,
     /// Stacking order; higher is in front.
     pub z: u32,
@@ -558,30 +479,28 @@ pub struct DaemonFloat {
 /// A session's floating windows, back to front.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct DaemonFloats {
-    /// The session.
     pub session_id: u64,
     /// The session layout revision these belong to.
     pub revision: u64,
-    /// The windows.
     pub floats: Vec<DaemonFloat>,
 }
 
 impl From<proto::SessionFloats> for DaemonFloats {
-    fn from(f: proto::SessionFloats) -> Self {
+    fn from(session_floats: proto::SessionFloats) -> Self {
         Self {
-            session_id: f.session_id.0,
-            revision: f.revision,
-            floats: f
+            session_id: session_floats.session_id.0,
+            revision: session_floats.revision,
+            floats: session_floats
                 .floats
                 .into_iter()
-                .map(|w| DaemonFloat {
-                    id: w.id.0,
-                    panes: w.panes.into_iter().map(|p| p.0).collect(),
-                    frame: w.frame.into(),
-                    z: w.z,
-                    minimized: w.minimized,
-                    pinned: w.pinned,
-                    close_when_done: w.close == proto::CloseWhen::Done,
+                .map(|window| DaemonFloat {
+                    id: window.id.0,
+                    panes: window.panes.into_iter().map(|pane| pane.0).collect(),
+                    frame: window.frame.into(),
+                    z: window.z,
+                    minimized: window.minimized,
+                    pinned: window.pinned,
+                    close_when_done: window.close == proto::CloseWhen::Done,
                 })
                 .collect(),
         }
@@ -589,9 +508,9 @@ impl From<proto::SessionFloats> for DaemonFloats {
 }
 
 impl From<LayoutOp> for proto::LayoutOp {
-    fn from(op: LayoutOp) -> Self {
+    fn from(layout_op: LayoutOp) -> Self {
         use proto::{PaneId, SessionId, TabId};
-        match op {
+        match layout_op {
             LayoutOp::Split {
                 pane_id,
                 axis,
@@ -739,8 +658,8 @@ impl From<LayoutOp> for proto::LayoutOp {
                 side,
             } => Self::DockPane {
                 pane_id: PaneId(pane_id),
-                beside: target.map(|t| proto::DockTarget {
-                    pane_id: PaneId(t),
+                beside: target.map(|target| proto::DockTarget {
+                    pane_id: PaneId(target),
                     side: side.into(),
                 }),
             },
@@ -774,25 +693,25 @@ pub struct DaemonProject {
 }
 
 impl From<proto::Project> for DaemonProject {
-    fn from(p: proto::Project) -> Self {
+    fn from(project: proto::Project) -> Self {
         Self {
-            id: p.id,
-            name: p.name,
-            color: p.color,
-            order: p.order,
-            updated_ms: p.updated.0,
+            id: project.id,
+            name: project.name,
+            color: project.color,
+            order: project.order,
+            updated_ms: project.updated.0,
         }
     }
 }
 
 impl From<DaemonProject> for proto::Project {
-    fn from(p: DaemonProject) -> Self {
+    fn from(daemon_project: DaemonProject) -> Self {
         Self {
-            id: p.id,
-            name: p.name,
-            color: p.color,
-            order: p.order,
-            updated: proto::UnixMillis(p.updated_ms),
+            id: daemon_project.id,
+            name: daemon_project.name,
+            color: daemon_project.color,
+            order: daemon_project.order,
+            updated: proto::UnixMillis(daemon_project.updated_ms),
         }
     }
 }
@@ -800,9 +719,7 @@ impl From<DaemonProject> for proto::Project {
 /// One tab's membership in a project.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DaemonTabProject {
-    /// The tab.
     pub tab_id: u64,
-    /// The project.
     pub project_id: String,
     /// Where the tab sorts within the project.
     pub rank: i64,
@@ -811,36 +728,37 @@ pub struct DaemonTabProject {
 /// A session's projects, as far as the connection sees.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DaemonProjects {
-    /// The session.
     pub session_id: u64,
     /// The session layout revision these belong to.
     pub revision: u64,
     /// Definitions of the projects `tabs` use.
     pub projects: Vec<DaemonProject>,
-    /// Tab memberships.
     pub tabs: Vec<DaemonTabProject>,
 }
 
 impl From<proto::SessionProjects> for DaemonProjects {
-    fn from(p: proto::SessionProjects) -> Self {
+    fn from(session_projects: proto::SessionProjects) -> Self {
         Self {
-            session_id: p.session_id.0,
-            revision: p.revision,
-            projects: p.projects.into_iter().map(Into::into).collect(),
-            tabs: p
+            session_id: session_projects.session_id.0,
+            revision: session_projects.revision,
+            projects: session_projects
+                .projects
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            tabs: session_projects
                 .tabs
                 .into_iter()
-                .map(|m| DaemonTabProject {
-                    tab_id: m.tab_id.0,
-                    project_id: m.project,
-                    rank: m.rank,
+                .map(|membership| DaemonTabProject {
+                    tab_id: membership.tab_id.0,
+                    project_id: membership.project,
+                    rank: membership.rank,
                 })
                 .collect(),
         }
     }
 }
 
-/// Why a layout op failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum OpErrorCode {
     /// A referenced session, tab or pane does not exist.
@@ -849,7 +767,6 @@ pub enum OpErrorCode {
     NameTaken,
     /// The process could not be started.
     SpawnFailed,
-    /// Invalid arguments.
     Invalid,
     /// Not allowed by the grant.
     Forbidden,
@@ -888,44 +805,31 @@ impl From<proto::AttachVia> for AttachVia {
     }
 }
 
-/// The result of a layout op.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum OpOutcome {
     /// Applied; nothing created.
     Done,
-    /// A pane was created.
     PaneCreated {
-        /// The new pane.
         pane_id: u64,
     },
-    /// A tab was created.
     TabCreated {
-        /// The new tab.
         tab_id: u64,
-        /// Its pane.
         pane_id: u64,
     },
-    /// A session was created.
     SessionCreated {
-        /// The session.
         session_id: u64,
-        /// Its tab.
         tab_id: u64,
-        /// Its pane.
         pane_id: u64,
     },
-    /// Not applied.
     Failed {
-        /// Machine-readable reason.
         code: OpErrorCode,
-        /// Detail.
         message: String,
     },
 }
 
 impl From<proto::OpOutcome> for OpOutcome {
-    fn from(o: proto::OpOutcome) -> Self {
-        match o {
+    fn from(op_outcome: proto::OpOutcome) -> Self {
+        match op_outcome {
             proto::OpOutcome::Done => Self::Done,
             proto::OpOutcome::PaneCreated { pane_id } => Self::PaneCreated { pane_id: pane_id.0 },
             proto::OpOutcome::TabCreated { tab_id, pane_id } => Self::TabCreated {
@@ -954,56 +858,47 @@ impl From<proto::OpOutcome> for OpOutcome {
 pub struct DecisionOption {
     /// Pass to [`DaemonClient::decide`](crate::DaemonClient::decide).
     pub id: u32,
-    /// Button label.
     pub label: String,
 }
 
-/// What an agent is doing.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AgentState {
     /// Waiting for a prompt.
     Idle,
-    /// Working.
     Running,
-    /// Needs a decision.
     Blocked {
         /// Answer with [`DaemonClient::decide`](crate::DaemonClient::decide).
         request_id: u64,
-        /// What it asks.
         summary: String,
-        /// The choices.
         options: Vec<DecisionOption>,
     },
-    /// Finished its turn.
     Done,
 }
 
-/// An agent running in a pane.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AgentStatus {
     /// `claude`, `codex`, …
     pub kind: String,
-    /// Its state.
     pub state: AgentState,
 }
 
 impl From<proto::AgentStatus> for AgentStatus {
-    fn from(a: proto::AgentStatus) -> Self {
+    fn from(agent_status: proto::AgentStatus) -> Self {
         Self {
-            kind: a.kind,
-            state: match a.state {
+            kind: agent_status.kind,
+            state: match agent_status.state {
                 proto::AgentState::Idle => AgentState::Idle,
                 proto::AgentState::Running => AgentState::Running,
                 proto::AgentState::Done => AgentState::Done,
-                proto::AgentState::Blocked(b) => AgentState::Blocked {
-                    request_id: b.request_id.0,
-                    summary: b.summary,
-                    options: b
+                proto::AgentState::Blocked(blocked) => AgentState::Blocked {
+                    request_id: blocked.request_id.0,
+                    summary: blocked.summary,
+                    options: blocked
                         .options
                         .into_iter()
-                        .map(|o| DecisionOption {
-                            id: o.id.0,
-                            label: o.label,
+                        .map(|option| DecisionOption {
+                            id: option.id.0,
+                            label: option.label,
                         })
                         .collect(),
                 },
@@ -1016,7 +911,6 @@ impl From<proto::AgentStatus> for AgentStatus {
 /// blocked report is a status only: there is no request to answer.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ProgramReport {
-    /// What it is doing.
     pub state: ProgramState,
     /// What a blocked program waits for, if it said.
     pub kind: Option<ProgramKind>,
@@ -1028,22 +922,16 @@ pub struct ProgramReport {
     pub progress: Option<u8>,
 }
 
-/// What a program says it is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum ProgramState {
-    /// At rest.
     Idle,
-    /// Running.
     Working,
     /// Finished work not looked at yet.
     Done,
-    /// Waiting on the user.
     Blocked,
-    /// Failed and stopped.
     Error,
 }
 
-/// What a blocked program waits for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum ProgramKind {
     /// Approval to do something.
@@ -1055,23 +943,23 @@ pub enum ProgramKind {
 }
 
 impl From<proto::ProgramReport> for ProgramReport {
-    fn from(r: proto::ProgramReport) -> Self {
+    fn from(program_report: proto::ProgramReport) -> Self {
         Self {
-            state: match r.state {
+            state: match program_report.state {
                 proto::ProgramState::Idle => ProgramState::Idle,
                 proto::ProgramState::Working => ProgramState::Working,
                 proto::ProgramState::Done => ProgramState::Done,
                 proto::ProgramState::Blocked => ProgramState::Blocked,
                 proto::ProgramState::Error => ProgramState::Error,
             },
-            kind: r.kind.map(|k| match k {
+            kind: program_report.kind.map(|kind| match kind {
                 proto::ProgramKind::Permission => ProgramKind::Permission,
                 proto::ProgramKind::Question => ProgramKind::Question,
                 proto::ProgramKind::Auth => ProgramKind::Auth,
             }),
-            app: r.app,
-            message: r.message,
-            progress: r.progress,
+            app: program_report.app,
+            message: program_report.message,
+            progress: program_report.progress,
         }
     }
 }
@@ -1083,21 +971,16 @@ pub enum SizePolicy {
     FollowLease,
     /// The client that last typed.
     LastInput,
-    /// A fixed size.
     Fixed {
-        /// Columns.
         cols: u16,
-        /// Rows.
         rows: u16,
     },
     /// The smallest attached client's.
     Smallest,
 }
 
-/// A pane's metadata.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct PaneMeta {
-    /// The pane.
     pub pane_id: u64,
     /// Title (OSC 0/2).
     pub title: String,
@@ -1105,39 +988,36 @@ pub struct PaneMeta {
     pub cwd: Option<String>,
     /// Exit status once the process ended.
     pub exit: Option<i32>,
-    /// The agent in it, if any.
     pub agent: Option<AgentStatus>,
-    /// The PTY's size.
     pub size: PaneSize,
-    /// Whose size it follows.
     pub size_policy: SizePolicy,
     /// The principal whose size it has (16 bytes), if any.
     pub sized_by: Option<Vec<u8>>,
 }
 
 impl From<proto::PaneMeta> for PaneMeta {
-    fn from(m: proto::PaneMeta) -> Self {
+    fn from(pane_meta: proto::PaneMeta) -> Self {
         Self {
-            pane_id: m.pane_id.0,
-            title: m.title,
-            cwd: m.cwd,
-            exit: m.exit,
-            agent: m.agent.map(Into::into),
-            size: m.size.into(),
-            size_policy: match m.size_policy {
+            pane_id: pane_meta.pane_id.0,
+            title: pane_meta.title,
+            cwd: pane_meta.cwd,
+            exit: pane_meta.exit,
+            agent: pane_meta.agent.map(Into::into),
+            size: pane_meta.size.into(),
+            size_policy: match pane_meta.size_policy {
                 proto::SizePolicy::FollowLease => SizePolicy::FollowLease,
                 proto::SizePolicy::LastInput => SizePolicy::LastInput,
                 proto::SizePolicy::Fixed { cols, rows } => SizePolicy::Fixed { cols, rows },
                 proto::SizePolicy::Smallest => SizePolicy::Smallest,
             },
-            sized_by: m.sized_by.map(|p| p.0.to_vec()),
+            sized_by: pane_meta.sized_by.map(|principal| principal.0.to_vec()),
         }
     }
 }
 
+/// Whether local echo prediction may run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum Prediction {
-    /// Predict.
     Allow,
     /// Hidden input (password prompt): never predict.
     HiddenInput,
@@ -1147,10 +1027,8 @@ pub enum Prediction {
     RawOutsidePrompt,
 }
 
-/// Echo prediction facts for a pane, at a point in its output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct EchoHint {
-    /// The pane.
     pub pane_id: u64,
     /// termios `ECHO`.
     pub echo: bool,
@@ -1162,20 +1040,19 @@ pub struct EchoHint {
     pub at_prompt: bool,
     /// Output offset the facts hold from.
     pub at_seq: u64,
-    /// The decision.
     pub prediction: Prediction,
 }
 
 impl From<proto::EchoHintAt> for EchoHint {
-    fn from(h: proto::EchoHintAt) -> Self {
+    fn from(echo_hint_at: proto::EchoHintAt) -> Self {
         Self {
-            pane_id: h.hint.pane_id.0,
-            echo: h.hint.echo,
-            icanon: h.hint.icanon,
-            alt_screen: h.hint.alt_screen,
-            at_prompt: h.hint.at_prompt,
-            at_seq: h.at_seq.0,
-            prediction: match h.prediction {
+            pane_id: echo_hint_at.hint.pane_id.0,
+            echo: echo_hint_at.hint.echo,
+            icanon: echo_hint_at.hint.icanon,
+            alt_screen: echo_hint_at.hint.alt_screen,
+            at_prompt: echo_hint_at.hint.at_prompt,
+            at_seq: echo_hint_at.at_seq.0,
+            prediction: match echo_hint_at.prediction {
                 proto::Prediction::Allow => Prediction::Allow,
                 proto::Prediction::HiddenInput => Prediction::HiddenInput,
                 proto::Prediction::AltScreen => Prediction::AltScreen,
@@ -1185,25 +1062,21 @@ impl From<proto::EchoHintAt> for EchoHint {
     }
 }
 
-/// How a command ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct CommandEnd {
     /// Exit status, if the shell reported one.
     pub exit: Option<i32>,
-    /// Run time.
     pub duration_ms: u64,
 }
 
 /// A shell-integration command (OSC 133).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct CommandMark {
-    /// The pane.
     pub pane_id: u64,
     /// Per-pane id.
     pub command_id: u64,
     /// The command line, if known.
     pub command: Option<String>,
-    /// Working directory.
     pub cwd: Option<String>,
     /// Start, Unix milliseconds.
     pub started_at_ms: u64,
@@ -1214,17 +1087,17 @@ pub struct CommandMark {
 }
 
 impl From<proto::CommandMark> for CommandMark {
-    fn from(m: proto::CommandMark) -> Self {
+    fn from(command_mark: proto::CommandMark) -> Self {
         Self {
-            pane_id: m.pane_id.0,
-            command_id: m.command_id,
-            command: m.command,
-            cwd: m.cwd,
-            started_at_ms: m.started_at.0,
-            at_seq: m.at_seq.0,
-            finished: m.finished.map(|e| CommandEnd {
-                exit: e.exit,
-                duration_ms: e.duration_ms,
+            pane_id: command_mark.pane_id.0,
+            command_id: command_mark.command_id,
+            command: command_mark.command,
+            cwd: command_mark.cwd,
+            started_at_ms: command_mark.started_at.0,
+            at_seq: command_mark.at_seq.0,
+            finished: command_mark.finished.map(|end| CommandEnd {
+                exit: end.exit,
+                duration_ms: end.duration_ms,
             }),
         }
     }
@@ -1233,17 +1106,13 @@ impl From<proto::CommandMark> for CommandMark {
 /// A command with its screen rows (row 0 = oldest retained row).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct CommandInfo {
-    /// The command.
     pub mark: CommandMark,
-    /// Prompt row.
     pub prompt_row: Option<u64>,
-    /// First output row.
     pub output_row: Option<u64>,
     /// Row after the output.
     pub end_row: Option<u64>,
 }
 
-/// A pane's remembered commands.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct CommandList {
     /// Output offset the rows refer to.
@@ -1255,28 +1124,26 @@ pub struct CommandList {
 }
 
 impl From<proto::CommandList> for CommandList {
-    fn from(l: proto::CommandList) -> Self {
+    fn from(command_list: proto::CommandList) -> Self {
         Self {
-            at_seq: l.at_seq.0,
-            total_rows: l.total_rows,
-            commands: l
+            at_seq: command_list.at_seq.0,
+            total_rows: command_list.total_rows,
+            commands: command_list
                 .commands
                 .into_iter()
-                .map(|c| CommandInfo {
-                    mark: c.mark.into(),
-                    prompt_row: c.rows.prompt,
-                    output_row: c.rows.output,
-                    end_row: c.rows.end,
+                .map(|command| CommandInfo {
+                    mark: command.mark.into(),
+                    prompt_row: command.rows.prompt,
+                    output_row: command.rows.output,
+                    end_row: command.rows.end,
                 })
                 .collect(),
         }
     }
 }
 
-/// A command's output text.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct CommandOutput {
-    /// The command.
     pub mark: CommandMark,
     /// Output, soft wraps joined.
     pub text: String,
@@ -1285,55 +1152,46 @@ pub struct CommandOutput {
 }
 
 impl From<proto::CommandOutput> for CommandOutput {
-    fn from(o: proto::CommandOutput) -> Self {
+    fn from(command_output: proto::CommandOutput) -> Self {
         Self {
-            mark: o.mark.into(),
-            text: o.text,
-            truncated: o.truncated,
+            mark: command_output.mark.into(),
+            text: command_output.text,
+            truncated: command_output.truncated,
         }
     }
 }
 
-/// Plain text or regex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum SearchMode {
-    /// Literal text.
     Plain,
     /// Rust `regex` syntax.
     Regex,
 }
 
-/// Case handling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum CaseMode {
-    /// Exact case.
     Sensitive,
-    /// Ignore case.
     Insensitive,
     /// Sensitive only if the pattern has an uppercase letter.
     Smart,
 }
 
-/// A scrollback search.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SearchQuery {
-    /// What to find.
     pub pattern: String,
-    /// How to read it.
     pub mode: SearchMode,
-    /// Case handling.
     pub case: CaseMode,
 }
 
 impl From<SearchQuery> for proto::SearchQuery {
-    fn from(q: SearchQuery) -> Self {
+    fn from(search_query: SearchQuery) -> Self {
         Self {
-            pattern: q.pattern,
-            mode: match q.mode {
+            pattern: search_query.pattern,
+            mode: match search_query.mode {
                 SearchMode::Plain => proto::SearchMode::Plain,
                 SearchMode::Regex => proto::SearchMode::Regex,
             },
-            case: match q.case {
+            case: match search_query.case {
                 CaseMode::Sensitive => proto::CaseMode::Sensitive,
                 CaseMode::Insensitive => proto::CaseMode::Insensitive,
                 CaseMode::Smart => proto::CaseMode::Smart,
@@ -1345,11 +1203,8 @@ impl From<SearchQuery> for proto::SearchQuery {
 /// One match, in screen rows at the page's `at_seq` (row 0 = oldest retained row).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SearchMatch {
-    /// Start row.
     pub row: u64,
-    /// Start column.
     pub col: u16,
-    /// End row.
     pub end_row: u64,
     /// End column (exclusive).
     pub end_col: u16,
@@ -1364,63 +1219,52 @@ pub struct SearchPage {
     pub at_seq: u64,
     /// Rows on the screen including scrollback.
     pub total_rows: u64,
-    /// Matches in total.
     pub total: u32,
-    /// This page.
     pub matches: Vec<SearchMatch>,
     /// Cursor for the next page.
     pub next: Option<u32>,
 }
 
 impl From<proto::SearchPage> for SearchPage {
-    fn from(p: proto::SearchPage) -> Self {
+    fn from(search_page: proto::SearchPage) -> Self {
         Self {
-            at_seq: p.at_seq.0,
-            total_rows: p.total_rows,
-            total: p.total,
-            matches: p
+            at_seq: search_page.at_seq.0,
+            total_rows: search_page.total_rows,
+            total: search_page.total,
+            matches: search_page
                 .matches
                 .into_iter()
-                .map(|m| SearchMatch {
-                    row: m.row,
-                    col: m.col,
-                    end_row: m.end_row,
-                    end_col: m.end_col,
-                    line: m.line,
+                .map(|found| SearchMatch {
+                    row: found.row,
+                    col: found.col,
+                    end_row: found.end_row,
+                    end_col: found.end_col,
+                    line: found.line,
                 })
                 .collect(),
-            next: p.next,
+            next: search_page.next,
         }
     }
 }
 
-/// What kind of link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum LinkKind {
     /// OSC 8 hyperlink.
     Hyperlink,
     /// A URL in the text.
     Url,
-    /// A file path.
     Path,
 }
 
 /// Where a link was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum LinkSource {
-    /// The visible screen.
     Screen,
-    /// A command's output.
-    Command {
-        /// The command.
-        command_id: u64,
-    },
+    Command { command_id: u64 },
 }
 
-/// A link or path.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Link {
-    /// Kind.
     pub kind: LinkKind,
     /// The text as shown.
     pub text: String,
@@ -1432,7 +1276,6 @@ pub struct Link {
     pub column: Option<u32>,
     /// For paths: whether it exists on the host.
     pub exists: Option<bool>,
-    /// Where it was found.
     pub source: LinkSource,
 }
 
@@ -1446,24 +1289,24 @@ pub struct Links {
 }
 
 impl From<proto::Links> for Links {
-    fn from(l: proto::Links) -> Self {
+    fn from(found: proto::Links) -> Self {
         Self {
-            cwd: l.cwd,
-            links: l
+            cwd: found.cwd,
+            links: found
                 .links
                 .into_iter()
-                .map(|k| Link {
-                    kind: match k.kind {
+                .map(|link| Link {
+                    kind: match link.kind {
                         proto::LinkKind::Hyperlink => LinkKind::Hyperlink,
                         proto::LinkKind::Url => LinkKind::Url,
                         proto::LinkKind::Path => LinkKind::Path,
                     },
-                    text: k.text,
-                    target: k.target,
-                    line: k.line,
-                    column: k.column,
-                    exists: k.exists,
-                    source: match k.source {
+                    text: link.text,
+                    target: link.target,
+                    line: link.line,
+                    column: link.column,
+                    exists: link.exists,
+                    source: match link.source {
                         proto::LinkSource::Screen => LinkSource::Screen,
                         proto::LinkSource::Command { command_id } => {
                             LinkSource::Command { command_id }
@@ -1478,25 +1321,21 @@ impl From<proto::Links> for Links {
 /// Why a daemon request failed.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum RpcError {
-    /// No such pane.
     UnknownPane,
     /// The request was invalid (e.g. a bad regex).
     BadRequest {
-        /// Why.
         message: String,
     },
     /// Nothing to return (e.g. no finished command).
     NotFound,
-    /// The daemon failed.
     Internal {
-        /// Why.
         message: String,
     },
 }
 
 impl From<proto::RpcError> for RpcError {
-    fn from(e: proto::RpcError) -> Self {
-        match e {
+    fn from(rpc_error: proto::RpcError) -> Self {
+        match rpc_error {
             proto::RpcError::UnknownPane => Self::UnknownPane,
             proto::RpcError::BadRequest(message) => Self::BadRequest { message },
             proto::RpcError::NotFound => Self::NotFound,
@@ -1505,20 +1344,16 @@ impl From<proto::RpcError> for RpcError {
     }
 }
 
-/// Press, repeat or release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum KeyAction {
-    /// Key down.
     Press,
-    /// Auto-repeat.
     Repeat,
-    /// Key up.
     Release,
 }
 
 impl From<KeyAction> for proto::KeyAction {
-    fn from(a: KeyAction) -> Self {
-        match a {
+    fn from(key_action: KeyAction) -> Self {
+        match key_action {
             KeyAction::Press => Self::Press,
             KeyAction::Repeat => Self::Repeat,
             KeyAction::Release => Self::Release,
@@ -1532,14 +1367,11 @@ impl From<KeyAction> for proto::KeyAction {
 pub struct KeyEvent {
     /// Physical key (`GhosttyKey`).
     pub key: u32,
-    /// Modifier bits.
     pub mods: u16,
     /// Modifiers consumed to produce `text`.
     #[uniffi(default = 0)]
     pub consumed_mods: u16,
-    /// Press, repeat or release.
     pub action: KeyAction,
-    /// Text the key produced.
     #[uniffi(default = None)]
     pub text: Option<String>,
     /// The key's codepoint without Shift (kitty protocol).
@@ -1551,48 +1383,36 @@ pub struct KeyEvent {
 }
 
 impl From<KeyEvent> for proto::FullKeyEvent {
-    fn from(k: KeyEvent) -> Self {
+    fn from(key_event: KeyEvent) -> Self {
         Self {
-            key: k.key,
-            mods: k.mods,
-            consumed_mods: k.consumed_mods,
-            action: k.action.into(),
-            text: k.text,
-            unshifted_codepoint: k.unshifted_codepoint,
-            composing: k.composing,
+            key: key_event.key,
+            mods: key_event.mods,
+            consumed_mods: key_event.consumed_mods,
+            action: key_event.action.into(),
+            text: key_event.text,
+            unshifted_codepoint: key_event.unshifted_codepoint,
+            composing: key_event.composing,
         }
     }
 }
 
-/// Mouse press, release or motion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MouseAction {
-    /// Button down.
     Press,
-    /// Button up.
     Release,
-    /// Movement.
     Motion,
 }
 
-/// Which mouse button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MouseButton {
     /// None (motion).
     None,
-    /// Left.
     Left,
-    /// Middle.
     Middle,
-    /// Right.
     Right,
-    /// Wheel up.
     WheelUp,
-    /// Wheel down.
     WheelDown,
-    /// Wheel left.
     WheelLeft,
-    /// Wheel right.
     WheelRight,
 }
 
@@ -1600,28 +1420,23 @@ pub enum MouseButton {
 /// mode and drops it if the program does not track the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct MouseEvent {
-    /// What happened.
     pub action: MouseAction,
-    /// Which button.
     pub button: MouseButton,
-    /// Column.
     pub col: u16,
-    /// Row.
     pub row: u16,
-    /// Modifier bits.
     #[uniffi(default = 0)]
     pub mods: u16,
 }
 
 impl From<MouseEvent> for proto::MouseEvent {
-    fn from(m: MouseEvent) -> Self {
+    fn from(mouse_event: MouseEvent) -> Self {
         Self {
-            action: match m.action {
+            action: match mouse_event.action {
                 MouseAction::Press => proto::MouseAction::Press,
                 MouseAction::Release => proto::MouseAction::Release,
                 MouseAction::Motion => proto::MouseAction::Motion,
             },
-            button: match m.button {
+            button: match mouse_event.button {
                 MouseButton::None => proto::MouseButton::None,
                 MouseButton::Left => proto::MouseButton::Left,
                 MouseButton::Middle => proto::MouseButton::Middle,
@@ -1631,9 +1446,9 @@ impl From<MouseEvent> for proto::MouseEvent {
                 MouseButton::WheelLeft => proto::MouseButton::WheelLeft,
                 MouseButton::WheelRight => proto::MouseButton::WheelRight,
             },
-            col: m.col,
-            row: m.row,
-            mods: m.mods,
+            col: mouse_event.col,
+            row: mouse_event.row,
+            mods: mouse_event.mods,
         }
     }
 }

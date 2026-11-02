@@ -55,16 +55,16 @@ fn options(env: &Env) -> ConnectOptions {
 
 async fn next_matching(
     events: &mut UnboundedReceiver<ClientEvent>,
-    mut f: impl FnMut(&ClientEvent) -> bool,
+    mut predicate: impl FnMut(&ClientEvent) -> bool,
 ) -> ClientEvent {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let e = events.recv().await.expect("events flowing");
+            let event = events.recv().await.expect("events flowing");
             if std::env::var_os("GUDO_TEST_TRACE_EVENTS").is_some() {
-                eprintln!("event: {e:?}");
+                eprintln!("event: {event:?}");
             }
-            if f(&e) {
-                return e;
+            if predicate(&event) {
+                return event;
             }
         }
     })
@@ -92,20 +92,20 @@ impl Stream {
         }
     }
 
-    async fn until(&mut self, mut f: impl FnMut(&ClientEvent) -> bool) -> ClientEvent {
+    async fn until(&mut self, mut predicate: impl FnMut(&ClientEvent) -> bool) -> ClientEvent {
         let Self {
             events,
             next_seq,
             bytes,
             ..
         } = self;
-        next_matching(events, |e| {
-            if let ClientEvent::PaneBytes { seq, data, .. } = e {
+        next_matching(events, |event| {
+            if let ClientEvent::PaneBytes { seq, data, .. } = event {
                 assert_eq!(*seq, *next_seq, "the stream has no gaps");
                 *next_seq += data.len() as u64;
                 bytes.extend_from_slice(data);
             }
-            f(e)
+            predicate(event)
         })
         .await
     }
@@ -115,8 +115,8 @@ impl Stream {
         let found = |bytes: &[u8], cursor: usize| {
             bytes[cursor..]
                 .windows(needle.len())
-                .position(|w| w == needle)
-                .map(|i| cursor + i + needle.len())
+                .position(|window| window == needle)
+                .map(|offset| cursor + offset + needle.len())
         };
         if let Some(end) = found(&self.bytes, self.cursor) {
             self.cursor = end;
@@ -125,8 +125,8 @@ impl Stream {
         let cursor = self.cursor;
         let mut end = None;
         let mut local = self.bytes.clone();
-        self.until(|e| {
-            if let ClientEvent::PaneBytes { data, .. } = e {
+        self.until(|event| {
+            if let ClientEvent::PaneBytes { data, .. } = event {
                 local.extend_from_slice(data);
                 end = found(&local, cursor);
             }
@@ -152,21 +152,25 @@ async fn proxy(upstream: String, cut: Arc<AtomicBool>) -> u16 {
             };
             let cut = Arc::clone(&cut);
             tokio::spawn(async move {
-                let (mut cr, mut cw) = client.into_split();
-                let (mut sr, mut sw) = server.into_split();
-                let c2 = Arc::clone(&cut);
+                let (mut client_read, mut client_write) = client.into_split();
+                let (mut server_read, mut server_write) = server.into_split();
+                let cut_up = Arc::clone(&cut);
                 let up = async move {
-                    let mut buf = vec![0u8; 32 << 10];
-                    while let Ok(n @ 1..) = cr.read(&mut buf).await {
-                        if !c2.load(Ordering::SeqCst) && sw.write_all(&buf[..n]).await.is_err() {
+                    let mut chunk = vec![0u8; 32 << 10];
+                    while let Ok(read @ 1..) = client_read.read(&mut chunk).await {
+                        if !cut_up.load(Ordering::SeqCst)
+                            && server_write.write_all(&chunk[..read]).await.is_err()
+                        {
                             break;
                         }
                     }
                 };
                 let down = async move {
-                    let mut buf = vec![0u8; 32 << 10];
-                    while let Ok(n @ 1..) = sr.read(&mut buf).await {
-                        if !cut.load(Ordering::SeqCst) && cw.write_all(&buf[..n]).await.is_err() {
+                    let mut chunk = vec![0u8; 32 << 10];
+                    while let Ok(read @ 1..) = server_read.read(&mut chunk).await {
+                        if !cut.load(Ordering::SeqCst)
+                            && client_write.write_all(&chunk[..read]).await.is_err()
+                        {
                             break;
                         }
                     }
@@ -207,11 +211,11 @@ async fn fallback_pane_survives_a_drop_with_a_new_shell() {
         listener,
     );
     let mut events = Stream::new(events);
-    let t = Instant::now();
+    let started = Instant::now();
     events
-        .until(|e| matches!(e, ClientEvent::Connected { resumed: false, .. }))
+        .until(|event| matches!(event, ClientEvent::Connected { resumed: false, .. }))
         .await;
-    eprintln!("ssh pane up in {:?}", t.elapsed());
+    eprintln!("ssh pane up in {:?}", started.elapsed());
 
     pane.send_input(b"echo pane-$((40+2))\n".to_vec());
     events.read_until(b"pane-42").await;
@@ -224,7 +228,7 @@ async fn fallback_pane_survives_a_drop_with_a_new_shell() {
     let ClientEvent::PaneResized {
         size: resized, seq, ..
     } = events
-        .until(|e| matches!(e, ClientEvent::PaneResized { .. }))
+        .until(|event| matches!(event, ClientEvent::PaneResized { .. }))
         .await
     else {
         unreachable!()
@@ -240,19 +244,19 @@ async fn fallback_pane_survives_a_drop_with_a_new_shell() {
     // Silent drop: keepalives notice, the pane says so, and comes back with a new shell
     // once the path heals; the byte stream continues without a gap.
     cut.store(true, Ordering::SeqCst);
-    let t = Instant::now();
+    let cut_at = Instant::now();
     events
-        .until(|e| matches!(e, ClientEvent::Disconnected { .. }))
+        .until(|event| matches!(event, ClientEvent::Disconnected { .. }))
         .await;
-    eprintln!("pane saw the drop after {:?}", t.elapsed());
+    eprintln!("pane saw the drop after {:?}", cut_at.elapsed());
     // Typed while disconnected: dropped, never replayed into the next shell.
     pane.send_input(b"echo typed-while-$((0+0))-down\n".to_vec());
     cut.store(false, Ordering::SeqCst);
-    let t = Instant::now();
+    let healed_at = Instant::now();
     events
-        .until(|e| matches!(e, ClientEvent::Connected { resumed: true, .. }))
+        .until(|event| matches!(event, ClientEvent::Connected { resumed: true, .. }))
         .await;
-    eprintln!("pane back {:?} after the path healed", t.elapsed());
+    eprintln!("pane back {:?} after the path healed", healed_at.elapsed());
     let mark = events.bytes.len();
     events.read_until(RESTART_MARKER).await;
     pane.send_input(b"echo again-$((1+1))\n".to_vec());
@@ -261,13 +265,13 @@ async fn fallback_pane_survives_a_drop_with_a_new_shell() {
         !events
             .since(mark)
             .windows(14)
-            .any(|w| w == b"typed-while-0-")
+            .any(|window| window == b"typed-while-0-")
     );
 
     // The shell exiting closes the pane.
     pane.send_input(b"exit\n".to_vec());
     events
-        .until(|e| matches!(e, ClientEvent::PaneClosed { pane_id: p } if *p == pane_id))
+        .until(|event| matches!(event, ClientEvent::PaneClosed { pane_id: closed } if *closed == pane_id))
         .await;
     session.close();
 }
@@ -282,14 +286,14 @@ async fn tmux_pane_reattaches_after_a_drop() {
         ReconnectPolicy::default(),
         None,
     );
-    let conn = session.connected().await.unwrap();
-    if !conn.exec("command -v tmux").await.unwrap().success() {
+    let connection = session.connected().await.unwrap();
+    if !connection.exec("command -v tmux").await.unwrap().success() {
         eprintln!("tmux not installed on the test host; skipping");
         return;
     }
     let name = format!("gudo-test-{}", std::process::id());
     let (listener, events) = EventQueue::channel();
-    let mut opts = SshPaneOptions::new(
+    let mut pane_options = SshPaneOptions::new(
         PaneId(1),
         PaneSize {
             cols: 80,
@@ -298,17 +302,17 @@ async fn tmux_pane_reattaches_after_a_drop() {
             height_px: 0,
         },
     );
-    opts.tmux_session = Some(name.clone());
-    let pane = SshPane::open(session.clone(), opts, listener);
+    pane_options.tmux_session = Some(name.clone());
+    let pane = SshPane::open(session.clone(), pane_options, listener);
     let mut events = Stream::new(events);
     events
-        .until(|e| matches!(e, ClientEvent::Connected { .. }))
+        .until(|event| matches!(event, ClientEvent::Connected { .. }))
         .await;
     pane.send_input(b"export GUDO_MARK=kept-$((3*3)); echo set\n".to_vec());
     events.read_until(b"\r\nset").await;
     session.reconnect_now();
     events
-        .until(|e| matches!(e, ClientEvent::Connected { resumed: true, .. }))
+        .until(|event| matches!(event, ClientEvent::Connected { resumed: true, .. }))
         .await;
     pane.send_input(b"echo $GUDO_MARK\n".to_vec());
     events.read_until(b"kept-9").await;
@@ -316,10 +320,11 @@ async fn tmux_pane_reattaches_after_a_drop() {
         !events
             .bytes
             .windows(RESTART_MARKER.len())
-            .any(|w| w == RESTART_MARKER)
+            .any(|window| window == RESTART_MARKER)
     );
-    let conn = session.connected().await.unwrap();
-    conn.exec(&format!("tmux kill-session -t {name}"))
+    let connection = session.connected().await.unwrap();
+    connection
+        .exec(&format!("tmux kill-session -t {name}"))
         .await
         .unwrap();
     drop(pane);
@@ -328,8 +333,8 @@ async fn tmux_pane_reattaches_after_a_drop() {
 
 /// The static daemon build for the test VM (made by scripts/ssh-test-vm.sh).
 fn hostd_binary(platform: ssh::HostPlatform) -> PathBuf {
-    if let Some(p) = std::env::var_os("GUDO_SSH_TEST_HOSTD") {
-        return PathBuf::from(p);
+    if let Some(path) = std::env::var_os("GUDO_SSH_TEST_HOSTD") {
+        return PathBuf::from(path);
     }
     let arch = match platform {
         ssh::HostPlatform::LinuxAarch64 => "aarch64",
@@ -347,17 +352,18 @@ async fn bootstrap_then_pair_over_iroh() {
     let env = env();
     let target = Target::direct(HostSpec::new(&env.host, &env.user));
     let started = Instant::now();
-    let conn = ssh::Connection::connect(&target, &options(&env))
+    let connection = ssh::Connection::connect(&target, &options(&env))
         .await
         .unwrap();
-    let platform = ssh::detect_platform(&conn).await.unwrap();
+    let platform = ssh::detect_platform(&connection).await.unwrap();
     // A host without the daemon: uninstall whatever an earlier run left.
-    conn.exec(&format!(
-        "systemctl --user disable --now {bin}.service; rm -f ~/.local/bin/{bin}",
-        bin = brand::DAEMON_BIN
-    ))
-    .await
-    .unwrap();
+    connection
+        .exec(&format!(
+            "systemctl --user disable --now {bin}.service; rm -f ~/.local/bin/{bin}",
+            bin = brand::DAEMON_BIN
+        ))
+        .await
+        .unwrap();
     let binaries = ssh::HostdBinaries {
         linux_aarch64: Some(ssh::BinarySource::Path(hostd_binary(platform))),
         linux_x86_64: Some(ssh::BinarySource::Path(hostd_binary(platform))),
@@ -373,7 +379,9 @@ async fn bootstrap_then_pair_over_iroh() {
         listener: Some(Arc::new(Timing(Instant::now()))),
         ..ssh::BootstrapOptions::default()
     };
-    let report = ssh::bootstrap(&conn, &binaries, &options).await.unwrap();
+    let report = ssh::bootstrap(&connection, &binaries, &options)
+        .await
+        .unwrap();
     eprintln!(
         "bootstrap ({:?}, {:?}) in {:?}",
         report.action,
@@ -384,7 +392,7 @@ async fn bootstrap_then_pair_over_iroh() {
     assert_eq!(report.service, ssh::ServiceMode::Service);
 
     // Pair with the ticket, exactly as the app would after "install helper".
-    let t = Instant::now();
+    let pairing_started = Instant::now();
     let (listener, mut events) = EventQueue::channel();
     let client = Client::connect(
         &report.ticket,
@@ -392,18 +400,23 @@ async fn bootstrap_then_pair_over_iroh() {
         listener,
     )
     .unwrap();
-    next_matching(&mut events, |e| matches!(e, ClientEvent::Connected { .. })).await;
-    eprintln!("paired over iroh in {:?}", t.elapsed());
+    next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Connected { .. })
+    })
+    .await;
+    eprintln!("paired over iroh in {:?}", pairing_started.elapsed());
     client.attach(None);
-    let ClientEvent::Layout { layout } =
-        next_matching(&mut events, |e| matches!(e, ClientEvent::Layout { .. })).await
+    let ClientEvent::Layout { layout } = next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Layout { .. })
+    })
+    .await
     else {
         unreachable!()
     };
     let pane = layout.tabs[0].focused;
     client.subscribe(pane);
-    next_matching(&mut events, |e| {
-        matches!(e, ClientEvent::PaneSnapshot { .. })
+    next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::PaneSnapshot { .. })
     })
     .await;
     // A freshly (re)started daemon may still be starting the pane's shell; keystrokes sent
@@ -413,11 +426,11 @@ async fn bootstrap_then_pair_over_iroh() {
     for _ in 0..6 {
         client.send_input(pane, b"echo daemon-$((5*5))\r".to_vec());
         echoed = tokio::time::timeout(Duration::from_secs(5), async {
-            while let Some(e) = events.recv().await {
-                if let ClientEvent::PaneBytes { data, .. } = e {
+            while let Some(event) = events.recv().await {
+                if let ClientEvent::PaneBytes { data, .. } = event {
                     seen.extend_from_slice(&data);
                 }
-                if seen.windows(9).any(|w| w == b"daemon-25") {
+                if seen.windows(9).any(|window| window == b"daemon-25") {
                     return;
                 }
             }

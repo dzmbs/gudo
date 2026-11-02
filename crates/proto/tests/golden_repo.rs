@@ -23,7 +23,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("GOLDEN {name}: \"{hex}\"");
         }
@@ -118,12 +118,12 @@ fn snapshot() -> RepoSnapshot {
 
 #[test]
 fn repo_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
-    c.check("Caps::REPO_STATUS", Caps::REPO_STATUS, "03000000018002");
-    c.check("ServerCtl::Repos", ServerCtl::Repos(snapshot()), "80000000012b070103042f722f7701042f722f77022f72017201770001016201016801086f726967696e2f62010203040501012a034669780000017501620a02010202636902010163010177046c696e740000000501034465760b6e706d2072756e206465760104706c61790105677265656e0101056e706d2069000100090101026d65");
+    checker.check("Caps::REPO_STATUS", Caps::REPO_STATUS, "03000000018002");
+    checker.check("ServerCtl::Repos", ServerCtl::Repos(snapshot()), "80000000012b070103042f722f7701042f722f77022f72017201770001016201016801086f726967696e2f62010203040501012a034669780000017501620a02010202636902010163010177046c696e740000000501034465760b6e706d2072756e206465760104706c61790105677265656e0101056e706d2069000100090101026d65");
     for (name, gh, golden) in [
         ("GhStatus::Unknown", GhStatus::Unknown, "020000000100"),
         ("GhStatus::Missing", GhStatus::Missing, "020000000102"),
@@ -135,13 +135,13 @@ fn repo_messages_match_their_frozen_bytes() {
             "0400000001030178",
         ),
     ] {
-        c.check(name, gh, golden);
+        checker.check(name, gh, golden);
     }
     for (name, s, golden) in [
         ("MergeState::Clean", MergeState::Clean, "020000000100"),
         ("MergeState::Unknown", MergeState::Unknown, "020000000107"),
     ] {
-        c.check(name, s, golden);
+        checker.check(name, s, golden);
     }
     for (name, s, golden) in [
         ("CheckStatus::Success", CheckStatus::Success, "020000000101"),
@@ -151,9 +151,9 @@ fn repo_messages_match_their_frozen_bytes() {
             "020000000105",
         ),
     ] {
-        c.check(name, s, golden);
+        checker.check(name, s, golden);
     }
-    c.check("PrState::Merged", PrState::Merged, "020000000102");
+    checker.check("PrState::Merged", PrState::Merged, "020000000102");
     let req = |req| ClientCtl::Workspace { req_id: 5, req };
     for (name, r, golden) in [
         (
@@ -244,7 +244,7 @@ fn repo_messages_match_their_frozen_bytes() {
             "1a0000000115052e042f722f7701034465760b6e706d2072756e20646576",
         ),
     ] {
-        c.check(name, req(r), golden);
+        checker.check(name, req(r), golden);
     }
     let answer = |result| ServerCtl::WorkspaceResult { req_id: 5, result };
     let wt = WorktreeInfo {
@@ -309,7 +309,11 @@ fn repo_messages_match_their_frozen_bytes() {
             "1d000000011805001a042f722f7701016200000000018420020301056e706d2069",
         ),
     ] {
-        c.check(name, answer(r), golden);
+        checker.check(name, answer(r), golden);
     }
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }

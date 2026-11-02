@@ -16,7 +16,7 @@ use crate::auth::{Credentials, authenticate};
 use crate::known_hosts::{HostKeyPolicy, KnownHosts, Undecided};
 use crate::target::{HostSpec, Target};
 
-/// Liveness settings (docs/SSH.md §2). The defaults follow 04 R1/R2.
+/// Liveness settings (docs/SSH.md §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Keepalive {
     /// A `keepalive@openssh.com` request is sent this often (`ServerAliveInterval`).
@@ -64,15 +64,11 @@ impl Default for Timeouts {
 /// Everything needed to dial a [`Target`].
 #[derive(Clone, Debug)]
 pub struct ConnectOptions {
-    /// Credentials, tried in order on every hop.
+    /// Tried in order on every hop.
     pub credentials: Credentials,
-    /// Host keys on record.
     pub known_hosts: Arc<KnownHosts>,
-    /// What to do with unknown hosts.
     pub host_key_policy: HostKeyPolicy,
-    /// Liveness monitoring.
     pub keepalive: Keepalive,
-    /// Dial timeouts.
     pub timeouts: Timeouts,
     /// Ask for `zlib@openssh.com` compression (helps on slow links, costs CPU).
     pub compression: bool,
@@ -117,9 +113,9 @@ impl client::Handler for ClientHandler {
         let russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } = key else {
             return Ok(false);
         };
-        if let Some(info) = self.known_hosts.verify(&self.spec, key, &self.policy)? {
+        if let Some(undecided) = self.known_hosts.verify(&self.spec, key, &self.policy)? {
             *self.pending.lock().unwrap_or_else(PoisonError::into_inner) =
-                Some((info, key.clone()));
+                Some((undecided, key.clone()));
         }
         Ok(true)
     }
@@ -137,13 +133,12 @@ impl client::Handler for ClientHandler {
             client::DisconnectReason::ReceivedDisconnect(info) => {
                 format!("{} closed the connection: {}", self.spec.host, info.message)
             }
-            client::DisconnectReason::Error(e) => format!("{}: {e}", self.spec.host),
+            client::DisconnectReason::Error(error) => format!("{}: {error}", self.spec.host),
         };
-        self.dead
-            .send_if_modified(|d| d.is_none().then(|| *d = Some(why)).is_some());
+        mark_dead(&self.dead, why);
         match reason {
             client::DisconnectReason::ReceivedDisconnect(_) => Ok(()),
-            client::DisconnectReason::Error(e) => Err(e),
+            client::DisconnectReason::Error(error) => Err(error),
         }
     }
 }
@@ -166,20 +161,20 @@ struct Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        if let Some(m) = self
+        if let Some(monitor) = self
             .monitor
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
         {
-            m.abort();
+            monitor.abort();
         }
     }
 }
 
 /// An authenticated SSH connection. Clones share it; it closes when the last clone drops.
 ///
-/// "Connected" is a probe answered recently, never a socket flag (04 R2): a monitor task
+/// "Connected" is a probe answered recently, never a socket flag: a monitor task
 /// sends keepalives and marks the connection dead when they go unanswered; see
 /// [`Keepalive`].
 #[derive(Clone)]
@@ -207,34 +202,33 @@ impl Connection {
     pub async fn connect(target: &Target, options: &ConnectOptions) -> Result<Self, SshError> {
         let dead = Arc::new(watch::channel(None).0);
         let mut jumps: Vec<Handle<ClientHandler>> = Vec::new();
-        for (i, spec) in target.hops().enumerate() {
-            let previous = jumps.last();
-            let handle = match previous {
+        for (i, hop) in target.hops().enumerate() {
+            let handle = match jumps.last() {
                 None => {
-                    let tcp = tcp_connect(spec, options.timeouts.connect).await?;
-                    handshake(tcp, spec, options, &dead).await?
+                    let tcp = tcp_connect(hop, options.timeouts.connect).await?;
+                    handshake(tcp, hop, options, &dead).await?
                 }
-                Some(hop) => {
+                Some(previous) => {
                     let channel = tokio::time::timeout(
                         options.timeouts.connect,
-                        hop.channel_open_direct_tcpip(
-                            spec.host.as_str(),
-                            u32::from(spec.port),
+                        previous.channel_open_direct_tcpip(
+                            hop.host.as_str(),
+                            u32::from(hop.port),
                             "127.0.0.1",
                             0,
                         ),
                     )
                     .await
                     .map_err(|_| SshError::Timeout("opening the jump tunnel"))?
-                    .map_err(|e| {
+                    .map_err(|error| {
                         SshError::Protocol(format!(
-                            "jump host {} could not reach {}:{}: {e}",
+                            "jump host {} could not reach {}:{}: {error}",
                             target.jumps[i - 1].host,
-                            spec.host,
-                            spec.port
+                            hop.host,
+                            hop.port
                         ))
                     })?;
-                    handshake(channel.into_stream(), spec, options, &dead).await?
+                    handshake(channel.into_stream(), hop, options, &dead).await?
                 }
             };
             jumps.push(handle);
@@ -269,8 +263,8 @@ impl Connection {
 
     /// Waits until the connection is dead and returns why.
     pub async fn closed(&self) -> String {
-        let mut rx = self.inner.dead.subscribe();
-        match rx.wait_for(Option::is_some).await {
+        let mut dead = self.inner.dead.subscribe();
+        match dead.wait_for(Option::is_some).await {
             Ok(reason) => reason.clone().unwrap_or_default(),
             Err(_) => "closed".into(),
         }
@@ -280,14 +274,14 @@ impl Connection {
     pub fn rtt(&self) -> Option<Duration> {
         match self.inner.rtt_us.load(Ordering::Relaxed) {
             0 => None,
-            us => Some(Duration::from_micros(us)),
+            micros => Some(Duration::from_micros(micros)),
         }
     }
 
     /// Time since the server last answered a keepalive (or since connecting).
     pub fn since_last_reply(&self) -> Duration {
-        let pong = Duration::from_millis(self.inner.last_pong.load(Ordering::Relaxed));
-        self.inner.born.elapsed().saturating_sub(pong)
+        let last_pong = Duration::from_millis(self.inner.last_pong.load(Ordering::Relaxed));
+        self.inner.born.elapsed().saturating_sub(last_pong)
     }
 
     /// Asks the monitor for a fast probe now: if the server does not answer within
@@ -298,6 +292,7 @@ impl Connection {
     }
 
     /// Notes that the user sent input. After a keepalive interval without any answer, a
+    /// fast probe makes sure the input is not going into a dead socket.
     pub fn note_input(&self) {
         if self.since_last_reply() >= self.inner.keepalive.interval {
             self.probe();
@@ -330,6 +325,7 @@ impl Connection {
     }
 
     /// Runs `work` unless the connection dies first: a dead connection fails fast instead
+    /// of leaving the caller waiting on a socket nobody answers.
     pub(crate) async fn guard<T>(
         &self,
         work: impl Future<Output = Result<T, SshError>>,
@@ -338,7 +334,7 @@ impl Connection {
             return Err(SshError::Disconnected(why));
         }
         tokio::select! {
-            r = work => r,
+            result = work => result,
             why = self.closed() => Err(SshError::Disconnected(why)),
         }
     }
@@ -353,7 +349,7 @@ impl Connection {
 }
 
 fn mark_dead(dead: &watch::Sender<Option<String>>, why: String) {
-    dead.send_if_modified(|d| d.is_none().then(|| *d = Some(why)).is_some());
+    dead.send_if_modified(|reason| reason.is_none().then(|| *reason = Some(why)).is_some());
 }
 
 async fn ping(inner: &Inner, timeout: Duration) -> Result<Duration, SshError> {
@@ -373,8 +369,9 @@ async fn ping_once(inner: &Inner) -> Result<Duration, SshError> {
     let rtt = start.elapsed();
     let since_born = u64::try_from(inner.born.elapsed().as_millis()).unwrap_or(u64::MAX);
     inner.last_pong.store(since_born, Ordering::Relaxed);
-    let us = u64::try_from(rtt.as_micros()).unwrap_or(u64::MAX).max(1);
-    inner.rtt_us.store(us, Ordering::Relaxed);
+    // Stored as at least 1 so 0 can mean "no reply yet".
+    let rtt_us = u64::try_from(rtt.as_micros()).unwrap_or(u64::MAX).max(1);
+    inner.rtt_us.store(rtt_us, Ordering::Relaxed);
     Ok(rtt)
 }
 
@@ -417,7 +414,7 @@ async fn monitor(weak: Weak<Inner>) {
         tokio::pin!(reply);
         let outcome = loop {
             tokio::select! {
-                r = &mut reply => break Some(r),
+                result = &mut reply => break Some(result),
                 () = &mut deadline => break None,
                 () = probe.notified(), if !fast => {
                     fast = true;
@@ -433,8 +430,8 @@ async fn monitor(weak: Weak<Inner>) {
                 misses = 0;
                 overdue = false;
             }
-            Some(Err(e)) => {
-                mark_dead(&inner.dead, e.to_string());
+            Some(Err(error)) => {
+                mark_dead(&inner.dead, error.to_string());
                 return;
             }
             None if fast => {
@@ -470,17 +467,17 @@ async fn monitor(weak: Weak<Inner>) {
 async fn tcp_connect(spec: &HostSpec, timeout: Duration) -> Result<TcpStream, SshError> {
     let what = format!("connecting to {}:{}", spec.host, spec.port);
     let work = async {
-        let addrs: Vec<SocketAddr> = tokio::net::lookup_host((spec.host.as_str(), spec.port))
+        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((spec.host.as_str(), spec.port))
             .await
-            .map_err(|e| SshError::io(format!("resolving {}", spec.host), e))?
+            .map_err(|error| SshError::io(format!("resolving {}", spec.host), error))?
             .collect();
-        let addrs = interleave_families(addrs);
+        let addresses = interleave_families(addresses);
         let mut attempts = JoinSet::new();
-        let mut pending = addrs.into_iter();
+        let mut pending = addresses.into_iter();
         let mut last_error = None;
         loop {
-            if let Some(addr) = pending.next() {
-                attempts.spawn(async move { (addr, TcpStream::connect(addr).await) });
+            if let Some(address) = pending.next() {
+                attempts.spawn(async move { (address, TcpStream::connect(address).await) });
             }
             let stagger = tokio::time::sleep(Duration::from_millis(250));
             tokio::select! {
@@ -490,8 +487,8 @@ async fn tcp_connect(spec: &HostSpec, timeout: Duration) -> Result<TcpStream, Ss
                             let _ = stream.set_nodelay(true);
                             return Ok(stream);
                         }
-                        Ok((addr, Err(e))) => last_error = Some(SshError::io(format!("{what} ({addr})"), e)),
-                        Err(e) => last_error = Some(SshError::Protocol(e.to_string())),
+                        Ok((address, Err(error))) => last_error = Some(SshError::io(format!("{what} ({address})"), error)),
+                        Err(error) => last_error = Some(SshError::Protocol(error.to_string())),
                     }
                     if attempts.is_empty() && pending.len() == 0 {
                         return Err(last_error.unwrap_or_else(|| SshError::Protocol(format!("{what}: no addresses"))));
@@ -508,14 +505,16 @@ async fn tcp_connect(spec: &HostSpec, timeout: Duration) -> Result<TcpStream, Ss
 }
 
 /// Alternates IPv6 and IPv4 addresses, IPv6 first (RFC 8305 §4).
-fn interleave_families(addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
-    let (v6, v4): (Vec<_>, Vec<_>) = addrs.into_iter().partition(SocketAddr::is_ipv6);
-    let mut out = Vec::with_capacity(v6.len() + v4.len());
-    let (mut a, mut b) = (v6.into_iter(), v4.into_iter());
+fn interleave_families(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    let (v6, v4): (Vec<_>, Vec<_>) = addresses.into_iter().partition(SocketAddr::is_ipv6);
+    let mut interleaved = Vec::with_capacity(v6.len() + v4.len());
+    let (mut v6, mut v4) = (v6.into_iter(), v4.into_iter());
     loop {
-        match (a.next(), b.next()) {
-            (None, None) => return out,
-            (x, y) => out.extend(x.into_iter().chain(y)),
+        match (v6.next(), v4.next()) {
+            (None, None) => return interleaved,
+            (v6_address, v4_address) => {
+                interleaved.extend(v6_address.into_iter().chain(v4_address));
+            }
         }
     }
 }
@@ -537,7 +536,13 @@ where
         .algorithms_for(spec.key_host(), spec.port);
     if !known.is_empty() {
         let mut keys = known.clone();
-        keys.extend(preferred.key.iter().filter(|a| !known.contains(a)).cloned());
+        keys.extend(
+            preferred
+                .key
+                .iter()
+                .filter(|algorithm| !known.contains(algorithm))
+                .cloned(),
+        );
         preferred.key = keys.into();
     }
     if options.compression {
@@ -549,7 +554,7 @@ where
     }
     let config = Arc::new(client::Config {
         preferred,
-        // Liveness is ours (the monitor above), not russh's.
+        // Liveness is handled by `monitor`, not russh.
         keepalive_interval: None,
         inactivity_timeout: None,
         nodelay: true,
@@ -626,13 +631,16 @@ mod tests {
 
     #[test]
     fn families_interleave_v6_first() {
-        let a: Vec<SocketAddr> = ["1.1.1.1:22", "2.2.2.2:22", "[::1]:22"]
+        let addresses: Vec<SocketAddr> = ["1.1.1.1:22", "2.2.2.2:22", "[::1]:22"]
             .iter()
-            .map(|s| s.parse().unwrap())
+            .map(|address| address.parse().unwrap())
             .collect();
-        let out = interleave_families(a);
+        let interleaved = interleave_families(addresses);
         assert_eq!(
-            out.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            interleaved
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
             ["[::1]:22", "1.1.1.1:22", "2.2.2.2:22"]
         );
     }

@@ -1,3 +1,4 @@
+//! Frozen wire bytes for the later multiplayer messages (invite terms, knock-to-join, approval
 //! policies), kept apart from `golden.rs` so the cases of parallel additions do not collide.
 //! Same rule: never edit an existing hex string; add a case instead.
 //!
@@ -31,7 +32,7 @@ impl Checker {
         T: Serialize + DeserializeOwned + PartialEq + Debug,
     {
         let wire = frame::to_vec(&msg).unwrap();
-        let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
         if self.print {
             println!("{name}: \"{hex}\"");
         }
@@ -112,7 +113,7 @@ const POLICY: ApprovalPolicy = ApprovalPolicy {
 
 #[test]
 fn mp2_messages_match_their_frozen_bytes() {
-    let mut c = Checker {
+    let mut checker = Checker {
         print: std::env::var_os("PROTO_PRINT_GOLDEN").is_some(),
         failures: vec![],
     };
@@ -121,7 +122,7 @@ fn mp2_messages_match_their_frozen_bytes() {
     assert_eq!(DaemonFeatures::MP2.0, 1 << 3);
 
     let req = |req| ClientCtl::Multiplayer { req_id: 5, req };
-    c.check(
+    checker.check(
         "MpRequest::RegisterInvite",
         req(MpRequest::RegisterInvite {
             chain: chain(),
@@ -132,12 +133,12 @@ fn mp2_messages_match_their_frozen_bytes() {
         }),
         "680000000116050e010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444455555555555555555555555555555555555555555555555555555555555555550401020101020101000002626f0209090101",
     );
-    c.check(
+    checker.check(
         "MpRequest::Knocks",
         req(MpRequest::Knocks),
         "040000000116050f",
     );
-    c.check(
+    checker.check(
         "MpRequest::AnswerKnock(admit)",
         req(MpRequest::AnswerKnock {
             knock_id: KNOCK,
@@ -149,7 +150,7 @@ fn mp2_messages_match_their_frozen_bytes() {
         }),
         "0a0000000116051007010c000109",
     );
-    c.check(
+    checker.check(
         "MpRequest::AnswerKnock(deny)",
         req(MpRequest::AnswerKnock {
             knock_id: KNOCK,
@@ -157,14 +158,14 @@ fn mp2_messages_match_their_frozen_bytes() {
         }),
         "06000000011605100700",
     );
-    c.check(
+    checker.check(
         "MpRequest::GetApprovalPolicy",
         req(MpRequest::GetApprovalPolicy {
             session_id: SESSION,
         }),
         "050000000116051102",
     );
-    c.check(
+    checker.check(
         "MpRequest::SetApprovalPolicy",
         req(MpRequest::SetApprovalPolicy {
             session_id: SESSION,
@@ -172,7 +173,7 @@ fn mp2_messages_match_their_frozen_bytes() {
         }),
         "0700000001160512020301",
     );
-    c.check(
+    checker.check(
         "MpRequest::Claim",
         req(MpRequest::Claim {
             request_id: RequestId(4),
@@ -182,12 +183,12 @@ fn mp2_messages_match_their_frozen_bytes() {
     );
 
     let answer = |result| ServerCtl::MultiplayerResult { req_id: 5, result };
-    c.check(
+    checker.check(
         "MpResponse::Knocks",
         answer(Ok(MpResponse::Knocks(vec![knock()]))),
         "4e000000011d05000b010711111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202626f3333333333333333333333333333333301030305",
     );
-    c.check(
+    checker.check(
         "MpResponse::Admitted",
         answer(Ok(MpResponse::Admitted(GrantInfo {
             grant: grant(),
@@ -197,12 +198,12 @@ fn mp2_messages_match_their_frozen_bytes() {
         }))),
         "86000000011d05000c0133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444455555555555555555555555555555555555555555555555555555555555555550401020101020101000002626f0001222222222222222222222222222222222222222222222222222222222222222200",
     );
-    c.check(
+    checker.check(
         "MpResponse::ApprovalPolicy",
         answer(Ok(MpResponse::ApprovalPolicy(POLICY))),
         "07000000011d05000d0301",
     );
-    c.check(
+    checker.check(
         "MpResponse::Approval",
         answer(Ok(MpResponse::Approval(ApprovalStatus {
             claimed_by: Some(vote()),
@@ -211,7 +212,7 @@ fn mp2_messages_match_their_frozen_bytes() {
         "74000000011d05000e030402020111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202616c06020111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202616c06",
     );
 
-    c.check(
+    checker.check(
         "ServerCtl::Knock(Added)",
         ServerCtl::Knock(KnockUpdate::Added(knock())),
         "4b000000012c000711111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202626f3333333333333333333333333333333301030305",
@@ -235,7 +236,7 @@ fn mp2_messages_match_their_frozen_bytes() {
             "36000000012c01070201111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222",
         ),
     ] {
-        c.check(
+        checker.check(
             &format!("ServerCtl::Knock(Gone {name})"),
             ServerCtl::Knock(KnockUpdate::Gone {
                 knock_id: KNOCK,
@@ -245,22 +246,22 @@ fn mp2_messages_match_their_frozen_bytes() {
             golden,
         );
     }
-    c.check(
+    checker.check(
         "ServerCtl::KnockAnswer(Waiting)",
         ServerCtl::KnockAnswer(KnockAnswer::Waiting { knock_id: KNOCK }),
         "04000000012d0007",
     );
-    c.check(
+    checker.check(
         "ServerCtl::KnockAnswer(Admitted)",
         ServerCtl::KnockAnswer(KnockAnswer::Admitted(chain())),
         "65000000012d01010133333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444455555555555555555555555555555555555555555555555555555555555555550401020101020101000002626f020909",
     );
-    c.check(
+    checker.check(
         "ServerCtl::KnockAnswer(Denied)",
         ServerCtl::KnockAnswer(KnockAnswer::Denied),
         "03000000012d02",
     );
-    c.check(
+    checker.check(
         "ServerCtl::ApprovalPolicy",
         ServerCtl::ApprovalPolicy {
             session_id: SESSION,
@@ -268,7 +269,7 @@ fn mp2_messages_match_their_frozen_bytes() {
         },
         "05000000012e020301",
     );
-    c.check("ServerCtl::ApprovalStatus", ServerCtl::ApprovalStatus(status()), "3d000000012f030402020111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202616c060200");
+    checker.check("ServerCtl::ApprovalStatus", ServerCtl::ApprovalStatus(status()), "3d000000012f030402020111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222202616c060200");
 
     for (name, kind, golden) in [
         ("Knock", AuditKind::Knock, "02000000010a"),
@@ -276,7 +277,7 @@ fn mp2_messages_match_their_frozen_bytes() {
         ("Policy", AuditKind::Policy, "02000000010c"),
         ("Claim", AuditKind::Claim, "02000000010d"),
     ] {
-        c.check(&format!("AuditKind::{name}"), kind, golden);
+        checker.check(&format!("AuditKind::{name}"), kind, golden);
     }
     for (name, mode, golden) in [
         ("AnyApprover", ApprovalMode::AnyApprover, "020000000100"),
@@ -284,16 +285,20 @@ fn mp2_messages_match_their_frozen_bytes() {
         ("TwoPerson", ApprovalMode::TwoPerson, "020000000102"),
         ("Claim", ApprovalMode::Claim, "020000000103"),
     ] {
-        c.check(&format!("ApprovalMode::{name}"), mode, golden);
+        checker.check(&format!("ApprovalMode::{name}"), mode, golden);
     }
     for (name, risk, golden) in [
         ("ReadOnly", Risk::ReadOnly, "020000000100"),
         ("Edits", Risk::Edits, "020000000101"),
         ("Any", Risk::Any, "020000000102"),
     ] {
-        c.check(&format!("Risk::{name}"), risk, golden);
+        checker.check(&format!("Risk::{name}"), risk, golden);
     }
-    assert!(c.failures.is_empty(), "{}", c.failures.join("\n"));
+    assert!(
+        checker.failures.is_empty(),
+        "{}",
+        checker.failures.join("\n")
+    );
 }
 
 #[test]

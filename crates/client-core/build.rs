@@ -4,7 +4,7 @@
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(ssh_test_host)");
     println!("cargo::rerun-if-env-changed=GUDO_SSH_TEST_HOST");
-    if std::env::var_os("GUDO_SSH_TEST_HOST").is_some_and(|v| !v.is_empty()) {
+    if std::env::var_os("GUDO_SSH_TEST_HOST").is_some_and(|host| !host.is_empty()) {
         println!("cargo::rustc-cfg=ssh_test_host");
     }
 }

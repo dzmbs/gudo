@@ -14,33 +14,23 @@ use crate::client::DaemonClient;
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum BrowserPush {
     /// A program in a pane asked for `url` to be opened.
-    Open {
-        /// The pane.
-        pane_id: u64,
-        /// The URL.
-        url: String,
-    },
+    Open { pane_id: u64, url: String },
     /// An agent in a pane calls browser tool `tool` with JSON arguments `args`.
     Call {
         /// Answer with this id.
         id: u64,
-        /// The agent's pane.
         pane_id: u64,
-        /// The tool.
         tool: String,
         /// A JSON object.
         args: String,
     },
     /// Call `id` is over (the agent gave up or it timed out).
-    CallClosed {
-        /// The call.
-        id: u64,
-    },
+    CallClosed { id: u64 },
 }
 
 impl From<proto::BrowserPush> for BrowserPush {
-    fn from(p: proto::BrowserPush) -> Self {
-        match p {
+    fn from(push: proto::BrowserPush) -> Self {
+        match push {
             proto::BrowserPush::Open { pane_id, url } => Self::Open {
                 pane_id: pane_id.0,
                 url,
@@ -66,7 +56,6 @@ impl From<proto::BrowserPush> for BrowserPush {
 /// Called on a runtime thread, in order, one at a time per client. Return quickly.
 #[uniffi::export(foreign)]
 pub trait BrowserListener: Send + Sync {
-    /// One push.
     fn on_browser_push(&self, push: BrowserPush);
 }
 
@@ -89,8 +78,8 @@ impl DaemonClient {
     /// Answers a [`BrowserPush::Call`]: the tool's result (JSON), or `error` saying why not.
     pub fn answer_browser_call(&self, id: u64, result: Option<String>, error: Option<String>) {
         let result = match (result, error) {
-            (Some(r), None) => Ok(r),
-            (_, e) => Err(e.unwrap_or_else(|| "failed".into())),
+            (Some(output), None) => Ok(output),
+            (_, error) => Err(error.unwrap_or_else(|| "failed".into())),
         };
         self.inner.answer_browser_call(id, result);
     }

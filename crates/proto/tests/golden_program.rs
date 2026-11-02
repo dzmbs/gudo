@@ -9,7 +9,7 @@ use proto::*;
 
 fn check(print: bool, name: &str, msg: ServerCtl, golden: &str) -> Option<String> {
     let wire = frame::to_vec(&msg).unwrap();
-    let hex: String = wire.iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = wire.iter().map(|byte| format!("{byte:02x}")).collect();
     if print {
         println!("{name}: \"{hex}\"");
     }

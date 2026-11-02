@@ -1,7 +1,7 @@
 [package]
 name = "grants"
 version = "0.0.0"
-description = "Signing and verification of attenuable capability grants and signed approvals (multiplayer, 08 §3)"
+description = "Signing and verification of attenuable capability grants and signed approvals (multiplayer)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

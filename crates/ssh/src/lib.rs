@@ -1,4 +1,5 @@
 //! Client-side SSH for the app and the CLI: the zero-setup path and the fallback rung of
+//! the transport ladder, on russh with ring crypto.
 //!
 //! - **Dial**: [`Connection::connect`] reaches a [`Target`] through any `ProxyJump` hops
 //!   (`direct-tcpip` channels through each), verifies host keys against [`KnownHosts`]
@@ -25,11 +26,12 @@
 //! # async fn demo() -> Result<(), ssh::SshError> {
 //! let config = SshConfig::load_default()?;
 //! let target = config.target("me@box", "me")?;
-//! let creds = Credentials::new().with(AuthMethod::Agent(None));
-//! let known = Arc::new(KnownHosts::open(std::path::Path::new("/tmp/known_hosts"))?);
-//! let conn = Connection::connect(&target, &ConnectOptions::new(creds, known, HostKeyPolicy::AcceptNew)).await?;
-//! let out = conn.exec("uname -sm").await?.check()?;
-//! println!("{}", out.stdout_text());
+//! let credentials = Credentials::new().with(AuthMethod::Agent(None));
+//! let known_hosts = Arc::new(KnownHosts::open(std::path::Path::new("/tmp/known_hosts"))?);
+//! let options = ConnectOptions::new(credentials, known_hosts, HostKeyPolicy::AcceptNew);
+//! let connection = Connection::connect(&target, &options).await?;
+//! let output = connection.exec("uname -sm").await?.check()?;
+//! println!("{}", output.stdout_text());
 //! # Ok(())
 //! # }
 //! ```

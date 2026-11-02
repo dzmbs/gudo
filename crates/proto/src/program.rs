@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 /// A program's last report about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgramReport {
-    /// What it is doing.
     pub state: ProgramState,
     /// What it waits for, only when [`ProgramState::Blocked`] and the program said.
     pub kind: Option<ProgramKind>,
@@ -34,7 +33,6 @@ pub struct ProgramReport {
 pub enum ProgramState {
     /// At rest, waiting for the user's next instruction.
     Idle,
-    /// Running.
     Working,
     /// Finished work the user hasn't looked at yet.
     Done,

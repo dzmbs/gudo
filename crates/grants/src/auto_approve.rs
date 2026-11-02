@@ -74,7 +74,7 @@ const SUBCOMMAND_TOOLS: &[&str] = &[
 ];
 
 /// Programs a rule never covers: they change who runs the command or run another one.
-const NEVER: &[&str] = &[
+const NEVER_COVERED: &[&str] = &[
     "sudo", "su", "doas", "env", "eval", "exec", "xargs", "sh", "bash", "zsh", "fish", "nohup",
     "time", "command", "builtin",
 ];
@@ -87,9 +87,9 @@ pub fn is_shell_tool(tool: &str) -> bool {
 /// Whether a shell command is one simple command: nothing that chains, pipes, redirects,
 /// runs in the background, substitutes or expands.
 fn is_simple_command(input: &str) -> bool {
-    !input.chars().any(|c| {
+    !input.chars().any(|character| {
         matches!(
-            c,
+            character,
             ';' | '&' | '|' | '>' | '<' | '`' | '$' | '\n' | '\r' | '(' | ')' | '{' | '}' | '\\'
         )
     })
@@ -126,17 +126,17 @@ pub fn like_this(tool: &str, input: &str) -> Option<RuleMatch> {
     }
     let mut words = input.split_whitespace();
     let first = words.next()?;
-    if !is_plain_word(first) || NEVER.contains(&first.rsplit('/').next().unwrap_or(first)) {
+    if !is_plain_word(first) || NEVER_COVERED.contains(&first.rsplit('/').next().unwrap_or(first)) {
         return None;
     }
     let mut prefix = first.to_owned();
     if SUBCOMMAND_TOOLS.contains(&first) {
-        let sub = words.next()?;
-        if !is_plain_word(sub) || sub.contains('/') {
+        let subcommand = words.next()?;
+        if !is_plain_word(subcommand) || subcommand.contains('/') {
             return None;
         }
         prefix.push(' ');
-        prefix.push_str(sub);
+        prefix.push_str(subcommand);
     }
     Some(RuleMatch {
         tool: tool.to_owned(),
@@ -216,10 +216,11 @@ pub fn check_rule(
     if rule.max_turns == 0 || rule.max_turns > MAX_RULE_TURNS {
         return Err(RuleError::Turns);
     }
-    let m = &rule.matcher;
-    if m.tool.is_empty()
-        || (is_shell_tool(&m.tool)
-            && like_this(&m.tool, &m.prefix).is_none_or(|own| !continues(&m.prefix, &own.prefix)))
+    let matcher = &rule.matcher;
+    if matcher.tool.is_empty()
+        || (is_shell_tool(&matcher.tool)
+            && like_this(&matcher.tool, &matcher.prefix)
+                .is_none_or(|own| !continues(&matcher.prefix, &own.prefix)))
     {
         return Err(RuleError::TooWide);
     }
@@ -293,44 +294,44 @@ mod tests {
 
     #[test]
     fn like_this_takes_the_program_and_its_subcommand() {
-        let m = |tool, input| like_this(tool, input).map(|m| m.prefix);
+        let prefix_of = |tool, input| like_this(tool, input).map(|matcher| matcher.prefix);
         assert_eq!(
-            m("Bash", "cargo test --workspace").as_deref(),
+            prefix_of("Bash", "cargo test --workspace").as_deref(),
             Some("cargo test")
         );
-        assert_eq!(m("Bash", "  rm -rf build ").as_deref(), Some("rm"));
+        assert_eq!(prefix_of("Bash", "  rm -rf build ").as_deref(), Some("rm"));
         assert_eq!(
-            m("Bash", "./scripts/ci.sh fast").as_deref(),
+            prefix_of("Bash", "./scripts/ci.sh fast").as_deref(),
             Some("./scripts/ci.sh")
         );
-        assert_eq!(m("Edit", "src/main.rs").as_deref(), Some(""));
+        assert_eq!(prefix_of("Edit", "src/main.rs").as_deref(), Some(""));
         // Nothing a rule should cover.
-        assert_eq!(m("Bash", "cargo test && rm -rf ~"), None);
-        assert_eq!(m("Bash", "sudo rm -rf /"), None);
-        assert_eq!(m("Bash", "/usr/bin/env rm x"), None);
-        assert_eq!(m("Bash", "git -C repo push"), None);
-        assert_eq!(m("Bash", "FOO=1 make"), None);
-        assert_eq!(m("Bash", "cargo"), None);
-        assert_eq!(m("Bash", ""), None);
-        assert_eq!(m("", "x"), None);
+        assert_eq!(prefix_of("Bash", "cargo test && rm -rf ~"), None);
+        assert_eq!(prefix_of("Bash", "sudo rm -rf /"), None);
+        assert_eq!(prefix_of("Bash", "/usr/bin/env rm x"), None);
+        assert_eq!(prefix_of("Bash", "git -C repo push"), None);
+        assert_eq!(prefix_of("Bash", "FOO=1 make"), None);
+        assert_eq!(prefix_of("Bash", "cargo"), None);
+        assert_eq!(prefix_of("Bash", ""), None);
+        assert_eq!(prefix_of("", "x"), None);
     }
 
     #[test]
     fn matches_on_a_word_boundary() {
-        let r = RuleMatch {
+        let matcher = RuleMatch {
             tool: "Bash".into(),
             prefix: "cargo test".into(),
         };
-        assert!(rule_matches(&r, "Bash", "cargo test"));
-        assert!(rule_matches(&r, "Bash", "cargo   test -p proto"));
-        assert!(!rule_matches(&r, "Bash", "cargo testx"));
-        assert!(!rule_matches(&r, "Bash", "cargo build"));
-        assert!(!rule_matches(&r, "Edit", "cargo test"));
+        assert!(rule_matches(&matcher, "Bash", "cargo test"));
+        assert!(rule_matches(&matcher, "Bash", "cargo   test -p proto"));
+        assert!(!rule_matches(&matcher, "Bash", "cargo testx"));
+        assert!(!rule_matches(&matcher, "Bash", "cargo build"));
+        assert!(!rule_matches(&matcher, "Edit", "cargo test"));
     }
 
     #[test]
     fn compound_commands_never_match() {
-        let r = RuleMatch {
+        let matcher = RuleMatch {
             tool: "Bash".into(),
             prefix: "cargo test".into(),
         };
@@ -347,27 +348,27 @@ mod tests {
             "cargo test $HOME",
             "cargo test\nrm x",
         ] {
-            assert!(!rule_matches(&r, "Bash", input), "{input:?} matched");
+            assert!(!rule_matches(&matcher, "Bash", input), "{input:?} matched");
         }
     }
 
     #[test]
     fn a_shell_rule_for_any_command_never_matches() {
-        let r = RuleMatch {
+        let matcher = RuleMatch {
             tool: "Bash".into(),
             prefix: String::new(),
         };
-        assert!(!rule_matches(&r, "Bash", "ls"));
+        assert!(!rule_matches(&matcher, "Bash", "ls"));
     }
 
     #[test]
     fn other_tools_match_on_the_tool() {
-        let r = RuleMatch {
+        let matcher = RuleMatch {
             tool: "Edit".into(),
             prefix: String::new(),
         };
-        assert!(rule_matches(&r, "Edit", "src/lib.rs"));
-        assert!(!rule_matches(&r, "Write", "src/lib.rs"));
+        assert!(rule_matches(&matcher, "Edit", "src/lib.rs"));
+        assert!(!rule_matches(&matcher, "Write", "src/lib.rs"));
     }
 
     #[test]
@@ -400,13 +401,20 @@ mod tests {
     #[test]
     fn rules_are_scoped_to_their_pane_time_and_turns() {
         let key = DeviceKey::generate();
-        let r = rule(&key, "Bash", "cargo test");
-        assert!(permits(&r, PANE, "Bash", "cargo test", NOW, 1));
-        assert!(permits(&r, PANE, "Bash", "cargo test", NOW, 5));
-        assert!(!permits(&r, PANE, "Bash", "cargo test", NOW, 6));
-        assert!(!permits(&r, PaneId(5), "Bash", "cargo test", NOW, 1));
-        assert!(!permits(&r, PANE, "Bash", "cargo test", r.expires_at, 1));
-        assert!(!permits(&r, PANE, "Edit", "cargo test", NOW, 1));
+        let approved = rule(&key, "Bash", "cargo test");
+        assert!(permits(&approved, PANE, "Bash", "cargo test", NOW, 1));
+        assert!(permits(&approved, PANE, "Bash", "cargo test", NOW, 5));
+        assert!(!permits(&approved, PANE, "Bash", "cargo test", NOW, 6));
+        assert!(!permits(&approved, PaneId(5), "Bash", "cargo test", NOW, 1));
+        assert!(!permits(
+            &approved,
+            PANE,
+            "Bash",
+            "cargo test",
+            approved.expires_at,
+            1
+        ));
+        assert!(!permits(&approved, PANE, "Edit", "cargo test", NOW, 1));
     }
 
     #[test]
@@ -417,31 +425,43 @@ mod tests {
             Ok(())
         );
 
-        let resign = |mut r: AutoApproveRule| {
-            sign_auto_approve(&key, DAEMON, &mut r);
-            r
+        let resign = |mut candidate: AutoApproveRule| {
+            sign_auto_approve(&key, DAEMON, &mut candidate);
+            candidate
         };
-        let mut r = rule(&key, "Bash", "cargo test");
-        r.expires_at = NOW;
-        assert_eq!(check_rule(DAEMON, &resign(r), NOW), Err(RuleError::Expired));
-        let mut r = rule(&key, "Bash", "cargo test");
-        r.expires_at = UnixMillis(NOW.0 + MAX_RULE_LIFETIME_MS + CLOCK_SKEW_MS + 1);
-        assert_eq!(check_rule(DAEMON, &resign(r), NOW), Err(RuleError::TooLong));
+        let mut candidate = rule(&key, "Bash", "cargo test");
+        candidate.expires_at = NOW;
+        assert_eq!(
+            check_rule(DAEMON, &resign(candidate), NOW),
+            Err(RuleError::Expired)
+        );
+        let mut candidate = rule(&key, "Bash", "cargo test");
+        candidate.expires_at = UnixMillis(NOW.0 + MAX_RULE_LIFETIME_MS + CLOCK_SKEW_MS + 1);
+        assert_eq!(
+            check_rule(DAEMON, &resign(candidate), NOW),
+            Err(RuleError::TooLong)
+        );
         for turns in [0, MAX_RULE_TURNS + 1] {
-            let mut r = rule(&key, "Bash", "cargo test");
-            r.max_turns = turns;
-            assert_eq!(check_rule(DAEMON, &resign(r), NOW), Err(RuleError::Turns));
+            let mut candidate = rule(&key, "Bash", "cargo test");
+            candidate.max_turns = turns;
+            assert_eq!(
+                check_rule(DAEMON, &resign(candidate), NOW),
+                Err(RuleError::Turns)
+            );
         }
         for (tool, prefix) in [("Bash", ""), ("Bash", "a && b"), ("Bash", "sudo"), ("", "")] {
-            let r = rule(&key, tool, prefix);
+            let candidate = rule(&key, tool, prefix);
             assert_eq!(
-                check_rule(DAEMON, &r, NOW),
+                check_rule(DAEMON, &candidate, NOW),
                 Err(RuleError::TooWide),
                 "{tool} {prefix}"
             );
         }
-        let mut r = rule(&key, "Bash", "cargo test");
-        r.sig[0] ^= 1;
-        assert_eq!(check_rule(DAEMON, &r, NOW), Err(RuleError::Signature));
+        let mut candidate = rule(&key, "Bash", "cargo test");
+        candidate.sig[0] ^= 1;
+        assert_eq!(
+            check_rule(DAEMON, &candidate, NOW),
+            Err(RuleError::Signature)
+        );
     }
 }

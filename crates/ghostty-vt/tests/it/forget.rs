@@ -4,19 +4,19 @@
 use ghostty_vt::{Error, SnapshotDecoder, Terminal, TextRegion};
 
 fn filled(alt: bool) -> Result<Terminal, Error> {
-    let mut t = Terminal::new(20, 4)?;
-    t.set_scrollback_max_bytes(Some(10 << 20))?;
+    let mut terminal = Terminal::new(20, 4)?;
+    terminal.set_scrollback_max_bytes(Some(10 << 20))?;
     for i in 0..300 {
-        t.write(format!("old {i}\r\n").as_bytes());
+        terminal.write(format!("old {i}\r\n").as_bytes());
     }
     if alt {
-        t.write(b"\x1b[?1049h\x1b[Halt screen");
+        terminal.write(b"\x1b[?1049h\x1b[Halt screen");
     }
-    Ok(t)
+    Ok(terminal)
 }
 
-fn copy_without_history(t: &Terminal) -> Result<Terminal, Error> {
-    let snapshot = t.encode_snapshot()?;
+fn copy_without_history(terminal: &Terminal) -> Result<Terminal, Error> {
+    let snapshot = terminal.encode_snapshot()?;
     let mut copy = SnapshotDecoder::new(&snapshot)?.decode()?;
     copy.forget_history()?;
     copy.set_scrollback_max_bytes(Some(10 << 20))?;
@@ -25,12 +25,12 @@ fn copy_without_history(t: &Terminal) -> Result<Terminal, Error> {
 
 #[test]
 fn forgetting_history_keeps_the_screen() -> Result<(), Error> {
-    let t = filled(false)?;
-    let copy = copy_without_history(&t)?;
+    let terminal = filled(false)?;
+    let copy = copy_without_history(&terminal)?;
     assert_eq!(copy.scrollback_rows(), 0);
     assert_eq!(
         copy.text(TextRegion::Active)?,
-        t.text(TextRegion::Active)?,
+        terminal.text(TextRegion::Active)?,
         "the screen survives"
     );
     let all = copy.text(TextRegion::All)?;
@@ -40,9 +40,12 @@ fn forgetting_history_keeps_the_screen() -> Result<(), Error> {
 
 #[test]
 fn forgetting_history_on_the_alternate_screen_clears_the_primary_too() -> Result<(), Error> {
-    let t = filled(true)?;
-    let mut copy = copy_without_history(&t)?;
-    assert_eq!(copy.text(TextRegion::Active)?, t.text(TextRegion::Active)?);
+    let terminal = filled(true)?;
+    let mut copy = copy_without_history(&terminal)?;
+    assert_eq!(
+        copy.text(TextRegion::Active)?,
+        terminal.text(TextRegion::Active)?
+    );
     copy.write(b"\x1b[?1049l");
     let all = copy.text(TextRegion::All)?;
     assert!(!all.contains("old 100"), "primary history leaked: {all}");
@@ -55,8 +58,8 @@ fn forgetting_history_on_the_alternate_screen_clears_the_primary_too() -> Result
 
 #[test]
 fn history_grows_again_after_forgetting() -> Result<(), Error> {
-    let t = filled(false)?;
-    let mut copy = copy_without_history(&t)?;
+    let terminal = filled(false)?;
+    let mut copy = copy_without_history(&terminal)?;
     for i in 0..50 {
         copy.write(format!("new {i}\r\n").as_bytes());
     }

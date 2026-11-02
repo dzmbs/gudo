@@ -26,19 +26,19 @@ impl<'de> Visitor<'de> for ByteBufVisitor {
         f.write_str("a byte string")
     }
 
-    fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Vec<u8>, E> {
-        Ok(v.to_vec())
+    fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<Vec<u8>, E> {
+        Ok(bytes.to_vec())
     }
 
-    fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Vec<u8>, E> {
-        Ok(v)
+    fn visit_byte_buf<E: de::Error>(self, bytes: Vec<u8>) -> Result<Vec<u8>, E> {
+        Ok(bytes)
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<u8>, A::Error> {
-        let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
-        while let Some(b) = seq.next_element()? {
-            out.push(b);
+        let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+        while let Some(byte) = seq.next_element()? {
+            bytes.push(byte);
         }
-        Ok(out)
+        Ok(bytes)
     }
 }

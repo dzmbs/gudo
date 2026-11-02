@@ -99,13 +99,13 @@ async fn an_old_install_moves_to_the_new_name_and_keeps_its_devices() {
     let scratch = root.join("scratch");
     let daemon = start(&exe, root, &scratch, port);
     let daemon_id = endpoint(&scratch)["daemon_id"].clone();
-    let out = hostd(&exe, root)
+    let output = hostd(&exe, root)
         .arg("--state-dir")
         .arg(&scratch)
         .args(["pair", "--json", "--local", "--wait", "10"])
         .output()
         .unwrap();
-    let paired: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let paired: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let ticket = paired["ticket"].as_str().unwrap().to_owned();
     let key = ClientConfig::generate_key();
     connects(&ticket, &key).await;

@@ -49,17 +49,17 @@ impl BrowserState {
     /// Handles a browser push from `ctl`; returns the message back if it is not one. Pushes
     /// on a connection that did not announce the capability are dropped: a daemon is not
     /// trusted to honour it.
-    pub(crate) fn dispatch(&self, msg: ServerCtl, announced: bool) -> Option<ServerCtl> {
-        let ServerCtl::Browser(push) = msg else {
-            return Some(msg);
+    pub(crate) fn dispatch(&self, ctl: ServerCtl, announced: bool) -> Option<ServerCtl> {
+        let ServerCtl::Browser(push) = ctl else {
+            return Some(ctl);
         };
         if !announced {
             tracing::warn!("browser push on a connection that did not ask for it; dropped");
             return None;
         }
         let listener = lock(&self.listener).clone();
-        if let Some(l) = listener {
-            l.on_browser_push(push);
+        if let Some(listener) = listener {
+            listener.on_browser_push(push);
         }
         None
     }

@@ -1,3 +1,4 @@
+//! Multiplayer on [`DaemonClient`] (docs/DAEMON.md §6): invites, roles, presence,
 //! control leases, composer prompts, grants, revocation and the audit log.
 //!
 //! Join with [`DaemonClient::join`] (an invite link or QR code). Keys and ids of principals,
@@ -11,8 +12,6 @@ use client_core::proto;
 use crate::bytes::Bytes;
 use crate::client::{ClientError, DaemonClient};
 use crate::on_runtime;
-
-// --- hex ids --------------------------------------------------------------------------------
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -33,50 +32,32 @@ pub(crate) fn unhex<const N: usize>(what: &str, text: &str) -> Result<[u8; N], M
     Ok(out)
 }
 
-// --- errors ---------------------------------------------------------------------------------
-
 /// Why a multiplayer request failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum MultiplayerError {
     /// The connection's roles or scope do not allow it (the message names the role).
     #[error("forbidden: {message}")]
-    Forbidden {
-        /// Why.
-        message: String,
-    },
+    Forbidden { message: String },
     /// No such pane, grant or device (or outside the scope).
     #[error("not found: {message}")]
-    NotFound {
-        /// What.
-        message: String,
-    },
+    NotFound { message: String },
     /// Malformed: a wider child grant, a refused prompt, a bad id.
     #[error("invalid: {message}")]
-    Invalid {
-        /// Why.
-        message: String,
-    },
+    Invalid { message: String },
     /// Someone else holds the lease, or the state changed.
     #[error("conflict: {message}")]
-    Conflict {
-        /// Why.
-        message: String,
-    },
-    /// Anything else.
+    Conflict { message: String },
     #[error("{message}")]
-    Failed {
-        /// Why.
-        message: String,
-    },
+    Failed { message: String },
     /// The connection dropped before the daemon answered.
     #[error("disconnected before the daemon answered")]
     Disconnected,
 }
 
 impl From<proto::MpError> for MultiplayerError {
-    fn from(e: proto::MpError) -> Self {
+    fn from(mp_error: proto::MpError) -> Self {
         use proto::MpError as E;
-        match e {
+        match mp_error {
             E::Forbidden(message) => Self::Forbidden { message },
             E::NotFound(message) => Self::NotFound { message },
             E::Invalid(message) => Self::Invalid { message },
@@ -86,8 +67,6 @@ impl From<proto::MpError> for MultiplayerError {
         }
     }
 }
-
-// --- types ----------------------------------------------------------------------------------
 
 /// A role a grant confers. Owner implies every other role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
@@ -132,28 +111,24 @@ pub(crate) fn roles_from_ffi(roles: &[Role]) -> proto::Roles {
 pub enum Scope {
     /// Every session, and host-wide requests (files, git, forwards).
     Daemon,
-    /// One session.
     Session {
-        /// The session.
         session_id: u64,
     },
-    /// One tab.
     Tab {
-        /// The tab.
         tab_id: u64,
     },
-    /// One pane.
     Pane {
-        /// The pane.
         pane_id: u64,
     },
 }
 
 impl From<proto::Scope> for Scope {
-    fn from(s: proto::Scope) -> Self {
-        match s {
+    fn from(scope: proto::Scope) -> Self {
+        match scope {
             proto::Scope::Daemon => Self::Daemon,
-            proto::Scope::Session(s) => Self::Session { session_id: s.0 },
+            proto::Scope::Session(scope) => Self::Session {
+                session_id: scope.0,
+            },
             proto::Scope::Tab(t) => Self::Tab { tab_id: t.0 },
             proto::Scope::Pane(p) => Self::Pane { pane_id: p.0 },
         }
@@ -161,8 +136,8 @@ impl From<proto::Scope> for Scope {
 }
 
 impl From<Scope> for proto::Scope {
-    fn from(s: Scope) -> Self {
-        match s {
+    fn from(scope: Scope) -> Self {
+        match scope {
             Scope::Daemon => Self::Daemon,
             Scope::Session { session_id } => Self::Session(proto::SessionId(session_id)),
             Scope::Tab { tab_id } => Self::Tab(proto::TabId(tab_id)),
@@ -181,24 +156,20 @@ pub struct Actor {
 }
 
 impl From<proto::Actor> for Actor {
-    fn from(a: proto::Actor) -> Self {
+    fn from(actor: proto::Actor) -> Self {
         Self {
-            principal: hex(&a.principal.0),
-            device: hex(&a.device.0),
+            principal: hex(&actor.principal.0),
+            device: hex(&actor.device.0),
         }
     }
 }
 
-/// This connection's identity.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct JoinInfo {
     /// Principal and device.
     pub actor: Actor,
-    /// Display name.
     pub name: String,
-    /// Effective roles.
     pub roles: Vec<Role>,
-    /// Effective scope.
     pub scope: Scope,
     /// The leaf grant; `nil` for a paired owner device.
     pub grant_id: Option<String>,
@@ -207,19 +178,18 @@ pub struct JoinInfo {
 }
 
 impl From<proto::JoinInfo> for JoinInfo {
-    fn from(i: proto::JoinInfo) -> Self {
+    fn from(join_info: proto::JoinInfo) -> Self {
         Self {
-            actor: i.actor.into(),
-            name: i.name,
-            roles: roles_to_ffi(i.roles),
-            scope: i.scope.into(),
-            grant_id: i.grant_id.map(|g| hex(&g.0)),
-            expires_ms: i.expires.map(|e| e.0),
+            actor: join_info.actor.into(),
+            name: join_info.name,
+            roles: roles_to_ffi(join_info.roles),
+            scope: join_info.scope.into(),
+            grant_id: join_info.grant_id.map(|g| hex(&g.0)),
+            expires_ms: join_info.expires.map(|e| e.0),
         }
     }
 }
 
-/// Activity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum PresenceState {
     /// Interacting now.
@@ -231,8 +201,8 @@ pub enum PresenceState {
 }
 
 impl From<proto::PresenceState> for PresenceState {
-    fn from(s: proto::PresenceState) -> Self {
-        match s {
+    fn from(presence_state: proto::PresenceState) -> Self {
+        match presence_state {
             proto::PresenceState::Active => Self::Active,
             proto::PresenceState::Idle => Self::Idle,
             proto::PresenceState::Away => Self::Away,
@@ -240,45 +210,35 @@ impl From<proto::PresenceState> for PresenceState {
     }
 }
 
-/// A shared cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct CursorPos {
-    /// The pane.
     pub pane_id: u64,
     /// Row within the viewport.
     pub row: u16,
-    /// Column.
     pub col: u16,
 }
 
 impl From<proto::CursorPos> for CursorPos {
-    fn from(c: proto::CursorPos) -> Self {
+    fn from(cursor_pos: proto::CursorPos) -> Self {
         Self {
-            pane_id: c.pane_id.0,
-            row: c.row,
-            col: c.col,
+            pane_id: cursor_pos.pane_id.0,
+            row: cursor_pos.row,
+            col: cursor_pos.col,
         }
     }
 }
 
-/// One connected device.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Participant {
-    /// Who.
     pub actor: Actor,
-    /// Display name.
     pub name: String,
-    /// Effective roles.
     pub roles: Vec<Role>,
-    /// Effective scope.
     pub scope: Scope,
     /// The grant; `nil` for an owner device.
     pub grant_id: Option<String>,
     /// Connected since, Unix ms.
     pub since_ms: u64,
-    /// Activity.
     pub state: PresenceState,
-    /// Focused pane.
     pub focus: Option<u64>,
     /// Typing in an agent composer.
     pub typing: bool,
@@ -287,18 +247,18 @@ pub struct Participant {
 }
 
 impl From<proto::Participant> for Participant {
-    fn from(p: proto::Participant) -> Self {
+    fn from(participant: proto::Participant) -> Self {
         Self {
-            actor: p.actor.into(),
-            name: p.name,
-            roles: roles_to_ffi(p.roles),
-            scope: p.scope.into(),
-            grant_id: p.grant_id.map(|g| hex(&g.0)),
-            since_ms: p.since.0,
-            state: p.state.into(),
-            focus: p.focus.map(|f| f.0),
-            typing: p.typing,
-            cursor: p.cursor.map(Into::into),
+            actor: participant.actor.into(),
+            name: participant.name,
+            roles: roles_to_ffi(participant.roles),
+            scope: participant.scope.into(),
+            grant_id: participant.grant_id.map(|g| hex(&g.0)),
+            since_ms: participant.since.0,
+            state: participant.state.into(),
+            focus: participant.focus.map(|f| f.0),
+            typing: participant.typing,
+            cursor: participant.cursor.map(Into::into),
         }
     }
 }
@@ -306,11 +266,8 @@ impl From<proto::Participant> for Participant {
 /// Another participant's presence update.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Presence {
-    /// Who.
     pub actor: Actor,
-    /// Activity.
     pub state: PresenceState,
-    /// Focused pane.
     pub focus: Option<u64>,
     /// Typing in an agent composer.
     pub typing: bool,
@@ -319,13 +276,13 @@ pub struct Presence {
 }
 
 impl From<proto::Presence> for Presence {
-    fn from(p: proto::Presence) -> Self {
+    fn from(presence: proto::Presence) -> Self {
         Self {
-            actor: p.actor.into(),
-            state: p.state.into(),
-            focus: p.focus.map(|f| f.0),
-            typing: p.typing,
-            cursor: p.cursor.map(Into::into),
+            actor: presence.actor.into(),
+            state: presence.state.into(),
+            focus: presence.focus.map(|f| f.0),
+            typing: presence.typing,
+            cursor: presence.cursor.map(Into::into),
         }
     }
 }
@@ -339,26 +296,23 @@ pub enum LeaseMode {
     Leased,
 }
 
-/// A pane's control lease.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Lease {
-    /// The pane.
     pub pane_id: u64,
     /// The holding principal; `nil` when free.
     pub holder: Option<String>,
     /// Held since, Unix ms.
     pub since_ms: u64,
-    /// Mode.
     pub mode: LeaseMode,
 }
 
 impl From<proto::Lease> for Lease {
-    fn from(l: proto::Lease) -> Self {
+    fn from(lease: proto::Lease) -> Self {
         Self {
-            pane_id: l.pane_id.0,
-            holder: l.holder.map(|h| hex(&h.0)),
-            since_ms: l.since.0,
-            mode: match l.mode {
+            pane_id: lease.pane_id.0,
+            holder: lease.holder.map(|h| hex(&h.0)),
+            since_ms: lease.since.0,
+            mode: match lease.mode {
                 proto::LeaseMode::Free => LeaseMode::Free,
                 proto::LeaseMode::Leased => LeaseMode::Leased,
             },
@@ -370,25 +324,19 @@ impl From<proto::Lease> for Lease {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum LeaseOutcome {
     /// Held now.
-    Granted {
-        /// The lease.
-        lease: Lease,
-    },
+    Granted { lease: Lease },
     /// The holder was asked; it moves when they give it or go idle.
     Pending {
         /// The current holder.
         holder: String,
     },
     /// The holder kept it.
-    Kept {
-        /// The lease.
-        lease: Lease,
-    },
+    Kept { lease: Lease },
 }
 
 impl From<proto::LeaseOutcome> for LeaseOutcome {
-    fn from(o: proto::LeaseOutcome) -> Self {
-        match o {
+    fn from(lease_outcome: proto::LeaseOutcome) -> Self {
+        match lease_outcome {
             proto::LeaseOutcome::Granted(lease) => Self::Granted {
                 lease: lease.into(),
             },
@@ -402,7 +350,6 @@ impl From<proto::LeaseOutcome> for LeaseOutcome {
     }
 }
 
-/// Why input was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum InputRejectReason {
     /// Someone else holds the lease.
@@ -416,8 +363,8 @@ pub enum InputRejectReason {
 }
 
 impl From<proto::InputRejectReason> for InputRejectReason {
-    fn from(r: proto::InputRejectReason) -> Self {
-        match r {
+    fn from(input_reject_reason: proto::InputRejectReason) -> Self {
+        match input_reject_reason {
             proto::InputRejectReason::NoLease => Self::NoLease,
             proto::InputRejectReason::Role => Self::Role,
             proto::InputRejectReason::Blocked => Self::Blocked,
@@ -426,43 +373,34 @@ impl From<proto::InputRejectReason> for InputRejectReason {
     }
 }
 
-/// A decided approval.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Decided {
-    /// The agent's pane.
     pub pane_id: u64,
-    /// The request.
     pub request_id: u64,
-    /// The winning option.
     pub option_id: u32,
-    /// Who decided.
     pub decided_by: Actor,
     /// When, Unix ms.
     pub at_ms: u64,
 }
 
 impl From<proto::Decided> for Decided {
-    fn from(d: proto::Decided) -> Self {
+    fn from(decided: proto::Decided) -> Self {
         Self {
-            pane_id: d.pane_id.0,
-            request_id: d.request_id.0,
-            option_id: d.option_id.0,
-            decided_by: d.decided_by.into(),
-            at_ms: d.at.0,
+            pane_id: decided.pane_id.0,
+            request_id: decided.request_id.0,
+            option_id: decided.option_id.0,
+            decided_by: decided.decided_by.into(),
+            at_ms: decided.at.0,
         }
     }
 }
 
-/// A grant.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Grant {
-    /// Its id.
     pub grant_id: String,
     /// The signing device.
     pub issuer: String,
-    /// Roles.
     pub roles: Vec<Role>,
-    /// Scope.
     pub scope: Scope,
     /// Signed at, Unix ms.
     pub issued_at_ms: u64,
@@ -479,18 +417,18 @@ pub struct Grant {
 }
 
 impl From<proto::Grant> for Grant {
-    fn from(g: proto::Grant) -> Self {
+    fn from(grant: proto::Grant) -> Self {
         Self {
-            grant_id: hex(&g.grant_id.0),
-            issuer: hex(&g.issuer.0),
-            roles: roles_to_ffi(g.roles),
-            scope: g.scope.into(),
-            issued_at_ms: g.issued_at.0,
-            expires_ms: g.expires.map(|e| e.0),
-            max_uses: g.max_uses,
-            bind: g.bind.map(|d| hex(&d.0)),
-            delegate: g.delegate,
-            label: g.label,
+            grant_id: hex(&grant.grant_id.0),
+            issuer: hex(&grant.issuer.0),
+            roles: roles_to_ffi(grant.roles),
+            scope: grant.scope.into(),
+            issued_at_ms: grant.issued_at.0,
+            expires_ms: grant.expires.map(|e| e.0),
+            max_uses: grant.max_uses,
+            bind: grant.bind.map(|d| hex(&d.0)),
+            delegate: grant.delegate,
+            label: grant.label,
         }
     }
 }
@@ -498,7 +436,6 @@ impl From<proto::Grant> for Grant {
 /// A grant as the daemon tracks it.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GrantInfo {
-    /// The grant.
     pub grant: Grant,
     /// Its parent, for an attenuated grant.
     pub parent: Option<String>,
@@ -509,17 +446,16 @@ pub struct GrantInfo {
 }
 
 impl From<proto::GrantInfo> for GrantInfo {
-    fn from(g: proto::GrantInfo) -> Self {
+    fn from(grant_info: proto::GrantInfo) -> Self {
         Self {
-            grant: g.grant.into(),
-            parent: g.parent.map(|p| hex(&p.0)),
-            bound: g.bound.iter().map(|d| hex(&d.0)).collect(),
-            revoked: g.revoked,
+            grant: grant_info.grant.into(),
+            parent: grant_info.parent.map(|p| hex(&p.0)),
+            bound: grant_info.bound.iter().map(|d| hex(&d.0)).collect(),
+            revoked: grant_info.revoked,
         }
     }
 }
 
-/// Owner or guest device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum DeviceKind {
     /// Paired with a pairing ticket.
@@ -531,7 +467,6 @@ pub enum DeviceKind {
 /// Something about a host's access control its owner should act on.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HostAlert {
-    /// What happened.
     pub kind: HostAlertKind,
     /// When, Unix ms; identifies the alert.
     pub at_ms: u64,
@@ -549,14 +484,14 @@ pub enum HostAlertKind {
 }
 
 impl From<proto::HostAlert> for HostAlert {
-    fn from(a: proto::HostAlert) -> Self {
+    fn from(host_alert: proto::HostAlert) -> Self {
         Self {
-            kind: match a.kind {
+            kind: match host_alert.kind {
                 proto::HostAlertKind::GrantStoreReset => HostAlertKind::GrantStoreReset,
             },
-            at_ms: a.at.0,
-            title: a.title,
-            body: a.body,
+            at_ms: host_alert.at.0,
+            title: host_alert.title,
+            body: host_alert.body,
         }
     }
 }
@@ -564,38 +499,33 @@ impl From<proto::HostAlert> for HostAlert {
 /// A device the daemon knows.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DeviceInfo {
-    /// The key.
     pub device: String,
-    /// Its principal.
     pub principal: String,
-    /// Owner or guest.
     pub kind: DeviceKind,
-    /// Display name.
     pub name: String,
     /// First seen, Unix ms.
     pub first_seen_ms: u64,
     /// The grant it last joined with.
     pub grant_id: Option<String>,
-    /// Revoked.
     pub revoked: bool,
     /// Live connections.
     pub connected: u32,
 }
 
 impl From<proto::DeviceInfo> for DeviceInfo {
-    fn from(d: proto::DeviceInfo) -> Self {
+    fn from(device_info: proto::DeviceInfo) -> Self {
         Self {
-            device: hex(&d.device.0),
-            principal: hex(&d.principal.0),
-            kind: match d.kind {
+            device: hex(&device_info.device.0),
+            principal: hex(&device_info.principal.0),
+            kind: match device_info.kind {
                 proto::DeviceKind::Owner => DeviceKind::Owner,
                 proto::DeviceKind::Guest => DeviceKind::Guest,
             },
-            name: d.name,
-            first_seen_ms: d.first_seen.0,
-            grant_id: d.grant_id.map(|g| hex(&g.0)),
-            revoked: d.revoked,
-            connected: d.connected,
+            name: device_info.name,
+            first_seen_ms: device_info.first_seen.0,
+            grant_id: device_info.grant_id.map(|g| hex(&g.0)),
+            revoked: device_info.revoked,
+            connected: device_info.connected,
         }
     }
 }
@@ -604,27 +534,18 @@ impl From<proto::DeviceInfo> for DeviceInfo {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum RevokeTarget {
     /// A grant and everything attenuated from it.
-    Grant {
-        /// Grant id.
-        grant_id: String,
-    },
+    Grant { grant_id: String },
     /// A device: its pairing and every grant it holds or issued.
-    Device {
-        /// Device key.
-        device: String,
-    },
+    Device { device: String },
     /// Every device and grant of a principal.
-    Principal {
-        /// Principal id.
-        principal: String,
-    },
+    Principal { principal: String },
 }
 
 impl TryFrom<RevokeTarget> for proto::RevokeTarget {
     type Error = MultiplayerError;
 
-    fn try_from(t: RevokeTarget) -> Result<Self, Self::Error> {
-        Ok(match t {
+    fn try_from(revoke_target: RevokeTarget) -> Result<Self, Self::Error> {
+        Ok(match revoke_target {
             RevokeTarget::Grant { grant_id } => {
                 Self::Grant(proto::GrantId(unhex("grant id", &grant_id)?))
             }
@@ -638,7 +559,6 @@ impl TryFrom<RevokeTarget> for proto::RevokeTarget {
     }
 }
 
-/// What a revocation hit.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RevokeResult {
     /// Grants now revoked.
@@ -652,23 +572,17 @@ pub struct RevokeResult {
 /// What an audit record records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum AuditKind {
-    /// Connected.
     Join,
-    /// Disconnected.
     Leave,
     /// Paired with a ticket.
     Paired,
-    /// A grant was registered.
     GrantRegistered,
     /// A grant was first redeemed.
     GrantRedeemed,
-    /// Something was revoked.
     Revoked,
-    /// A lease moved.
     Lease,
     /// A composer prompt (length and hash only).
     Prompt,
-    /// An approval was decided.
     Approval,
     /// Refused by policy.
     Denied,
@@ -683,9 +597,9 @@ pub enum AuditKind {
 }
 
 impl From<proto::AuditKind> for AuditKind {
-    fn from(k: proto::AuditKind) -> Self {
+    fn from(audit_kind: proto::AuditKind) -> Self {
         use proto::AuditKind as K;
-        match k {
+        match audit_kind {
             K::Join => Self::Join,
             K::Leave => Self::Leave,
             K::Paired => Self::Paired,
@@ -711,34 +625,26 @@ pub struct ApprovalAudit {
     pub request_id: u64,
     /// The agent's own id for the tool call.
     pub agent_request: String,
-    /// The chosen option.
     pub option_id: u32,
-    /// Its label.
     pub option: String,
-    /// The tool.
     pub tool: Option<String>,
     /// What the agent wanted.
     pub summary: String,
-    /// The signed bytes.
     pub signed: Bytes,
     /// The approver's Ed25519 signature.
     pub sig: Bytes,
 }
 
-/// One audit record.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AuditRecord {
     /// Position, from 1.
     pub seq: u64,
     /// When, Unix ms.
     pub at_ms: u64,
-    /// What.
     pub kind: AuditKind,
-    /// Who.
     pub actor: Option<Actor>,
     /// Under which grant.
     pub grant_id: Option<String>,
-    /// The pane.
     pub pane_id: Option<u64>,
     /// One line for people.
     pub detail: String,
@@ -762,33 +668,33 @@ pub struct AuditPage {
 }
 
 impl From<proto::AuditPage> for AuditPage {
-    fn from(p: proto::AuditPage) -> Self {
+    fn from(audit_page: proto::AuditPage) -> Self {
         Self {
-            total: p.total,
-            chain_ok: p.chain_ok,
-            records: p
+            total: audit_page.total,
+            chain_ok: audit_page.chain_ok,
+            records: audit_page
                 .records
                 .into_iter()
-                .map(|r| AuditRecord {
-                    seq: r.seq,
-                    at_ms: r.at.0,
-                    kind: r.kind.into(),
-                    actor: r.actor.map(Into::into),
-                    grant_id: r.grant_id.map(|g| hex(&g.0)),
-                    pane_id: r.pane_id.map(|p| p.0),
-                    detail: r.detail,
-                    approval: r.approval.map(|a| ApprovalAudit {
-                        request_id: a.request_id.0,
-                        agent_request: a.agent_request,
-                        option_id: a.option_id.0,
-                        option: a.option,
-                        tool: a.tool,
-                        summary: a.summary,
-                        signed: a.signed.into(),
-                        sig: a.sig.into(),
+                .map(|record| AuditRecord {
+                    seq: record.seq,
+                    at_ms: record.at.0,
+                    kind: record.kind.into(),
+                    actor: record.actor.map(Into::into),
+                    grant_id: record.grant_id.map(|g| hex(&g.0)),
+                    pane_id: record.pane_id.map(|audit_page| audit_page.0),
+                    detail: record.detail,
+                    approval: record.approval.map(|approval| ApprovalAudit {
+                        request_id: approval.request_id.0,
+                        agent_request: approval.agent_request,
+                        option_id: approval.option_id.0,
+                        option: approval.option,
+                        tool: approval.tool,
+                        summary: approval.summary,
+                        signed: approval.signed.into(),
+                        sig: approval.sig.into(),
                     }),
-                    prev_hash: r.prev_hash.into(),
-                    hash: r.hash.into(),
+                    prev_hash: record.prev_hash.into(),
+                    hash: record.hash.into(),
                 })
                 .collect(),
         }
@@ -845,7 +751,6 @@ impl std::fmt::Debug for CreatedInvite {
     }
 }
 
-/// A multiplayer push.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum MultiplayerEvent {
     /// Who this connection is (after every handshake).
@@ -860,47 +765,34 @@ pub enum MultiplayerEvent {
     },
     /// Another participant's presence (typing, focus, cursor).
     Presence {
-        /// The update.
         presence: Presence,
     },
-    /// A pane's lease changed.
     Lease {
-        /// The lease.
         lease: Lease,
     },
     /// Someone asks for a lease this principal holds: answer with `answer_control`.
     LeaseRequested {
-        /// The pane.
         pane_id: u64,
-        /// Who.
         by: Actor,
-        /// Their name.
         name: String,
     },
-    /// Input was refused.
     InputRejected {
-        /// The pane.
         pane_id: u64,
-        /// Why.
         reason: InputRejectReason,
     },
     /// A request was refused by policy.
     Forbidden {
-        /// What.
         what: String,
         /// Why (names the missing role).
         reason: String,
     },
     /// An approval was decided (by anyone).
     Decided {
-        /// The decision.
         decided: Decided,
     },
     /// This client's decision lost to an earlier one.
     AlreadyDecided {
-        /// The request.
         request_id: u64,
-        /// Who won.
         by: Actor,
     },
     /// This connection's grant was revoked; the daemon closes it.
@@ -908,34 +800,27 @@ pub enum MultiplayerEvent {
     /// Another owner device just paired with the host (owner devices only): say so, so a
     /// pairing the owner did not make is noticed and revoked.
     DevicePaired {
-        /// The new device.
         device: DeviceInfo,
     },
     /// The host's access control needs its owner (owner devices only). Sent on every
     /// connection while it stands: notify once per `at_ms`.
     HostAlert {
-        /// The alert.
         alert: HostAlert,
     },
     /// Someone knocked, or a knock changed (owner devices): replace any entry with its id.
     KnockAdded {
-        /// The knock.
         knock: crate::mp2::Knock,
     },
     /// A knock is no longer waiting.
     KnockGone {
-        /// The knock.
         knock_id: u64,
-        /// How it ended.
         outcome: crate::mp2::KnockOutcome,
         /// Who answered it.
         by: Option<Actor>,
     },
     /// The attached session's approval rules (after attaching and on every change).
     ApprovalPolicy {
-        /// The session.
         session_id: u64,
-        /// The rules.
         policy: crate::mp2::ApprovalPolicy,
     },
     /// An open approval request's votes or claim changed.
@@ -952,15 +837,14 @@ pub enum MultiplayerEvent {
     },
     /// One connection's live presence changed: replace it when `rev` is newer.
     PeerChanged {
-        /// Its new state.
         peer: crate::peer::Peer,
     },
 }
 
 impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
-    fn from(e: client_core::MultiplayerEvent) -> Self {
+    fn from(multiplayer_event: client_core::MultiplayerEvent) -> Self {
         use client_core::MultiplayerEvent as E;
-        match e {
+        match multiplayer_event {
             E::Joined { info } => Self::Joined { info: info.into() },
             E::Peers { you, peers } => Self::Peers {
                 you: you.0,
@@ -1032,7 +916,6 @@ impl From<client_core::MultiplayerEvent> for MultiplayerEvent {
 /// order. Return quickly.
 #[uniffi::export(foreign)]
 pub trait MultiplayerListener: Send + Sync {
-    /// One event.
     fn on_multiplayer_event(&self, event: MultiplayerEvent);
 }
 
@@ -1053,7 +936,6 @@ pub struct InviteInfo {
     pub addrs: Vec<String>,
     /// The daemon's home relay.
     pub relay_url: Option<String>,
-    /// Who invited.
     pub inviter: String,
     /// Who it is for.
     pub label: String,
@@ -1158,7 +1040,8 @@ impl DaemonClient {
     ///
     /// [`MultiplayerError`].
     pub async fn who_am_i(&self) -> Result<JoinInfo, MultiplayerError> {
-        self.mp_call(|c| async move { c.who_am_i().await }).await
+        self.mp_call(|client| async move { client.who_am_i().await })
+            .await
     }
 
     /// Everyone connected, with presence.
@@ -1168,7 +1051,7 @@ impl DaemonClient {
     /// [`MultiplayerError`].
     pub async fn participants(&self) -> Result<Vec<Participant>, MultiplayerError> {
         let all: Vec<proto::Participant> = self
-            .mp_call(|c| async move { c.participants().await })
+            .mp_call(|client| async move { client.participants().await })
             .await?;
         Ok(all.into_iter().map(Into::into).collect())
     }
@@ -1179,7 +1062,7 @@ impl DaemonClient {
     ///
     /// [`MultiplayerError`].
     pub async fn set_name(&self, name: String) -> Result<(), MultiplayerError> {
-        self.mp_call(|c| async move { c.set_name(name).await })
+        self.mp_call(|client| async move { client.set_name(name).await })
             .await
     }
 
@@ -1197,7 +1080,7 @@ impl DaemonClient {
         let mut spec = GrantSpec::new(roles_from_ffi(&options.roles), options.scope.into());
         spec.expires = options
             .ttl_secs
-            .map(|s| proto::UnixMillis(client_core::now_millis().0 + s.saturating_mul(1000)));
+            .map(|secs| proto::UnixMillis(client_core::now_millis().0 + secs.saturating_mul(1000)));
         spec.max_uses = options.max_uses;
         spec.delegate = options.delegate;
         spec.label = options.label;
@@ -1211,7 +1094,9 @@ impl DaemonClient {
             },
         };
         let invite: proto::Invite = self
-            .mp_call(|c| async move { c.create_invite_with_terms(spec, inviter, terms).await })
+            .mp_call(
+                |client| async move { client.create_invite_with_terms(spec, inviter, terms).await },
+            )
             .await?;
         let link = invite.to_string_with_terms(terms);
         let leaf = invite.chain.leaf();
@@ -1230,7 +1115,7 @@ impl DaemonClient {
     /// [`MultiplayerError`].
     pub async fn list_grants(&self) -> Result<Vec<GrantInfo>, MultiplayerError> {
         let all: Vec<proto::GrantInfo> = self
-            .mp_call(|c| async move { c.list_grants().await })
+            .mp_call(|client| async move { client.list_grants().await })
             .await?;
         Ok(all.into_iter().map(Into::into).collect())
     }
@@ -1246,7 +1131,7 @@ impl DaemonClient {
         inviter: String,
     ) -> Result<String, MultiplayerError> {
         let id = proto::GrantId(unhex("grant id", &grant_id)?);
-        self.mp_call(|c| async move { c.invite_link(id, inviter).await })
+        self.mp_call(|client| async move { client.invite_link(id, inviter).await })
             .await
     }
 
@@ -1257,7 +1142,7 @@ impl DaemonClient {
     /// [`MultiplayerError`].
     pub async fn list_devices(&self) -> Result<Vec<DeviceInfo>, MultiplayerError> {
         let all: Vec<proto::DeviceInfo> = self
-            .mp_call(|c| async move { c.list_devices().await })
+            .mp_call(|client| async move { client.list_devices().await })
             .await?;
         Ok(all.into_iter().map(Into::into).collect())
     }
@@ -1270,10 +1155,10 @@ impl DaemonClient {
     /// `Invalid` for a malformed id; the daemon's refusal.
     pub async fn revoke(&self, target: RevokeTarget) -> Result<RevokeResult, MultiplayerError> {
         let target = proto::RevokeTarget::try_from(target)?;
-        let r: proto::MpResponse = self
-            .mp_call(|c| async move { c.revoke(target).await })
+        let response: proto::MpResponse = self
+            .mp_call(|client| async move { client.revoke(target).await })
             .await?;
-        match r {
+        match response {
             proto::MpResponse::Revoked {
                 grants,
                 devices,
@@ -1299,8 +1184,10 @@ impl DaemonClient {
         pane_id: u64,
         force: bool,
     ) -> Result<LeaseOutcome, MultiplayerError> {
-        self.mp_call(|c| async move { c.take_control(proto::PaneId(pane_id), force).await })
-            .await
+        self.mp_call(
+            |client| async move { client.take_control(proto::PaneId(pane_id), force).await },
+        )
+        .await
     }
 
     /// Gives up a lease this principal holds.
@@ -1309,7 +1196,7 @@ impl DaemonClient {
     ///
     /// [`MultiplayerError`].
     pub async fn release_control(&self, pane_id: u64) -> Result<(), MultiplayerError> {
-        self.mp_call(|c| async move { c.release_control(proto::PaneId(pane_id)).await })
+        self.mp_call(|client| async move { client.release_control(proto::PaneId(pane_id)).await })
             .await
     }
 
@@ -1323,8 +1210,10 @@ impl DaemonClient {
         pane_id: u64,
         give: bool,
     ) -> Result<LeaseOutcome, MultiplayerError> {
-        self.mp_call(|c| async move { c.answer_control(proto::PaneId(pane_id), give).await })
-            .await
+        self.mp_call(
+            |client| async move { client.answer_control(proto::PaneId(pane_id), give).await },
+        )
+        .await
     }
 
     /// Hands a lease to another connected driver (holder or owner); `to` is a principal id.
@@ -1338,7 +1227,7 @@ impl DaemonClient {
         to: String,
     ) -> Result<LeaseOutcome, MultiplayerError> {
         let to = proto::PrincipalId(unhex("principal", &to)?);
-        self.mp_call(|c| async move { c.give_control(proto::PaneId(pane_id), to).await })
+        self.mp_call(|client| async move { client.give_control(proto::PaneId(pane_id), to).await })
             .await
     }
 
@@ -1348,7 +1237,9 @@ impl DaemonClient {
     ///
     /// [`MultiplayerError`].
     pub async fn leases(&self) -> Result<Vec<Lease>, MultiplayerError> {
-        let all: Vec<proto::Lease> = self.mp_call(|c| async move { c.leases().await }).await?;
+        let all: Vec<proto::Lease> = self
+            .mp_call(|client| async move { client.leases().await })
+            .await?;
         Ok(all.into_iter().map(Into::into).collect())
     }
 
@@ -1365,8 +1256,10 @@ impl DaemonClient {
         text: String,
         submit: bool,
     ) -> Result<u32, MultiplayerError> {
-        self.mp_call(|c| async move { c.prompt(proto::PaneId(pane_id), text, submit).await })
-            .await
+        self.mp_call(
+            |client| async move { client.prompt(proto::PaneId(pane_id), text, submit).await },
+        )
+        .await
     }
 
     /// Audit log records after `after` (`nil`: the newest `limit`), owner only.
@@ -1379,7 +1272,7 @@ impl DaemonClient {
         after: Option<u64>,
         limit: u32,
     ) -> Result<AuditPage, MultiplayerError> {
-        self.mp_call(|c| async move { c.audit(after, limit).await })
+        self.mp_call(|client| async move { client.audit(after, limit).await })
             .await
     }
 }

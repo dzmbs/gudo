@@ -1,3 +1,4 @@
+//! Multiplayer: signed attenuable grants, invites, roles,
 //! control leases, presence, signed approvals and the audit log.
 //!
 //! # Grants
@@ -49,7 +50,6 @@ pub enum Scope {
     Session(SessionId),
     /// One tab and its panes.
     Tab(TabId),
-    /// One pane.
     Pane(PaneId),
 }
 
@@ -57,13 +57,14 @@ impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Daemon => f.write_str("daemon"),
-            Self::Session(s) => write!(f, "session:{s}"),
-            Self::Tab(t) => write!(f, "tab:{t}"),
-            Self::Pane(p) => write!(f, "pane:{p}"),
+            Self::Session(session) => write!(f, "session:{session}"),
+            Self::Tab(tab) => write!(f, "tab:{tab}"),
+            Self::Pane(pane) => write!(f, "pane:{pane}"),
         }
     }
 }
 
+/// One capability grant. Signed by `issuer`; see the module docs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
     /// Format version; [`Grant::VERSION`].
@@ -103,16 +104,15 @@ impl Grant {
     /// The exact bytes the issuer signs: [`SIGNING_CONTEXT`](Self::SIGNING_CONTEXT) followed by
     /// the postcard encoding of the grant.
     pub fn signing_bytes(&self) -> Vec<u8> {
-        let mut out = Self::SIGNING_CONTEXT.to_vec();
-        out.extend(postcard::to_stdvec(self).expect("grants always encode"));
-        out
+        let mut signed = Self::SIGNING_CONTEXT.to_vec();
+        signed.extend(postcard::to_stdvec(self).expect("grants always encode"));
+        signed
     }
 }
 
 /// A grant and its issuer's signature.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantLink {
-    /// The grant.
     pub grant: Grant,
     /// Ed25519 signature by `grant.issuer` over [`Grant::signing_bytes`].
     #[serde(with = "crate::serde_bytes")]
@@ -129,12 +129,12 @@ pub struct GrantChain {
 impl GrantChain {
     /// The grant being exercised (the last link).
     pub fn leaf(&self) -> Option<&Grant> {
-        self.links.last().map(|l| &l.grant)
+        self.links.last().map(|link| &link.grant)
     }
 
     /// The leaf's id, or all zeroes for an empty chain.
     pub fn grant_id(&self) -> GrantId {
-        self.leaf().map_or(GrantId([0; 16]), |g| g.grant_id)
+        self.leaf().map_or(GrantId([0; 16]), |grant| grant.grant_id)
     }
 
     /// The postcard encoding carried in [`SignedGrant::token`](crate::SignedGrant::token).
@@ -224,20 +224,11 @@ impl FromStr for Invite {
     /// Parses the URL form (also with `#` instead of `/` before the payload, so the payload
     /// can travel in a URL fragment, and as the universal link `https://<web domain>/join#…`)
     /// or the bare base32. Whitespace and case are ignored.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim();
-        let payload = crate::ticket::link_payload(s, "join").unwrap_or(s);
-        let cleaned: String = payload
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .map(|c| c.to_ascii_uppercase())
-            .collect();
-        let bytes = BASE32_NOPAD
-            .decode(cleaned.as_bytes())
-            .map_err(|_| TicketError::Encoding)?;
-        let (v, _) = postcard::take_from_bytes::<u16>(&bytes).map_err(TicketError::Decode)?;
-        if v != Self::VERSION {
-            return Err(TicketError::Version(v));
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let bytes = invite_bytes(text)?;
+        let (version, _) = postcard::take_from_bytes::<u16>(&bytes).map_err(TicketError::Decode)?;
+        if version != Self::VERSION {
+            return Err(TicketError::Version(version));
         }
         postcard::from_bytes(&bytes).map_err(TicketError::Decode)
     }
@@ -252,17 +243,13 @@ pub fn approval_signing_bytes(
     option_id: OptionId,
     actor: Actor,
 ) -> Vec<u8> {
-    let mut out = b"approval-v1\0".to_vec();
-    out.extend(
+    let mut signed = b"approval-v1\0".to_vec();
+    signed.extend(
         postcard::to_stdvec(&(daemon, request_id, option_id, actor))
             .expect("approvals always encode"),
     );
-    out
+    signed
 }
-
-// ---------------------------------------------------------------------------------------------
-// Requests
-// ---------------------------------------------------------------------------------------------
 
 /// What to revoke.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,26 +290,20 @@ pub enum MpRequest {
     /// Asks for a pane's control lease → [`MpResponse::Lease`]. `force` (owner only) takes it
     /// from the holder.
     TakeControl {
-        /// The pane.
         pane_id: PaneId,
         /// Take it now, whatever the holder is doing.
         force: bool,
     },
     /// Gives up the lease → [`MpResponse::Done`].
-    ReleaseControl {
-        /// The pane.
-        pane_id: PaneId,
-    },
+    ReleaseControl { pane_id: PaneId },
     /// The holder answers a pending take-control request → [`MpResponse::Lease`].
     AnswerControl {
-        /// The pane.
         pane_id: PaneId,
         /// Hand it over (`true`) or keep it.
         give: bool,
     },
     /// The holder or an owner hands the lease to a principal → [`MpResponse::Lease`].
     GiveControl {
-        /// The pane.
         pane_id: PaneId,
         /// The new holder; must be connected with the Driver role on the pane.
         to: PrincipalId,
@@ -342,17 +323,12 @@ pub enum MpRequest {
     /// Audit log records → [`MpResponse::Audit`]. Owner only.
     Audit(AuditQuery),
     /// This connection's display name → [`MpResponse::Done`].
-    SetName {
-        /// The name.
-        name: String,
-    },
+    SetName { name: String },
     /// Like [`RegisterGrant`](Self::RegisterGrant), with terms the daemon enforces on the
     /// chain and everything attenuated from it (knock, history) → [`MpResponse::Grant`].
     /// A delegating holder may only add terms to what its own grant carries.
     RegisterInvite {
-        /// The signed chain.
         chain: GrantChain,
-        /// Its terms.
         terms: InviteTerms,
     },
     /// Pending knocks → [`MpResponse::Knocks`]. Owner only.
@@ -360,27 +336,20 @@ pub enum MpRequest {
     /// Admits (with roles) or denies a knock → [`MpResponse::Admitted`] or
     /// [`MpResponse::Done`]. Owner only.
     AnswerKnock {
-        /// The knock.
         knock_id: KnockId,
         /// `None` denies.
         admit: Option<Admit>,
     },
     /// A session's approval policy → [`MpResponse::ApprovalPolicy`]. Any role in scope.
-    GetApprovalPolicy {
-        /// The session.
-        session_id: SessionId,
-    },
+    GetApprovalPolicy { session_id: SessionId },
     /// Sets a session's approval policy → [`MpResponse::ApprovalPolicy`]. Owner only.
     SetApprovalPolicy {
-        /// The session.
         session_id: SessionId,
-        /// The rules.
         policy: ApprovalPolicy,
     },
     /// Claims an open approval request (or gives a claim up) → [`MpResponse::Approval`].
     /// Approver role on the request's pane.
     Claim {
-        /// The request.
         request_id: RequestId,
         /// `false` releases this principal's claim (an owner may release anyone's).
         claim: bool,
@@ -415,11 +384,8 @@ pub enum MpResponse {
     Me(JoinInfo),
     /// Everyone connected.
     Participants(Vec<Participant>),
-    /// A grant.
     Grant(GrantInfo),
-    /// Grants.
     Grants(Vec<GrantInfo>),
-    /// Devices.
     Devices(Vec<DeviceInfo>),
     /// What a revocation hit.
     Revoked {
@@ -432,16 +398,13 @@ pub enum MpResponse {
     },
     /// A lease change.
     Lease(LeaseOutcome),
-    /// Leases.
     Leases(Vec<Lease>),
     /// A prompt was written.
     Prompted {
         /// Characters sent.
         chars: u32,
     },
-    /// Audit records.
     Audit(AuditPage),
-    /// Pending knocks.
     Knocks(Vec<Knock>),
     /// The grant a knock was admitted with.
     Admitted(GrantInfo),
@@ -453,7 +416,6 @@ pub enum MpResponse {
     InviteLink {
         /// The chain, root first.
         chain: GrantChain,
-        /// Its terms.
         terms: InviteTerms,
     },
 }
@@ -490,17 +452,12 @@ impl fmt::Display for MpError {
 
 impl std::error::Error for MpError {}
 
-// ---------------------------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------------------------
-
 /// A connection's identity, sent as [`ServerCtl::Joined`](crate::ServerCtl::Joined) right
 /// after `Welcome`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JoinInfo {
     /// The principal and device.
     pub actor: Actor,
-    /// Display name.
     pub name: String,
     /// Effective roles.
     pub roles: Roles,
@@ -512,11 +469,10 @@ pub struct JoinInfo {
     pub expires: Option<UnixMillis>,
 }
 
+/// One connected device and what it is doing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Participant {
-    /// Who.
     pub actor: Actor,
-    /// Display name.
     pub name: String,
     /// Effective roles.
     pub roles: Roles,
@@ -526,7 +482,6 @@ pub struct Participant {
     pub grant_id: Option<GrantId>,
     /// When it connected.
     pub since: UnixMillis,
-    /// Activity.
     pub state: PresenceState,
     /// The pane it focuses (hidden when outside the recipient's scope).
     pub focus: Option<PaneId>,
@@ -539,7 +494,6 @@ pub struct Participant {
 /// A grant as the daemon tracks it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantInfo {
-    /// The grant.
     pub grant: Grant,
     /// Its parent, for an attenuated grant.
     pub parent: Option<GrantId>,
@@ -561,19 +515,15 @@ pub enum DeviceKind {
 /// A device the daemon knows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceInfo {
-    /// The key.
     pub device: DeviceId,
     /// The principal it acts as.
     pub principal: PrincipalId,
-    /// Owner or guest.
     pub kind: DeviceKind,
-    /// Display name.
     pub name: String,
     /// First pairing or redemption.
     pub first_seen: UnixMillis,
     /// The grant it last joined with (guests).
     pub grant_id: Option<GrantId>,
-    /// Revoked.
     pub revoked: bool,
     /// Live connections.
     pub connected: u32,
@@ -642,9 +592,7 @@ pub struct ApprovalAudit {
 pub struct AuditRecord {
     /// Position in the log, from 1.
     pub seq: u64,
-    /// When.
     pub at: UnixMillis,
-    /// What.
     pub kind: AuditKind,
     /// Who did it, if anyone.
     pub actor: Option<Actor>,
@@ -675,9 +623,7 @@ pub struct AuditPage {
     pub chain_ok: bool,
 }
 
-// ---------------------------------------------------------------------------------------------
-// ---------------------------------------------------------------------------------------------
-
+/// How much of a pane's past a guest sees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum History {
     /// Everything still in scrollback.
@@ -767,16 +713,18 @@ impl Invite {
     /// # Errors
     ///
     /// As [`Invite::from_str`].
-    pub fn parse_with_terms(s: &str) -> Result<(Self, InviteTerms), TicketError> {
-        let invite: Self = s.parse()?;
-        let bytes = invite_bytes(s)?;
+    pub fn parse_with_terms(text: &str) -> Result<(Self, InviteTerms), TicketError> {
+        let invite: Self = text.parse()?;
+        let bytes = invite_bytes(text)?;
         let (_, rest) = postcard::take_from_bytes::<Self>(&bytes).map_err(TicketError::Decode)?;
         let terms = match rest.split_first() {
-            Some((&InviteTerms::MAGIC, tail)) => postcard::from_bytes::<(u16, InviteTerms)>(tail)
-                .ok()
-                .filter(|(v, _)| *v == InviteTerms::VERSION)
-                .map(|(_, t)| t)
-                .unwrap_or_default(),
+            Some((&InviteTerms::MAGIC, terms_bytes)) => {
+                postcard::from_bytes::<(u16, InviteTerms)>(terms_bytes)
+                    .ok()
+                    .filter(|(version, _)| *version == InviteTerms::VERSION)
+                    .map(|(_, terms)| terms)
+                    .unwrap_or_default()
+            }
             _ => InviteTerms::default(),
         };
         Ok((invite, terms))
@@ -784,13 +732,13 @@ impl Invite {
 }
 
 /// The base32 payload of an invite's text, decoded.
-fn invite_bytes(s: &str) -> Result<Vec<u8>, TicketError> {
-    let s = s.trim();
-    let payload = crate::ticket::link_payload(s, "join").unwrap_or(s);
+fn invite_bytes(text: &str) -> Result<Vec<u8>, TicketError> {
+    let text = text.trim();
+    let payload = crate::ticket::link_payload(text, "join").unwrap_or(text);
     let cleaned: String = payload
         .chars()
-        .filter(|c| !c.is_whitespace())
-        .map(|c| c.to_ascii_uppercase())
+        .filter(|ch| !ch.is_whitespace())
+        .map(|ch| ch.to_ascii_uppercase())
         .collect();
     BASE32_NOPAD
         .decode(cleaned.as_bytes())
@@ -807,9 +755,9 @@ impl fmt::Display for KnockId {
     }
 }
 
+/// Someone holding a knock invite asks to join.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Knock {
-    /// The knock.
     pub knock_id: KnockId,
     /// Who knocks (their guest principal and device).
     pub actor: Actor,
@@ -847,9 +795,7 @@ pub enum KnockUpdate {
     Added(Knock),
     /// A knock is no longer pending.
     Gone {
-        /// The knock.
         knock_id: KnockId,
-        /// Why.
         outcome: KnockOutcome,
         /// Who answered it, for admitted and denied knocks.
         by: Option<Actor>,
@@ -861,10 +807,7 @@ pub enum KnockUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnockAnswer {
     /// The owner has been asked; keep the connection open.
-    Waiting {
-        /// The knock.
-        knock_id: KnockId,
-    },
+    Waiting { knock_id: KnockId },
     /// Admitted: a grant chain bound to this device, signed by the daemon. Reconnect with it
     /// (`SignedGrant::CHAIN`); the daemon closes this connection.
     Admitted(GrantChain),
@@ -879,6 +822,7 @@ pub struct Admit {
     pub roles: Roles,
     /// How much scrollback they see.
     pub history: History,
+    /// When their access ends; `None` takes the daemon's default (7 days).
     pub expires: Option<UnixMillis>,
 }
 
@@ -933,7 +877,7 @@ impl Risk {
             "apply_patch",
             "applypatch",
         ];
-        let Some(tool) = tool.map(|t| t.trim().to_ascii_lowercase()) else {
+        let Some(tool) = tool.map(|name| name.trim().to_ascii_lowercase()) else {
             return Self::Any;
         };
         if READ_ONLY.contains(&tool.as_str()) {
@@ -956,6 +900,7 @@ impl fmt::Display for Risk {
     }
 }
 
+/// Who may answer a session's agent approvals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ApprovalMode {
     /// Any approver; the first valid decision wins.
@@ -984,11 +929,9 @@ pub struct ApprovalPolicy {
 /// One person's part in an approval: an approval cast, or a claim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalVote {
-    /// Who.
     pub actor: Actor,
     /// Their display name.
     pub name: String,
-    /// When.
     pub at: UnixMillis,
 }
 
@@ -999,7 +942,6 @@ pub struct ApprovalVote {
 pub struct ApprovalStatus {
     /// The agent's pane.
     pub pane_id: PaneId,
-    /// The request.
     pub request_id: RequestId,
     /// The call's risk class.
     pub risk: Risk,
@@ -1020,7 +962,6 @@ pub struct ApprovalStatus {
 pub struct HostAlert {
     /// What happened.
     pub kind: HostAlertKind,
-    /// When.
     pub at: UnixMillis,
     /// One line for a notification.
     pub title: String,

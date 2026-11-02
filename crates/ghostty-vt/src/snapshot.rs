@@ -168,12 +168,12 @@ impl<'a> SnapshotDecoder<'a> {
     ///
     /// `T` must be the output type libghostty-vt documents for `data`.
     unsafe fn get<T: Default>(&self, data: ffi::GhosttySnapshotDecoderData) -> Option<T> {
-        let mut out = T::default();
+        let mut value = T::default();
         // SAFETY: the decoder is live and the caller guarantees `T` matches `data`.
         let result = unsafe {
-            ffi::ghostty_snapshot_decoder_get(self.raw.as_ptr(), data, (&raw mut out).cast())
+            ffi::ghostty_snapshot_decoder_get(self.raw.as_ptr(), data, (&raw mut value).cast())
         };
-        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(out)
+        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(value)
     }
 }
 
@@ -331,6 +331,7 @@ pub(crate) const KITTY_IMAGE_PAYLOAD_TAG: u16 = 9;
 
 /// Returns the length of the snapshot's prefix up to and including the READY record.
 ///
+/// That prefix is what a client needs to render and continue the byte stream; the
 /// scrollback records after it can follow lazily. Walks the record headers without decoding
 /// or checksumming them, so it costs nothing next to encoding. Returns `None` if the bytes are
 /// not a snapshot or contain no READY record.
@@ -404,14 +405,14 @@ pub fn screen_len(snapshot: &[u8]) -> Option<usize> {
 
 /// Returns the snapshot format version this build of libghostty-vt writes.
 ///
-/// Client and daemon must agree on it; the `Hello` handshake compares it (ARCHITECTURE §4).
+/// Client and daemon must agree on it; the `Hello` handshake compares it.
 pub fn snapshot_format() -> u16 {
     static FORMAT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
     *FORMAT.get_or_init(|| {
         Terminal::new(1, 1)
-            .and_then(|t| t.encode_snapshot())
+            .and_then(|terminal| terminal.encode_snapshot())
             .ok()
-            .and_then(|s| Some(u16::from_le_bytes([*s.get(8)?, *s.get(9)?])))
+            .and_then(|snapshot| Some(u16::from_le_bytes([*snapshot.get(8)?, *snapshot.get(9)?])))
             .unwrap_or(0)
     })
 }

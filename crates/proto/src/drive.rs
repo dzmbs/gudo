@@ -13,8 +13,6 @@
 //! [`Caps::APPROVALS`](crate::Caps::APPROVALS)): the exact action asked for, so the card
 //! can show it and offer all three answers. Daemons that ask say
 //! [`DaemonFeatures::DRIVE_ASKS`](crate::DaemonFeatures::DRIVE_ASKS).
-//!
-//! Same compatibility rules as the rest of the crate: append only.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,10 +36,7 @@ pub enum DriveAction {
         command: String,
     },
     /// Prompt the agent in the pane (`agent_prompt`).
-    Prompt {
-        /// The prompt.
-        text: String,
-    },
+    Prompt { text: String },
     /// Close the pane (`pane_close`).
     Close,
 }
@@ -150,25 +145,25 @@ impl DriveAction {
 
 /// `text` with every character that could hide or reorder what is shown made visible.
 fn visible(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '\n' | '\r' => out.push('⏎'),
-            '\t' => out.push('⇥'),
-            c if (c as u32) < 0x20 => {
-                out.push('^');
-                out.push(char::from(c as u8 + b'@'));
+    let mut shown = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\n' | '\r' => shown.push('⏎'),
+            '\t' => shown.push('⇥'),
+            ch if (ch as u32) < 0x20 => {
+                shown.push('^');
+                shown.push(char::from(ch as u8 + b'@'));
             }
-            '\u{7f}' => out.push_str("^?"),
+            '\u{7f}' => shown.push_str("^?"),
             '\u{80}'..='\u{9f}'
             | '\u{200b}'..='\u{200f}'
             | '\u{202a}'..='\u{202e}'
             | '\u{2060}'..='\u{2069}'
-            | '\u{feff}' => out.push_str(&format!("<U+{:04X}>", c as u32)),
-            c => out.push(c),
+            | '\u{feff}' => shown.push_str(&format!("<U+{:04X}>", ch as u32)),
+            ch => shown.push(ch),
         }
     }
-    out
+    shown
 }
 
 /// A drive request opened or closed ([`ApprovalPush::Drive`](crate::ApprovalPush::Drive)).
@@ -177,8 +172,5 @@ pub enum DrivePush {
     /// A request opened (and, after attaching, every open one).
     Open(DriveAsk),
     /// A request was answered, expired or withdrawn.
-    Closed {
-        /// The request.
-        request_id: RequestId,
-    },
+    Closed { request_id: RequestId },
 }

@@ -31,7 +31,7 @@ fn document<T: Serialize>(kind: &str, body: &T) -> anyhow::Result<serde_json::Va
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// `gudo ls`.
@@ -72,12 +72,12 @@ impl Ls {
         Self {
             sessions: sessions
                 .iter()
-                .map(|s| Session {
-                    id: session_ref(s.session_id),
-                    name: s.name.clone(),
-                    tabs: s.tabs,
-                    panes: s.panes,
-                    clients: s.clients,
+                .map(|session| Session {
+                    id: session_ref(session.session_id),
+                    name: session.name.clone(),
+                    tabs: session.tabs,
+                    panes: session.panes,
+                    clients: session.clients,
                 })
                 .collect(),
             attached: Some(session_ref(layout.session_id)),
@@ -85,14 +85,14 @@ impl Ls {
                 .tabs
                 .iter()
                 .enumerate()
-                .map(|(i, t)| Tab {
-                    id: tab_ref(t.tab_id),
+                .map(|(i, tab)| Tab {
+                    id: tab_ref(tab.tab_id),
                     index: i + 1,
-                    name: t.name.clone(),
-                    active: Some(t.tab_id) == layout.active_tab,
-                    focused: pane_ref(t.focused),
-                    zoomed: t.zoomed.map(pane_ref),
-                    panes: leaves(&t.root).into_iter().map(pane_ref).collect(),
+                    name: tab.name.clone(),
+                    active: Some(tab.tab_id) == layout.active_tab,
+                    focused: pane_ref(tab.focused),
+                    zoomed: tab.zoomed.map(pane_ref),
+                    panes: leaves(&tab.root).into_iter().map(pane_ref).collect(),
                 })
                 .collect(),
         }
@@ -101,11 +101,11 @@ impl Ls {
 
 fn leaves(node: &LayoutNode) -> Vec<client_core::proto::PaneId> {
     match node {
-        LayoutNode::Leaf(p) => vec![*p],
+        LayoutNode::Leaf(pane) => vec![*pane],
         LayoutNode::Split { first, second, .. } => {
-            let mut v = leaves(first);
-            v.extend(leaves(second));
-            v
+            let mut panes = leaves(first);
+            panes.extend(leaves(second));
+            panes
         }
     }
 }
@@ -126,20 +126,20 @@ pub struct Command {
 }
 
 impl From<&CommandMark> for Command {
-    fn from(m: &CommandMark) -> Self {
+    fn from(mark: &CommandMark) -> Self {
         Self {
-            id: m.command_id,
-            pane: pane_ref(m.pane_id),
-            command: m.command.clone(),
-            cwd: m.cwd.clone(),
-            started_at: m.started_at.0,
-            status: if m.finished.is_some() {
+            id: mark.command_id,
+            pane: pane_ref(mark.pane_id),
+            command: mark.command.clone(),
+            cwd: mark.cwd.clone(),
+            started_at: mark.started_at.0,
+            status: if mark.finished.is_some() {
                 "exited"
             } else {
                 "running"
             },
-            exit_code: m.finished.and_then(|f| f.exit),
-            duration_ms: m.finished.map(|f| f.duration_ms),
+            exit_code: mark.finished.and_then(|finished| finished.exit),
+            duration_ms: mark.finished.map(|finished| finished.duration_ms),
         }
     }
 }
@@ -178,19 +178,19 @@ struct Match {
 }
 
 impl From<&SearchPage> for Search {
-    fn from(p: &SearchPage) -> Self {
+    fn from(page: &SearchPage) -> Self {
         Self {
-            total: p.total,
-            total_rows: p.total_rows,
-            matches: p
+            total: page.total,
+            total_rows: page.total_rows,
+            matches: page
                 .matches
                 .iter()
-                .map(|m| Match {
-                    row: m.row,
-                    col: m.col,
-                    end_row: m.end_row,
-                    end_col: m.end_col,
-                    line: m.line.trim_end().to_owned(),
+                .map(|found| Match {
+                    row: found.row,
+                    col: found.col,
+                    end_row: found.end_row,
+                    end_col: found.end_col,
+                    line: found.line.trim_end().to_owned(),
                 })
                 .collect(),
         }
@@ -218,15 +218,15 @@ pub struct LinkOut {
 }
 
 impl From<&Link> for LinkOut {
-    fn from(l: &Link) -> Self {
+    fn from(link: &Link) -> Self {
         Self {
-            kind: format!("{:?}", l.kind).to_ascii_lowercase(),
-            text: l.text.clone(),
-            target: l.target.clone(),
-            line: l.line,
-            column: l.column,
-            exists: l.exists,
-            command: match l.source {
+            kind: format!("{:?}", link.kind).to_ascii_lowercase(),
+            text: link.text.clone(),
+            target: link.target.clone(),
+            line: link.line,
+            column: link.column,
+            exists: link.exists,
+            command: match link.source {
                 LinkSource::Screen => None,
                 LinkSource::Command { command_id } => Some(command_id),
             },
@@ -254,15 +254,15 @@ pub struct Port {
 }
 
 impl From<&PortInfo> for Port {
-    fn from(p: &PortInfo) -> Self {
+    fn from(info: &PortInfo) -> Self {
         Self {
-            port: p.port,
-            kind: format!("{:?}", p.kind).to_ascii_lowercase(),
-            pane: p.pane_id.map(pane_ref),
-            pid: p.pid,
-            process: p.process.clone(),
-            loopback_only: p.loopback_only,
-            url: p.url.clone(),
+            port: info.port,
+            kind: format!("{:?}", info.kind).to_ascii_lowercase(),
+            pane: info.pane_id.map(pane_ref),
+            pid: info.pid,
+            process: info.process.clone(),
+            loopback_only: info.loopback_only,
+            url: info.url.clone(),
         }
     }
 }
@@ -289,21 +289,21 @@ pub struct Item {
 }
 
 impl From<&AttentionItem> for Item {
-    fn from(i: &AttentionItem) -> Self {
+    fn from(item: &AttentionItem) -> Self {
         Self {
-            id: i.id,
-            at: i.at.0,
-            pane: pane_ref(i.pane_id),
-            session: i.session_id.map(session_ref),
-            kind: match i.kind {
+            id: item.id,
+            at: item.at.0,
+            pane: pane_ref(item.pane_id),
+            session: item.session_id.map(session_ref),
+            kind: match item.kind {
                 AttentionKind::AgentBlocked { .. } => "blocked",
                 AttentionKind::AgentDone { .. } => "done",
                 AttentionKind::AgentFailed { .. } => "failed",
                 AttentionKind::CommandFinished(_) => "command",
             },
-            title: i.title.clone(),
-            body: i.body.clone(),
-            seen: i.seen,
+            title: item.title.clone(),
+            body: item.body.clone(),
+            seen: item.seen,
         }
     }
 }
@@ -331,23 +331,23 @@ struct GitFile {
 }
 
 impl From<&GitStatus> for Git {
-    fn from(s: &GitStatus) -> Self {
-        let change = |c: &dyn std::fmt::Debug| format!("{c:?}").to_ascii_lowercase();
+    fn from(status: &GitStatus) -> Self {
+        let change = |change: &dyn std::fmt::Debug| format!("{change:?}").to_ascii_lowercase();
         Self {
-            root: s.root.clone(),
-            branch: s.branch.clone(),
-            head: s.head.clone(),
-            upstream: s.upstream.clone(),
-            ahead: s.ahead,
-            behind: s.behind,
-            files: s
+            root: status.root.clone(),
+            branch: status.branch.clone(),
+            head: status.head.clone(),
+            upstream: status.upstream.clone(),
+            ahead: status.ahead,
+            behind: status.behind,
+            files: status
                 .files
                 .iter()
-                .map(|f| GitFile {
-                    path: f.path.clone(),
-                    orig_path: f.orig_path.clone(),
-                    staged: change(&f.staged),
-                    unstaged: change(&f.unstaged),
+                .map(|file| GitFile {
+                    path: file.path.clone(),
+                    orig_path: file.orig_path.clone(),
+                    staged: change(&file.staged),
+                    unstaged: change(&file.unstaged),
                 })
                 .collect(),
         }
@@ -377,21 +377,21 @@ pub struct Person {
 }
 
 impl Person {
-    pub fn new(p: &Participant, me: Option<client_core::proto::DeviceId>) -> Self {
+    pub fn new(participant: &Participant, me: Option<client_core::proto::DeviceId>) -> Self {
         Self {
-            name: p.name.clone(),
-            device: hex(&p.actor.device.0),
-            roles: p.roles.names(),
-            scope: p.scope.to_string(),
-            state: match p.state {
+            name: participant.name.clone(),
+            device: hex(&participant.actor.device.0),
+            roles: participant.roles.names(),
+            scope: participant.scope.to_string(),
+            state: match participant.state {
                 PresenceState::Active => "active",
                 PresenceState::Idle => "idle",
                 PresenceState::Away => "away",
             },
-            focus: p.focus.map(pane_ref),
-            typing: p.typing,
-            since: p.since.0,
-            you: Some(p.actor.device) == me,
+            focus: participant.focus.map(pane_ref),
+            typing: participant.typing,
+            since: participant.since.0,
+            you: Some(participant.actor.device) == me,
         }
     }
 }
@@ -422,17 +422,23 @@ pub struct Record {
 }
 
 impl From<&AuditRecord> for Record {
-    fn from(r: &AuditRecord) -> Self {
+    fn from(record: &AuditRecord) -> Self {
         Self {
-            seq: r.seq,
-            at: r.at.0,
-            kind: format!("{:?}", r.kind),
-            device: r.actor.map(|a| hex(&a.device.0)),
-            pane: r.pane_id.map(pane_ref),
-            detail: r.detail.clone(),
-            option: r.approval.as_ref().map(|a| a.option.clone()),
-            summary: r.approval.as_ref().map(|a| a.summary.clone()),
-            signed: r.approval.is_some(),
+            seq: record.seq,
+            at: record.at.0,
+            kind: format!("{:?}", record.kind),
+            device: record.actor.map(|actor| hex(&actor.device.0)),
+            pane: record.pane_id.map(pane_ref),
+            detail: record.detail.clone(),
+            option: record
+                .approval
+                .as_ref()
+                .map(|approval| approval.option.clone()),
+            summary: record
+                .approval
+                .as_ref()
+                .map(|approval| approval.summary.clone()),
+            signed: record.approval.is_some(),
         }
     }
 }
@@ -452,16 +458,16 @@ pub struct Info {
 }
 
 impl From<&DaemonInfo> for Info {
-    fn from(i: &DaemonInfo) -> Self {
+    fn from(info: &DaemonInfo) -> Self {
         Self {
-            version: i.version.clone(),
-            build: i.build.clone(),
-            built_unix: i.built_unix,
-            protocol: i.protocol,
-            hostname: i.hostname.clone(),
-            os: i.os.clone(),
-            os_name: i.os_name.clone(),
-            arch: i.arch.clone(),
+            version: info.version.clone(),
+            build: info.build.clone(),
+            built_unix: info.built_unix,
+            protocol: info.protocol,
+            hostname: info.hostname.clone(),
+            os: info.os.clone(),
+            os_name: info.os_name.clone(),
+            arch: info.arch.clone(),
         }
     }
 }

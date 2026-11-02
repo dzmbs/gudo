@@ -1,5 +1,6 @@
+//! Anchoring ink to output rows with tracked grid references (`Terminal::pin_at`).
 //!
-//! What a row anchor has to survive, and what libghostty-vt does (asserted below; numbers in
+//! What a row anchor has to survive, and what libghostty-vt does (asserted below):
 //!
 //! - scrolling: the pin follows its row into scrollback;
 //! - resize with reflow: the pin follows its cell into the re-wrapped row;
@@ -13,83 +14,94 @@
 
 use ghostty_vt::{Point, Screen, Terminal, TextRegion};
 
-fn row_text(t: &Terminal, y: u32) -> String {
-    t.text(TextRegion::Range {
-        start: Point { y, x: 0 },
-        end: Point { y, x: t.cols() - 1 },
-    })
-    .unwrap_or_default()
-    .trim_end()
-    .to_owned()
+fn row_text(terminal: &Terminal, y: u32) -> String {
+    terminal
+        .text(TextRegion::Range {
+            start: Point { y, x: 0 },
+            end: Point {
+                y,
+                x: terminal.cols() - 1,
+            },
+        })
+        .unwrap_or_default()
+        .trim_end()
+        .to_owned()
 }
 
-fn lines(t: &mut Terminal, from: usize, to: usize) {
+fn lines(terminal: &mut Terminal, from: usize, to: usize) {
     for i in from..to {
-        t.write(format!("line {i}\r\n").as_bytes());
+        terminal.write(format!("line {i}\r\n").as_bytes());
     }
 }
 
 /// Screen row whose text is `needle`.
-fn find(t: &Terminal, needle: &str) -> Option<u32> {
-    (0..t.total_rows() as u32).find(|&y| row_text(t, y) == needle)
+fn find(terminal: &Terminal, needle: &str) -> Option<u32> {
+    (0..terminal.total_rows() as u32).find(|&y| row_text(terminal, y) == needle)
 }
 
 #[test]
 fn anchor_follows_scrolling() {
-    let mut t = Terminal::new(40, 10).unwrap();
-    lines(&mut t, 0, 8);
-    let y = find(&t, "line 5").unwrap();
-    let pin = t.pin_at(Point { y, x: 0 }).unwrap();
-    lines(&mut t, 8, 500);
-    let now = t.pin_point(pin).expect("still in scrollback");
-    assert_eq!(row_text(&t, now.y), "line 5");
+    let mut terminal = Terminal::new(40, 10).unwrap();
+    lines(&mut terminal, 0, 8);
+    let y = find(&terminal, "line 5").unwrap();
+    let pin = terminal.pin_at(Point { y, x: 0 }).unwrap();
+    lines(&mut terminal, 8, 500);
+    let now = terminal.pin_point(pin).expect("still in scrollback");
+    assert_eq!(row_text(&terminal, now.y), "line 5");
     // Distance from the bottom grew by exactly the rows written.
-    let from_bottom = t.total_rows() as u32 - 1 - now.y;
+    let from_bottom = terminal.total_rows() as u32 - 1 - now.y;
     assert_eq!(from_bottom, 500 - 5);
 }
 
 #[test]
 fn anchor_follows_reflow_on_resize() {
-    let mut t = Terminal::new(40, 10).unwrap();
-    lines(&mut t, 0, 3);
+    let mut terminal = Terminal::new(40, 10).unwrap();
+    lines(&mut terminal, 0, 3);
     // A 30-character line, then a marker after it.
-    t.write(b"abcdefghijklmnopqrstuvwxyz0123\r\nafter\r\n");
-    let y = find(&t, "after").unwrap();
-    let pin = t.pin_at(Point { y, x: 0 }).unwrap();
-    t.resize(10, 10, (8, 16)).unwrap();
-    let now = t.pin_point(pin).unwrap();
-    assert_eq!(row_text(&t, now.y), "after", "after narrowing");
-    t.resize(80, 10, (8, 16)).unwrap();
-    let now = t.pin_point(pin).unwrap();
-    assert_eq!(row_text(&t, now.y), "after", "after widening");
+    terminal.write(b"abcdefghijklmnopqrstuvwxyz0123\r\nafter\r\n");
+    let y = find(&terminal, "after").unwrap();
+    let pin = terminal.pin_at(Point { y, x: 0 }).unwrap();
+    terminal.resize(10, 10, (8, 16)).unwrap();
+    let now = terminal.pin_point(pin).unwrap();
+    assert_eq!(row_text(&terminal, now.y), "after", "after narrowing");
+    terminal.resize(80, 10, (8, 16)).unwrap();
+    let now = terminal.pin_point(pin).unwrap();
+    assert_eq!(row_text(&terminal, now.y), "after", "after widening");
 }
 
 #[test]
 fn anchor_detaches_on_scrollback_eviction() {
-    let mut t = Terminal::new(40, 10).unwrap();
-    t.set_scrollback_max_lines(Some(100)).unwrap();
-    lines(&mut t, 0, 20);
-    let y = find(&t, "line 3").unwrap();
-    let pin = t.pin_at(Point { y, x: 0 }).unwrap();
-    lines(&mut t, 20, 60);
-    assert_eq!(row_text(&t, t.pin_point(pin).unwrap().y), "line 3");
+    let mut terminal = Terminal::new(40, 10).unwrap();
+    terminal.set_scrollback_max_lines(Some(100)).unwrap();
+    lines(&mut terminal, 0, 20);
+    let y = find(&terminal, "line 3").unwrap();
+    let pin = terminal.pin_at(Point { y, x: 0 }).unwrap();
+    lines(&mut terminal, 20, 60);
+    assert_eq!(
+        row_text(&terminal, terminal.pin_point(pin).unwrap().y),
+        "line 3"
+    );
     // Enough output to push it past the scrollback limit (limits are per page, so more).
-    lines(&mut t, 60, 5000);
-    assert_eq!(t.pin_point(pin), None, "evicted rows lose their pin");
+    lines(&mut terminal, 60, 5000);
+    assert_eq!(terminal.pin_point(pin), None, "evicted rows lose their pin");
 }
 
 #[test]
 fn clear_and_erase_scrollback() {
     // `clear` (ncurses) sends ESC[H ESC[2J ESC[3J.
-    let mut t = Terminal::new(40, 10).unwrap();
-    lines(&mut t, 0, 30);
-    let y_old = find(&t, "line 4").unwrap(); // in scrollback
-    let y_vis = find(&t, "line 27").unwrap(); // on screen
-    let old = t.pin_at(Point { y: y_old, x: 0 }).unwrap();
-    let vis = t.pin_at(Point { y: y_vis, x: 0 }).unwrap();
-    t.write(b"\x1b[H\x1b[2J");
-    let after_ed2_old = t.pin_point(old).map(|p| row_text(&t, p.y));
-    let after_ed2_vis = t.pin_point(vis).map(|p| row_text(&t, p.y));
+    let mut terminal = Terminal::new(40, 10).unwrap();
+    lines(&mut terminal, 0, 30);
+    let y_old = find(&terminal, "line 4").unwrap(); // in scrollback
+    let y_visible = find(&terminal, "line 27").unwrap(); // on screen
+    let old = terminal.pin_at(Point { y: y_old, x: 0 }).unwrap();
+    let visible = terminal.pin_at(Point { y: y_visible, x: 0 }).unwrap();
+    terminal.write(b"\x1b[H\x1b[2J");
+    let after_ed2_old = terminal
+        .pin_point(old)
+        .map(|point| row_text(&terminal, point.y));
+    let after_ed2_vis = terminal
+        .pin_point(visible)
+        .map(|point| row_text(&terminal, point.y));
     println!("ED2: scrollback pin -> {after_ed2_old:?}, screen pin -> {after_ed2_vis:?}");
     assert_eq!(
         after_ed2_old.as_deref(),
@@ -98,8 +110,8 @@ fn clear_and_erase_scrollback() {
     );
     // ED 2 erases the screen rows in place: the pin keeps its row, whose text is now empty.
     assert_eq!(after_ed2_vis.as_deref(), Some(""));
-    t.write(b"\x1b[3J");
-    let after_ed3_old = t.pin_point(old);
+    terminal.write(b"\x1b[3J");
+    let after_ed3_old = terminal.pin_point(old);
     println!("ED3: scrollback pin -> {after_ed3_old:?}");
     // ED 3 frees the scrollback pages and the tracked reference with them.
     assert_eq!(after_ed3_old, None, "an erased anchor reports no point");
@@ -107,29 +119,29 @@ fn clear_and_erase_scrollback() {
 
 #[test]
 fn alternate_screen() {
-    let mut t = Terminal::new(40, 10).unwrap();
-    lines(&mut t, 0, 15);
-    let y = find(&t, "line 12").unwrap();
-    let primary = t.pin_at(Point { y, x: 0 }).unwrap();
+    let mut terminal = Terminal::new(40, 10).unwrap();
+    lines(&mut terminal, 0, 15);
+    let y = find(&terminal, "line 12").unwrap();
+    let primary = terminal.pin_at(Point { y, x: 0 }).unwrap();
     // A full-screen program starts (vim, less).
-    t.write(b"\x1b[?1049h\x1b[H\x1b[2Jvim buffer\r\nsecond");
-    assert_eq!(t.active_screen(), Screen::Alternate);
-    let alt_y = find(&t, "vim buffer").unwrap();
-    let alt = t.pin_at(Point { y: alt_y, x: 0 }).unwrap();
+    terminal.write(b"\x1b[?1049h\x1b[H\x1b[2Jvim buffer\r\nsecond");
+    assert_eq!(terminal.active_screen(), Screen::Alternate);
+    let alt_y = find(&terminal, "vim buffer").unwrap();
+    let alt_pin = terminal.pin_at(Point { y: alt_y, x: 0 }).unwrap();
     // While it runs, the primary pin still resolves against the primary screen.
-    let p = t.pin_point(primary);
-    println!("primary pin during alt screen: {p:?}");
-    assert!(p.is_some());
-    t.write(b"\x1b[?1049l");
-    assert_eq!(t.active_screen(), Screen::Primary);
-    let p = t.pin_point(primary).unwrap();
-    assert_eq!(row_text(&t, p.y), "line 12");
-    let a = t.pin_point(alt);
-    println!("alt pin after leaving alt screen: {a:?}");
+    let during = terminal.pin_point(primary);
+    println!("primary pin during alt screen: {during:?}");
+    assert!(during.is_some());
+    terminal.write(b"\x1b[?1049l");
+    assert_eq!(terminal.active_screen(), Screen::Primary);
+    let after = terminal.pin_point(primary).unwrap();
+    assert_eq!(row_text(&terminal, after.y), "line 12");
+    let alt_point = terminal.pin_point(alt_pin);
+    println!("alt pin after leaving alt screen: {alt_point:?}");
     // The alternate screen's pin survives as a stale point on the cleared alternate page
     // list (top-left), so the daemon detaches alternate-screen anchors itself when the
     // program leaves (it records the screen it pinned on).
-    assert_eq!(a, Some(Point { y: 0, x: 0 }));
+    assert_eq!(alt_point, Some(Point { y: 0, x: 0 }));
 }
 
 #[test]
@@ -140,19 +152,23 @@ fn daemon_and_client_agree() {
         .map(|i| format!("row {i} {}\r\n", "x".repeat(i % 70)))
         .collect::<String>()
         .into_bytes();
-    let mut a = Terminal::new(50, 12).unwrap();
-    let mut b = Terminal::new(50, 12).unwrap();
-    a.write(&script[..4000]);
-    b.write(&script[..4000]);
-    let y = a.total_rows() as u32 - 7;
-    let pa = a.pin_at(Point { y, x: 0 }).unwrap();
-    let pb = b.pin_at(Point { y, x: 0 }).unwrap();
-    for t in [&mut a, &mut b] {
-        t.write(&script[4000..]);
-        t.resize(33, 12, (8, 16)).unwrap();
-        t.write(b"tail\r\n");
+    let mut daemon = Terminal::new(50, 12).unwrap();
+    let mut client = Terminal::new(50, 12).unwrap();
+    daemon.write(&script[..4000]);
+    client.write(&script[..4000]);
+    let y = daemon.total_rows() as u32 - 7;
+    let daemon_pin = daemon.pin_at(Point { y, x: 0 }).unwrap();
+    let client_pin = client.pin_at(Point { y, x: 0 }).unwrap();
+    for terminal in [&mut daemon, &mut client] {
+        terminal.write(&script[4000..]);
+        terminal.resize(33, 12, (8, 16)).unwrap();
+        terminal.write(b"tail\r\n");
     }
-    let (qa, qb) = (a.pin_point(pa).unwrap(), b.pin_point(pb).unwrap());
-    assert_eq!(qa, qb);
-    assert_eq!(a.total_rows() as u32 - qa.y, b.total_rows() as u32 - qb.y);
+    let daemon_point = daemon.pin_point(daemon_pin).unwrap();
+    let client_point = client.pin_point(client_pin).unwrap();
+    assert_eq!(daemon_point, client_point);
+    assert_eq!(
+        daemon.total_rows() as u32 - daemon_point.y,
+        client.total_rows() as u32 - client_point.y
+    );
 }

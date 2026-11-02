@@ -169,41 +169,43 @@ pub(crate) enum MpCmd {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn unhex<const N: usize>(s: &str) -> Result<[u8; N]> {
-    let s = s.trim();
-    if s.len() != N * 2 {
+fn unhex<const N: usize>(text: &str) -> Result<[u8; N]> {
+    let text = text.trim();
+    if text.len() != N * 2 {
         bail!("expected {} hex digits", N * 2);
     }
     let mut out = [0; N];
     for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).context("not hex")?;
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).context("not hex")?;
     }
     Ok(out)
 }
 
-fn parse_ttl(s: &str) -> Result<Option<Duration>> {
-    if s == "never" {
+fn parse_ttl(text: &str) -> Result<Option<Duration>> {
+    if text == "never" {
         return Ok(None);
     }
-    let (num, unit) = s.split_at(s.len().saturating_sub(1));
-    let n: u64 = num.parse().with_context(|| format!("bad ttl {s:?}"))?;
+    let (number, unit) = text.split_at(text.len().saturating_sub(1));
+    let count: u64 = number
+        .parse()
+        .with_context(|| format!("bad ttl {text:?}"))?;
     let secs = match unit {
-        "s" => n,
-        "m" => n * 60,
-        "h" => n * 3600,
-        "d" => n * 86_400,
+        "s" => count,
+        "m" => count * 60,
+        "h" => count * 3600,
+        "d" => count * 86_400,
         _ => bail!("ttl unit must be s, m, h or d"),
     };
     Ok(Some(Duration::from_secs(secs)))
 }
 
-fn parse_scope(conn: &Conn, s: &str) -> Result<Scope> {
-    let (kind, id) = match s.split_once(':') {
-        Some((k, id)) => (k, Some(id.parse::<u64>().context("bad scope id")?)),
-        None => (s, None),
+fn parse_scope(conn: &Conn, text: &str) -> Result<Scope> {
+    let (kind, id) = match text.split_once(':') {
+        Some((kind, id)) => (kind, Some(id.parse::<u64>().context("bad scope id")?)),
+        None => (text, None),
     };
     Ok(match kind {
         "daemon" => Scope::Daemon,
@@ -214,16 +216,16 @@ fn parse_scope(conn: &Conn, s: &str) -> Result<Scope> {
     })
 }
 
-fn parse_history(s: &str) -> Result<History> {
-    match s {
+fn parse_history(text: &str) -> Result<History> {
+    match text {
         "full" => Ok(History::Full),
         "since-join" | "since_join" => Ok(History::SinceJoin),
         other => bail!("history is `full` or `since-join`, not {other:?}"),
     }
 }
 
-fn parse_mode(s: &str) -> Result<ApprovalMode> {
-    Ok(match s {
+fn parse_mode(text: &str) -> Result<ApprovalMode> {
+    Ok(match text {
         "any" | "any-approver" => ApprovalMode::AnyApprover,
         "owner-only" | "owner_only" => ApprovalMode::OwnerOnly,
         "two-person" | "two_person" => ApprovalMode::TwoPerson,
@@ -232,8 +234,8 @@ fn parse_mode(s: &str) -> Result<ApprovalMode> {
     })
 }
 
-fn parse_risk(s: &str) -> Result<Risk> {
-    Ok(match s {
+fn parse_risk(text: &str) -> Result<Risk> {
+    Ok(match text {
         "read-only" | "read_only" => Risk::ReadOnly,
         "edits" => Risk::Edits,
         "any" => Risk::Any,
@@ -254,12 +256,12 @@ fn print_policy(policy: ApprovalPolicy) {
     );
 }
 
-fn when(t: Option<UnixMillis>) -> String {
-    match t {
+fn when(expires: Option<UnixMillis>) -> String {
+    match expires {
         None => "never".into(),
-        Some(t) => {
+        Some(expires) => {
             let now = now_millis().0 as i64;
-            let secs = (t.0 as i64 - now) / 1000;
+            let secs = (expires.0 as i64 - now) / 1000;
             if secs <= 0 {
                 "expired".into()
             } else if secs < 3600 {
@@ -287,39 +289,41 @@ fn print_invite(link: &str, qr: bool) {
                     .build();
                 println!("{qr}");
             }
-            Err(e) => eprintln!("(no QR code: {e})"),
+            Err(error) => eprintln!("(no QR code: {error})"),
         }
     }
     println!("{link}");
 }
 
 fn print_participants(conn: &Conn, list: &[client_core::proto::Participant]) {
-    let me = conn.client.me().map(|m| m.actor.device);
-    for p in list {
-        let state = match p.state {
+    let me = conn.client.me().map(|me| me.actor.device);
+    for participant in list {
+        let state = match participant.state {
             PresenceState::Active => "active",
             PresenceState::Idle => "idle",
             PresenceState::Away => "away",
         };
-        let focus = p.focus.map_or("-".into(), |f| format!("pane {f}"));
-        let typing = if p.typing { " typing…" } else { "" };
-        let you = if Some(p.actor.device) == me {
+        let focus = participant
+            .focus
+            .map_or("-".into(), |pane| format!("pane {pane}"));
+        let typing = if participant.typing { " typing…" } else { "" };
+        let you = if Some(participant.actor.device) == me {
             " (you)"
         } else {
             ""
         };
         println!(
             "{:<12} {:<22} {:<14} {:<7} {focus}{typing}{you}",
-            p.name,
-            p.roles.names(),
-            p.scope.to_string(),
+            participant.name,
+            participant.roles.names(),
+            participant.scope.to_string(),
             state
         );
     }
 }
 
-pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
-    match cmd {
+pub(crate) async fn run(conn: &mut Conn, command: MpCmd) -> Result<()> {
+    match command {
         MpCmd::Invite {
             role,
             scope,
@@ -340,13 +344,16 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             let roles: Roles = role.parse().map_err(anyhow::Error::msg)?;
             let mut spec = GrantSpec::new(roles, parse_scope(conn, &scope)?);
             spec.expires =
-                parse_ttl(&ttl)?.map(|d| UnixMillis(now_millis().0 + d.as_millis() as u64));
+                parse_ttl(&ttl)?.map(|ttl| UnixMillis(now_millis().0 + ttl.as_millis() as u64));
             spec.max_uses = (uses > 0).then_some(uses);
             spec.label = name;
             spec.delegate = delegate;
             spec.bind = bind.as_deref().map(unhex::<32>).transpose()?.map(DeviceId);
-            let inviter =
-                from.unwrap_or_else(|| conn.client.me().map_or_else(|| "owner".into(), |m| m.name));
+            let inviter = from.unwrap_or_else(|| {
+                conn.client
+                    .me()
+                    .map_or_else(|| "owner".into(), |me| me.name)
+            });
             let invite = conn
                 .client
                 .create_invite_with_terms(spec.clone(), inviter, terms)
@@ -358,17 +365,18 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                 roles.names(),
                 spec.scope,
                 when(spec.expires),
-                spec.max_uses.map_or("unlimited".into(), |u| u.to_string()),
+                spec.max_uses
+                    .map_or("unlimited".into(), |uses| uses.to_string()),
             );
         }
         MpCmd::Knocks { watch } => {
-            let print = |k: &client_core::proto::Knock| {
+            let print = |knock: &client_core::proto::Knock| {
                 println!(
                     "#{:<4} {:<16} wants {} on {}",
-                    k.knock_id,
-                    k.name,
-                    k.roles.names(),
-                    k.scope
+                    knock.knock_id,
+                    knock.name,
+                    knock.roles.names(),
+                    knock.scope
                 );
             };
             let (listener, mut events) = MultiplayerEventQueue::channel();
@@ -382,8 +390,8 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                 while let Some(event) = events.recv().await {
                     match event {
                         MultiplayerEvent::Knock {
-                            update: KnockUpdate::Added(k),
-                        } => print(&k),
+                            update: KnockUpdate::Added(knock),
+                        } => print(&knock),
                         MultiplayerEvent::Knock {
                             update:
                                 KnockUpdate::Gone {
@@ -408,23 +416,23 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                 .map(parse_ttl)
                 .transpose()?
                 .flatten()
-                .map(|d| UnixMillis(now_millis().0 + d.as_millis() as u64));
+                .map(|ttl| UnixMillis(now_millis().0 + ttl.as_millis() as u64));
             let admit = Admit {
                 roles,
                 history: parse_history(&history)?,
                 expires,
             };
-            let info = conn
+            let admitted = conn
                 .client
                 .answer_knock(KnockId(knock), Some(admit))
                 .await?;
-            match info {
-                Some(g) => println!(
+            match admitted {
+                Some(info) => println!(
                     "let {} in as {} (grant {}, expires {})",
-                    g.grant.label,
+                    info.grant.label,
                     roles.names(),
-                    hex(&g.grant.grant_id.0[..4]),
-                    when(g.grant.expires)
+                    hex(&info.grant.grant_id.0[..4]),
+                    when(info.grant.expires)
                 ),
                 None => println!("let #{knock} in"),
             }
@@ -451,17 +459,17 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
         MpCmd::Claim { request, release } => {
             let status = conn.client.claim(RequestId(request), !release).await?;
             match status.claimed_by {
-                Some(c) => println!("request {request} claimed by {}", c.name),
+                Some(claimer) => println!("request {request} claimed by {}", claimer.name),
                 None => println!("request {request} is unclaimed"),
             }
         }
         MpCmd::Who { watch } => {
             let list = conn.client.participants().await?;
             if conn.json {
-                let me = conn.client.me().map(|m| m.actor.device);
+                let me = conn.client.me().map(|me| me.actor.device);
                 let participants = list
                     .iter()
-                    .map(|p| crate::json::Person::new(p, me))
+                    .map(|participant| crate::json::Person::new(participant, me))
                     .collect();
                 return crate::json::print("who", &crate::json::Who { participants });
             }
@@ -486,8 +494,11 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                                 .client
                                 .participant_list()
                                 .into_iter()
-                                .find(|p| p.actor == decided.decided_by)
-                                .map_or_else(|| hex(&decided.decided_by.device.0[..4]), |p| p.name);
+                                .find(|participant| participant.actor == decided.decided_by)
+                                .map_or_else(
+                                    || hex(&decided.decided_by.device.0[..4]),
+                                    |participant| participant.name,
+                                );
                             println!(
                                 "request {} in pane {} decided by {by}",
                                 decided.request_id, decided.pane_id
@@ -496,9 +507,9 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                         MultiplayerEvent::Lease { lease } => println!(
                             "pane {}: {}",
                             lease.pane_id,
-                            lease
-                                .holder
-                                .map_or("free".into(), |h| format!("driven by {}", hex(&h.0[..4])))
+                            lease.holder.map_or("free".into(), |holder| {
+                                format!("driven by {}", hex(&holder.0[..4]))
+                            })
                         ),
                         MultiplayerEvent::Revoked => bail!("access revoked"),
                         _ => {}
@@ -510,7 +521,7 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
             let (listener, mut events) = MultiplayerEventQueue::channel();
             conn.client.set_multiplayer_listener(listener);
-            let me = conn.client.me().map(|m| m.actor.principal);
+            let me = conn.client.me().map(|me| me.actor.principal);
             match conn.client.take_control(pane_id, force).await? {
                 LeaseOutcome::Granted(_) => println!("you have control of pane {pane_id}"),
                 LeaseOutcome::Kept(_) => bail!("the holder kept control"),
@@ -548,8 +559,8 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             no_submit,
         } => {
             let pane_id = pane.map_or(conn.tab()?.focused, PaneId);
-            let n = conn.client.prompt(pane_id, text, !no_submit).await?;
-            println!("sent {n} characters to pane {pane_id}");
+            let sent = conn.client.prompt(pane_id, text, !no_submit).await?;
+            println!("sent {sent} characters to pane {pane_id}");
         }
         MpCmd::Draft {
             text,
@@ -565,19 +576,19 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             conn.client.set_device_class(DeviceClass::Terminal);
             conn.client.set_view(Some(pane_id), vec![pane_id]);
             let pause = Duration::from_secs_f64(1.0 / cps.max(1.0));
-            let me = conn.client.me().map(|m| m.actor.principal);
+            let me = conn.client.me().map(|me| me.actor.principal);
             let follower = || -> Option<Peer> {
                 conn.client
                     .peers()
                     .1
                     .into_iter()
-                    .find(|p| me.is_some() && p.following == me)
+                    .find(|peer| me.is_some() && peer.following == me)
             };
             // With --then-focus, type it again and again until someone follows.
             'typing: loop {
                 let mut typed = String::new();
-                for c in text.chars() {
-                    typed.push(c);
+                for character in text.chars() {
+                    typed.push(character);
                     conn.client.set_draft(Some(Draft {
                         pane_id,
                         source: DraftSource::Composer,
@@ -601,12 +612,12 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                 }
             }
             if let Some(next) = then_focus.map(PaneId) {
-                let name = follower().map(|p| p.name).unwrap_or_default();
+                let name = follower().map(|peer| peer.name).unwrap_or_default();
                 println!("followed by {name}");
                 conn.client.set_view(Some(next), vec![next]);
                 println!("moved to pane {next}");
                 for _ in 0..300 {
-                    if follower().is_some_and(|p| p.focus == Some(next)) {
+                    if follower().is_some_and(|peer| peer.focus == Some(next)) {
                         println!("{name} came along to pane {next}");
                         break;
                     }
@@ -619,25 +630,27 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
         }
         MpCmd::Grants { devices } => {
             if devices {
-                for d in conn.client.list_devices().await? {
+                for device in conn.client.list_devices().await? {
                     println!(
                         "{}  {:<6} {:<12} {}{}{}",
-                        hex(&d.device.0),
-                        format!("{:?}", d.kind).to_lowercase(),
-                        d.name,
-                        d.grant_id
-                            .map_or(String::new(), |g| format!("grant {} ", hex(&g.0[..4]))),
-                        if d.connected > 0 {
-                            format!("connected×{}", d.connected)
+                        hex(&device.device.0),
+                        format!("{:?}", device.kind).to_lowercase(),
+                        device.name,
+                        device.grant_id.map_or(String::new(), |grant| format!(
+                            "grant {} ",
+                            hex(&grant.0[..4])
+                        )),
+                        if device.connected > 0 {
+                            format!("connected×{}", device.connected)
                         } else {
                             String::new()
                         },
-                        if d.revoked { " REVOKED" } else { "" },
+                        if device.revoked { " REVOKED" } else { "" },
                     );
                 }
             } else {
-                for g in conn.client.list_grants().await? {
-                    let leaf = &g.grant;
+                for entry in conn.client.list_grants().await? {
+                    let leaf = &entry.grant;
                     println!(
                         "{}  {:<10} {:<20} {:<12} expires {:<8} uses {}/{}{}{}{}",
                         hex(&leaf.grant_id.0),
@@ -649,12 +662,14 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                         leaf.roles.names(),
                         leaf.scope.to_string(),
                         when(leaf.expires),
-                        g.bound.len(),
-                        leaf.max_uses.map_or("∞".into(), |u| u.to_string()),
-                        g.parent
-                            .map_or(String::new(), |p| format!(" from {}", hex(&p.0[..4]))),
+                        entry.bound.len(),
+                        leaf.max_uses.map_or("∞".into(), |uses| uses.to_string()),
+                        entry.parent.map_or(String::new(), |parent| format!(
+                            " from {}",
+                            hex(&parent.0[..4])
+                        )),
                         if leaf.delegate { " delegable" } else { "" },
-                        if g.revoked { " REVOKED" } else { "" },
+                        if entry.revoked { " REVOKED" } else { "" },
                     );
                 }
             }
@@ -664,16 +679,16 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
             device,
             principal,
         } => {
-            let target = if let Some(d) = device {
-                RevokeTarget::Device(DeviceId(unhex(&d)?))
-            } else if let Some(p) = principal {
-                RevokeTarget::Principal(PrincipalId(unhex(&p)?))
+            let target = if let Some(device) = device {
+                RevokeTarget::Device(DeviceId(unhex(&device)?))
+            } else if let Some(principal) = principal {
+                RevokeTarget::Principal(PrincipalId(unhex(&principal)?))
             } else {
                 let prefix = grant.context("give a grant id, --device or --principal")?;
                 let grants = conn.client.list_grants().await?;
                 let matches: Vec<GrantId> = grants
                     .iter()
-                    .map(|g| g.grant.grant_id)
+                    .map(|entry| entry.grant.grant_id)
                     .filter(|id| hex(&id.0).starts_with(&prefix.to_ascii_lowercase()))
                     .collect();
                 match matches.as_slice() {
@@ -705,20 +720,24 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
                 };
                 return crate::json::print("audit", &doc);
             }
-            for r in &page.records {
-                let who = r.actor.map_or("-".into(), |a| hex(&a.device.0[..4]));
-                let pane = r.pane_id.map_or(String::new(), |p| format!(" pane {p}"));
-                let signed = if r.kind == AuditKind::Approval && r.approval.is_some() {
+            for record in &page.records {
+                let who = record
+                    .actor
+                    .map_or("-".into(), |actor| hex(&actor.device.0[..4]));
+                let pane = record
+                    .pane_id
+                    .map_or(String::new(), |pane| format!(" pane {pane}"));
+                let signed = if record.kind == AuditKind::Approval && record.approval.is_some() {
                     " [signed]"
                 } else {
                     ""
                 };
                 println!(
                     "{:>5} {} {:<15} {who}{pane} {}{signed}",
-                    r.seq,
-                    r.at.0,
-                    format!("{:?}", r.kind),
-                    r.detail
+                    record.seq,
+                    record.at.0,
+                    format!("{:?}", record.kind),
+                    record.detail
                 );
             }
             println!(

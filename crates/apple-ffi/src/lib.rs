@@ -1,18 +1,6 @@
-//! The Swift app's view of the Rust core (ARCHITECTURE D6): a UniFFI surface over
-//! [`client_core`] (daemon connections) and [`ssh`] (plain SSH, bootstrap), built into
-//! `GudoCore.xcframework` by `cargo xtask build-xcframework`. See docs/APPLE-FFI.md.
-//!
-//! - [`DaemonClient`]: dial a daemon by ticket; every client-core request; events through a
-//!   Swift [`ClientEventListener`].
-//! - [`SshSession`], [`SshPane`]: self-healing SSH and plain-SSH panes with the same events;
-//!   [`SshSession::bootstrap`] installs the daemon and returns a ticket.
-//! - [`SshConfigFile`], [`KnownHostsStore`], [`generate_ed25519_key`]: config, host keys
-//!   and keys, with persistence left to the app.
-//! - Drawings, images, Excalidraw scenes and inline placements (`artifacts.rs`, an
-//!   [`ArtifactListener`]); input assistance for the mobile line editor (`assist.rs`, an
-//!   [`AssistListener`]).
-//! - [`inspect_pair_ticket`], [`install_log_sink`]: read a ticket offline; core logs to
-//!   the app's logger.
+//! The Swift app's view of the Rust core: a UniFFI surface over [`client_core`] (daemon
+//! connections) and [`ssh`] (plain SSH, bootstrap), built into `GudoCore.xcframework` by
+//! `cargo xtask build-xcframework`. See docs/APPLE-FFI.md.
 //!
 //! # Threading
 //!
@@ -153,8 +141,8 @@ where
     F::Output: Send + 'static,
 {
     match runtime().spawn(future).await {
-        Ok(out) => out,
-        Err(e) => std::panic::resume_unwind(e.into_panic()),
+        Ok(output) => output,
+        Err(join_error) => std::panic::resume_unwind(join_error.into_panic()),
     }
 }
 

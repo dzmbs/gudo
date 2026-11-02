@@ -3,6 +3,7 @@
 //! A ticket is shown by `hostd pair` as text and as a QR code. Its text form is
 //! `<scheme>://pair/<base32>` ([`brand::URL_SCHEME`]), where the base32 (RFC 4648, no padding)
 //! decodes to the postcard encoding of [`Ticket`]. Dialing by the daemon's key pins it in the
+//! TLS handshake, so the ticket needs no other server authentication.
 //!
 //! # Examples
 //!
@@ -55,7 +56,7 @@ pub struct Ticket {
     pub addrs: Vec<SocketAddr>,
     /// The daemon's home relay, if it uses one.
     pub relay_url: Option<String>,
-    /// The principal the paired device will act as. The MVP has a single owner principal.
+    /// The principal the paired device will act as.
     pub principal: PrincipalId,
     /// One-time secret proving the invitation.
     pub secret: PairingSecret,
@@ -83,8 +84,8 @@ impl fmt::Display for TicketError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Encoding => f.write_str("not a pairing ticket"),
-            Self::Decode(e) => write!(f, "malformed pairing ticket: {e}"),
-            Self::Version(v) => write!(f, "unsupported pairing ticket version {v}"),
+            Self::Decode(error) => write!(f, "malformed pairing ticket: {error}"),
+            Self::Version(version) => write!(f, "unsupported pairing ticket version {version}"),
         }
     }
 }
@@ -92,7 +93,7 @@ impl fmt::Display for TicketError {
 impl std::error::Error for TicketError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Decode(e) => Some(e),
+            Self::Decode(error) => Some(error),
             _ => None,
         }
     }
@@ -115,20 +116,20 @@ impl FromStr for Ticket {
 
     /// Parses the URL form, or the bare base32 payload. Whitespace and case are ignored, so a
     /// ticket survives being retyped or wrapped by a terminal.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = ticket_bytes(s)?;
-        let (v, _) = postcard::take_from_bytes::<u16>(&bytes).map_err(TicketError::Decode)?;
-        if v != Self::VERSION {
-            return Err(TicketError::Version(v));
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let bytes = ticket_bytes(text)?;
+        let (version, _) = postcard::take_from_bytes::<u16>(&bytes).map_err(TicketError::Decode)?;
+        if version != Self::VERSION {
+            return Err(TicketError::Version(version));
         }
         postcard::from_bytes(&bytes).map_err(TicketError::Decode)
     }
 }
 
 /// What follows `<verb>/` or `<verb>#` in a link into the app: `<scheme>://<verb>`, the same
-/// under the product's earlier scheme, or the universal link `https://<web domain>/<verb>`.
-/// `None` when `s` is not such a link. Case is ignored.
-pub(crate) fn link_payload<'a>(s: &'a str, verb: &str) -> Option<&'a str> {
+/// under the legacy scheme, or the universal link `https://<web domain>/<verb>`.
+/// `None` when `link` is not such a link. Case is ignored.
+pub(crate) fn link_payload<'a>(link: &'a str, verb: &str) -> Option<&'a str> {
     [
         format!("{}://{verb}", brand::URL_SCHEME),
         format!("{}://{verb}", brand::legacy::URL_SCHEME),
@@ -136,30 +137,26 @@ pub(crate) fn link_payload<'a>(s: &'a str, verb: &str) -> Option<&'a str> {
     ]
     .iter()
     .find_map(|head| {
-        let start = s.get(..head.len())?;
+        let start = link.get(..head.len())?;
         start
             .eq_ignore_ascii_case(head)
-            .then(|| s[head.len()..].strip_prefix(['/', '#']))?
+            .then(|| link[head.len()..].strip_prefix(['/', '#']))?
     })
 }
 
 /// The base32 payload of a ticket's text, decoded.
-fn ticket_bytes(s: &str) -> Result<Vec<u8>, TicketError> {
-    let s = s.trim();
-    let payload = link_payload(s, "pair").unwrap_or(s);
+fn ticket_bytes(text: &str) -> Result<Vec<u8>, TicketError> {
+    let text = text.trim();
+    let payload = link_payload(text, "pair").unwrap_or(text);
     let cleaned: String = payload
         .chars()
-        .filter(|c| !c.is_whitespace())
-        .map(|c| c.to_ascii_uppercase())
+        .filter(|ch| !ch.is_whitespace())
+        .map(|ch| ch.to_ascii_uppercase())
         .collect();
     BASE32_NOPAD
         .decode(cleaned.as_bytes())
         .map_err(|_| TicketError::Encoding)
 }
-
-// ---------------------------------------------------------------------------------------------
-// Extensions (appended after the ticket; readers that predate them ignore them)
-// ---------------------------------------------------------------------------------------------
 
 /// Which relays a daemon uses, so the paired device dials it the same way (self-hosted relays,
 /// local-only mode). Travels in [`TicketExtras`].
@@ -216,7 +213,6 @@ pub enum TicketRelays {
 pub struct TicketExtras {
     /// [`TicketExtras::VERSION`].
     pub v: u16,
-    /// The daemon's relays.
     pub relays: TicketRelays,
 }
 
@@ -230,7 +226,7 @@ const EXTRAS_MAGIC: u8 = 0xE7;
 
 impl Ticket {
     /// The text form with `extras` appended (plain [`Display`](fmt::Display) when the relays
-    /// are the default, so ordinary tickets stay as short as before).
+    /// are the default, so ordinary tickets stay short).
     pub fn to_string_with(&self, extras: &TicketExtras) -> String {
         if extras.relays == TicketRelays::Default {
             return self.to_string();
@@ -251,15 +247,17 @@ impl Ticket {
     /// # Errors
     ///
     /// As [`Ticket::from_str`].
-    pub fn parse_with_extras(s: &str) -> Result<(Self, TicketExtras), TicketError> {
-        let ticket: Self = s.parse()?;
-        let bytes = ticket_bytes(s)?;
+    pub fn parse_with_extras(text: &str) -> Result<(Self, TicketExtras), TicketError> {
+        let ticket: Self = text.parse()?;
+        let bytes = ticket_bytes(text)?;
         let (_, rest) = postcard::take_from_bytes::<Self>(&bytes).map_err(TicketError::Decode)?;
         let extras = match rest.split_first() {
-            Some((&EXTRAS_MAGIC, ext)) => postcard::from_bytes::<TicketExtras>(ext)
-                .ok()
-                .filter(|e| e.v == TicketExtras::VERSION)
-                .unwrap_or_default(),
+            Some((&EXTRAS_MAGIC, extras_bytes)) => {
+                postcard::from_bytes::<TicketExtras>(extras_bytes)
+                    .ok()
+                    .filter(|extras| extras.v == TicketExtras::VERSION)
+                    .unwrap_or_default()
+            }
             _ => TicketExtras::default(),
         };
         Ok((ticket, extras))

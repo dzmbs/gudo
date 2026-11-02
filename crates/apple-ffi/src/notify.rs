@@ -1,6 +1,7 @@
-//! Push notifications (module `notify`, to keep the `push` crate name free), app side (docs/PUSH.md): the device's sealing key, the relay
+//! Push notifications, app side (docs/PUSH.md): the device's sealing key, the relay
 //! registration body, registering with each daemon, opening sealed payloads in the
-//! Notification Service Extension, and answering an approval from the lock screen.
+//! Notification Service Extension, and answering an approval from the lock screen. The module
+//! is `notify` so it does not shadow the `push` crate.
 
 use std::time::Duration;
 
@@ -26,30 +27,23 @@ pub enum PushError {
     Signature,
     /// The payload is not the expected JSON.
     #[error("payload: {message}")]
-    Json {
-        /// Why.
-        message: String,
-    },
+    Json { message: String },
     /// Too large to seal.
     #[error("payload too large ({size} bytes)")]
-    TooLarge {
-        /// Sealed size.
-        size: u64,
-    },
-    /// Expired.
+    TooLarge { size: u64 },
     #[error("expired")]
     Expired,
 }
 
 impl From<client_core::push::PushError> for PushError {
-    fn from(e: client_core::push::PushError) -> Self {
+    fn from(push_error: client_core::push::PushError) -> Self {
         use client_core::push::PushError as E;
-        match e {
+        match push_error {
             E::Malformed => Self::Malformed,
             E::Open(_) => Self::Open,
             E::Signature => Self::Signature,
-            E::Json(e) => Self::Json {
-                message: e.to_string(),
+            E::Json(push_error) => Self::Json {
+                message: push_error.to_string(),
             },
             E::TooLarge(size) => Self::TooLarge { size: size as u64 },
             E::Expired => Self::Expired,
@@ -62,47 +56,35 @@ impl From<client_core::push::PushError> for PushError {
 pub enum PushActionError {
     /// The ticket or device key is unusable.
     #[error("bad ticket or key: {message}")]
-    Client {
-        /// Why.
-        message: String,
-    },
+    Client { message: String },
     /// The action token is not base64url.
     #[error("bad action token")]
     Token,
     /// The host could not be reached in time.
     #[error("cannot reach the host: {message}")]
-    Unreachable {
-        /// Why.
-        message: String,
-    },
+    Unreachable { message: String },
     /// The host refused the connection (the device was unpaired).
     #[error("refused: {reason}")]
-    Refused {
-        /// Why.
-        reason: String,
-    },
+    Refused { reason: String },
     /// The host refused the decision (expired, already decided, no longer waiting).
     #[error("rejected: {message}")]
-    Rejected {
-        /// Why.
-        message: String,
-    },
+    Rejected { message: String },
 }
 
 impl From<client_core::push::ActionError> for PushActionError {
-    fn from(e: client_core::push::ActionError) -> Self {
+    fn from(action_error: client_core::push::ActionError) -> Self {
         use client_core::push::ActionError as E;
-        match e {
-            E::Client(e) => Self::Client {
-                message: e.to_string(),
+        match action_error {
+            E::Client(action_error) => Self::Client {
+                message: action_error.to_string(),
             },
             E::Token => Self::Token,
             E::Unreachable(message) => Self::Unreachable { message },
             E::Refused(reason) => Self::Refused {
                 reason: format!("{reason:?}"),
             },
-            E::Rejected(e) => Self::Rejected {
-                message: e.to_string(),
+            E::Rejected(action_error) => Self::Rejected {
+                message: action_error.to_string(),
             },
         }
     }
@@ -221,9 +203,7 @@ pub enum PushKind {
 pub struct PushActionOffer {
     /// The action token, base64url; `push_action_token` decodes it for `send_push_action`.
     pub token: String,
-    /// Approve label.
     pub approve: String,
-    /// Deny label.
     pub deny: String,
     /// Expiry, Unix ms.
     pub expires_ms: u64,
@@ -246,21 +226,15 @@ impl std::fmt::Debug for PushActionOffer {
 pub struct PushNotification {
     /// The daemon's key, hex.
     pub daemon: String,
-    /// The host's name.
     pub host: String,
-    /// What happened.
     pub kind: PushKind,
     /// `UNNotificationCategory` identifier for `kind`.
     pub category: String,
     /// Attention item id (mark seen with `attention_seen`).
     pub item: u64,
-    /// The pane.
     pub pane: u64,
-    /// Its session.
     pub session: Option<u64>,
-    /// Title.
     pub title: String,
-    /// Body.
     pub body: String,
     /// When, Unix ms.
     pub at_ms: u64,
@@ -279,8 +253,8 @@ pub fn open_push_notification(
     device_secret: Bytes,
     sealed: String,
 ) -> Result<PushNotification, PushError> {
-    let n = client_core::push::open_notification(&key32(&device_secret)?, &sealed)?;
-    let kind = match n.kind {
+    let notification = client_core::push::open_notification(&key32(&device_secret)?, &sealed)?;
+    let kind = match notification.kind {
         client_core::push::Kind::Approval => PushKind::Approval,
         client_core::push::Kind::Blocked => PushKind::Blocked,
         client_core::push::Kind::Done => PushKind::Done,
@@ -288,21 +262,21 @@ pub fn open_push_notification(
         client_core::push::Kind::Command => PushKind::Command,
     };
     Ok(PushNotification {
-        category: n.kind.category().apns_category().to_owned(),
-        daemon: n.daemon,
-        host: n.host,
+        category: notification.kind.category().apns_category().to_owned(),
+        daemon: notification.daemon,
+        host: notification.host,
         kind,
-        item: n.item,
-        pane: n.pane,
-        session: n.session,
-        title: n.title,
-        body: n.body,
-        at_ms: n.at,
-        action: n.action.map(|a| PushActionOffer {
-            token: a.token,
-            approve: a.approve,
-            deny: a.deny,
-            expires_ms: a.expires,
+        item: notification.item,
+        pane: notification.pane,
+        session: notification.session,
+        title: notification.title,
+        body: notification.body,
+        at_ms: notification.at,
+        action: notification.action.map(|action| PushActionOffer {
+            token: action.token,
+            approve: action.approve,
+            deny: action.deny,
+            expires_ms: action.expires,
         }),
     })
 }
@@ -320,14 +294,12 @@ pub fn push_action_token(token: String) -> Result<Bytes, PushError> {
 /// The lock-screen answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum PushDecision {
-    /// Approve.
     Approve,
-    /// Deny.
     Deny,
 }
 
-fn decision(d: PushDecision) -> client_core::push::Decision {
-    match d {
+fn decision(answer: PushDecision) -> client_core::push::Decision {
+    match answer {
         PushDecision::Approve => client_core::push::Decision::Approve,
         PushDecision::Deny => client_core::push::Decision::Deny,
     }
@@ -420,7 +392,7 @@ impl DaemonClient {
             prefs: registration.prefs.into(),
             activity_cap: registration.activity_cap,
         };
-        self.ws_call(|c| async move { c.push_register(reg).await })
+        self.ws_call(|client| async move { client.push_register(reg).await })
             .await
     }
 
@@ -430,7 +402,7 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn push_unregister(&self) -> Result<PushStatus, WorkspaceError> {
-        self.ws_call(|c| async move { c.push_unregister().await })
+        self.ws_call(|client| async move { client.push_unregister().await })
             .await
     }
 
@@ -440,7 +412,8 @@ impl DaemonClient {
     ///
     /// The daemon's [`WorkspaceError`].
     pub async fn push_status(&self) -> Result<PushStatus, WorkspaceError> {
-        self.ws_call(|c| async move { c.push_status().await }).await
+        self.ws_call(|client| async move { client.push_status().await })
+            .await
     }
 
     /// The relay capability of this device's running agents Live Activity (its update
@@ -451,7 +424,7 @@ impl DaemonClient {
     ///
     /// `NotFound` without a push registration; the daemon's other [`WorkspaceError`]s.
     pub async fn push_activity(&self, cap: Option<String>) -> Result<PushStatus, WorkspaceError> {
-        self.ws_call(|c| async move { c.push_activity(cap).await })
+        self.ws_call(|client| async move { client.push_activity(cap).await })
             .await
     }
 

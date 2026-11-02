@@ -1,3 +1,4 @@
+//! Knocks and approval policies on [`DaemonClient`] (docs/DAEMON.md §6.9): knock to join, approval
 //! policies (owner only, two-person rule, claims, risk caps) and scrollback since joining.
 //!
 //! A guest with a knock invite calls [`knock_invite`] and waits; the owner sees
@@ -14,14 +15,11 @@ use crate::mp::{
 };
 use crate::{on_runtime, runtime};
 
-// --- knocks -------------------------------------------------------------------------------
-
 /// Someone waiting to be let in.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Knock {
     /// The knock (answer with it).
     pub knock_id: u64,
-    /// Who knocks.
     pub actor: Actor,
     /// The name they gave, or the invite's label.
     pub name: String,
@@ -36,27 +34,23 @@ pub struct Knock {
 }
 
 impl From<proto::Knock> for Knock {
-    fn from(k: proto::Knock) -> Self {
+    fn from(knock: proto::Knock) -> Self {
         Self {
-            knock_id: k.knock_id.0,
-            actor: k.actor.into(),
-            name: k.name,
-            grant_id: hex(&k.grant_id.0),
-            roles: roles_to_ffi(k.roles),
-            scope: k.scope.into(),
-            at_ms: k.at.0,
+            knock_id: knock.knock_id.0,
+            actor: knock.actor.into(),
+            name: knock.name,
+            grant_id: hex(&knock.grant_id.0),
+            roles: roles_to_ffi(knock.roles),
+            scope: knock.scope.into(),
+            at_ms: knock.at.0,
         }
     }
 }
 
-/// How a knock ended.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum KnockOutcome {
     /// Let in with these roles.
-    Admitted {
-        /// The roles.
-        roles: Vec<Role>,
-    },
+    Admitted { roles: Vec<Role> },
     /// Turned away.
     Denied,
     /// They stopped waiting.
@@ -64,8 +58,8 @@ pub enum KnockOutcome {
 }
 
 impl From<proto::KnockOutcome> for KnockOutcome {
-    fn from(o: proto::KnockOutcome) -> Self {
-        match o {
+    fn from(knock_outcome: proto::KnockOutcome) -> Self {
+        match knock_outcome {
             proto::KnockOutcome::Admitted { roles } => Self::Admitted {
                 roles: roles_to_ffi(roles),
             },
@@ -87,21 +81,14 @@ pub enum KnockResult {
     Denied,
 }
 
-/// Why knocking failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum KnockError {
     /// The invite does not parse, or the key is bad.
     #[error("{message}")]
-    Invalid {
-        /// Why.
-        message: String,
-    },
+    Invalid { message: String },
     /// The host could not be reached, or hung up while waiting.
     #[error("cannot reach the host: {message}")]
-    Unreachable {
-        /// Why.
-        message: String,
-    },
+    Unreachable { message: String },
     /// The host refused the invite (expired, revoked, too many people waiting).
     #[error("refused: {reason}")]
     Refused {
@@ -111,11 +98,11 @@ pub enum KnockError {
 }
 
 impl From<client_core::knock::KnockError> for KnockError {
-    fn from(e: client_core::knock::KnockError) -> Self {
+    fn from(knock_error: client_core::knock::KnockError) -> Self {
         use client_core::knock::KnockError as E;
-        match e {
-            E::Client(e) => Self::Invalid {
-                message: ClientError::from(e).to_string(),
+        match knock_error {
+            E::Client(knock_error) => Self::Invalid {
+                message: ClientError::from(knock_error).to_string(),
             },
             E::Unreachable(message) => Self::Unreachable { message },
             E::Refused(reason) => Self::Refused {
@@ -174,8 +161,6 @@ pub async fn knock_invite(
     }
 }
 
-// --- approval policies --------------------------------------------------------------------
-
 /// How risky an agent's tool call is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum Risk {
@@ -188,8 +173,8 @@ pub enum Risk {
 }
 
 impl From<proto::Risk> for Risk {
-    fn from(r: proto::Risk) -> Self {
-        match r {
+    fn from(risk: proto::Risk) -> Self {
+        match risk {
             proto::Risk::ReadOnly => Self::ReadOnly,
             proto::Risk::Edits => Self::Edits,
             proto::Risk::Any => Self::Any,
@@ -198,8 +183,8 @@ impl From<proto::Risk> for Risk {
 }
 
 impl From<Risk> for proto::Risk {
-    fn from(r: Risk) -> Self {
-        match r {
+    fn from(risk: Risk) -> Self {
+        match risk {
             Risk::ReadOnly => Self::ReadOnly,
             Risk::Edits => Self::Edits,
             Risk::Any => Self::Any,
@@ -221,8 +206,8 @@ pub enum ApprovalMode {
 }
 
 impl From<proto::ApprovalMode> for ApprovalMode {
-    fn from(m: proto::ApprovalMode) -> Self {
-        match m {
+    fn from(approval_mode: proto::ApprovalMode) -> Self {
+        match approval_mode {
             proto::ApprovalMode::AnyApprover => Self::AnyApprover,
             proto::ApprovalMode::OwnerOnly => Self::OwnerOnly,
             proto::ApprovalMode::TwoPerson => Self::TwoPerson,
@@ -232,8 +217,8 @@ impl From<proto::ApprovalMode> for ApprovalMode {
 }
 
 impl From<ApprovalMode> for proto::ApprovalMode {
-    fn from(m: ApprovalMode) -> Self {
-        match m {
+    fn from(approval_mode: ApprovalMode) -> Self {
+        match approval_mode {
             ApprovalMode::AnyApprover => Self::AnyApprover,
             ApprovalMode::OwnerOnly => Self::OwnerOnly,
             ApprovalMode::TwoPerson => Self::TwoPerson,
@@ -242,7 +227,6 @@ impl From<ApprovalMode> for proto::ApprovalMode {
     }
 }
 
-/// A session's approval rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Record)]
 pub struct ApprovalPolicy {
     /// Who may answer.
@@ -252,19 +236,19 @@ pub struct ApprovalPolicy {
 }
 
 impl From<proto::ApprovalPolicy> for ApprovalPolicy {
-    fn from(p: proto::ApprovalPolicy) -> Self {
+    fn from(approval_policy: proto::ApprovalPolicy) -> Self {
         Self {
-            mode: p.mode.into(),
-            max_risk: p.max_risk.into(),
+            mode: approval_policy.mode.into(),
+            max_risk: approval_policy.max_risk.into(),
         }
     }
 }
 
 impl From<ApprovalPolicy> for proto::ApprovalPolicy {
-    fn from(p: ApprovalPolicy) -> Self {
+    fn from(approval_policy: ApprovalPolicy) -> Self {
         Self {
-            mode: p.mode.into(),
-            max_risk: p.max_risk.into(),
+            mode: approval_policy.mode.into(),
+            max_risk: approval_policy.max_risk.into(),
         }
     }
 }
@@ -272,20 +256,18 @@ impl From<ApprovalPolicy> for proto::ApprovalPolicy {
 /// One approval cast, or a claim.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ApprovalVote {
-    /// Who.
     pub actor: Actor,
-    /// Their name.
     pub name: String,
     /// When, Unix ms.
     pub at_ms: u64,
 }
 
 impl From<proto::ApprovalVote> for ApprovalVote {
-    fn from(v: proto::ApprovalVote) -> Self {
+    fn from(approval_vote: proto::ApprovalVote) -> Self {
         Self {
-            actor: v.actor.into(),
-            name: v.name,
-            at_ms: v.at.0,
+            actor: approval_vote.actor.into(),
+            name: approval_vote.name,
+            at_ms: approval_vote.at.0,
         }
     }
 }
@@ -293,9 +275,7 @@ impl From<proto::ApprovalVote> for ApprovalVote {
 /// Where an open approval request stands.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ApprovalStatus {
-    /// The agent's pane.
     pub pane_id: u64,
-    /// The request.
     pub request_id: u64,
     /// The call's risk.
     pub risk: Risk,
@@ -310,15 +290,19 @@ pub struct ApprovalStatus {
 }
 
 impl From<proto::ApprovalStatus> for ApprovalStatus {
-    fn from(s: proto::ApprovalStatus) -> Self {
+    fn from(approval_status: proto::ApprovalStatus) -> Self {
         Self {
-            pane_id: s.pane_id.0,
-            request_id: s.request_id.0,
-            risk: s.risk.into(),
-            mode: s.mode.into(),
-            approvals: s.approvals.into_iter().map(Into::into).collect(),
-            needed: s.needed,
-            claimed_by: s.claimed_by.map(Into::into),
+            pane_id: approval_status.pane_id.0,
+            request_id: approval_status.request_id.0,
+            risk: approval_status.risk.into(),
+            mode: approval_status.mode.into(),
+            approvals: approval_status
+                .approvals
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            needed: approval_status.needed,
+            claimed_by: approval_status.claimed_by.map(Into::into),
         }
     }
 }
@@ -360,8 +344,9 @@ impl DaemonClient {
             } else {
                 proto::History::Full
             },
-            expires: ttl_secs
-                .map(|s| proto::UnixMillis(client_core::now_millis().0 + s.saturating_mul(1000))),
+            expires: ttl_secs.map(|secs| {
+                proto::UnixMillis(client_core::now_millis().0 + secs.saturating_mul(1000))
+            }),
         };
         let core = self.core();
         let info = on_runtime(async move {

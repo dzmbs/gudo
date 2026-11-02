@@ -1,3 +1,4 @@
+//! Signing and verification of attenuable capability grants (ARCHITECTURE D17) and
 //! of signed approvals.
 //!
 //! The wire types ([`Grant`], [`GrantChain`], [`Invite`](proto::Invite)) live in `proto`; this
@@ -129,16 +130,17 @@ pub fn verify_signature(device: DeviceId, msg: &[u8], sig: &[u8]) -> bool {
 /// Whether `device` is a usable Ed25519 public key: a valid point not of small order. A
 /// small-order key "signs" with forgeable signatures, so no one holds it in any real sense.
 pub fn is_strong_key(device: DeviceId) -> bool {
-    ed25519_dalek::VerifyingKey::from_bytes(&device.0).is_ok_and(|k| !k.is_weak())
+    ed25519_dalek::VerifyingKey::from_bytes(&device.0).is_ok_and(|key| !key.is_weak())
 }
 
 /// SHA-256 over the concatenation of `parts`.
 pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
-    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
     for part in parts {
-        ctx.update(part);
+        digest.update(part);
     }
-    ctx.finish()
+    digest
+        .finish()
         .as_ref()
         .try_into()
         .expect("SHA-256 is 32 bytes")
@@ -176,9 +178,7 @@ pub fn verify_approval(daemon: DaemonId, decide: &Decide) -> bool {
 /// [`issue`] and [`attenuate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantSpec {
-    /// Roles.
     pub roles: Roles,
-    /// Scope.
     pub scope: Scope,
     /// Expiry; `None` never expires.
     pub expires: Option<UnixMillis>,
@@ -255,7 +255,7 @@ pub fn attenuate(
     if depth >= MAX_DEPTH {
         return Err(GrantError::TooDeep);
     }
-    if leaf.bind.is_some_and(|b| b != key.device_id()) {
+    if leaf.bind.is_some_and(|bound| bound != key.device_id()) {
         return Err(GrantError::NotHolder(depth));
     }
     let link = spec.sign(key, leaf.daemon_id, now);
@@ -411,7 +411,7 @@ impl LocalScopes {
         match (inner, outer) {
             (_, Scope::Daemon) => true,
             (Scope::Daemon, _) => false,
-            (a, b) if a == b => true,
+            (inner, outer) if inner == outer => true,
             (Scope::Session(_), _) => false,
             (Scope::Tab(_), Scope::Session(_))
             | (Scope::Pane(_), Scope::Session(_) | Scope::Tab(_)) => true,
@@ -439,30 +439,34 @@ impl<A: Authority + ?Sized> ScopeOrder for &A {
 fn check_narrowing(
     parent: &Grant,
     child: &Grant,
-    i: usize,
+    index: usize,
     scopes: &impl ScopeOrder,
 ) -> Result<(), GrantError> {
     if !parent.delegate {
-        return Err(GrantError::NotDelegable(i));
+        return Err(GrantError::NotDelegable(index));
     }
     if child.roles.effective() == Roles::EMPTY || !parent.roles.covers(child.roles) {
-        return Err(GrantError::Escalation(i));
+        return Err(GrantError::Escalation(index));
     }
     if !scopes.within(child.scope, parent.scope) {
-        return Err(GrantError::ScopeWidened(i));
+        return Err(GrantError::ScopeWidened(index));
     }
     match (parent.expires, child.expires) {
-        (Some(_), None) => return Err(GrantError::ExpiryWidened(i)),
-        (Some(p), Some(c)) if c > p => return Err(GrantError::ExpiryWidened(i)),
+        (Some(_), None) => return Err(GrantError::ExpiryWidened(index)),
+        (Some(parent_expiry), Some(child_expiry)) if child_expiry > parent_expiry => {
+            return Err(GrantError::ExpiryWidened(index));
+        }
         _ => {}
     }
     match (parent.max_uses, child.max_uses) {
-        (Some(_), None) => return Err(GrantError::UsesWidened(i)),
-        (Some(p), Some(c)) if c > p => return Err(GrantError::UsesWidened(i)),
+        (Some(_), None) => return Err(GrantError::UsesWidened(index)),
+        (Some(parent_uses), Some(child_uses)) if child_uses > parent_uses => {
+            return Err(GrantError::UsesWidened(index));
+        }
         _ => {}
     }
     if child.daemon_id != parent.daemon_id {
-        return Err(GrantError::WrongDaemon(i));
+        return Err(GrantError::WrongDaemon(index));
     }
     Ok(())
 }
@@ -496,7 +500,7 @@ pub fn verify(
     daemon: DaemonId,
     presenter: DeviceId,
     now: UnixMillis,
-    auth: &impl Authority,
+    authority: &impl Authority,
 ) -> Result<Verified, GrantError> {
     let leaf = chain.leaf().ok_or(GrantError::Empty)?;
     if chain.links.len() > MAX_DEPTH {
@@ -505,51 +509,51 @@ pub fn verify(
     let mut seen = HashSet::new();
     let mut roles = Roles::ALL;
     let mut expires: Option<UnixMillis> = None;
-    for (i, link) in chain.links.iter().enumerate() {
-        let g = &link.grant;
-        if g.v != Grant::VERSION {
-            return Err(GrantError::Version(i));
+    for (index, link) in chain.links.iter().enumerate() {
+        let grant = &link.grant;
+        if grant.v != Grant::VERSION {
+            return Err(GrantError::Version(index));
         }
-        if g.daemon_id != daemon {
-            return Err(GrantError::WrongDaemon(i));
+        if grant.daemon_id != daemon {
+            return Err(GrantError::WrongDaemon(index));
         }
-        if !verify_signature(g.issuer, &g.signing_bytes(), &link.sig) {
-            return Err(GrantError::BadSignature(i));
+        if !verify_signature(grant.issuer, &grant.signing_bytes(), &link.sig) {
+            return Err(GrantError::BadSignature(index));
         }
-        if !seen.insert(g.grant_id) {
-            return Err(GrantError::Duplicate(i));
+        if !seen.insert(grant.grant_id) {
+            return Err(GrantError::Duplicate(index));
         }
-        if auth.grant_revoked(g.grant_id) {
-            return Err(GrantError::Revoked(i));
+        if authority.grant_revoked(grant.grant_id) {
+            return Err(GrantError::Revoked(index));
         }
-        if g.expires.is_some_and(|e| e <= now) {
-            return Err(GrantError::Expired(i));
+        if grant.expires.is_some_and(|expiry| expiry <= now) {
+            return Err(GrantError::Expired(index));
         }
-        if i == 0 {
-            if !auth.is_root(g.issuer) {
+        if index == 0 {
+            if !authority.is_root(grant.issuer) {
                 return Err(GrantError::UntrustedRoot);
             }
         } else {
-            let parent = &chain.links[i - 1].grant;
+            let parent = &chain.links[index - 1].grant;
             let held = match parent.bind {
-                Some(bound) => bound == g.issuer,
-                None => auth.holds(parent.grant_id, g.issuer),
+                Some(bound) => bound == grant.issuer,
+                None => authority.holds(parent.grant_id, grant.issuer),
             };
             if !held {
-                return Err(GrantError::NotHolder(i));
+                return Err(GrantError::NotHolder(index));
             }
-            check_narrowing(parent, g, i, &auth)?;
+            check_narrowing(parent, grant, index, &authority)?;
         }
-        roles = Roles(roles.0 & g.roles.effective().0);
-        expires = match (expires, g.expires) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
+        roles = Roles(roles.0 & grant.roles.effective().0);
+        expires = match (expires, grant.expires) {
+            (Some(earliest), Some(link_expiry)) => Some(earliest.min(link_expiry)),
+            (earliest, link_expiry) => earliest.or(link_expiry),
         };
     }
-    if leaf.bind.is_some_and(|b| b != presenter) {
+    if leaf.bind.is_some_and(|bound| bound != presenter) {
         return Err(GrantError::BoundElsewhere);
     }
-    check_removals(chain, presenter, auth)?;
+    check_removals(chain, presenter, authority)?;
     if roles == Roles::EMPTY {
         return Err(GrantError::Escalation(chain.links.len() - 1));
     }
@@ -557,7 +561,7 @@ pub fn verify(
         roles,
         scope: leaf.scope,
         expires,
-        ids: chain.links.iter().map(|l| l.grant.grant_id).collect(),
+        ids: chain.links.iter().map(|link| link.grant.grant_id).collect(),
         leaf: leaf.clone(),
     })
 }
@@ -568,23 +572,29 @@ pub fn verify(
 fn check_removals(
     chain: &GrantChain,
     presenter: DeviceId,
-    auth: &impl Authority,
+    authority: &impl Authority,
 ) -> Result<(), GrantError> {
     let Some(root) = chain.links.first() else {
         return Err(GrantError::Empty);
     };
     let signed = root.grant.issued_at;
-    if auth.void_before().is_some_and(|t| signed <= t) {
+    if authority
+        .void_before()
+        .is_some_and(|cutoff| signed <= cutoff)
+    {
         return Err(GrantError::Revoked(0));
     }
     let devices = chain
         .links
         .iter()
-        .flat_map(|l| [Some(l.grant.issuer), l.grant.bind])
+        .flat_map(|link| [Some(link.grant.issuer), link.grant.bind])
         .flatten()
         .chain([presenter]);
     for device in devices {
-        if auth.removed_at(device).is_some_and(|t| signed <= t) {
+        if authority
+            .removed_at(device)
+            .is_some_and(|removed| signed <= removed)
+        {
             return Err(GrantError::DeviceRevoked);
         }
     }
@@ -661,13 +671,13 @@ mod tests {
     #[test]
     fn local_scope_order() {
         use proto::{PaneId, SessionId, TabId};
-        let s = Scope::Session(SessionId(1));
-        let t = Scope::Tab(TabId(1));
-        let p = Scope::Pane(PaneId(1));
-        assert!(LocalScopes::within(p, Scope::Daemon));
-        assert!(LocalScopes::within(t, s));
-        assert!(!LocalScopes::within(s, t));
-        assert!(!LocalScopes::within(Scope::Daemon, p));
-        assert!(!LocalScopes::within(Scope::Pane(PaneId(2)), p));
+        let session = Scope::Session(SessionId(1));
+        let tab = Scope::Tab(TabId(1));
+        let pane = Scope::Pane(PaneId(1));
+        assert!(LocalScopes::within(pane, Scope::Daemon));
+        assert!(LocalScopes::within(tab, session));
+        assert!(!LocalScopes::within(session, tab));
+        assert!(!LocalScopes::within(Scope::Daemon, pane));
+        assert!(!LocalScopes::within(Scope::Pane(PaneId(2)), pane));
     }
 }

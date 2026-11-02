@@ -1,5 +1,6 @@
 //! Ink points and their packed wire form ([`PackedPoints`]), plus stroke simplification.
 //!
+//! Packed format, version 1:
 //!
 //! ```text
 //! 0x01
@@ -28,7 +29,6 @@ const VERSION: u8 = 1;
 pub struct InkPoint {
     /// x, in the drawing's units.
     pub x: f32,
-    /// y.
     pub y: f32,
     /// Force, 0..=1 (1 for a mouse or finger).
     pub pressure: f32,
@@ -68,7 +68,7 @@ pub enum PointsError {
 impl std::fmt::Display for PointsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Version(v) => write!(f, "unknown packed points version {v}"),
+            Self::Version(version) => write!(f, "unknown packed points version {version}"),
             Self::Truncated => f.write_str("packed points truncated"),
             Self::TooMany => write!(f, "more than {MAX_POINTS} points"),
         }
@@ -77,46 +77,46 @@ impl std::fmt::Display for PointsError {
 
 impl std::error::Error for PointsError {}
 
-fn put_varint(out: &mut Vec<u8>, mut v: u64) {
-    while v >= 0x80 {
-        out.push((v as u8) | 0x80);
-        v >>= 7;
+fn put_varint(out: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        out.push((value as u8) | 0x80);
+        value >>= 7;
     }
-    out.push(v as u8);
+    out.push(value as u8);
 }
 
 fn get_varint(data: &[u8], pos: &mut usize) -> Result<u64, PointsError> {
-    let mut v = 0u64;
+    let mut value = 0u64;
     for shift in (0..64).step_by(7) {
-        let b = *data.get(*pos).ok_or(PointsError::Truncated)?;
+        let byte = *data.get(*pos).ok_or(PointsError::Truncated)?;
         *pos += 1;
-        v |= u64::from(b & 0x7f) << shift;
-        if b & 0x80 == 0 {
-            return Ok(v);
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
         }
     }
     Err(PointsError::Truncated)
 }
 
-fn zigzag(v: i64) -> u64 {
-    ((v << 1) ^ (v >> 63)) as u64
+fn zigzag(value: i64) -> u64 {
+    ((value << 1) ^ (value >> 63)) as u64
 }
 
-fn unzigzag(v: u64) -> i64 {
-    ((v >> 1) as i64) ^ -((v & 1) as i64)
+fn unzigzag(value: u64) -> i64 {
+    ((value >> 1) as i64) ^ -((value & 1) as i64)
 }
 
-fn quantise(v: f32) -> i64 {
-    if v.is_finite() {
-        (v / QUANTUM).round().clamp(-1e12, 1e12) as i64
+fn quantise(value: f32) -> i64 {
+    if value.is_finite() {
+        (value / QUANTUM).round().clamp(-1e12, 1e12) as i64
     } else {
         0
     }
 }
 
-fn unit_byte(v: f32, full: f32) -> u8 {
-    if v.is_finite() {
-        (v / full * 255.0).round().clamp(0.0, 255.0) as u8
+fn unit_byte(value: f32, full: f32) -> u8 {
+    if value.is_finite() {
+        (value / full * 255.0).round().clamp(0.0, 255.0) as u8
     } else {
         255
     }
@@ -136,21 +136,21 @@ fn unit_byte(v: f32, full: f32) -> u8 {
 pub fn pack(points: &[InkPoint]) -> PackedPoints {
     let mut out = Vec::with_capacity(1 + points.len() * 7);
     out.push(VERSION);
-    let (mut px, mut py, mut pt) = (0i64, 0i64, 0u32);
-    for p in points {
-        let (x, y) = (quantise(p.x), quantise(p.y));
-        put_varint(&mut out, zigzag(x - px));
-        put_varint(&mut out, zigzag(y - py));
-        out.push(unit_byte(p.pressure, 1.0));
-        out.push(unit_byte(p.altitude, FRAC_PI_2));
-        let az = if p.azimuth.is_finite() {
-            (p.azimuth.rem_euclid(TAU) / TAU * 256.0).round() as u32 % 256
+    let (mut prev_x, mut prev_y, mut prev_ms) = (0i64, 0i64, 0u32);
+    for point in points {
+        let (x, y) = (quantise(point.x), quantise(point.y));
+        put_varint(&mut out, zigzag(x - prev_x));
+        put_varint(&mut out, zigzag(y - prev_y));
+        out.push(unit_byte(point.pressure, 1.0));
+        out.push(unit_byte(point.altitude, FRAC_PI_2));
+        let azimuth = if point.azimuth.is_finite() {
+            (point.azimuth.rem_euclid(TAU) / TAU * 256.0).round() as u32 % 256
         } else {
             0
         };
-        out.push(az as u8);
-        put_varint(&mut out, u64::from(p.t_ms.saturating_sub(pt)));
-        (px, py, pt) = (x, y, p.t_ms.max(pt));
+        out.push(azimuth as u8);
+        put_varint(&mut out, u64::from(point.t_ms.saturating_sub(prev_ms)));
+        (prev_x, prev_y, prev_ms) = (x, y, point.t_ms.max(prev_ms));
     }
     PackedPoints(out)
 }
@@ -170,23 +170,23 @@ pub fn unpack(packed: &PackedPoints) -> Result<Vec<InkPoint>, PointsError> {
     }
     let mut pos = 1;
     let mut out = Vec::new();
-    let (mut x, mut y, mut t) = (0i64, 0i64, 0u64);
+    let (mut x, mut y, mut elapsed_ms) = (0i64, 0i64, 0u64);
     while pos < data.len() {
         if out.len() >= MAX_POINTS {
             return Err(PointsError::TooMany);
         }
         x += unzigzag(get_varint(data, &mut pos)?);
         y += unzigzag(get_varint(data, &mut pos)?);
-        let bytes = data.get(pos..pos + 3).ok_or(PointsError::Truncated)?;
+        let pen = data.get(pos..pos + 3).ok_or(PointsError::Truncated)?;
         pos += 3;
-        t += get_varint(data, &mut pos)?;
+        elapsed_ms += get_varint(data, &mut pos)?;
         out.push(InkPoint {
             x: x as f32 * QUANTUM,
             y: y as f32 * QUANTUM,
-            pressure: f32::from(bytes[0]) / 255.0,
-            altitude: f32::from(bytes[1]) / 255.0 * FRAC_PI_2,
-            azimuth: f32::from(bytes[2]) / 256.0 * TAU,
-            t_ms: u32::try_from(t).unwrap_or(u32::MAX),
+            pressure: f32::from(pen[0]) / 255.0,
+            altitude: f32::from(pen[1]) / 255.0 * FRAC_PI_2,
+            azimuth: f32::from(pen[2]) / 256.0 * TAU,
+            t_ms: u32::try_from(elapsed_ms).unwrap_or(u32::MAX),
         });
     }
     Ok(out)
@@ -194,7 +194,7 @@ pub fn unpack(packed: &PackedPoints) -> Result<Vec<InkPoint>, PointsError> {
 
 /// Number of points in packed data without decoding them fully, or `None` if malformed.
 pub fn count(packed: &PackedPoints) -> Option<usize> {
-    unpack(packed).ok().map(|p| p.len())
+    unpack(packed).ok().map(|points| points.len())
 }
 
 /// Ramer–Douglas–Peucker simplification for committed strokes: drops points closer than
@@ -209,48 +209,48 @@ pub fn simplify(points: &[InkPoint], epsilon: f32) -> Vec<InkPoint> {
     keep[0] = true;
     keep[points.len() - 1] = true;
     let mut stack = vec![(0, points.len() - 1)];
-    while let Some((a, b)) = stack.pop() {
-        if b <= a + 1 {
+    while let Some((start, end)) = stack.pop() {
+        if end <= start + 1 {
             continue;
         }
-        let (pa, pb) = (points[a], points[b]);
-        let mut worst = (0.0f32, 0usize);
-        for (i, p) in points.iter().enumerate().take(b).skip(a + 1) {
-            let d = segment_distance(*p, pa, pb);
-            let f = (i - a) as f32 / (b - a) as f32;
-            let expected = pa.pressure + (pb.pressure - pa.pressure) * f;
-            let score = if (p.pressure - expected).abs() > 0.1 {
+        let (first, last) = (points[start], points[end]);
+        let (mut worst_score, mut worst_index) = (0.0f32, 0usize);
+        for (i, point) in points.iter().enumerate().take(end).skip(start + 1) {
+            let distance = segment_distance(*point, first, last);
+            let fraction = (i - start) as f32 / (end - start) as f32;
+            let expected = first.pressure + (last.pressure - first.pressure) * fraction;
+            let score = if (point.pressure - expected).abs() > 0.1 {
                 f32::INFINITY
             } else {
-                d
+                distance
             };
-            if score > worst.0 {
-                worst = (score, i);
+            if score > worst_score {
+                (worst_score, worst_index) = (score, i);
             }
         }
-        if worst.0 > epsilon {
-            keep[worst.1] = true;
-            stack.push((a, worst.1));
-            stack.push((worst.1, b));
+        if worst_score > epsilon {
+            keep[worst_index] = true;
+            stack.push((start, worst_index));
+            stack.push((worst_index, end));
         }
     }
     points
         .iter()
         .zip(keep)
-        .filter_map(|(p, k)| k.then_some(*p))
+        .filter_map(|(point, kept)| kept.then_some(*point))
         .collect()
 }
 
-fn segment_distance(p: InkPoint, a: InkPoint, b: InkPoint) -> f32 {
+fn segment_distance(point: InkPoint, a: InkPoint, b: InkPoint) -> f32 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
-    let len2 = dx * dx + dy * dy;
-    let t = if len2 == 0.0 {
+    let length_sq = dx * dx + dy * dy;
+    let along = if length_sq == 0.0 {
         0.0
     } else {
-        (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0)
+        (((point.x - a.x) * dx + (point.y - a.y) * dy) / length_sq).clamp(0.0, 1.0)
     };
-    let (cx, cy) = (a.x + t * dx, a.y + t * dy);
-    ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt()
+    let (closest_x, closest_y) = (a.x + along * dx, a.y + along * dy);
+    ((point.x - closest_x).powi(2) + (point.y - closest_y).powi(2)).sqrt()
 }
 
 #[cfg(test)]
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn round_trips_within_quantum() {
-        let pts: Vec<InkPoint> = (0..200)
+        let points: Vec<InkPoint> = (0..200)
             .map(|i| InkPoint {
                 x: 100.0 + i as f32 * 0.37,
                 y: -20.0 + (i as f32 / 7.0).sin() * 30.0,
@@ -269,10 +269,10 @@ mod tests {
                 t_ms: i * 4,
             })
             .collect();
-        let packed = pack(&pts);
-        let back = unpack(&packed).unwrap();
-        assert_eq!(back.len(), pts.len());
-        for (a, b) in pts.iter().zip(&back) {
+        let packed = pack(&points);
+        let decoded = unpack(&packed).unwrap();
+        assert_eq!(decoded.len(), points.len());
+        for (a, b) in points.iter().zip(&decoded) {
             assert!((a.x - b.x).abs() <= QUANTUM / 2.0 + 1e-4);
             assert!((a.y - b.y).abs() <= QUANTUM / 2.0 + 1e-4);
             assert!((a.pressure - b.pressure).abs() <= 1.0 / 255.0);
@@ -280,8 +280,7 @@ mod tests {
             assert!((a.azimuth - b.azimuth).abs() < 0.03);
             assert_eq!(a.t_ms, b.t_ms);
         }
-        // About 6–7 bytes a point for a smooth stroke.
-        assert!(packed.0.len() < pts.len() * 8, "{}", packed.0.len());
+        assert!(packed.0.len() < points.len() * 8, "{}", packed.0.len());
     }
 
     #[test]
@@ -299,11 +298,11 @@ mod tests {
 
     #[test]
     fn simplify_keeps_corners_and_ends() {
-        let mut pts: Vec<InkPoint> = (0..50).map(|i| InkPoint::at(i as f32, 0.0, i)).collect();
-        pts.extend((1..50).map(|i| InkPoint::at(49.0, i as f32, 50 + i)));
-        let s = simplify(&pts, 0.25);
-        assert_eq!(s.len(), 3);
-        assert_eq!(s[1].x, 49.0);
-        assert_eq!(s[1].y, 0.0);
+        let mut points: Vec<InkPoint> = (0..50).map(|i| InkPoint::at(i as f32, 0.0, i)).collect();
+        points.extend((1..50).map(|i| InkPoint::at(49.0, i as f32, 50 + i)));
+        let simplified = simplify(&points, 0.25);
+        assert_eq!(simplified.len(), 3);
+        assert_eq!(simplified[1].x, 49.0);
+        assert_eq!(simplified[1].y, 0.0);
     }
 }

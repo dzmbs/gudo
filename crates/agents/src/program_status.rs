@@ -1,4 +1,5 @@
-//! `src/terminal/osc/parsers/program_status.zig`).
+//! OSC 7501 program-status reports, as parsed by libghostty-vt in
+//! `src/terminal/osc/parsers/program_status.zig`.
 //!
 //! A report body is a list of `key=value` pairs separated by colons:
 //!
@@ -49,9 +50,9 @@ pub enum ProgramState {
 }
 
 impl ProgramState {
-    /// The state named `s` in a report (`working`, `blocked`, …).
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
+    /// The state named `name` in a report (`working`, `blocked`, …).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
             "idle" => Self::Idle,
             "working" => Self::Working,
             "done" => Self::Done,
@@ -87,9 +88,9 @@ pub enum ProgramKind {
 }
 
 impl ProgramKind {
-    /// The kind named `s` in a report (`permission`, `question`, `auth`).
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
+    /// The kind named `name` in a report (`permission`, `question`, `auth`).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
             "permission" => Self::Permission,
             "question" => Self::Question,
             "auth" => Self::Auth,
@@ -136,19 +137,19 @@ pub struct ProgramStatus {
     pub title: Option<String>,
     /// One decoded line for people.
     pub msg: Option<String>,
-    /// Our `seq` extension.
     pub seq: Option<Seq>,
 }
 
-fn is_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_.+-".contains(&b))
+fn is_name(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.+-".contains(&byte))
 }
 
-fn is_value(s: &str) -> bool {
-    s.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"_.+-,/=".contains(&b))
+fn is_value(text: &str) -> bool {
+    text.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"_.+-,/=".contains(&byte))
 }
 
 fn valid_id(id: &str) -> bool {
@@ -156,7 +157,7 @@ fn valid_id(id: &str) -> bool {
         && id.split('/').count() <= MAX_ID_DEPTH
         && id
             .split('/')
-            .all(|seg| seg.len() <= MAX_ID_SEGMENT_BYTES && is_name(seg))
+            .all(|segment| segment.len() <= MAX_ID_SEGMENT_BYTES && is_name(segment))
 }
 
 /// Decodes base64 (padding optional) to text with no control characters.
@@ -178,7 +179,6 @@ fn decode_text(encoded: &str, max: usize) -> Result<String, ()> {
 }
 
 impl ProgramStatus {
-    /// Creates a report with only a state.
     pub fn new(state: ProgramState) -> Self {
         Self {
             state,
@@ -253,12 +253,12 @@ impl ProgramStatus {
             }
         }
         report.state = ProgramState::parse(state?)?;
-        report.title = match report.title.filter(|t| !t.is_empty()) {
-            Some(t) => Some(decode_text(&t, MAX_TITLE_BYTES).ok()?),
+        report.title = match report.title.filter(|title| !title.is_empty()) {
+            Some(title) => Some(decode_text(&title, MAX_TITLE_BYTES).ok()?),
             None => None,
         };
-        report.msg = match report.msg.filter(|m| !m.is_empty()) {
-            Some(m) => Some(decode_text(&m, MAX_MSG_BYTES).ok()?),
+        report.msg = match report.msg.filter(|msg| !msg.is_empty()) {
+            Some(msg) => Some(decode_text(&msg, MAX_MSG_BYTES).ok()?),
             None => None,
         };
         if report.state == ProgramState::Blocked {
@@ -266,9 +266,11 @@ impl ProgramStatus {
         }
         if matches!(report.state, ProgramState::Working | ProgramState::Blocked) {
             report.progress = progress
-                .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-                .and_then(|p| p.parse().ok())
-                .filter(|&p| p <= 100);
+                .filter(|digits| {
+                    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .and_then(|digits| digits.parse().ok())
+                .filter(|&percent| percent <= 100);
         }
         Some(report)
     }
@@ -443,12 +445,12 @@ mod tests {
             Some(Claim::Blocked(Blocker::new(BlockedReason::Permission)))
         );
 
-        let sub = ProgramStatus::parse("state=working:app=claude-code:id=agent1")
+        let subagent = ProgramStatus::parse("state=working:app=claude-code:id=agent1")
             .unwrap()
             .to_signal("claude-code")
             .unwrap();
-        assert_eq!(sub.claim, None);
-        assert_eq!(sub.subagent.unwrap().id.as_str(), "agent1");
+        assert_eq!(subagent.claim, None);
+        assert_eq!(subagent.subagent.unwrap().id.as_str(), "agent1");
 
         let clear = ProgramStatus::parse("state=clear:app=claude-code")
             .unwrap()

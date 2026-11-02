@@ -1,9 +1,11 @@
+//! Plain-SSH fallback panes: a remote PTY over SSH for hosts without the
 //! daemon, delivered through the same [`ClientListener`] events as daemon panes, so the app
 //! renders it with the same code.
 //!
 //! The pane's bytes form one continuous stream ([`ClientEvent::PaneBytes`] with a running
 //! `seq`). The SSH [`Session`](ssh::Session) underneath redials on its own; after a drop the
 //! pane opens a new shell and writes a dim "connection lost, new shell" line into the
+//! stream, so a lost session is never silent. With
 //! [`SshPaneOptions::tmux_session`] the shell runs inside `tmux new -A`, so a reconnect
 //! re-attaches the same session instead.
 //!
@@ -36,6 +38,7 @@ pub struct SshPaneOptions {
     /// A command instead of the login shell.
     pub command: Option<String>,
     /// Run inside `tmux new -A -s <name>` when tmux exists on the host, so reconnects
+    /// re-attach instead of starting over.
     pub tmux_session: Option<String>,
 }
 
@@ -82,7 +85,7 @@ enum Command {
 /// A terminal pane backed by a plain SSH PTY. Dropping it closes the remote shell.
 pub struct SshPane {
     pane_id: PaneId,
-    tx: mpsc::UnboundedSender<Command>,
+    commands: mpsc::UnboundedSender<Command>,
 }
 
 /// A small shared runtime for SSH work driven from non-async code (the app, via FFI).
@@ -108,36 +111,35 @@ impl SshPane {
         options: SshPaneOptions,
         listener: Arc<dyn ClientListener>,
     ) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (commands, command_rx) = mpsc::unbounded_channel();
         let pane_id = options.pane_id;
-        tokio::spawn(drive(session, options, listener, rx));
-        Self { pane_id, tx }
+        tokio::spawn(drive(session, options, listener, command_rx));
+        Self { pane_id, commands }
     }
 
-    /// The pane's id.
     pub fn pane_id(&self) -> PaneId {
         self.pane_id
     }
 
     /// Sends keystrokes or paste. Dropped while disconnected.
     pub fn send_input(&self, data: Vec<u8>) {
-        let _ = self.tx.send(Command::Input(data));
+        let _ = self.commands.send(Command::Input(data));
     }
 
     /// Resizes the remote PTY; a [`ClientEvent::PaneResized`] marks the point in the stream.
     pub fn resize(&self, size: PaneSize) {
-        let _ = self.tx.send(Command::Resize(size));
+        let _ = self.commands.send(Command::Resize(size));
     }
 
     /// Closes the remote shell; [`ClientEvent::PaneClosed`] follows.
     pub fn close(&self) {
-        let _ = self.tx.send(Command::Close);
+        let _ = self.commands.send(Command::Close);
     }
 }
 
 impl Drop for SshPane {
     fn drop(&mut self) {
-        let _ = self.tx.send(Command::Close);
+        let _ = self.commands.send(Command::Close);
     }
 }
 
@@ -153,7 +155,7 @@ async fn drive(
     session: ssh::Session,
     options: SshPaneOptions,
     listener: Arc<dyn ClientListener>,
-    mut rx: mpsc::UnboundedReceiver<Command>,
+    mut commands: mpsc::UnboundedReceiver<Command>,
 ) {
     let pane_id = options.pane_id;
     let mut size = options.size;
@@ -161,40 +163,40 @@ async fn drive(
     let mut shells = 0u64;
     let mut states = session.subscribe();
     loop {
-        let conn = tokio::select! {
-            c = session.connected() => c,
-            cmd = rx.recv() => match cmd {
-                Some(Command::Resize(s)) => { size = s; continue; }
+        let connected = tokio::select! {
+            connected = session.connected() => connected,
+            command = commands.recv() => match command {
+                Some(Command::Resize(new_size)) => { size = new_size; continue; }
                 Some(Command::Input(_)) => continue,
                 Some(Command::Close) | None => break,
             },
         };
-        let conn = match conn {
-            Ok(conn) => conn,
+        let connection = match connected {
+            Ok(connection) => connection,
             Err(ssh::SshError::Closed) => break,
-            Err(e) => {
+            Err(err) => {
                 listener.on_event(ClientEvent::Refused {
-                    reason: e.to_string(),
+                    reason: err.to_string(),
                 });
                 // Wait for the user to fix it (`reconnect_now`) or to close the pane.
                 tokio::select! {
-                    _ = states.wait_for(|s| !matches!(s, ConnectionState::NeedsAttention { .. })) => continue,
-                    cmd = rx.recv() => match cmd {
+                    _ = states.wait_for(|state| !matches!(state, ConnectionState::NeedsAttention { .. })) => continue,
+                    command = commands.recv() => match command {
                         Some(Command::Close) | None => break,
                         _ => continue,
                     },
                 }
             }
         };
-        let (shell, mut output) = match conn.open_shell(&options.pty_request(size)).await {
-            Ok(s) => s,
-            Err(e) => {
+        let (shell, mut output) = match connection.open_shell(&options.pty_request(size)).await {
+            Ok(opened) => opened,
+            Err(err) => {
                 listener.on_event(ClientEvent::Disconnected {
-                    reason: format!("opening the shell: {e}"),
+                    reason: format!("opening the shell: {err}"),
                 });
                 // A refused shell on a live connection would loop; wait for the next one.
                 tokio::select! {
-                    _ = conn.closed() => {}
+                    _ = connection.closed() => {}
                     () = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
                 }
                 continue;
@@ -217,23 +219,23 @@ async fn drive(
                         emit_bytes(&*listener, pane_id, &mut seq, data);
                     }
                     Some(ShellEvent::Exit { .. }) => exited = true,
-                    None if exited || !conn.is_dead() => break Ended::Closed,
-                    None => break Ended::Lost(conn.closed().await),
+                    None if exited || !connection.is_dead() => break Ended::Closed,
+                    None => break Ended::Lost(connection.closed().await),
                 },
-                cmd = rx.recv() => match cmd {
+                command = commands.recv() => match command {
                     Some(Command::Input(data)) => {
-                        if let Err(e) = shell.write(&data).await {
-                            tracing::debug!("ssh pane input lost: {e}");
+                        if let Err(err) = shell.write(&data).await {
+                            tracing::debug!("ssh pane input lost: {err}");
                         }
                     }
-                    Some(Command::Resize(s)) => {
-                        size = s;
+                    Some(Command::Resize(new_size)) => {
+                        size = new_size;
                         if shell
-                            .resize(u32::from(s.cols), u32::from(s.rows))
+                            .resize(u32::from(size.cols), u32::from(size.rows))
                             .await
                             .is_ok()
                         {
-                            listener.on_event(ClientEvent::PaneResized { pane_id, seq, size: s });
+                            listener.on_event(ClientEvent::PaneResized { pane_id, seq, size });
                         }
                     }
                     Some(Command::Close) | None => {
@@ -252,11 +254,11 @@ async fn drive(
 }
 
 fn emit_bytes(listener: &dyn ClientListener, pane_id: PaneId, seq: &mut u64, data: Vec<u8>) {
-    let at = *seq;
+    let start = *seq;
     *seq += data.len() as u64;
     listener.on_event(ClientEvent::PaneBytes {
         pane_id,
-        seq: at,
+        seq: start,
         data,
     });
 }

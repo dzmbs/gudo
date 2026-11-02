@@ -7,10 +7,10 @@ use crate::support::{command, read_until, within};
 async fn wait_foreground(pty: &PtyActor, name: &str) -> ForegroundProcess {
     within(&format!("foreground {name}"), async {
         loop {
-            if let Some(fg) = pty.foreground_process()
-                && fg.name == name
+            if let Some(foreground) = pty.foreground_process()
+                && foreground.name == name
             {
-                return fg;
+                return foreground;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -20,11 +20,11 @@ async fn wait_foreground(pty: &PtyActor, name: &str) -> ForegroundProcess {
 
 #[tokio::test]
 async fn reports_shell_then_job() {
-    let mut cmd = command(&["/bin/bash", "--norc", "--noprofile", "-i"]);
-    cmd.env("PS1", "PROMPT> ");
-    let pty = PtyActor::spawn(cmd, pty::SpawnOptions::default()).unwrap();
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-    read_until(&mut out, "PROMPT> ").await;
+    let mut command = command(&["/bin/bash", "--norc", "--noprofile", "-i"]);
+    command.env("PS1", "PROMPT> ");
+    let pty = PtyActor::spawn(command, pty::SpawnOptions::default()).unwrap();
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut output, "PROMPT> ").await;
 
     let shell = wait_foreground(&pty, "bash").await;
     assert_eq!(shell.pid, pty.pid());

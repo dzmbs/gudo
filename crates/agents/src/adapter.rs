@@ -9,6 +9,7 @@ use crate::program_status::ProgramStatus;
 use crate::signal::Signal;
 
 /// How much of the agent's lifecycle its hooks report, which decides how far the arbiter trusts
+/// them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookCoverage {
     /// Hooks report every transition, interrupts included (pi extension, Kimi ≥ 0.14). Hook
@@ -57,16 +58,13 @@ impl From<serde_json::Error> for HookError {
 /// agent means one new implementation plus a manifest; the event schema, the manifest engine and
 /// the [`Arbiter`](crate::Arbiter) stay as they are.
 pub trait AgentAdapter {
-    /// Which agent this is.
     fn kind(&self) -> AgentKind;
 
     /// The OSC 7501 `app` value the agent's hook shim writes, e.g. `claude-code`.
     fn program_status_app(&self) -> &str;
 
-    /// How much of the lifecycle the agent's hooks cover.
     fn hook_coverage(&self) -> HookCoverage;
 
-    /// The screen-detection manifest.
     fn manifest(&self) -> &Manifest;
 
     /// Builds the argv, env and support files to start or resume a session.

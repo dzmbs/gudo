@@ -1,6 +1,8 @@
+//! Data-driven screen detection from TOML rule manifests.
 //!
-//! The format, region names and evaluation semantics are ported from herdr v0.9.5
-//! (`src/detect/manifest.rs`, Apache-2.0, see `manifests/LICENSE-herdr`) so its manifests load
+//! The format, region names and evaluation semantics are derived from herdr v0.9.5
+//! (`src/detect/manifest.rs`, Apache-2.0, see `manifests/LICENSE-herdr`), so its manifests load
+//! unchanged and can be patched without an app release.
 //!
 //! A manifest is a list of rules. Each rule names a target `state`, a `priority`, a `region` of the
 //! screen to look at, and matchers:
@@ -11,6 +13,7 @@
 //! - `all` / `any` / `not`: nested gates of the same shape, at most 8 deep.
 //!
 //! The highest-priority matching rule wins; on a tie the earlier rule wins. If nothing matches,
+//! the agent is idle. A rule with
 //! `skip_state_update` (a transcript viewer, a model picker) freezes the current state instead.
 //!
 //! # Examples
@@ -28,9 +31,9 @@
 //!     contains = ["allow command?"]
 //! "#)?;
 //! let verdict = manifest.evaluate(ScreenInput::screen("Allow command? [y/n]"));
-//! let ScreenVerdict::State(m) = verdict else { panic!() };
-//! assert_eq!(m.state, AgentState::Blocked);
-//! assert!(m.is_visible());
+//! let ScreenVerdict::State(matched) = verdict else { panic!() };
+//! assert_eq!(matched.state, AgentState::Blocked);
+//! assert!(matched.is_visible());
 //! # Ok::<(), agents::ManifestError>(())
 //! ```
 
@@ -65,7 +68,6 @@ pub struct ScreenInput<'a> {
 }
 
 impl<'a> ScreenInput<'a> {
-    /// Creates an input with screen text only.
     pub fn screen(screen: &'a str) -> Self {
         Self {
             screen,
@@ -78,10 +80,7 @@ impl<'a> ScreenInput<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScreenVerdict {
     /// An overlay hides the agent's real state; keep whatever state the pane had.
-    Freeze {
-        /// The rule that matched.
-        rule_id: String,
-    },
+    Freeze { rule_id: String },
     /// The screen shows a state.
     State(ScreenMatch),
 }
@@ -100,6 +99,7 @@ pub struct ScreenMatch {
 
 impl ScreenMatch {
     /// Creates a match. `visible` means the rule saw a strong, live UI element for this state
+    /// (a rule's `visible_idle` / `visible_blocker` / `visible_working`).
     pub fn new(state: AgentState, source: Source, rule_id: Option<String>, visible: bool) -> Self {
         Self {
             state,
@@ -123,22 +123,17 @@ pub enum ManifestError {
     /// The TOML did not parse or had unknown fields.
     Toml(toml::de::Error),
     /// The manifest needs a newer engine than [`ENGINE_VERSION`].
-    EngineTooOld {
-        /// The version the manifest requires.
-        required: u32,
-    },
+    EngineTooOld { required: u32 },
     /// A rule or the manifest broke a structural rule or a size limit.
     Invalid {
         /// The offending rule, if any.
         rule: Option<String>,
-        /// What is wrong.
         reason: String,
     },
     /// A pattern is not a valid regex.
     Regex {
         /// The offending rule.
         rule: String,
-        /// The compiler error.
         source: regex::Error,
     },
 }
@@ -238,11 +233,14 @@ impl FromStr for Region {
                 .strip_suffix(')')?;
             if count.is_empty()
                 || count.starts_with('0')
-                || !count.bytes().all(|b| b.is_ascii_digit())
+                || !count.bytes().all(|byte| byte.is_ascii_digit())
             {
                 return None;
             }
-            count.parse().ok().filter(|&n| n <= usize::from(u16::MAX))
+            count
+                .parse()
+                .ok()
+                .filter(|&lines| lines <= usize::from(u16::MAX))
         };
         counted("bottom_lines")
             .map(Self::BottomLines)
@@ -318,7 +316,7 @@ impl Region {
                 let end = lines[top + 1..]
                     .iter()
                     .position(|line| is_horizontal_rule(line))
-                    .map_or(lines.len(), |rel| top + 1 + rel);
+                    .map_or(lines.len(), |offset| top + 1 + offset);
                 &content[line_start(content, &lines, top + 1)..line_start(content, &lines, end)]
             }
             Self::AbovePromptBox => above_prompt_box(content),
@@ -548,11 +546,11 @@ impl Gate {
         self.contains
             .iter()
             .all(|needle| lower.contains(needle.as_str()))
-            && self.regex.iter().all(|re| re.is_match(text))
+            && self.regex.iter().all(|pattern| pattern.is_match(text))
             && self
                 .line_regex
                 .iter()
-                .all(|re| text.lines().any(|line| re.is_match(line)))
+                .all(|pattern| text.lines().any(|line| pattern.is_match(line)))
             && self.all.iter().all(|gate| gate.matches(text, lower))
             && (self.any.is_empty() || self.any.iter().any(|gate| gate.matches(text, lower)))
             && !self.not.iter().any(|gate| gate.matches(text, lower))
@@ -603,7 +601,10 @@ impl Manifest {
         if raw.id.trim().is_empty() {
             return Err(invalid(None, "manifest id is empty".into()));
         }
-        if let Some(required) = raw.min_engine_version.filter(|&v| v > ENGINE_VERSION) {
+        if let Some(required) = raw
+            .min_engine_version
+            .filter(|&version| version > ENGINE_VERSION)
+        {
             return Err(ManifestError::EngineTooOld { required });
         }
         if raw.rules.len() > MAX_RULES {
@@ -618,7 +619,10 @@ impl Manifest {
             if id.trim().is_empty() {
                 return Err(invalid(None, "rule id is empty".into()));
             }
-            let region: Region = rule.region.parse().map_err(|e| invalid(Some(id), e))?;
+            let region: Region = rule
+                .region
+                .parse()
+                .map_err(|reason| invalid(Some(id), reason))?;
             if matches!(region, Region::TopNonEmptyLines(_))
                 && raw.min_engine_version.unwrap_or(0) < 3
             {
@@ -676,7 +680,7 @@ impl Manifest {
     pub fn evaluate(&self, input: ScreenInput<'_>) -> ScreenVerdict {
         let mut best: Option<&Rule> = None;
         for rule in &self.rules {
-            if best.is_some_and(|b| b.priority >= rule.priority) {
+            if best.is_some_and(|current| current.priority >= rule.priority) {
                 continue;
             }
             let text = rule.region.slice(&input);
@@ -742,7 +746,7 @@ fn compile_gate(
     let all_patterns = raw.contains.iter().chain(&raw.regex).chain(&raw.line_regex);
     if let Some(long) = all_patterns
         .into_iter()
-        .find(|p| p.chars().count() > MAX_MATCHER_CHARS)
+        .find(|pattern| pattern.chars().count() > MAX_MATCHER_CHARS)
     {
         return Err(invalid(format!(
             "matcher longer than {MAX_MATCHER_CHARS} characters: {:.40}…",
@@ -752,8 +756,8 @@ fn compile_gate(
     let compile = |patterns: &[String]| -> Result<Vec<Regex>, ManifestError> {
         patterns
             .iter()
-            .map(|p| {
-                Regex::new(p).map_err(|source| ManifestError::Regex {
+            .map(|pattern| {
+                Regex::new(pattern).map_err(|source| ManifestError::Regex {
                     rule: rule.to_owned(),
                     source,
                 })
@@ -763,14 +767,18 @@ fn compile_gate(
     let nested = |gates: &[RawGate], budget: &mut Budget| -> Result<Vec<Gate>, ManifestError> {
         gates
             .iter()
-            .map(|g| compile_gate(g, rule, depth + 1, budget))
+            .map(|gate| compile_gate(gate, rule, depth + 1, budget))
             .collect()
     };
     Ok(Gate {
         all: nested(&raw.all, budget)?,
         any: nested(&raw.any, budget)?,
         not: nested(&raw.not, budget)?,
-        contains: raw.contains.iter().map(|n| n.to_lowercase()).collect(),
+        contains: raw
+            .contains
+            .iter()
+            .map(|needle| needle.to_lowercase())
+            .collect(),
         regex: compile(&raw.regex)?,
         line_regex: compile(&raw.line_regex)?,
     })
@@ -782,7 +790,9 @@ mod tests {
 
     fn state(verdict: ScreenVerdict) -> (AgentState, Option<String>, bool) {
         match verdict {
-            ScreenVerdict::State(m) => (m.state, m.rule_id.clone(), m.is_visible()),
+            ScreenVerdict::State(matched) => {
+                (matched.state, matched.rule_id.clone(), matched.is_visible())
+            }
             ScreenVerdict::Freeze { rule_id } => panic!("unexpected freeze by {rule_id}"),
         }
     }
@@ -826,8 +836,8 @@ mod tests {
             "#,
         )
         .unwrap();
-        let (s, rule, _) = state(manifest.evaluate(ScreenInput::screen("X")));
-        assert_eq!(s, AgentState::Blocked);
+        let (winner, rule, _) = state(manifest.evaluate(ScreenInput::screen("X")));
+        assert_eq!(winner, AgentState::Blocked);
         assert_eq!(rule.as_deref(), Some("high"));
     }
 
@@ -864,7 +874,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let blocked = |s| state(manifest.evaluate(ScreenInput::screen(s))).0;
+        let blocked = |screen| state(manifest.evaluate(ScreenInput::screen(screen))).0;
         assert_eq!(blocked("Proceed?\n  1. Yes\n  2. No"), AgentState::Blocked);
         assert_eq!(blocked("Proceed? [y/n]"), AgentState::Blocked);
         assert_eq!(blocked("Proceed?\nmaybe"), AgentState::Idle);
@@ -891,11 +901,11 @@ mod tests {
             osc_title: "[ ! ] Action Required",
             osc_progress: "",
         });
-        let ScreenVerdict::State(m) = verdict else {
+        let ScreenVerdict::State(matched) = verdict else {
             panic!()
         };
         assert_eq!(
-            (m.state, m.source, m.is_visible()),
+            (matched.state, matched.source, matched.is_visible()),
             (AgentState::Blocked, Source::Title, true)
         );
     }

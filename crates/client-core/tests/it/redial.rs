@@ -35,13 +35,15 @@ async fn flaky_daemon() -> (iroh::Endpoint, Ticket, Arc<AtomicUsize>) {
     let admitted = Arc::new(AtomicUsize::new(0));
     let server = endpoint.clone();
     let count = Arc::clone(&admitted);
-    let id = ticket.daemon_id;
+    let daemon_id = ticket.daemon_id;
     tokio::spawn(async move {
         while let Some(incoming) = server.accept().await {
             let count = Arc::clone(&count);
             tokio::spawn(async move {
-                let Ok(conn) = incoming.await else { return };
-                let Ok((mut tx, mut rx)) = conn.accept_bi().await else {
+                let Ok(connection) = incoming.await else {
+                    return;
+                };
+                let Ok((mut tx, mut rx)) = connection.accept_bi().await else {
                     return;
                 };
                 let mut prefix = [0; proto::frame::LEN_PREFIX];
@@ -53,7 +55,7 @@ async fn flaky_daemon() -> (iroh::Endpoint, Ticket, Arc<AtomicUsize>) {
                 rx.read_exact(&mut body).await.unwrap();
                 let _: ClientCtl = proto::frame::decode_body(&body).unwrap();
                 let welcome = ServerCtl::Welcome(Welcome {
-                    daemon_id: id,
+                    daemon_id,
                     session_epoch: SessionEpoch(1),
                     roles: Roles::OWNER,
                     snapshot_format: u32::from(ghostty_vt::snapshot_format()),
@@ -63,10 +65,10 @@ async fn flaky_daemon() -> (iroh::Endpoint, Ticket, Arc<AtomicUsize>) {
                 tx.write_all(&proto::frame::to_vec(&welcome).unwrap())
                     .await
                     .unwrap();
-                if conn.accept_uni().await.is_ok() {
+                if connection.accept_uni().await.is_ok() {
                     count.fetch_add(1, Ordering::SeqCst);
                 }
-                conn.close(0u32.into(), b"go away");
+                connection.close(0u32.into(), b"go away");
             });
         }
     });
@@ -78,9 +80,9 @@ async fn a_daemon_that_drops_every_connection_is_backed_off() {
     let (endpoint, ticket, admitted) = flaky_daemon().await;
     let (client, _events) = super::connect(&ticket.to_string(), false);
     tokio::time::sleep(Duration::from_secs(4)).await;
-    let n = admitted.load(Ordering::SeqCst);
+    let dials = admitted.load(Ordering::SeqCst);
     // 100 ms doubling up to 5 s is about six dials in four seconds; a tight loop makes hundreds.
-    assert!((2..=10).contains(&n), "{n} connections in 4 s");
+    assert!((2..=10).contains(&dials), "{dials} connections in 4 s");
     drop(client);
     endpoint.close().await;
 }

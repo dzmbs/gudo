@@ -1,8 +1,4 @@
 //! Opening a PTY pair and starting a child as session leader on it.
-//!
-//! The approach (`/dev/ptmx` + `std::process::Command` with a `pre_exec` doing `setsid` and
-//! `TIOCSCTTY`) matches what `portable-pty`, used by herdr (Apache-2.0), does on Unix, without
-//! its trait objects and Windows layer.
 
 use std::ffi::CString;
 use std::io;
@@ -20,35 +16,37 @@ pub(crate) struct Spawned {
     pub(crate) child: Child,
 }
 
-/// Opens a PTY of `size` and spawns `cmd` on it as a new session whose controlling terminal is
+/// Opens a PTY of `size` and spawns `command` on it as a new session whose controlling terminal is
 /// the PTY. Only the master fd stays open in the parent.
-pub(crate) fn spawn(mut cmd: Command, size: WinSize) -> io::Result<Spawned> {
+pub(crate) fn spawn(mut command: Command, size: WinSize) -> io::Result<Spawned> {
     // Say which step failed: running out of PTYs (a system-wide limit on macOS) or of
     // descriptors reads very differently from a missing program.
-    let master = open_master()
-        .map_err(|e| io::Error::new(e.kind(), format!("cannot open a pseudo-terminal: {e}")))?;
+    let master = open_master().map_err(|err| {
+        io::Error::new(err.kind(), format!("cannot open a pseudo-terminal: {err}"))
+    })?;
     let slave_name = pty::ptsname(&master, Vec::new())?;
     let slave = open_slave(&slave_name)?;
     termios::set_size(&slave, size)?;
 
-    cmd.stdin(Stdio::from(slave.try_clone()?))
+    command
+        .stdin(Stdio::from(slave.try_clone()?))
         .stdout(Stdio::from(slave.try_clone()?))
         .stderr(Stdio::from(slave));
     // SAFETY: the closure runs between fork and exec, so it may only make async-signal-safe
     // calls. `setsid` and `ioctl` are plain syscalls, and the error conversion does not
     // allocate.
     unsafe {
-        cmd.pre_exec(|| {
+        command.pre_exec(|| {
             rustix::process::setsid()?;
             // stdin is already the slave (std dup2'd it before running this closure).
             rustix::process::ioctl_tiocsctty(BorrowedFd::borrow_raw(0))?;
             Ok(())
         });
     }
-    let child = cmd.spawn()?;
-    // `cmd` owns the parent's copies of the slave fds; dropping it here (it was moved in) closes
+    let child = command.spawn()?;
+    // `command` owns the parent's copies of the slave fds; dropping it here (it was moved in) closes
     // them so the master sees EOF once the child side is gone.
-    drop(cmd);
+    drop(command);
     Ok(Spawned { master, child })
 }
 

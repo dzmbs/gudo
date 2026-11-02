@@ -1,6 +1,6 @@
 //! Identifying the foreground job of a PTY, so the agents layer can tell `claude` from `zsh`.
 //!
-//! Adapted from herdr's `platform/{macos,linux}.rs` foreground-job code (Apache-2.0,
+//! Adapted from herdr's foreground-job code (Apache-2.0, see NOTICE).
 
 use std::os::fd::AsFd;
 
@@ -34,12 +34,12 @@ impl ForegroundProcess {
     /// # Examples
     ///
     /// ```
-    /// let p = pty::ForegroundProcess {
+    /// let process = pty::ForegroundProcess {
     ///     pid: 1,
     ///     name: "node".into(),
     ///     argv: vec!["/usr/local/bin/claude".into(), "--resume".into()],
     /// };
-    /// assert_eq!(p.program(), "claude");
+    /// assert_eq!(process.program(), "claude");
     /// ```
     pub fn program(&self) -> &str {
         self.argv
@@ -70,8 +70,6 @@ pub(crate) fn foreground_process(
     ForegroundProcess::of(foreground_pgid(master, session_leader)?)
 }
 
-/// The foreground process group id of the terminal behind `master` (see
-/// [`foreground_process`]).
 pub(crate) fn foreground_pgid(master: impl AsFd, session_leader: u32) -> Option<u32> {
     match tcgetpgrp(master) {
         Some(pgid) => Some(pgid),
@@ -85,7 +83,7 @@ fn tcgetpgrp(master: impl AsFd) -> Option<u32> {
     use std::os::fd::AsRawFd;
     // SAFETY: the descriptor is borrowed for the duration of the call.
     let pgid = unsafe { libc::tcgetpgrp(master.as_fd().as_raw_fd()) };
-    u32::try_from(pgid).ok().filter(|&p| p > 0)
+    u32::try_from(pgid).ok().filter(|&pgid| pgid > 0)
 }
 
 #[cfg(test)]
@@ -110,12 +108,11 @@ mod tests {
     fn tcgetpgrp_on_master_names_the_session_leader() {
         let mut spawned = spawn(Command::new("/bin/cat"), WinSize::new(24, 80)).unwrap();
         let pid = spawned.child.id();
-        // The child is the foreground group once it has run setsid + TIOCSCTTY.
         let mut pgid = None;
         for _ in 0..200 {
             pgid = rustix::termios::tcgetpgrp(&spawned.master)
                 .ok()
-                .map(|p| p.as_raw_nonzero().get() as u32);
+                .map(|pgid| pgid.as_raw_nonzero().get() as u32);
             if pgid == Some(pid) {
                 break;
             }

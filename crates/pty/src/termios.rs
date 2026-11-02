@@ -8,9 +8,7 @@ use rustix::termios::{self, LocalModes, Winsize};
 /// Terminal dimensions in cells, plus optional pixel dimensions for image protocols.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct WinSize {
-    /// Rows (cells).
     pub rows: u16,
-    /// Columns (cells).
     pub cols: u16,
     /// Total width in pixels, or 0 if unknown.
     pub pixel_width: u16,
@@ -53,8 +51,10 @@ pub(crate) fn set_size(fd: impl AsFd, size: WinSize) -> io::Result<()> {
     Ok(termios::tcsetwinsize(fd, size.into())?)
 }
 
+/// The slave's line-discipline flags that matter for local echo prediction.
 ///
 /// Read with `tcgetattr` on the master. On both macOS and Linux this returns the slave's
+/// termios.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EchoState {
     /// `ECHO`: the kernel echoes typed characters. Off at password prompts and in most

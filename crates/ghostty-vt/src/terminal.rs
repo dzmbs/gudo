@@ -135,12 +135,7 @@ pub enum TextRegion {
     /// The active area and all of the active screen's scrollback.
     All,
     /// The cells from `start` to `end`, both inclusive, in reading order.
-    Range {
-        /// First cell.
-        start: Point,
-        /// Last cell.
-        end: Point,
-    },
+    Range { start: Point, end: Point },
 }
 
 /// Whether extracted text keeps soft wraps as line breaks.
@@ -233,7 +228,6 @@ pub enum SemanticPromptKind {
 /// A shell-integration event with where the cursor was when it arrived.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SemanticPrompt {
-    /// What happened.
     pub kind: SemanticPromptKind,
     /// The cursor cell at that moment, tracked; `None` if it could not be tracked.
     pub pin: Option<PinId>,
@@ -449,7 +443,7 @@ impl Terminal {
     /// The working directory the program reported (OSC 7), as sent: usually a `file://` or
     /// `kitty-shell-cwd://` URL.
     pub fn pwd(&self) -> Option<String> {
-        let mut out = ffi::GhosttyString {
+        let mut pwd = ffi::GhosttyString {
             ptr: ptr::null(),
             len: 0,
         };
@@ -459,14 +453,14 @@ impl Terminal {
             ffi::ghostty_terminal_get(
                 self.as_raw(),
                 ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_PWD,
-                (&raw mut out).cast(),
+                (&raw mut pwd).cast(),
             )
         };
-        if result != ffi::GhosttyResult_GHOSTTY_SUCCESS || out.len == 0 || out.ptr.is_null() {
+        if result != ffi::GhosttyResult_GHOSTTY_SUCCESS || pwd.len == 0 || pwd.ptr.is_null() {
             return None;
         }
         // SAFETY: libghostty-vt returned `len` valid bytes at `ptr`.
-        let bytes = unsafe { slice::from_raw_parts(out.ptr, out.len) };
+        let bytes = unsafe { slice::from_raw_parts(pwd.ptr, pwd.len) };
         Some(String::from_utf8_lossy(bytes).into_owned())
     }
 
@@ -495,14 +489,17 @@ impl Terminal {
     ///
     /// As for [`encode_snapshot`](Self::encode_snapshot).
     pub fn encode_snapshot_sized(&self, capacity: usize) -> Result<Vec<u8>, Error> {
-        let mut out = Vec::with_capacity(capacity);
-        // SAFETY: the handle is live; the writer's userdata points at `out`, which outlives
-        // the call, and `extend_vec` treats it as a `Vec<u8>`.
-        Error::check(unsafe { ffi::ghostty_snapshot_encode(self.as_raw(), vec_writer(&mut out)) })?;
-        Ok(out)
+        let mut snapshot = Vec::with_capacity(capacity);
+        // SAFETY: the handle is live; the writer's userdata points at `snapshot`, which
+        // outlives the call, and `extend_vec` treats it as a `Vec<u8>`.
+        Error::check(unsafe {
+            ffi::ghostty_snapshot_encode(self.as_raw(), vec_writer(&mut snapshot))
+        })?;
+        Ok(snapshot)
     }
 
     /// Serializes only the READY section: visible screens, modes and unfinished parser input,
+    /// without scrollback. This is what a client needs to render and continue.
     ///
     /// libghostty-vt cannot stop at READY yet, so this encodes everything and truncates.
     ///
@@ -536,7 +533,7 @@ impl Terminal {
     /// let replies = Arc::new(Mutex::new(Vec::new()));
     /// let mut terminal = ghostty_vt::Terminal::new(80, 24)?;
     /// let sink = Arc::clone(&replies);
-    /// terminal.set_reply_sink(Box::new(move |b| sink.lock().unwrap().extend_from_slice(b)))?;
+    /// terminal.set_reply_sink(Box::new(move |reply| sink.lock().unwrap().extend_from_slice(reply)))?;
     /// terminal.write(b"\x1b[6n"); // where is the cursor?
     /// assert_eq!(&*replies.lock().unwrap(), b"\x1b[1;1R");
     /// # Ok(())
@@ -550,7 +547,7 @@ impl Terminal {
             ffi::ghostty_terminal_set(
                 self.as_raw(),
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_WRITE_PTY,
-                callback.map_or(ptr::null(), |f| f as *const c_void),
+                callback.map_or(ptr::null(), |callback| callback as *const c_void),
             )
         })
     }
@@ -591,7 +588,7 @@ impl Terminal {
             ffi::ghostty_terminal_set(
                 self.as_raw(),
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT,
-                callback.map_or(ptr::null(), |f| f as *const c_void),
+                callback.map_or(ptr::null(), |callback| callback as *const c_void),
             )
         })
     }
@@ -605,11 +602,12 @@ impl Terminal {
         }
         // SAFETY: `callbacks` is live and only touched by `write`'s callbacks, which cannot be
         // running while we hold `&mut self`.
-        let raw = mem::take(unsafe { &mut (*self.callbacks).prompts });
-        raw.into_iter()
-            .map(|p| SemanticPrompt {
-                kind: p.kind,
-                pin: p.pin.map(|r| self.adopt_pin(r)),
+        let recorded = mem::take(unsafe { &mut (*self.callbacks).prompts });
+        recorded
+            .into_iter()
+            .map(|prompt| SemanticPrompt {
+                kind: prompt.kind,
+                pin: prompt.pin.map(|tracked| self.adopt_pin(tracked)),
             })
             .collect()
     }
@@ -647,16 +645,20 @@ impl Terminal {
     /// for an unknown id.
     pub fn pin_point(&self, pin: PinId) -> Option<Point> {
         let raw = self.pins.get(&pin)?;
-        let mut out = ffi::GhosttyPointCoordinate::default();
-        // SAFETY: the tracked reference is live (owned by `self.pins`) and `out` is valid.
+        let mut coordinate = ffi::GhosttyPointCoordinate::default();
+        // SAFETY: the tracked reference is live (owned by `self.pins`) and `coordinate` is
+        // valid.
         let result = unsafe {
             ffi::ghostty_tracked_grid_ref_point(
                 raw.as_ptr(),
                 ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN,
-                &mut out,
+                &mut coordinate,
             )
         };
-        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(Point { y: out.y, x: out.x })
+        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(Point {
+            y: coordinate.y,
+            x: coordinate.x,
+        })
     }
 
     /// Stops tracking a pin. Unknown ids are ignored.
@@ -677,22 +679,22 @@ impl Terminal {
     /// The callback state, allocating and installing it on first use.
     fn callbacks(&mut self) -> Result<&mut Callbacks, Error> {
         if self.callbacks.is_null() {
-            let new = Box::into_raw(Box::<Callbacks>::default());
+            let allocated = Box::into_raw(Box::<Callbacks>::default());
             // SAFETY: the handle is live; USERDATA takes the pointer value itself, which stays
             // valid until `Drop`.
             let result = Error::check(unsafe {
                 ffi::ghostty_terminal_set(
                     self.as_raw(),
                     ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_USERDATA,
-                    new.cast::<c_void>().cast_const(),
+                    allocated.cast::<c_void>().cast_const(),
                 )
             });
-            if let Err(err) = result {
-                // SAFETY: `new` came from `Box::into_raw` above and was never handed out.
-                drop(unsafe { Box::<Callbacks>::from_raw(new) });
-                return Err(err);
+            if let Err(error) = result {
+                // SAFETY: `allocated` came from `Box::into_raw` above and was never handed out.
+                drop(unsafe { Box::<Callbacks>::from_raw(allocated) });
+                return Err(error);
             }
-            self.callbacks = new;
+            self.callbacks = allocated;
         }
         // SAFETY: non-null, owned by `self`, and no callback runs while we hold `&mut self`.
         Ok(unsafe { &mut *self.callbacks })
@@ -811,14 +813,15 @@ impl Terminal {
         Error::check(unsafe {
             ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.as_raw(), options)
         })?;
-        let mut out = Vec::new();
-        // SAFETY: `formatter` is live; the writer's userdata points at `out`, which outlives
-        // the call.
-        let result = unsafe { ffi::ghostty_formatter_format(formatter, vec_writer(&mut out)) };
+        let mut formatted = Vec::new();
+        // SAFETY: `formatter` is live; the writer's userdata points at `formatted`, which
+        // outlives the call.
+        let result =
+            unsafe { ffi::ghostty_formatter_format(formatter, vec_writer(&mut formatted)) };
         // SAFETY: `formatter` is live and not used again.
         unsafe { ffi::ghostty_formatter_free(formatter) };
         Error::check(result)?;
-        Ok(String::from_utf8_lossy(&out).into_owned())
+        Ok(String::from_utf8_lossy(&formatted).into_owned())
     }
 
     pub(crate) fn grid_ref(
@@ -856,16 +859,16 @@ impl Terminal {
     ///
     /// `T` must be the output type libghostty-vt documents for `data`.
     unsafe fn get<T: Default>(&self, data: ffi::GhosttyTerminalData) -> T {
-        let mut out = T::default();
+        let mut value = T::default();
         // SAFETY: the handle is live and the caller guarantees `T` matches `data`.
         let result =
-            unsafe { ffi::ghostty_terminal_get(self.as_raw(), data, (&raw mut out).cast()) };
+            unsafe { ffi::ghostty_terminal_get(self.as_raw(), data, (&raw mut value).cast()) };
         assert_eq!(
             result,
             ffi::GhosttyResult_GHOSTTY_SUCCESS,
             "terminal data {data} unavailable"
         );
-        out
+        value
     }
 }
 
@@ -962,9 +965,10 @@ unsafe extern "C" fn semantic_prompt_trampoline(
     unsafe {
         let callbacks = &mut *userdata.cast::<Callbacks>();
         let event = &*event;
-        let string = |s: &ffi::GhosttyString| {
-            (!s.ptr.is_null() && s.len > 0)
-                .then(|| String::from_utf8_lossy(slice::from_raw_parts(s.ptr, s.len)).into_owned())
+        let string = |text: &ffi::GhosttyString| {
+            (!text.ptr.is_null() && text.len > 0).then(|| {
+                String::from_utf8_lossy(slice::from_raw_parts(text.ptr, text.len)).into_owned()
+            })
         };
         let kind = match event.kind {
             ffi::GhosttySemanticPromptKind_GHOSTTY_SEMANTIC_PROMPT_PROMPT_START => {
@@ -1115,7 +1119,7 @@ mod tests {
         terminal.write(b"\x1b]133;A\x07$ \x1b]133;B\x07");
         terminal.write(b"echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;3\x07");
         let events = terminal.take_semantic_prompts();
-        let kinds: Vec<_> = events.iter().map(|e| e.kind.clone()).collect();
+        let kinds: Vec<_> = events.iter().map(|event| event.kind.clone()).collect();
         assert_eq!(
             kinds,
             [

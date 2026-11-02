@@ -1,3 +1,4 @@
+//! The workspace and multiplayer FFI surface against a real daemon (relays off, loopback), driven the way Swift
 //! drives it: plain threads, listener objects, `async` methods awaited from a foreign
 //! executor. One call (or flow) from each group: files, git, forwards, multiplayer,
 //! attention, the editor, push.
@@ -76,7 +77,7 @@ impl TransferProgress for Recorder<(u64, u64)> {
 /// A daemon whose `$HOME` (path policy, panes) is a temporary directory, with no `code`
 /// CLI, plus the runtime the test awaits on.
 struct Host {
-    rt: tokio::runtime::Runtime,
+    runtime: tokio::runtime::Runtime,
     daemon: Option<daemon::Daemon>,
     state: PathBuf,
     home: PathBuf,
@@ -89,8 +90,8 @@ fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-fn s(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+fn path_text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 impl Host {
@@ -99,11 +100,11 @@ impl Host {
     }
 
     /// A host whose daemon config `f` adjusts last.
-    fn start_with(f: impl FnOnce(&mut daemon::Config)) -> Self {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+    fn start_with(configure: impl FnOnce(&mut daemon::Config)) -> Self {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
         let (state_dir, state) = canonical_tempdir();
         let (home_dir, home) = canonical_tempdir();
-        let daemon = rt.block_on(async {
+        let daemon = runtime.block_on(async {
             let mut config = daemon::Config::new(&state);
             config.relay = daemon::RelayMode::Disabled;
             config.bind = Some("127.0.0.1:0".parse().unwrap());
@@ -111,16 +112,16 @@ impl Host {
             config.pane_env = vec![
                 ("PS1".into(), "$ ".into()),
                 ("ENV".into(), String::new()),
-                ("HOME".into(), s(&home)),
+                ("HOME".into(), path_text(&home)),
             ];
             config.fs_allow.push(home.clone());
             // No user `code` CLI, whatever this machine has installed.
             config.code_cli = Some(state.join("no-such-code"));
-            f(&mut config);
+            configure(&mut config);
             daemon::Daemon::start(config).await.unwrap()
         });
         Self {
-            rt,
+            runtime,
             daemon: Some(daemon),
             state,
             home,
@@ -146,14 +147,14 @@ impl Host {
     }
 
     fn block_on<F: Future>(&self, f: F) -> F::Output {
-        self.rt.block_on(f)
+        self.runtime.block_on(f)
     }
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        if let Some(d) = self.daemon.take() {
-            self.rt.block_on(d.shutdown());
+        if let Some(daemon) = self.daemon.take() {
+            self.runtime.block_on(daemon.shutdown());
         }
     }
 }
@@ -179,7 +180,7 @@ fn connected(events: &Recorder<ClientEvent>) {
 fn attach(client: &DaemonClient, events: &Recorder<ClientEvent>) -> u64 {
     client.attach(None);
     let layout = events.wait("layout", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ClientEvent::Layout { layout } => Some(layout.clone()),
             _ => None,
         })
@@ -201,7 +202,7 @@ fn attach(client: &DaemonClient, events: &Recorder<ClientEvent>) -> u64 {
 
 fn target(path: &Path) -> WriteTarget {
     WriteTarget {
-        path: s(path),
+        path: path_text(path),
         if_match: None,
         create_new: false,
         mkdirs: true,
@@ -215,14 +216,16 @@ fn files_round_trip_with_transfers() {
     let (client, _events) = host.client();
     let dir = host.home.join("proj");
 
-    let made = host.block_on(client.fs_mkdir(s(&dir), true)).unwrap();
+    let made = host
+        .block_on(client.fs_mkdir(path_text(&dir), true))
+        .unwrap();
     assert_eq!(made.kind, FileKind::Dir);
     let written = host
         .block_on(client.fs_write(target(&dir.join("a.txt")), b"hello ffi".to_vec().into()))
         .unwrap();
     assert_eq!(written.size, 9);
     let chunk = host
-        .block_on(client.fs_read(s(&dir.join("a.txt")), 6, 100))
+        .block_on(client.fs_read(path_text(&dir.join("a.txt")), 6, 100))
         .unwrap();
     assert_eq!(&*chunk.data, b"ffi");
     assert!(chunk.eof);
@@ -246,15 +249,19 @@ fn files_round_trip_with_transfers() {
     std::fs::write(&local, &big).unwrap();
     let up = Recorder::new();
     let stat = host
-        .block_on(client.upload_file(s(&local), target(&dir.join("big.bin")), Some(up.clone())))
+        .block_on(client.upload_file(
+            path_text(&local),
+            target(&dir.join("big.bin")),
+            Some(up.clone()),
+        ))
         .unwrap();
     assert_eq!(stat.size, big.len() as u64);
     assert_eq!(up.0.lock().unwrap().last(), Some(&(300_000, 300_000)));
     let back = host.state.join("back.bin");
     let down = Recorder::new();
     host.block_on(client.download_file(
-        s(&dir.join("big.bin")),
-        s(&back),
+        path_text(&dir.join("big.bin")),
+        path_text(&back),
         0,
         None,
         Some(down.clone()),
@@ -263,15 +270,21 @@ fn files_round_trip_with_transfers() {
     assert_eq!(std::fs::read(&back).unwrap(), big);
     assert!(!down.0.lock().unwrap().is_empty());
 
-    host.block_on(client.fs_rename(s(&dir.join("a.txt")), s(&dir.join("b.txt")), false))
+    host.block_on(client.fs_rename(
+        path_text(&dir.join("a.txt")),
+        path_text(&dir.join("b.txt")),
+        false,
+    ))
+    .unwrap();
+    let listing = host
+        .block_on(client.fs_list(path_text(&dir), false))
         .unwrap();
-    let listing = host.block_on(client.fs_list(s(&dir), false)).unwrap();
     let names: Vec<_> = listing.entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, ["b.txt", "big.bin"]);
-    host.block_on(client.fs_delete(s(&dir.join("b.txt")), DeleteMode::Permanent, false))
+    host.block_on(client.fs_delete(path_text(&dir.join("b.txt")), DeleteMode::Permanent, false))
         .unwrap();
     let err = host
-        .block_on(client.fs_stat(s(&dir.join("b.txt"))))
+        .block_on(client.fs_stat(path_text(&dir.join("b.txt"))))
         .unwrap_err();
     assert!(matches!(err, WorkspaceError::NotFound { .. }), "{err:?}");
 }
@@ -306,7 +319,7 @@ fn git_status_and_diff_in_a_temp_repo() {
     std::fs::write(repo.join("new.txt"), "new\n").unwrap();
 
     let (client, _events) = host.client();
-    let status = host.block_on(client.git_status(s(&repo))).unwrap();
+    let status = host.block_on(client.git_status(path_text(&repo))).unwrap();
     assert_eq!(status.branch.as_deref(), Some("main"));
     assert!(status.head.is_some());
     let change = |p: &str| {
@@ -327,7 +340,7 @@ fn git_status_and_diff_in_a_temp_repo() {
 
     let diff = host
         .block_on(client.git_diff(GitDiffRequest {
-            path: s(&repo),
+            path: path_text(&repo),
             base: DiffBase::Head,
             files: vec![],
             context: 3,
@@ -338,7 +351,9 @@ fn git_status_and_diff_in_a_temp_repo() {
     assert_eq!((tracked.additions, tracked.deletions), (1, 0));
     assert!(tracked.hunks[0].lines.iter().any(|l| l.text == "two"));
 
-    let err = host.block_on(client.git_status(s(&host.home))).unwrap_err();
+    let err = host
+        .block_on(client.git_status(path_text(&host.home)))
+        .unwrap_err();
     assert!(matches!(err, WorkspaceError::NotFound { .. }), "{err:?}");
 }
 
@@ -352,8 +367,8 @@ fn forward_reaches_a_local_echo_server_and_stops() {
             let Ok(mut conn) = conn else { break };
             std::thread::spawn(move || {
                 let mut buf = [0; 1024];
-                while let Ok(n) = conn.read(&mut buf) {
-                    if n == 0 || conn.write_all(&buf[..n]).is_err() {
+                while let Ok(read) = conn.read(&mut buf) {
+                    if read == 0 || conn.write_all(&buf[..read]).is_err() {
                         break;
                     }
                 }
@@ -421,7 +436,7 @@ fn invite_join_and_a_viewer_cannot_type() {
     guest.set_multiplayer_listener(guest_mp.clone());
     connected(&guest_events);
     let me = guest_mp.wait("joined", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             MultiplayerEvent::Joined { info } => Some(info.clone()),
             _ => None,
         })
@@ -441,8 +456,8 @@ fn invite_join_and_a_viewer_cannot_type() {
     guest.send_input(pane, b"echo viewer-typed\r");
     guest_mp.wait("input refused", |all| {
         all.iter()
-            .any(|e| {
-                matches!(e, MultiplayerEvent::InputRejected { pane_id, reason }
+            .any(|event| {
+                matches!(event, MultiplayerEvent::InputRejected { pane_id, reason }
                     if *pane_id == pane && *reason == InputRejectReason::Role)
             })
             .then_some(())
@@ -479,8 +494,8 @@ fn invite_join_and_a_viewer_cannot_type() {
 fn attention_items_are_marked_seen() {
     let host = Host::start();
     let (client, events) = host.client();
-    let ws = Recorder::new();
-    client.set_workspace_listener(ws.clone());
+    let workspace_events = Recorder::new();
+    client.set_workspace_listener(workspace_events.clone());
     let shown = attach(&client, &events);
     let outcome = host
         .block_on(client.perform(LayoutOp::Split {
@@ -498,7 +513,7 @@ fn attention_items_are_marked_seen() {
     // An agent in the hidden pane finishes a turn (as its hooks report it).
     let hook = |event: &str, extra: serde_json::Value| {
         let mut payload = serde_json::json!({
-            "session_id": "s", "cwd": s(&host.home), "hook_event_name": event,
+            "session_id": "s", "cwd": path_text(&host.home), "hook_event_name": event,
         });
         payload
             .as_object_mut()
@@ -529,8 +544,8 @@ fn attention_items_are_marked_seen() {
         "Stop",
         serde_json::json!({"last_assistant_message": "All tests pass."}),
     );
-    let item = ws.wait("done item", |all| {
-        all.iter().find_map(|e| match e {
+    let item = workspace_events.wait("done item", |all| {
+        all.iter().find_map(|event| match event {
             WorkspaceEvent::Attention {
                 update: AttentionUpdate::Added { item, .. },
             } if matches!(item.kind, AttentionKind::AgentDone { .. }) => Some(item.clone()),
@@ -551,10 +566,10 @@ fn attention_items_are_marked_seen() {
         }))
         .unwrap();
     assert!(list.items.iter().any(|i| i.id == item.id && i.seen));
-    ws.wait("seen pushed", |all| {
+    workspace_events.wait("seen pushed", |all| {
         all.iter()
-            .any(|e| {
-                matches!(e, WorkspaceEvent::Attention { update: AttentionUpdate::Seen { ids, .. } }
+            .any(|event| {
+                matches!(event, WorkspaceEvent::Attention { update: AttentionUpdate::Seen { ids, .. } }
                     if ids.contains(&item.id))
             })
             .then_some(())
@@ -577,7 +592,7 @@ fn editor_without_code_cli_is_a_clear_error() {
     // The default flow asks for nothing it cannot do: no CLI and no licence accepted → a
     // typed error saying what to do; never a sign-in.
     let err = host
-        .block_on(client.open_editor(s(&host.home), false))
+        .block_on(client.open_editor(path_text(&host.home), false))
         .unwrap_err();
     let WorkspaceError::Unavailable { message } = &err else {
         panic!("{err:?}")
@@ -631,12 +646,12 @@ fn open_editor_with_vscodium_needs_no_licence() {
     let codium = tempfile::tempdir().unwrap();
     install_fake_codium(codium.path());
     let dir = codium.path().to_owned();
-    let host = Host::start_with(move |c| c.vscodium_dir = Some(dir));
+    let host = Host::start_with(move |config| config.vscodium_dir = Some(dir));
     let (client, _events) = host.client();
 
     // No `code` CLI and no licence accepted: VSCodium still opens, and nothing is installed.
     let session = host
-        .block_on(client.open_editor_with(s(&host.home), false, Some(EditorKind::Vscodium)))
+        .block_on(client.open_editor_with(path_text(&host.home), false, Some(EditorKind::Vscodium)))
         .unwrap();
     assert_eq!(session.instance.kind, EditorKind::Vscodium);
     assert!(!session.installed_cli);
@@ -670,7 +685,7 @@ fn open_editor_with_vscodium_needs_no_licence() {
     // Asking for VS Code explicitly still needs the licence.
     host.block_on(client.close_editor(session, true)).unwrap();
     let err = host
-        .block_on(client.open_editor_with(s(&host.home), false, Some(EditorKind::VsCode)))
+        .block_on(client.open_editor_with(path_text(&host.home), false, Some(EditorKind::VsCode)))
         .unwrap_err();
     assert!(matches!(err, WorkspaceError::Unavailable { .. }), "{err:?}");
 }
@@ -688,13 +703,13 @@ fn open_editor_follows_the_configured_default() {
     let codium = tempfile::tempdir().unwrap();
     install_fake_codium(codium.path());
     let dir = codium.path().to_owned();
-    let host = Host::start_with(move |c| {
-        c.vscodium_dir = Some(dir);
-        c.editor_default = client_core::proto::EditorKind::Vscodium;
+    let host = Host::start_with(move |config| {
+        config.vscodium_dir = Some(dir);
+        config.editor_default = client_core::proto::EditorKind::Vscodium;
     });
     let (client, _events) = host.client();
     let session = host
-        .block_on(client.open_editor(s(&host.home), false))
+        .block_on(client.open_editor(path_text(&host.home), false))
         .unwrap();
     assert_eq!(session.instance.kind, EditorKind::Vscodium);
     let status = host.block_on(client.editor_status()).unwrap();
@@ -726,18 +741,18 @@ fn open_editor_falls_back_to_vscodium_when_vscode_cannot_be_had() {
     // 1. No CLI, and Microsoft's update service unreachable.
     let dir = codium.path().to_owned();
     let blocked = codium.path().join("no-such-update-service");
-    let host = Host::start_with(move |c| {
-        c.vscodium_dir = Some(dir);
-        c.vscode_update_url = format!("file://{}", blocked.display());
+    let host = Host::start_with(move |config| {
+        config.vscodium_dir = Some(dir);
+        config.vscode_update_url = format!("file://{}", blocked.display());
     });
     let (client, _events) = host.client();
     // Without the licence accepted nothing changes: the typed licence error, no fallback.
     assert!(matches!(
-        host.block_on(client.open_editor(s(&host.home), false)),
+        host.block_on(client.open_editor(path_text(&host.home), false)),
         Err(WorkspaceError::Unavailable { .. })
     ));
     let session = host
-        .block_on(client.open_editor(s(&host.home), true))
+        .block_on(client.open_editor(path_text(&host.home), true))
         .unwrap();
     assert_eq!(session.instance.kind, EditorKind::Vscodium);
     assert!(!session.installed_cli);
@@ -755,14 +770,14 @@ fn open_editor_falls_back_to_vscodium_when_vscode_cannot_be_had() {
     .unwrap();
     std::fs::set_permissions(&code, std::fs::Permissions::from_mode(0o755)).unwrap();
     let dir = codium.path().to_owned();
-    let host = Host::start_with(move |c| {
-        c.vscodium_dir = Some(dir);
-        c.code_cli = Some(code);
-        c.vscode_serve_web = true;
+    let host = Host::start_with(move |config| {
+        config.vscodium_dir = Some(dir);
+        config.code_cli = Some(code);
+        config.vscode_serve_web = true;
     });
     let (client, _events) = host.client();
     let session = host
-        .block_on(client.open_editor(s(&host.home), true))
+        .block_on(client.open_editor(path_text(&host.home), true))
         .unwrap();
     assert_eq!(session.instance.kind, EditorKind::Vscodium);
     let reason = session.fallback_reason.unwrap();
@@ -845,7 +860,7 @@ fn knock_admit_and_session_rules() {
     owner.set_multiplayer_listener(owner_mp.clone());
     attach(&owner, &owner_events);
     let session = owner_events.wait("attached", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             ClientEvent::Layout { layout } => Some(layout.session_id),
             _ => None,
         })
@@ -890,7 +905,7 @@ fn knock_admit_and_session_rules() {
     });
     let knock_id = waiting.wait("asked the owner", |all| all.first().copied());
     let seen = owner_mp.wait("knock pushed", |all| {
-        all.iter().rev().find_map(|e| match e {
+        all.iter().rev().find_map(|event| match event {
             MultiplayerEvent::KnockAdded { knock } if knock.name == "Dee" => Some(knock.clone()),
             _ => None,
         })
@@ -923,7 +938,7 @@ fn knock_admit_and_session_rules() {
     dee.set_multiplayer_listener(dee_mp.clone());
     connected(&dee_events);
     let me = dee_mp.wait("joined", |all| {
-        all.iter().find_map(|e| match e {
+        all.iter().find_map(|event| match event {
             MultiplayerEvent::Joined { info } => Some(info.clone()),
             _ => None,
         })

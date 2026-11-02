@@ -35,7 +35,6 @@ pub enum TicketRelays {
     /// Only the daemon's self-hosted `iroh-relay` servers (a private CA goes into
     /// `ConnectOptions.relay_ca_der`).
     Custom {
-        /// Relay URLs.
         urls: Vec<String>,
         /// The relays need the shared token the ticket carries (not shown).
         has_auth_token: bool,

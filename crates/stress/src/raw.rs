@@ -12,8 +12,8 @@ use proto::{
     SignedGrant, SnapGen, SubscribeMode, Ticket,
 };
 
-async fn send(stream: &mut SendStream, msg: &ClientCtl) -> Result<()> {
-    stream.write_all(&proto::frame::to_vec(msg)?).await?;
+async fn send(stream: &mut SendStream, message: &ClientCtl) -> Result<()> {
+    stream.write_all(&proto::frame::to_vec(message)?).await?;
     Ok(())
 }
 
@@ -28,7 +28,7 @@ async fn recv(stream: &mut RecvStream) -> Result<Option<ServerCtl>> {
     Ok(Some(proto::frame::decode_body(&body)?))
 }
 
-struct Raw {
+struct RawClient {
     _endpoint: Endpoint,
     conn: Connection,
     tx: SendStream,
@@ -38,7 +38,12 @@ struct Raw {
 }
 
 /// Dials and says `Hello`: with the ticket's pairing secret, or as an already paired device.
-async fn dial(key: &[u8], ticket: &str, pairing: bool, resume: Vec<ResumePoint>) -> Result<Raw> {
+async fn dial(
+    key: &[u8],
+    ticket: &str,
+    pairing: bool,
+    resume: Vec<ResumePoint>,
+) -> Result<RawClient> {
     let (ticket, _) = Ticket::parse_with_extras(ticket)?;
     let secret = iroh::SecretKey::from_bytes(key.try_into().context("32-byte key")?);
     let device = DeviceId(*secret.public().as_bytes());
@@ -47,12 +52,12 @@ async fn dial(key: &[u8], ticket: &str, pairing: bool, resume: Vec<ResumePoint>)
         .bind()
         .await?;
     let mut addr = EndpointAddr::new(EndpointId::from_bytes(&ticket.daemon_id.0)?);
-    for a in &ticket.addrs {
-        addr = addr.with_ip_addr(*a);
+    for ip in &ticket.addrs {
+        addr = addr.with_ip_addr(*ip);
     }
     let conn = endpoint.connect(addr, proto::ALPN).await?;
     let (mut tx, mut rx) = conn.open_bi().await?;
-    let (v, token) = if pairing {
+    let (grant_version, token) = if pairing {
         (SignedGrant::PAIRING, ticket.secret.0.to_vec())
     } else {
         (SignedGrant::DEVICE, Vec::new())
@@ -61,7 +66,7 @@ async fn dial(key: &[u8], ticket: &str, pairing: bool, resume: Vec<ResumePoint>)
         device_id: device,
         principal_id: ticket.principal,
         grant: SignedGrant {
-            v,
+            v: grant_version,
             grant_id: GrantId([0; 16]),
             token,
         },
@@ -74,14 +79,14 @@ async fn dial(key: &[u8], ticket: &str, pairing: bool, resume: Vec<ResumePoint>)
     send(&mut tx, &ClientCtl::Hello(hello)).await?;
     loop {
         match recv(&mut rx).await? {
-            Some(ServerCtl::Welcome(w)) => {
-                return Ok(Raw {
+            Some(ServerCtl::Welcome(welcome)) => {
+                return Ok(RawClient {
                     _endpoint: endpoint,
                     conn,
                     tx,
                     rx,
-                    epoch: w.session_epoch.0,
-                    panes: w.panes.iter().map(|m| m.pane_id).collect(),
+                    epoch: welcome.session_epoch.0,
+                    panes: welcome.panes.iter().map(|pane| pane.pane_id).collect(),
                 });
             }
             Some(ServerCtl::Refused { reason }) => bail!("refused: {reason:?}"),
@@ -96,7 +101,7 @@ async fn dial(key: &[u8], ticket: &str, pairing: bool, resume: Vec<ResumePoint>)
 pub async fn slow(tickets: &Path, secs: u64) -> Result<()> {
     let tickets = std::fs::read_to_string(tickets)?;
     let mut held = Vec::new();
-    for ticket in tickets.lines().filter(|l| !l.is_empty()) {
+    for ticket in tickets.lines().filter(|line| !line.is_empty()) {
         let key = client_core::ClientConfig::generate_key();
         let mut raw = dial(&key, ticket, true, Vec::new()).await?;
         send(&mut raw.tx, &ClientCtl::Attach { session_id: None }).await?;
@@ -129,7 +134,7 @@ pub async fn slow(tickets: &Path, secs: u64) -> Result<()> {
         tokio::time::sleep(Duration::from_secs(1)).await;
         let closed = held
             .iter()
-            .filter(|r| r.conn.close_reason().is_some())
+            .filter(|client| client.conn.close_reason().is_some())
             .count();
         if closed == held.len() {
             println!("slow: the daemon closed every stuck client");
@@ -138,7 +143,7 @@ pub async fn slow(tickets: &Path, secs: u64) -> Result<()> {
     }
     let closed = held
         .iter()
-        .filter(|r| r.conn.close_reason().is_some())
+        .filter(|client| client.conn.close_reason().is_some())
         .count();
     println!(
         "slow: {closed}/{} closed by the daemon after {secs} s",
@@ -155,31 +160,31 @@ pub async fn stale_resume(key: &[u8], ticket: &str, secs: u64) -> Result<()> {
     let (epoch, panes) = (first.epoch, first.panes.clone());
     drop(first);
     let mut rounds = 0u64;
-    let mut i = 1u64;
+    let mut rng = 1u64;
     while Instant::now() < end {
-        i = i
+        rng = rng
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         let mut points = Vec::new();
-        let n = match rounds % 4 {
+        let point_count = match rounds % 4 {
             0 => 5000,
             _ => 20,
         };
-        for k in 0..n {
-            let pane = match k % 3 {
-                0 => PaneId(i >> 20),
-                _ => panes[(k as usize) % panes.len().max(1)],
+        for index in 0..point_count {
+            let pane = match index % 3 {
+                0 => PaneId(rng >> 20),
+                _ => panes[(index as usize) % panes.len().max(1)],
             };
-            let seq = match k % 4 {
+            let seq = match index % 4 {
                 0 => Seq(u64::MAX),
-                1 => Seq(i >> 8),
+                1 => Seq(rng >> 8),
                 2 => Seq(0),
                 _ => Seq(1),
             };
-            let generation = if k % 2 == 0 {
+            let generation = if index % 2 == 0 {
                 SnapGen(epoch)
             } else {
-                SnapGen(i)
+                SnapGen(rng)
             };
             points.push(ResumePoint {
                 pane_id: pane,
@@ -188,11 +193,10 @@ pub async fn stale_resume(key: &[u8], ticket: &str, secs: u64) -> Result<()> {
             });
         }
         let mut raw = dial(key, ticket, false, points).await?;
-        // The daemon must still answer ctl traffic promptly.
         send(&mut raw.tx, &ClientCtl::ListSessions).await?;
         let answered = tokio::time::timeout(Duration::from_secs(5), async {
-            while let Some(msg) = recv(&mut raw.rx).await? {
-                if matches!(msg, ServerCtl::Sessions { .. }) {
+            while let Some(message) = recv(&mut raw.rx).await? {
+                if matches!(message, ServerCtl::Sessions { .. }) {
                     return Ok::<_, anyhow::Error>(true);
                 }
             }

@@ -35,7 +35,7 @@ impl EventMapper {
 
     /// The script events `event` means, in order.
     pub fn feed(&mut self, event: &ClientEvent) -> Vec<ScriptEvent> {
-        let mut out = Vec::new();
+        let mut events = Vec::new();
         match event {
             ClientEvent::Layout { layout } => {
                 let session = layout.session_id;
@@ -47,12 +47,12 @@ impl EventMapper {
                     for pane in leaves(&tab.root) {
                         if self.panes.insert(pane, session).is_none() && !baseline {
                             let tab = Some(tab_ref(tab.tab_id));
-                            out.push(self.event(pane, ScriptEventKind::PaneOpened { tab }));
+                            events.push(self.event(pane, ScriptEventKind::PaneOpened { tab }));
                         }
                     }
                 }
                 if !baseline {
-                    out.push(self.make(Some(session), None, ScriptEventKind::LayoutChanged));
+                    events.push(self.make(Some(session), None, ScriptEventKind::LayoutChanged));
                 }
             }
             ClientEvent::PaneClosed { pane_id } => {
@@ -61,7 +61,7 @@ impl EventMapper {
                     let closed =
                         self.make(Some(session), Some(*pane_id), ScriptEventKind::PaneClosed);
                     self.panes.remove(pane_id);
-                    out.push(closed);
+                    events.push(closed);
                 }
             }
             ClientEvent::CommandMark { mark } => {
@@ -71,33 +71,33 @@ impl EventMapper {
                         command: mark.command.clone(),
                         cwd: mark.cwd.clone(),
                     },
-                    Some(f) => ScriptEventKind::CommandFinished {
+                    Some(finished) => ScriptEventKind::CommandFinished {
                         id: mark.command_id,
                         command: mark.command.clone(),
-                        exit_code: f.exit,
-                        duration_ms: f.duration_ms,
+                        exit_code: finished.exit,
+                        duration_ms: finished.duration_ms,
                     },
                 };
-                out.push(self.event(mark.pane_id, kind));
+                events.push(self.event(mark.pane_id, kind));
             }
             ClientEvent::PaneMeta { meta } => {
-                let now = meta.agent.as_ref().map(|a| {
-                    let (state, kind) = match &a.state {
+                let after = meta.agent.as_ref().map(|agent| {
+                    let (state, kind) = match &agent.state {
                         AgentState::Idle => ("idle", None),
                         AgentState::Running => ("working", None),
                         AgentState::Blocked(_) => ("blocked", Some("permission".to_owned())),
                         AgentState::Done => ("done", None),
                     };
-                    (state.to_owned(), kind, Some(a.kind.clone()))
+                    (state.to_owned(), kind, Some(agent.kind.clone()))
                 });
-                let before = match &now {
-                    Some(now) => self.states.insert(meta.pane_id, now.clone()),
+                let before = match &after {
+                    Some(after) => self.states.insert(meta.pane_id, after.clone()),
                     None => self.states.remove(&meta.pane_id),
                 };
-                let first = before.is_none() && now.is_some();
-                if before != now && !first {
-                    let (state, kind, app) = now.unwrap_or_else(|| ("none".into(), None, None));
-                    out.push(self.event(
+                let first = before.is_none() && after.is_some();
+                if before != after && !first {
+                    let (state, kind, app) = after.unwrap_or_else(|| ("none".into(), None, None));
+                    events.push(self.event(
                         meta.pane_id,
                         ScriptEventKind::AgentState { state, kind, app },
                     ));
@@ -105,11 +105,11 @@ impl EventMapper {
             }
             ClientEvent::Disconnected { .. } if !self.sessions.is_empty() => {
                 // What happens while away is not replayed: say so (count unknown).
-                out.push(self.make(None, None, ScriptEventKind::Lost { missed: 0 }));
+                events.push(self.make(None, None, ScriptEventKind::Lost { missed: 0 }));
             }
             _ => {}
         }
-        out
+        events
     }
 
     fn event(&mut self, pane: PaneId, kind: ScriptEventKind) -> ScriptEvent {
@@ -137,11 +137,11 @@ impl EventMapper {
 
 fn leaves(node: &proto::LayoutNode) -> Vec<PaneId> {
     match node {
-        proto::LayoutNode::Leaf(p) => vec![*p],
+        proto::LayoutNode::Leaf(pane_id) => vec![*pane_id],
         proto::LayoutNode::Split { first, second, .. } => {
-            let mut v = leaves(first);
-            v.extend(leaves(second));
-            v
+            let mut panes = leaves(first);
+            panes.extend(leaves(second));
+            panes
         }
     }
 }

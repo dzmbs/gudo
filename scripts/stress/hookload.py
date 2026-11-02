@@ -31,14 +31,14 @@ PERM = {
 }
 
 lock = threading.Lock()
-lat, fails = [], []
+latencies, failures = [], []
 
 
 def record(seconds, failure):
     with lock:
-        lat.append(seconds)
+        latencies.append(seconds)
         if failure:
-            fails.append(failure)
+            failures.append(failure)
 
 
 def un_hook(binary, event, payload, n, end):
@@ -47,9 +47,9 @@ def un_hook(binary, event, payload, n, end):
     try:
         # A held PermissionRequest returns once a newer one replaces it; the last one is
         # still held when the run ends.
-        p = subprocess.run([binary, "claude", event], input=json.dumps(payload).encode(),
-                           capture_output=True, env=env, timeout=max(1.0, end - started + 1))
-        failure = p.stderr.decode().strip()[:120] or None
+        result = subprocess.run([binary, "claude", event], input=json.dumps(payload).encode(),
+                                capture_output=True, env=env, timeout=max(1.0, end - started + 1))
+        failure = result.stderr.decode().strip()[:120] or None
     except subprocess.TimeoutExpired:
         failure = "still held when the run ended"
     record(time.monotonic() - started, failure)
@@ -61,22 +61,22 @@ def term_call(tool, args):
     started = time.monotonic()
     failure = None
     try:
-        s = socket.socket(socket.AF_UNIX)
-        s.settimeout(300)
-        s.connect(os.environ["GUDO_SOCK"])
-        s.sendall(json.dumps(call).encode() + b"\n")
+        sock = socket.socket(socket.AF_UNIX)
+        sock.settimeout(300)
+        sock.connect(os.environ["GUDO_SOCK"])
+        sock.sendall(json.dumps(call).encode() + b"\n")
         data = b""
         while not data.endswith(b"\n"):
-            chunk = s.recv(65536)
+            chunk = sock.recv(65536)
             if not chunk:
                 break
             data += chunk
-        s.close()
+        sock.close()
         reply = json.loads(data)
         if "error" in reply:
             failure = reply["error"]["code"] + ": " + reply["error"]["message"][:80]
-    except Exception as e:  # noqa: BLE001 - every failure is a data point
-        failure = type(e).__name__ + ": " + str(e)[:80]
+    except Exception as error:  # noqa: BLE001 - every failure is a data point
+        failure = type(error).__name__ + ": " + str(error)[:80]
     record(time.monotonic() - started, failure)
 
 
@@ -87,21 +87,21 @@ def perm_every(binary, gap, secs):
     end = time.monotonic() + secs
     held = []
     while time.monotonic() < end:
-        p = subprocess.Popen([binary, "claude", "PermissionRequest"], stdin=subprocess.PIPE,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-        p.stdin.write(json.dumps(PERM).encode())
-        p.stdin.close()
-        held.append(p)
+        process = subprocess.Popen([binary, "claude", "PermissionRequest"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        process.stdin.write(json.dumps(PERM).encode())
+        process.stdin.close()
+        held.append(process)
         time.sleep(gap)
-    for p in held:
-        p.kill()
-        p.wait()
+    for process in held:
+        process.kill()
+        process.wait()
     report = f"perm-every: {len(held)} requests, one every {gap} s\n"
     sys.stdout.write(report)
     out = os.environ.get("HOOKLOAD_OUT")
     if out:
-        with open(out, "a") as f:
-            f.write(report)
+        with open(out, "a") as out_file:
+            out_file.write(report)
 
 
 def main():
@@ -128,25 +128,25 @@ def main():
 
     started = time.monotonic()
     pool = [threading.Thread(target=worker, args=(i,)) for i in range(threads)]
-    for t in pool:
-        t.start()
-    for t in pool:
-        t.join()
+    for thread in pool:
+        thread.start()
+    for thread in pool:
+        thread.join()
     wall = time.monotonic() - started
-    v = sorted(lat)
-    at = lambda q: v[min(len(v) - 1, int(q * (len(v) - 1)))] * 1000 if v else 0
+    samples = sorted(latencies)
+    millis_at = lambda q: samples[min(len(samples) - 1, int(q * (len(samples) - 1)))] * 1000 if samples else 0
     kinds = {}
-    for f in fails:
-        kinds[f] = kinds.get(f, 0) + 1
-    report = (f"{mode}: {len(v)} calls in {wall:.1f} s ({len(v) / wall:.0f}/s), "
-              f"p50 {at(0.5):.1f} ms p99 {at(0.99):.1f} ms max {at(1):.1f} ms, {len(fails)} failed\n")
-    for k, c in sorted(kinds.items(), key=lambda kv: -kv[1])[:5]:
-        report += f"  {c}x {k}\n"
+    for failure in failures:
+        kinds[failure] = kinds.get(failure, 0) + 1
+    report = (f"{mode}: {len(samples)} calls in {wall:.1f} s ({len(samples) / wall:.0f}/s), "
+              f"p50 {millis_at(0.5):.1f} ms p99 {millis_at(0.99):.1f} ms max {millis_at(1):.1f} ms, {len(failures)} failed\n")
+    for kind, count in sorted(kinds.items(), key=lambda item: -item[1])[:5]:
+        report += f"  {count}x {kind}\n"
     sys.stdout.write(report)
     out = os.environ.get("HOOKLOAD_OUT")
     if out:
-        with open(out, "a") as f:
-            f.write(report)
+        with open(out, "a") as out_file:
+            out_file.write(report)
 
 
 main()

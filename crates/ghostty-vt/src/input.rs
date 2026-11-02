@@ -120,11 +120,8 @@ keys!(
 pub struct Mods(pub u16);
 
 impl Mods {
-    /// No modifiers.
     pub const NONE: Self = Self(0);
-    /// Shift.
     pub const SHIFT: Self = Self(1 << 0);
-    /// Control.
     pub const CTRL: Self = Self(1 << 1);
     /// Alt / Option.
     pub const ALT: Self = Self(1 << 2);
@@ -237,14 +234,17 @@ impl KeyEncoder {
         let text = event
             .text
             .as_deref()
-            .filter(|t| !t.chars().any(char::is_control))
+            .filter(|text| !text.chars().any(char::is_control))
             .unwrap_or("");
         // SAFETY: the handles are live; the terminal is only read, and `&Terminal` keeps it
         // from being mutated meanwhile. The event borrows the UTF-8 text without copying it;
         // `text` outlives the encode below and the borrow is cleared right after.
         unsafe {
             ffi::ghostty_key_encoder_setopt_from_terminal(self.encoder.as_ptr(), terminal.as_raw());
-            ffi::ghostty_key_event_set_key(raw, event.key.map_or(0, |k| k.0 as ffi::GhosttyKey));
+            ffi::ghostty_key_event_set_key(
+                raw,
+                event.key.map_or(0, |key| key.0 as ffi::GhosttyKey),
+            );
             ffi::ghostty_key_event_set_mods(raw, event.mods.0);
             ffi::ghostty_key_event_set_consumed_mods(raw, event.consumed_mods.0);
             ffi::ghostty_key_event_set_action(
@@ -262,9 +262,17 @@ impl KeyEncoder {
             );
             ffi::ghostty_key_event_set_utf8(raw, text.as_ptr().cast::<c_char>(), text.len());
         }
-        let result = encode_into(|buf, len, out| {
-            // SAFETY: live handles; `buf` is valid for `len` bytes (or null with 0).
-            unsafe { ffi::ghostty_key_encoder_encode(self.encoder.as_ptr(), raw, buf, len, out) }
+        let result = encode_into(|buffer, capacity, written| {
+            // SAFETY: live handles; `buffer` is valid for `capacity` bytes (or null with 0).
+            unsafe {
+                ffi::ghostty_key_encoder_encode(
+                    self.encoder.as_ptr(),
+                    raw,
+                    buffer,
+                    capacity,
+                    written,
+                )
+            }
         });
         // Do not keep a pointer to `text` past this call.
         // SAFETY: the event is live; an empty slice clears the borrowed text.
@@ -287,17 +295,17 @@ impl Drop for KeyEncoder {
 fn encode_into(
     mut call: impl FnMut(*mut c_char, usize, *mut usize) -> ffi::GhosttyResult,
 ) -> Result<Vec<u8>, Error> {
-    let mut buf = vec![0u8; 64];
+    let mut buffer = vec![0u8; 64];
     loop {
         let mut len = 0usize;
-        let result = call(buf.as_mut_ptr().cast(), buf.len(), &mut len);
-        if result == ffi::GhosttyResult_GHOSTTY_OUT_OF_SPACE && len > buf.len() {
-            buf.resize(len, 0);
+        let result = call(buffer.as_mut_ptr().cast(), buffer.len(), &mut len);
+        if result == ffi::GhosttyResult_GHOSTTY_OUT_OF_SPACE && len > buffer.len() {
+            buffer.resize(len, 0);
             continue;
         }
         Error::check(result)?;
-        buf.truncate(len);
-        return Ok(buf);
+        buffer.truncate(len);
+        return Ok(buffer);
     }
 }
 
@@ -352,7 +360,6 @@ impl MouseButton {
 /// A mouse event in cell coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MouseEvent {
-    /// What happened.
     pub action: MouseAction,
     /// The button, `None` for motion with no button held.
     pub button: Option<MouseButton>,
@@ -449,16 +456,16 @@ impl MouseEncoder {
         event: &MouseEvent,
         cell_px: (u16, u16),
     ) -> Result<Vec<u8>, Error> {
-        let (cell_w, cell_h) = (u32::from(cell_px.0.max(1)), u32::from(cell_px.1.max(1)));
+        let (cell_width, cell_height) = (u32::from(cell_px.0.max(1)), u32::from(cell_px.1.max(1)));
         let size = ffi::GhosttyMouseEncoderSize {
             size: std::mem::size_of::<ffi::GhosttyMouseEncoderSize>(),
-            screen_width: u32::from(terminal.cols()) * cell_w,
-            screen_height: u32::from(terminal.rows()) * cell_h,
-            cell_width: cell_w,
-            cell_height: cell_h,
+            screen_width: u32::from(terminal.cols()) * cell_width,
+            screen_height: u32::from(terminal.rows()) * cell_height,
+            cell_width,
+            cell_height,
             ..Default::default()
         };
-        if let Some(button) = event.button.filter(|b| !b.is_wheel()) {
+        if let Some(button) = event.button.filter(|button| !button.is_wheel()) {
             let bit = 1 << button.raw();
             match event.action {
                 MouseAction::Press => self.held |= bit,
@@ -471,15 +478,15 @@ impl MouseEncoder {
         // SAFETY: live handles; option values match their documented types and are read
         // before each call returns. The terminal is only read.
         unsafe {
-            let enc = self.encoder.as_ptr();
-            ffi::ghostty_mouse_encoder_setopt_from_terminal(enc, terminal.as_raw());
+            let encoder = self.encoder.as_ptr();
+            ffi::ghostty_mouse_encoder_setopt_from_terminal(encoder, terminal.as_raw());
             ffi::ghostty_mouse_encoder_setopt(
-                enc,
+                encoder,
                 ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
                 (&raw const size).cast(),
             );
             ffi::ghostty_mouse_encoder_setopt(
-                enc,
+                encoder,
                 ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
                 (&raw const any_pressed).cast(),
             );
@@ -492,7 +499,7 @@ impl MouseEncoder {
                 },
             );
             match event.button {
-                Some(b) => ffi::ghostty_mouse_event_set_button(raw, b.raw()),
+                Some(button) => ffi::ghostty_mouse_event_set_button(raw, button.raw()),
                 None => ffi::ghostty_mouse_event_clear_button(raw),
             }
             ffi::ghostty_mouse_event_set_mods(raw, event.mods.0);
@@ -500,14 +507,22 @@ impl MouseEncoder {
             ffi::ghostty_mouse_event_set_position(
                 raw,
                 ffi::GhosttyMousePosition {
-                    x: (f32::from(event.col) + 0.5) * cell_w as f32,
-                    y: (f32::from(event.row) + 0.5) * cell_h as f32,
+                    x: (f32::from(event.col) + 0.5) * cell_width as f32,
+                    y: (f32::from(event.row) + 0.5) * cell_height as f32,
                 },
             );
         }
-        encode_into(|buf, len, out| {
-            // SAFETY: live handles; `buf` is valid for `len` bytes.
-            unsafe { ffi::ghostty_mouse_encoder_encode(self.encoder.as_ptr(), raw, buf, len, out) }
+        encode_into(|buffer, capacity, written| {
+            // SAFETY: live handles; `buffer` is valid for `capacity` bytes.
+            unsafe {
+                ffi::ghostty_mouse_encoder_encode(
+                    self.encoder.as_ptr(),
+                    raw,
+                    buffer,
+                    capacity,
+                    written,
+                )
+            }
         })
     }
 }
@@ -542,18 +557,18 @@ impl Drop for MouseEncoder {
 /// ```
 pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     let mut data = text.as_bytes().to_vec();
-    let result = encode_into(|buf, len, out| {
+    let result = encode_into(|buffer, capacity, written| {
         // SAFETY: `data` is valid for reads and writes of its length (the encoder sanitizes in
-        // place, idempotently, so a retry after OUT_OF_SPACE sees equivalent input); `buf` is
-        // valid for `len` bytes.
+        // place, idempotently, so a retry after OUT_OF_SPACE sees equivalent input); `buffer`
+        // is valid for `capacity` bytes.
         unsafe {
             ffi::ghostty_paste_encode(
                 data.as_mut_ptr().cast(),
                 data.len(),
                 bracketed,
-                buf,
-                len,
-                out,
+                buffer,
+                capacity,
+                written,
             )
         }
     });
@@ -576,10 +591,10 @@ impl Terminal {
     }
 }
 
-/// The number of cells `c` takes, by libghostty-vt's width tables (0, 1 or 2).
-pub fn char_width(c: char) -> u8 {
+/// The number of cells `character` takes, by libghostty-vt's width tables (0, 1 or 2).
+pub fn char_width(character: char) -> u8 {
     // SAFETY: a pure function of its argument.
-    unsafe { ffi::ghostty_unicode_codepoint_width(u32::from(c)) }
+    unsafe { ffi::ghostty_unicode_codepoint_width(u32::from(character)) }
 }
 
 #[cfg(test)]
@@ -688,16 +703,16 @@ mod tests {
         let mut terminal = Terminal::new(80, 24)?;
         terminal.write(b"\x1b[?2004h");
         let hostile = "a\x1b[201~rm -rf ~\r\n\u{9b}201~\x03\x15\x17\x1a\x04\x7fb";
-        let out = terminal.encode_paste(hostile);
-        let body = out
+        let encoded = terminal.encode_paste(hostile);
+        let body = encoded
             .strip_prefix(b"\x1b[200~")
-            .and_then(|b| b.strip_suffix(b"\x1b[201~"))
+            .and_then(|framed| framed.strip_suffix(b"\x1b[201~"))
             .expect("framed");
         for byte in [0x1b, 0x03, 0x15, 0x17, 0x1a, 0x04, 0x7f] {
-            assert!(!body.contains(&byte), "{byte:#x} in {out:?}");
+            assert!(!body.contains(&byte), "{byte:#x} in {encoded:?}");
         }
         // U+009B stays a UTF-8 character (C2 9B), never a lone 8-bit CSI byte.
-        assert!(std::str::from_utf8(body).is_ok_and(|s| s.contains('\u{9b}')));
+        assert!(std::str::from_utf8(body).is_ok_and(|text| text.contains('\u{9b}')));
         Ok(())
     }
 

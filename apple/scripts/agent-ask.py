@@ -18,12 +18,12 @@ path = open(os.path.join(state, "hook.endpoint")).read().strip()
 
 def send(seq, event, payload):
     request = {"v": 1, "token": token, "pane": pane, "agent": "claude", "event": event, "seq": seq, "payload": payload}
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.connect(path)
-        s.sendall(json.dumps(request).encode() + b"\n")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.connect(path)
+        sock.sendall(json.dumps(request).encode() + b"\n")
         answer = b""
         while not answer.endswith(b"\n"):
-            chunk = s.recv(65536)
+            chunk = sock.recv(65536)
             if not chunk:
                 break
             answer += chunk
@@ -40,7 +40,7 @@ answer = send(2, "PermissionRequest", {
     "tool_input": {"command": command, "description": "Clean the build"},
 })
 try:
-    out = json.loads(answer.get("stdout") or "{}")
-    print(out["hookSpecificOutput"]["decision"]["behavior"])
+    hook_output = json.loads(answer.get("stdout") or "{}")
+    print(hook_output["hookSpecificOutput"]["decision"]["behavior"])
 except (KeyError, ValueError, TypeError):
     print("none")

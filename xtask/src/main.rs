@@ -111,50 +111,54 @@ fn target_dir() -> PathBuf {
 }
 
 fn cargo() -> Command {
-    let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
-    cmd.current_dir(root());
-    cmd
+    let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    command.current_dir(root());
+    command
 }
 
-fn run(cmd: &mut Command) -> Result<()> {
-    let status = cmd.status().with_context(|| format!("running {cmd:?}"))?;
-    ensure!(status.success(), "{cmd:?} failed: {status}");
+fn run(command: &mut Command) -> Result<()> {
+    let status = command
+        .status()
+        .with_context(|| format!("running {command:?}"))?;
+    ensure!(status.success(), "{command:?} failed: {status}");
     Ok(())
 }
 
-fn output(cmd: &mut Command) -> Result<String> {
-    let out = cmd.output().with_context(|| format!("running {cmd:?}"))?;
+fn output(command: &mut Command) -> Result<String> {
+    let captured = command
+        .output()
+        .with_context(|| format!("running {command:?}"))?;
     ensure!(
-        out.status.success(),
-        "{cmd:?} failed: {}\n{}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr)
+        captured.status.success(),
+        "{command:?} failed: {}\n{}",
+        captured.status,
+        String::from_utf8_lossy(&captured.stderr)
     );
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&captured.stdout).into_owned())
 }
 
 fn xcrun(sdk: &str, tool: &str) -> Command {
-    let mut cmd = Command::new("xcrun");
-    cmd.args(["--sdk", sdk, tool]);
-    cmd
+    let mut command = Command::new("xcrun");
+    command.args(["--sdk", sdk, tool]);
+    command
 }
 
 fn size_mb(path: &Path) -> f64 {
-    fs::metadata(path).map_or(0.0, |m| m.len() as f64 / 1_048_576.0)
+    fs::metadata(path).map_or(0.0, |metadata| metadata.len() as f64 / 1_048_576.0)
 }
 
 fn dir_size(path: &Path) -> u64 {
     let Ok(entries) = fs::read_dir(path) else {
-        return fs::metadata(path).map_or(0, |m| m.len());
+        return fs::metadata(path).map_or(0, |metadata| metadata.len());
     };
     entries
         .flatten()
-        .map(|e| {
-            let p = e.path();
-            if p.is_dir() {
-                dir_size(&p)
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                dir_size(&path)
             } else {
-                e.metadata().map_or(0, |m| m.len())
+                entry.metadata().map_or(0, |metadata| metadata.len())
             }
         })
         .sum()
@@ -172,8 +176,7 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
     let work = target.join("apple-ffi");
     let package = root.join("apple/Packages").join(CORE_NAME);
 
-    // 1. Release static libraries. Debug info off (it would only be stripped again); the
-    //    profile's thin LTO stays.
+    // Debug info off: it would only be stripped again. The profile's thin LTO stays.
     for slice in &slices {
         eprintln!("==> cargo build {}", slice.target);
         run(cargo()
@@ -183,14 +186,14 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
             .env("IPHONEOS_DEPLOYMENT_TARGET", IOS_MIN)
             .env("MACOSX_DEPLOYMENT_TARGET", MACOS_MIN))?;
     }
-    let raw = |slice: &Slice| {
+    let raw_archive = |slice: &Slice| {
         target
             .join(slice.target)
             .join("release")
             .join(format!("lib{LIB_NAME}.a"))
     };
 
-    // 2. Swift bindings from the macOS archive's UniFFI metadata (the same on every slice).
+    // The UniFFI metadata is the same in every slice's archive.
     eprintln!("==> uniffi-bindgen swift");
     let bindings = work.join("bindings");
     let _ = fs::remove_dir_all(&bindings);
@@ -199,7 +202,7 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
             generate_swift_sources: true,
             generate_headers: true,
             generate_modulemap: false,
-            source: utf8(raw(&MACOS))?,
+            source: utf8(raw_archive(&MACOS))?,
             out_dir: utf8(bindings.clone())?,
             metadata_no_deps: true,
             ..Default::default()
@@ -219,7 +222,6 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
         format!("module {FFI_MODULE} {{\n    header \"{header}\"\n    export *\n}}\n"),
     )?;
 
-    // 3. Per slice, one archive exporting only the UniFFI API (see `hide_internals`).
     let exports = work.join("exported_symbols.txt");
     fs::write(
         &exports,
@@ -229,17 +231,23 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
     let mut libraries = Vec::new();
     for slice in &slices {
         eprintln!("==> hide internals {}", slice.target);
-        let library = hide_internals(slice, &raw(slice), &api, &exports, &work.join(slice.target))?;
+        let library = hide_internals(
+            slice,
+            &raw_archive(slice),
+            &api,
+            &exports,
+            &work.join(slice.target),
+        )?;
         eprintln!(
             "    {}: {:.1} MB raw archive -> {:.1} MB",
             slice.target,
-            size_mb(&raw(slice)),
+            size_mb(&raw_archive(slice)),
             size_mb(&library)
         );
         libraries.push(library);
     }
 
-    // 4. The xcframework, inside the Swift package (gitignored).
+    // Inside the Swift package (gitignored).
     let xcframework = package.join(format!("{CORE_NAME}.xcframework"));
     let _ = fs::remove_dir_all(&xcframework);
     let mut create = Command::new("xcodebuild");
@@ -254,7 +262,6 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
     create.arg("-output").arg(&xcframework);
     output(&mut create)?;
 
-    // 5. The generated Swift next to the hand-written sources.
     let sources = package.join("Sources").join(CORE_NAME);
     fs::create_dir_all(&sources)?;
     let swift = format!("{CORE_NAME}.swift");
@@ -270,7 +277,8 @@ fn build_xcframework(macos_only: bool) -> Result<()> {
 }
 
 fn utf8(path: PathBuf) -> Result<Utf8PathBuf> {
-    Utf8PathBuf::from_path_buf(path).map_err(|p| anyhow::anyhow!("non-UTF-8 path {}", p.display()))
+    Utf8PathBuf::from_path_buf(path)
+        .map_err(|path| anyhow::anyhow!("non-UTF-8 path {}", path.display()))
 }
 
 /// `MH_SUBSECTIONS_VIA_SYMBOLS`: the object may be split at symbols, which is what lets the
@@ -282,7 +290,7 @@ fn macho_flags(object: &Path) -> Result<Option<u32>> {
     let data = fs::read(object)?;
     let word = |at: usize| {
         data.get(at..at + 4)
-            .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")))
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("4 bytes")))
     };
     Ok(match word(0) {
         Some(0xfeed_facf) => word(24),
@@ -316,7 +324,10 @@ fn hide_internals(
     let members = dir.join("members");
     fs::create_dir_all(&members)?;
     let listing = output(Command::new("ar").arg("t").arg(raw))?;
-    let mut names: Vec<&str> = listing.lines().filter(|n| n.ends_with(".o")).collect();
+    let mut names: Vec<&str> = listing
+        .lines()
+        .filter(|name| name.ends_with(".o"))
+        .collect();
     let total = names.len();
     names.sort_unstable();
     names.dedup();
@@ -340,7 +351,10 @@ fn hide_internals(
 
     let filelist = |paths: &[PathBuf], name: &str| -> Result<PathBuf> {
         let list = dir.join(name);
-        let text: String = paths.iter().map(|p| format!("{}\n", p.display())).collect();
+        let text: String = paths
+            .iter()
+            .map(|path| format!("{}\n", path.display()))
+            .collect();
         fs::write(&list, text)?;
         Ok(list)
     };
@@ -364,7 +378,7 @@ fn hide_internals(
             slice.min_os,
         ])
         .arg(sdk_version.trim())
-        .args(api.iter().flat_map(|s| ["-u", s]))
+        .args(api.iter().flat_map(|symbol| ["-u", symbol]))
         .arg("-exported_symbols_list")
         .arg(exports)
         .arg(&inputs)
@@ -373,7 +387,7 @@ fn hide_internals(
     // Debug info only: local symbols mark the function boundaries dead-stripping needs.
     run(xcrun(slice.sdk, "strip").arg("-S").arg(&object))?;
     ensure!(
-        macho_flags(&object)?.is_some_and(|f| f & MH_SUBSECTIONS_VIA_SYMBOLS != 0),
+        macho_flags(&object)?.is_some_and(|flags| flags & MH_SUBSECTIONS_VIA_SYMBOLS != 0),
         "{}: the prelinked object lost MH_SUBSECTIONS_VIA_SYMBOLS",
         slice.target
     );
@@ -401,7 +415,7 @@ fn defined_globals(slice: &Slice, library: &Path) -> Result<Vec<String>> {
     Ok(symbols
         .lines()
         .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.ends_with(':'))
+        .filter(|line| !line.is_empty() && !line.ends_with(':'))
         .map(str::to_owned)
         .collect())
 }
@@ -410,9 +424,12 @@ fn defined_globals(slice: &Slice, library: &Path) -> Result<Vec<String>> {
 fn is_api(symbol: &str) -> bool {
     symbol
         .strip_prefix('_')
-        .and_then(|s| s.strip_prefix("uniffi_").or_else(|| s.strip_prefix("ffi_")))
-        .and_then(|s| s.strip_prefix(LIB_NAME))
-        .is_some_and(|s| s.starts_with('_'))
+        .and_then(|rest| {
+            rest.strip_prefix("uniffi_")
+                .or_else(|| rest.strip_prefix("ffi_"))
+        })
+        .and_then(|rest| rest.strip_prefix(LIB_NAME))
+        .is_some_and(|rest| rest.starts_with('_'))
 }
 
 /// The UniFFI entry points, as linker symbols, from the generated C header. (Reading them
@@ -421,7 +438,7 @@ fn is_api(symbol: &str) -> bool {
 fn api_symbols(header: &Path) -> Result<Vec<String>> {
     let text = fs::read_to_string(header)?;
     let mut api: Vec<String> = text
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
         .map(|word| format!("_{word}"))
         .filter(|symbol| is_api(symbol))
         .collect();
@@ -438,7 +455,10 @@ fn api_symbols(header: &Path) -> Result<Vec<String>> {
 /// Fails if anything but the UniFFI API and `allowed` (or no API at all) is exported.
 fn check_exports(slice: &Slice, library: &Path, allowed: &[String]) -> Result<()> {
     let symbols = defined_globals(slice, library)?;
-    if let Some(stray) = symbols.iter().find(|s| !is_api(s) && !allowed.contains(s)) {
+    if let Some(stray) = symbols
+        .iter()
+        .find(|symbol| !is_api(symbol) && !allowed.contains(symbol))
+    {
         bail!("{}: unexpected exported symbol {stray}", slice.target);
     }
     ensure!(
@@ -452,24 +472,24 @@ fn check_exports(slice: &Slice, library: &Path, allowed: &[String]) -> Result<()
 /// The build id and time for release builds: the commit (with `-dirty` and the current time
 /// when the tree has uncommitted changes), else the commit time.
 fn build_stamp() -> Result<(String, u64)> {
-    let vcs = |args: &[&str]| -> Result<String> {
-        let out = Command::new("git")
+    let git = |args: &[&str]| -> Result<String> {
+        let captured = Command::new("git")
             .args(args)
             .current_dir(root())
             .output()
             .with_context(|| format!("git {args:?}"))?;
-        ensure!(out.status.success(), "git {args:?} failed");
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        ensure!(captured.status.success(), "git {args:?} failed");
+        Ok(String::from_utf8_lossy(&captured.stdout).trim().to_owned())
     };
-    let commit = vcs(&["rev-parse", "--short=12", "HEAD"])?;
-    let dirty = !vcs(&["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    let commit = git(&["rev-parse", "--short=12", "HEAD"])?;
+    let dirty = !git(&["status", "--porcelain", "--untracked-files=no"])?.is_empty();
     if dirty {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();
         Ok((format!("{commit}-dirty"), now))
     } else {
-        Ok((commit, vcs(&["log", "-1", "--format=%ct"])?.parse()?))
+        Ok((commit, git(&["log", "-1", "--format=%ct"])?.parse()?))
     }
 }
 
@@ -507,9 +527,9 @@ fn build_hostd_linux() -> Result<()> {
             protocol = proto::PROTOCOL_LEVEL,
             size = data.len(),
         ));
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
-        gz.write_all(&data)?;
-        fs::write(&dest, gz.finish()?)?;
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        gzip.write_all(&data)?;
+        fs::write(&dest, gzip.finish()?)?;
         eprintln!(
             "    {} ({:.1} MB) -> {} ({:.1} MB)",
             binary.display(),

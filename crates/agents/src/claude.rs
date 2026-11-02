@@ -1,3 +1,4 @@
+//! Claude Code.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -28,7 +29,6 @@ const SETTINGS_VERSION: u32 = 3;
 const PERMISSION_TIMEOUT_SECS: u32 = 590;
 const HOOK_TIMEOUT_SECS: u32 = 10;
 
-/// The Claude Code adapter.
 #[derive(Debug, Clone)]
 pub struct ClaudeCode {
     manifest: Manifest,
@@ -174,12 +174,13 @@ impl ClaudeCode {
     /// Every hook runs `<hook_bin> claude <Event>`. The status line runs `<hook_bin> claude
     /// StatusLine`: the shim hands its input (which carries the plan's `rate_limits`) to the
     /// daemon, then runs and prints the user's own `statusLine` command, so the user's status
+    /// line looks as it did.
     pub fn hook_settings(ctx: &LaunchContext) -> Value {
-        let bin = shell_quote(&ctx.hook_bin.to_string_lossy());
+        let hook_bin = shell_quote(&ctx.hook_bin.to_string_lossy());
         let entry = |event: &str, matcher: Option<&str>, timeout: Option<u32>| {
             let mut handler = json!({
                 "type": "command",
-                "command": format!("{bin} claude {event}"),
+                "command": format!("{hook_bin} claude {event}"),
             });
             if let Some(timeout) = timeout {
                 handler["timeout"] = timeout.into();
@@ -203,7 +204,7 @@ impl ClaudeCode {
             },
             "statusLine": {
                 "type": "command",
-                "command": format!("{bin} claude StatusLine"),
+                "command": format!("{hook_bin} claude StatusLine"),
             },
             "hooks": {
                 "SessionStart": entry("SessionStart", Some("startup|resume|clear|compact|fork"), short),
@@ -235,11 +236,11 @@ impl ClaudeCode {
                 let updated: Vec<Value> = suggestions
                     .iter()
                     .cloned()
-                    .map(|mut s| {
-                        if let Some(obj) = s.as_object_mut() {
-                            obj.insert("destination".into(), "session".into());
+                    .map(|mut suggestion| {
+                        if let Some(fields) = suggestion.as_object_mut() {
+                            fields.insert("destination".into(), "session".into());
                         }
-                        s
+                        suggestion
                     })
                     .collect();
                 json!({ "behavior": "allow", "updatedPermissions": updated })
@@ -348,12 +349,12 @@ fn question_blocker(tool_input: &Value) -> Blocker {
 fn parse(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
     let Payload { common, event } = serde_json::from_slice(payload)?;
     let signal = |kind| {
-        let mut s = Signal::new(Source::Hook, Confidence::Authoritative, kind).with_seq(seq);
-        s.session = common.session();
-        s
+        let mut signal = Signal::new(Source::Hook, Confidence::Authoritative, kind).with_seq(seq);
+        signal.session = common.session();
+        signal
     };
 
-    let mut out = match event {
+    let mut parsed = match event {
         Event::SessionStart { source } => {
             let kind = match source {
                 Some(SessionSource::Clear | SessionSource::Compact | SessionSource::Fork) => {
@@ -418,24 +419,24 @@ fn parse(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
         Event::Stop {
             last_assistant_message,
         } => {
-            let mut s = signal(EventKind::TurnEnded).with_claim(Claim::Idle);
-            s.turn = Some(Turn {
+            let mut stopped = signal(EventKind::TurnEnded).with_claim(Claim::Idle);
+            stopped.turn = Some(Turn {
                 outcome: TurnOutcome::Completed,
                 last_message: hook::message(last_assistant_message),
             });
-            s
+            stopped
         }
         Event::StopFailure {
             error,
             error_details,
             last_assistant_message,
         } => {
-            let mut s = signal(EventKind::Error).with_claim(Claim::Error);
-            s.turn = Some(Turn {
+            let mut failed = signal(EventKind::Error).with_claim(Claim::Error);
+            failed.turn = Some(Turn {
                 outcome: TurnOutcome::Failed,
                 last_message: hook::message(last_assistant_message.or(error_details).or(error)),
             });
-            s
+            failed
         }
         // A manual /compact emits no Stop, so its PostCompact ends the "turn". An auto-compact
         // happens mid-turn and changes nothing.
@@ -452,11 +453,11 @@ fn parse(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
     };
 
     if let Some(subagent) = common.subagent() {
-        out.claim = None;
-        out.turn = None;
-        out.subagent = Some(subagent);
+        parsed.claim = None;
+        parsed.turn = None;
+        parsed.subagent = Some(subagent);
     }
-    Ok(Some(out))
+    Ok(Some(parsed))
 }
 
 impl AgentAdapter for ClaudeCode {
@@ -491,15 +492,15 @@ impl AgentAdapter for ClaudeCode {
                 args.extend(["--resume".into(), session_id.as_str().into()]);
             }
         }
-        let mcp = Self::mcp_config_path(ctx);
+        let mcp_config_file = Self::mcp_config_path(ctx);
         args.extend([
             "--mcp-config".into(),
-            mcp.clone().into(),
+            mcp_config_file.clone().into(),
             "--settings".into(),
             settings.clone().into(),
         ]);
-        let pretty = |v: &Value| {
-            serde_json::to_string_pretty(v).expect("serializing a JSON value cannot fail")
+        let pretty = |value: &Value| {
+            serde_json::to_string_pretty(value).expect("serializing a JSON value cannot fail")
         };
         let (env_remove, env_pinned) = account_env(&ctx.account, CLAUDE_DIR_VAR);
         LaunchSpec {
@@ -515,7 +516,7 @@ impl AgentAdapter for ClaudeCode {
                     contents: pretty(&Self::hook_settings(ctx)),
                 },
                 SupportFile {
-                    path: mcp,
+                    path: mcp_config_file,
                     contents: pretty(&Self::mcp_config(ctx)),
                 },
             ],
@@ -550,13 +551,17 @@ mod tests {
 
     #[test]
     fn session_start_reports_identity_without_a_state() {
-        let s = parse_fixture(fixture!("session_start_resume"));
-        assert_eq!(s.kind, EventKind::SessionStarted);
-        assert_eq!(s.claim, None);
-        assert_eq!(s.seq, Some(Seq(1)));
-        assert_eq!(s.session.native_id, Some(NativeSessionId::new("abc123")));
+        let signal = parse_fixture(fixture!("session_start_resume"));
+        assert_eq!(signal.kind, EventKind::SessionStarted);
+        assert_eq!(signal.claim, None);
+        assert_eq!(signal.seq, Some(Seq(1)));
+        assert_eq!(
+            signal.session.native_id,
+            Some(NativeSessionId::new("abc123"))
+        );
         assert!(
-            s.session
+            signal
+                .session
                 .transcript
                 .unwrap()
                 .ends_with("00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl")
@@ -571,29 +576,29 @@ mod tests {
 
     #[test]
     fn prompt_submit_is_working() {
-        let s = parse_fixture(fixture!("user_prompt_submit"));
+        let signal = parse_fixture(fixture!("user_prompt_submit"));
         assert_eq!(
-            (s.kind, s.claim),
+            (signal.kind, signal.claim),
             (EventKind::TurnStarted, Some(Claim::Working))
         );
-        assert_eq!(s.confidence, Confidence::Authoritative);
+        assert_eq!(signal.confidence, Confidence::Authoritative);
     }
 
     #[test]
     fn permission_request_is_a_rich_blocker() {
-        let s = parse_fixture(fixture!("permission_request"));
-        assert_eq!(s.kind, EventKind::Blocked);
-        let Some(Claim::Blocked(b)) = s.claim else {
+        let signal = parse_fixture(fixture!("permission_request"));
+        assert_eq!(signal.kind, EventKind::Blocked);
+        let Some(Claim::Blocked(blocker)) = signal.claim else {
             panic!("expected a blocked claim")
         };
-        assert_eq!(b.reason, BlockedReason::Permission);
-        assert_eq!(b.tool.as_deref(), Some("Bash"));
-        assert_eq!(b.summary.as_deref(), Some("rm -rf node_modules"));
+        assert_eq!(blocker.reason, BlockedReason::Permission);
+        assert_eq!(blocker.tool.as_deref(), Some("Bash"));
+        assert_eq!(blocker.summary.as_deref(), Some("rm -rf node_modules"));
         assert_eq!(
-            b.detail.unwrap()["description"],
+            blocker.detail.unwrap()["description"],
             "Remove node_modules directory"
         );
-        let ids: Vec<_> = b.options.iter().map(|o| o.id).collect();
+        let ids: Vec<_> = blocker.options.iter().map(|option| option.id).collect();
         assert_eq!(
             ids,
             [
@@ -603,7 +608,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            b.answer_paths,
+            blocker.answer_paths,
             [AnswerPath::HookDecision, AnswerPath::Keystrokes]
         );
     }
@@ -614,31 +619,31 @@ mod tests {
             "tool_name":"AskUserQuestion","tool_use_id":"t1","tool_input":{"questions":[
             {"question":"Which framework?","header":"Framework","multiSelect":false,
              "options":[{"label":"React","description":"Component library"}]}]}}"#;
-        let Some(Claim::Blocked(b)) = parse_fixture(payload).claim else {
+        let Some(Claim::Blocked(blocker)) = parse_fixture(payload).claim else {
             panic!()
         };
-        assert_eq!(b.reason, BlockedReason::Question);
-        assert_eq!(b.summary.as_deref(), Some("Which framework?"));
-        assert!(b.options.is_empty());
+        assert_eq!(blocker.reason, BlockedReason::Question);
+        assert_eq!(blocker.summary.as_deref(), Some("Which framework?"));
+        assert!(blocker.options.is_empty());
     }
 
     #[test]
     fn other_tools_are_working() {
-        let s = parse_fixture(fixture!("pre_tool_use_bash"));
+        let signal = parse_fixture(fixture!("pre_tool_use_bash"));
         assert_eq!(
-            (s.kind, s.claim),
+            (signal.kind, signal.claim),
             (EventKind::ToolStarted, Some(Claim::Working))
         );
     }
 
     #[test]
     fn permission_notification_blocks() {
-        let s = parse_fixture(fixture!("notification_permission_prompt"));
-        let Some(Claim::Blocked(b)) = s.claim else {
+        let signal = parse_fixture(fixture!("notification_permission_prompt"));
+        let Some(Claim::Blocked(blocker)) = signal.claim else {
             panic!()
         };
-        assert_eq!(b.reason, BlockedReason::Permission);
-        assert_eq!(b.summary, None);
+        assert_eq!(blocker.reason, BlockedReason::Permission);
+        assert_eq!(blocker.summary, None);
     }
 
     #[test]
@@ -655,27 +660,34 @@ mod tests {
             notification("idle_prompt").unwrap().claim,
             Some(Claim::Idle)
         );
-        let Some(Claim::Blocked(b)) = notification("elicitation_dialog").unwrap().claim else {
+        let Some(Claim::Blocked(blocker)) = notification("elicitation_dialog").unwrap().claim
+        else {
             panic!()
         };
-        assert_eq!(b.reason, BlockedReason::Elicitation);
+        assert_eq!(blocker.reason, BlockedReason::Elicitation);
         assert_eq!(notification("auth_success"), None);
     }
 
     #[test]
     fn stop_ends_the_turn() {
-        let s = parse_fixture(fixture!("stop"));
-        assert_eq!((s.kind, s.claim), (EventKind::TurnEnded, Some(Claim::Idle)));
-        let turn = s.turn.unwrap();
+        let signal = parse_fixture(fixture!("stop"));
+        assert_eq!(
+            (signal.kind, signal.claim),
+            (EventKind::TurnEnded, Some(Claim::Idle))
+        );
+        let turn = signal.turn.unwrap();
         assert_eq!(turn.outcome, TurnOutcome::Completed);
         assert!(turn.last_message.unwrap().starts_with("I've completed"));
     }
 
     #[test]
     fn stop_failure_is_an_error() {
-        let s = parse_fixture(fixture!("stop_failure"));
-        assert_eq!((s.kind, s.claim), (EventKind::Error, Some(Claim::Error)));
-        let turn = s.turn.unwrap();
+        let signal = parse_fixture(fixture!("stop_failure"));
+        assert_eq!(
+            (signal.kind, signal.claim),
+            (EventKind::Error, Some(Claim::Error))
+        );
+        let turn = signal.turn.unwrap();
         assert_eq!(turn.outcome, TurnOutcome::Failed);
         assert_eq!(
             turn.last_message.as_deref(),
@@ -685,31 +697,31 @@ mod tests {
 
     #[test]
     fn manual_compact_ends_the_turn() {
-        let s = parse_fixture(fixture!("post_compact"));
-        assert_eq!(s.claim, Some(Claim::Idle));
+        let signal = parse_fixture(fixture!("post_compact"));
+        assert_eq!(signal.claim, Some(Claim::Idle));
         let auto = br#"{"session_id":"s","hook_event_name":"PostCompact","trigger":"auto"}"#;
         assert_eq!(ClaudeCode::new().parse_hook(auto, Seq(1)).unwrap(), None);
     }
 
     #[test]
     fn session_end_claims_nothing() {
-        let s = parse_fixture(fixture!("session_end"));
-        assert_eq!((s.kind, s.claim), (EventKind::SessionEnded, None));
+        let signal = parse_fixture(fixture!("session_end"));
+        assert_eq!((signal.kind, signal.claim), (EventKind::SessionEnded, None));
     }
 
     #[test]
     fn subagent_hooks_never_claim_lead_state() {
-        let s = parse_fixture(fixture!("subagent_stop"));
-        assert_eq!(s.claim, None);
-        let sub = s.subagent.unwrap();
-        assert_eq!(sub.id.as_str(), "def456");
-        assert_eq!(sub.agent_type.as_deref(), Some("Explore"));
+        let signal = parse_fixture(fixture!("subagent_stop"));
+        assert_eq!(signal.claim, None);
+        let subagent = signal.subagent.unwrap();
+        assert_eq!(subagent.id.as_str(), "def456");
+        assert_eq!(subagent.agent_type.as_deref(), Some("Explore"));
 
         let inside = br#"{"session_id":"s","hook_event_name":"PermissionRequest","agent_id":"a1",
             "tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-        let s = parse_fixture(inside);
-        assert_eq!(s.claim, None);
-        assert!(s.subagent.is_some());
+        let signal = parse_fixture(inside);
+        assert_eq!(signal.claim, None);
+        assert!(signal.subagent.is_some());
     }
 
     #[test]
@@ -745,7 +757,7 @@ mod tests {
         assert!(
             spec.env
                 .iter()
-                .any(|(k, v)| k == "GUDO_PANE_ID" && v == "p_9f2")
+                .any(|(name, value)| name == "GUDO_PANE_ID" && value == "p_9f2")
         );
         assert_eq!(spec.files[0].path, ClaudeCode::settings_path(&ctx));
         let settings: Value = serde_json::from_str(&spec.files[0].contents).unwrap();
@@ -774,19 +786,29 @@ mod tests {
         assert!(
             spec.env_pinned
                 .iter()
-                .any(|(k, v)| k == "CLAUDE_CONFIG_DIR" && v == "/state/accounts/claude/a1b2")
+                .any(|(name, value)| name == "CLAUDE_CONFIG_DIR"
+                    && value == "/state/accounts/claude/a1b2")
         );
-        assert!(spec.env_remove.iter().any(|v| v == "ANTHROPIC_API_KEY"));
-        assert!(spec.env_remove.iter().any(|v| v == "CODEX_HOME"));
+        assert!(
+            spec.env_remove
+                .iter()
+                .any(|name| name == "ANTHROPIC_API_KEY")
+        );
+        assert!(spec.env_remove.iter().any(|name| name == "CODEX_HOME"));
         // Nothing secret is pinned: pinned values are on the shell's command line.
-        assert!(!spec.env_pinned.iter().any(|(k, _)| k.contains("TOKEN")));
+        assert!(
+            !spec
+                .env_pinned
+                .iter()
+                .any(|(name, _)| name.contains("TOKEN"))
+        );
         // The system account inherits the user's own directory and keys, as before accounts.
         let spec = ClaudeCode::new().launch(&test_context(), &mode);
         assert!(
             !spec
                 .env_pinned
                 .iter()
-                .any(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+                .any(|(name, _)| name == "CLAUDE_CONFIG_DIR")
         );
         assert!(spec.env_remove.is_empty());
         assert!(!spec.shell_line().contains("unset"));
@@ -822,7 +844,7 @@ mod tests {
             !spec
                 .display_argv()
                 .iter()
-                .any(|a| a == "--strict-mcp-config")
+                .any(|arg| arg == "--strict-mcp-config")
         );
     }
 
@@ -873,7 +895,9 @@ mod tests {
             osc_title: title,
             osc_progress: "",
         }) {
-            ScreenVerdict::State(m) => (m.state, m.rule_id.clone(), m.is_visible()),
+            ScreenVerdict::State(matched) => {
+                (matched.state, matched.rule_id.clone(), matched.is_visible())
+            }
             ScreenVerdict::Freeze { rule_id } => (AgentState::Unknown, Some(rule_id), false),
         }
     }
@@ -906,7 +930,7 @@ mod tests {
 ────────────────────────────────────────
  Accessing workspace:
 
- /Users/me/src/app
+ /home/me/src/app
 
  Quick safety check: Is this a project you created or one you trust? (Like your
  own code, a well-known open source project, or work from your team). If not,
