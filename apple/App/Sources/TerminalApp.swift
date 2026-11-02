@@ -98,32 +98,28 @@ struct TerminalApp: App {
 /// the last-focused tab are restored per window. The window publishes what it shows for Handoff
 /// and continues other devices' (and dragged-out tabs') activities.
 ///
-/// The window's model is made once per scene, when the scene first appears: SwiftUI rebuilds
-/// this struct (and would re-run a `@State` initial value) several times per scene, and a
-/// spare model would have its own sources and terminals and could be picked as the active
-/// window.
+/// The window's model is made once per scene, in the scene's first update, so the window's
+/// first frame is its content. SwiftUI rebuilds this struct (and re-runs a `@State` initial
+/// value) several times per scene: the state holds a cheap box that makes the model on first
+/// use, since a spare model would have its own sources and terminals and could be picked as
+/// the active window.
 struct WindowRoot: View {
     /// What this window was opened for (New Window, Open in New Window), if anything.
     var request: WindowRequest?
-    @State private var model: WindowModel?
-    @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
+    @State private var box = WindowModelBox()
 
     var body: some View {
-        if let model {
-            WindowContent(request: request, model: model)
-        } else {
-            // One frame on the terminal background while the model is made.
-            ThemeCatalog.theme(named: themeName).background
-                .ignoresSafeArea()
-                .onAppear {
-                    guard model == nil else { return }
-                    let made = WindowModel(app: AppModel.shared)
-                    made.start()
-                    model = made
-                }
-        }
+        WindowContent(request: request, model: box.model)
     }
+}
 
+@MainActor
+final class WindowModelBox {
+    private(set) lazy var model: WindowModel = {
+        let model = WindowModel(app: AppModel.shared)
+        model.start()
+        return model
+    }()
 }
 
 /// A window's content around its model (see `WindowRoot`).
@@ -175,6 +171,7 @@ struct WindowContent: View {
     }
 
     var body: some View {
+        let _ = restoreBeforeFirstFrame()
         observed
             .modifier(HostKeyPromptModifier(prompts: app.hosts.hostKeyPrompts))
             .modifier(BulkCloseConfirmation(model: model))
@@ -212,7 +209,7 @@ struct WindowContent: View {
                 } else if let request, openedRequest != request.id.uuidString {
                     openedRequest = request.id.uuidString
                     model.open(request)
-                } else if model.lastContinued == nil, shouldRestore {
+                } else if model.lastContinued == nil, shouldRestore, !model.restoredBeforeFirstFrame {
                     restore()
                 }
                 // `-openHost <name or id>`: open that saved host (screenshots, manual checks).
@@ -356,6 +353,18 @@ struct WindowContent: View {
 
     /// Restore by default in normal launches; never for design fixtures, `-mock` or dogfood
     /// runs unless `-restoreLastTarget YES` asks for it.
+    /// A window coming back with nothing else to open restores its hosts while its first frame
+    /// is built, so that frame is the saved workspace (instant start), not this device's shell
+    /// until `.task` runs. Windows opened for a request, a launch hook or Handoff wait for it.
+    private func restoreBeforeFirstFrame() {
+        guard !model.consideredEarlyRestore else { return }
+        model.consideredEarlyRestore = true
+        let pendingRequest = request.map { openedRequest != $0.id.uuidString } ?? false
+        guard !pendingRequest, !app.hasLaunchHooks, model.lastContinued == nil, shouldRestore else { return }
+        restore()
+        model.restoredBeforeFirstFrame = true
+    }
+
     private var shouldRestore: Bool {
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "restoreLastTarget") != nil { return defaults.bool(forKey: "restoreLastTarget") }

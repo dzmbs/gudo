@@ -394,6 +394,10 @@ final class WindowModel {
 
     /// Whether `start()` ran: the window is on screen and owns terminals.
     private(set) var isStarted = false
+    /// The scene's saved hosts were restored before its first frame (`WindowContent`).
+    @ObservationIgnored var restoredBeforeFirstFrame = false
+    /// The first frame's restore was considered (it runs at most once per window).
+    @ObservationIgnored var consideredEarlyRestore = false
 
     /// The window appeared: it registers and opens this device's workspace. Not in `init`:
     /// SwiftUI may build a view's `@State` initial value more than once and keep only one, and

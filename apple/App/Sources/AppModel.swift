@@ -270,6 +270,14 @@ final class AppModel {
 
     @ObservationIgnored private var launchHooksRan = false
 
+    /// `runLaunchHooks` still has a host to pair or connect (UI tests): the first window
+    /// waits for it instead of restoring.
+    var hasLaunchHooks: Bool {
+        guard !launchHooksRan else { return false }
+        let defaults = LaunchArguments()
+        return ["testTickets", "testTicket", "testSSH"].contains { !(defaults.string(forKey: $0) ?? "").isEmpty }
+    }
+
     private func runSingleLaunchHook() async -> WorkspaceTarget? {
         let defaults = LaunchArguments()
         // `-testSSHConfig <path>`: read that ssh_config as Hosts → Import would (UI tests; the

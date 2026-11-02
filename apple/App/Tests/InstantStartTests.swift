@@ -5,6 +5,7 @@ import PaneLayout
 import Synchronization
 import SwiftUI
 import TerminalCore
+import TerminalRenderer
 import UnnamedCore
 import XCTest
 @testable import App
@@ -31,7 +32,17 @@ nonisolated final class SilentDaemonClient: DaemonClientAPI, @unchecked Sendable
     func resize(paneId: UInt64, size: PaneSize) {}
     func sendInput(paneId: UInt64, data: Data) { state.withLock { $0.inputs.append(String(decoding: data, as: UTF8.self)) } }
     func sendPaste(paneId: UInt64, text: String) { state.withLock { $0.inputs.append(text) } }
-    func fetchHistory(paneId: UInt64, maxBytes: UInt32) -> Bool { false }
+    /// Answers a history request (nil: there is none).
+    var history: (@Sendable (UInt64) -> ClientEvent?)? {
+        get { historyAnswer.withLock { $0 } }
+        set { historyAnswer.withLock { $0 = newValue } }
+    }
+    private let historyAnswer = Mutex<(@Sendable (UInt64) -> ClientEvent?)?>(nil)
+    func fetchHistory(paneId: UInt64, maxBytes: UInt32) -> Bool {
+        guard let event = history?(paneId) else { return false }
+        DispatchQueue.global().async { self.send(event) }
+        return true
+    }
     func decide(requestId: UInt64, optionId: UInt32) {}
     func reconnect() {}
     func suspend() {}
@@ -225,10 +236,13 @@ final class InstantStartTests: XCTestCase {
         XCTAssertTrue(hasContent(image))
         print("instant start: saved workspace on screen \(firstFrame) (seed \(attached - started), window model and panes \(shown - attached), layout and draw \(drawn - shown))")
 
-        // The host answers: the screens are the host's, in place, same tabs.
+        // The host answers: the screens are the host's, in place, same tabs. (Panes of other
+        // tabs are made in later stages and subscribe then; this silent host sends each screen
+        // once, so it answers after all three exist.)
+        for _ in 0..<100 where workspace.panes.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
         InstantStartFixture.goLive(client)
         let deadline = ContinuousClock.now + .seconds(5)
-        while pane.showsSavedScreen || !connection.status.isLive, ContinuousClock.now < deadline {
+        while workspace.showsSavedWorkspace || pane.showsSavedScreen || !connection.status.isLive, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertFalse(pane.showsSavedScreen)
@@ -255,6 +269,9 @@ final class InstantStartTests: XCTestCase {
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             print("instant start: round \(round) saved workspace on screen \(ContinuousClock.now - started)")
+            // The window's tab first, the other tabs' panes in the next stages.
+            XCTAssertEqual(model.workspace?.panes.count, 2)
+            for _ in 0..<50 where model.workspace?.panes.count != 3 { try await Task.sleep(for: .milliseconds(10)) }
             XCTAssertEqual(model.workspace?.panes.count, 3)
             window.close()
             model.close()
@@ -273,6 +290,85 @@ final class InstantStartTests: XCTestCase {
             plain.close()
             try await Task.sleep(for: .milliseconds(200))
         }
+    }
+
+    /// A window coming back at launch has its saved workspace in its first layout: never a
+    /// frame of bare background while its model is made, nor one of another host while it
+    /// restores.
+    func testAWindowsFirstFrameIsItsSavedWorkspace() throws {
+        _ = try InstantStartFixture.attach(.shared)
+        let defaults = UserDefaults.standard
+        let saved = (defaults.object(forKey: "restoreLastTarget"), defaults.object(forKey: "window.openHosts"), defaults.object(forKey: "window.focusedTab"))
+        defaults.set(true, forKey: "restoreLastTarget")
+        defaults.set("[\"\(InstantStartFixture.hostId)\"]", forKey: "window.openHosts")
+        let focus = try JSONEncoder().encode(TabRef(hostId: InstantStartFixture.hostId, tab: TabId(10)))
+        defaults.set(String(decoding: focus, as: UTF8.self), forKey: "window.focusedTab")
+        defer {
+            for (key, value) in [("restoreLastTarget", saved.0), ("window.openHosts", saved.1), ("window.focusedTab", saved.2)] {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        let before = Set(AppModel.shared.openWindows.map(ObjectIdentifier.init))
+        let window = OffscreenWindow(
+            contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 600),
+            styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: WindowRoot(request: nil).environment(AppModel.shared))
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let made = AppModel.shared.openWindows.filter { !before.contains(ObjectIdentifier($0)) }
+        defer {
+            window.close()
+            made.forEach { $0.close() }
+        }
+        XCTAssertEqual(made.count, 1, "the window's model exists by its first frame")
+        let model = try XCTUnwrap(made.first)
+        XCTAssertTrue(model.workspace?.showsSavedWorkspace == true, "the first frame is the saved workspace")
+        XCTAssertEqual(model.workspace?.session.tabs.map(\.id), [TabId(10), TabId(20)])
+        func terminals(_ view: NSView) -> [TerminalView] { ((view as? TerminalView).map { [$0] } ?? []) + view.subviews.flatMap(terminals) }
+        let shown = window.contentView.map(terminals) ?? []
+        XCTAssertTrue(shown.contains { $0.surface.terminal.visibleText().contains("audit_logs_login") }, "drawn in that frame")
+    }
+
+    /// A pane saved scrolled back stays at that position when the host's screen replaces the
+    /// saved one, its older scrollback fetched to get there.
+    func testAScrolledBackPaneKeepsItsPositionWhenItGoesLive() async throws {
+        let lines = (1...200).map { String(format: "line %04d", $0) }
+        let host = InstantStartFixture.terminal(lines, rows: 24)
+        let saving = InstantStartFixture.terminal(lines, rows: 24)
+        saving.scrollViewport(by: -40)
+        let seen = saving.visibleText()
+        var saved = InstantStartFixture.saved
+        saved.panes[1] = CachedPane(terminal: saving, title: "zsh", cwd: nil)
+        XCTAssertEqual(saved.panes[1]?.scrolledBack, 40)
+
+        let client = SilentDaemonClient()
+        let connection = DaemonConnection(hostId: InstantStartFixture.hostId, ticket: "t", session: 7) { _, listener in client.dial(listener) }
+        connection.seed(saved)
+        try connection.connect()
+        AppModel.shared.hosts.attachPreview(
+            HostRecord(id: InstantStartFixture.hostId, name: "studio", kind: .daemon, daemonId: "fixture-i"), connection: connection)
+        let model = WindowModel(app: .shared)
+        model.start()
+        model.show(.host(InstantStartFixture.hostId))
+        defer { model.close() }
+        let pane = try XCTUnwrap(model.workspace?.panes[PaneId(1)])
+        XCTAssertEqual(pane.view.surface.terminal.visibleText(), seen, "the saved screen where it was scrolled to")
+
+        // The host's snapshot has only its screen; the rows above it come as history.
+        let (ready, history) = try XCTUnwrap(Terminal.splitSnapshot(try XCTUnwrap(host.encodeSnapshot()), images: false))
+        client.history = { $0 == 1 ? .paneHistory(paneId: 1, snapshotSeq: 0, data: history, rows: 0, done: true) : nil }
+        client.send(.connected(epoch: 1, resumed: false))
+        client.send(.attached(sessionId: 7, via: .requested, missing: nil))
+        client.send(.layout(layout: InstantStartFixture.layout))
+        client.send(.paneSnapshot(paneId: 1, seq: 0, data: ready))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while pane.showsSavedScreen || pane.view.surface.terminal.visibleText() != seen, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(pane.showsSavedScreen, "live")
+        XCTAssertEqual(pane.view.surface.terminal.visibleText(), seen, "still where it was scrolled to")
+        XCTAssertFalse(pane.view.surface.terminal.viewportAtBottom)
     }
 
     func testInputBeforeLiveWaitsForTheHostsScreen() async throws {
