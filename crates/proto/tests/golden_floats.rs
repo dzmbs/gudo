@@ -1,6 +1,6 @@
 //! Frozen wire bytes for floating panes: `Caps::FLOATS`, `DaemonFeatures::FLOATS`,
 //! `LayoutOp::NewFloat` / `FloatPane` / `SetFloat` / `DockPane` / `MovePaneToEdge` (appended
-//! after `RemoveProject`) and `ServerCtl::Floats` (after `Clipboard`). Same rule as `golden.rs`: never
+//! after `RemoveProject`) and `ServerCtl::Floats` (after `AccountUsage`). Same rule as `golden.rs`: never
 //! edit an existing hex string; add a case instead.
 //!
 //! To print the current encodings: `PROTO_PRINT_GOLDEN=1 cargo test -p proto --test
@@ -131,7 +131,7 @@ fn float_messages_match_their_frozen_bytes() {
                 close: CloseWhen::Never,
             }],
         }),
-        "1d000000013a010901040203050000003f0000803e0000003f0000003f02000100",
+        "1d000000013c010901040203050000003f0000803e0000003f0000003f02000100",
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

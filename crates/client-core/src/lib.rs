@@ -40,6 +40,7 @@ mod mirror;
 mod mp;
 mod peer;
 pub mod push;
+pub mod script;
 mod ssh_pane;
 mod upgrade;
 pub mod vscode;

@@ -1,0 +1,14 @@
+{
+  "name": "@unnamed/term",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Typed client for the terminal tools, for scripts running in a pane. See docs/DAEMON.md (Scripting).",
+  "type": "module",
+  "exports": "./un.ts",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test un.test.ts"
+  }
+}

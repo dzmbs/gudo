@@ -28,7 +28,12 @@
 //! un float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P] -- <command…>
 //! un float pane|min|restore|pin [--off] <P>   un float move <P> <x,y,w,h>
 //! un float dock <P> [--beside P --side left|right|up|down]   un float list
+//! un events [--type T]…       what happens in the session, as it happens
 //! ```
+//!
+//! `--json` makes the read commands (`ls`, `marks`, `output`, `search`, `links`, `ports`,
+//! `inbox`, `git status`, `who`, `audit`, `daemon info`) print one JSON document and `events`
+//! one JSON line per event, in the versioned schema of docs/DAEMON.md ("Scripting").
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,6 +52,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 mod draw;
 mod float;
+mod json;
 mod mp;
 mod ws;
 
@@ -87,6 +93,9 @@ struct Cli {
     /// Direct connections only (no relays).
     #[arg(long, global = true)]
     no_relay: bool,
+    /// Print read commands' results as JSON (docs/DAEMON.md, "Scripting").
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: Cmd,
 }
@@ -222,6 +231,13 @@ enum Cmd {
     Daemon {
         #[command(subcommand)]
         action: DaemonCmd,
+    },
+    /// Follow what happens in the attached session: panes opening and closing, commands
+    /// starting and finishing, agents changing state, layout changes. Ctrl-C stops.
+    Events {
+        /// Only these types (`pane.opened`, `command.finished`, …); repeatable.
+        #[arg(long = "type")]
+        types: Vec<String>,
     },
     /// Print a command's output (default: the last finished command).
     Output {
@@ -398,6 +414,8 @@ struct Conn {
     last_error: Option<String>,
     /// Dialling the ticket's direct addresses only (`--no-relay`).
     direct_only: bool,
+    /// Print results as JSON (`--json`).
+    json: bool,
 }
 
 impl Conn {
@@ -422,6 +440,7 @@ impl Conn {
             connected: false,
             last_error: None,
             direct_only: cli.no_relay,
+            json: cli.json,
         })
     }
 
@@ -615,6 +634,7 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Draw { action } => return draw::run(&mut conn, action).await,
         Cmd::Float { action } => return float::run(&mut conn, action).await,
         Cmd::Attach => return attach(conn).await,
+        Cmd::Events { types } => return events(conn, &types).await,
         Cmd::SshProxy { port } => {
             conn.client
                 .forward_io(
@@ -656,6 +676,9 @@ async fn run(cli: Cli) -> Result<()> {
                     _ => None,
                 })
                 .await??;
+            if conn.json {
+                return json::print("search", &json::Search::from(&page));
+            }
             println!(
                 "{} matches in {} rows (row 0 = oldest scrollback)",
                 page.total, page.total_rows
@@ -674,6 +697,10 @@ async fn run(cli: Cli) -> Result<()> {
                     _ => None,
                 })
                 .await??;
+            if conn.json {
+                let links = links.links.iter().map(json::LinkOut::from).collect();
+                return json::print("links", &json::Links { links });
+            }
             for link in &links.links {
                 let place = match link.source {
                     LinkSource::Screen => "screen".to_owned(),
@@ -741,6 +768,10 @@ async fn run(cli: Cli) -> Result<()> {
                     _ => None,
                 })
                 .await??;
+            if conn.json {
+                let commands = list.commands.iter().map(|c| (&c.mark).into()).collect();
+                return json::print("marks", &json::Marks { commands });
+            }
             for c in &list.commands {
                 let m = &c.mark;
                 let status = match m.finished {
@@ -772,6 +803,14 @@ async fn run(cli: Cli) -> Result<()> {
                     _ => None,
                 })
                 .await??;
+            if conn.json {
+                let doc = json::Output {
+                    command: (&out.mark).into(),
+                    text: out.text,
+                    truncated: out.truncated,
+                };
+                return json::print("output", &doc);
+            }
             println!("{}", out.text);
             return Ok(());
         }
@@ -779,6 +818,9 @@ async fn run(cli: Cli) -> Result<()> {
             conn.client.list_sessions();
             conn.wait("session list", |c| !c.sessions.is_empty())
                 .await?;
+            if conn.json {
+                return json::print("ls", &json::Ls::new(&conn.sessions, conn.layout()));
+            }
             print_ls(&conn);
             return Ok(());
         }
@@ -952,6 +994,50 @@ async fn run(cli: Cli) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// `un events`: one line per event until Ctrl-C.
+async fn events(mut conn: Conn, types: &[String]) -> Result<()> {
+    use client_core::proto::ScriptEvent;
+    let mut mapper = client_core::script::EventMapper::new();
+    // What the attach showed is the baseline, not news.
+    if let Some(layout) = conn.layout.clone() {
+        mapper.feed(&ClientEvent::Layout { layout });
+    }
+    let wanted = |e: &ScriptEvent| {
+        let kind = serde_json::to_value(&e.kind).unwrap_or_default();
+        types.is_empty() || types.iter().any(|t| kind["type"] == t.as_str())
+    };
+    let mut out = std::io::stdout().lock();
+    loop {
+        let event = tokio::select! {
+            event = conn.next() => event?,
+            _ = tokio::signal::ctrl_c() => return Ok(()),
+        };
+        for e in mapper.feed(&event).into_iter().filter(|e| wanted(e)) {
+            if conn.json {
+                writeln!(out, "{}", serde_json::to_string(&e)?)?;
+            } else {
+                let kind = serde_json::to_value(&e.kind)?;
+                writeln!(
+                    out,
+                    "{:>5} {:<16} {:<5} {}",
+                    e.seq,
+                    kind["type"].as_str().unwrap_or("?"),
+                    e.pane.as_deref().unwrap_or("-"),
+                    kind.as_object()
+                        .map(|o| o
+                            .iter()
+                            .filter(|(k, _)| *k != "type")
+                            .map(|(k, v)| format!("{k}={v}"))
+                            .collect::<Vec<_>>()
+                            .join(" "))
+                        .unwrap_or_default()
+                )?;
+            }
+            out.flush()?;
+        }
+    }
 }
 
 fn print_ls(conn: &Conn) {
@@ -1213,9 +1299,15 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
     match action {
         DaemonCmd::Info => {
             let Some(i) = info else {
+                if cli.json {
+                    return json::print("daemon.info", &serde_json::json!({ "info": null }));
+                }
                 println!("the daemon predates version reporting (protocol level 0)");
                 return Ok(());
             };
+            if cli.json {
+                return json::print("daemon.info", &json::Info::from(&i));
+            }
             println!(
                 "{} {} ({}, built {})",
                 brand::DAEMON_BIN,

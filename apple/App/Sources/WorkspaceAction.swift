@@ -41,7 +41,7 @@ enum WorkspaceAction: Hashable {
     case shortcuts
     /// The last closed tab (or tabs closed together) back where it was (⇧⌘T, browsers).
     case reopenClosedTab
-    /// Floating windows (docs/APP-ARCHITECTURE.md §27): float or dock the focused pane, send
+    /// Floating windows (docs/APP-ARCHITECTURE.md §28): float or dock the focused pane, send
     /// its window to the tray, bring the next window forward, look under them all.
     case toggleFloat, minimizeFloat, cycleFloats, toggleFloatsHidden
     case focusNextPane, focusPreviousPane

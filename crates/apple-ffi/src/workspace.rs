@@ -92,6 +92,25 @@ pub struct AgentLaunch {
     /// `worktree`.
     #[uniffi(default = None)]
     pub new_tab_in: Option<u64>,
+    /// The account to run under (`AgentAccount.id`); `nil` uses the host's default. Ignored
+    /// by daemons without accounts, and by a resume, which keeps the session's account.
+    #[uniffi(default = None)]
+    pub account: Option<String>,
+}
+
+/// The pane a layout op made, or its failure as a [`WorkspaceError`].
+pub(crate) fn created_pane(outcome: OpOutcome) -> Result<u64, WorkspaceError> {
+    match outcome {
+        OpOutcome::PaneCreated { pane_id } | OpOutcome::TabCreated { pane_id, .. } => Ok(pane_id),
+        OpOutcome::Failed { code, message } => Err(match code {
+            crate::types::OpErrorCode::Forbidden => WorkspaceError::Denied { message },
+            crate::types::OpErrorCode::NotFound => WorkspaceError::NotFound { message },
+            _ => WorkspaceError::Failed { message },
+        }),
+        other => Err(WorkspaceError::Failed {
+            message: format!("unexpected outcome {other:?}"),
+        }),
+    }
 }
 
 /// The tab [`DaemonClient::reopen_tab`] made.
@@ -335,10 +354,23 @@ impl DaemonClient {
                 .await?
             }
             None => {
-                let agent = proto::PaneLaunch::Agent {
-                    agent: launch.agent.into(),
-                    resume: launch.resume,
-                    cwd: launch.cwd,
+                let accounts = self
+                    .inner
+                    .daemon_info()
+                    .is_some_and(|i| i.features.contains(proto::DaemonFeatures::ACCOUNTS));
+                let agent = if accounts {
+                    proto::PaneLaunch::AccountAgent {
+                        agent: launch.agent.into(),
+                        account: launch.account,
+                        resume: launch.resume,
+                        cwd: launch.cwd,
+                    }
+                } else {
+                    proto::PaneLaunch::Agent {
+                        agent: launch.agent.into(),
+                        resume: launch.resume,
+                        cwd: launch.cwd,
+                    }
                 };
                 let op = match launch.new_tab_in {
                     Some(session) => proto::LayoutOp::NewTab {
@@ -352,27 +384,7 @@ impl DaemonClient {
                         launch: agent,
                     },
                 };
-                match self.await_op(op).await? {
-                    OpOutcome::PaneCreated { pane_id } | OpOutcome::TabCreated { pane_id, .. } => {
-                        pane_id
-                    }
-                    OpOutcome::Failed { code, message } => {
-                        return Err(match code {
-                            crate::types::OpErrorCode::Forbidden => {
-                                WorkspaceError::Denied { message }
-                            }
-                            crate::types::OpErrorCode::NotFound => {
-                                WorkspaceError::NotFound { message }
-                            }
-                            _ => WorkspaceError::Failed { message },
-                        });
-                    }
-                    other => {
-                        return Err(WorkspaceError::Failed {
-                            message: format!("unexpected outcome {other:?}"),
-                        });
-                    }
-                }
+                created_pane(self.await_op(op).await?)?
             }
         };
         let mut launched = AgentLaunched {

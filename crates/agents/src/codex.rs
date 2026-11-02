@@ -4,7 +4,7 @@
 //! flags turn on. Hook payloads are still parsed for users who opt into the marker-block install.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -16,8 +16,8 @@ use crate::event::{
 };
 use crate::hook::{self, Common};
 use crate::launch::{
-    LaunchContext, LaunchMode, LaunchSpec, mcp_args, mcp_server_name, pane_env, toml_quote,
-    user_mcp_server,
+    CODEX_DIR_VAR, LaunchContext, LaunchMode, LaunchSpec, account_env, mcp_args, mcp_server_name,
+    pane_env, toml_quote, user_mcp_server,
 };
 use crate::manifest::Manifest;
 use crate::signal::{Claim, Signal};
@@ -100,9 +100,45 @@ impl Codex {
         [program, "mcp", "remove", name].map(String::from).into()
     }
 
-    /// Whether `~/.codex/config.toml` under `home` registers server `name`.
-    pub fn user_mcp_registered(home: &Path, name: &str) -> bool {
-        std::fs::read_to_string(home.join(".codex/config.toml")).is_ok_and(|config| {
+    /// Codex's configuration file: `<CODEX_HOME>/config.toml`, else `~/.codex/config.toml`.
+    pub fn config_file(home: &Path, codex_home: Option<&Path>) -> PathBuf {
+        codex_home
+            .map_or_else(|| home.join(".codex"), Path::to_path_buf)
+            .join("config.toml")
+    }
+
+    /// What a new account's `config.toml` says: MCP servers' OAuth logins in the account's
+    /// own files, because Codex keys those keyring items by server alone, shared across homes.
+    pub const ACCOUNT_CONFIG: &str = "# MCP OAuth logins stay in this account: Codex's keyring \
+        entries for them are shared by every home.\nmcp_oauth_credentials_store = \"file\"\n";
+
+    /// Codex's own sign-in for the context's account: `codex login`, or `codex login
+    /// --device-auth` for a host whose browser is not the user's, with only that account's
+    /// home in the environment. The user completes it in the pane.
+    pub fn sign_in(ctx: &LaunchContext, device_code: bool) -> LaunchSpec {
+        let (env_remove, env_pinned) = account_env(&ctx.account, CODEX_DIR_VAR);
+        let mut args = vec![OsString::from("login")];
+        if device_code {
+            args.push("--device-auth".into());
+        }
+        LaunchSpec {
+            program: "codex".into(),
+            args,
+            env: pane_env(ctx),
+            cwd: ctx.cwd.clone(),
+            files: Vec::new(),
+            env_remove,
+            env_pinned,
+        }
+    }
+
+    /// Arguments that sign an account out (`codex logout`).
+    pub const SIGN_OUT: &[&str] = &["logout"];
+
+    /// Whether the configuration file `config` ([`Self::config_file`]) registers server
+    /// `name`.
+    pub fn user_mcp_registered(config: &Path, name: &str) -> bool {
+        std::fs::read_to_string(config).is_ok_and(|config| {
             config.lines().any(|line| {
                 let line = line.trim_start_matches(['[', ' ']);
                 line.strip_prefix("mcp_servers.")
@@ -300,8 +336,8 @@ impl AgentAdapter for Codex {
 
     /// `codex -c <notifications…> -c <drawings MCP server…> [resume <id>]`. Codex cannot pin a
     /// new session id, so a `Fresh` id is ignored; the id arrives later from a hook or the rollout
-    /// file. Resume must run with the same `CODEX_HOME` that created the session, so the pane
-    /// inherits it untouched.
+    /// file. Resume must run with the same `CODEX_HOME` that created the session: the account's,
+    /// or for the system account the inherited one, untouched.
     fn launch(&self, ctx: &LaunchContext, mode: &LaunchMode) -> LaunchSpec {
         let mut args: Vec<OsString> = NOTIFICATION_OVERRIDES
             .iter()
@@ -312,12 +348,15 @@ impl AgentAdapter for Codex {
         if let LaunchMode::Resume { session_id } = mode {
             args.extend(["resume".into(), session_id.as_str().into()]);
         }
+        let (env_remove, env_pinned) = account_env(&ctx.account, CODEX_DIR_VAR);
         LaunchSpec {
             program: "codex".into(),
             args,
             env: pane_env(ctx),
             cwd: ctx.cwd.clone(),
             files: Vec::new(),
+            env_remove,
+            env_pinned,
         }
     }
 
@@ -337,17 +376,17 @@ mod tests {
     fn finds_a_user_registration_by_exact_name() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join(".codex")).unwrap();
-        let config = home.path().join(".codex/config.toml");
+        let config = Codex::config_file(home.path(), None);
         std::fs::write(
             &config,
             "[mcp_servers.unnamed_drawings_x]\ncommand = \"x\"\n",
         )
         .unwrap();
-        assert!(!Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
+        assert!(!Codex::user_mcp_registered(&config, "unnamed_drawings"));
         std::fs::write(&config, "[mcp_servers.unnamed_drawings]\ncommand = \"x\"\n").unwrap();
-        assert!(Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
+        assert!(Codex::user_mcp_registered(&config, "unnamed_drawings"));
         std::fs::write(&config, "mcp_servers.unnamed_drawings.command = \"x\"\n").unwrap();
-        assert!(Codex::user_mcp_registered(home.path(), "unnamed_drawings"));
+        assert!(Codex::user_mcp_registered(&config, "unnamed_drawings"));
     }
     use super::*;
     use crate::AgentState;
@@ -363,6 +402,24 @@ mod tests {
 
     fn hook(bytes: &[u8]) -> Signal {
         Codex::new().parse_hook(bytes, Seq(9)).unwrap().unwrap()
+    }
+
+    #[test]
+    fn launch_and_sign_in_run_under_the_account() {
+        let ctx = crate::launch::work_context();
+        let spec = Codex::new().launch(&ctx, &LaunchMode::Fresh { session_id: None });
+        assert!(spec.env_pinned.iter().any(|(k, _)| k == "CODEX_HOME"));
+        assert!(spec.env_remove.iter().any(|v| v == "OPENAI_API_KEY"));
+        assert!(spec.env_remove.iter().any(|v| v == "CLAUDE_CONFIG_DIR"));
+        let remote = Codex::sign_in(&ctx, true);
+        assert_eq!(remote.display_argv(), ["codex", "login", "--device-auth"]);
+        assert_eq!(
+            Codex::sign_in(&ctx, false).display_argv(),
+            ["codex", "login"]
+        );
+        assert!(Codex::ACCOUNT_CONFIG.contains("mcp_oauth_credentials_store = \"file\""));
+        let doc: toml::Table = toml::from_str(Codex::ACCOUNT_CONFIG).unwrap();
+        assert_eq!(doc["mcp_oauth_credentials_store"].as_str(), Some("file"));
     }
 
     #[test]

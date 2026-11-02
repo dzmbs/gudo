@@ -9,6 +9,10 @@
 //! 2. **The tools' documented commands** ([`cli`]): `claude -p /usage`, `codex app-server`.
 //!    At most once per [`UsageConfig::cli_refresh`] per agent.
 //!
+//! Usage is kept per account (`proto::account`): each account's commands run in its own
+//! directory, its rollouts are read from its own `CODEX_HOME`, and a status line counts for the
+//! account of the pane that sent it. `AgentUsageReport` carries the system accounts.
+//!
 //! The daemon never reads the tools' sign-in tokens and never calls the providers' undocumented
 //! usage endpoints. When every source fails the last local data stays (with its age), else the
 //! agent is listed with the reason and no windows.
@@ -22,9 +26,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use proto::{AgentKind, AgentUsage, AgentUsageReport, Caps, ServerCtl, UsageSource, UsageWatch};
+use proto::{
+    AccountStatus, AccountUsage, AccountUsageReport, AgentKind, AgentUsage, AgentUsageReport, Caps,
+    SYSTEM_ACCOUNT, ServerCtl, UsageSource, UsageWatch,
+};
 use tokio::sync::mpsc;
 
+use crate::accounts::{Accounts, Tools};
 use crate::config::Config;
 use crate::core::lock;
 use crate::ws::installs::{self, INSTALLER_DIRS};
@@ -61,8 +69,6 @@ struct Paths {
     claude_dir: PathBuf,
     /// `PATH` to look for the tools on.
     path: Option<std::ffi::OsString>,
-    /// The panes' configured environment, for the tools' commands.
-    vars: Vec<(String, String)>,
     /// Where the last status-line snapshot is kept across restarts.
     state: PathBuf,
 }
@@ -78,7 +84,6 @@ impl Paths {
                 .pane_var("CLAUDE_CONFIG_DIR")
                 .map_or_else(|| home.join(".claude"), PathBuf::from),
             path: cfg.pane_var("PATH"),
-            vars: cfg.pane_env.clone(),
             state: cfg.state_dir.join("usage"),
             home,
         }
@@ -89,14 +94,6 @@ impl Paths {
         // Where the installers put them, for daemons started without a login PATH.
         let installers = INSTALLER_DIRS.iter().map(|d| self.home.join(d));
         installs::find(path.chain(installers), program)
-    }
-
-    fn cli_env(&self, agent: AgentKind) -> Option<cli::Env> {
-        Some(cli::Env {
-            program: self.which(crate::agent::program(agent))?,
-            cwd: self.home.clone(),
-            vars: self.vars.clone(),
-        })
     }
 
     fn has(&self, agent: AgentKind) -> bool {
@@ -111,44 +108,70 @@ impl Paths {
 struct Watcher {
     ctl: mpsc::UnboundedSender<ServerCtl>,
     push: bool,
+    /// Takes per-account pushes (`Caps::ACCOUNTS`).
+    accounts: bool,
 }
+
+/// One account of one agent: what usage is kept and asked for.
+type Key = (AgentKind, String);
 
 #[derive(Default)]
 struct State {
     watchers: Vec<Watcher>,
+    /// The system accounts, for clients without `Caps::ACCOUNTS`.
     report: AgentUsageReport,
+    /// Every account.
+    accounts: AccountUsageReport,
     refreshed: Option<Instant>,
     /// What was last pushed, to send only changes.
     pushed: Option<AgentUsageReport>,
+    pushed_accounts: Option<AccountUsageReport>,
     pushed_at: Option<Instant>,
     ticking: bool,
     /// Commands are being run in the background.
     asking: bool,
     /// Where refreshes send what is due to be asked.
-    asker: Option<mpsc::UnboundedSender<Vec<AgentKind>>>,
-    claude_line: Option<AgentUsage>,
-    /// The last answer of each tool's command, and when it came.
-    asked: HashMap<AgentKind, (Instant, Result<AgentUsage, String>)>,
+    asker: Option<mpsc::UnboundedSender<Vec<Key>>>,
+    /// The last status-line snapshot of each Claude account.
+    claude_lines: HashMap<String, AgentUsage>,
+    /// The last answer of each account's command, and when it came.
+    asked: HashMap<Key, (Instant, Result<AgentUsage, String>)>,
 }
 
 /// The usage hub: one per daemon.
 pub(crate) struct Usage {
     cfg: UsageConfig,
     paths: Paths,
+    accounts: Arc<Accounts>,
+    tools: Tools,
     state: Mutex<State>,
     /// One refresh at a time.
     refreshing: tokio::sync::Mutex<()>,
 }
 
 impl Usage {
-    pub fn new(cfg: &Config) -> Self {
+    pub fn new(cfg: &Config, accounts: Arc<Accounts>) -> Self {
         let paths = Paths::new(cfg);
-        let claude_line = claude::load(&paths.state);
+        let mut claude_lines = HashMap::new();
+        let ids = std::iter::once(SYSTEM_ACCOUNT.to_owned()).chain(
+            accounts
+                .list()
+                .into_iter()
+                .filter(|a| a.agent == AgentKind::Claude && !a.is_system())
+                .map(|a| a.id),
+        );
+        for id in ids {
+            if let Some(line) = claude::load(&paths.state, &id) {
+                claude_lines.insert(id, line);
+            }
+        }
         Self {
             cfg: cfg.usage.clone(),
             paths,
+            accounts,
+            tools: Tools::new(cfg),
             state: Mutex::new(State {
-                claude_line,
+                claude_lines,
                 ..State::default()
             }),
             refreshing: tokio::sync::Mutex::new(()),
@@ -157,13 +180,15 @@ impl Usage {
 
     /// Starts (or updates) a connection's watch and answers with the report, refreshed when
     /// older than the refresh interval. `UsageWatch::api_fallback` is ignored: it stays on the
-    /// wire for compatibility only.
+    /// wire for compatibility only. A client with `Caps::ACCOUNTS` also gets every account's
+    /// usage pushed at once.
     pub async fn watch(
         self: &Arc<Self>,
         ctl: &mpsc::UnboundedSender<ServerCtl>,
         caps: Caps,
         _opts: UsageWatch,
     ) -> AgentUsageReport {
+        let accounts = caps.contains(Caps::ACCOUNTS);
         let start_ticker = {
             let mut st = lock(&self.state);
             st.watchers
@@ -171,6 +196,7 @@ impl Usage {
             st.watchers.push(Watcher {
                 ctl: ctl.clone(),
                 push: caps.contains(Caps::AGENT_USAGE),
+                accounts,
             });
             if st.asker.is_none() {
                 st.asker = Some(self.spawn_asker());
@@ -181,7 +207,11 @@ impl Usage {
             self.spawn_ticker();
         }
         self.refresh(false).await;
-        lock(&self.state).report.clone()
+        let st = lock(&self.state);
+        if accounts {
+            let _ = ctl.send(ServerCtl::AccountUsage(st.accounts.clone()));
+        }
+        st.report.clone()
     }
 
     /// Ends a connection's watch.
@@ -191,15 +221,15 @@ impl Usage {
             .retain(|w| !w.ctl.is_closed() && !w.ctl.same_channel(ctl));
     }
 
-    /// A Claude Code status-line input from a session the daemon launched.
-    pub fn status_line(&self, payload: &serde_json::Value) {
+    /// A Claude Code status-line input from a session the daemon launched under `account`.
+    pub fn status_line(&self, account: &str, payload: &serde_json::Value) {
         let Some(mut usage) = claude::from_status_line(payload, crate::identity::now_millis())
         else {
             return;
         };
-        let report = {
+        let (report, accounts) = {
             let mut st = lock(&self.state);
-            if let Some(old) = &st.claude_line {
+            if let Some(old) = st.claude_lines.get(account) {
                 // The status line runs after every message: same numbers within a minute say
                 // nothing new.
                 let recent = old
@@ -212,28 +242,43 @@ impl Usage {
             }
             // The plan is not in the status line; keep what a command said.
             usage.plan = st
-                .report
-                .agents
+                .accounts
+                .accounts
                 .iter()
-                .find(|a| a.agent == AgentKind::Claude)
-                .and_then(|a| a.plan.clone());
-            st.claude_line = Some(usage.clone());
+                .find(|a| a.usage.agent == AgentKind::Claude && a.account == account)
+                .and_then(|a| a.usage.plan.clone());
+            st.claude_lines.insert(account.to_owned(), usage.clone());
+            let entry = AccountUsage {
+                account: account.to_owned(),
+                usage: usage.clone(),
+            };
             match st
-                .report
-                .agents
+                .accounts
+                .accounts
                 .iter_mut()
-                .find(|a| a.agent == AgentKind::Claude)
+                .find(|a| a.usage.agent == AgentKind::Claude && a.account == account)
             {
-                Some(entry) => *entry = usage.clone(),
-                None => {
-                    st.report.agents.push(usage.clone());
-                    st.report.agents.sort_by_key(|a| agent_order(a.agent));
+                Some(old) => *old = entry,
+                None => st.accounts.accounts.push(entry),
+            }
+            if account == SYSTEM_ACCOUNT {
+                match st
+                    .report
+                    .agents
+                    .iter_mut()
+                    .find(|a| a.agent == AgentKind::Claude)
+                {
+                    Some(old) => *old = usage.clone(),
+                    None => {
+                        st.report.agents.push(usage.clone());
+                        st.report.agents.sort_by_key(|a| agent_order(a.agent));
+                    }
                 }
             }
-            st.report.clone()
+            (st.report.clone(), st.accounts.clone())
         };
-        claude::save(&self.paths.state, &usage);
-        self.publish(report);
+        claude::save(&self.paths.state, account, &usage);
+        self.publish(report, accounts);
     }
 
     fn spawn_ticker(self: &Arc<Self>) {
@@ -262,7 +307,7 @@ impl Usage {
     /// again when they are done.
     async fn refresh(&self, due: bool) {
         let _one = self.refreshing.lock().await;
-        let claude_line = {
+        let claude_lines = {
             let st = lock(&self.state);
             let fresh = st.refreshed.is_some_and(|t| {
                 t.elapsed() < self.cfg.refresh.saturating_sub(Duration::from_millis(500))
@@ -270,23 +315,39 @@ impl Usage {
             if fresh && !due {
                 return;
             }
-            st.claude_line.clone()
+            st.claude_lines.clone()
         };
+        let accounts = self.accounts.list();
         let paths = self.paths.clone();
-        let local = tokio::task::spawn_blocking(move || Local::read(&paths))
-            .await
-            .unwrap_or_default();
+        let dirs: Vec<(Key, Option<PathBuf>, AccountStatus)> = accounts
+            .iter()
+            .map(|a| {
+                let dir = (!a.is_system()).then(|| self.accounts.dir(a.agent, &a.id));
+                ((a.agent, a.id.clone()), dir, a.status.clone())
+            })
+            .collect();
+        let tools = self.tools.clone();
+        let local = {
+            let dirs = dirs.clone();
+            tokio::task::spawn_blocking(move || Local::read(&paths, &tools, &dirs))
+                .await
+                .unwrap_or_default()
+        };
         let now = crate::identity::now_millis();
-        let mut agents = Vec::new();
+        let mut entries = Vec::new();
         let mut asks = Vec::new();
-        for agent in [AgentKind::Claude, AgentKind::Codex] {
-            let (installed, local_usage) = match agent {
-                AgentKind::Claude => (local.claude, claude_line.clone()),
-                AgentKind::Codex => (local.codex, local.codex_usage.clone()),
+        for ((agent, id), _, status) in dirs {
+            let key = (agent, id.clone());
+            let system = id == SYSTEM_ACCOUNT;
+            let installed = local.installed.get(&key).copied().unwrap_or(false);
+            let local_usage = match agent {
+                AgentKind::Claude => claude_lines.get(&id).cloned(),
+                AgentKind::Codex => local.codex.get(&key).cloned().flatten(),
             };
-            if !installed && local_usage.is_none() {
+            if system && !installed && local_usage.is_none() {
                 continue;
             }
+            let signed_out = matches!(status, AccountStatus::SignedOut);
             let fresh = local_usage.as_ref().is_some_and(|u| {
                 u.as_of
                     .is_some_and(|t| now.saturating_sub(t.0) < LOCAL_FRESH.as_millis() as u64)
@@ -297,10 +358,10 @@ impl Usage {
             if fresh {
                 chosen = local_usage.clone();
             }
-            if chosen.is_none() && self.cfg.cli && installed {
-                let (last, due) = self.cached(agent);
+            if chosen.is_none() && self.cfg.cli && installed && !signed_out {
+                let (last, due) = self.cached(&key);
                 if due {
-                    asks.push(agent);
+                    asks.push(key.clone());
                     pending |= last.is_none();
                 }
                 match last {
@@ -313,24 +374,33 @@ impl Usage {
                 (Some(c), Some(l)) if is_newer(&l, &c) => l,
                 (Some(c), _) => c,
                 (None, Some(l)) => l,
+                (None, None) if signed_out => not_signed_in(agent),
                 (None, None) => unknown(agent, &errors, pending),
             };
             if usage.plan.is_none() {
                 // A plan named by an earlier answer still holds.
                 usage.plan = lock(&self.state)
                     .asked
-                    .get(&agent)
+                    .get(&key)
                     .and_then(|(_, r)| r.as_ref().ok()?.plan.clone());
             }
-            agents.push(usage);
+            entries.push(AccountUsage { account: id, usage });
         }
-        let report = AgentUsageReport { agents };
+        let report = AgentUsageReport {
+            agents: entries
+                .iter()
+                .filter(|e| e.account == SYSTEM_ACCOUNT)
+                .map(|e| e.usage.clone())
+                .collect(),
+        };
+        let accounts = AccountUsageReport { accounts: entries };
         {
             let mut st = lock(&self.state);
             st.report = report.clone();
+            st.accounts = accounts.clone();
             st.refreshed = Some(Instant::now());
         }
-        self.publish(report);
+        self.publish(report, accounts);
         let mut st = lock(&self.state);
         if !asks.is_empty()
             && !st.asking
@@ -343,14 +413,14 @@ impl Usage {
 
     /// The background task that runs the commands a refresh found due, one batch at a time,
     /// then refreshes with their answers.
-    fn spawn_asker(self: &Arc<Self>) -> mpsc::UnboundedSender<Vec<AgentKind>> {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<AgentKind>>();
+    fn spawn_asker(self: &Arc<Self>) -> mpsc::UnboundedSender<Vec<Key>> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<Key>>();
         let hub = Arc::downgrade(self);
         tokio::spawn(async move {
             while let Some(batch) = rx.recv().await {
                 let Some(hub) = hub.upgrade() else { return };
-                for agent in batch {
-                    hub.ask(agent).await;
+                for key in batch {
+                    hub.ask(&key).await;
                 }
                 lock(&hub.state).asking = false;
                 hub.refresh(true).await;
@@ -359,48 +429,63 @@ impl Usage {
         tx
     }
 
-    /// The last answer of a tool's command, and whether it is due to be asked again.
-    fn cached(&self, agent: AgentKind) -> (Option<Result<AgentUsage, String>>, bool) {
-        match lock(&self.state).asked.get(&agent) {
+    /// The last answer of an account's command, and whether it is due to be asked again.
+    fn cached(&self, key: &Key) -> (Option<Result<AgentUsage, String>>, bool) {
+        match lock(&self.state).asked.get(key) {
             Some((at, result)) => (Some(result.clone()), at.elapsed() >= self.cfg.cli_refresh),
             None => (None, true),
         }
     }
 
-    /// Runs the tool's usage command for `agent` and keeps the answer.
-    async fn ask(&self, agent: AgentKind) {
-        let result = match self.paths.cli_env(agent) {
-            None => Err(format!(
-                "{} is not on the PATH",
-                crate::agent::program(agent)
-            )),
-            Some(env) => match agent {
-                AgentKind::Claude => cli::claude(&env).await,
-                AgentKind::Codex => cli::codex(&env).await,
+    /// Runs the tool's usage command for one account, in that account's environment, and
+    /// keeps the answer.
+    async fn ask(&self, key: &Key) {
+        let (agent, id) = key;
+        let result = match self.accounts.context(*agent, id) {
+            None => Err("the account was removed".to_owned()),
+            Some(account) => match self.tools.env(*agent, &account) {
+                Err(e) => Err(e),
+                Ok(env) => match agent {
+                    AgentKind::Claude => cli::claude(&env).await,
+                    AgentKind::Codex => cli::codex(&env).await,
+                },
             },
         };
         if let Err(e) = &result {
-            tracing::debug!(?agent, "usage: {e}");
+            tracing::debug!(?agent, account = %id, "usage: {e}");
         }
         lock(&self.state)
             .asked
-            .insert(agent, (Instant::now(), result));
+            .insert(key.clone(), (Instant::now(), result));
     }
 
-    /// Sends `report` to the watchers that take pushes, when it differs from the last one
+    /// Sends the reports to the watchers that take pushes, when they differ from the last ones
     /// pushed (only times moving is pushed at most once per refresh interval).
-    fn publish(&self, report: AgentUsageReport) {
+    fn publish(&self, report: AgentUsageReport, accounts: AccountUsageReport) {
         let mut st = lock(&self.state);
         st.watchers.retain(|w| !w.ctl.is_closed());
-        let same = st.pushed.as_ref().is_some_and(|p| same_numbers(p, &report));
+        let same = st.pushed.as_ref().is_some_and(|p| same_numbers(p, &report))
+            && st
+                .pushed_accounts
+                .as_ref()
+                .is_some_and(|p| same_account_numbers(p, &accounts));
         let recent = st.pushed_at.is_some_and(|t| t.elapsed() < self.cfg.refresh);
-        if st.pushed.as_ref() == Some(&report) || (same && recent) {
+        let unchanged =
+            st.pushed.as_ref() == Some(&report) && st.pushed_accounts.as_ref() == Some(&accounts);
+        if unchanged || (same && recent) {
             return;
         }
+        let system_changed = st.pushed.as_ref() != Some(&report);
         st.pushed = Some(report.clone());
+        st.pushed_accounts = Some(accounts.clone());
         st.pushed_at = Some(Instant::now());
         for w in st.watchers.iter().filter(|w| w.push) {
-            let _ = w.ctl.send(ServerCtl::AgentUsage(report.clone()));
+            if system_changed {
+                let _ = w.ctl.send(ServerCtl::AgentUsage(report.clone()));
+            }
+            if w.accounts {
+                let _ = w.ctl.send(ServerCtl::AccountUsage(accounts.clone()));
+            }
         }
     }
 }
@@ -408,19 +493,57 @@ impl Usage {
 /// What the files on the host say (read on the blocking pool).
 #[derive(Default)]
 struct Local {
-    claude: bool,
-    codex: bool,
-    codex_usage: Option<AgentUsage>,
+    /// Whether each account's agent can run here.
+    installed: HashMap<Key, bool>,
+    /// Each Codex account's newest rollout limits.
+    codex: HashMap<Key, Option<AgentUsage>>,
 }
 
 impl Local {
-    fn read(paths: &Paths) -> Self {
-        Self {
-            claude: paths.has(AgentKind::Claude),
-            codex: paths.has(AgentKind::Codex),
-            codex_usage: codex::from_rollouts(&paths.codex_home),
+    fn read(paths: &Paths, tools: &Tools, dirs: &[(Key, Option<PathBuf>, AccountStatus)]) -> Self {
+        let mut local = Self::default();
+        for ((agent, id), dir, _) in dirs {
+            let key = (*agent, id.clone());
+            let installed = match dir {
+                None => paths.has(*agent),
+                Some(_) => tools.which(crate::agent::program(*agent)).is_some(),
+            };
+            local.installed.insert(key.clone(), installed);
+            if *agent == AgentKind::Codex {
+                let home = dir.as_deref().unwrap_or(&paths.codex_home);
+                local.codex.insert(key, codex::from_rollouts(home));
+            }
         }
+        local
     }
+}
+
+/// An account that is not signed in.
+fn not_signed_in(agent: AgentKind) -> AgentUsage {
+    AgentUsage {
+        agent,
+        plan: None,
+        windows: Vec::new(),
+        source: UsageSource::Unknown,
+        as_of: None,
+        note: Some("Not signed in.".into()),
+    }
+}
+
+/// Equal but for the report times.
+fn same_account_numbers(a: &AccountUsageReport, b: &AccountUsageReport) -> bool {
+    a.accounts.len() == b.accounts.len()
+        && a.accounts.iter().zip(&b.accounts).all(|(x, y)| {
+            x.account == y.account
+                && same_numbers(
+                    &AgentUsageReport {
+                        agents: vec![x.usage.clone()],
+                    },
+                    &AgentUsageReport {
+                        agents: vec![y.usage.clone()],
+                    },
+                )
+        })
 }
 
 /// An agent with nothing known, and why.

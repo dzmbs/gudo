@@ -1,0 +1,15 @@
+{
+  "kind": "ports",
+  "ports": [
+    {
+      "kind": "http",
+      "loopbackOnly": true,
+      "pane": "p4",
+      "pid": 4242,
+      "port": 5173,
+      "process": "node",
+      "url": "http://localhost:5173/"
+    }
+  ],
+  "v": 1
+}

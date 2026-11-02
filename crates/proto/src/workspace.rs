@@ -313,6 +313,50 @@ pub enum WorkspaceRequest {
         /// [`RepoHooksTrust::hash`](crate::repo::RepoHooksTrust::hash).
         hash: String,
     },
+    /// The host's agent accounts → [`WorkspaceResponse::Accounts`]. Owner only; needs
+    /// [`DaemonFeatures::ACCOUNTS`](crate::DaemonFeatures::ACCOUNTS) (see [`crate::account`]).
+    Accounts,
+    /// Makes an account (its directory, signed out) → [`WorkspaceResponse::Account`]. Sign
+    /// in with [`PaneLaunch::AccountSignIn`](crate::PaneLaunch::AccountSignIn).
+    AccountAdd(crate::account::AccountAdd),
+    /// Renames or recolours an account → [`WorkspaceResponse::Accounts`].
+    AccountEdit {
+        /// The account's agent.
+        agent: AgentKind,
+        /// The account.
+        account: String,
+        /// Its new name.
+        label: String,
+        /// Its new palette index.
+        color: u8,
+    },
+    /// Signs an account out with the agent's own logout and deletes its directory →
+    /// [`WorkspaceResponse::Accounts`]. Refused for the system account and while an agent
+    /// pane runs under it.
+    AccountRemove {
+        /// The account's agent.
+        agent: AgentKind,
+        /// The account.
+        account: String,
+    },
+    /// Asks the agent whether an account is signed in, and as whom →
+    /// [`WorkspaceResponse::Account`].
+    AccountCheck {
+        /// The account's agent.
+        agent: AgentKind,
+        /// The account.
+        account: String,
+    },
+    /// Sets or clears the account an agent uses by default, on the host or in a project →
+    /// [`WorkspaceResponse::Accounts`].
+    AccountSetDefault {
+        /// The agent.
+        agent: AgentKind,
+        /// The project; `None` sets the host default.
+        project: Option<String>,
+        /// The account; `None` clears the default.
+        account: Option<String>,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -391,6 +435,10 @@ pub enum WorkspaceResponse {
     AgentMcpCommands(Vec<AgentMcpCommand>),
     /// A repository's setup and teardown commands.
     RepoHooks(crate::repo::RepoHooksTrust),
+    /// The host's agent accounts.
+    Accounts(crate::account::AccountsReport),
+    /// One account.
+    Account(crate::account::AgentAccount),
 }
 
 /// A command that registers or removes the daemon's MCP server with an agent.

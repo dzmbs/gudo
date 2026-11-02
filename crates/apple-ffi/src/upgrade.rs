@@ -52,6 +52,9 @@ pub struct DaemonInfo {
     /// It keeps floating windows (`LayoutOp::NewFloat` …, `ClientEvent::Floats`).
     #[uniffi(default = false)]
     pub floats: bool,
+    /// It keeps agent accounts (`accounts`, `account_sign_in`, `AgentLaunch.account`).
+    #[uniffi(default = false)]
+    pub accounts: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -74,6 +77,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             floats: i.features.contains(proto::DaemonFeatures::FLOATS),
             agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
             reopen: i.features.contains(proto::DaemonFeatures::REOPEN),
+            accounts: i.features.contains(proto::DaemonFeatures::ACCOUNTS),
         }
     }
 }

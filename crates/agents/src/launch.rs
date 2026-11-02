@@ -23,7 +23,52 @@ pub struct LaunchContext {
     /// The working directory to launch in. Resume must use the session's original cwd for agents
     /// that scope sessions by directory.
     pub cwd: PathBuf,
+    /// The account the agent runs under.
+    pub account: AccountContext,
 }
+
+/// Which of the host's accounts an agent runs under (docs/DAEMON.md "Agent accounts").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountContext {
+    /// The account's id, exported as `UN_ACCOUNT`.
+    pub id: String,
+    /// The account's configuration directory, passed as the agent's own variable
+    /// (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). `None` is the system account: the pane inherits
+    /// whatever the user's environment says, exactly as without accounts.
+    pub dir: Option<PathBuf>,
+}
+
+impl AccountContext {
+    /// The user's own configuration directory.
+    pub fn system() -> Self {
+        Self {
+            id: SYSTEM_ACCOUNT.into(),
+            dir: None,
+        }
+    }
+}
+
+/// The id of the account that is the user's own configuration directory.
+pub const SYSTEM_ACCOUNT: &str = "system";
+
+/// Variables that outrank an account's own sign-in (an API key or token in the environment wins
+/// over `/login` and `codex login`), so they would silently bill another account. They are
+/// removed from agent panes launched under a named account; the system account keeps them.
+pub const CREDENTIAL_VARS: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "ANTHROPIC_PROFILE",
+    "CODEX_API_KEY",
+    "OPENAI_API_KEY",
+    "CODEX_ACCESS_TOKEN",
+];
+
+/// The variable naming Claude Code's configuration directory.
+pub const CLAUDE_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
+/// The variable naming Codex's home.
+pub const CODEX_DIR_VAR: &str = "CODEX_HOME";
 
 /// Whether to start a new session or resume one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +108,12 @@ pub struct LaunchSpec {
     pub cwd: PathBuf,
     /// Files to write first. Writing is idempotent; the contents depend only on the context.
     pub files: Vec<SupportFile>,
+    /// Variables removed from the pane's environment, again after the login shell's startup
+    /// files ran ([`Self::shell_line`]).
+    pub env_remove: Vec<String>,
+    /// Variables set after the login shell's startup files ran, so a startup file cannot point
+    /// the agent at another account. They appear in the process list: never a secret.
+    pub env_pinned: Vec<(String, OsString)>,
 }
 
 impl LaunchSpec {
@@ -76,6 +127,92 @@ impl LaunchSpec {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
     }
+
+    /// The POSIX shell line that runs the program: `unset` of [`Self::env_remove`], `export`
+    /// of [`Self::env_pinned`], then the command.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let spec = agents::LaunchSpec {
+    ///     program: "claude".into(),
+    ///     args: vec!["--resume".into(), "s1".into()],
+    ///     env: Vec::new(),
+    ///     cwd: "/src".into(),
+    ///     files: Vec::new(),
+    ///     env_remove: vec!["ANTHROPIC_API_KEY".into()],
+    ///     env_pinned: vec![("CLAUDE_CONFIG_DIR".into(), "/s/a b".into())],
+    /// };
+    /// assert_eq!(
+    ///     spec.shell_line(),
+    ///     "unset ANTHROPIC_API_KEY; export CLAUDE_CONFIG_DIR='/s/a b'; claude --resume s1"
+    /// );
+    /// ```
+    pub fn shell_line(&self) -> String {
+        let mut line = String::new();
+        if !self.env_remove.is_empty() {
+            line.push_str("unset ");
+            line.push_str(&self.env_remove.join(" "));
+            line.push_str("; ");
+        }
+        for (k, v) in &self.env_pinned {
+            line.push_str(&format!(
+                "export {k}={}; ",
+                shell_quote(&v.to_string_lossy())
+            ));
+        }
+        let command: Vec<String> = std::iter::once(&self.program)
+            .chain(&self.args)
+            .map(|a| shell_quote(&a.to_string_lossy()))
+            .collect();
+        line.push_str(&command.join(" "));
+        line
+    }
+}
+
+/// The environment rules for an agent whose directory variable is `own` (`CLAUDE_CONFIG_DIR`,
+/// `CODEX_HOME`) under `account`: the variables to remove and the ones to set
+/// (docs/DAEMON.md "Agent accounts").
+///
+/// The system account keeps the pane's environment exactly as before accounts, API keys
+/// included: many users run the agents with one. A named account has its directory set and the
+/// credential variables and the other agent's directory variable removed, since a stray key would
+/// outrank that account's own sign-in.
+///
+/// # Examples
+///
+/// ```
+/// use agents::{AccountContext, account_env};
+///
+/// let (remove, set) = account_env(&AccountContext::system(), "CODEX_HOME");
+/// assert!(remove.is_empty());
+/// assert!(!set.iter().any(|(k, _)| k == "CODEX_HOME"));
+///
+/// let work = AccountContext { id: "a1b2c3d4".into(), dir: Some("/s/accounts/codex/a1b2c3d4".into()) };
+/// let (remove, set) = account_env(&work, "CODEX_HOME");
+/// assert!(remove.iter().any(|v| v == "OPENAI_API_KEY"));
+/// assert!(remove.iter().any(|v| v == "CLAUDE_CONFIG_DIR"));
+/// assert!(set.iter().any(|(k, _)| k == "CODEX_HOME"));
+/// ```
+pub fn account_env(account: &AccountContext, own: &str) -> (Vec<String>, Vec<(String, OsString)>) {
+    let mut pinned = vec![(brand::env_var("ACCOUNT"), account.id.clone().into())];
+    let Some(dir) = &account.dir else {
+        return (Vec::new(), pinned);
+    };
+    let other = if own == CLAUDE_DIR_VAR {
+        CODEX_DIR_VAR
+    } else {
+        CLAUDE_DIR_VAR
+    };
+    let remove = CREDENTIAL_VARS
+        .iter()
+        .chain([&other])
+        .map(|v| (*v).to_owned())
+        .collect();
+    pinned.push((own.to_owned(), dir.clone().into()));
+    // The hook shim reads it: Claude may scrub its own variable from hook environments.
+    pinned.push((brand::env_var("ACCOUNT_DIR"), dir.clone().into()));
+    (remove, pinned)
 }
 
 /// Returns the variables every agent pane gets: pane id, socket, token, endpoint file and the hook
@@ -183,7 +320,7 @@ pub(crate) fn toml_quote(s: &str) -> String {
 }
 
 /// Quotes `s` for a POSIX shell as one word.
-pub(crate) fn shell_quote(s: &str) -> String {
+pub fn shell_quote(s: &str) -> String {
     if !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&b))
@@ -203,6 +340,18 @@ pub(crate) fn test_context() -> LaunchContext {
         hook_bin: "/opt/un/bin/un-hook".into(),
         state_dir: "/state".into(),
         cwd: "/src/app".into(),
+        account: AccountContext::system(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn work_context() -> LaunchContext {
+    LaunchContext {
+        account: AccountContext {
+            id: "a1b2".into(),
+            dir: Some("/state/accounts/claude/a1b2".into()),
+        },
+        ..test_context()
     }
 }
 
@@ -259,5 +408,66 @@ mod tests {
         assert_eq!(shell_quote("/Users/A B/un-hook"), "'/Users/A B/un-hook'");
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
         assert_eq!(shell_quote(""), "''");
+    }
+
+    fn names(vars: &[(String, OsString)]) -> Vec<&str> {
+        vars.iter().map(|(k, _)| k.as_str()).collect()
+    }
+
+    /// A named account loses every credential that outranks its sign-in, for both agents; the
+    /// system account keeps its environment as before accounts, API keys included.
+    #[test]
+    fn named_accounts_scrub_credentials_the_system_account_keeps_them() {
+        for own in [CLAUDE_DIR_VAR, CODEX_DIR_VAR] {
+            let (remove, _) = account_env(&work_context().account, own);
+            for var in CREDENTIAL_VARS {
+                assert!(remove.iter().any(|r| r == var), "{own}: {var} kept");
+            }
+            let other = if own == CLAUDE_DIR_VAR {
+                CODEX_DIR_VAR
+            } else {
+                CLAUDE_DIR_VAR
+            };
+            assert!(remove.iter().any(|r| r == other));
+            assert!(!remove.iter().any(|r| r == own), "{own} removed");
+            let (remove, _) = account_env(&test_context().account, own);
+            assert!(
+                remove.is_empty(),
+                "{own}: system account scrubbed {remove:?}"
+            );
+        }
+        let (_, set) = account_env(&test_context().account, CLAUDE_DIR_VAR);
+        assert_eq!(names(&set), ["UN_ACCOUNT"]);
+        assert_eq!(set[0].1, "system");
+        let (_, set) = account_env(&work_context().account, CLAUDE_DIR_VAR);
+        assert_eq!(
+            names(&set),
+            ["UN_ACCOUNT", "CLAUDE_CONFIG_DIR", "UN_ACCOUNT_DIR"]
+        );
+        assert_eq!(set[1].1, "/state/accounts/claude/a1b2");
+    }
+
+    /// The shell line unsets before it exports and quotes every value, so a startup file's
+    /// `export ANTHROPIC_API_KEY=…` cannot reach the agent.
+    #[test]
+    fn shell_line_scrubs_after_startup_files() {
+        let (env_remove, env_pinned) = account_env(&work_context().account, CODEX_DIR_VAR);
+        let spec = LaunchSpec {
+            program: "codex".into(),
+            args: vec!["resume".into(), "it's".into()],
+            env: Vec::new(),
+            cwd: "/".into(),
+            files: Vec::new(),
+            env_remove,
+            env_pinned,
+        };
+        let line = spec.shell_line();
+        assert!(line.starts_with("unset ANTHROPIC_API_KEY "), "{line}");
+        assert!(line.contains(" CLAUDE_CONFIG_DIR; "), "{line}");
+        assert!(
+            line.contains("export CODEX_HOME=/state/accounts/claude/a1b2; "),
+            "{line}"
+        );
+        assert!(line.ends_with(r"; codex resume 'it'\''s'"), "{line}");
     }
 }

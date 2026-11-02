@@ -102,6 +102,9 @@ pub struct TestClient {
     pub floats: Vec<client_core::proto::SessionFloats>,
     /// `ClientEvent::Clipboard` writes (connections with `clipboard`).
     pub clipboard: Vec<(PaneId, String)>,
+    script: client_core::script::EventMapper,
+    /// What `un events` would print, in order.
+    pub script_events: Vec<client_core::proto::ScriptEvent>,
 }
 
 impl TestClient {
@@ -227,12 +230,16 @@ impl TestClient {
             projects: Vec::new(),
             floats: Vec::new(),
             clipboard: Vec::new(),
+            script: client_core::script::EventMapper::new(),
+            script_events: Vec::new(),
         }
     }
 
     fn apply(&mut self, event: ClientEvent) {
         let name = format!("{event:?}");
         self.log.push(name.chars().take(120).collect());
+        let script = self.script.feed(&event);
+        self.script_events.extend(script);
         match event {
             ClientEvent::Connected { .. } => self.connected += 1,
             ClientEvent::Layout { layout } => {

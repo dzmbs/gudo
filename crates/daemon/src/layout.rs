@@ -281,6 +281,16 @@ impl Layout {
             .find_map(|t| leaves(&t.root).any(|p| p == pane).then_some(t.tab_id))
     }
 
+    /// The project of the tab holding `pane`, if it is in one.
+    pub fn project_of_pane(&self, pane: PaneId) -> Option<String> {
+        let tab = self.tab_of_pane(pane)?;
+        self.sessions
+            .iter()
+            .flat_map(|s| &s.tab_projects)
+            .find(|m| m.tab_id == tab)
+            .map(|m| m.project.clone())
+    }
+
     pub fn session_of_tab(&self, tab: TabId) -> Option<SessionId> {
         self.locate_tab(tab).map(|(s, _)| self.sessions[s].id)
     }

@@ -108,6 +108,23 @@ pub(crate) fn check(core: &Core, authz: &Authz, need: Need, target: Target) -> R
     }
 }
 
+/// Whether a layout op chooses one of the owner's agent accounts: an agent under a named
+/// account other than the system one, or a sign-in. Only the owner's own devices may.
+pub(crate) fn chooses_account(op: &LayoutOp) -> bool {
+    let launch = match op {
+        LayoutOp::Split { launch, .. } | LayoutOp::NewTab { launch, .. } => launch,
+        _ => return false,
+    };
+    match launch {
+        PaneLaunch::AccountAgent {
+            account: Some(account),
+            ..
+        } => account != proto::SYSTEM_ACCOUNT,
+        PaneLaunch::AccountSignIn { .. } => true,
+        _ => false,
+    }
+}
+
 /// What a layout op needs.
 pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
     use LayoutOp as O;
@@ -124,6 +141,10 @@ pub(crate) fn op(op: &LayoutOp) -> (Need, Target) {
             launch: PaneLaunch::Reopen { .. },
             ..
         } => (Need::Own, Target::Session(*session_id)),
+        O::Split { pane_id, .. } if chooses_account(op) => (Need::Own, Target::SessionOf(*pane_id)),
+        O::NewTab { session_id, .. } if chooses_account(op) => {
+            (Need::Own, Target::Session(*session_id))
+        }
         O::Split { pane_id, .. } | O::BreakPane { pane_id } | O::MovePane { pane_id, .. } => {
             (Need::Drive, Target::SessionOf(*pane_id))
         }
@@ -254,6 +275,13 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::AgentInstalls => (Need::Drive, Target::Host),
         // Changes the owner's agent configuration.
         R::AgentMcpCommands { .. } => (Need::Own, Target::Daemon),
+        // The owner's sign-ins: a guest neither sees nor switches them.
+        R::Accounts
+        | R::AccountAdd(_)
+        | R::AccountEdit { .. }
+        | R::AccountRemove { .. }
+        | R::AccountCheck { .. }
+        | R::AccountSetDefault { .. } => (Need::Own, Target::Daemon),
     }
 }
 
@@ -289,6 +317,54 @@ pub(crate) fn assist_pane(req: &AssistRequest) -> Option<PaneId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A guest who drives may start an agent under the host default, but never choose one of
+    /// the owner's accounts or open a sign-in.
+    #[test]
+    fn choosing_an_account_needs_the_owner() {
+        let session = SessionId(1);
+        let tab = |launch| LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch,
+        };
+        let agent = |account: Option<&str>| PaneLaunch::AccountAgent {
+            agent: proto::AgentKind::Claude,
+            account: account.map(str::to_owned),
+            resume: None,
+            cwd: None,
+        };
+        assert_eq!(
+            op(&tab(agent(None))),
+            (Need::Drive, Target::Session(session))
+        );
+        assert_eq!(
+            op(&tab(agent(Some(proto::SYSTEM_ACCOUNT)))),
+            (Need::Drive, Target::Session(session))
+        );
+        assert_eq!(
+            op(&tab(agent(Some("a1b2c3d4")))),
+            (Need::Own, Target::Session(session))
+        );
+        let sign_in = PaneLaunch::AccountSignIn {
+            agent: proto::AgentKind::Codex,
+            account: "a1b2c3d4".into(),
+            device_code: true,
+        };
+        let split = LayoutOp::Split {
+            pane_id: PaneId(2),
+            axis: proto::Axis::Horizontal,
+            launch: sign_in,
+        };
+        assert_eq!(op(&split), (Need::Own, Target::SessionOf(PaneId(2))));
+        assert!(chooses_account(&split));
+        let accounts = WorkspaceRequest::AccountSetDefault {
+            agent: proto::AgentKind::Claude,
+            project: None,
+            account: None,
+        };
+        assert_eq!(workspace(&accounts), (Need::Own, Target::Daemon));
+    }
 
     /// A driver may open tabs, but bringing back a closed pane (which can resume the owner's
     /// agent session) is the owner's.

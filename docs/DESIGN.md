@@ -340,7 +340,9 @@ tabs to reorder.
   split divider", ±2.5 %). Split sizes snap to whole cells (main's `SplitSnapping`).
 - No focus ring. Unfocused panes are dimmed with the background at 1 − `unfocused-split-opacity`.
 - Pane header (only in splits, 24 pt, on the terminal background): program mark (12 pt),
-  program's display name, status glyph and state word in its color, and the pane menu (… on
+  program's display name, its account ("· ● Work", only when that agent has more than one account
+  on the host), status glyph and state word in its color, an "At Limit" mark in the attention colour
+  whose menu offers a new tab under another signed-in account, and the pane menu (… on
   hover/focus on the Mac; at 0.6 on touch, where there is no hover). Tap focuses.
   it failed), a failed command's rows tinted with the theme's red at 6 %, its ✓ / ✗ exit and run
   time at the right of its prompt row on hover, and the command whose output fills the top of the
@@ -351,7 +353,7 @@ tabs to reorder.
   scrollback search bar top-right (draggable to any corner).
 
 
-docs/APP-ARCHITECTURE.md §27 has the model. One canvas per tab (`PaneCanvas.swift`): every pane,
+docs/APP-ARCHITECTURE.md §28 has the model. One canvas per tab (`PaneCanvas.swift`): every pane,
 tiled or floating, is one view keyed by its id, so floating, docking, zooming, dropping and
 minimizing only move and resize views in one `lift` spring, and no terminal is ever rebuilt.
 
@@ -755,7 +757,7 @@ shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`
 theme, each from the same picker; the system's appearance writes `theme` (`Views/ThemePair.swift`).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
-from the real profiles). Notifications. Privacy & Security: App Lock ("Require Face ID", the grace period) and saved passwords; locked, every window shows the app icon, "<App> Is Locked" and one primary Unlock on the theme base (`Security/AppLockScreen.swift`, 1Password and banking apps). About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
+from the real profiles). Notifications. Agents: Accounts (each host's Claude Code and Codex sign-ins; per agent a grouped list of rows with the account's colour dot in the project palette, its name, a quiet Default capsule, who it is signed in as on the second line, "Not signed in" in the attention colour, its tightest limit trailing in `meta`; actions in the context menu, Add … Account opens a name-and-colour sheet; APP-ARCHITECTURE §27), Agent Tools. Privacy & Security: App Lock ("Require Face ID", the grace period) and saved passwords; locked, every window shows the app icon, "<App> Is Locked" and one primary Unlock on the theme base (`Security/AppLockScreen.swift`, 1Password and banking apps). About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
 top, the pane's title once in the titlebar, a grouped form beside it, min 720 × 480); iOS: one grouped form. Both on the
 theme's chrome. Values reach the renderer through `TerminalAppearance`
 (`TerminalAppearance.fromPreferences()`).

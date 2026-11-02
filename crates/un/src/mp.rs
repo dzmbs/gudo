@@ -457,6 +457,14 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
         }
         MpCmd::Who { watch } => {
             let list = conn.client.participants().await?;
+            if conn.json {
+                let me = conn.client.me().map(|m| m.actor.device);
+                let participants = list
+                    .iter()
+                    .map(|p| crate::json::Person::new(p, me))
+                    .collect();
+                return crate::json::print("who", &crate::json::Who { participants });
+            }
             print_participants(conn, &list);
             if watch {
                 let (listener, mut events) = MultiplayerEventQueue::channel();
@@ -689,6 +697,14 @@ pub(crate) async fn run(conn: &mut Conn, cmd: MpCmd) -> Result<()> {
         }
         MpCmd::Audit { limit, after } => {
             let page = conn.client.audit(after, limit).await?;
+            if conn.json {
+                let doc = crate::json::Audit {
+                    records: page.records.iter().map(Into::into).collect(),
+                    total: page.total,
+                    chain_ok: page.chain_ok,
+                };
+                return crate::json::print("audit", &doc);
+            }
             for r in &page.records {
                 let who = r.actor.map_or("-".into(), |a| hex(&a.device.0[..4]));
                 let pane = r.pane_id.map_or(String::new(), |p| format!(" pane {p}"));

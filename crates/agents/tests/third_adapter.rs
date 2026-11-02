@@ -90,6 +90,8 @@ impl AgentAdapter for Pi {
                 path: extension,
                 contents: "// un-agent extension".into(),
             }],
+            env_remove: Vec::new(),
+            env_pinned: Vec::new(),
         }
     }
 
@@ -133,6 +135,7 @@ fn context() -> LaunchContext {
         hook_bin: "/bin/un-hook".into(),
         state_dir: "/state".into(),
         cwd: "/src".into(),
+        account: agents::AccountContext::system(),
     }
 }
 

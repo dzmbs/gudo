@@ -44,6 +44,13 @@ pub const PERMISSION_WAIT: Duration = Duration::from_secs(585);
 /// The event name the shim sends for Claude Code's status-line input (`un-hook claude
 /// StatusLine`, the `statusLine` command in the settings the daemon launches Claude with).
 pub const STATUS_LINE_EVENT: &str = "StatusLine";
+
+/// The hook shim's agent name for account events (`un-hook account SignIn`), which sign-in
+/// panes send when the agent's login ends.
+pub const ACCOUNT_HOOK: &str = "account";
+
+/// The account event a sign-in pane sends when the agent's login ends.
+pub const SIGN_IN_EVENT: &str = "SignIn";
 /// Longest hook request line accepted: a browser upload's files fill most of a frame to the app.
 const MAX_REQUEST: usize = proto::MAX_FRAME_LEN;
 
@@ -145,6 +152,11 @@ pub(crate) fn new_uuid() -> String {
 static NEXT_REQUEST: std::sync::LazyLock<AtomicU64> =
     std::sync::LazyLock::new(|| AtomicU64::new(first_request_id()));
 
+/// A new wire request id, unique for this run.
+pub(crate) fn next_request_id() -> RequestId {
+    RequestId(NEXT_REQUEST.fetch_add(1, Ordering::Relaxed))
+}
+
 /// A random id in `[2^32, 2^52)`: far from any earlier run's, and exact as a JSON number.
 fn first_request_id() -> u64 {
     let mut b = [0; 8];
@@ -225,7 +237,7 @@ impl AgentRuntime {
         if let Some((wire, _)) = self.requests.iter().find(|(_, r)| r == id) {
             return *wire;
         }
-        let wire = RequestId(NEXT_REQUEST.fetch_add(1, Ordering::Relaxed));
+        let wire = next_request_id();
         self.requests.push((wire, id.clone()));
         // Old dialogs are never answered again; keep the table short.
         if self.requests.len() > 32 {
@@ -615,7 +627,12 @@ impl HookServer {
         own || fsutil::constant_eq(token.as_bytes(), self.token.as_bytes())
     }
 
-    pub fn launch_context(&self, pane: PaneId, cwd: PathBuf) -> LaunchContext {
+    pub fn launch_context(
+        &self,
+        pane: PaneId,
+        cwd: PathBuf,
+        account: agents::AccountContext,
+    ) -> LaunchContext {
         LaunchContext {
             pane_id: agents::PaneId::new(pane.0.to_string()),
             socket: self.socket.clone(),
@@ -624,6 +641,7 @@ impl HookServer {
             hook_bin: self.hook_bin.clone(),
             state_dir: self.state_dir.clone(),
             cwd,
+            account,
         }
     }
 
@@ -787,7 +805,7 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
     }
     // So do the terminal tools.
     if let Ok(call) = serde_json::from_str::<crate::term::TermCall>(&line) {
-        let reply = crate::term::serve(core, call, peer_uid).await;
+        let reply = crate::term::serve(core, call, peer_uid, reader).await;
         let mut out = serde_json::to_vec(&reply).map_err(io::Error::other)?;
         out.push(b'\n');
         write.write_all(&out).await?;
@@ -815,13 +833,27 @@ async fn handle_hook(core: &Arc<Core>, request: HookRequest) -> HookResponse {
         return HookResponse::default();
     }
     // shim prints the user's own status line itself.
-    if request.event == STATUS_LINE_EVENT {
-        core.ws.usage.status_line(&request.payload);
-        return HookResponse::default();
-    }
     let Some(pane_id) = request.pane.parse().ok().map(PaneId) else {
         return HookResponse::default();
     };
+    if request.event == STATUS_LINE_EVENT {
+        // It counts for the account of the pane that sent it.
+        let account = core
+            .pane_account(pane_id)
+            .filter(|(agent, _)| *agent == AgentKind::Claude)
+            .map_or_else(|| proto::SYSTEM_ACCOUNT.to_owned(), |(_, id)| id);
+        core.ws.usage.status_line(&account, &request.payload);
+        return HookResponse::default();
+    }
+    // A sign-in pane's login ended: ask the agent who is signed in now.
+    if request.agent == ACCOUNT_HOOK {
+        if request.event == SIGN_IN_EVENT
+            && let Some((agent, account)) = core.ws.accounts.sign_in_of(pane_id)
+        {
+            core.check_account(agent, account);
+        }
+        return HookResponse::default();
+    }
     let Some(entry) = core.pane(pane_id) else {
         return HookResponse::default();
     };

@@ -132,11 +132,33 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     /// The daemon's item as a note: approval options come from the pane's agent state.
     func note(for item: AttentionItem, hostId: String, daemon: DaemonConnection) -> AttentionNote? {
-        let hostName = hosts.record(hostId)?.name ?? "Host"
-        let agentState = daemon.meta[PaneId(item.paneId)]?.agent
+        let drive: DriveRequestInfo? = if case .agentBlocked(_, let request?) = item.kind {
+            daemon.approvals.drives[request]
+        } else {
+            nil
+        }
+        return Self.note(for: item, hostId: hostId, hostName: hosts.record(hostId)?.name ?? "Host",
+                         agentState: daemon.meta[PaneId(item.paneId)]?.agent, drive: drive)
+    }
+
+    /// The note for `item`. A drive request (an agent asking to drive one of the user's panes)
+    /// is titled with what it wants and answers with its fixed options: Approve allows once,
+    /// never "for this pane". Pure, for tests.
+    static func note(
+        for item: AttentionItem, hostId: String, hostName: String, agentState: AgentStatus?, drive: DriveRequestInfo?
+    ) -> AttentionNote {
         let kind: AttentionNote.Kind
         var agent: String?
         switch item.kind {
+        case .agentBlocked(let name, let request?) where drive?.id == request:
+            agent = AgentKind(name).title
+            if let drive {
+                kind = .approval(requestId: request, approve: .init(id: drive.allowOnce, label: "Allow once"),
+                                 deny: .init(id: drive.deny, label: "Deny"))
+                return AttentionNote(hostId: hostId, hostName: hostName, itemId: item.id, paneId: item.paneId,
+                                     kind: kind, title: drive.title, body: drive.action, agent: agent)
+            }
+            kind = .blocked
         case .agentBlocked(let name, let request):
             agent = AgentKind(name).title
             if let request, case .blocked(_, _, let options) = agentState?.state, !options.isEmpty {

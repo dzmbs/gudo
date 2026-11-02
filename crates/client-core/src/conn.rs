@@ -365,7 +365,7 @@ async fn handshake(inner: &Arc<Inner>, conn: Connection, v: u16) -> Result<Live,
             | if crate::mp::is_guest(inner) {
                 Caps::EMPTY
             } else {
-                Caps::KNOCK | Caps::DEVICE_ALERTS | Caps::HOST_ALERTS
+                Caps::KNOCK | Caps::DEVICE_ALERTS | Caps::HOST_ALERTS | Caps::DRIVE_ASKS | Caps::ACCOUNTS
             }
             | Caps::APPROVALS
             | Caps::WORKFLOWS

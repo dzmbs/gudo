@@ -706,6 +706,13 @@ pub enum ServerCtl {
         /// The text, at most [`MAX_CLIPBOARD_BYTES`] of UTF-8.
         text: String,
     },
+    /// The host's agent accounts changed (or a pane started under one), to owner clients with
+    /// [`Caps::ACCOUNTS`] (see [`crate::account`]).
+    Accounts(crate::account::AccountsReport),
+    /// Plan usage per account, to owner clients with [`Caps::ACCOUNTS`] while they watch
+    /// usage, after each [`ServerCtl::AgentUsage`] and on its own when only a non-system
+    /// account changed.
+    AccountUsage(crate::account::AccountUsageReport),
     /// A session's floating panes, right after each [`ServerCtl::LayoutChanged`], to clients
     /// with [`Caps::FLOATS`], cut down to the panes they see (see [`crate::float`]).
     Floats(crate::float::SessionFloats),

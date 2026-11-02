@@ -1,6 +1,7 @@
 //! End-to-end tests: daemon and client-core in one process over iroh (relays off).
 
 mod access;
+mod accounts;
 mod agents;
 mod approvals;
 mod artifacts;
@@ -8,6 +9,7 @@ mod askpass;
 mod assist;
 mod browser;
 mod codex;
+mod drive;
 mod e2e;
 mod floats;
 mod history;

@@ -35,6 +35,7 @@ struct PaneHeader: View {
         let state = model.paneStatus.state(of: id.description)
         let program = model.programIdentity(ofPane: id, onGroup: workspace.groupId)
         let window = workspace.window(of: id)
+        let accounts = program.isShell ? nil : model.accountBook(onGroup: workspace.groupId)
         HStack(spacing: DS.Space.row) {
             ProgramMark(program, size: 12)
                 .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
@@ -44,6 +45,10 @@ struct PaneHeader: View {
                 .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
                 .lineLimit(1)
                 .layoutPriority(1)
+            // "Claude Code · Work": only where the host has more than one account for it.
+            if let label = accounts?.paneLabel(id.rawValue) {
+                PaneAccountLabel(name: label.name, color: label.color, emphasized: isFocused)
+            }
             if window != nil, let cwd = workspace.panes[id]?.workingDirectory, !cwd.isEmpty {
                 Text(verbatim: (cwd as NSString).abbreviatingWithTildeInPath)
                     .font(DS.Font.literalSmall)
@@ -71,6 +76,11 @@ struct PaneHeader: View {
                 }
             }
             Spacer(minLength: 0)
+            if let hint = accounts?.limitHint(forPane: id.rawValue) {
+                LimitHintMenu(hint: hint) {
+                    model.startAgent(onGroup: workspace.groupId, agent: hint.alternative.agent, account: hint.alternative.id, from: id)
+                }
+            }
             PanePresence(workspace: workspace, pane: id)
             PaneHeaderButtons(id: id, workspace: workspace, window: window, focus: focus)
                 .opacity(isFocused || isHovered ? 1 : Self.restingOpacity)

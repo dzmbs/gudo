@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, tabs, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, agentTools, git, network, devices, thisMac, about
+    case appearance, tabs, font, cursor, splits, links, browser, keyboard, appLock, passwords, voice, notifications, bell, accounts, agentTools, git, network, devices, thisMac, about
 
     var title: String {
         switch self {
@@ -42,6 +42,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .voice: "Voice"
         case .notifications: "Notifications"
         case .bell: "Bell"
+        case .accounts: "Accounts"
         case .agentTools: "Agent Tools"
         case .git: "Git"
         case .network: "Network"
@@ -60,7 +61,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .browser: .browser
         case .keyboard, .voice: .keyboard
         case .notifications, .bell: .notifications
-        case .agentTools: .agents
+        case .accounts, .agentTools: .agents
         case .git: .git
         case .network: .network
         case .devices: .devices
@@ -103,6 +104,7 @@ enum SettingsIndex {
             .init(id: "search-region", title: "Search Region", section: .browser, synonyms: ["browser", "region", "country", "google", "bing"]),
             .init(id: "website-appearance", title: "Websites Follow Theme Appearance", section: .browser, synonyms: ["browser", "dark", "light", "theme", "color scheme"]),
             .init(id: "browser-history", title: "Clear Browsing History", section: .browser, synonyms: ["browser", "history", "recent", "frequent"]),
+            .init(id: "accounts", title: "Agent Accounts", section: .accounts, synonyms: ["account", "sign in", "login", "personal", "work", "claude", "codex"]),
             .init(id: "agent-tools", title: "Browser and Drawings for Agents Started in a Terminal", section: .agentTools, synonyms: ["mcp", "claude", "codex", "browser", "drawings", "tools"]),
             .init(id: "record-agent-sessions", title: "Record Agent Sessions", section: .browser, synonyms: ["replay", "recording", "browser", "session", "rrweb"]),
             .init(id: "delete-replays", title: "Delete All Replays", section: .browser, synonyms: ["replay", "recording", "storage", "clear"]),

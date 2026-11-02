@@ -319,13 +319,18 @@ pub(crate) fn action(
         name: "The owner",
         owner: true,
     };
-    let gate = crate::mp::gate_decision(
-        core,
-        ballot,
-        token.request,
-        option,
-        (signed.clone(), req.sig.clone()),
-    );
+    // A drive request is the owner's alone; approval policies are for agents' tool calls.
+    let gate = if core.term.asks.caller_of(token.request).is_some() {
+        Ok(crate::mp::Gate::Proceed)
+    } else {
+        crate::mp::gate_decision(
+            core,
+            ballot,
+            token.request,
+            option,
+            (signed.clone(), req.sig.clone()),
+        )
+    };
     match gate {
         Ok(crate::mp::Gate::Proceed) => {}
         Ok(crate::mp::Gate::Held) => {
@@ -417,6 +422,22 @@ fn classify(
     item: &AttentionItem,
 ) -> (push::Kind, Option<crate::agent::ApprovalButtons>) {
     match &item.kind {
+        AttentionKind::AgentBlocked {
+            request_id: Some(id),
+            ..
+        } if core.term.asks.caller_of(*id).is_some() => {
+            // Approve allows this one action; a cut-off action is never approved blind.
+            match core.term.asks.notice(*id) {
+                Some((_, _, true)) => (
+                    push::Kind::Approval,
+                    Some(crate::agent::ApprovalButtons {
+                        approve: Some((proto::DriveAsk::ALLOW_ONCE, "Allow once".into())),
+                        deny: Some((proto::DriveAsk::DENY, "Deny".into())),
+                    }),
+                ),
+                _ => (push::Kind::Blocked, None),
+            }
+        }
         AttentionKind::AgentBlocked { request_id, .. } => {
             let buttons = request_id.and_then(|id| {
                 let entry = core.pane(item.pane_id)?;

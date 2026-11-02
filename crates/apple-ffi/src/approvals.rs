@@ -177,6 +177,16 @@ pub enum ApprovalEvent {
     },
     /// The connection dropped: forget everything; the daemon says it again on reconnect.
     Reset,
+    /// An agent asks to drive one of the user's panes (owner devices only).
+    DriveOpened {
+        /// The request.
+        ask: DriveAsk,
+    },
+    /// A drive request was answered, expired or withdrawn.
+    DriveClosed {
+        /// The request.
+        request_id: u64,
+    },
 }
 
 impl From<client_core::ApprovalEvent> for ApprovalEvent {
@@ -189,6 +199,85 @@ impl From<client_core::ApprovalEvent> for ApprovalEvent {
                 rules: rules.into_iter().map(Into::into).collect(),
             },
             E::Reset => Self::Reset,
+            E::Drive(proto::DrivePush::Open(ask)) => Self::DriveOpened { ask: ask.into() },
+            E::Drive(proto::DrivePush::Closed { request_id }) => Self::DriveClosed {
+                request_id: request_id.0,
+            },
+        }
+    }
+}
+
+/// An agent's request to drive one of the user's panes (`proto::drive`). Answer it with
+/// `DaemonClient::decide(request_id, option)` and one of [`DriveAsk::allow_once`],
+/// [`DriveAsk::allow_pane`], [`DriveAsk::deny`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DriveAsk {
+    /// The request (the one the asking pane's `Blocked` state names).
+    pub request_id: u64,
+    /// The asking agent's pane.
+    pub pane_id: u64,
+    /// The pane it wants to drive.
+    pub target: u64,
+    /// `Claude wants to type into ~/api · zsh`.
+    pub title: String,
+    /// Exactly what will be done: `Run $ npm test`.
+    pub action: String,
+    /// The tool asking: `pane_send`, `cmd_run`, `agent_prompt` or `pane_close`.
+    pub kind: DriveKind,
+    /// When it lapses unanswered, ms since the epoch.
+    pub expires_at_ms: u64,
+    /// "Allow once".
+    pub allow_once: DriveOption,
+    /// "Allow for this pane until it closes".
+    pub allow_pane: DriveOption,
+    /// "Deny".
+    pub deny: DriveOption,
+}
+
+/// What a drive request would do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum DriveKind {
+    /// Type text or keys.
+    Type,
+    /// Run a command.
+    Run,
+    /// Prompt the agent in the pane.
+    Prompt,
+    /// Close the pane.
+    Close,
+}
+
+/// One answer to a drive request.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DriveOption {
+    /// The option id for `decide`.
+    pub id: u32,
+    /// Its label.
+    pub label: String,
+}
+
+impl From<proto::DriveAsk> for DriveAsk {
+    fn from(ask: proto::DriveAsk) -> Self {
+        let [once, pane, deny] = proto::DriveAsk::OPTIONS.map(|(id, label)| DriveOption {
+            id: id.0,
+            label: label.to_owned(),
+        });
+        Self {
+            request_id: ask.request_id.0,
+            pane_id: ask.pane_id.0,
+            target: ask.target.0,
+            title: ask.title(),
+            action: ask.action.describe(),
+            kind: match ask.action {
+                proto::DriveAction::Type { .. } => DriveKind::Type,
+                proto::DriveAction::Run { .. } => DriveKind::Run,
+                proto::DriveAction::Prompt { .. } => DriveKind::Prompt,
+                proto::DriveAction::Close => DriveKind::Close,
+            },
+            expires_at_ms: ask.expires_at.0,
+            allow_once: once,
+            allow_pane: pane,
+            deny,
         }
     }
 }
@@ -230,6 +319,15 @@ impl DaemonClient {
         self.inner
             .approval_info(proto::PaneId(pane_id))
             .map(Into::into)
+    }
+
+    /// Agents' open requests to drive the user's panes, oldest first (no round trip).
+    pub fn drive_asks(&self) -> Vec<DriveAsk> {
+        self.inner
+            .drive_asks()
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 
     /// The auto-approve rules in force on a pane (no round trip).

@@ -218,6 +218,7 @@ async fn run(
     }
     // Everyone here and what they are doing, before any change to it.
     client.forward(Event::Participants);
+    client.forward(Event::Accounts);
     let mut tasks = JoinSet::new();
     tasks.spawn(write_ctl(
         conn.clone(),
@@ -289,7 +290,8 @@ pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
         | DaemonFeatures::INVITE_LINKS
         | DaemonFeatures::PROGRAM_STATUS
         | DaemonFeatures::REPO_TRUST
-        | DaemonFeatures::REOPEN;
+        | DaemonFeatures::REOPEN
+        | DaemonFeatures::ACCOUNTS;
     if core.cfg.push.enabled && core.cfg.push.live_activity {
         features |= DaemonFeatures::LIVE_ACTIVITY;
     }
@@ -1113,6 +1115,11 @@ impl Client {
                     self.send(ServerCtl::Repos(snapshot));
                 }
             }
+            Event::Accounts => {
+                if self.caps.contains(Caps::ACCOUNTS) && is_owner(&self.core, &self.authz) {
+                    self.send(ServerCtl::Accounts(self.core.accounts_report()));
+                }
+            }
             Event::Knock(update) => {
                 if self.caps.contains(Caps::KNOCK) && is_owner(&self.core, &self.authz) {
                     self.send(ServerCtl::Knock(update));
@@ -1138,10 +1145,20 @@ impl Client {
                     self.send(ServerCtl::ApprovalStatus(status));
                 }
             }
+            Event::Approval(proto::ApprovalPush::Drive(push)) => {
+                let shown = match &push {
+                    proto::DrivePush::Open(ask) => self.sees_drive_asks(ask.pane_id),
+                    proto::DrivePush::Closed { .. } => self.sees_drive_asks(None),
+                };
+                if shown {
+                    self.send(ServerCtl::Approval(proto::ApprovalPush::Drive(push)));
+                }
+            }
             Event::Approval(push) => {
                 let pane = match &push {
                     proto::ApprovalPush::Request(info) => info.pane_id,
                     proto::ApprovalPush::Rules { pane_id, .. } => *pane_id,
+                    proto::ApprovalPush::Drive(_) => return,
                 };
                 if self.caps.contains(Caps::APPROVALS) && self.pane_allowed(pane) {
                     self.send(ServerCtl::Approval(push));
@@ -1188,6 +1205,25 @@ impl Client {
                     pane_id,
                     status: Some(status),
                 });
+            }
+        }
+    }
+
+    /// Whether this connection is told about drive requests (of `pane`'s session, or any when
+    /// `None`): owner devices that asked for them.
+    fn sees_drive_asks(&self, pane: impl Into<Option<PaneId>>) -> bool {
+        self.caps.contains(Caps::APPROVALS | Caps::DRIVE_ASKS)
+            && is_owner(&self.core, &self.authz)
+            && pane.into().is_none_or(|p| self.in_session(p))
+    }
+
+    /// The open drive requests of the attached session, for a connection that just attached.
+    fn drive_state(&self) {
+        for ask in self.core.term.asks.all() {
+            if self.sees_drive_asks(ask.pane_id) {
+                self.send(ServerCtl::Approval(proto::ApprovalPush::Drive(
+                    proto::DrivePush::Open(ask),
+                )));
             }
         }
     }
@@ -2199,7 +2235,17 @@ impl Client {
             }
             ClientCtl::Op { op_id, mut op } => {
                 let (need, target) = policy::op(&op);
-                let outcome = match self.allow(need, target) {
+                let allowed = self.allow(need, target).and_then(|()| {
+                    // A delegated owner role is still a guest: the sign-ins are the owner's.
+                    if policy::chooses_account(&op) && !is_owner(&self.core, &self.authz) {
+                        Err(MpError::Forbidden(
+                            "only the host's owner chooses its agent accounts".into(),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                });
+                let outcome = match allowed {
                     Ok(()) => match self.prepare_canvas(&mut op) {
                         Ok(created) => {
                             let outcome = Arc::clone(&self.core).apply_op(op);
@@ -2249,6 +2295,22 @@ impl Client {
         if let Err(e) = self.allow(Need::Approve, Target::Pane(pane)) {
             return refuse(e.to_string());
         }
+        // Letting an agent drive the user's panes is the owner's call alone, never a guest's.
+        let drive = self.core.term.asks.caller_of(decide.request_id).is_some();
+        if drive && !is_owner(&self.core, &self.authz) {
+            self.core.mp.audit.append(
+                AuditKind::Denied,
+                crate::mp::AuditEntry {
+                    pane_id: Some(pane),
+                    detail: format!(
+                        "a guest tried to answer drive request {}",
+                        decide.request_id
+                    ),
+                    ..self.authz.audit()
+                },
+            );
+            return refuse("only the owner may let an agent drive their panes".into());
+        }
         let daemon = self.core.identity.daemon_id();
         if !grants::verify_approval(daemon, &decide) {
             self.core.mp.audit.append(
@@ -2274,13 +2336,19 @@ impl Client {
             name: &name,
             owner: is_owner(&self.core, &self.authz),
         };
-        match crate::mp::gate_decision(
-            &self.core,
-            ballot,
-            decide.request_id,
-            decide.option_id,
-            (signed_bytes, sig.clone()),
-        ) {
+        // Approval policies are for agents' own tool calls; a drive request is the owner's.
+        let gate = if drive {
+            Ok(crate::mp::Gate::Proceed)
+        } else {
+            crate::mp::gate_decision(
+                &self.core,
+                ballot,
+                decide.request_id,
+                decide.option_id,
+                (signed_bytes, sig.clone()),
+            )
+        };
+        match gate {
             Ok(crate::mp::Gate::Proceed) => {}
             Ok(crate::mp::Gate::Held) => return,
             Err(e) => return refuse(e.to_string()),
@@ -2686,6 +2754,7 @@ impl Client {
                 });
             }
         }
+        self.drive_state();
         self.send(ServerCtl::Participants {
             participants: self.core.mp.participants(&self.core, &self.authz),
         });

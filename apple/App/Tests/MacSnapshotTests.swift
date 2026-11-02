@@ -639,6 +639,14 @@ final class MacSnapshotTests: XCTestCase {
         try await settings("settings-privacy", SettingsNavigation(pane: .privacy))
     }
 
+    /// Agent accounts: Settings › Agents with the hosts, one host's accounts, and a pane under
+    /// the Work account (its header names it; Work is at its limit, so the suggestion shows).
+    func testAccounts() async throws {
+        try await settings("settings-agents", SettingsNavigation(pane: .agents))
+        try await settings("settings-accounts", SettingsNavigation(pane: .agents, path: [.hostAccounts("studio")]))
+        try await window("account-pane")
+    }
+
     /// App Lock's screen, as it covers a locked window.
     func testAppLockScreen() async throws {
         struct Owner: AppLockAuthenticator {

@@ -163,6 +163,7 @@ struct SettingsView: View {
             PasswordsSection().chromeRows()
             VoiceSettingsSection().chromeRows()
             NotificationsSection().chromeRows()
+            AccountsSettingsSection().chromeRows()
             AgentToolsSection().chromeRows()
             GitSettingsSection().chromeRows()
             NetworkSettingsSection().chromeRows()
@@ -197,7 +198,7 @@ struct SettingsView: View {
         case .browser: BrowserSettingsSection(); ReplaySettingsSection()
         case .notifications: NotificationsSection()
         case .privacy: AppLockSection(); PasswordsSection()
-        case .agents: AgentToolsSection()
+        case .agents: AccountsSettingsSection(); AgentToolsSection()
         case .git: GitSettingsSection()
         case .network: NetworkSettingsSection()
         case .devices: DevicesSettingsSection()
@@ -213,6 +214,8 @@ enum SettingsPage: Hashable {
     case theme, lightTheme, darkTheme, keyBarProfiles, acknowledgements
     /// A host's paired devices and guests.
     case hostDevices(String)
+    /// A host's agent accounts.
+    case hostAccounts(String)
 
     #if os(macOS)
     /// The pane it is pushed over.
@@ -222,6 +225,7 @@ enum SettingsPage: Hashable {
         case .keyBarProfiles: .keyboard
         case .acknowledgements: .about
         case .hostDevices: .devices
+        case .hostAccounts: .agents
         }
     }
     #endif
@@ -277,6 +281,7 @@ private struct SettingsPageView: View {
                 #endif
             case .acknowledgements: AcknowledgementsView()
             case .hostDevices(let id): HostDevicesView(hostId: id)
+            case .hostAccounts(let id): HostAccountsView(hostId: id)
             }
         }
         #if os(macOS)

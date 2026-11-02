@@ -504,7 +504,8 @@ the compact line ("Claude · 62% of 5h · resets 14:20": the limited, else fulle
 not reset) and its tone (quiet ≤ 80 %, amber above, red limited); `UsageDetail` the popover rows.
 Views (`UsageViews.swift`): one line per agent under each daemon host's name in the sidebar, the
 detail popover (also from the host menu's Agent Usage), and a quiet strip at the bottom of the
-Inbox. Unknown means absent; the reason is in the popover. There is no setting: the daemon uses
+Inbox. Unknown means absent; the reason is in the popover. With agent accounts (§27) the daemon also
+pushes usage per account (`DaemonWorkspace.accountUsage`); a pane's limit suggestion reads it. There is no setting: the daemon uses
 only the tools' own data and documented commands, never the host's sign-ins.
 Tests: `AgentUsageTests` (HostKit), `UsageFeedTests` (AppTests), `UsageUITests`.
 
@@ -1434,7 +1435,7 @@ workspace at once, live in place, early input sent; prints the times); App `Inst
 swapped in place; input before live; first-frame times); snapshots
 `MacSnapshotTests.testInstantStart` (`instant-start-{cached,live}[-ipad]-{dark,light}`).
 
-## 27. Floating panes (windows over a tab), rearranging by drag, zoom
+## 28. Floating panes (windows over a tab), rearranging by drag, zoom
 
 The host keeps the model (DAEMON.md "Floating windows", `proto::float`): a floating window is a
 subtree of its tab's tree with a frame in fractions of the tab, a z order, minimized and pinned
@@ -1495,3 +1496,49 @@ regions and their ops, edges, the Float target, snapping, dock after a dwell, re
 the tray keeping a pane's size); daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
 `MacSnapshotTests.testFloating*`, `TouchSnapshotTests.testFloating` (DESIGN.md "Floating
 panes").
+## 27. Agent accounts (DAEMON.md §5.15)
+
+A host can keep several Claude Code and Codex sign-ins, such as Personal and Work. Each account is a directory on the host the agent is launched with. Signing in is the agent's own login in a terminal tab, which the user completes, so the app never sees a password or a token. A host without accounts looks exactly as before: nothing names an account until an agent has a second one.
+
+**Model.**
+- `DaemonWorkspace.accounts` (`AccountsReport`) is filled by the daemon's push (`WorkspaceEvent.accounts`, owner devices with `Caps::ACCOUNTS`) or by `loadAccounts()`. Views that only label panes call `loadAccountsIfNeeded()` once per connection.
+- `DaemonWorkspace.accountUsage` is updated while usage is watched.
+- `supportsAccounts` follows `DaemonInfo.accounts`.
+- `AccountBook` (HostKit `Accounts.swift`) is the pure reading of a report:
+  - `resolve(agent, project:, override:)`: the tab's pick, else the project's default, else the host's, else the system account. A pick or default whose account is gone falls back to the next.
+  - `paneLabel` (nil unless the agent has more than one account).
+  - `limitHint`.
+  - `defaultAccount`.
+- `DaemonAccountsAPI` is the FFI's `account*` calls.
+
+**Settings ▸ Agents ▸ Accounts** (`Views/AccountsSettings.swift`):
+- One row per owned host, with a summary such as "Claude: 3 · Codex: 1". Each opens `HostAccountsView` (`SettingsPage.hostAccounts`).
+- The page has one section per agent:
+  - Each row has its colour dot, name, a Default badge, who it is signed in as ("sam@acme.example · Team · Acme"; "Not signed in" in the attention colour) and its tightest window.
+  - The context menu has Sign In… / Sign In Again…, Use by Default, Rename…, and Sign Out and Remove… (confirmed; the agent signs out on the host before the folder goes).
+  - Add Claude Account… / Add Codex Account… open a name-and-colour sheet. "Add and Sign In" makes the account and opens the agent's login in a new tab on the host, revealed: `account_sign_in`.
+- Codex uses `--device-auth` unless the host is this Mac (`AccountHosts.usesDeviceCode`).
+- The footer says what isolation means: a folder only the user can open on that host.
+- Search finds it ("accounts", "sign in", "work").
+- Guests never see it, because the daemon refuses them.
+
+**Choosing.**
+- New Agent shows an Account picker when the agent has more than one account on the chosen host.
+  - It defaults to the current tab's project default, else the host's (`WindowModel.currentProjectId`). The pick is per host and agent, and only for that launch.
+  - `AgentLaunchRequest.account` → `AgentLaunch.account` → `PaneLaunch::AccountAgent`.
+- A new worktree task follows the host's default, shown read-only. `TaskCreate` is frozen on the wire; this is a follow-up.
+- Project and host defaults are set on the daemon (`account_set_default`, by every owner device alike). Resume always runs under the session's own account; the daemon enforces this.
+
+**Pane.**
+- The header shows the account after the program: "Claude Code · ● Work" (`PaneAccountLabel`, the account's colour dot from the project palette).
+- When the pane's account is at a plan limit and another account of the same agent is signed in and not limited, a quiet "At Limit" mark appears (`LimitHintMenu`). Its menu reads "Work is at its 5h limit · resets 14:20" and offers "New Tab with Personal" (`WindowModel.startAgent`). Nothing switches by itself and the running session stays where it is: automatic rotation is what Anthropic's "ordinary, individual usage" rules out.
+
+**Mock.** `MockAccounts.book`, used under `-mock`:
+- Claude: Personal (the system account, Max), Work (Team, Acme, at its 5-hour limit) and Side Project (signed out).
+- One Codex account.
+- The mock's Claude pane (pane 3) runs under Work.
+
+**Tests and snapshots.**
+- HostKit `AccountBookTests` cover the resolution order, removed defaults, labels only with a choice, the limit hint (and when it stays quiet) and the status words.
+- App `AccountsTests` cover the fixture, project defaults, search and row words.
+- Snapshots: `MacSnapshotTests.testAccounts`, run with `TEST_RUNNER_SNAPSHOT_ONLY=settings-agents,settings-accounts,account-pane` in dark and light.

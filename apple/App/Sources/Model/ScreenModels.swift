@@ -145,6 +145,10 @@ nonisolated struct AgentItem: Identifiable, Hashable, Sendable {
     var isCommand = false
     /// Another program reporting its own status (OSC 7501: pi, opencode), by its name.
     var program: String?
+    /// The request is an agent asking to drive one of the user's panes: the permission's tool is
+    /// what it wants ("Claude wants to type into ~/api · zsh"), its detail the exact action;
+    /// Approve allows that once, and `allowForPane` is offered too.
+    var drive = false
 
     /// Who it is, for headlines and rows: the program's name, else the agent's.
     @MainActor var title: String { program.map { ProgramCatalog.identity(process: $0).displayName } ?? agent.title }
@@ -174,6 +178,8 @@ nonisolated struct AgentLaunchRequest: Hashable, Sendable {
     var repo: String?
     /// Open a shell instead of starting `agent`.
     var shell = false
+    /// The host account the agent runs under (`AgentAccount.id`); nil is the host's default.
+    var account: String?
 }
 
 /// What Approve can do beyond yes, for a permission request.
@@ -231,6 +237,9 @@ protocol AgentFeed: AnyObject, Observable {
     func approval(_ id: AgentItem.ID) -> ApprovalContext?
     /// Claims a request ("I'll take this one"), or releases the claim.
     func claim(_ id: AgentItem.ID, _ claim: Bool)
+    /// For a drive request: allows it and every later one from that agent to that pane until the
+    /// pane closes.
+    func allowForPane(_ id: AgentItem.ID)
 
     /// Edit and "approve all like this" for a permission request; nil when neither is offered.
     func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions?
@@ -245,6 +254,7 @@ protocol AgentFeed: AnyObject, Observable {
 
 /// Feeds without the approval extras (mocks, fakes): plain approve and deny.
 extension AgentFeed {
+    func allowForPane(_ id: AgentItem.ID) { approve(id) }
     func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions? { nil }
     func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval] { [] }
     func approveEdited(_ id: AgentItem.ID, input: String) async throws { throw ApprovalUnavailable() }

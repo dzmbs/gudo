@@ -65,7 +65,7 @@ fn pane_schema() -> Value {
             "kind": { "type": "string", "enum": ["shell", "agent", "command"] },
             "isSelf": { "type": "boolean" },
             "createdByYou": { "type": "boolean" },
-            "scopes": { "type": "array", "items": { "type": "string", "enum": ["read", "input", "manage"] } },
+            "scopes": { "type": "array", "items": { "type": "string", "enum": ["read", "input", "manage", "ask"], "description": "ask: input and closing need the user's yes first." } },
             "atPrompt": { "type": "boolean", "description": "The shell waits at its prompt." },
             "altScreen": { "type": "boolean", "description": "A full-screen program owns the screen." },
             "secretPrompt": { "type": "boolean", "description": "A password is being asked for; input is refused." },
@@ -183,7 +183,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_list",
             title: "List terminal panes",
-            description: "List the terminal panes in this session (or only this tab): id, folder, whether a shell waits at its prompt, the running program, the last command and its exit code, and what you may do there. You may type into and close only panes you created.",
+            description: "List the terminal panes in this session (or only this tab): id, folder, whether a shell waits at its prompt, the running program, the last command and its exit code, and what you may do there. You may type into and close the panes you created; the user's own panes only once they allow it.",
             input: object(
                 json!({
                     "scope": { "type": "string", "enum": ["session", "tab"], "default": "session" },
@@ -198,7 +198,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "cmd_run",
             title: "Run a shell command",
-            description: "Run a shell command in a terminal pane the user can watch, wait for it, and get its exit code and its own output. Without a pane, opens a new pane below this one (and keeps it for later commands: pass its id as `pane`). Long-running commands: give timeoutMs and continue with pane_wait or pane_read.",
+            description: "Run a shell command in a terminal pane the user can watch, wait for it, and get its exit code and its own output. Without a pane, opens a new pane below this one (and keeps it for later commands: pass its id as `pane`). Long-running commands: give timeoutMs and continue with pane_wait or pane_read. In a pane the user opened, the user is asked first (on their phone or Mac) and the call waits up to two minutes for their answer; refused if they say no or do not answer.",
             input: object(
                 json!({
                     "command": { "type": "string" },
@@ -291,7 +291,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_send",
             title: "Type into a terminal pane",
-            description: "Type into a terminal pane you created: text (pasted as one piece), named keys (enter, esc, tab, up, ctrl+c, shift+tab, f5…), and submit to press Enter after. For answering a program's prompt or driving a full-screen program; to run a command use cmd_run. Refused at a password prompt.",
+            description: "Type into a terminal pane: text (pasted as one piece), named keys (enter, esc, tab, up, ctrl+c, shift+tab, f5…), and submit to press Enter after. For answering a program's prompt or driving a full-screen program; to run a command use cmd_run. Refused at a password prompt. In a pane the user opened, the user is asked first (on their phone or Mac) and the call waits up to two minutes for their answer; refused if they say no or do not answer.",
             input: object(
                 json!({
                     "pane": pane_ref("A pane you created."),
@@ -357,7 +357,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_close",
             title: "Close a terminal pane",
-            description: "Close a terminal pane you created, ending what runs in it. Closing one that is already gone succeeds.",
+            description: "Close a terminal pane, ending what runs in it. Closing one that is already gone succeeds. In a pane the user opened, the user is asked first (on their phone or Mac) and the call waits up to two minutes for their answer; refused if they say no or do not answer.",
             input: object(
                 json!({ "pane": pane_ref("A pane you created.") }),
                 &["pane"],
@@ -459,6 +459,42 @@ fn tools_list() -> Vec<Tool> {
             read_only: true,
             destructive: false,
             idempotent: true,
+        },
+        Tool {
+            name: "events_wait",
+            title: "Wait for terminal events",
+            description: "Wait for what happens in this session instead of polling: panes opening and closing, commands starting and finishing (with exit codes), agents and programs changing state (idle, working, blocked, done), layout changes. Pass the returned cursor as `since` to read on; events.lost says some were missed.",
+            input: object(
+                json!({
+                    "since": { "type": "integer", "description": "The cursor from the last call; omitted: from now." },
+                    "types": { "type": "array", "items": { "type": "string", "enum": ["pane.opened", "pane.closed", "command.started", "command.finished", "agent.state", "layout.changed", "events.lost"] } },
+                    "max": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Most events to return (default 100)." },
+                    "timeoutMs": timeout.clone(),
+                }),
+                &[],
+            ),
+            output: json!({
+                "type": "object",
+                "properties": {
+                    "events": { "type": "array", "items": {
+                        "type": "object",
+                        "properties": {
+                            "v": { "type": "integer" },
+                            "seq": { "type": "integer" },
+                            "at": { "type": "integer" },
+                            "type": { "type": "string" },
+                            "session": { "type": "string" },
+                            "pane": { "type": "string" },
+                        },
+                        "required": ["v", "seq", "at", "type"],
+                    } },
+                    "cursor": { "type": "integer" },
+                },
+                "required": ["events", "cursor"],
+            }),
+            read_only: true,
+            destructive: false,
+            idempotent: false,
         },
         Tool {
             name: "pane_float",
@@ -626,7 +662,7 @@ fn summary(tool: &str, v: &Value) -> String {
         head.push(note.to_owned());
     }
     let Some(output) = v.get("output").filter(|o| o.is_object()) else {
-        return if head.is_empty() || matches!(tool, "whoami" | "pane_list") {
+        return if head.is_empty() || matches!(tool, "whoami" | "pane_list" | "events_wait") {
             serde_json::to_string_pretty(v).unwrap_or_default()
         } else {
             head.join(", ")

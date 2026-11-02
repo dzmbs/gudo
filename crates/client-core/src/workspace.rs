@@ -68,6 +68,16 @@ pub enum WorkspaceEvent {
         /// The whole report.
         report: AgentUsageReport,
     },
+    /// The host's agent accounts or the panes' accounts changed (owner devices).
+    Accounts {
+        /// The whole report.
+        report: proto::AccountsReport,
+    },
+    /// Plan usage per account changed (owner devices, while watching usage).
+    AccountUsage {
+        /// The whole report.
+        report: proto::AccountUsageReport,
+    },
     /// The repositories, worktrees, branches and pull requests of the panes (the whole
     /// snapshot; only with [`ClientConfig::repo_status`](crate::ClientConfig::repo_status)).
     Repos {
@@ -143,6 +153,8 @@ impl WsState {
             ServerCtl::Attention(update) => WorkspaceEvent::Attention { update },
             ServerCtl::VsCodeTunnel(status) => WorkspaceEvent::VsCodeTunnel { status },
             ServerCtl::AgentUsage(report) => WorkspaceEvent::AgentUsage { report },
+            ServerCtl::Accounts(report) => WorkspaceEvent::Accounts { report },
+            ServerCtl::AccountUsage(report) => WorkspaceEvent::AccountUsage { report },
             ServerCtl::Repos(snapshot) => {
                 *lock(&self.repos) = Some(snapshot.clone());
                 WorkspaceEvent::Repos { snapshot }
@@ -389,6 +401,119 @@ impl Client {
         }
         expect!(self.workspace(WorkspaceRequest::AgentMcpCommands { register }).await?,
             WorkspaceResponse::AgentMcpCommands(list) => list)
+    }
+
+    // --- agent accounts (proto::account) -------------------------------------------------
+
+    fn accounts_offered(&self) -> Result<(), WsError> {
+        if self.daemon_has(proto::DaemonFeatures::ACCOUNTS) {
+            Ok(())
+        } else {
+            Err(WsError::Unavailable(
+                "the host's helper predates agent accounts; update it".into(),
+            ))
+        }
+    }
+
+    /// The host's agent accounts.
+    ///
+    /// # Errors
+    ///
+    /// [`WsError::Unavailable`] without asking when the daemon does not offer
+    /// [`DaemonFeatures::ACCOUNTS`](proto::DaemonFeatures::ACCOUNTS); else the daemon's error
+    /// (owners only).
+    pub async fn accounts(&self) -> Result<proto::AccountsReport, WsError> {
+        self.accounts_offered()?;
+        expect!(self.workspace(WorkspaceRequest::Accounts).await?,
+            WorkspaceResponse::Accounts(r) => r)
+    }
+
+    /// Makes an account, signed out; sign in with
+    /// [`PaneLaunch::AccountSignIn`](proto::PaneLaunch::AccountSignIn).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::accounts`].
+    pub async fn account_add(
+        &self,
+        add: proto::AccountAdd,
+    ) -> Result<proto::AgentAccount, WsError> {
+        self.accounts_offered()?;
+        expect!(self.workspace(WorkspaceRequest::AccountAdd(add)).await?,
+            WorkspaceResponse::Account(a) => a)
+    }
+
+    /// Renames or recolours an account.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::accounts`].
+    pub async fn account_edit(
+        &self,
+        agent: proto::AgentKind,
+        account: String,
+        label: String,
+        color: u8,
+    ) -> Result<proto::AccountsReport, WsError> {
+        self.accounts_offered()?;
+        let req = WorkspaceRequest::AccountEdit {
+            agent,
+            account,
+            label,
+            color,
+        };
+        expect!(self.workspace(req).await?, WorkspaceResponse::Accounts(r) => r)
+    }
+
+    /// Signs an account out with the agent's own logout and deletes it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::accounts`]; [`WsError::Conflict`] while agent panes run under it.
+    pub async fn account_remove(
+        &self,
+        agent: proto::AgentKind,
+        account: String,
+    ) -> Result<proto::AccountsReport, WsError> {
+        self.accounts_offered()?;
+        expect!(self.workspace(WorkspaceRequest::AccountRemove { agent, account }).await?,
+            WorkspaceResponse::Accounts(r) => r)
+    }
+
+    /// Asks the agent whether an account is signed in, and as whom.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::accounts`].
+    pub async fn account_check(
+        &self,
+        agent: proto::AgentKind,
+        account: String,
+    ) -> Result<proto::AgentAccount, WsError> {
+        self.accounts_offered()?;
+        expect!(self.workspace(WorkspaceRequest::AccountCheck { agent, account }).await?,
+            WorkspaceResponse::Account(a) => a)
+    }
+
+    /// Sets or clears an agent's default account on the host (`project` `None`) or in a
+    /// project.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::accounts`].
+    pub async fn account_set_default(
+        &self,
+        agent: proto::AgentKind,
+        project: Option<String>,
+        account: Option<String>,
+    ) -> Result<proto::AccountsReport, WsError> {
+        self.accounts_offered()?;
+        let req = WorkspaceRequest::AccountSetDefault {
+            agent,
+            project,
+            account,
+        };
+        expect!(self.workspace(req).await?, WorkspaceResponse::Accounts(r) => r)
     }
 
 

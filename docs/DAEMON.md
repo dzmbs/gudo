@@ -285,7 +285,8 @@ policy is always `LastInput` for now.
 
 ### Persistence
 
-`<state>/layout.json`: layout plus per-pane `{launch, cwd, agent{kind, session_id}}`, written
+`<state>/layout.json`: layout plus per-pane `{launch, cwd, agent{kind, session_id}}` and which
+pane created which (`creators`, for the terminal tools), written
 atomically (tmp, fsync, rename, fsync dir) 500 ms after the last change and on shutdown. On
 start the layout is restored with the same ids; shells restart in their last directory
 (OSC 7), agents resume, one-off commands come back as shells. An unreadable file is moved
@@ -911,7 +912,8 @@ calls the providers' undocumented usage endpoints: that is closest to what Anthr
 OpenAI's terms forbid. `UsageWatch::api_fallback` and `UsageSource::Api` stay on the wire for
 compatibility; clients send `false`, the daemon ignores the flag and never reports `Api`. The
 report refreshes at most once a minute and only
-while a connection watches; the last status-line snapshot survives restarts
+while a connection watches. Usage is kept per agent account (§5.15): `AgentUsageReport` carries the
+system accounts, `ServerCtl::AccountUsage` every account; the last status-line snapshot survives restarts
 (`<state>/usage/claude-status-line.json`). Tools are found through the panes' `PATH` (plus
 `~/.local/bin`), `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Tests: `cargo test -p daemon --test it usage`
 (fixture rollouts, status-line hook, fake `claude` / `codex`; a client that still sends
@@ -1075,6 +1077,72 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   goldens in `crates/proto/tests/golden_installs.rs`; app: `AgentInstallGuideTests`,
   `W3UITests.testAgentNotInstalledOffersTheOfficialInstaller` (`apple/scripts/w3-ui-test.sh`).
 
+### 5.15 Agent accounts (`proto::account`)
+
+Several Claude Code and Codex sign-ins on one host, such as Personal and Work. This follows the vendors' documented mechanism: one configuration directory per account, `CLAUDE_CONFIG_DIR` for Claude (documented for exactly this, concurrent use included) and `CODEX_HOME` for Codex. Codex's keyring item is keyed by a hash of `CODEX_HOME`. Codex profiles are not accounts. Code: `crates/daemon/src/accounts.rs`.
+
+- **System account.** Each agent has an implicit account with id `system`: the user's own `~/.claude` / `~/.codex`, or whatever the panes' environment already says. Agents under it are launched with **no** directory variable, so a host without accounts behaves byte for byte as before. Whether an explicit `CLAUDE_CONFIG_DIR=~/.claude` changes Claude's Keychain item could not be confirmed offline. The 2.1.316 binary is compiled bytecode that holds `Claude Code`, `-credentials`, `sha256` and `.claude` together. Since the variable is never set for the system account, either answer is safe.
+- **Storage.** Each account is `<state>/accounts/<claude|codex>/<id>/`. The id is 8 hex digits the daemon mints; ids read from disk that are not of that form are dropped, so they never become a path. The directory and its parents are mode 0700. A Codex account's `config.toml` starts with `mcp_oauth_credentials_store = "file"`, because Codex keys MCP OAuth keyring items by server alone, so they would otherwise be shared by every home. `<state>/accounts.json` holds names, colours (palette 0–7, as projects), host and per-project defaults, and which account created each session (the last 2048). It never holds a credential, and credential files are never copied between accounts.
+- **Requests** (owner device only, `DaemonFeatures::ACCOUNTS`). Each answers `Accounts(AccountsReport)` or `Account(AgentAccount)`.
+  - `Accounts`: the list. Any account not asked about yet is checked in the background.
+  - `AccountAdd {agent, label, color}`: makes the directory; the account starts signed out.
+  - `AccountEdit`: renames or recolours.
+  - `AccountRemove`: refused for `system`, and refused (`Conflict`) while an agent pane runs under the account. It first runs the agent's own `claude auth logout` / `codex logout` in that account's environment, then deletes the directory. If the logout cannot run and the account is not known to be signed out, nothing is deleted, because deleting the directory alone would orphan a macOS Keychain item.
+  - `AccountCheck`: runs `claude auth status --json` (exit 0 when signed in; `email`, `subscriptionType`, `orgName`, `authMethod`) or `codex app-server` `account/read` (`email`, `planType`, `type`), and keeps who it is signed in as. That is display facts, never a token.
+  - `AccountSetDefault {agent, project, account}`: sets or clears the host default (`project: None`) or a project's.
+- **Sign-in.** `PaneLaunch::AccountSignIn {agent, account, device_code}` (owner device only) opens a tab running the vendor's own login:
+  - Claude: `claude auth login`.
+  - Codex: `codex login`, with `--device-auth` when the client is not on the host, because the browser login's localhost callback cannot reach a remote browser.
+
+  The user completes it in the pane: the URL is tappable, and Claude takes a pasted code. When the login ends, the pane runs `un-hook account SignIn`; the daemon checks the account and pushes the result. It checks again when the pane closes. The tab's record is a plain shell, so a restart never runs a login again.
+- **Launching.** `PaneLaunch::AccountAgent {agent, account, resume, cwd}`; plain `Agent` from older clients behaves the same with `account: None`.
+  - **Which account:**
+    1. A resume runs under the account that created the session, whatever was asked. If that account was removed, the launch is refused and the session runs under no other.
+    2. Otherwise the named account. Clients send it resolved: tab pick, else project default, else host default.
+    3. Otherwise the default of the tab's project, then the host default, then `system`.
+  - The record keeps the account (`AgentRecord.account`), so restore and Reopen come back under it.
+  - **Environment** (`agents::account_env`, `LaunchSpec::shell_line`):
+    - **System account: unchanged.** Its panes keep the environment exactly as before accounts, API keys included, because many users run the agents with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Only `UN_ACCOUNT=system` is added.
+    - **Named account:** the pane has `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_PROFILE`, `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_ACCESS_TOKEN` and the other agent's directory variable removed. These outrank a `/login` and would silently override the account's own sign-in and bill another.
+    - For a named account the removal happens twice: on the spawned process, and with `unset` in the login shell's command line after its startup files ran. A `.profile` that exports a key cannot reach the agent.
+    - Only the account's directory is exported, plus `UN_ACCOUNT=<id>` and `UN_ACCOUNT_DIR` (directories only, never a secret, since the line is visible in the process list). The account's own commands (status, logout, usage) run with the same rules.
+    - Plain shell panes are untouched; the shell left after an agent exits keeps the account's directory.
+- **Where one account was assumed:**
+  - Codex session capture reads rollouts under the pane's account home.
+  - `un-hook` finds the user's status line through `UN_ACCOUNT_DIR` rather than `CLAUDE_CONFIG_DIR`, which Claude's subprocess scrub may remove.
+  - `user_mcp_registered` takes the account's `.claude.json` / `config.toml`.
+  - `AgentMcpCommands` returns one command per account, `env CLAUDE_CONFIG_DIR=<dir> claude mcp add …`.
+- **Usage** (§5.11) is kept per (agent, account):
+  - A status line counts for the account of the pane that sent it; the daemon looks the pane up and never trusts a field.
+  - Rollouts are read per account home.
+  - `claude -p /usage` and `codex app-server` run once per account in its environment, at most every 5 min each; accounts known to be signed out are not asked.
+  - `AgentUsageReport` keeps reporting the system accounts for older clients. Owner clients with `Caps::ACCOUNTS` also get `ServerCtl::AccountUsage` while they watch.
+  - Snapshots: `usage/claude-status-line-<id>.json`.
+  - No undocumented endpoint is used, and the daemon never switches accounts on its own. At a limit, the app suggests a new tab under another account (APP-ARCHITECTURE §27).
+- **Pushes.** `ServerCtl::Accounts` goes to owner devices with `Caps::ACCOUNTS`: on connect, on every change, and when an agent pane starts or closes, since `panes` lists each agent pane's account.
+- **Guests** neither see nor choose accounts:
+  - every `Account*` request is refused for anything but an owner device, a guest whose grant names every role included;
+  - `AccountAgent` naming a non-system account, and `AccountSignIn`, need the owner role *and* an owner device;
+  - a driver's plain agent launch uses the host default.
+- **Isolation.** All accounts are readable by the host user, as the vendors' own directories are. The isolation guards against mix-ups and environment leakage, not against a malicious process running as that user.
+- **Wire.**
+  - Append-only: `Caps::ACCOUNTS = 23` and `DaemonFeatures::ACCOUNTS = 18` (bits 21–22 / 16–17 are floating panes' and agent driving's).
+  - New last variants: `PaneLaunch::AccountAgent`, `AccountSignIn`; `WorkspaceRequest::Accounts` … `AccountSetDefault`; `WorkspaceResponse::Accounts`, `Account`; `ServerCtl::Accounts`, `AccountUsage`.
+  - Goldens: `crates/proto/tests/golden_accounts.rs`.
+- **Tests:**
+  - `cargo test -p daemon --lib accounts`: 0700 directories, ids from disk, resolution order, resume pinning across a restart and after removal, limits, identity parsing.
+  - `cargo test -p agents`: a named account scrubs every credential for both agents, the system account removes nothing, and `shell_line` unsets before it exports.
+  - `cargo test -p daemon --test it accounts`, against fake `claude` / `codex` that honour `CLAUDE_CONFIG_DIR` / `CODEX_HOME`:
+    - sign-in in the account's directory only;
+    - a Work launch with a key in the daemon's environment and in `.profile` sees none, while a system launch keeps the key, as before accounts;
+    - resume pinned, and refused after removal;
+    - logout runs before the directory goes;
+    - defaults and the account survive a restart;
+    - per-account usage;
+    - Codex device-code sign-in, rollouts and resume in the account home;
+    - a full-role guest is refused.
+  - `mp::policy` unit test. Nothing signs in for real.
+
 
 Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
 hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, end to end
@@ -1188,6 +1256,8 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Artifact`: `Send` (to agent) | **prompter or driver**; **agent pane only** | pane in scope |
 | `Op` `Split`/`NewTab` with `PaneLaunch::Canvas` | driver (as any split) | session of the pane |
 | `Op` `Split`/`NewTab` with `PaneLaunch::Reopen` | **owner** (it can resume the owner's agent session) | session / session of the pane |
+| `Op` `Split`/`NewTab` with `PaneLaunch::AccountAgent` naming a non-system account, or `AccountSignIn` | **owner** role and an owner device (§5.15) | session / session of the pane |
+| `Workspace`: `Accounts`, `AccountAdd`, `AccountEdit`, `AccountRemove`, `AccountCheck`, `AccountSetDefault` | **owner** device | daemon |
 | `Assist`: `Watch`, `State`, `BlockedOptions` / `SubmitLine` / `History`, `Complete`, `FileSearch` / `AnswerBlocked` | any role / **driver** + lease / **driver** / **approver** (§7.8) | pane in scope / pane / host / pane |
 
 An artifact is visible to daemon- and session-wide grants in its session; tab- and
@@ -2126,10 +2196,47 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   holds at most 1 MiB of output.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
   `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`,
-  `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`. Ids are `p12`, `t3`; `self` (or no pane) is the caller.
-- **Rules.** Read any pane of the caller's session; type into, run in and close only the panes it
-  created (or that those created), never its own; nothing it opens takes the user's focus;
-  input is refused while the program asks for a password (echo off, canonical).
+  `events_wait`, `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`. Ids are `p12`, `t3`; `self` (or no pane) is the caller. `pane_list` scopes:
+  `read`, plus `input` and `manage` where it drives, or `ask` on the user's panes.
+- **Rules.** Read any pane of the caller's session; type into, run in and close the panes it
+  created (or that those created) at once, never its own; the user's panes (any other pane of
+  its session) only once the owner allows it (below); nothing it opens takes the user's focus;
+  input is refused while the program asks for a password (echo off, canonical), whoever allowed
+  it. Another session's panes are refused outright.
+- **Asking the owner** (`proto::drive`, `daemon::term::ask`, `DaemonFeatures::DRIVE_ASKS`).
+  `pane_send`, `cmd_run` with a `pane`, `agent_prompt` and `pane_close` on a user's pane open a
+  drive request instead of refusing, after the cheap refusals (own pane, other session, password
+  prompt, busy pane for `cmd_run`). The request holds the exact action: the text and keys, the
+  command line as it will be typed (with the `cd` a `cwd` adds), the prompt, or the close. The
+  asking pane shows `AgentState::Blocked` with three options, in this order: `Allow once` (0),
+  `Allow for this pane until it closes` (1), `Deny` (2); old apps' Approve picks the first, so it
+  is never the wider answer. The summary is `Claude wants to type into ~/api · zsh: Type
+  “npm test”, then Return`; control characters show as `^X`, line breaks as `⏎` and bidi or
+  zero-width characters as `<U+…>` (`DriveAction::describe`), so nothing typed hides from the
+  reader. An attention item (`AgentBlocked{request_id}`, titled with what it wants, the action as
+  body) goes out as a push: `AGENT_APPROVAL` with Approve = Allow once and Deny when the action
+  fits whole (400 characters), else `AGENT_BLOCKED` (open the app to see it all), never approved
+  blind. Owner devices announcing `Caps::DRIVE_ASKS` (bit 22) also get
+  `ApprovalPush::Drive(Open | Closed)` with the action as data (again after attaching); guests
+  never do. Answers are the existing signed `Decide` (in app) or `PushAction` (lock screen,
+  `.authenticationRequired`, token bound to this device, pane and the request's content, 15 min):
+  only paired owner devices may answer (a guest's `Decide`, whatever its roles, is `Forbidden`
+  and audited as `Denied`); approval policies do not apply; the first answer uses the request up,
+  so a replayed or second answer finds nothing, and it unlocks only the call that is waiting,
+  which then does exactly the action shown, rechecking the password prompt. Every answer is an
+  `Approval` audit record with the signed bytes. "For this pane" lets that caller drive that
+  target without asking until either pane closes (or the daemon restarts: memory only).
+  Unanswered after `drive_ask_wait` (120 s) the call fails `forbidden` with `retryable`; a caller
+  that hangs up withdraws its request; a closing pane withdraws requests that name it.
+- **Ownership across restarts.** Which pane created which is saved in `layout.json`
+  (`creators: [[pane, creator]]`) and restored for panes that came back, so an agent keeps the
+  panes it opened through a restart or upgrade. A closed pane's entry goes; panes it had opened
+  pass to its own creator (an agent keeps what its closed worker opened), or back to the user when
+  it had none.
+- **Events.** `events_wait {since?, types?, max?, timeoutMs?}` returns the caller's session's
+  events after the cursor `since` (default: from now), waiting up to `timeoutMs` for the first,
+  and the cursor to read on from: the "Scripting" schema below. The daemon keeps the last 1024;
+  a cursor older than that gets `events.lost` first.
 - **Output.** Bytes are rendered by a scratch terminal of the pane's width, so carriage returns,
   erases and colors come out as seen. Results cap at 16 KiB by default (256 KiB at most), keeping
   the first third and last two thirds. A cursor (`c<seq>`, the pane's output offset) reads on
@@ -2177,6 +2284,75 @@ Agents drive the terminal they run in through `un-hook mcp`: one `TermCall {v, t
   prompt asks about. The server is `unnamed` (`agents::mcp_server_name`); registering with
   an agent removes a registration under the old `unnamed_drawings` first. Other harnesses add
   it by hand, e.g. pi: `pi mcp add unnamed -- un-hook mcp` from a pane.
+- **Tests.** `tests/it/term.rs`; `tests/it/drive.rs` (allow once runs exactly the shown action,
+  a replayed answer unlocks nothing, deny, for this pane, the password prompt refused anyway, the
+  audit records; a guest approver refused and not sent the request; expiry and hang-up withdraw
+  it; ownership kept across a restart; events scoped to the session and to a guest's grant; the
+  TypeScript client against a real daemon); `tests/it/notify.rs`
+  (`a_drive_request_is_answered_from_the_lock_screen`: Allow once from the lock screen, the token
+  spent, a long action offered without Approve); goldens `proto/tests/golden_drive.rs`.
+
+### Scripting: `un --json`, `un events`, the TypeScript client
+
+**`--json`.** The read commands print one JSON document: `un ls`, `marks`, `output`, `search`,
+`links`, `ports`, `inbox`, `git status`, `who`, `audit`, `daemon info`. Every document is
+`{"v": 1, "kind": "<command>", …}` with camelCase fields; optional fields are present as `null`.
+Version 1 only gains fields and kinds; renaming, retyping or dropping one is version 2. Ids are
+`p12`, `t3`, `s1`. Goldens: `crates/un/tests/golden/*.json` (`crates/un/src/json.rs`). `un fs`,
+`un grants` and the layout-changing commands print text.
+
+**Events** (`proto::script`, `SCRIPT_EVENTS_VERSION` 1). One JSON object per event:
+`{"v":1, "seq", "at" (Unix ms), "session"?: "s1", "pane"?: "p4", "type", …}`:
+
+| `type` | fields |
+|---|---|
+| `pane.opened` | `tab`? |
+| `pane.closed` | |
+| `command.started` | `id`, `command`?, `cwd`? |
+| `command.finished` | `id`, `command`?, `exitCode`?, `durationMs` |
+| `agent.state` | `state` (`idle`, `working`, `blocked`, `done`, `error`, `none`), `kind`? (`permission`, `question`, `auth`), `app`? |
+| `layout.changed` | tabs, splits, floating panes or projects changed: read the layout again |
+| `events.lost` | `missed` (0 when unknown): events were dropped; what you knew may be stale |
+
+New types may appear; ignore unknown ones. Two sources, one schema:
+
+- `un events [--type T]… [--json]` (a client): what its connection is shown, so roles and scopes
+  are the daemon's (a pane-scoped guest hears only its pane). The attached session; what is there
+  at the start is the baseline, not events; a reconnect says `events.lost`.
+  (`client_core::script::EventMapper`.)
+- `events_wait` (terminal tools, MCP): the caller's session, from the daemon's ring; `seq` is
+  the daemon's and skips other sessions' events.
+
+**TypeScript client** (`sdk/typescript/un.ts`, no dependencies, Node ≥ 22.18, Bun, Deno), for
+`UN_ENDPOINT_FILE`/`UN_SOCK`, `UN_TOKEN` and `UN_PANE_ID` and speaks the hook socket's line
+protocol, so a script has an agent's rights exactly (its own panes; the user's after the owner
+says yes). `term.run(cmd)`, `term.panes.list/split/read/wait/send/close`,
+`term.agents.spawn/prompt/wait/result`, typed results, `TermError {code, retryable, hint}`, and
+`for await (const e of term.events({types}))`, which throws `EventsLost` rather than skip. Tests:
+`cd sdk/typescript && npm test` (fake socket) and
+`tests/it/drive.rs::the_typescript_client_drives_a_real_daemon`. We chose TypeScript over a
+Rust module: scripts that drive panes are mostly JS/Python/shell, and Rust callers already have
+`daemon::TermCall`.
+
+### Cross-host tools (design only, not built)
+
+An agent on host A driving a pane on host B. Not built; the safe shape:
+
+- **Identity.** A's daemon, not the agent, is the actor on B: it connects to B as a guest under a
+  grant chain B's owner issued to A's daemon key (an invite, `crates/grants`), narrowed to the
+  panes or session meant for it and to roles that fit (Prompter for `agent_prompt`, Driver for
+  input). A never holds B's owner key, and an agent's request never travels as a credential.
+- **Ownership.** Panes A's agent opens on B are recorded on B with the guest principal as creator;
+  driving them needs no further question while the grant lives. Every other pane of B is B's
+  owner's: a drive request on B, answered by B's owner like any other (guests never answer), and
+  "for this pane" scoped to the guest principal. Password prompts stay refused.
+- **Revocation and audit.** B audits every action under the guest principal and grant id;
+  revoking the grant on B ends A's access at once (the live checks of §6.2). A also audits what
+  it asked B to do, so both sides can account for a cross-host action.
+- **Tools.** A `host` argument (from `un hosts`) on the terminal tools, forwarded over A's
+  connection to B; results and the event stream stay per host; nothing is ever fanned out to
+  every host at once. Open: how A's owner sees B's pending requests (B's own push to B's owner
+  is the default; A forwarding them would need B to trust A's devices).
 
 ## 10. Known gaps / follow-ups
 

@@ -124,6 +124,8 @@ pub struct Config {
     pub default_size: (u16, u16),
     /// Quiet period before layout changes are written to disk.
     pub persist_debounce: Duration,
+    /// How long an agent's request to drive one of the user's panes waits for the owner.
+    pub drive_ask_wait: Duration,
     /// The agent hook shim; next to the current executable when `None`.
     pub hook_bin: Option<PathBuf>,
     /// Inject Ghostty's shell integration into bash, zsh and fish panes (OSC 133 command
@@ -297,6 +299,7 @@ impl Config {
             image_storage_bytes: ghostty_vt::KITTY_IMAGE_STORAGE_LIMIT,
             default_size: (80, 24),
             persist_debounce: Duration::from_millis(500),
+            drive_ask_wait: Duration::from_secs(120),
             hook_bin: None,
             shell_integration: true,
             long_command: Duration::from_secs(10),
