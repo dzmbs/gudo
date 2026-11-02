@@ -924,6 +924,10 @@ struct CompactTerminalView: View {
         HStack(spacing: DS.Space.xs) {
             tabSwitcher
             Spacer()
+            // The focused pane's worktree: its pull request, the checks in a sheet.
+            if model.destination == .terminal, let worktree = model.git.worktree {
+                PRToolbarButton(git: model.git, worktree: worktree)
+            }
             if let mixed = model.activeMixed {
                 // A page, editor or another host's pane beside a terminal: one shows at a time.
                 if mixed.leaves.count > 1 { mixedPaneSwitcher(mixed) }

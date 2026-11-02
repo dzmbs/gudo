@@ -247,7 +247,9 @@ struct NewTaskSheet: View {
                 repoPath = repoPath ?? (repos.first { preferred.contains($0.path) } ?? repos.first)?.path
                 worktree = repo != nil
                 if let seeded = seed.prompt { prompt = seeded }
-                isPromptFocused = true
+                // Not on a phone: its keyboard would scroll the runner and host out of view as
+                // the sheet opens.
+                isPromptFocused = model.widthBucket != .compact
             }
             .onChange(of: hosts.map(\.id)) { _, ids in
                 if hostID == nil || !ids.contains(hostID!) { hostID = ids.first }

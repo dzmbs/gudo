@@ -605,6 +605,12 @@ private struct CompactRoot: View {
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
+        // As in the regular layout: without them a merge, archive or delete from the palette
+        // waited for a confirmation that never showed.
+        .modifier(GitDialogs(git: model.git))
+        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
+            if has { model.git.syncAutoDelete() }
+        }
     }
 }
 #endif
