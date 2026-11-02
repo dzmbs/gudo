@@ -77,7 +77,7 @@ import GudoCore
         #expect(Self.worktree("/w/x", branch: nil).displayBranch == "detached at abcdef1")
     }
 
-    @Test func checksSummaryFollowsSupacodesRule() {
+    @Test func checksSummaryFailsOnAnyFailure() {
         #expect(ChecksSummary(statuses: []) == .none)
         #expect(ChecksSummary(statuses: [.success, .success]) == .passing(2))
         #expect(ChecksSummary(statuses: [.success, .pending]) == .pending(failed: 0, running: 1, passed: 1))

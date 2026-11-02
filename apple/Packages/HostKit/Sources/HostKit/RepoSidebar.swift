@@ -35,6 +35,7 @@ nonisolated public protocol DaemonRepoTrustAPI: AnyObject, Sendable {
 
 extension DaemonClient: DaemonRepoTrustAPI {}
 
+/// A pull request's checks at a glance (any failure fails; else anything
 /// running is pending; else passing).
 nonisolated public enum ChecksSummary: Equatable, Sendable {
     case none
@@ -86,7 +87,8 @@ extension WorktreeState: Identifiable {
         return "detached"
     }
 
-    /// subtitle equal to the branch's last component). The main worktree has none.
+    /// The worktree's name under the branch, unless it equals the
+    /// branch's last component. The main worktree has none.
     nonisolated public var subtitle: String? {
         if main { return nil }
         let last = branch.map { $0.split(separator: "/").last.map(String.init) ?? $0 }
