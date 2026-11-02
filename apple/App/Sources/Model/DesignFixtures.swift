@@ -4,9 +4,7 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
-/// Puts a window into a known state for design review and screenshots:
-/// `-screen <name>` (UserDefaults argument domain). Names are listed in docs/DESIGN.md
-/// "Screenshots". Does nothing in normal launches.
+/// Puts a window into a known state for design review and screenshots (`-screen <name>`).
 enum DesignFixtures {
     static func apply(_ screen: String?, workspace: Workspace, model: WindowModel) async {
         guard let screen else { return }
@@ -26,11 +24,9 @@ enum DesignFixtures {
             for _ in 0..<50 where workspace.focusedPane == nil {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            // One window model per scene: the workspace given is the one on screen.
             programs(workspace)
             return
         case "live-splits":
-            // A real host's tab split in three, names and titles left as they are.
             if let tab = workspace.session.activeTab, tab.root.panes.count == 1 {
                 workspace.apply(.split(tab.focused, .horizontal))
                 try? await Task.sleep(for: .milliseconds(800))
@@ -46,10 +42,9 @@ enum DesignFixtures {
         default:
             break
         }
-        // left as it is.
+        // Screens on a real host's data (`-testTicket … -screen files`), the session left as it is.
         if !LaunchOptions.mock {
-            // Screenshot seeds (apple/scripts/w3-screenshots.sh): text typed into the focused
-            // pane, an agent started with a first prompt.
+            // Screenshot seeds: text typed into the focused pane, an agent started with a prompt.
             let defaults = LaunchArguments()
             if let text = defaults.string(forKey: "typeOnStart"), let id = workspace.focusedPane, let pane = workspace.pane(id) {
                 Data(text.replacingOccurrences(of: "\\n", with: "\r").utf8).withUnsafeBytes { pane.backend.write($0) }
@@ -104,15 +99,13 @@ enum DesignFixtures {
             model.searchNeedle = "error"
         case "keybar":
             #if os(iOS)
-            // Show the software keyboard with the key bar on the focused pane.
             Task {
                 try? await Task.sleep(for: .milliseconds(600))
                 if let id = workspace.focusedPane { _ = workspace.pane(id)?.view.becomeFirstResponder() }
             }
             #endif
         case "agent-toast":
-            // Two agents on another host start needing you and finish, a moment apart: the toast
-            // stack (`AgentToasts`), approve from it, ⇧⌘A.
+            // Two agents on another host start needing you and finish, a moment apart.
             guard let feed = model.agents as? MockAgentFeed else { return }
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation(DS.Motion.snappy) {
@@ -121,8 +114,7 @@ enum DesignFixtures {
             try? await Task.sleep(for: .seconds(0.6))
             withAnimation(DS.Motion.snappy) { feed.simulate("a4", state: .done, summary: "The reconnect test waited on a stale timer; fixed.") }
         case "program-status":
-            // A program other than Claude or Codex reports its own status (OSC 7501): pi asks a
-            // question beside Claude at work. A status only, no approval card.
+            // A program other than Claude or Codex reports its own status (OSC 7501).
             let panes = workspace.session.activeTab?.root.panes ?? []
             guard panes.count > 2 else { return }
             MockPaneStatus.fixture = [
@@ -135,12 +127,12 @@ enum DesignFixtures {
             try? await Task.sleep(for: .seconds(1))
             model.toasts.show(Toast("Closed “cargo test”", systemImage: "xmark.circle.fill", action: Toast.Action("Undo") {}))
         case "browser-page":
-            // The in-app browser on a page (a local one: no network), its chrome in view.
+            // A local page, so no network.
             let page = "<html><body style='font:17px -apple-system;margin:40px'><h1>Dev server</h1><p>localhost:5173 · pnpm dev</p></body></html>"
             model.browserURL = URL(string: "data:text/html;charset=utf-8," + (page.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))
             model.sheet = .browser
         case "start-page":
-            // A new browser tab on the host whose dev servers turn up after it opens.
+            // A new browser tab on a host whose dev servers turn up after it opens.
             let history = BrowserHistory.shared
             if history.entries.isEmpty {
                 for (url, title) in [("https://ghostty.org/docs", "Ghostty Docs"), ("https://github.com", "GitHub"), ("https://developer.apple.com", "Apple Developer")] {
@@ -160,14 +152,13 @@ enum DesignFixtures {
                 }
             }
         case "presence-notice":
-            // Someone arrives in a shared session (`-mockPresence YES`).
+            // Needs `-mockPresence YES`.
             try? await Task.sleep(for: .seconds(1))
             if let session = workspace.multiplayer {
                 model.toasts.show(PresenceNotices.toast(arrived: ["Mira Holt"], in: session))
             }
         case "stopped-following":
-            // The banner rises above Mira's draft at the bottom of the zoomed agent pane
-            // (`-mockPresence YES`).
+            // Needs `-mockPresence YES`.
             workspace.apply(.focus(PaneId(3)))
             workspace.apply(.toggleZoom)
             try? await Task.sleep(for: .seconds(1))
@@ -175,7 +166,6 @@ enum DesignFixtures {
             toast.action = Toast.Action("Follow Again") {}
             model.toasts.show(toast)
         case "port-offer":
-            // The dev-server offer with a banner over it: both clear of the panes' top bars.
             try? await Task.sleep(for: .seconds(1))
             if let ports = model.ports as? MockPortSource { ports.offer = ports.ports.first }
             model.toasts.show(Toast("Copied localhost:5173", systemImage: "doc.on.doc"))
@@ -192,14 +182,13 @@ enum DesignFixtures {
             }
         case "file-preview": model.sheet = .files
         case "editor-licence":
-            // VS Code's first use on a host: Microsoft's terms (`-mockEditorPhase licence`).
+            // Needs `-mockEditorPhase licence`.
             model.openEditor()
         default:
             if screen == "ticket" { model.addHost(mode: .ticket) } else if screen == "themes" || screen == "devices" { model.sheet = .settings } else if let route = SheetRoute(rawValue: screen) { model.sheet = route }
         }
     }
 
-    /// Tab 1: a shell beside Claude, Codex below it; two more tabs.
     /// Two daemons and a plain-SSH host beside this device, their tabs in two projects that
     /// span hosts, a few left loose.
     static func projects(_ model: WindowModel) {
@@ -208,14 +197,13 @@ enum DesignFixtures {
             guard let group = model.groups.group(host), let tab = group.tabs.first(where: { $0.title == name }) else { return nil }
             return group.ref(tab.id)
         }
-        let app = [ref("fixture-studio", "api-server"), ref("fixture-hetzner", "web"), ref("fixture-studio", "claude")].compactMap(\.self)
-        let infra = [ref("fixture-hetzner", "deploy"), ref("fixture-box", "htop")].compactMap(\.self)
-        model.newProject(from: app, name: "acme-app", naming: false)
-        model.newProject(from: infra, name: "infra", naming: false)
+        let appTabs = [ref("fixture-studio", "api-server"), ref("fixture-hetzner", "web"), ref("fixture-studio", "claude")].compactMap(\.self)
+        let infraTabs = [ref("fixture-hetzner", "deploy"), ref("fixture-box", "htop")].compactMap(\.self)
+        model.newProject(from: appTabs, name: "acme-app", naming: false)
+        model.newProject(from: infraTabs, name: "infra", naming: false)
     }
 
-    /// Tab history on the projects fixture: two tabs kept aside at launch ("Restore 2 Tabs"),
-    /// two idle ones ("Close 2 Idle Tabs"), and a few recently closed tabs.
+    /// The projects fixture with two hidden tabs, two idle ones and a few recently closed.
     static func tabHistory(_ model: WindowModel) {
         projects(model)
         let hetzner = model.groups.group("fixture-hetzner")
@@ -226,14 +214,14 @@ enum DesignFixtures {
         model.idleTabs = [studio.flatMap { group in group.tabs.last.map { group.ref($0.id) } }, model.groups.group("fixture-box").flatMap { group in group.tabs.first.map { group.ref($0.id) } }]
             .compactMap(\.self)
         let now = Date.now
-        let app = model.projects.first { $0.name == "acme-app" }
+        let appProject = model.projects.first { $0.name == "acme-app" }
         model.recentlyClosed.removeAll()
         model.recentlyClosed.record([
             ClosedTab(title: "release-notes", hostId: "fixture-hetzner", hostName: "hetzner", directory: "/srv/web", closedAt: now.addingTimeInterval(-26 * 3600)),
             ClosedTab(title: "migrate-db", hostId: "fixture-studio", hostName: "studio", pane: 9, directory: "/srv/api", agent: "codex",
-                      project: app.map { ClosedProject(id: $0.id, name: $0.name, color: $0.color) }, closedAt: now.addingTimeInterval(-3 * 3600)),
+                      project: appProject.map { ClosedProject(id: $0.id, name: $0.name, color: $0.color) }, closedAt: now.addingTimeInterval(-3 * 3600)),
             ClosedTab(title: "fix-reconnect", hostId: "fixture-studio", hostName: "studio", pane: 4, directory: "/srv/api", agent: "claude",
-                      project: app.map { ClosedProject(id: $0.id, name: $0.name, color: $0.color) }, closedAt: now.addingTimeInterval(-12 * 60)),
+                      project: appProject.map { ClosedProject(id: $0.id, name: $0.name, color: $0.color) }, closedAt: now.addingTimeInterval(-12 * 60)),
             ClosedTab(title: "~/notes", hostId: HostGroups.localId, hostName: WindowModel.deviceName, closedAt: now.addingTimeInterval(-90)),
         ])
     }
@@ -248,7 +236,6 @@ enum DesignFixtures {
         model.clickTab(rows[3], modifiers: .command)
     }
 
-    /// The projects fixture's hosts, before any project.
     static func projectHosts(_ model: WindowModel) {
         let hosts: [(HostRecord, [String])] = [
             (HostRecord(id: "fixture-studio", name: "studio", kind: .daemon, daemonId: "fixture-a"), ["api-server", "claude", "logs"]),
@@ -274,20 +261,21 @@ enum DesignFixtures {
         if let tab = workspace.session.tabs.first { workspace.selectTab(tab.id) }
     }
 
-    /// tab that needs input (its glyph replaces the mark), the first tab selected.
+    /// One tab per program for checking program marks; Claude's split with a shell.
     private static func programs(_ workspace: Workspace) {
         let tabs: [(name: String, program: String, state: AgentState?)] = [
             ("~/projects/gudo", "claude", .working), ("notes.txt", "vim", nil), ("build-01", "htop", nil),
             ("scratch", "python3.12", nil), ("review", "codex", .blocked), ("README.md", "nvim", nil),
             ("Cargo.toml", "hx", nil), ("work", "tmux", nil), ("history", "git", nil), ("load", "btop", nil),
             ("console", "irb", nil), ("~", "-zsh", nil),
+            // After the original twelve so their tab numbers stay.
             ("search", "gemini", nil), ("pr", "copilot", nil), ("init.el", "emacs", nil), ("api", "docker", nil),
             ("prod", "kubectl", nil), ("web", "node", nil), ("bench", "bun", nil), ("tools", "deno", nil),
             ("server", "go", nil), ("build", "cargo", nil), ("check", "rustc", nil), ("db", "psql", nil),
             ("cache", "redis-cli", nil),
         ]
         var fixture: [String: (program: String, state: AgentState?)] = [:]
-        // `-fixtureTabs N`: the first N only (the tab strip has room for about six).
+        // `-fixtureTabs N` keeps the first N only.
         let count = LaunchArguments().integer(forKey: "fixtureTabs")
         for (index, tab) in tabs.prefix(count > 0 ? count : tabs.count).enumerated() {
             if index > 0 { workspace.apply(.newTab) }

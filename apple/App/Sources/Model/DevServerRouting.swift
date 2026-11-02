@@ -5,9 +5,8 @@ import Network
 import GudoCore
 import WebKit
 
-/// S-BR1: a host's dev server opens in the in-app browser at exactly the URL it printed
-/// (`http://localhost:3000`, `http://app.localhost:5173`), so its origin, cookies, OAuth
-/// callbacks, CORS and HMR websockets work as on the host. How (HostKit `DevServerProxy.swift`):
+/// A host's dev server opens in the in-app browser at exactly the URL it printed, so its origin,
+/// cookies, OAuth callbacks, CORS and HMR websockets work as on the host:
 ///
 /// - Each host has its own `WKWebsiteDataStore` (cookies and storage never mix between two
 ///   hosts that both serve `:3000`) whose `proxyConfigurations` point at that host's SOCKS proxy:
@@ -16,9 +15,8 @@ import WebKit
 ///   macOS), so for those the app also listens on this device's loopback port itself
 ///   (`LoopbackRouter`) and sends each connection to the host whose route cookie it carries.
 ///
-/// The fallback (`page` returns nil): a forward on the same port number if free here, else on
-/// any port (the origin's port changes). Taken when the port is in use here by something else
-/// (on the Mac, the user's own server) or the proxy cannot start; `-browserProxy NO` forces it.
+/// When the port is in use here or the proxy cannot start, `page` returns nil and the caller
+/// forwards to another port instead. `-browserProxy NO` forces that.
 @MainActor
 final class DevServerRouting {
     static let shared = DevServerRouting()
@@ -44,14 +42,12 @@ final class DevServerRouting {
         }
     }
 
-    /// The host's web data store, once one of its dev servers was opened (nil: the default).
     func store(forHost id: String?) -> WKWebsiteDataStore? {
         id.flatMap { hosts[$0]?.store }
     }
 
-    /// The store for a page on `hostId` (a host opened it, or it shows the host's servers), else
-    /// the user's own. A host's pages never share cookies or storage with another host's or
-    /// with the user's own browsing, whether or not its proxy runs.
+    /// A host's pages never share cookies or storage with another host's or with the user's own
+    /// browsing, whether or not its proxy runs.
     func dataStore(forHost hostId: String?) -> WKWebsiteDataStore {
         guard let hostId else { return .default() }
         if let store = stores[hostId] { return store }
@@ -60,7 +56,6 @@ final class DevServerRouting {
         return store
     }
 
-    /// A host was removed: its pages' cookies and storage go with it.
     func forgetHost(_ hostId: String) async {
         let store = stores.removeValue(forKey: hostId)
         if let route = hosts.removeValue(forKey: hostId) {
@@ -77,14 +72,12 @@ final class DevServerRouting {
         }
     }
 
-    /// Connections the in-app browser sent to the host through the proxy or the router.
     func routedConnections(forHost id: String) -> Int {
         guard let route = hosts[id] else { return 0 }
         return (route.proxy?.counts.routed ?? 0) + router.count(for: route.token)
     }
 
-    /// The URL to load for a host's dev server, with its data store routed to the host; nil
-    /// when it cannot keep the origin (the caller forwards to another port instead).
+    /// Nil when the origin cannot be kept.
     func page(for port: DetectedPort, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async -> URL? {
         guard isEnabled, let route = await route(hostId, client: client) else { return nil }
         let url = Self.pageURL(for: port)
@@ -103,14 +96,13 @@ final class DevServerRouting {
         return url
     }
 
-    /// The host's data store, its proxy running (a browser leaf on the host's dev servers).
+    /// The host's data store, with its proxy running.
     func store(forHost id: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async -> WKWebsiteDataStore? {
         guard isEnabled else { return nil }
         return await route(id, client: client)?.store
     }
 
-    /// Before a page on the host's `localhost:<port>` (or `127.0.0.1`) loads: this device's
-    /// port serves the host's, as for a dev server opened from the ports list.
+    /// Makes this device's loopback port serve the host's before such a page loads.
     func prepareLoopback(_ url: URL, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI) async {
         guard let host = url.host(), DevServerNames.isLoopbackLiteral(host), let port = url.port.flatMap(UInt16.init(exactly:)),
               !router.ports.contains(port)
@@ -120,9 +112,8 @@ final class DevServerRouting {
             hostId: hostId, client: client)
     }
 
-    /// Serves this device's `localhost:<port>` for the host while a sign-in waits for its
-    /// callback there (`HostSignIn`); `onRequest` hears each request's target. Returns the
-    /// claim's token for `releaseSignIn`. Throws when the port is taken here.
+    /// Serves this device's `localhost:<port>` for the host while a sign-in waits for its callback
+    /// there. Returns the token for `releaseSignIn`; throws when the port is taken here.
     func claimSignIn(
         port: UInt16, hostId: String, client: @escaping () throws -> any DaemonWorkspaceAPI,
         onRequest: @escaping @Sendable (String) -> Void
@@ -140,8 +131,8 @@ final class DevServerRouting {
         router.release(port: port, token: token)
     }
 
-    /// Loopback names WebKit sends through `proxyConfigurations` (checked 2026-10-21): on iOS 27
-    /// `localhost` (not `127.0.0.1` or `[::1]`); on macOS 26 none. `*.localhost` always is.
+    /// Loopback names WebKit sends through `proxyConfigurations`: on iOS 27 `localhost` (not
+    /// `127.0.0.1` or `[::1]`); on macOS 26 none. `*.localhost` always is.
     nonisolated static func webKitProxies(_ host: String) -> Bool {
         #if os(iOS)
         host.lowercased() == "localhost"
@@ -150,8 +141,7 @@ final class DevServerRouting {
         #endif
     }
 
-    /// What the server printed when it names this host's loopback (`localhost`, `127.0.0.1`,
-    /// `*.localhost`), else `http://localhost:<port>` with the printed path.
+    /// The printed URL when it names the host's loopback, else `http://localhost:<port>` with the printed path.
     nonisolated static func pageURL(for port: DetectedPort) -> URL {
         var components = URLComponents()
         components.scheme = "http"
@@ -209,24 +199,22 @@ final class DevServerRouting {
         return route
     }
 
-    /// A forward to the host's `localhost:<hostPort>` on any local port (reused while it lasts).
     private func forward(_ hostId: String, _ hostPort: UInt16) throws -> UInt16 {
         guard let route = hosts[hostId] else { throw HostError.notConnected }
         let api = try route.client()
-        if let existing = api.forwards().first(where: { if case .tcp(let p) = $0.target { p == hostPort } else { false } }) {
+        if let existing = api.forwards().first(where: { if case .tcp(let port) = $0.target { port == hostPort } else { false } }) {
             return existing.localPort
         }
         return try api.forward(localPort: 0, target: .tcp(port: hostPort))
     }
 
-    /// The same store for a host across launches (its dev servers' cookies and storage).
     nonisolated static func storeIdentifier(_ hostId: String) -> UUID {
         WKWebsiteDataStore.stableIdentifier("gudo-browser:\(hostId)")
     }
 }
 
 extension WKWebsiteDataStore {
-    /// A data store identifier that is the same for `key` on every launch (a name-based UUID).
+    /// A name-based UUID, the same for `key` on every launch.
     nonisolated static func stableIdentifier(_ key: String) -> UUID {
         var bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
@@ -237,11 +225,9 @@ extension WKWebsiteDataStore {
 }
 
 extension DetectedPort {
-    /// A coding agent's own listener, never a dev server: Claude Code's and Codex's sign-in
-    /// callbacks and editor bridges answer only at the URL the agent built, and opening their
-    /// `/` breaks a sign-in in progress. By process (`claude`, `codex`, or the version-named
-    /// binary Claude's native install runs as, `2.1.307`), or, in a pane running an agent, any
-    /// port in the ephemeral range: servers an agent starts take a chosen port.
+    /// A coding agent's own listener, never a dev server: opening its `/` breaks a sign-in in
+    /// progress. Claude's native install runs as a version-named binary (`2.1.307`); in an agent
+    /// pane, any ephemeral port counts, since servers an agent starts take a chosen port.
     nonisolated static func isAgentListener(process: String, port: UInt16, inAgentPane: Bool) -> Bool {
         let name = process.lowercased()
         if ["claude", "codex", "claude-code", "codex-cli"].contains(name) { return true }

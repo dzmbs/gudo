@@ -5,60 +5,42 @@ import SwiftUI
 import PaneLayout
 import WebKit
 
-/// One browser page: its `WebPage`, the host whose dev servers it reaches (its data store
-/// routes `localhost` there, `DevServerRouting`), and a hook on where it navigates. A sheet's
-/// browser owns one; a browser leaf's lives as long as the leaf (`BrowserPanes`).
+/// One browser page and the host whose `localhost` its data store routes to.
 @MainActor
 @Observable
 final class BrowserPane: Identifiable {
     let id: UUID
-    /// A `WebPage`, or a `PopupPage` for a page another one opened.
     let page: any BrowserPageContent
-    /// The host the page's `localhost` goes to, if any.
     let hostId: String?
-    /// Its cookies and storage (`DevServerRouting.dataStore(forHost:)`).
     let dataStore: WKWebsiteDataStore
-    /// Where it started (shown until the page has a URL of its own).
     let initialURL: URL
-    /// Sees every navigation of the main frame first; true keeps it from loading (a sign-in
-    /// code taken from its callback page).
+    /// Sees every main-frame navigation first; true cancels it.
     @ObservationIgnored var intercept: ((URL) -> Bool)?
-    /// Runs before a navigation loads (a host's `localhost` port made to reach the host).
     @ObservationIgnored var prepare: ((URL) async -> Void)?
     @ObservationIgnored private var started = false
 
-    // MARK: Agents (`BrowserAgent`)
+    // MARK: Agents
 
-    /// What an agent is doing on the page now ("Clicking “Sign in”"), shown on the page.
     var agentActivity: String?
-    /// The agent waits for the user: to approve a step, or to do it themselves.
     var agentRequest: AgentRequest?
-    /// The user took the page over: agents wait until they hand it back.
     var userHasControl = false
-    /// Screenshot pixels per CSS pixel of the last screenshot (coordinates scale back by it).
+    /// Screenshot pixels per CSS pixel of the last screenshot; agent coordinates scale back by it.
     @ObservationIgnored var shotScale = 1.0
 
-    /// The frames running the agent's script, to call into them.
     @ObservationIgnored let frames = BrowserFrames()
-    /// A page this page opened (`window.open`, `target=_blank`), to show as a new leaf with
-    /// `window.opener` intact.
+    /// A page this page opened, shown as a new leaf with `window.opener` intact.
     @ObservationIgnored var onPopupPane: ((BrowserPane) -> Void)?
-    /// The same by its URL alone (no `window.opener`): without `onPopupPane`, or before the
-    /// page's web view is known.
+    /// A popup by URL alone (no `window.opener`): without `onPopupPane`, or before the web view is known.
     @ObservationIgnored var onPopup: ((URL) -> Void)?
-    /// The page closed itself (`window.close()` in a page another opened).
     @ObservationIgnored var onClose: (() -> Void)?
     @ObservationIgnored private let windows = BrowserWindows()
-    /// A popup's navigation and dialogs (a `WebPage` has its own).
     @ObservationIgnored private var popupDelegate: PopupDelegate?
-    /// An agent's action is running on the page (a file picker it opens is the agent's, and
-    /// so are new windows: its input carries no user gesture for WebKit's popup blocker).
+    /// While true, file pickers and new windows belong to the agent: its input carries no user
+    /// gesture for WebKit's popup blocker.
     @ObservationIgnored var agentActing = false {
         didSet { windows.allowPopups(agentActing) }
     }
-    /// An `alert`, `confirm` or `prompt` the page waits on; the user or the agent answers it.
     var dialog: PageDialog?
-    /// A file picker an agent's action opened; `browser_upload` answers it.
     @ObservationIgnored var fileChooser: FileChooser?
 
     struct AgentRequest: Identifiable {
@@ -75,7 +57,6 @@ final class BrowserPane: Identifiable {
         let kind: Kind
         let message: String
         let defaultText: String?
-        /// Accept (with the prompt's text) or dismiss.
         let answer: (_ accept: Bool, _ text: String?) -> Void
     }
 
@@ -105,8 +86,7 @@ final class BrowserPane: Identifiable {
         hookUp()
     }
 
-    /// A page `opener` opened, in the web view made with the configuration WebKit gave for it:
-    /// that keeps `window.opener`, so the page can `postMessage` back and close itself.
+    /// Uses the configuration WebKit gave for the popup, which keeps `window.opener`.
     init(id: UUID = UUID(), popupOf opener: BrowserPane, configuration: WKWebViewConfiguration, url: URL?) {
         self.id = id
         hostId = opener.hostId
@@ -137,18 +117,15 @@ final class BrowserPane: Identifiable {
         windows.onClose = { [weak self] in self?.onClose?() }
     }
 
-    /// The page as SwiftUI's `WebView` shows it; nil for a popup.
     var webPage: WebPage? { page as? WebPage }
     var popupPage: PopupPage? { page as? PopupPage }
 
-    /// The view showing the page. A `WebPage` may be in one `WebView` at a time (WebKit traps
-    /// on a second), and a view swapped for another is made before the old one goes: the first
-    /// to ask keeps it for as long as it lives, and the others wait.
+    /// A `WebPage` may be in one `WebView` at a time (WebKit traps on a second), and a view
+    /// swapped for another is made before the old one goes: the first to ask keeps it, the others wait.
     @ObservationIgnored private(set) var shownBy: UUID?
     /// Counts the views that let go, so one waiting asks again.
     private var releases = 0
 
-    /// Whether `view` shows the page (asked while it draws: the page is its from then on).
     func mayShow(in view: UUID) -> Bool {
         _ = releases
         if shownBy == nil { shownBy = view }
@@ -161,7 +138,7 @@ final class BrowserPane: Identifiable {
         releases += 1
     }
 
-    /// A view's hold on the page, let go when the view is gone (after its `WebView`).
+    /// Released when the view is gone, after its `WebView`.
     final class ViewHold {
         let id = UUID()
         private weak var pane: BrowserPane?
@@ -174,7 +151,7 @@ final class BrowserPane: Identifiable {
         }
     }
 
-    /// A new window this page asked for: a pane of its own, or nil (WebKit then opens none).
+    /// Nil makes WebKit open no window.
     private func makePopup(_ configuration: WKWebViewConfiguration, for action: WKNavigationAction) -> WKWebView? {
         let url = action.request.url
         guard let onPopupPane else {
@@ -186,8 +163,7 @@ final class BrowserPane: Identifiable {
         return popup.popupPage?.webView
     }
 
-    /// Whether a navigation goes ahead, for both kinds of page. `newWindow`: it has no frame
-    /// to load in (a `target=_blank` link).
+    /// `newWindow`: there is no frame to load in (a `target=_blank` link).
     func decide(
         _ request: URLRequest, newWindow: Bool, mainFrame: Bool, type: WKNavigationType, download: Bool
     ) async -> WKNavigationActionPolicy {
@@ -212,7 +188,6 @@ final class BrowserPane: Identifiable {
         return .allow
     }
 
-    /// The agent's files for a file input its action opened (`browser_upload`); nil: none.
     func chooseFiles(multiple: Bool) async -> [URL]? {
         await withCheckedContinuation { continuation in
             fileChooser = FileChooser(multiple: multiple) { [weak self] urls in
@@ -222,7 +197,6 @@ final class BrowserPane: Identifiable {
         }
     }
 
-    /// Shows a page's dialog until it is answered.
     func present(_ kind: PageDialog.Kind, _ message: String, defaultText: String? = nil) async -> (Bool, String?) {
         dialog?.answer(false, nil)
         return await withCheckedContinuation { continuation in
@@ -236,9 +210,8 @@ final class BrowserPane: Identifiable {
         }
     }
 
-    /// Whether the page lets itself be left: a `beforeunload` handler that objects (unsaved
-    /// changes) asks first, as browsers do. WebKit leaves without asking, so the handlers are
-    /// run here before a navigation the app starts.
+    /// WebKit leaves without running `beforeunload`, so the handlers run here before a navigation
+    /// the app starts.
     func leavingAllowed() async -> Bool {
         let objects = try? await page.run(
             "const e = new Event('beforeunload', { cancelable: true }); dispatchEvent(e); return e.defaultPrevented",
@@ -247,7 +220,6 @@ final class BrowserPane: Identifiable {
         return await present(.beforeunload, "Leave site? Changes you made may not be saved.").0
     }
 
-    /// Loads the first page once (a view showing it again keeps where it is).
     func start() {
         guard !started else { return }
         started = true
@@ -263,7 +235,6 @@ final class BrowserPane: Identifiable {
         page.open(Self.request(url))
     }
 
-    /// A request in the language chosen for websites (`WebsiteLanguage`).
     nonisolated static func request(_ url: URL, language: String = WebsiteLanguage.current) -> URLRequest {
         var request = URLRequest(url: url)
         if let accept = WebsiteLanguage.acceptLanguage(language), url.scheme == "http" || url.scheme == "https" {
@@ -272,9 +243,8 @@ final class BrowserPane: Identifiable {
         return request
     }
 
-    /// Whether a main-frame navigation should be loaded again with the language header: WebKit
-    /// has no setting for it, so a page's own links and redirects are reissued. Never a form
-    /// post, a history step, a reload, a jump within the page, or what an agent's action set off.
+    /// WebKit has no setting for the language header, so a page's own links and redirects are
+    /// reissued with it. Never form posts, history steps, reloads or in-page jumps.
     nonisolated static func needsLanguage(
         _ request: URLRequest, type: WKNavigationType, from current: URL?, language: String = WebsiteLanguage.current
     ) -> Bool {
@@ -292,12 +262,10 @@ final class BrowserPane: Identifiable {
 
     // MARK: Favicon
 
-    /// The page's icon, for its tab.
     var favicon: Image?
     @ObservationIgnored private var faviconPage: URL?
 
-    /// Reads the page's icon (its `link rel=icon`, else `/favicon.ico`) through the page itself,
-    /// so it comes from the page's own data store and reaches a host's dev servers.
+    /// Fetched through the page itself so it uses the page's data store and reaches a host's dev servers.
     func refreshFavicon() async {
         guard let url = page.url, url.scheme == "http" || url.scheme == "https" else {
             favicon = nil
@@ -339,7 +307,6 @@ final class BrowserPane: Identifiable {
         #endif
     }
 
-    /// The page's URL, or where it is going.
     var url: URL { page.url ?? initialURL }
 
     fileprivate final class DeciderBox {
@@ -376,31 +343,26 @@ private struct Dialogs: WebPage.DialogPresenting {
         return .ok(text ?? defaultText ?? "")
     }
 
-    /// While an agent acts, its upload answers the picker; else as WebKit's default.
+    /// Only an acting agent's upload answers the picker.
     func handleFileInputPrompt(parameters: WKOpenPanelParameters, initiatedBy frame: WebPage.FrameInfo) async -> WebPage.FileInputPromptResult {
         guard let pane = box.pane, pane.agentActing else { return .cancel }
         return await pane.chooseFiles(multiple: parameters.allowsMultipleSelection).map { .selected($0) } ?? .cancel
     }
 }
 
-/// A window's browser leaves' pages, by `BrowserMember.id`: made when a leaf is first shown,
-/// kept across tab switches, gone with the leaf.
+/// A window's browser pages by `BrowserMember.id`, kept across tab switches and gone with the leaf.
 @MainActor
 final class BrowserPanes {
     private(set) var panes: [UUID: BrowserPane] = [:]
-    /// A page opened another by URL alone (its leaf's id, the URL).
+    /// The opener's leaf id and the URL.
     var onPopup: ((UUID, URL) -> Void)?
-    /// A page opened another as a pane of its own (the opener's leaf id, the pane, whose id
-    /// its leaf takes).
+    /// The opener's leaf id and the new pane, whose id its leaf takes.
     var onPopupPane: ((UUID, BrowserPane) -> Void)?
-    /// A page closed itself (its leaf's id).
     var onClose: ((UUID) -> Void)?
-    /// Leaves whose pages another page opened.
     var popups: Set<UUID> = []
 
     func existing(_ id: UUID) -> BrowserPane? { panes[id] }
 
-    /// The leaf's page, made on first use (on a host, with its data store and `localhost`).
     func pane(for member: BrowserMember, app: AppModel) async -> BrowserPane? {
         if let pane = panes[member.id] { return pane }
         guard let url = URL(string: member.url) else { return nil }
@@ -408,7 +370,6 @@ final class BrowserPanes {
         if let hostId = member.hostId, let context = HostContext.host(hostId, app: app) {
             let hub = context.hub
             client = { try hub.client() }
-            // Starts the host's proxy on its store, so its `localhost` is the host's.
             _ = await DevServerRouting.shared.store(forHost: hostId, client: { try hub.client() })
         }
         let store = DevServerRouting.shared.dataStore(forHost: member.hostId)
@@ -421,7 +382,6 @@ final class BrowserPanes {
         return pane
     }
 
-    /// Keeps `pane` for the leaf of its id, and the pages it opens.
     private func adopt(_ pane: BrowserPane) {
         let id = pane.id
         pane.onPopup = { [weak self] url in self?.onPopup?(id, url) }
@@ -435,7 +395,6 @@ final class BrowserPanes {
         panes[id] = pane
     }
 
-    /// Lets go of pages whose leaves closed.
     func prune(keeping ids: Set<UUID>) {
         for (id, pane) in panes where !ids.contains(id) {
             panes[id] = nil

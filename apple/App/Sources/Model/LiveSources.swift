@@ -7,10 +7,7 @@ import GudoCore
 
 // The screens' data sources over the real models (HostKit's `HostsModel` and the daemons'
 // pane metadata). `MockData.swift` holds the `-mock` stand-ins; the screens cannot tell them
-// apart. The Inbox, Files, Diff, Editor, Browser and Links sources are in
-// `LiveWorkspaceSources.swift` (docs/APP-ARCHITECTURE.md §10).
-
-// MARK: - Hosts
+// apart.
 
 /// `HostsModel` as the Hosts screen, the palette and the sidebar see it: this device first, then
 /// the saved hosts with their live status, agents and helper installs.
@@ -164,8 +161,6 @@ extension ConnectionState {
         }
     }
 }
-
-// MARK: - Agents
 
 extension DesignSystem.AgentState {
     /// The daemon's agent state (OSC 7501 / hooks, through `PaneMeta.agent`).

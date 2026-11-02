@@ -4,23 +4,19 @@ import PaneLayout
 import SwiftUI
 import TerminalRenderer
 
-/// Floating windows (docs/APP-ARCHITECTURE.md §28): what the header buttons, menus, palette and
-/// keys do. Every change is a layout op, so a daemon keeps it for every device; a host whose
-/// helper predates floats says so instead of doing nothing.
+/// Floating window actions. Every change is a layout op, so a daemon keeps it for every device.
 extension Workspace {
-    /// Whether this host keeps floating windows: always in a layout the app keeps itself, on a
-    /// daemon that offers them.
+    /// Always in a layout the app keeps itself; on a daemon only if it offers them.
     var canFloat: Bool {
         guard let daemon = host as? DaemonConnection else { return true }
         return daemon.layout.supportsFloats
     }
 
-    /// The window holding `pane`, if it floats.
     func window(of pane: PaneId) -> FloatWindow? {
         session.window(containing: pane)
     }
 
-    /// Whether `pane` can float: it floats already, or its tab keeps another tiled pane.
+    /// A tab must keep at least one tiled pane.
     func canToggleFloat(_ pane: PaneId) -> Bool {
         guard canFloat, let tab = session.tab(containing: pane) else { return false }
         if session.isFloating(pane) { return true }
@@ -29,7 +25,6 @@ extension Workspace {
 }
 
 extension WindowModel {
-    /// The workspace and pane the floating actions act on: `pane` there, else the focused one.
     private func floatTarget(_ pane: PaneId?, _ workspace: Workspace?) -> (Workspace, PaneId)? {
         guard activeMixedTab == nil, let workspace = workspace ?? self.workspace,
               let pane = pane ?? workspace.focusedPane else { return nil }
@@ -42,14 +37,12 @@ extension WindowModel {
             systemImage: "arrow.up.circle", style: .neutral))
     }
 
-    /// One coordinated spring for a window lifting out or settling back: the panes around it
-    /// reflow in the same motion, their grids held until it ends.
+    /// The panes around reflow in the same spring, their grids held until it ends.
     private func lift(_ body: () -> Void) {
         TerminalSurfaceHold.hold(for: DS.Motion.liftDuration)
         withAnimation(DS.Motion.lift, body)
     }
 
-    /// Float or dock (⌥⌘↩, the header's float button).
     func toggleFloat(_ pane: PaneId? = nil, in workspace: Workspace? = nil) {
         guard let (workspace, pane) = floatTarget(pane, workspace) else { return }
         guard workspace.canFloat else { return floatsUnsupported(workspace) }
@@ -63,13 +56,12 @@ extension WindowModel {
         }
     }
 
-    /// The window holding `pane` docks where it is, splits and all.
+    /// Docks the whole window holding `pane`, splits and all.
     func dock(_ pane: PaneId, in workspace: Workspace) {
         guard workspace.session.isFloating(pane) else { return }
         lift { workspace.apply(.dock(pane, beside: nil, side: .right)) }
     }
 
-    /// The window holding `pane` goes to the tray, or comes back from it (⇧⌘M).
     func toggleMinimized(_ pane: PaneId? = nil, in workspace: Workspace? = nil) {
         guard let (workspace, pane) = floatTarget(pane, workspace), let window = workspace.window(of: pane) else { return }
         lift {
@@ -81,27 +73,26 @@ extension WindowModel {
         }
     }
 
-    /// Shown over every tab of its host, or only its own.
+    /// Pinned windows show over every tab of their host.
     func togglePinned(_ pane: PaneId, in workspace: Workspace) {
         guard let window = workspace.window(of: pane) else { return }
         workspace.apply(.setFloat(pane, frame: nil, minimized: nil, pinned: !window.pinned))
     }
 
-    /// Hides every floating window for a look at the panes under them, or shows them again
-    /// (⌥⌘F, Quake's drop-down in reverse). Per window; the host keeps them as they are.
+    /// Per window; the host keeps the floats as they are.
     func toggleFloatsHidden() {
         lift { floatsHidden.toggle() }
     }
 
-    /// The windows over the shown tab, front to back, pinned ones from other tabs included.
+    /// Front to back, pinned ones from other tabs included.
     func visibleWindows(in workspace: Workspace) -> [FloatWindow] {
         guard let tab = workspace.session.activeTab else { return [] }
-        let own = Set(workspace.session.windows(in: tab.id).map(\.id))
-        return workspace.session.floats.filter { own.contains($0.id) || $0.pinned }.reversed()
+        let tabWindows = Set(workspace.session.windows(in: tab.id).map(\.id))
+        return workspace.session.floats.filter { tabWindows.contains($0.id) || $0.pinned }.reversed()
     }
 
-    /// The next pane (⌘]) or the previous one (⌘[): the tiled panes in reading order, then
-    /// each window's front to back; a window in the tray comes out when reached.
+    /// Tiled panes in reading order, then each window's front to back; a minimized window comes
+    /// out when reached.
     func focusPane(offset: Int) {
         guard activeMixedTab == nil, let workspace, let tab = workspace.session.activeTab else { return }
         let tiled = workspace.session.tiledRoot(of: tab)?.panes ?? []
@@ -112,20 +103,18 @@ extension WindowModel {
         withAnimation(DS.Motion.snappy) { workspace.apply(.focus(next)) }
     }
 
-    /// The front window behind the focused one comes forward with the keyboard (⌥⌘]).
     func cycleFloats() {
         guard let workspace else { return }
         let windows = visibleWindows(in: workspace)
         guard !windows.isEmpty else { return }
         if floatsHidden { floatsHidden = false }
         let focused = workspace.focusedPane.flatMap(workspace.window(of:))
-        // Front to back: the one after the focused window, or the frontmost.
-        let next = focused.flatMap { f in windows.firstIndex { $0.id == f.id } }.map { windows[($0 + 1) % windows.count] } ?? windows[0]
+        // The one after the focused window, or the frontmost.
+        let next = focused.flatMap { focusedWindow in windows.firstIndex { $0.id == focusedWindow.id } }.map { windows[($0 + 1) % windows.count] } ?? windows[0]
         withAnimation(DS.Motion.snappy) { workspace.apply(.focus(next.panes[0])) }
     }
 
-    /// Splits the focused pane along its longer side (⌘↩): wide panes side by side, tall ones
-    /// stacked, judged by the pane's size on screen.
+    /// Splits the focused pane along its longer side on screen.
     func splitBestFit() {
         guard let workspace, let pane = workspace.focusedPane else { return }
         let size = paneSize(pane, in: workspace)
@@ -133,7 +122,6 @@ extension WindowModel {
         action.perform(on: workspace, window: self)
     }
 
-    /// A pane's size on screen, from its tab's tree (or its window's frame) in the tab's area.
     func paneSize(_ pane: PaneId, in workspace: Workspace) -> CGSize {
         let area = CGRect(origin: .zero, size: terminalArea == .zero ? CGSize(width: 1200, height: 800) : terminalArea)
         let session = workspace.session
@@ -144,8 +132,7 @@ extension WindowModel {
         return session.tiledRoot(of: tab)?.frames(in: area)[pane]?.size ?? area.size
     }
 
-    /// ⌥⇧⌘ with an arrow: a tiled pane trades places past its neighbour that way; a floating
-    /// window steps a twelfth of the tab, snapping where it lands.
+    /// A tiled pane moves past its neighbour that way; a floating window steps a twelfth of the tab.
     func movePane(_ direction: Direction) {
         guard let (workspace, pane) = floatTarget(nil, nil) else { return }
         if let window = workspace.window(of: pane) {
@@ -163,15 +150,13 @@ extension WindowModel {
         guard workspace.canMovePanes, let tab = workspace.session.activeTab,
               let tiled = workspace.session.tiledRoot(of: tab)
         else { return }
-        // The neighbour the focus would move to: the pane goes past it.
         var probe = Session(tabs: [Tab(id: tab.id, root: tiled, focused: pane)], activeTabId: tab.id)
         probe.apply(.focusDirection(direction))
         guard let neighbour = probe.activeTab?.focused, neighbour != pane else { return }
         withAnimation(DS.Motion.lift) { workspace.apply(.movePane(pane, beside: neighbour, side: direction)) }
     }
 
-    /// ⌃⌘ with an arrow on a floating window grows it that way (shrinks with left/up), like
-    /// moving the divider on a tiled pane.
+    /// Grows a floating window that way; left and up shrink it.
     func resizeFloat(_ direction: Direction) -> Bool {
         guard let (workspace, pane) = floatTarget(nil, nil), let window = workspace.window(of: pane) else { return false }
         var frame = window.frame
@@ -186,8 +171,7 @@ extension WindowModel {
         return true
     }
 
-    /// The pane alone in a window of its own (Mac windows, iPad scenes): it moves to a new tab,
-    /// which opens in the new window, and this window stays on the tab it showed.
+    /// Moves the pane to a new tab in a new window; this window stays on the tab it showed.
     func popOut(_ pane: PaneId, in workspace: Workspace) {
         guard workspace.canMovePanes else { return }
         let before = currentTab
@@ -196,7 +180,7 @@ extension WindowModel {
             workspace.apply(.movePaneToNewTab(pane))
         }
         Task { @MainActor [weak self] in
-            // The host answers with the new tab: open it there, then come back here.
+            // Wait for the host to answer with the new tab.
             for _ in 0..<50 {
                 if let tab = workspace.session.tab(containing: pane), !tabs.contains(tab.id) || workspace.session.tabs.count == 1 {
                     self?.openInNewWindow(TabRef(hostId: workspace.groupId, tab: tab.id))
@@ -208,28 +192,25 @@ extension WindowModel {
         }
     }
 
-    /// The pane's id as the terminal tools and `gudo` name it (`p12`).
+    /// As the terminal tools and `gudo` name it (`p12`).
     func copyPaneId(_ pane: PaneId) {
         PaneIdPasteboard.copy("p\(pane.rawValue)")
         toasts.show(Toast("Copied p\(pane.rawValue)", systemImage: "doc.on.doc", style: .neutral))
     }
 
-    /// Clears the pane's terminal state on this device (modes, colours, screen) and asks the
-    /// program to draw itself again.
+    /// Resets terminal state on this device and asks the program to redraw.
     func resetTerminal(_ pane: PaneId, in workspace: Workspace) {
         guard let terminal = workspace.panes[pane] else { return }
         terminal.view.surface.terminal.write(Array("\u{1b}c".utf8))
         [UInt8(0x0c)].withUnsafeBytes { terminal.backend.write($0) }
     }
 
-    /// Whether the floating actions apply to the focused pane (menus enable them by this).
     var focusedFloats: Bool {
         guard let workspace, let pane = workspace.focusedPane else { return false }
         return workspace.session.isFloating(pane)
     }
 }
 
-/// The holds `TerminalSurface` keeps while a layout animates, by duration in seconds.
 enum TerminalSurfaceHold {
     static func hold(for seconds: Double) {
         TerminalSurface.holdGrids(for: .milliseconds(Int(seconds * 1000)))

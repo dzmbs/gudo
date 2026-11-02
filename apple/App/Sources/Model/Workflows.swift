@@ -4,7 +4,7 @@ import HostKit
 import PaneLayout
 import GudoCore
 
-// YAML files on the host. The palette's "/" scope lists the focused pane's (its repository's,
+// Workflows: named commands with `{{arguments}}` from YAML files on the host. The palette's "/" scope lists the focused pane's (its repository's,
 // then the global ones); one with arguments opens the argument form, which types the filled
 // command into the pane (Return there runs it) or runs it with ⌘↩. Nothing runs by itself.
 
@@ -101,7 +101,6 @@ extension WindowModel {
         }
     }
 
-    /// Writes the workflow on the host and says where.
     func saveWorkflow(_ draft: WorkflowDraft, scope: WorkflowScope, pane: PaneId) async -> Bool {
         guard let target = workflowTarget else { return false }
         do {

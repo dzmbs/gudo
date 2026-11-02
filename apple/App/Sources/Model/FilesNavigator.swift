@@ -1,9 +1,8 @@
 import Foundation
 import Observation
 
-/// Where a Files browser is, with Finder's history: the levels opened from where browsing
-/// started (back), the ones gone back from (forward), and the folders around it. A leaf's
-/// navigator is kept by its window, so a leaf rebuilt by a split keeps its place.
+/// Where a Files browser is, with Finder-style back and forward. The window keeps a leaf's
+/// navigator, so a leaf rebuilt by a split keeps its place.
 @MainActor
 @Observable
 final class FilesNavigator {
@@ -19,12 +18,12 @@ final class FilesNavigator {
         }
     }
 
-    /// The levels, where browsing started first: the last is on screen.
+    /// Where browsing started first; the last is on screen.
     private(set) var levels: [Place]
     private(set) var forwards: [Place] = []
-    /// Folders open in place (disclosure triangles), across levels as in Finder.
+    /// Folders open in place with disclosure triangles, across levels.
     var expanded: Set<String> = []
-    /// Folders' entries as last listed: a level gone back to shows at once, then refreshes.
+    /// A level gone back to shows these at once, then refreshes.
     var listings: [String: [FileEntry]] = [:]
 
     init(root: String) {
@@ -34,10 +33,9 @@ final class FilesNavigator {
     var place: Place { levels[levels.count - 1] }
     var canGoBack: Bool { levels.count > 1 }
     var canGoForward: Bool { !forwards.isEmpty }
-    /// Nowhere yet: the start can follow the focused pane's folder.
+    /// The start can still follow the focused pane's folder.
     var isAtStart: Bool { levels.count == 1 && forwards.isEmpty }
 
-    /// The folder shown, or the folder of the file shown.
     var folder: String {
         switch place {
         case .folder(let path): path
@@ -61,14 +59,12 @@ final class FilesNavigator {
         levels.append(next)
     }
 
-    /// The enclosing folder (⌘↑): back when that is where this level was opened from.
     func openEnclosing() {
         guard let parent = enclosing else { return }
         go(to: parent)
     }
 
-    /// An enclosing folder from the path bar or the title's menu: back to it when it is a level
-    /// already open, else a new level.
+    /// Back to the folder when it is a level already open, else a new level.
     func go(to folder: String) {
         if let index = levels.lastIndex(of: .folder(folder)), index < levels.count - 1 {
             forwards.append(contentsOf: levels[(index + 1)...].reversed())
@@ -78,13 +74,12 @@ final class FilesNavigator {
         }
     }
 
-    /// Starts over at `root` (the focused pane's folder changed before anything was opened).
     func reset(to root: String) {
         levels = [.folder(root)]
         forwards.removeAll()
     }
 
-    /// For a NavigationStack: the levels above the first.
+    /// For a NavigationStack.
     var stack: [Place] {
         get { Array(levels.dropFirst()) }
         set {
@@ -103,7 +98,6 @@ final class FilesNavigator {
         return Self.parent(of: folder)
     }
 
-    /// The folders from the top of the file system (or home) down to the one shown.
     var trail: [String] { Self.ancestors(of: folder) }
 
     nonisolated static func parent(of path: String) -> String? {

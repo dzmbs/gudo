@@ -1,19 +1,15 @@
 import WebKit
 
-/// The scripts a browser page carries for agents (`BrowserAgent`).
+/// The scripts a browser page carries for agents.
 ///
-/// - `agent` runs in every frame, in its own content world out of the page's reach:
-///   Playwright's injected script (`AgentBrowser/playwright-injected.js`, built by
-///   apple/scripts/build-agent-browser.sh) and ours on top (`AgentBrowser/agent.js`): snapshots
-///   with `ref_N` references, actions that wait for their target and check what they hit, the
-///   agent's cursor, labels for annotated screenshots, and pointing out an element for the agent.
-///   Each frame announces itself on `frameHandler` so the app can call into it.
-/// - `recorder` runs in the main frame's page world: it keeps console messages, uncaught errors
-///   and the page's fetch and XHR requests for `browser_console`, `browser_network` and for
-///   waiting until requests an action started are done.
+/// - `agent` runs in every frame, in its own content world out of the page's reach: Playwright's
+///   injected script (built by apple/scripts/build-agent-browser.sh) with `agent.js` on top. Each
+///   frame announces itself on `frameHandler` so the app can call into it.
+/// - `recorder` runs in the main frame's page world and keeps console messages, errors and
+///   fetch/XHR requests, so actions can wait for the requests they started.
 enum BrowserAgentScript {
     static let world = WKContentWorld.world(name: "gudo-agent")
-    /// The message handler frames announce themselves on (`{token, main}`).
+    /// Frames post `{token, main}` here.
     static let frameHandler = "gudoAgentFrame"
 
     static func install(in controller: WKUserContentController, frames: (any WKScriptMessageHandler)? = nil) {
@@ -75,12 +71,11 @@ enum BrowserAgentScript {
     """#
 }
 
-/// The frames of one page that run the agent's script, by the token each announced, and the
-/// web view to call into them with. Numbers (`f1`, `f2`, …) name child frames in refs.
+/// The frames of one page that run the agent's script, by the token each announced. Numbers
+/// (`f1`, `f2`, …) name child frames in refs.
 @MainActor
 final class BrowserFrames: NSObject, WKScriptMessageHandler {
     private(set) weak var webView: WKWebView?
-    /// The page's web view, once a frame first speaks from it.
     var onWebView: ((WKWebView) -> Void)?
     private(set) var main: String?
     private var frames: [String: WKFrameInfo] = [:]
@@ -89,7 +84,7 @@ final class BrowserFrames: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let token = body["token"] as? String else { return }
-        if let web = message.webView, web !== webView { onWebView?(web) }
+        if let sender = message.webView, sender !== webView { onWebView?(sender) }
         webView = message.webView
         if body["main"] as? Bool == true, message.frameInfo.isMainFrame {
             main = token
@@ -102,9 +97,9 @@ final class BrowserFrames: NSObject, WKScriptMessageHandler {
 
     var tokens: [String] { Array(frames.keys) }
 
-    /// The child frame's number, made on first use and never reused.
+    /// Made on first use and never reused.
     func number(of token: String) -> Int {
-        if let n = numbers[token] { return n }
+        if let existing = numbers[token] { return existing }
         numbers[token] = next
         next += 1
         return numbers[token]!

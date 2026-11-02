@@ -2,7 +2,8 @@ import DesignSystem
 import HostKit
 import PaneLayout
 
-/// Ghostty's split drag). Panes move only within their host: the process stays where it runs.
+/// Moving panes between tabs and merging tabs. Panes move only within their host: the process
+/// stays where it runs.
 extension Workspace {
     /// Whether panes can move between this host's tabs: always in a layout the app keeps itself
     /// (this device, plain SSH); on a daemon that offers it.
@@ -11,7 +12,6 @@ extension Workspace {
         return daemon.daemonInfo?.paneMoves == true
     }
 
-    /// The tab holding `pane` has others: it can leave for a tab of its own.
     func canMoveToNewTab(_ pane: PaneId) -> Bool {
         canMovePanes && (session.tab(containing: pane)?.root.panes.count ?? 0) > 1
     }
@@ -25,7 +25,6 @@ extension WindowModel {
         return (groups.group(workspace.groupId)?.tabs ?? []).filter { $0.id != tab }
     }
 
-    /// Whether the focused pane can move to a tab of its own (⌥⇧⌘T).
     var canMovePaneToNewTab: Bool {
         guard destination == .terminal else { return false }
         if let mixed = activeMixed {
@@ -50,7 +49,6 @@ extension WindowModel {
         workspace.apply(.movePaneToNewTab(pane))
     }
 
-    /// Moves `pane` into another tab of its host, beside that tab's trailing pane.
     func movePane(_ pane: PaneId, in workspace: Workspace, toTab target: Tab) {
         guard workspace.canMovePanes else { return moveUnsupported(workspace) }
         destination = .terminal

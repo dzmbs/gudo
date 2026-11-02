@@ -5,9 +5,8 @@ import HostKit
 import Foundation
 import os
 
-/// Each paired host as a location in the Files app (the File Provider extension,
-/// docs/APP-ARCHITECTURE.md §22): whenever the hosts or the relay settings change, what the
-/// extension needs is shared and the locations follow. Only in builds with the shared groups.
+/// Each paired host as a location in the Files app, kept in step with the hosts and relay
+/// settings. Only in builds with the shared App Group and Keychain group.
 @MainActor
 enum FilesLocations {
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "files")

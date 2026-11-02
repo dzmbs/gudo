@@ -1,9 +1,8 @@
 import SwiftUI
 import WebKit
 
-/// What a browser pane shows and agents act on: WebKit's SwiftUI `WebPage`, or the `WKWebView`
-/// of a page another page opened (`PopupPage`). The two meet here, so the browser's chrome,
-/// agents' tools and the recorder treat them alike.
+/// A SwiftUI `WebPage` or a popup's `WKWebView`, so the browser chrome, agents' tools and the
+/// recorder treat them alike.
 @MainActor
 protocol BrowserPageContent: AnyObject {
     var url: URL? { get }
@@ -18,9 +17,8 @@ protocol BrowserPageContent: AnyObject {
     func go(to item: BrowserHistoryItem)
     func reloadPage()
     func stopLoading()
-    /// Runs `body` as an async function in the main frame.
     func run(_ body: String, arguments: [String: Any], in world: WKContentWorld) async throws -> Any?
-    /// The page drawn `width` points wide: `region` of it (CSS pixels), or all of it.
+    /// `region` in CSS pixels, or the whole page when nil.
     func picture(_ region: CGRect?, width: Double) async throws -> Data
 }
 
@@ -71,9 +69,9 @@ extension WebPage: BrowserPageContent {
     }
 }
 
-/// A page another page opened (`window.open`, a `target=_blank` link) in the web view WebKit
-/// configured for it, so `window.opener`, `postMessage` back to it and `window.close()` work
-/// as in a browser. `WebPage` can't adopt a given configuration, hence a plain `WKWebView`.
+/// A page another page opened, in the web view WebKit configured for it, so `window.opener`,
+/// `postMessage` and `window.close()` work. `WebPage` can't adopt a given configuration, hence a
+/// plain `WKWebView`.
 @MainActor
 @Observable
 final class PopupPage: NSObject, BrowserPageContent {
@@ -105,10 +103,10 @@ final class PopupPage: NSObject, BrowserPageContent {
     }
 
     private func observe<Value>(_ key: KeyPath<WKWebView, Value>, _ apply: @escaping @MainActor (PopupPage, WKWebView) -> Void) {
-        observations.append(webView.observe(key, options: [.initial, .new]) { [weak self] web, _ in
+        observations.append(webView.observe(key, options: [.initial, .new]) { [weak self] observed, _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                apply(self, web)
+                apply(self, observed)
             }
         })
     }
@@ -137,7 +135,6 @@ final class PopupPage: NSObject, BrowserPageContent {
 
     func picture(_ region: CGRect?, width: Double) async throws -> Data {
         let configuration = WKSnapshotConfiguration()
-        // Without a region, the whole document.
         if let region {
             configuration.rect = region
         } else if let size = try await run("return [document.documentElement.scrollWidth, document.documentElement.scrollHeight]", in: .defaultClient) as? [Double], size.count == 2 {
@@ -157,7 +154,6 @@ final class PopupPage: NSObject, BrowserPageContent {
     }
 }
 
-/// Shows a popup's web view in its leaf, with the page's appearance from the environment.
 struct PopupWebView {
     let page: PopupPage
     let colorScheme: ColorScheme

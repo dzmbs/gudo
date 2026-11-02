@@ -3,7 +3,7 @@ import HostKit
 import Observation
 import GudoCore
 
-/// and the Inbox show it. Views call `watch` / `unwatch` as they appear and disappear, so a
+/// Agent plan usage per host, as the sidebar's host headers and the Inbox show it. Views call `watch` / `unwatch` as they appear and disappear, so a
 /// daemon only refreshes while something is on screen.
 @MainActor
 protocol UsageFeed: AnyObject, Observable {
@@ -76,22 +76,22 @@ final class FakeUsageFeed: UsageFeed {
 
     /// Claude at 62 % of its 5-hour window (quiet), Codex at 92 % of its week (amber).
     static func report(now: Date = .now) -> AgentUsageReport {
-        let ms = { (d: TimeInterval) in UInt64((now.timeIntervalSince1970 + d) * 1000) }
+        let msFromNow = { (offset: TimeInterval) in UInt64((now.timeIntervalSince1970 + offset) * 1000) }
         return AgentUsageReport(agents: [
             AgentUsage(
                 agent: .claude, plan: "max",
                 windows: [
-                    UsageWindow(name: "5h", minutes: 300, usedPermille: 620, resetsAtMs: ms(2 * 3600 + 20 * 60), limited: false),
-                    UsageWindow(name: "weekly", minutes: 10_080, usedPermille: 410, resetsAtMs: ms(3 * 86_400), limited: false),
+                    UsageWindow(name: "5h", minutes: 300, usedPermille: 620, resetsAtMs: msFromNow(2 * 3600 + 20 * 60), limited: false),
+                    UsageWindow(name: "weekly", minutes: 10_080, usedPermille: 410, resetsAtMs: msFromNow(3 * 86_400), limited: false),
                 ],
-                source: .statusLine, asOfMs: ms(-120), note: nil),
+                source: .statusLine, asOfMs: msFromNow(-120), note: nil),
             AgentUsage(
                 agent: .codex, plan: "plus",
                 windows: [
-                    UsageWindow(name: "5h", minutes: 300, usedPermille: 300, resetsAtMs: ms(3600), limited: false),
-                    UsageWindow(name: "weekly", minutes: 10_080, usedPermille: 920, resetsAtMs: ms(2 * 86_400), limited: false),
+                    UsageWindow(name: "5h", minutes: 300, usedPermille: 300, resetsAtMs: msFromNow(3600), limited: false),
+                    UsageWindow(name: "weekly", minutes: 10_080, usedPermille: 920, resetsAtMs: msFromNow(2 * 86_400), limited: false),
                 ],
-                source: .localLog, asOfMs: ms(-600), note: nil),
+                source: .localLog, asOfMs: msFromNow(-600), note: nil),
         ])
     }
 }

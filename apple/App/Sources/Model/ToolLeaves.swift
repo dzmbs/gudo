@@ -7,11 +7,9 @@ import AppKit
 import UIKit
 #endif
 
-// Files, Changes, Ports and Session Replays as leaves of the window's split tree, as editors
-// and pages are: beside the pane they were opened from instead of over it (a sheet) or apart
-// from it (a window a tiling window manager would rearrange). On the Mac a tool can still go
-// to a window of its own (⌥, or its leaf's Open in New Window); iPhone and compact widths
-// keep sheets, where a split has no room.
+// Files, Changes, Ports and Session Replays open as leaves of the window's split tree, beside
+// the pane they came from rather than over it (a sheet) or apart from it (a window a tiling
+// window manager would rearrange). iPhone and compact widths keep sheets: a split has no room.
 
 extension ToolMember.Tool {
     init?(route: SheetRoute) {
@@ -106,7 +104,6 @@ extension WindowModel {
         return made
     }
 
-    /// Closes a tool leaf.
     func closeTool(_ id: UUID) {
         filesNavigators[id] = nil
         guard let tab = composites.tab(containingTool: id), let leaf = tab.leaf(forTool: id) else { return }
@@ -114,7 +111,7 @@ extension WindowModel {
         if activeMixedTab == tab.id { syncMixedFocus() }
     }
 
-    /// Mac: the tool in a window of its own (today's tool windows). False where there are none.
+    /// Mac: the tool in a window of its own. False where there are none.
     @discardableResult
     func openToolWindow(_ tool: ToolMember.Tool) -> Bool {
         #if os(macOS)
@@ -126,7 +123,6 @@ extension WindowModel {
         #endif
     }
 
-    /// The tool leaf with the focus, if any.
     var focusedToolLeaf: ToolMember? {
         destination == .terminal ? activeMixed?.focusedTool : nil
     }
@@ -143,7 +139,6 @@ extension WindowModel {
         destination = .hosts
     }
 
-    /// Whether the window can show tools in windows of their own.
     var hasToolWindows: Bool {
         #if os(macOS)
         openTool != nil
