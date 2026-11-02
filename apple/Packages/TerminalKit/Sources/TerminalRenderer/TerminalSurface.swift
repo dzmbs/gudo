@@ -120,6 +120,9 @@ public final class TerminalSurface {
     private(set) var kittyTextures: [UInt32: KittyTexture] = [:]
     private var kittyGenerations: (placements: UInt64, storage: UInt64)?
     private var kittyDraws = KittyDraws()
+    /// The kitty images the last frame drew and their visible part in view points, in drawing
+    /// order (topmost last): what a drag lifts and VoiceOver finds.
+    public private(set) var kittyImageFrames: [(placement: ImagePlacement, rect: CGRect)] = []
     private var animationWake: Task<Void, Never>?
 
     private let renderer: MetalRenderer
@@ -754,16 +757,29 @@ public final class TerminalSurface {
     /// pixels to the renderer's (a remote pane lays images out in the host's cells).
     private func kittyImageDraws(metrics m: CellMetrics) -> KittyDraws {
         var draws = KittyDraws()
+        kittyImageFrames = []
         guard !kittyPlacements.isEmpty, let grid else { return draws }
         let vtCell = terminal.cellPixelSize
         guard vtCell.width > 0, vtCell.height > 0 else { return draws }
         let sx = Float(m.cellWidth) / Float(vtCell.width), sy = Float(m.cellHeight) / Float(vtCell.height)
         let sorted = kittyPlacements.sorted { ($0.layer, $0.z) < ($1.layer, $1.z) }
+        let scale = layer.contentsScale
+        let gridRect = CGRect(
+            x: CGFloat(paddingPx.w), y: CGFloat(paddingPx.x),
+            width: CGFloat(Int(grid.cols) * m.cellWidth), height: CGFloat(Int(grid.rows) * m.cellHeight))
         for p in sorted {
             guard let image = kittyTextures[p.imageID], image.generation == p.generation else { continue }
             let top = Float(p.row) * Float(m.cellHeight) + Float(p.offsetY) * sy
             let height = Float(p.height) * sy
             guard top + height > 0, top < Float(Int(grid.rows) * m.cellHeight) else { continue }
+            let left = Float(p.col) * Float(m.cellWidth) + Float(p.offsetX) * sx
+            let drawn = CGRect(
+                x: gridRect.minX + CGFloat(left), y: gridRect.minY + CGFloat(top),
+                width: CGFloat(Float(p.width) * sx), height: CGFloat(height)).intersection(gridRect)
+            if !drawn.isNull, !drawn.isEmpty {
+                kittyImageFrames.append((p, CGRect(
+                    x: drawn.minX / scale, y: drawn.minY / scale, width: drawn.width / scale, height: drawn.height / scale)))
+            }
             let t = image.scale
             let draw = ImageDraw(texture: image.texture, vertex: ImageVertex(
                 gridPos: SIMD2(Float(p.col), Float(p.row)),
@@ -777,6 +793,11 @@ public final class TerminalSurface {
             }
         }
         return draws
+    }
+
+    /// The topmost kitty image the last frame drew under `point` (view points).
+    public func kittyImage(at point: CGPoint) -> (placement: ImagePlacement, rect: CGRect)? {
+        kittyImageFrames.last { $0.rect.contains(point) }
     }
 
     /// Wakes the renderer when the next animation frame is due; nothing while none plays.

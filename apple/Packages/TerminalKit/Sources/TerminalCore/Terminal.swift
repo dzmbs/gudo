@@ -89,6 +89,8 @@ public final class Terminal: @unchecked Sendable {
         let answersQueries = Atomic<Bool>(true)
         /// Set while output is being parsed: whatever `writePty` gets then is a reply.
         let parsing = Atomic<Bool>(false)
+        /// Kitty image storage per screen, for every handle (restored ones included).
+        let imageStorageLimit = Atomic<UInt64>(KittyGraphics.storageLimit)
 
         init(writePty: @escaping @Sendable (UnsafeRawBufferPointer) -> Void) {
             self.writePty = writePty
@@ -163,7 +165,7 @@ public final class Terminal: @unchecked Sendable {
         var scrollback = configuration.scrollbackBytes
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &scrollback)
         _ = KittyGraphics.installPNGDecoder
-        var images = KittyGraphics.storageLimit
+        var images = effects.imageStorageLimit.load(ordering: .relaxed)
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &images)
         applyDefaults(terminal, configuration)
         // Ghostty's default `grapheme-width-method = unicode`: mode 2027 on, so emoji ZWJ
@@ -249,6 +251,21 @@ public final class Terminal: @unchecked Sendable {
     public var answersQueries: Bool {
         get { effects.answersQueries.load(ordering: .relaxed) }
         set { effects.answersQueries.store(newValue, ordering: .relaxed) }
+    }
+
+    /// Kitty image storage per screen in bytes. A mirror of a remote pane keeps its host's
+    /// (`DaemonPaneBackend.imageStorageLimit`): with less it would evict an image the host
+    /// still places, with more keep one the host dropped. Applies at once and to snapshots
+    /// restored later.
+    public var kittyImageStorageLimit: UInt64 {
+        get { effects.imageStorageLimit.load(ordering: .relaxed) }
+        set {
+            lock.withLock { _ in
+                guard effects.imageStorageLimit.exchange(newValue, ordering: .relaxed) != newValue else { return }
+                var images = newValue
+                ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &images)
+            }
+        }
     }
 
     /// Replaces the event handlers. Safe from any thread.

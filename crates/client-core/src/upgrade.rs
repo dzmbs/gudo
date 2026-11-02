@@ -98,6 +98,12 @@ impl Client {
         lock(&self.inner.daemon_info).clone()
     }
 
+    /// The kitty image storage per pane and screen this client's terminals keep for the
+    /// current (or last) host ([`image_storage_limit`](crate::image_storage_limit)).
+    pub fn image_storage_limit(&self) -> u64 {
+        crate::image_storage_limit(*lock(&self.inner.image_storage_bytes))
+    }
+
     /// Whether the last connection was let in only to upgrade the daemon (its snapshot
     /// format differs; see [`crate::ClientEvent::Incompatible`]).
     pub fn is_incompatible(&self) -> bool {

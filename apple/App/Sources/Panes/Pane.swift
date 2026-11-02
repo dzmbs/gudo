@@ -129,6 +129,7 @@ final class Pane {
             case .snapshot(let ready):
                 // Resume after a gap or first attach: the daemon's state replaces ours. A bad
                 // snapshot keeps what is on screen (stale beats blank) and is logged.
+                if let limit = backend.kittyImageStorageLimit { terminal.kittyImageStorageLimit = limit }
                 do {
                     try terminal.restore(snapshot: ready)
                     let size = terminal.size

@@ -706,6 +706,14 @@ pub enum ServerCtl {
         /// The text, at most [`MAX_CLIPBOARD_BYTES`] of UTF-8.
         text: String,
     },
+    /// The limits of the daemon's terminals that a client's mirrors must share, or they
+    /// diverge (an image one keeps and the other evicts lays the text after it out
+    /// differently). Sent to admitted clients with [`Caps::TERMINAL_LIMITS`], after
+    /// [`ServerCtl::DaemonInfo`] and before [`ServerCtl::Welcome`].
+    TerminalLimits {
+        /// Kitty graphics image storage per pane and screen, in bytes (0: images off).
+        image_storage_bytes: u64,
+    },
 }
 
 /// Longest clipboard write a program may make (OSC 52), in bytes of decoded text.

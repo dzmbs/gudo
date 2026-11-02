@@ -162,13 +162,10 @@ final class MixedTabsUITests: XCTestCase {
         shot(app, "mixed-alpha-down")
     }
 
-    /// An image shown in alpha's pane, dragged onto beta's pane in the same mixed tab, is
-    /// uploaded to beta and placed there (`DrawingTransfer`: another host gets the content, not
-    /// a reference).
+    /// A kitty graphics image printed in alpha's pane, dragged onto beta's pane in the same
+    /// mixed tab, is uploaded to beta and placed there (another host gets the content, not a
+    /// reference).
     func testDragAnImageToAnotherHostsPane() throws {
-        // Kitty images are now Ghostty's, drawn from the VT rather than kept as placements, so
-        // printing one no longer gives a draggable placement. Needs a drag source for them.
-        try XCTSkipIf(true, "kitty images are not placements any more (docs/DAEMON.md §7.10)")
         let app = try launch(tickets: true, directory: NSTemporaryDirectory() + "mixed-drag-\(UUID().uuidString)", pair: "2")
         XCTAssertTrue(element(app, "host-group-beta").waitForExistence(timeout: 40))
         waitFor(NSPredicate(format: "value == 'Connected'"), element(app, "host-group-alpha"), timeout: 40, "alpha connected")
@@ -184,20 +181,22 @@ final class MixedTabsUITests: XCTestCase {
         let sides = panesByPosition(app)
         type(in: sides[1], app, "clear; echo beta-$((7*6))", expect: "beta-42")
 
-        // A kitty graphics PNG printed in alpha's pane: alpha's daemon keeps it as a placement.
+        // A kitty graphics PNG printed in alpha's pane: Ghostty keeps it in the pane's VT.
         let png = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAYCAIAAAAzn+mLAAAALElEQVR42u3OAQkAAAgDsMcxk/0xhzUEBwuwTNcpERISEhISEhISEhIS+hVa2hBUW4vlBT8AAAAASUVORK5CYII="
         type(in: sides[0], app, "clear; printf '\\033_Gf=100,a=T,c=24,r=5;\(png)\\033\\\\\\n\\n\\n\\n\\n\\n'; echo sho''wn", expect: "shown")
-        let placements = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'placement-'"))
-        waitFor(NSPredicate(format: "count == 1"), placements, timeout: 20, "the image is placed in alpha's pane")
-        let image = placements.firstMatch
+        let kittyImages = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'kitty-image-'"))
+        waitFor(NSPredicate(format: "count == 1"), kittyImages, timeout: 20, "the image shows in alpha's pane")
+        let image = kittyImages.firstMatch
         XCTAssertTrue(sides[0].frame.contains(image.frame), "in alpha's pane")
+        let placements = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'placement-'"))
+        XCTAssertEqual(placements.count, 0, "nothing placed yet")
         shot(app, "mixed-drag-before")
 
         image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 1.2, thenDragTo: sides[1].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
-        waitFor(NSPredicate(format: "count == 2"), placements, timeout: 30, "placed on beta too")
-        let onBeta = placements.allElementsBoundByIndex.filter { sides[1].frame.insetBy(dx: -2, dy: -2).contains($0.frame) }
-        XCTAssertEqual(onBeta.count, 1, "the copy is in beta's pane")
+        waitFor(NSPredicate(format: "count == 1"), placements, timeout: 30, "placed on beta")
+        XCTAssertTrue(sides[1].frame.insetBy(dx: -2, dy: -2).contains(placements.firstMatch.frame), "the copy is in beta's pane")
+        XCTAssertEqual(kittyImages.count, 1, "alpha keeps its image")
         shot(app, "mixed-drag-after")
     }
 

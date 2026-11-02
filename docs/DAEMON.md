@@ -1548,8 +1548,13 @@ Two ways in:
 **Kitty graphics** (`kitten icat`, yazi and ranger previews, chafa/timg, matplotlib's kitty
 backend, `un draw show`, agents printing screenshots) are not placements: Ghostty implements
 the protocol. The daemon's VT and every client's VT keep the images (64 MiB per pane and
-screen by default, `[terminal] image_storage_mb`; clients keep the same default, so a host
-set higher may see a client evict an image it still shows). Everything the protocol has
+screen by default, `[terminal] image_storage_mb`). A mirror must keep exactly what the host
+keeps, or an image one evicts and the other keeps lays the text after it out differently: so
+the daemon sends its limit to clients announcing `Caps::TERMINAL_LIMITS`
+(`ServerCtl::TerminalLimits`, after `DaemonInfo` and before `Welcome`, so it is known before
+any snapshot), and their VTs and snapshot decoders take it, up to 256 MiB
+(`client_core::MAX_IMAGE_STORAGE_BYTES`: four times the default, a ceiling a phone with many
+panes can afford). Older daemons send none and keep the default. Everything the protocol has
 works: direct and chunked transmission, PNG (decoded with the `png` crate on the daemon,
 ImageIO on Apple) and raw RGB/RGBA/gray, transmit then place, placement ids, source rects,
 cell offsets, `c`/`r` scaling, z layers, relative placements, Unicode placeholders,
@@ -1578,14 +1583,22 @@ The app draws placements from the render state's image list (`RenderState.imageP
 in Ghostty's three layers, lowest z first, clipped to the grid, with a texture per image and
 generation, kept only for images on screen and scaled down beyond 4096 px. Animations tick
 with each frame and wake the renderer when the next frame is due, so nothing runs while none
-plays.
+plays. The frames drawn (clipped to the grid, topmost last) are also what a drag lifts: a long
+press (iOS) or a click-drag (Mac) on an image carries the part it shows as a PNG into other
+apps, or onto another pane, which imports it on its own host (`ImportRequest`); each image on
+screen is an accessibility element (`kitty-image-<id>`).
 
 Tests: `tests/it/kitty.rs` (a query answered once; a PNG with `a=T` sized from the default
 cells; `a=t` then `a=p` twice with raw RGBA; a chunked transfer; `a=d,d=I`; a second client
-and a reconnecting one restoring the images with their pixels from the snapshot),
-`ghostty_vt` `history::tests::image_pixels_arrive_after_ready`; TerminalKit
+and a reconnecting one restoring the images with their pixels from the snapshot; a mirror
+evicting what a host with a small `image_storage_mb` evicts), `ghostty_vt`
+`history::tests::image_pixels_arrive_after_ready` and
+`restore_keeps_the_images_its_storage_limit_allows`; TerminalKit
 `KittyGraphicsTests` (placement position, offsets, source rect, layer; a negative row after
-scrolling; deletion; pending pixels after a restore; replies left to the host) and
+scrolling; deletion; pending pixels after a restore; replies left to the host; a host limit
+above the default kept live and through a restore), `KittyImageDragTests` (the topmost image
+under a point in renderer cells, clipped when scrolled partly away; the dragged PNG is the
+placement's source rect) and
 `KittyImageTests` (pixels on screen, layers against cell backgrounds, host cells scaled to
 the renderer's, a restored image appearing with its pixels, animation frames); the Mac
 `MacSnapshotTests.testKittyImageInAPane` fixture.

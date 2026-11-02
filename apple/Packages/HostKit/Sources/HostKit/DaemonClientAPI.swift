@@ -64,6 +64,14 @@ nonisolated public protocol TabHistoryClient: AnyObject, Sendable {
 
 extension DaemonClient: TabHistoryClient {}
 
+/// The host's terminal limits its panes' mirrors follow (`DaemonClient.imageStorageLimit`),
+/// apart from `DaemonClientAPI` so test fakes need not implement it.
+nonisolated public protocol TerminalLimitsClient: AnyObject, Sendable {
+    func imageStorageLimit() -> UInt64
+}
+
+extension DaemonClient: TerminalLimitsClient {}
+
 /// Dials a daemon. The real one is `DaemonClient.connect`; tests pass a fake.
 public typealias DaemonDialer = @Sendable (_ ticket: String, _ listener: any ClientEventListener) throws -> any DaemonClientAPI
 

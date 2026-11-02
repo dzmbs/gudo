@@ -316,6 +316,9 @@ bitset! {
         /// Understands `AskpassPush::PromptWhileGuestDrives` (a password prompt asked while
         /// a guest holds the pane's lease).
         ASKPASS_DRIVER = 20;
+        /// Mirrors panes with the daemon's terminal limits: wants
+        /// `ServerCtl::TerminalLimits` after `DaemonInfo` and before `Welcome`.
+        TERMINAL_LIMITS = 21;
     }
 }
 

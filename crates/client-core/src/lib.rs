@@ -522,6 +522,9 @@ pub(crate) struct Inner {
     pub programs: Mutex<HashMap<PaneId, proto::ProgramReport>>,
     /// What the daemon said about itself on the last connection.
     pub daemon_info: Mutex<Option<proto::DaemonInfo>>,
+    /// The daemon's kitty image storage per pane and screen on the last connection, as it
+    /// sent it (`ServerCtl::TerminalLimits`); `None` from daemons that do not.
+    pub image_storage_bytes: Mutex<Option<u64>>,
     /// The last connection was for an upgrade only.
     pub incompatible: Mutex<bool>,
     /// The nonce of the last `Pong`, for [`Client::probe`].
@@ -547,6 +550,30 @@ impl Inner {
     fn send(&self, msg: ClientCtl) {
         let _ = self.outgoing_tx.send(Outgoing::Ctl(msg));
     }
+}
+
+/// The most kitty image storage a client keeps per pane and screen, whatever its host sets:
+/// four times the default. A pane's mirror holds this much per screen at worst, which a
+/// phone with dozens of panes cannot multiply much further.
+pub const MAX_IMAGE_STORAGE_BYTES: u64 = 256 << 20;
+
+/// The kitty image storage a mirror keeps for a host that sent `host` (`None`: a daemon
+/// from before `ServerCtl::TerminalLimits`, which keeps the default): the host's own, so the
+/// mirror evicts exactly what the host evicts, up to [`MAX_IMAGE_STORAGE_BYTES`].
+///
+/// # Examples
+///
+/// ```
+/// use client_core::{MAX_IMAGE_STORAGE_BYTES, image_storage_limit};
+///
+/// assert_eq!(image_storage_limit(None), 64 << 20);
+/// assert_eq!(image_storage_limit(Some(128 << 20)), 128 << 20);
+/// assert_eq!(image_storage_limit(Some(0)), 0);
+/// assert_eq!(image_storage_limit(Some(4 << 30)), MAX_IMAGE_STORAGE_BYTES);
+/// ```
+pub fn image_storage_limit(host: Option<u64>) -> u64 {
+    host.unwrap_or(ghostty_vt::KITTY_IMAGE_STORAGE_LIMIT)
+        .min(MAX_IMAGE_STORAGE_BYTES)
 }
 
 /// A connection to one daemon. Dropping it disconnects.
@@ -707,6 +734,7 @@ impl Client {
             approvals: approvals::ApprovalState::default(),
             programs: Mutex::new(HashMap::new()),
             daemon_info: Mutex::new(None),
+            image_storage_bytes: Mutex::new(None),
             incompatible: Mutex::new(false),
             pong: watch::Sender::new(0),
             next_ping: AtomicU64::new(0),
