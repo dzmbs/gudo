@@ -46,7 +46,13 @@ final class BrowserUITests: XCTestCase {
         waitForExpectations(timeout: timeout)
     }
 
-    private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    private var isPhone: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
 
     /// The bar's Panes menu on a phone, which shows one leaf of a tab at a time: picks the
     /// item whose label matches.

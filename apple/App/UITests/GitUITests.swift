@@ -31,7 +31,13 @@ final class GitUITests: XCTestCase {
     }
 
     /// A phone has no sidebar: worktrees are acted on from the palette and the bar's PR button.
-    private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    private var isPhone: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
 
     /// Closes the checks popover (a sheet on a phone).
     private func closePRPopover() {
@@ -161,7 +167,7 @@ final class GitUITests: XCTestCase {
     /// The sidebar groups the host's tabs by repository and worktree: the repository header,
     /// the main branch with its tab, the idle worktree with its diff counts and PR number.
     func testSidebarGroupsTabsByRepositoryAndWorktree() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is the iPad and Mac layout")
+        try XCTSkipIf(isPhone, "the sidebar is the iPad and Mac layout")
         try launch()
         XCTAssertTrue(element("repo-header-proj").waitForExistence(timeout: 30), "the repository's header")
         let main = element("worktree-row-main")
