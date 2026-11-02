@@ -1472,6 +1472,16 @@ pub enum WorkspaceEvent {
         /// The new revision.
         rev: u64,
     },
+    /// The host's agent accounts or the panes' accounts changed (owner devices).
+    Accounts {
+        /// The whole report.
+        report: crate::accounts::AccountsReport,
+    },
+    /// Usage per account changed (owner devices, while watching usage).
+    AccountUsage {
+        /// The whole report.
+        report: crate::accounts::AccountUsageReport,
+    },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
@@ -1495,6 +1505,12 @@ impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
                 status: status.into(),
             },
             E::AgentUsage { report } => Self::AgentUsage {
+                report: report.into(),
+            },
+            E::Accounts { report } => Self::Accounts {
+                report: report.into(),
+            },
+            E::AccountUsage { report } => Self::AccountUsage {
                 report: report.into(),
             },
             E::Repos { snapshot } => Self::Repos {

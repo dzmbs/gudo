@@ -782,8 +782,17 @@ mod tests {
         assert!(!spec.env_pinned.iter().any(|(k, _)| k.contains("TOKEN")));
         // The system account inherits the user's own directory.
         let spec = ClaudeCode::new().launch(&test_context(), &mode);
-        assert!(!spec.env_pinned.iter().any(|(k, _)| k == "CLAUDE_CONFIG_DIR"));
-        assert!(spec.env_remove.iter().any(|v| v == "CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(
+            !spec
+                .env_pinned
+                .iter()
+                .any(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+        );
+        assert!(
+            spec.env_remove
+                .iter()
+                .any(|v| v == "CLAUDE_CODE_OAUTH_TOKEN")
+        );
     }
 
     #[test]

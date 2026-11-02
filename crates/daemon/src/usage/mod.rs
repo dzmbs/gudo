@@ -27,8 +27,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use proto::{
-    AccountStatus, AccountUsage, AccountUsageReport, AgentKind, AgentUsage, AgentUsageReport,
-    Caps, SYSTEM_ACCOUNT, ServerCtl, UsageSource, UsageWatch,
+    AccountStatus, AccountUsage, AccountUsageReport, AgentKind, AgentUsage, AgentUsageReport, Caps,
+    SYSTEM_ACCOUNT, ServerCtl, UsageSource, UsageWatch,
 };
 use tokio::sync::mpsc;
 

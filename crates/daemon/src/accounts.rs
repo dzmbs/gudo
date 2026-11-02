@@ -216,13 +216,18 @@ impl Accounts {
                 color: 0,
                 status: self.status_of(agent, SYSTEM_ACCOUNT),
             });
-            out.extend(stored.iter().filter(|a| a.agent == agent).map(|a| AgentAccount {
-                id: a.id.clone(),
-                agent,
-                label: a.label.clone(),
-                color: a.color,
-                status: self.status_of(agent, &a.id),
-            }));
+            out.extend(
+                stored
+                    .iter()
+                    .filter(|a| a.agent == agent)
+                    .map(|a| AgentAccount {
+                        id: a.id.clone(),
+                        agent,
+                        label: a.label.clone(),
+                        color: a.color,
+                        status: self.status_of(agent, &a.id),
+                    }),
+            );
         }
         out
     }
@@ -544,5 +549,205 @@ impl Accounts {
         }
         self.forget(agent, id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn add(accounts: &Accounts, agent: AgentKind, label: &str) -> AgentAccount {
+        accounts
+            .add(&proto::AccountAdd {
+                agent,
+                label: label.into(),
+                color: 1,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn an_account_is_a_private_directory_of_its_own() {
+        let state = tempfile::tempdir().unwrap();
+        let accounts = Accounts::load(state.path());
+        let work = add(&accounts, AgentKind::Codex, "Work");
+        assert!(is_minted(&work.id));
+        assert_eq!(work.status, AccountStatus::SignedOut);
+        let dir = accounts.dir(AgentKind::Codex, &work.id);
+        for d in [
+            state.path().join("accounts"),
+            dir.parent().unwrap().into(),
+            dir.clone(),
+        ] {
+            let mode = std::fs::metadata(&d).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", d.display());
+        }
+        // MCP OAuth logins stay per account.
+        let config = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(config.contains("mcp_oauth_credentials_store = \"file\""));
+        // Survives a restart.
+        let again = Accounts::load(state.path());
+        assert_eq!(again.get(AgentKind::Codex, &work.id).unwrap().label, "Work");
+        // System first, per agent.
+        let ids: Vec<_> = again.list().into_iter().map(|a| (a.agent, a.id)).collect();
+        assert_eq!(ids[0], (AgentKind::Claude, SYSTEM_ACCOUNT.to_owned()));
+        assert_eq!(ids[1], (AgentKind::Codex, SYSTEM_ACCOUNT.to_owned()));
+        assert_eq!(ids[2], (AgentKind::Codex, work.id));
+    }
+
+    /// An id read from disk is a path component: anything but a minted id is dropped.
+    #[test]
+    fn ids_from_disk_never_escape_the_accounts_directory() {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::write(
+            state.path().join("accounts.json"),
+            r#"{"accounts":[{"id":"../../etc","agent":"Claude","label":"x","color":0}]}"#,
+        )
+        .unwrap();
+        let accounts = Accounts::load(state.path());
+        assert!(!accounts.exists(AgentKind::Claude, "../../etc"));
+        assert_eq!(accounts.list().len(), 2);
+    }
+
+    #[test]
+    fn launches_resolve_resume_first_then_asked_then_defaults() {
+        let state = tempfile::tempdir().unwrap();
+        let accounts = Accounts::load(state.path());
+        let work = add(&accounts, AgentKind::Claude, "Work");
+        let personal = add(&accounts, AgentKind::Claude, "Personal");
+        let id = |r: Result<AccountContext, String>| r.unwrap().id;
+        // Nothing set: the user's own setup, with no directory.
+        let system = accounts
+            .resolve(AgentKind::Claude, None, None, None)
+            .unwrap();
+        assert_eq!(system, AccountContext::system());
+        // Host default, then a project's.
+        accounts
+            .set_default(AgentKind::Claude, None, Some(personal.id.clone()))
+            .unwrap();
+        accounts
+            .set_default(AgentKind::Claude, Some("app".into()), Some(work.id.clone()))
+            .unwrap();
+        assert_eq!(
+            id(accounts.resolve(AgentKind::Claude, None, None, None)),
+            personal.id
+        );
+        assert_eq!(
+            id(accounts.resolve(AgentKind::Claude, None, None, Some("app"))),
+            work.id
+        );
+        // Codex defaults are its own.
+        assert_eq!(
+            id(accounts.resolve(AgentKind::Codex, None, None, Some("app"))),
+            SYSTEM_ACCOUNT
+        );
+        // An explicit pick wins over defaults; an unknown one is refused.
+        assert_eq!(
+            id(accounts.resolve(AgentKind::Claude, Some(SYSTEM_ACCOUNT), None, Some("app"))),
+            SYSTEM_ACCOUNT
+        );
+        assert!(
+            accounts
+                .resolve(AgentKind::Claude, Some("ffffffff"), None, None)
+                .is_err()
+        );
+        // The account a dir comes from is the one asked for.
+        let ctx = accounts
+            .resolve(AgentKind::Claude, Some(&work.id), None, None)
+            .unwrap();
+        assert_eq!(ctx.dir, Some(accounts.dir(AgentKind::Claude, &work.id)));
+    }
+
+    /// Transcripts live in the account's directory, so a session resumes only under the account
+    /// that created it, and never under another once that account is gone.
+    #[test]
+    fn resume_is_pinned_to_the_account_that_made_the_session() {
+        let state = tempfile::tempdir().unwrap();
+        let accounts = Accounts::load(state.path());
+        let work = add(&accounts, AgentKind::Claude, "Work");
+        accounts.pin(AgentKind::Claude, "s-work", &work.id);
+        accounts.pin(AgentKind::Claude, "s-own", SYSTEM_ACCOUNT);
+        let resume = |asked: Option<&str>, session: &str| {
+            accounts.resolve(AgentKind::Claude, asked, Some(session), None)
+        };
+        assert_eq!(resume(None, "s-work").unwrap().id, work.id);
+        assert_eq!(resume(Some(SYSTEM_ACCOUNT), "s-work").unwrap().id, work.id);
+        assert_eq!(resume(Some(&work.id), "s-own").unwrap().id, SYSTEM_ACCOUNT);
+        // Same id, other agent: not pinned.
+        assert_eq!(
+            accounts
+                .resolve(AgentKind::Codex, None, Some("s-work"), None)
+                .unwrap()
+                .id,
+            SYSTEM_ACCOUNT
+        );
+        // Pins survive a restart.
+        let again = Accounts::load(state.path());
+        assert_eq!(
+            again
+                .resolve(AgentKind::Claude, None, Some("s-work"), None)
+                .unwrap()
+                .id,
+            work.id
+        );
+        accounts.forget(AgentKind::Claude, &work.id);
+        let err = resume(None, "s-work").unwrap_err();
+        assert!(err.contains("removed"), "{err}");
+        assert!(!accounts.dir(AgentKind::Claude, &work.id).exists());
+    }
+
+    #[test]
+    fn labels_colours_and_limits_are_checked() {
+        let state = tempfile::tempdir().unwrap();
+        let accounts = Accounts::load(state.path());
+        let bad = |label: &str, color| {
+            accounts
+                .add(&proto::AccountAdd {
+                    agent: AgentKind::Claude,
+                    label: label.into(),
+                    color,
+                })
+                .is_err()
+        };
+        assert!(bad("", 0));
+        assert!(bad("  ", 0));
+        assert!(bad("a\nb", 0));
+        assert!(bad("Work", 8));
+        assert!(
+            accounts
+                .edit(AgentKind::Claude, SYSTEM_ACCOUNT, "Mine", 0)
+                .is_err()
+        );
+        for i in 1..proto::MAX_ACCOUNTS_PER_AGENT {
+            add(&accounts, AgentKind::Claude, &format!("A{i}"));
+        }
+        assert!(bad("One more", 0));
+    }
+
+    #[test]
+    fn reads_who_is_signed_in() {
+        let json = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"me@work.example","orgName":"Acme","subscriptionType":"max"}"#;
+        let id = claude_identity(true, json).unwrap();
+        assert_eq!(id.email.as_deref(), Some("me@work.example"));
+        assert_eq!(id.plan.as_deref(), Some("max"));
+        assert_eq!(id.organization.as_deref(), Some("Acme"));
+        assert_eq!(claude_identity(false, json), None);
+        assert_eq!(
+            claude_identity(true, r#"{"loggedIn":false,"authMethod":"none"}"#),
+            None
+        );
+        let codex = serde_json::json!({"account": {"type": "chatgpt", "email": "me@x", "planType": "plus"}, "requiresOpenaiAuth": true});
+        let id = codex_identity(&codex).unwrap();
+        assert_eq!(
+            (
+                id.email.as_deref(),
+                id.plan.as_deref(),
+                id.method.as_deref()
+            ),
+            (Some("me@x"), Some("plus"), Some("chatgpt"))
+        );
+        assert_eq!(codex_identity(&serde_json::json!({"account": null})), None);
     }
 }

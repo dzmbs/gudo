@@ -305,6 +305,54 @@ pub(crate) fn assist_pane(req: &AssistRequest) -> Option<PaneId> {
 mod tests {
     use super::*;
 
+    /// A guest who drives may start an agent under the host default, but never choose one of
+    /// the owner's accounts or open a sign-in.
+    #[test]
+    fn choosing_an_account_needs_the_owner() {
+        let session = SessionId(1);
+        let tab = |launch| LayoutOp::NewTab {
+            session_id: session,
+            name: String::new(),
+            launch,
+        };
+        let agent = |account: Option<&str>| PaneLaunch::AccountAgent {
+            agent: proto::AgentKind::Claude,
+            account: account.map(str::to_owned),
+            resume: None,
+            cwd: None,
+        };
+        assert_eq!(
+            op(&tab(agent(None))),
+            (Need::Drive, Target::Session(session))
+        );
+        assert_eq!(
+            op(&tab(agent(Some(proto::SYSTEM_ACCOUNT)))),
+            (Need::Drive, Target::Session(session))
+        );
+        assert_eq!(
+            op(&tab(agent(Some("a1b2c3d4")))),
+            (Need::Own, Target::Session(session))
+        );
+        let sign_in = PaneLaunch::AccountSignIn {
+            agent: proto::AgentKind::Codex,
+            account: "a1b2c3d4".into(),
+            device_code: true,
+        };
+        let split = LayoutOp::Split {
+            pane_id: PaneId(2),
+            axis: proto::Axis::Horizontal,
+            launch: sign_in,
+        };
+        assert_eq!(op(&split), (Need::Own, Target::SessionOf(PaneId(2))));
+        assert!(chooses_account(&split));
+        let accounts = WorkspaceRequest::AccountSetDefault {
+            agent: proto::AgentKind::Claude,
+            project: None,
+            account: None,
+        };
+        assert_eq!(workspace(&accounts), (Need::Own, Target::Daemon));
+    }
+
     /// A driver may open tabs, but bringing back a closed pane (which can resume the owner's
     /// agent session) is the owner's.
     #[test]

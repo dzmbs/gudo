@@ -82,31 +82,33 @@ impl From<proto::UsageSource> for UsageSource {
     }
 }
 
+impl From<proto::AgentUsage> for AgentUsage {
+    fn from(a: proto::AgentUsage) -> Self {
+        Self {
+            agent: a.agent.into(),
+            plan: a.plan,
+            windows: a
+                .windows
+                .into_iter()
+                .map(|w| UsageWindow {
+                    name: w.name,
+                    minutes: w.minutes,
+                    used_permille: w.used_permille,
+                    resets_at_ms: w.resets_at.map(|t| t.0),
+                    limited: w.limited,
+                })
+                .collect(),
+            source: a.source.into(),
+            as_of_ms: a.as_of.map(|t| t.0),
+            note: a.note,
+        }
+    }
+}
+
 impl From<proto::AgentUsageReport> for AgentUsageReport {
     fn from(r: proto::AgentUsageReport) -> Self {
         Self {
-            agents: r
-                .agents
-                .into_iter()
-                .map(|a| AgentUsage {
-                    agent: a.agent.into(),
-                    plan: a.plan,
-                    windows: a
-                        .windows
-                        .into_iter()
-                        .map(|w| UsageWindow {
-                            name: w.name,
-                            minutes: w.minutes,
-                            used_permille: w.used_permille,
-                            resets_at_ms: w.resets_at.map(|t| t.0),
-                            limited: w.limited,
-                        })
-                        .collect(),
-                    source: a.source.into(),
-                    as_of_ms: a.as_of.map(|t| t.0),
-                    note: a.note,
-                })
-                .collect(),
+            agents: r.agents.into_iter().map(Into::into).collect(),
         }
     }
 }

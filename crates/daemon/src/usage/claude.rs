@@ -222,7 +222,9 @@ pub(crate) fn save(dir: &Path, account: &str, usage: &AgentUsage) {
         "plan": usage.plan,
         "payload": { "rate_limits": limits },
     });
-    if let Err(e) = crate::fsutil::write_atomic(&state_file(dir, account), doc.to_string().as_bytes()) {
+    if let Err(e) =
+        crate::fsutil::write_atomic(&state_file(dir, account), doc.to_string().as_bytes())
+    {
         tracing::debug!("saving the Claude usage snapshot: {e}");
     }
 }

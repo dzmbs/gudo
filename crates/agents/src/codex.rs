@@ -413,7 +413,10 @@ mod tests {
         assert!(spec.env_remove.iter().any(|v| v == "CLAUDE_CONFIG_DIR"));
         let remote = Codex::sign_in(&ctx, true);
         assert_eq!(remote.display_argv(), ["codex", "login", "--device-auth"]);
-        assert_eq!(Codex::sign_in(&ctx, false).display_argv(), ["codex", "login"]);
+        assert_eq!(
+            Codex::sign_in(&ctx, false).display_argv(),
+            ["codex", "login"]
+        );
         assert!(Codex::ACCOUNT_CONFIG.contains("mcp_oauth_credentials_store = \"file\""));
         let doc: toml::Table = toml::from_str(Codex::ACCOUNT_CONFIG).unwrap();
         assert_eq!(doc["mcp_oauth_credentials_store"].as_str(), Some("file"));

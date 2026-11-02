@@ -1097,14 +1097,7 @@ impl Core {
                 account,
                 resume,
                 cwd,
-            } => (
-                PaneLaunch::Agent {
-                    agent,
-                    resume,
-                    cwd,
-                },
-                account,
-            ),
+            } => (PaneLaunch::Agent { agent, resume, cwd }, account),
             launch => (launch, None),
         };
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
@@ -1218,9 +1211,7 @@ impl Core {
                     .accounts
                     .context(*agent, account_id)
                     .ok_or((OpError::NotFound, "no such account".to_owned()))?;
-                let ctx = self
-                    .hooks
-                    .launch_context(id, PathBuf::from(&cwd), account);
+                let ctx = self.hooks.launch_context(id, PathBuf::from(&cwd), account);
                 let spec = match agent {
                     AgentKind::Claude => agents::ClaudeCode::sign_in(&ctx),
                     AgentKind::Codex => agents::Codex::sign_in(&ctx, *device_code),
@@ -2116,7 +2107,12 @@ pub(crate) fn restore(
                 *cwd = record.cwd.clone().or(cwd.take());
                 let resumed = agent.session_id.is_some();
                 // Back under the account it ran under.
-                if let PaneLaunch::Agent { agent: kind, resume, cwd } = &launch {
+                if let PaneLaunch::Agent {
+                    agent: kind,
+                    resume,
+                    cwd,
+                } = &launch
+                {
                     launch = PaneLaunch::AccountAgent {
                         agent: *kind,
                         account: agent.account.clone(),

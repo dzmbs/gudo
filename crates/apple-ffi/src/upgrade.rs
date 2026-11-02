@@ -49,6 +49,9 @@ pub struct DaemonInfo {
     /// It reopens closed panes, resuming their agents (`reopen_tab`).
     #[uniffi(default = false)]
     pub reopen: bool,
+    /// It keeps agent accounts (`accounts`, `account_sign_in`, `AgentLaunch.account`).
+    #[uniffi(default = false)]
+    pub accounts: bool,
 }
 
 impl From<proto::DaemonInfo> for DaemonInfo {
@@ -70,6 +73,7 @@ impl From<proto::DaemonInfo> for DaemonInfo {
             projects: i.features.contains(proto::DaemonFeatures::PROJECTS),
             agent_mcp: i.features.contains(proto::DaemonFeatures::AGENT_MCP),
             reopen: i.features.contains(proto::DaemonFeatures::REOPEN),
+            accounts: i.features.contains(proto::DaemonFeatures::ACCOUNTS),
         }
     }
 }

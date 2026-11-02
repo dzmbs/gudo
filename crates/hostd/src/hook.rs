@@ -190,7 +190,10 @@ mod tests {
             config_dir_from(dir("/s/accounts/claude/a1"), dir("/h/.claude")),
             Some(PathBuf::from("/s/accounts/claude/a1"))
         );
-        assert_eq!(config_dir_from(None, dir("/h/.claude")), Some(PathBuf::from("/h/.claude")));
+        assert_eq!(
+            config_dir_from(None, dir("/h/.claude")),
+            Some(PathBuf::from("/h/.claude"))
+        );
         assert_eq!(config_dir_from(dir(""), None), None);
     }
 
