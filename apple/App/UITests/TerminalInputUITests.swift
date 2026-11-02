@@ -115,7 +115,10 @@ final class TerminalInputUITests: XCTestCase {
         let copy = app.menuItems["Copy"].firstMatch
         XCTAssertTrue(copy.waitForExistence(timeout: 5))
         copy.tap()
-        XCTAssertTrue(element(app, "terminal-copied").waitForExistence(timeout: 2), "the Copied confirmation shows")
+        // Copying clears the selection; the paste below shows what was copied. (The 1.2 s
+        // "Copied" capsule can fade before XCUITest's next snapshot, and the runner cannot read
+        // another app's pasteboard without a prompt.)
+        XCTAssertTrue(element(app, "selection-start-handle").waitForNonExistence(timeout: 5), "copied")
         key.tap()
         XCTAssertFalse(app.menuItems["Paste"].firstMatch.waitForExistence(timeout: 1))
         expectScreen(app, containing: "pasted-from-key-barpane-1")

@@ -84,7 +84,7 @@ struct WorkspaceView: View {
             }
             // At the bottom, clear of every pane's top bar; over the port offer when it shows,
             // and over the iPhone's tab bar.
-            .toastHost(model.toasts, bottomInset: (model.widthBucket == .compact ? 64 : DS.Space.l)
+            .toastHost(model.toasts, bottomInset: PortOfferBanner.bottomInset(model)
                 + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
             .overlay(alignment: model.widthBucket == .compact ? .top : .topTrailing) { AgentToastStack() }
             .dictationIndicator()
@@ -618,6 +618,12 @@ private struct CompactRoot: View {
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
+        // As in the regular layout: without them a merge, archive or delete from the palette
+        // waited for a confirmation that never showed.
+        .modifier(GitDialogs(git: model.git))
+        .onChange(of: model.git.hub?.repos != nil, initial: true) { _, has in
+            if has { model.git.syncAutoDelete() }
+        }
     }
 }
 #endif

@@ -183,6 +183,12 @@ struct PortOfferBanner: ViewModifier {
     /// Its height, so a banner can sit above it.
     static let height: CGFloat = 52
 
+    /// Clear of the iPhone's tab bar and, while a page is in front there, of its address bar.
+    static func bottomInset(_ model: WindowModel) -> CGFloat {
+        guard model.widthBucket == .compact else { return DS.Space.l }
+        return 64 + (model.activeMixed?.focusedBrowser != nil ? BrowserView.compactBarHeight : 0)
+    }
+
     func body(content: Content) -> some View {
         content.overlay(alignment: .bottom) {
             if let port = model.ports.offer, !model.editorHasKeys {
@@ -214,7 +220,7 @@ struct PortOfferBanner: ViewModifier {
                 .floatingCapsule()
                 .frame(maxWidth: 520)
                 .padding(.horizontal, DS.Space.l)
-                .padding(.bottom, model.widthBucket == .compact ? 64 : DS.Space.l)
+                .padding(.bottom, Self.bottomInset(model))
                 .movingTransition(.bottom)
                 .task(id: port.port) {
                     try? await Task.sleep(for: .seconds(15))

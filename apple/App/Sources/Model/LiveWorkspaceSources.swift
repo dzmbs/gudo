@@ -1146,8 +1146,12 @@ final class LivePortSource: PortSource {
             .filter { info in context.map { !isAgentListener(info, on: $0) } ?? true }
         if let new = fresh.first, let port = Self.ports([new], meta: context?.daemon.meta.all ?? [:]).first {
             offer = port
-        } else if let offer, !ports.contains(where: { $0.port == offer.port }) {
-            self.offer = nil
+        } else if let offer {
+            // The listener is often seen before the URL the server prints, which then comes
+            // in a later update: the offer opens at that URL, not at plain localhost.
+            let current = ports.first { $0.port == offer.port }
+                .flatMap { Self.ports([$0], meta: context?.daemon.meta.all ?? [:]).first }
+            if current != offer { self.offer = current }
         }
     }
 

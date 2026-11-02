@@ -8,7 +8,7 @@ import XCTest
 /// Also: the toolbar never covers the first row, one finger draws with the chosen tool, one pane
 /// draws at a time, and Write keeps handwriting (typed here: Scribble cannot be synthesised) at
 /// the prompt until Send.
-/// Needs `PAIR_TICKET` (run with `TEST_RUNNER_PAIR_TICKET=$(apple/scripts/local-daemon.sh start)`).
+/// Needs `PAIR_TICKET` (run with apple/scripts/drawing-ui-test.sh).
 @MainActor
 final class DrawingUITests: XCTestCase {
     override nonisolated func setUp() {
