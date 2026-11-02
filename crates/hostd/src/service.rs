@@ -21,11 +21,11 @@ fn exe() -> Result<PathBuf> {
 /// expansion would otherwise change the command.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn systemd_word(path: &Path) -> Result<String> {
-    let s = path.to_str().context("the path is not UTF-8")?;
-    if s.chars().any(char::is_control) {
-        bail!("{s:?} has control characters");
+    let text = path.to_str().context("the path is not UTF-8")?;
+    if text.chars().any(char::is_control) {
+        bail!("{text:?} has control characters");
     }
-    let escaped = s
+    let escaped = text
         .replace('\\', r"\\")
         .replace('"', "\\\"")
         .replace('%', "%%")
@@ -42,10 +42,12 @@ fn xml_text(path: &Path) -> String {
         .replace('>', "&gt;")
 }
 
-fn run(cmd: &mut Command) -> Result<()> {
-    let status = cmd.status().with_context(|| format!("running {cmd:?}"))?;
+fn run(command: &mut Command) -> Result<()> {
+    let status = command
+        .status()
+        .with_context(|| format!("running {command:?}"))?;
     if !status.success() {
-        bail!("{cmd:?} failed with {status}");
+        bail!("{command:?} failed with {status}");
     }
     Ok(())
 }
@@ -53,9 +55,9 @@ fn run(cmd: &mut Command) -> Result<()> {
 #[cfg(target_os = "linux")]
 fn unit_dir() -> Result<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .map_or_else(|| home().map(|h| h.join(".config")), Ok)?;
+        .map_or_else(|| home().map(|home| home.join(".config")), Ok)?;
     Ok(config.join("systemd/user"))
 }
 
@@ -141,7 +143,6 @@ fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Stops and removes the service.
 #[cfg(target_os = "linux")]
 pub fn uninstall() -> Result<()> {
     let unit = format!("{}.service", brand::DAEMON_BIN);
@@ -176,7 +177,7 @@ fn gui_domain() -> String {
 /// Whether the LaunchAgent installed under the product's earlier name is still there.
 #[cfg(target_os = "macos")]
 pub fn legacy_installed() -> bool {
-    plist_path_for(brand::legacy::SERVICE_LABEL).is_ok_and(|p| p.exists())
+    plist_path_for(brand::legacy::SERVICE_LABEL).is_ok_and(|path| path.exists())
 }
 
 /// Stops and removes the LaunchAgent installed under the product's earlier name. The file
@@ -239,7 +240,6 @@ fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Stops and removes the LaunchAgent.
 #[cfg(target_os = "macos")]
 pub fn uninstall() -> Result<()> {
     let path = plist_path()?;
@@ -276,8 +276,8 @@ mod tests {
     #[test]
     fn plist_paths_are_xml_text() {
         assert_eq!(
-            xml_text(Path::new("/Users/a&b/<x>")),
-            "/Users/a&amp;b/&lt;x&gt;"
+            xml_text(Path::new("/home/a&b/<x>")),
+            "/home/a&amp;b/&lt;x&gt;"
         );
     }
 }

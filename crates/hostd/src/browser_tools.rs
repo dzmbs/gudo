@@ -22,7 +22,6 @@ const INLINE_LIMIT: usize = 20_000;
 /// (`proto::MAX_FRAME_LEN`).
 const MAX_UPLOAD: usize = 3_000_000;
 
-/// One tool: name, description, input properties, required inputs, read-only.
 struct Tool {
     name: &'static str,
     description: &'static str,
@@ -265,20 +264,19 @@ const TOOLS: &[Tool] = &[
 pub fn tools() -> Vec<Value> {
     TOOLS
         .iter()
-        .map(|t| {
+        .map(|tool| {
             json!({
-                "name": t.name,
-                "description": t.description,
-                "inputSchema": { "type": "object", "properties": (t.properties)(), "required": t.required },
-                "annotations": { "readOnlyHint": t.read_only, "openWorldHint": true },
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": { "type": "object", "properties": (tool.properties)(), "required": tool.required },
+                "annotations": { "readOnlyHint": tool.read_only, "openWorldHint": true },
             })
         })
         .collect()
 }
 
-/// Whether `name` is a browser tool.
 pub fn is_tool(name: &str) -> bool {
-    TOOLS.iter().any(|t| t.name == name)
+    TOOLS.iter().any(|tool| tool.name == name)
 }
 
 /// How a step that needs the user's approval is answered.
@@ -326,8 +324,8 @@ pub fn call_with(
     };
     if let Some(missing) = TOOLS
         .iter()
-        .find(|t| t.name == name)
-        .and_then(|t| t.required.iter().find(|k| args.get(**k).is_none()))
+        .find(|tool| tool.name == name)
+        .and_then(|tool| tool.required.iter().find(|key| args.get(**key).is_none()))
     {
         return error(&format!("`{missing}` is required"));
     }
@@ -347,7 +345,7 @@ pub fn call_with(
         Ok(BrowserReply::Result(json)) => {
             let asked = serde_json::from_str::<Value>(&json)
                 .ok()
-                .and_then(|v| v["approval"]["message"].as_str().map(str::to_owned));
+                .and_then(|answer| answer["approval"]["message"].as_str().map(str::to_owned));
             if let (Some(message), Some(approve)) = (asked, approve.as_mut()) {
                 return match approve(&message, &args) {
                     Approval::Allow => {
@@ -366,8 +364,8 @@ pub fn call_with(
             brand::PRODUCT_NAME
         )),
         Ok(BrowserReply::Opened) => error("unexpected answer"),
-        Err(e) => error(&format!(
-            "the {} daemon is not reachable: {e}",
+        Err(io_error) => error(&format!(
+            "the {} daemon is not reachable: {io_error}",
             brand::PRODUCT_NAME
         )),
     }
@@ -396,7 +394,7 @@ fn load_files(args: &mut Value) -> Result<(), String> {
             .ok_or("each of `files` needs name and data (base64)")?;
         total += STANDARD
             .decode(data)
-            .map_err(|e| format!("bad base64: {e}"))?
+            .map_err(|decode_error| format!("bad base64: {decode_error}"))?
             .len();
         let name = file["name"]
             .as_str()
@@ -413,14 +411,18 @@ fn load_files(args: &mut Value) -> Result<(), String> {
         Some(Value::String(one)) => vec![one.clone()],
         Some(Value::Array(paths)) => paths
             .iter()
-            .map(|p| p.as_str().map(str::to_owned).ok_or("`paths` are strings"))
+            .map(|path| {
+                path.as_str()
+                    .map(str::to_owned)
+                    .ok_or("`paths` are strings")
+            })
             .collect::<Result<_, _>>()?,
         Some(_) => return Err("`paths` is a list of paths".into()),
     };
     for path in paths {
         let path = PathBuf::from(path);
         let shown = path.display().to_string();
-        let meta = std::fs::metadata(&path).map_err(|e| format!("{shown}: {e}"))?;
+        let meta = std::fs::metadata(&path).map_err(|io_error| format!("{shown}: {io_error}"))?;
         if !meta.is_file() {
             return Err(format!("{shown} is not a file"));
         }
@@ -431,10 +433,11 @@ fn load_files(args: &mut Value) -> Result<(), String> {
                 meta.len() as f64 / 1e6
             )));
         }
-        let bytes = std::fs::read(&path).map_err(|e| format!("{shown}: {e}"))?;
-        let name = path
-            .file_name()
-            .map_or_else(|| shown.clone(), |n| n.to_string_lossy().into_owned());
+        let bytes = std::fs::read(&path).map_err(|io_error| format!("{shown}: {io_error}"))?;
+        let name = path.file_name().map_or_else(
+            || shown.clone(),
+            |file_name| file_name.to_string_lossy().into_owned(),
+        );
         files.push(
             json!({ "name": name, "mime_type": mime_for(&name), "data": STANDARD.encode(&bytes) }),
         );
@@ -448,7 +451,9 @@ fn load_files(args: &mut Value) -> Result<(), String> {
 
 /// A MIME type from a file name's extension.
 fn mime_for(name: &str) -> &'static str {
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase());
     match ext.as_deref() {
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
@@ -525,9 +530,9 @@ pub fn cli(args: &[String], backend: &mut dyn Backend) -> i32 {
         return 2;
     }
     let input = match parse_cli_args(&args[1..]) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{e}");
+        Ok(input) => input,
+        Err(message) => {
+            eprintln!("{message}");
             return 2;
         }
     };
@@ -541,7 +546,7 @@ pub fn cli(args: &[String], backend: &mut dyn Backend) -> i32 {
             Some("text") => println!("{}", item["text"].as_str().unwrap_or_default()),
             Some("image") => match save_image(item) {
                 Ok(path) => println!("Image saved to {}", path.display()),
-                Err(e) => eprintln!("saving the image: {e}"),
+                Err(io_error) => eprintln!("saving the image: {io_error}"),
             },
             _ => {}
         }
@@ -555,7 +560,7 @@ fn parse_cli_args(args: &[String]) -> Result<Value, String> {
     if let [one] = args
         && one.trim_start().starts_with('{')
     {
-        return serde_json::from_str(one).map_err(|e| format!("bad JSON: {e}"));
+        return serde_json::from_str(one).map_err(|parse_error| format!("bad JSON: {parse_error}"));
     }
     let mut map = serde_json::Map::new();
     for arg in args {
@@ -572,8 +577,8 @@ fn parse_cli_args(args: &[String]) -> Result<Value, String> {
         let value = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
         map.insert(key.to_owned(), value);
     }
-    if let Some(r) = map.remove("ref") {
-        map.insert("target".into(), json!({ "type": "ref", "ref": r }));
+    if let Some(reference) = map.remove("ref") {
+        map.insert("target".into(), json!({ "type": "ref", "ref": reference }));
     } else if let (Some(x), Some(y)) = (map.get("x").cloned(), map.get("y").cloned())
         && !map.contains_key("region")
     {
@@ -601,7 +606,10 @@ fn save_image(item: &Value) -> io::Result<PathBuf> {
 }
 
 fn usage() -> String {
-    let verbs: Vec<&str> = TOOLS.iter().map(|t| &t.name["browser_".len()..]).collect();
+    let verbs: Vec<&str> = TOOLS
+        .iter()
+        .map(|tool| &tool.name["browser_".len()..])
+        .collect();
     format!(
         "usage: {} browser <verb> [json | key=value …]\nverbs: {}",
         brand::HOOK_BIN,
@@ -617,12 +625,12 @@ mod tests {
     fn every_tool_has_a_schema_and_read_only_ones_say_so() {
         let tools = tools();
         assert!(tools.len() >= 15);
-        for t in &tools {
-            assert!(t["name"].as_str().unwrap().starts_with("browser_"));
-            assert_eq!(t["inputSchema"]["type"], "object");
+        for tool in &tools {
+            assert!(tool["name"].as_str().unwrap().starts_with("browser_"));
+            assert_eq!(tool["inputSchema"]["type"], "object");
         }
-        let read_only = |n: &str| {
-            tools.iter().find(|t| t["name"] == n).unwrap()["annotations"]["readOnlyHint"]
+        let read_only = |name: &str| {
+            tools.iter().find(|tool| tool["name"] == name).unwrap()["annotations"]["readOnlyHint"]
                 .as_bool()
                 .unwrap()
         };
@@ -632,22 +640,25 @@ mod tests {
 
     #[test]
     fn cli_arguments_make_targets() {
-        let v = parse_cli_args(&["ref=ref_3".into()]).unwrap();
-        assert_eq!(v, json!({ "target": { "type": "ref", "ref": "ref_3" } }));
-        let v = parse_cli_args(&["x=10".into(), "y=20".into()]).unwrap();
+        let parsed = parse_cli_args(&["ref=ref_3".into()]).unwrap();
         assert_eq!(
-            v,
+            parsed,
+            json!({ "target": { "type": "ref", "ref": "ref_3" } })
+        );
+        let parsed = parse_cli_args(&["x=10".into(), "y=20".into()]).unwrap();
+        assert_eq!(
+            parsed,
             json!({ "target": { "type": "coordinate", "x": 10, "y": 20 } })
         );
-        let v = parse_cli_args(&["url=https://x.dev".into(), "full=true".into()]).unwrap();
-        assert_eq!(v, json!({ "url": "https://x.dev", "full": true }));
-        let v = parse_cli_args(&[r#"{"keys":"Enter"}"#.into()]).unwrap();
-        assert_eq!(v, json!({ "keys": "Enter" }));
+        let parsed = parse_cli_args(&["url=https://x.dev".into(), "full=true".into()]).unwrap();
+        assert_eq!(parsed, json!({ "url": "https://x.dev", "full": true }));
+        let parsed = parse_cli_args(&[r#"{"keys":"Enter"}"#.into()]).unwrap();
+        assert_eq!(parsed, json!({ "keys": "Enter" }));
         assert!(parse_cli_args(&["nope".into()]).is_err());
-        let v =
+        let parsed =
             parse_cli_args(&["ref=ref_4".into(), "path=a.png".into(), "path=7".into()]).unwrap();
         assert_eq!(
-            v,
+            parsed,
             json!({ "target": { "type": "ref", "ref": "ref_4" }, "paths": ["a.png", "7"] })
         );
     }
@@ -655,17 +666,17 @@ mod tests {
     #[test]
     fn saved_pages_are_private_and_unguessable() {
         use std::os::unix::fs::PermissionsExt;
-        let a = save_text("secret page").unwrap();
-        let b = save_text("secret page").unwrap();
+        let first = save_text("secret page").unwrap();
+        let second = save_text("secret page").unwrap();
         assert_ne!(
-            a, b,
+            first, second,
             "two saves in the same millisecond must not share a name"
         );
-        let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+        let mode = std::fs::metadata(&first).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
-        assert_eq!(std::fs::read_to_string(&a).unwrap(), "secret page");
-        let _ = std::fs::remove_file(a);
-        let _ = std::fs::remove_file(b);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "secret page");
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
     }
 
     #[test]
@@ -723,14 +734,16 @@ mod tests {
     #[test]
     fn upload_and_dialog_calls_reach_the_app() {
         use daemon::{PullOp, PullReply};
-        struct Fake(Vec<(String, Value)>);
+        struct Fake {
+            asked: Vec<(String, Value)>,
+        }
         impl Backend for Fake {
             fn pull(&mut self, _: PullOp) -> io::Result<PullReply> {
                 Err(io::ErrorKind::NotFound.into())
             }
             fn browser(&mut self, ask: BrowserAsk) -> io::Result<BrowserReply> {
                 if let BrowserAsk::Tool { name, args } = ask {
-                    self.0.push((name, args));
+                    self.asked.push((name, args));
                 }
                 Ok(BrowserReply::Result(json!({ "text": "Done." }).to_string()))
             }
@@ -738,59 +751,59 @@ mod tests {
                 Err(io::ErrorKind::NotFound.into())
             }
         }
-        let mut fake = Fake(vec![]);
-        let r = call(
+        let mut fake = Fake { asked: vec![] };
+        let result = call(
             "browser_dialog",
             &json!({ "accept": true, "text": "Ada" }),
             &mut fake,
         );
-        assert_eq!(r["content"][0]["text"], "Done.");
+        assert_eq!(result["content"][0]["text"], "Done.");
         assert_eq!(
-            fake.0[0],
+            fake.asked[0],
             (
                 "browser_dialog".into(),
                 json!({ "accept": true, "text": "Ada" })
             )
         );
         // Required arguments are checked here.
-        let r = call("browser_dialog", &json!({}), &mut fake);
-        assert_eq!(r["isError"], true);
+        let result = call("browser_dialog", &json!({}), &mut fake);
+        assert_eq!(result["isError"], true);
         // A file that cannot be read never reaches the app.
-        let r = call(
+        let result = call(
             "browser_upload",
             &json!({ "paths": ["/nonexistent/f"] }),
             &mut fake,
         );
-        assert_eq!(r["isError"], true);
-        assert_eq!(fake.0.len(), 1);
+        assert_eq!(result["isError"], true);
+        assert_eq!(fake.asked.len(), 1);
         call(
             "browser_upload",
             &json!({ "files": [{ "name": "a.txt", "data": "aGk=" }] }),
             &mut fake,
         );
-        assert_eq!(fake.0[1].1["files"][0]["mime_type"], "text/plain");
+        assert_eq!(fake.asked[1].1["files"][0]["mime_type"], "text/plain");
 
         let tools = tools();
         for name in ["browser_dialog", "browser_upload"] {
-            let tool = tools.iter().find(|t| t["name"] == name).unwrap();
+            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
             assert_eq!(tool["annotations"]["readOnlyHint"], false);
         }
     }
 
     #[test]
     fn answers_become_text_and_images() {
-        let r = result(
+        let content = result(
             r#"{"text":"button \"Go\" [ref_1]","image":{"data":"AAA","mimeType":"image/jpeg"}}"#,
             false,
         );
-        assert_eq!(r["content"][0]["text"], "button \"Go\" [ref_1]");
+        assert_eq!(content["content"][0]["text"], "button \"Go\" [ref_1]");
         assert_eq!(
-            r["content"][1],
+            content["content"][1],
             json!({ "type": "image", "data": "AAA", "mimeType": "image/jpeg" })
         );
         let long = "x\n".repeat(INLINE_LIMIT);
-        let r = result(&json!({ "text": long }).to_string(), true);
-        let text = r["content"][0]["text"].as_str().unwrap();
+        let content = result(&json!({ "text": long }).to_string(), true);
+        let text = content["content"][0]["text"].as_str().unwrap();
         assert!(text.starts_with("Snapshot saved to "), "{}", &text[..60]);
         let path = text["Snapshot saved to ".len()..]
             .split(' ')

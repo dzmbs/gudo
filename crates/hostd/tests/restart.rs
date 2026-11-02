@@ -1,5 +1,5 @@
 //! A real `gudo-hostd` upgraded while clients come and go restarts into the new build (the
-//! same process) every time. It used to die of SIGPIPE half of the time: `Command::exec`
+//! same process) every time. Guards against SIGPIPE killing it mid-restart: `Command::exec`
 //! resets SIGPIPE to its default before `execve`, while the runtime's threads still write to
 //! sockets peers have just closed.
 
@@ -30,14 +30,14 @@ impl Drop for Daemon {
 }
 
 fn pairing_ticket(exe: &Path, state: &Path) -> String {
-    let out = Command::new(exe)
+    let output = Command::new(exe)
         .arg("--state-dir")
         .arg(state)
         .args(["pair", "--json", "--local", "--wait", "10"])
         .output()
         .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    v["ticket"].as_str().unwrap().to_owned()
+    let paired: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    paired["ticket"].as_str().unwrap().to_owned()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -73,8 +73,8 @@ async fn upgrades_restart_the_daemon_while_clients_reconnect() {
     let owner = Client::connect_on(&handle, &ticket, config(&key), listener).unwrap();
     let connected = async |events: &mut tokio::sync::mpsc::UnboundedReceiver<ClientEvent>| {
         tokio::time::timeout(Duration::from_secs(30), async {
-            while let Some(e) = events.recv().await {
-                if matches!(e, ClientEvent::Connected { .. }) {
+            while let Some(event) = events.recv().await {
+                if matches!(event, ClientEvent::Connected { .. }) {
                     return;
                 }
             }
@@ -98,10 +98,11 @@ async fn upgrades_restart_the_daemon_while_clients_reconnect() {
             tokio::spawn(async move {
                 while !stop.load(Ordering::Relaxed) {
                     let (listener, _events) = EventQueue::channel();
-                    let c = Client::connect_on(&handle, &ticket, config(&key), listener).unwrap();
-                    c.attach(None);
+                    let client =
+                        Client::connect_on(&handle, &ticket, config(&key), listener).unwrap();
+                    client.attach(None);
                     tokio::time::sleep(Duration::from_millis(50 + 70 * i)).await;
-                    drop(c);
+                    drop(client);
                 }
             })
         })
@@ -111,7 +112,7 @@ async fn upgrades_restart_the_daemon_while_clients_reconnect() {
         owner
             .upgrade_daemon(build, None)
             .await
-            .unwrap_or_else(|e| panic!("round {round}: {e}"));
+            .unwrap_or_else(|error| panic!("round {round}: {error}"));
         connected(&mut events).await;
         let status = daemon.0.try_wait().unwrap();
         assert!(
@@ -120,7 +121,7 @@ async fn upgrades_restart_the_daemon_while_clients_reconnect() {
         );
     }
     stop.store(true, Ordering::Relaxed);
-    for c in churn {
-        let _ = c.await;
+    for task in churn {
+        let _ = task.await;
     }
 }

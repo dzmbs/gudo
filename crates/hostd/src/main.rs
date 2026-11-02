@@ -111,7 +111,7 @@ enum ServiceAction {
 fn main() -> Result<()> {
     // Not a clap subcommand: the prompt is free text that may start with `-`.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|a| a == "askpass") {
+    if args.first().is_some_and(|arg| arg == "askpass") {
         std::process::exit(askpass::main(&args[1..]));
     }
     let cli = Cli::parse();
@@ -288,7 +288,10 @@ fn upgradable_exe() -> Option<PathBuf> {
 
 /// Whether `exe` lives in a macOS app bundle (`….app/Contents/…`).
 fn in_app_bundle(exe: &Path) -> bool {
-    let parts: Vec<_> = exe.components().map(|c| c.as_os_str()).collect();
+    let parts: Vec<_> = exe
+        .components()
+        .map(|component| component.as_os_str())
+        .collect();
     parts
         .windows(2)
         .any(|pair| pair[0].to_string_lossy().ends_with(".app") && pair[1] == "Contents")
@@ -299,12 +302,12 @@ fn in_app_bundle(exe: &Path) -> bool {
 /// and exits with an error (the service manager restarts it) if neither can.
 fn restart_into(exe: &Path) -> ! {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let err = exec(exe, &args);
-    eprintln!("could not start the new build {}: {err}", exe.display());
-    let prev = daemon::upgrade_prev_path(exe);
-    if std::fs::rename(&prev, exe).is_ok() {
-        let err = exec(exe, &args);
-        eprintln!("could not start the previous build either: {err}");
+    let error = exec(exe, &args);
+    eprintln!("could not start the new build {}: {error}", exe.display());
+    let previous = daemon::upgrade_prev_path(exe);
+    if std::fs::rename(&previous, exe).is_ok() {
+        let error = exec(exe, &args);
+        eprintln!("could not start the previous build either: {error}");
     }
     std::process::exit(1)
 }
@@ -319,13 +322,13 @@ fn exec(exe: &Path, args: &[std::ffi::OsString]) -> std::io::Error {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     let Ok(argv) = std::iter::once(exe.as_os_str())
-        .chain(args.iter().map(|a| a.as_os_str()))
-        .map(|s| CString::new(s.as_bytes()))
+        .chain(args.iter().map(|arg| arg.as_os_str()))
+        .map(|arg| CString::new(arg.as_bytes()))
         .collect::<Result<Vec<_>, _>>()
     else {
         return std::io::ErrorKind::InvalidInput.into();
     };
-    let mut pointers: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
+    let mut pointers: Vec<*const libc::c_char> = argv.iter().map(|arg| arg.as_ptr()).collect();
     pointers.push(std::ptr::null());
     // SAFETY: `argv[0]` and every pointer are NUL-terminated strings that outlive the call,
     // and the array ends with a null pointer.
@@ -351,15 +354,15 @@ fn build_info(json: bool) -> Result<()> {
 
 async fn wait_for_signal() -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
-    let mut term = signal(SignalKind::terminate())?;
-    let mut int = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
     // Ignore SIGHUP so closing the terminal that started us does not stop the panes.
-    let mut hup = signal(SignalKind::hangup())?;
+    let mut sighup = signal(SignalKind::hangup())?;
     loop {
         tokio::select! {
-            _ = term.recv() => return Ok(()),
-            _ = int.recv() => return Ok(()),
-            _ = hup.recv() => continue,
+            _ = sigterm.recv() => return Ok(()),
+            _ = sigint.recv() => return Ok(()),
+            _ = sighup.recv() => continue,
         }
     }
 }
@@ -385,17 +388,17 @@ fn lock_instance(state_dir: &Path) -> Result<OwnedFd> {
 
 /// The user's login shell from the passwd database, for service managers that set no $SHELL.
 fn login_shell() -> Option<PathBuf> {
-    if let Some(shell) = std::env::var_os("SHELL").filter(|s| !s.is_empty()) {
+    if let Some(shell) = std::env::var_os("SHELL").filter(|shell| !shell.is_empty()) {
         return Some(PathBuf::from(shell));
     }
     // SAFETY: getpwuid returns a pointer into static storage or NULL; we copy the string out
     // immediately and call nothing else in between.
     unsafe {
-        let pw = libc::getpwuid(libc::getuid());
-        if pw.is_null() || (*pw).pw_shell.is_null() {
+        let passwd = libc::getpwuid(libc::getuid());
+        if passwd.is_null() || (*passwd).pw_shell.is_null() {
             return None;
         }
-        let shell = std::ffi::CStr::from_ptr((*pw).pw_shell);
+        let shell = std::ffi::CStr::from_ptr((*passwd).pw_shell);
         Some(PathBuf::from(shell.to_string_lossy().into_owned()))
     }
 }
@@ -427,7 +430,7 @@ fn pair(state_dir: &Path, ttl: Duration, json: bool, wait: Duration, local: bool
             "addrs": ticket.addrs,
             "relay_url": ticket.relay_url,
             "relays": relays_label(&extras.relays),
-            "running": info.is_some_and(|i| pid_alive(i.pid)),
+            "running": info.is_some_and(|info| pid_alive(info.pid)),
             "version": env!("CARGO_PKG_VERSION"),
         });
         println!("{out}");
@@ -468,7 +471,7 @@ fn wait_for_endpoint(state_dir: &Path, wait: Duration) -> Result<()> {
     let mut live_since = None;
     loop {
         let info = daemon::endpoint_info(state_dir).ok().flatten();
-        if let Some(info) = info.filter(|i| pid_alive(i.pid)) {
+        if let Some(info) = info.filter(|info| pid_alive(info.pid)) {
             let since = *live_since.get_or_insert_with(std::time::Instant::now);
             if info.relay_url.is_some() || since.elapsed() >= RELAY_GRACE {
                 return Ok(());
@@ -502,7 +505,7 @@ fn print_ticket(ticket: &str) {
                 .build();
             println!("{qr}");
         }
-        Err(e) => eprintln!("(no QR code: {e})"),
+        Err(error) => eprintln!("(no QR code: {error})"),
     }
     println!("{ticket}");
 }
@@ -541,11 +544,15 @@ fn devices(state_dir: &Path) -> Result<()> {
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64);
-    for d in devices {
-        let days = now.saturating_sub(d.paired_at) / 86_400_000;
-        let name = if d.name.is_empty() { "gudo" } else { &d.name };
-        println!("{}  {name}  paired {days} day(s) ago", d.device);
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    for paired in devices {
+        let days = now.saturating_sub(paired.paired_at) / 86_400_000;
+        let name = if paired.name.is_empty() {
+            "gudo"
+        } else {
+            &paired.name
+        };
+        println!("{}  {name}  paired {days} day(s) ago", paired.device);
     }
     Ok(())
 }
@@ -564,7 +571,7 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -587,11 +594,11 @@ mod tests {
         const CHILD: &str = "HOSTD_TEST_EXEC_CHILD";
         if std::env::var_os(CHILD).is_some() {
             // In the re-run test binary: become a shell that sends itself SIGPIPE.
-            let err = exec(
+            let error = exec(
                 Path::new("/bin/sh"),
                 &["-c".into(), "kill -PIPE $$; exit 7".into()],
             );
-            panic!("exec failed: {err}");
+            panic!("exec failed: {error}");
         }
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([

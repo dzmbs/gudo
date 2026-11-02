@@ -16,7 +16,7 @@ const HELPER: &str = env!("CARGO_BIN_EXE_gudo-hook");
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_urls_reach_the_app() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start_with(dir.path(), |c| c.hook_bin = Some(HELPER.into())).await;
+    let daemon = start_with(dir.path(), |config| config.hook_bin = Some(HELPER.into())).await;
     let mut app = TestClient::connect_browser(&ticket(&daemon), ClientConfig::generate_key());
     let pane = app.attach_and_follow().await;
 
@@ -25,7 +25,8 @@ async fn browser_urls_reach_the_app() {
         pane,
         &format!("\"$BROWSER\" '{url}' && echo \"opener exit $?\""),
     );
-    app.until("the URL", |c| !c.browser.is_empty()).await;
+    app.until("the URL", |client| !client.browser.is_empty())
+        .await;
     assert_eq!(
         app.browser[0],
         BrowserPush::Open {

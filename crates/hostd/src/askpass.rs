@@ -1,5 +1,5 @@
 //! The askpass helper (`gudo-hook askpass <prompt>`, also `gudo-hostd askpass <prompt>`):
-//! what `SUDO_ASKPASS`, `SSH_ASKPASS` and `GIT_ASKPASS` run in a pane (docs/DAEMON.md §9).
+//! what `SUDO_ASKPASS`, `SSH_ASKPASS` and `GIT_ASKPASS` run in a pane.
 //!
 //! It asks the daemon over the hook socket, which shows the prompt in the app, and prints the
 //! answer on stdout. When no app can answer (or the daemon is not reachable) it asks on the
@@ -18,7 +18,7 @@ use daemon::{ASKPASS_VERSION, AskpassCall, HelperQuery, HelperReply};
 
 /// Runs the helper with the arguments after `askpass`; returns the exit status.
 pub fn main(args: &[String]) -> i32 {
-    let probe = args.first().is_some_and(|a| a == "--available");
+    let probe = args.first().is_some_and(|arg| arg == "--available");
     let prompt = if probe {
         String::new()
     } else {
@@ -58,8 +58,8 @@ fn ask_daemon(query: HelperQuery, probe: bool) -> Option<HelperReply> {
     let env = |name: &str| brand::var(name);
     // The endpoint file wins over GUDO_SOCK so a pane outlives a daemon restart that moved it.
     let socket = env("ENDPOINT_FILE")
-        .and_then(|f| std::fs::read_to_string(f).ok())
-        .map(|s| PathBuf::from(s.trim()))
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .map(|contents| PathBuf::from(contents.trim()))
         .or_else(|| env("SOCK").map(PathBuf::from))?;
     let call = AskpassCall {
         v: ASKPASS_VERSION,
@@ -80,7 +80,7 @@ fn ask_daemon(query: HelperQuery, probe: bool) -> Option<HelperReply> {
     let read = BufReader::new(&stream).read_line(&mut answer);
     let reply = read
         .ok()
-        .filter(|&n| n > 0)
+        .filter(|&bytes_read| bytes_read > 0)
         .and_then(|_| serde_json::from_str(&answer).ok());
     zeroize::Zeroize::zeroize(&mut answer);
     reply
@@ -132,7 +132,7 @@ fn read_line(mut tty: &File, line: &mut Vec<u8>) -> bool {
             Ok(0) => return !line.is_empty(),
             Ok(_) if byte[0] == b'\n' || byte[0] == b'\r' => return true,
             Ok(_) => line.push(byte[0]),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => return false,
         }
     }
@@ -154,15 +154,15 @@ fn is_question(prompt: &str) -> bool {
 
 /// The command line of the program that ran us, for the prompt's "who asks" line.
 fn parent_command() -> String {
-    let ppid = rustix::process::getppid().map_or(0, |p| p.as_raw_nonzero().get());
+    let ppid = rustix::process::getppid().map_or(0, |pid| pid.as_raw_nonzero().get());
     if ppid <= 1 {
         return String::new();
     }
     if let Ok(raw) = std::fs::read(format!("/proc/{ppid}/cmdline")) {
         let args: Vec<String> = raw
-            .split(|&b| b == 0)
-            .filter(|a| !a.is_empty())
-            .map(|a| String::from_utf8_lossy(a).into_owned())
+            .split(|&byte| byte == 0)
+            .filter(|arg| !arg.is_empty())
+            .map(|arg| String::from_utf8_lossy(arg).into_owned())
             .collect();
         if !args.is_empty() {
             return args.join(" ");
@@ -173,7 +173,7 @@ fn parent_command() -> String {
         .stderr(std::process::Stdio::null())
         .output()
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_default()
 }

@@ -33,25 +33,20 @@ use serde_json::Value;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|a| a == "askpass") {
-        std::process::exit(askpass::main(&args[1..]));
-    }
-    if args.first().is_some_and(|a| a == "mcp") {
-        std::process::exit(mcp::main(&args[1..]));
-    }
-    if args.first().is_some_and(|a| a == "open-url") {
-        std::process::exit(browser::open_url(&args[1..]));
-    }
-    if args.first().is_some_and(|a| a == "browser") {
-        std::process::exit(browser::cli(&args[1..]));
+    match args.first().map(String::as_str) {
+        Some("askpass") => std::process::exit(askpass::main(&args[1..])),
+        Some("mcp") => std::process::exit(mcp::main(&args[1..])),
+        Some("open-url") => std::process::exit(browser::open_url(&args[1..])),
+        Some("browser") => std::process::exit(browser::cli(&args[1..])),
+        _ => {}
     }
     let mut payload = Vec::new();
     let _ = std::io::stdin().take(4 << 20).read_to_end(&mut payload);
     let status_line = args.get(1).map(String::as_str) == Some(STATUS_LINE_EVENT);
-    if let Err(e) = relay(&args, &payload, status_line)
+    if let Err(error) = relay(&args, &payload, status_line)
         && brand::var_os("HOOK_DEBUG").is_some()
     {
-        eprintln!("{}: {e}", brand::HOOK_BIN);
+        eprintln!("{}: {error}", brand::HOOK_BIN);
     }
     if status_line {
         user_status_line(&payload);
@@ -68,8 +63,8 @@ fn relay(args: &[String], raw: &[u8], status_line: bool) -> Result<(), Box<dyn s
     // The endpoint file wins over GUDO_SOCK so a pane outlives a daemon restart that moved it.
     let socket = env("ENDPOINT_FILE")
         .ok()
-        .and_then(|f| std::fs::read_to_string(f).ok())
-        .map(|s| PathBuf::from(s.trim()))
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .map(|contents| PathBuf::from(contents.trim()))
         .or_else(|| env("SOCK").ok().map(PathBuf::from))
         .ok_or("no hook socket")?;
     let request = HookRequest {
@@ -145,9 +140,9 @@ fn config_dir_from(
     claude: Option<std::ffi::OsString>,
 ) -> Option<PathBuf> {
     account
-        .filter(|d| !d.is_empty())
+        .filter(|dir| !dir.is_empty())
         .or(claude)
-        .filter(|d| !d.is_empty())
+        .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
 }
 
@@ -161,7 +156,7 @@ fn user_status_command(input: &Value) -> Option<String> {
         }
     }
     let config = user_config_dir()
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")));
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")));
     if let Some(config) = config {
         files.push(config.join("settings.json"));
     }
@@ -186,7 +181,7 @@ mod tests {
     /// hook environments or a startup file may point elsewhere.
     #[test]
     fn the_accounts_dir_names_the_status_line_settings() {
-        let dir = |s: &str| Some(std::ffi::OsString::from(s));
+        let dir = |path: &str| Some(std::ffi::OsString::from(path));
         assert_eq!(
             config_dir_from(dir("/s/accounts/claude/a1"), dir("/h/.claude")),
             Some(PathBuf::from("/s/accounts/claude/a1"))

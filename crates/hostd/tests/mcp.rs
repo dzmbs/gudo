@@ -30,16 +30,17 @@ struct Server {
 
 impl Server {
     fn spawn(args: &[&str]) -> Self {
-        let mut cmd = Command::new(HOOK);
-        cmd.args(args)
+        let mut command = Command::new(HOOK);
+        command
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         // Only the flags say where the daemon is.
         for name in ["PANE_ID", "SOCK", "TOKEN", "ENDPOINT_FILE"] {
-            cmd.env_remove(brand::env_var(name));
+            command.env_remove(brand::env_var(name));
         }
-        let mut child = cmd.spawn().unwrap();
+        let mut child = command.spawn().unwrap();
         Self {
             stdin: child.stdin.take().unwrap(),
             stdout: BufReader::new(child.stdout.take().unwrap()),
@@ -48,8 +49,8 @@ impl Server {
         }
     }
 
-    fn send(&mut self, msg: &Value) {
-        let mut line = msg.to_string();
+    fn send(&mut self, message: &Value) {
+        let mut line = message.to_string();
         line.push('\n');
         self.stdin.write_all(line.as_bytes()).unwrap();
     }
@@ -78,10 +79,10 @@ impl Server {
 async fn agents_read_the_sessions_drawings_over_mcp() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path()).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await;
-    let session = c.layout.as_ref().unwrap().session_id;
-    let drawing = c
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    let session = client.layout.as_ref().unwrap().session_id;
+    let drawing = client
         .client
         .artifact_create(ArtifactCreate {
             session_id: session,
@@ -168,7 +169,7 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
     let mut app = TestClient::connect_browser(&ticket(&daemon), ClientConfig::generate_key());
     let pane = app.attach_and_follow().await.0.to_string();
     let state = dir.path().to_str().unwrap().to_owned();
-    let (state2, pane2) = (state.clone(), pane.clone());
+    let (upload_state, upload_pane) = (state.clone(), pane.clone());
     let call = tokio::task::spawn_blocking(move || {
         let mut server = Server::spawn(&["mcp", "--state", &state, "--pane", &pane]);
         server.request(
@@ -180,7 +181,8 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
         drop(server.stdin);
         (snapshot, missing)
     });
-    app.until("the call", |c| !c.browser.is_empty()).await;
+    app.until("the call", |client| !client.browser.is_empty())
+        .await;
     let BrowserPush::Call { id, tool, args, .. } = app.browser[0].clone() else {
         panic!("not a call: {:?}", app.browser[0]);
     };
@@ -206,7 +208,7 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
     // A file near the upload cap is read on the host and reaches the app in one call.
     let file = dir.path().join("photo.jpg");
     std::fs::write(&file, vec![7u8; 2_900_000]).unwrap();
-    let (state, pane) = (state2, pane2);
+    let (state, pane) = (upload_state, upload_pane);
     let path = file.to_str().unwrap().to_owned();
     let call = tokio::task::spawn_blocking(move || {
         let mut server = Server::spawn(&["mcp", "--state", &state, "--pane", &pane]);
@@ -219,7 +221,8 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
             json!({ "target": { "type": "ref", "ref": "ref_2" }, "paths": [path] }),
         )
     });
-    app.until("the upload", |c| c.browser.len() == 2).await;
+    app.until("the upload", |client| client.browser.len() == 2)
+        .await;
     let BrowserPush::Call { id, tool, args, .. } = app.browser[1].clone() else {
         panic!("not a call: {:?}", app.browser[1]);
     };
@@ -241,15 +244,15 @@ async fn browser_tools_reach_the_app_showing_the_pane() {
 async fn agents_run_commands_over_mcp_with_typed_results() {
     let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh", "/opt/homebrew/bin/zsh"]
         .into_iter()
-        .find(|p| std::path::Path::new(p).exists())
+        .find(|path| std::path::Path::new(path).exists())
     else {
         eprintln!("skipping: zsh not installed");
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let daemon = support::start_with(dir.path(), |c| c.shell = Some(zsh.into())).await;
-    let mut c = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
-    let pane = c.attach_and_follow().await.0.to_string();
+    let daemon = support::start_with(dir.path(), |config| config.shell = Some(zsh.into())).await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await.0.to_string();
     let state = dir.path().to_str().unwrap();
     let mut server = Server::spawn(&["mcp", "--state", state, "--pane", &pane]);
     server.request(
@@ -262,7 +265,7 @@ async fn agents_run_commands_over_mcp_with_typed_results() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|t| t["name"] == "cmd_run")
+        .find(|tool| tool["name"] == "cmd_run")
         .unwrap();
     assert_eq!(
         run["outputSchema"]["properties"]["status"]["enum"][0],
