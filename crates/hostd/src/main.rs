@@ -265,16 +265,37 @@ fn in_app_bundle(exe: &Path) -> bool {
 /// keep supervising it). Falls back to the previous build if the new one cannot be executed,
 /// and exits with an error (the service manager restarts it) if neither can.
 fn restart_into(exe: &Path) -> ! {
-    use std::os::unix::process::CommandExt;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let err = std::process::Command::new(exe).args(&args).exec();
+    let err = exec(exe, &args);
     eprintln!("could not start the new build {}: {err}", exe.display());
     let prev = daemon::upgrade_prev_path(exe);
     if std::fs::rename(&prev, exe).is_ok() {
-        let err = std::process::Command::new(exe).args(&args).exec();
+        let err = exec(exe, &args);
         eprintln!("could not start the previous build either: {err}");
     }
     std::process::exit(1)
+}
+
+/// `execv` itself, not `Command::exec`: that first resets SIGPIPE to its default while the
+/// runtime's other threads still run, and one of them writing to a socket a peer just closed
+/// then killed the daemon instead of restarting it. Returns only on failure.
+fn exec(exe: &Path, args: &[std::ffi::OsString]) -> std::io::Error {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = |s: &std::ffi::OsStr| CString::new(s.as_bytes());
+    let argv: Result<Vec<CString>, _> = std::iter::once(exe.as_os_str())
+        .chain(args.iter().map(|a| a.as_os_str()))
+        .map(c)
+        .collect();
+    let Ok(argv) = argv else {
+        return std::io::Error::other("an argument contains a NUL byte");
+    };
+    let mut ptrs: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
+    ptrs.push(std::ptr::null());
+    // SAFETY: `argv[0]` and every pointer in `ptrs` point to NUL-terminated strings that live
+    // until the call returns, and `ptrs` ends with a null pointer.
+    unsafe { libc::execv(argv[0].as_ptr(), ptrs.as_ptr()) };
+    std::io::Error::last_os_error()
 }
 
 fn build_info(json: bool) -> Result<()> {

@@ -26,7 +26,11 @@ for r in $(seq $ROUNDS); do
   t0=$(python3 -c 'import time; print(time.time())')
   "$BIN/un" --no-relay daemon upgrade "$ROOT/new-hostd" --build "stress-$r" 2>&1 | tail -1 | sed 's/^/  /'
   t1=$(python3 -c 'import time; print(time.time())')
-  until "$BIN/un" --no-relay ls >/dev/null 2>&1; do sleep 0.2; done
+  for i in $(seq 300); do
+    "$BIN/un" --no-relay ls >/dev/null 2>&1 && break
+    kill -0 $DPID 2>/dev/null || { echo "  DAEMON GONE after round $r"; tail -5 "$ROOT/daemon.log"; exit 1; }
+    sleep 0.2
+  done
   t2=$(python3 -c 'import time; print(time.time())')
   sleep 5
   printf "  round %d: upgrade answered in %.1f s, answering again %.1f s later; lines in \`un ls\`: %s; daemon pid %s\n" \
