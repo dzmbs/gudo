@@ -56,12 +56,11 @@ public final class SystemSpeechRecognizer: SpeechRecognizer {
 
     // MARK: Languages (Settings › Voice)
 
-    /// Whether dictation in a language works now, and how.
     public enum Availability: Equatable, Sendable {
         /// SpeechAnalyzer's model is on the device.
         case installed
-        /// SpeechAnalyzer supports it; the model can be downloaded (Apple's on-device model).
-        /// Until then the older on-device recognizer is used when `fallback` is true.
+        /// SpeechAnalyzer's model can be downloaded. Until then the older on-device recognizer
+        /// is used when `fallback` is true.
         case downloadable(fallback: Bool)
         case downloading
         /// Only the older on-device recognizer (SFSpeechRecognizer) has it.
@@ -83,8 +82,6 @@ public final class SystemSpeechRecognizer: SpeechRecognizer {
         }
     }
 
-    /// Downloads and installs SpeechAnalyzer's model for `locale` (the system does it; recognition
-    /// stays on device). `progress` is updated as it goes.
     public static func download(_ locale: Locale, progress: @escaping @MainActor (Double) -> Void = { _ in }) async throws {
         guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else { return }
         guard let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber(supported)]) else { return }
@@ -99,16 +96,16 @@ public final class SystemSpeechRecognizer: SpeechRecognizer {
         progress(1)
     }
 
-    /// Every language some on-device recognizer here can dictate in, by identifier.
+    /// Every language some on-device recognizer here can dictate in.
     public static func supportedLocales() async -> [Locale] {
-        var byId: [String: Locale] = [:]
+        var localesById: [String: Locale] = [:]
         if SpeechTranscriber.isAvailable {
-            for locale in await SpeechTranscriber.supportedLocales { byId[locale.identifier(.bcp47)] = locale }
+            for locale in await SpeechTranscriber.supportedLocales { localesById[locale.identifier(.bcp47)] = locale }
         }
-        for locale in SFSpeechRecognizer.supportedLocales() where byId[locale.identifier(.bcp47)] == nil {
-            if SFSpeechRecognizer(locale: locale)?.supportsOnDeviceRecognition == true { byId[locale.identifier(.bcp47)] = locale }
+        for locale in SFSpeechRecognizer.supportedLocales() where localesById[locale.identifier(.bcp47)] == nil {
+            if SFSpeechRecognizer(locale: locale)?.supportsOnDeviceRecognition == true { localesById[locale.identifier(.bcp47)] = locale }
         }
-        return byId.values.sorted { displayName($0).localizedStandardCompare(displayName($1)) == .orderedAscending }
+        return localesById.values.sorted { displayName($0).localizedStandardCompare(displayName($1)) == .orderedAscending }
     }
 
     public nonisolated static func displayName(_ locale: Locale) -> String {
@@ -143,7 +140,6 @@ public final class SystemSpeechRecognizer: SpeechRecognizer {
     }
 }
 
-/// One dictation: microphone in, recognition events out.
 @MainActor
 protocol RecognitionSession: AnyObject {
     func finish() async
@@ -291,19 +287,19 @@ nonisolated final class Microphone: @unchecked Sendable {
         try audio.setActive(true, options: .notifyOthersOnDeactivation)
         #endif
         let input = engine.inputNode
-        let natural = input.outputFormat(forBus: 0)
-        guard natural.sampleRate > 0, natural.channelCount > 0 else {
+        let inputFormat = input.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw VoiceError.failed("no microphone input")
         }
-        let converter = format.flatMap { $0 == natural ? nil : AVAudioConverter(from: natural, to: $0) }
-        input.installTap(onBus: 0, bufferSize: 1024, format: natural) { buffer, _ in
+        let converter = format.flatMap { $0 == inputFormat ? nil : AVAudioConverter(from: inputFormat, to: $0) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { buffer, _ in
             guard let converter, let format else { return deliver(buffer) }
-            let ratio = format.sampleRate / natural.sampleRate
+            let ratio = format.sampleRate / inputFormat.sampleRate
             let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 16
-            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
             nonisolated(unsafe) var consumed = false
             var error: NSError?
-            converter.convert(to: out, error: &error) { _, status in
+            converter.convert(to: converted, error: &error) { _, status in
                 if consumed {
                     status.pointee = .noDataNow
                     return nil
@@ -312,7 +308,7 @@ nonisolated final class Microphone: @unchecked Sendable {
                 status.pointee = .haveData
                 return buffer
             }
-            if error == nil, out.frameLength > 0 { deliver(out) }
+            if error == nil, converted.frameLength > 0 { deliver(converted) }
         }
         engine.prepare()
         try engine.start()

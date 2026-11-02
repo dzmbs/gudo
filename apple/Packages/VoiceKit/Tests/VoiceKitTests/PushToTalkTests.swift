@@ -42,7 +42,6 @@ final class FakeRecognizer: SpeechRecognizer {
     func fail(_ error: VoiceError) { sink?.finish(throwing: error) }
 }
 
-/// A pane: records the preview it shows and what it receives.
 @MainActor
 final class FakeTarget: DictationTarget {
     var route: DictationRoute
@@ -74,17 +73,17 @@ struct PushToTalkTests {
     }
 
     @Test func partialAndFinalSegmentsMerge() {
-        var t = Transcript()
-        t.apply(.volatile("list"))
-        #expect(t.text == "list")
-        t.apply(.volatile("list the files"))
-        #expect(t.text == "list the files" && t.finalized.isEmpty)
-        t.apply(.finalized("List the files"))
-        #expect(t.finalized == "List the files" && t.volatile.isEmpty)
-        t.apply(.volatile("in  src\n"))
-        #expect(t.text == "List the files in src")
-        t.apply(.finalized(" in source. "))
-        #expect(t.text == "List the files in source.")
+        var transcript = Transcript()
+        transcript.apply(.volatile("list"))
+        #expect(transcript.text == "list")
+        transcript.apply(.volatile("list the files"))
+        #expect(transcript.text == "list the files" && transcript.finalized.isEmpty)
+        transcript.apply(.finalized("List the files"))
+        #expect(transcript.finalized == "List the files" && transcript.volatile.isEmpty)
+        transcript.apply(.volatile("in  src\n"))
+        #expect(transcript.text == "List the files in src")
+        transcript.apply(.finalized(" in source. "))
+        #expect(transcript.text == "List the files in source.")
     }
 
     @Test func previewShowsLiveTextAndNothingIsSentBeforeRelease() async {
@@ -249,13 +248,13 @@ struct PushToTalkTests {
         #expect(DictationRoute.resolve(kind: .agent, canType: true, canPrompt: true) == .paste)
         #expect(DictationRoute.resolve(kind: .agent, canType: false, canPrompt: true) == .agentPrompt)
         #expect(DictationRoute.resolve(kind: .shell, canType: false, canPrompt: true) != .paste)
-        if case .refused(let why) = DictationRoute.resolve(kind: .shell, canType: false, canPrompt: false) {
-            #expect(why.contains("viewing"))
+        if case .refused(let reason) = DictationRoute.resolve(kind: .shell, canType: false, canPrompt: false) {
+            #expect(reason.contains("viewing"))
         } else {
             Issue.record("a viewer must be refused")
         }
-        if case .refused(let why) = DictationRoute.resolve(kind: .shell, canType: false, canPrompt: true, drivenBy: "Mira") {
-            #expect(why == "Mira is driving. Take control to dictate.")
+        if case .refused(let reason) = DictationRoute.resolve(kind: .shell, canType: false, canPrompt: true, drivenBy: "Mira") {
+            #expect(reason == "Mira is driving. Take control to dictate.")
         } else {
             Issue.record("a pane driven by someone else must be refused")
         }
@@ -286,17 +285,17 @@ struct PushToTalkTests {
     }
 
     @Test func holdShortcut() {
-        var key = HoldShortcut()
-        #expect(key.handle(isTriggerKey: false, chordHeld: true, phase: .press) == .pass)
-        #expect(key.handle(isTriggerKey: true, chordHeld: false, phase: .press) == .pass)
-        #expect(key.handle(isTriggerKey: true, chordHeld: false, phase: .release) == .pass)
-        #expect(key.handle(isTriggerKey: true, chordHeld: true, phase: .press) == .start)
-        #expect(key.handle(isTriggerKey: true, chordHeld: true, phase: .repeat) == .swallow)
-        #expect(key.handle(isTriggerKey: true, chordHeld: true, phase: .press) == .swallow)
-        #expect(key.handle(isTriggerKey: false, chordHeld: false, phase: .press) == .pass)
+        var shortcut = HoldShortcut()
+        #expect(shortcut.handle(isTriggerKey: false, chordHeld: true, phase: .press) == .pass)
+        #expect(shortcut.handle(isTriggerKey: true, chordHeld: false, phase: .press) == .pass)
+        #expect(shortcut.handle(isTriggerKey: true, chordHeld: false, phase: .release) == .pass)
+        #expect(shortcut.handle(isTriggerKey: true, chordHeld: true, phase: .press) == .start)
+        #expect(shortcut.handle(isTriggerKey: true, chordHeld: true, phase: .repeat) == .swallow)
+        #expect(shortcut.handle(isTriggerKey: true, chordHeld: true, phase: .press) == .swallow)
+        #expect(shortcut.handle(isTriggerKey: false, chordHeld: false, phase: .press) == .pass)
         // Modifiers let go first: releasing Space still stops.
-        #expect(key.handle(isTriggerKey: true, chordHeld: false, phase: .release) == .stop)
-        #expect(!key.isHeld)
+        #expect(shortcut.handle(isTriggerKey: true, chordHeld: false, phase: .release) == .stop)
+        #expect(!shortcut.isHeld)
     }
 
     @Test func settingsDefaults() {

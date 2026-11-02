@@ -1,25 +1,22 @@
 import Foundation
 
-/// A speech recognizer the controller drives: `SystemSpeechRecognizer` in the app, a fake in tests.
 @MainActor
 public protocol SpeechRecognizer: AnyObject {
     /// Starts listening (asking for permission the first time) and returns the recognition
     /// events. The stream ends after `finish()` once the last words are final, or throws.
     func start(locale: Locale) async throws(VoiceError) -> AsyncThrowingStream<RecognitionEvent, any Error>
-    /// Stops the microphone; the stream delivers what is left and ends.
+    /// The stream delivers what is left, then ends.
     func finish() async
-    /// Stops at once; the stream ends without more events.
+    /// The stream ends without more events.
     func cancel()
 }
 
-/// Why dictation stopped or could not start, in words a person can act on.
 nonisolated public enum VoiceError: Error, Equatable, Sendable {
     case disabled
     case microphoneDenied
     case speechDenied
-    /// No on-device recognizer for the language (its name).
+    /// The language's display name.
     case languageUnavailable(String)
-    /// Nothing to dictate into (no terminal has the keyboard).
     case noTarget
     /// The pane does not take this person's input (a viewer, or someone else drives).
     case refused(String)
@@ -53,21 +50,16 @@ nonisolated public enum VoiceError: Error, Equatable, Sendable {
     }
 }
 
-/// Where dictated text goes when the user lets go.
 nonisolated public enum DictationRoute: Equatable, Sendable {
     /// Typed into the pane as a paste (bracketed when the program asked for it): a shell prompt,
     /// or an agent's prompt box when this person may type there.
     case paste
     /// Sent to the agent as a prompt without submitting it (a guest who may prompt but not type).
     case agentPrompt
-    /// The pane takes no input from this person; the reason in words.
     case refused(String)
 
-    /// What runs in a pane, as far as dictation cares.
     public enum PaneKind: Equatable, Sendable { case shell, agent }
 
-    /// The route for a pane: typing (paste) when allowed; an agent pane falls back to an
-    /// unsubmitted prompt for people who may prompt but not type.
     public static func resolve(kind: PaneKind, canType: Bool, canPrompt: Bool, drivenBy: String? = nil) -> Self {
         if canType { return .paste }
         if kind == .agent, canPrompt { return .agentPrompt }
@@ -76,14 +68,13 @@ nonisolated public enum DictationRoute: Equatable, Sendable {
     }
 }
 
-/// A pane dictation types into. The app implements it over a terminal pane.
 @MainActor
 public protocol DictationTarget: AnyObject {
     /// Where committed text goes (checked at start and again at commit).
     var route: DictationRoute { get }
-    /// Shows the live transcript at the cursor (nil clears it). Nothing reaches the host.
+    /// Nil clears it. Nothing reaches the host.
     func showPreview(_ text: String?)
-    /// Delivers the final text: no Return, nothing submitted.
+    /// No Return, nothing submitted.
     func commit(_ text: String, via route: DictationRoute)
 }
 
@@ -92,9 +83,7 @@ public protocol DictationTarget: AnyObject {
 /// them; everything else passes through.
 nonisolated public struct HoldShortcut: Equatable, Sendable {
     public enum Action: Equatable, Sendable {
-        /// Not ours: let the terminal encode the key.
         case pass
-        /// Ours, nothing to do (a repeat while held).
         case swallow
         case start
         case stop
@@ -129,13 +118,12 @@ nonisolated public struct HoldShortcut: Equatable, Sendable {
     public enum Phase: Equatable, Sendable { case press, `repeat`, release }
 }
 
-/// The user's choices (Settings › Voice), in user defaults.
 nonisolated public struct VoiceSettings: Equatable, Sendable {
     public static let enabledKey = "voiceDictationEnabled"
     public static let localeKey = "voiceDictationLocale"
 
     public var isEnabled: Bool
-    /// A BCP 47 identifier ("en-US"), or nil for the system language.
+    /// BCP 47 ("en-US"), or nil for the system language.
     public var localeIdentifier: String?
 
     public init(isEnabled: Bool = true, localeIdentifier: String? = nil) {
