@@ -3,12 +3,11 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-/// The owner's access list: every invite (grant) with who redeemed it, and every device, each
-/// revocable. Revoking disconnects at once (DAEMON.md §6.2).
+/// The owner's access list: every invite with who redeemed it, and every device, each revocable.
 struct GrantsView: View {
     let session: MultiplayerSession
     var hostName = "this host"
-    @State private var confirm: GrantInfo?
+    @State private var revoking: GrantInfo?
     @State private var removing: DeviceInfo?
     @State private var loaded = false
 
@@ -26,10 +25,10 @@ struct GrantsView: View {
                 ForEach(active, id: \.grant.grantId) { info in
                     GrantRow(info: info, session: session)
                         // Red, not `.destructive`: the row stays until the revocation is confirmed.
-                        .swipeActions { Button("Revoke") { confirm = info }.tint(.red) }
+                        .swipeActions { Button("Revoke") { revoking = info }.tint(.red) }
                         .contextMenu {
                             Button("Copy Grant ID", systemImage: "doc.on.doc") { Pasteboard.copy(info.grant.grantId) }
-                            Button("Revoke…", systemImage: "xmark.circle", role: .destructive) { confirm = info }
+                            Button("Revoke…", systemImage: "xmark.circle", role: .destructive) { revoking = info }
                         }
                 }
             } header: {
@@ -58,9 +57,9 @@ struct GrantsView: View {
             loaded = true
         }
         .confirmationDialog(
-            "Revoke \(confirm.map { $0.grant.label.isEmpty ? "this invite" : $0.grant.label } ?? "")?",
-            isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
-            titleVisibility: .visible, presenting: confirm
+            "Revoke \(revoking.map { $0.grant.label.isEmpty ? "this invite" : $0.grant.label } ?? "")?",
+            isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
+            titleVisibility: .visible, presenting: revoking
         ) { info in
             Button("Revoke", role: .destructive) {
                 Task { await session.revoke(.grant(grantId: info.grant.grantId)) }
@@ -81,7 +80,7 @@ struct GrantsView: View {
 struct GrantRow: View {
     let info: GrantInfo
     let session: MultiplayerSession
-    /// With both, the row carries Copy Link and Revoke (Share Session's Active Links).
+    /// With both set, the row shows Copy Link and Revoke buttons.
     var onCopy: (() -> Void)?
     var onRevoke: (() -> Void)?
     var copied = false
@@ -162,9 +161,6 @@ struct GrantRow: View {
 
 // MARK: - Audit log
 
-/// The host's append-only audit log (DAEMON.md §6.6), newest first: joins and refusals, leases,
-/// prompts (length only), revocations, and signed approvals with the signer and signature. The
-/// header says whether the daemon re-verified the whole hash chain and every signature.
 struct AuditLogView: View {
     let session: MultiplayerSession
     @State private var filter = Filter.all
@@ -333,9 +329,8 @@ private struct AuditRow: View {
         }
     }
 
-    /// The daemon's line without repeating the title: "Mira Holt joined as viewer on
-    /// session:1" under "Mira Holt joined" reads "As viewer on session:1"; "Mira Holt left"
-    /// under "Mira Holt left" disappears.
+    /// The daemon's detail minus what the title already says: "Mira Holt joined as viewer on
+    /// session:1" under "Mira Holt joined" becomes "As viewer on session:1".
     private var subtitle: String? {
         // An approval's command is in its card below.
         if record.approval != nil { return nil }
@@ -425,8 +420,6 @@ private struct AuditRow: View {
 
 // MARK: - Managing sharing
 
-/// Every link that still lets people in, newest first, each with Copy Link and Revoke. Revoking
-/// refuses the link at once and disconnects everyone who joined with it.
 struct ActiveLinksSection: View {
     let session: MultiplayerSession
     @State private var revoking: GrantInfo?
@@ -479,8 +472,6 @@ struct ActiveLinksSection: View {
     }
 }
 
-/// Removes a person now: their device is disconnected and kept out. The link they used keeps
-/// working for anyone else.
 struct RemovePersonDialog: ViewModifier {
     let session: MultiplayerSession
     @Binding var person: GudoCore.Participant?

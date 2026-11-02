@@ -3,7 +3,6 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-/// Settings › Devices: every host this device paired with, each opening its devices.
 struct DevicesSettingsSection: View {
     private let hosts = AppModel.shared.hosts
 
@@ -68,7 +67,6 @@ enum DeviceHosts {
     }
 }
 
-/// One host's devices: connects it if needed, then lists its owner devices and guests.
 struct HostDevicesView: View {
     let hostId: String
     private let hosts = AppModel.shared.hosts
@@ -198,7 +196,6 @@ struct HostAlertsSection: View {
     }
 }
 
-/// Removing a device, confirmed: what it ends and that only a new pairing code undoes it.
 struct RemoveDeviceDialog: ViewModifier {
     let session: MultiplayerSession
     let hostName: String
@@ -245,14 +242,14 @@ private struct DeviceRow: View {
     var body: some View {
         // At the accessibility sizes the parts stack, so the name and date are never squeezed.
         let large = typeSize.isAccessibilitySize
-        let row = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: DS.Space.s)) : AnyLayout(HStackLayout(spacing: DS.Space.m))
-        let title = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: DS.Space.xs)) : AnyLayout(HStackLayout(spacing: DS.Space.row))
-        row {
+        let rowLayout = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: DS.Space.s)) : AnyLayout(HStackLayout(spacing: DS.Space.m))
+        let titleLayout = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: DS.Space.xs)) : AnyLayout(HStackLayout(spacing: DS.Space.row))
+        rowLayout {
             Image(systemName: symbol)
                 .foregroundStyle(pairedNow != nil ? DS.Palette.attention : DS.Palette.textSecondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                title {
+                titleLayout {
                     Text(name)
                         .font(pairedNow != nil ? DS.Font.rowTitleEmphasis : DS.Font.rowTitle)
                         .lineLimit(large ? 3 : 1)
