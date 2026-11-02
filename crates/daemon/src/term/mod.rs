@@ -10,6 +10,7 @@
 //! prompt, whoever allowed it.
 
 pub(crate) mod ask;
+pub(crate) mod events;
 mod output;
 
 use std::collections::HashMap;
@@ -140,6 +141,8 @@ pub(crate) struct Term {
     creators: Mutex<HashMap<PaneId, PaneId>>,
     /// Requests to drive the user's panes, and the panes the owner let an agent drive.
     pub asks: ask::Asks,
+    /// The event stream (`events_wait`).
+    pub events: events::Feed,
 }
 
 impl Term {
@@ -208,8 +211,11 @@ impl Term {
         saved: impl IntoIterator<Item = (PaneId, PaneId)>,
         live: impl Fn(PaneId) -> bool,
     ) {
-        lock(&self.creators)
-            .extend(saved.into_iter().filter(|&(p, c)| p != c && live(p) && live(c)));
+        lock(&self.creators).extend(
+            saved
+                .into_iter()
+                .filter(|&(p, c)| p != c && live(p) && live(c)),
+        );
     }
 }
 
@@ -479,6 +485,21 @@ struct StatusArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EventsArgs {
+    /// The cursor a previous call returned; omitted: from now.
+    #[serde(default)]
+    since: Option<u64>,
+    /// Only these types (`pane.opened`, `command.finished`, …).
+    #[serde(default)]
+    types: Vec<String>,
+    #[serde(default)]
+    max: Option<usize>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SendArgs {
     pane: String,
     #[serde(default)]
@@ -559,6 +580,7 @@ impl Ctx {
             "agent_prompt" => self.agent_prompt(args(value)?).await,
             "agent_wait" => self.agent_wait(args(value)?).await,
             "agent_result" => self.agent_result(args(value)?),
+            "events_wait" => self.events_wait(args(value)?).await,
             other => Err(ToolError::new(
                 ErrorCode::NotFound,
                 format!("no tool {other}"),
@@ -641,7 +663,6 @@ impl Ctx {
         let wait = self.core.cfg.drive_ask_wait;
         let (agent, kind) = self.caller_names();
         let target_label = self.label(entry);
-        let title = format!("{agent} wants to {} {target_label}", ask::verb(&action));
         let request_id = crate::agent::next_request_id();
         let request = DriveAsk {
             request_id,
@@ -650,11 +671,9 @@ impl Ctx {
             agent,
             target_label,
             action,
-            expires_at: proto::UnixMillis(
-                crate::identity::now_millis() + wait.as_millis() as u64,
-            ),
+            expires_at: proto::UnixMillis(crate::identity::now_millis() + wait.as_millis() as u64),
         };
-        let answer = self.core.term.asks.open(request.clone(), title);
+        let answer = self.core.term.asks.open(request.clone());
         let _withdraw = Withdraw {
             core: &self.core,
             request_id,
@@ -1556,6 +1575,45 @@ impl Ctx {
             },
         );
         Ok(json!({ "status": status(&self.core, self.caller, &entry) }))
+    }
+
+    // --- events -----------------------------------------------------------------------------
+
+    /// Waits for events of the caller's session after `since` (`proto::script`).
+    async fn events_wait(&self, a: EventsArgs) -> Result<Value> {
+        const TYPES: [&str; 7] = [
+            "pane.opened",
+            "pane.closed",
+            "command.started",
+            "command.finished",
+            "agent.state",
+            "layout.changed",
+            "events.lost",
+        ];
+        if let Some(bad) = a.types.iter().find(|t| !TYPES.contains(&t.as_str())) {
+            return Err(
+                ToolError::new(ErrorCode::InvalidArgs, format!("no event type {bad}"))
+                    .hint(format!("types are {}", TYPES.join(", "))),
+            );
+        }
+        let wanted = |kind: &proto::ScriptEventKind| {
+            let name = events::type_name(kind);
+            // Losing events is always said: what a subscriber knows may be stale.
+            a.types.is_empty() || name == "events.lost" || a.types.iter().any(|t| t == name)
+        };
+        let page = self
+            .core
+            .term
+            .events
+            .read(
+                self.session(),
+                a.since,
+                wanted,
+                a.max.unwrap_or(100).clamp(1, 1000),
+                wait_for(a.timeout_ms),
+            )
+            .await;
+        Ok(json!({ "events": page.events, "cursor": page.cursor }))
     }
 
     // --- input ------------------------------------------------------------------------------

@@ -2279,7 +2279,10 @@ impl Client {
                 AuditKind::Denied,
                 crate::mp::AuditEntry {
                     pane_id: Some(pane),
-                    detail: format!("a guest tried to answer drive request {}", decide.request_id),
+                    detail: format!(
+                        "a guest tried to answer drive request {}",
+                        decide.request_id
+                    ),
                     ..self.authz.audit()
                 },
             );

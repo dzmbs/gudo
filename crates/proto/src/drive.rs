@@ -72,6 +72,103 @@ impl DriveAsk {
     pub const ALLOW_PANE: OptionId = OptionId(1);
     /// Refuses.
     pub const DENY: OptionId = OptionId(2);
+
+    /// The options in order, with the labels every surface shows.
+    pub const OPTIONS: [(OptionId, &'static str); 3] = [
+        (Self::ALLOW_ONCE, "Allow once"),
+        (Self::ALLOW_PANE, "Allow for this pane until it closes"),
+        (Self::DENY, "Deny"),
+    ];
+
+    /// `Claude wants to type into ~/api · zsh`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use proto::{DriveAction, DriveAsk, PaneId, RequestId, UnixMillis};
+    ///
+    /// let ask = DriveAsk {
+    ///     request_id: RequestId(1),
+    ///     pane_id: PaneId(1),
+    ///     target: PaneId(2),
+    ///     agent: "Claude".into(),
+    ///     target_label: "~/api · zsh".into(),
+    ///     action: DriveAction::Run { command: "npm test".into() },
+    ///     expires_at: UnixMillis(0),
+    /// };
+    /// assert_eq!(ask.title(), "Claude wants to run a command in ~/api · zsh");
+    /// assert_eq!(ask.action.describe(), "Run $ npm test");
+    /// ```
+    pub fn title(&self) -> String {
+        format!(
+            "{} wants to {} {}",
+            self.agent,
+            self.action.verb(),
+            self.target_label
+        )
+    }
+}
+
+impl DriveAction {
+    /// `type into`, `run a command in`, `prompt the agent in`, `close`.
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Self::Type { .. } => "type into",
+            Self::Run { .. } => "run a command in",
+            Self::Prompt { .. } => "prompt the agent in",
+            Self::Close => "close",
+        }
+    }
+
+    /// The action exactly, in words. Control characters show as `^X`, line breaks as `⏎`
+    /// and invisible formatting as `<U+…>`, so nothing typed can hide from the reader.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Type { text, keys, submit } => {
+                let mut parts = Vec::new();
+                if let Some(text) = text.as_deref().filter(|t| !t.is_empty()) {
+                    parts.push(format!("“{}”", visible(text)));
+                }
+                if !keys.is_empty() {
+                    parts.push(format!("keys {}", visible(&keys.join(" "))));
+                }
+                if *submit {
+                    parts.push("then Return".into());
+                }
+                if parts.is_empty() {
+                    "Type nothing".into()
+                } else {
+                    format!("Type {}", parts.join(", "))
+                }
+            }
+            Self::Run { command } => format!("Run $ {}", visible(command)),
+            Self::Prompt { text } => format!("Prompt “{}”", visible(text)),
+            Self::Close => "Close the pane".into(),
+        }
+    }
+}
+
+/// `text` with every character that could hide or reorder what is shown made visible.
+fn visible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' | '\r' => out.push('⏎'),
+            '\t' => out.push('⇥'),
+            c if (c as u32) < 0x20 => {
+                out.push('^');
+                out.push(char::from(c as u8 + b'@'));
+            }
+            '\u{7f}' => out.push_str("^?"),
+            '\u{80}'..='\u{9f}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{feff}' => out.push_str(&format!("<U+{:04X}>", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// A drive request opened or closed ([`ApprovalPush::Drive`](crate::ApprovalPush::Drive)).

@@ -3,7 +3,8 @@
 //!
 //! Every connection announces `Caps::APPROVALS`. Pushes go to an [`ApprovalListener`] set
 //! with [`Client::set_approval_listener`] and are also kept: [`Client::approval_info`] (what
-//! may be done with a pane's open request) and [`Client::auto_approve_rules`].
+//! may be done with a pane's open request), [`Client::auto_approve_rules`] and, on owner
+//! devices, [`Client::drive_asks`] (agents asking to drive the user's panes, `proto::drive`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -11,7 +12,8 @@ use std::time::Duration;
 
 use proto::{
     ActiveRule, ApprovalError, ApprovalInfo, ApprovalPush, ApprovalRequest, ApprovalResponse,
-    AutoApproveRule, Decide, PaneId, RequestId, RuleId, RuleMatch, ServerCtl, UnixMillis,
+    AutoApproveRule, Decide, DriveAsk, DrivePush, PaneId, RequestId, RuleId, RuleMatch, ServerCtl,
+    UnixMillis,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -32,6 +34,9 @@ pub enum ApprovalEvent {
         /// Its rules.
         rules: Vec<ActiveRule>,
     },
+    /// An agent asks to drive one of the user's panes, or such a request closed. Answer with
+    /// [`Client::decide`] and one of the [`DriveAsk`] options.
+    Drive(DrivePush),
     /// The connection dropped: everything above is forgotten until the daemon says it again.
     Reset,
 }
@@ -73,6 +78,7 @@ pub(crate) struct ApprovalState {
     listener: Mutex<Option<Arc<dyn ApprovalListener>>>,
     requests: Mutex<HashMap<PaneId, ApprovalInfo>>,
     rules: Mutex<HashMap<PaneId, Vec<ActiveRule>>>,
+    drives: Mutex<HashMap<RequestId, DriveAsk>>,
 }
 
 impl ApprovalState {
@@ -97,6 +103,17 @@ impl ApprovalState {
                 }
                 ApprovalEvent::Rules { pane_id, rules }
             }
+            ServerCtl::Approval(ApprovalPush::Drive(push)) => {
+                match &push {
+                    DrivePush::Open(ask) => {
+                        lock(&self.drives).insert(ask.request_id, ask.clone());
+                    }
+                    DrivePush::Closed { request_id } => {
+                        lock(&self.drives).remove(request_id);
+                    }
+                }
+                ApprovalEvent::Drive(push)
+            }
             other => return Some(other),
         };
         self.emit(event);
@@ -118,9 +135,11 @@ impl ApprovalState {
         let had = {
             let mut requests = lock(&self.requests);
             let mut rules = lock(&self.rules);
-            let had = !requests.is_empty() || !rules.is_empty();
+            let mut drives = lock(&self.drives);
+            let had = !requests.is_empty() || !rules.is_empty() || !drives.is_empty();
             requests.clear();
             rules.clear();
+            drives.clear();
             had
         };
         if had {
@@ -133,6 +152,16 @@ impl Client {
     /// Sets the receiver of [`ApprovalEvent`]s (replacing any previous one).
     pub fn set_approval_listener(&self, listener: Arc<dyn ApprovalListener>) {
         *lock(&self.inner.approvals.listener) = Some(listener);
+    }
+
+    /// The open requests of agents to drive the user's panes, oldest first (owner devices).
+    pub fn drive_asks(&self) -> Vec<DriveAsk> {
+        let mut asks: Vec<DriveAsk> = lock(&self.inner.approvals.drives)
+            .values()
+            .cloned()
+            .collect();
+        asks.sort_by_key(|a| a.request_id);
+        asks
     }
 
     /// What may be done with the request `pane` is blocked on, if the daemon said. Check that

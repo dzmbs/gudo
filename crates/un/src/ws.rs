@@ -377,11 +377,13 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
             let (listener, mut events) = WorkspaceEventQueue::channel();
             c.set_workspace_listener(listener);
             let ports = c.list_ports().await?;
-            print_ports(&ports);
+            print_ports(&ports, conn.json);
             while watch && let Some(event) = events.recv().await {
                 if let WorkspaceEvent::PortsChanged { ports } = event {
-                    println!("--");
-                    print_ports(&ports);
+                    if !conn.json {
+                        println!("--");
+                    }
+                    print_ports(&ports, conn.json);
                 }
             }
         }
@@ -527,6 +529,9 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
                     None => conn.focused_cwd().await,
                 };
                 let s = conn.client.git_status(path).await?;
+                if conn.json {
+                    return crate::json::print("git.status", &crate::json::Git::from(&s));
+                }
                 println!(
                     "{} on {} (upstream {}, +{} -{})",
                     s.root,
@@ -699,10 +704,16 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
             } else {
                 c.attention_list().await?
             };
-            for item in &list.items {
-                print_item(item);
+            if conn.json {
+                let items = list.items.iter().map(crate::json::Item::from).collect();
+                let unseen = list.unseen;
+                crate::json::print("inbox", &crate::json::Inbox { items, unseen })?;
+            } else {
+                for item in &list.items {
+                    print_item(item);
+                }
+                println!("{} unseen", list.unseen);
             }
-            println!("{} unseen", list.unseen);
             while watch && let Some(event) = events.recv().await {
                 if let WorkspaceEvent::Attention { update } = event {
                     println!("{update:?}");
@@ -713,7 +724,14 @@ pub(crate) async fn run(conn: &mut Conn, cmd: WsCmd) -> Result<()> {
     Ok(())
 }
 
-fn print_ports(ports: &[client_core::proto::PortInfo]) {
+fn print_ports(ports: &[client_core::proto::PortInfo], json: bool) {
+    if json {
+        let ports = ports.iter().map(crate::json::Port::from).collect();
+        if let Err(e) = crate::json::print("ports", &crate::json::Ports { ports }) {
+            eprintln!("{e}");
+        }
+        return;
+    }
     if ports.is_empty() {
         println!("no listening ports in panes");
     }

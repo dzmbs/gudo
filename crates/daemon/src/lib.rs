@@ -172,6 +172,7 @@ impl Daemon {
         tasks.push(tokio::spawn(ws::turns::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(ws::repo::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(notifier::run(Arc::clone(&core))));
+        tasks.push(tokio::spawn(term::events::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(mp::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(art::run(Arc::clone(&core))));
         tasks.push(tokio::spawn(assist::run(Arc::clone(&core))));

@@ -1506,7 +1506,11 @@ impl Core {
             if edited.is_some() {
                 return Err(None);
             }
-            return self.term.asks.decide(self, actor, decide, record).ok_or(None);
+            return self
+                .term
+                .asks
+                .decide(self, actor, decide, record)
+                .ok_or(None);
         }
         for (id, entry) in self.pane_entries() {
             let mut agent = lock(&entry.agent);
