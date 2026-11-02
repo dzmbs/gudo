@@ -91,6 +91,16 @@ case_upgrade() {
   rm -rf "$copy"
 }
 
+case_knocks() {
+  echo "== knock flood on one knock invite"
+  RECOVER=5 D knocks "$W/s-knocks.sh" 60
+}
+
+case_many() {
+  echo "== 1000 panes: 300 PTY tabs and 700 canvas tabs, a restart"
+  "$W/many.sh" "$B" 300 700
+}
+
 case_outages() {
   # Outages freeze the daemon (SIGSTOP): a user-space UDP proxy cannot cut the link, since
   # QUIC multipath finds the direct loopback path around it.
