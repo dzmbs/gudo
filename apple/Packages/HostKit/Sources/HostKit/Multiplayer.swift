@@ -358,7 +358,7 @@ public final class MultiplayerSession {
         followByDefault()
     }
 
-    /// This device's kind, for "Ivan · iPad" (the app sets it at launch).
+    /// This device's kind, for "Mira · iPad" (the app sets it at launch).
     public static var deviceClass: DeviceClass = .unknown
 
     func detach() {

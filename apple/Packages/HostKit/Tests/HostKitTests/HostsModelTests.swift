@@ -183,9 +183,9 @@ nonisolated func temporaryDirectory() -> URL {
     @Test func justSSHParsesDestinations() throws {
         let model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()))
         let flow = JustSSHFlow(hosts: model)
-        flow.destination = " ivan@example.com:2222 "
+        flow.destination = " mira@example.com:2222 "
         let endpoint = try flow.endpoint()
-        #expect(endpoint == SSHEndpoint(user: "ivan", host: "example.com", port: 2222, identity: .password))
+        #expect(endpoint == SSHEndpoint(user: "mira", host: "example.com", port: 2222, identity: .password))
         flow.destination = "ssh://root@[::1]:22"
         #expect(try flow.endpoint().host == "::1")
         try flow.generateKey()
