@@ -1,8 +1,11 @@
 # Host daemon (`gudo-hostd`) and client core
 
-Status: MVP path working end to end on macOS and Linux (2026-10-18), plus terminal completeness
+Status: working end to end on macOS and Linux, with terminal completeness
 (key/mouse/paste encoding, history paging, shell integration, search, links, Codex resume), plus
+the developer workflow (§5: forwards, ports, editor, git/diff/turns/review, worktrees, files,
+attention feed), plus multiplayer on the Rust side (§6: signed attenuable grants, invites,
 roles enforced on every request, control lease, presence, signed approvals, audit log,
+revocation), plus drawings and images (§7: artifact store, live ink, canvas panes, row
 anchors, send to agent) and input assistance for the mobile line editor (§8: foreground
 program, prompt state and input line, atomic submit, history, completion, file search,
 blocked-agent options), and native password prompts (§9: askpass helper, detected
@@ -24,7 +27,7 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
 ```
 
 - `Axis::Horizontal` lays children out left → right, `Vertical` top → bottom; `ratio` is the
-  first child's share (clamped to 0.05–0.95). Split puts the new pane *after* the old one and
+  first child's share (clamped to 0.05-0.95). Split puts the new pane *after* the old one and
   focuses it.
 - Ops (`proto::LayoutOp`): split, close pane, focus, focus direction, resize (moves the nearest
   divider on that axis), toggle zoom, new/close/move/select/rename tab, create/rename/close
@@ -41,7 +44,7 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   of another tab and closes that tab. Processes keep running; a tab left empty closes.
 - Projects (offered as `DaemonFeatures::PROJECTS`): named, coloured groups of tabs that a
   client merges across hosts by project id. Each session stores the definitions its tabs use
-  (`Project { id, name, color 0–7, order, updated }`) and each tab's membership (`TabProject {
+  (`Project { id, name, color 0-7, order, updated }`) and each tab's membership (`TabProject {
   tab_id, project, rank }`), persisted in `layout.json`. `PutProject` upserts a definition
   (last writer wins on `updated`; an older one is `Done` with no change), `SetTabProject` puts a
   tab in a project defined in its session (else `Invalid`), moves it by `rank` or ungroups it
@@ -69,7 +72,8 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   `ServerCtl::Floats` (same revision) right after every `LayoutChanged`, cut down to their
   scope (a tab-scoped guest sees its tab's windows, a pane-scoped one none).
 - The daemon is the source of truth. Every change bumps the session's `revision` and is
-  view is the truth"). A client applies a layout only if its revision is not older than the
+  broadcast as `LayoutChanged(SessionLayout)` (the whole session: events are hints, the
+  view is the truth). A client applies a layout only if its revision is not older than the
   one it has. `OpResult` is sent after the requesting client's `LayoutChanged`.
 - Pane, tab and session ids are never reused and survive daemon restarts.
 
@@ -105,6 +109,7 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   Codex session lookup run on `spawn_blocking`.
 - No `std::sync::Mutex` guard is held across an `.await`.
 
+### Streams (ALPN `gudo/1`)
 
 | Stream | Opened by | Priority | Content |
 |---|---|---|---|
@@ -150,6 +155,7 @@ of the newer one can be fetched instead. `client-core` drives the cursor
 (`Client::fetch_history`), prepends the pages to its VT mirror, and hands the raw records to the
 app (`ClientEvent::PaneHistory`) for its own decoder.
 
+### Shell integration
 
 - **Injection**, as Ghostty does it, without touching dotfiles: Ghostty's scripts
   (`vendor/ghostty/src/shell-integration`) are written to `<state>/shell-integration/` on
@@ -191,18 +197,23 @@ app (`ClientEvent::PaneHistory`) for its own decoder.
   directory and are kept if they exist, or if they are explicit (`/`, `~/`, `./`) multi-part
   paths (flagged `exists: false`). Deduplicated, screen first, bottom up.
 
+### Output: bytes while keeping up, snapshots when behind
 
 - Each pane stream tracks wire bytes in flight per frame (`InFlight`) against the client's
   cumulative `Ack{seq}` (client acks at most every 5 ms).
-  path: focused 50 ms (64 KiB – 1 MiB), others 10 ms (16 – 256 KiB). Over budget the stream drops
+- **Budget = link rate × allowed added delay**, with rate ≈ cwnd / RTT of the selected
+  path: focused 50 ms (64 KiB to 1 MiB), others 10 ms (16 to 256 KiB). Over budget the stream drops
   bytes and marks the pane dirty; once everything sent is acked it sends one snapshot and resumes
   bytes from the snapshot's `seq`. One frame always goes through when nothing is in flight.
+- **Snapshots** are the READY prefix of a Ghostty snapshot (records scanned for tag 5)
   and the pixels of the kitty images in view right after it (§7.10),
   zstd level 3, cached per (seq, resize count) so many clients share one encode. Rate limit:
+  33 ms focused, 250 ms otherwise. An unencodable moment retries after 20 ms.
 - **Resizes are in-band**: `Resized{seq, size}` is sent at its exact offset in the byte stream,
   so client VTs resize at the same point as the daemon's.
 - `InputAck{input_seq, at_seq}` (the head when the input was written) goes on the pane's stream.
 
+### Resume
 
 - The client keeps `(seq, snap_gen)` per followed pane (plus a VT mirror if enabled). On
   reconnect `Hello.resume` lists them, focused first; the daemon starts streaming those panes
@@ -212,6 +223,7 @@ app (`ClientEvent::PaneHistory`) for its own decoder.
 - `snap_gen` is the daemon run's epoch, so after a daemon restart every resume point is invalid
   and clients get snapshots.
 
+### Echo prediction (`EchoHintAt`)
 
 `EchoHintAt{hint, at_seq, prediction}` is sent whenever termios ECHO/ICANON, the alt screen or
 the OSC 133 prompt state changes, tagged with the output head. `proto::Prediction::decide`:
@@ -220,9 +232,11 @@ shell prompt (after 133;A/B, before 133;C; shell integration is injected, see be
 
 ### Sizing
 
-Each client sends its size per pane (`Resize`); the PTY follows the client that **last typed**
+Each client sends its size per pane (`Resize`); the PTY follows the client that **last typed**,
+or the first client to report a size. `PaneMeta.sized_by` names its principal; the
 policy is always `LastInput` for now.
 
+### Identity and pairing
 
 - `daemon.key` (Ed25519, iroh endpoint id), `owner.json` (the single owner principal),
   `devices.json` (allowlist: device key → principal), `pairing.json` (pending one-time secrets).
@@ -269,11 +283,13 @@ policy is always `LastInput` for now.
 - Each agent pane has an `Arbiter`. Inputs: hooks (via `gudo-hook` → Unix socket
   `<state>/hook.sock`, one JSON line each way, token-checked), OSC 9 and OSC 7501, screen
   manifests (every 500 ms after output), timers, process exit. Events go to clients as
+  `AgentEvent{pane, json}` and as `PaneMeta.agent`.
 - A Claude `PermissionRequest` hook is held open; the first client `Decide` answers it with the
   hook decision JSON (single-flight; later deciders get `AlreadyDecided`).
 - Claude session ids are pinned at launch and persisted; on restart agent panes resume with
   `claude --resume <id>`.
 - Codex cannot be given an id and does not report one without hooks, so the daemon learns it
+  from the rollout transcript Codex writes, checking every second until found:
   1. **open file** (exact): a process in the pane's tree holds
      `…/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` open (`/proc/<pid>/fd` on Linux,
      `proc_pidfdinfo` on macOS);
@@ -340,6 +356,7 @@ and only once), `mp::policy` unit test.
   ids), pane directories, paired devices, grants, history, drawings and Claude/Codex sessions
   (`--resume`) come back; clients redial by themselves (backoff ≤ 5 s) and get snapshots.
   **Lost**: the shell processes and whatever ran in them (they restart in their last directory),
+  unsaved terminal state, scrollback beyond what the next snapshot holds, in-memory workspace state
   (attention items, turn snapshots, editor servers; §9), and Codex sessions started by hand.
 - `gudo daemon info` / `gudo daemon upgrade <file> [--build ID]` drive it from a terminal.
 - **Installs from before the rename** (`brand::legacy`: `unnamed-hostd`, state in `unnamed`,
@@ -430,13 +447,12 @@ Default state directory: `$XDG_STATE_HOME/gudo`, else `~/.local/state/gudo` on L
   carries the connection. `--no-relay` is only for LAN/Tailscale setups.
 - **Direct-only devices and restarts.** A device with relays off (`gudo --no-relay`, the app's
   local-only switch) dials only the direct addresses in the ticket it paired with. iroh binds
-  random UDP ports, so a restart or upgrade used to move the daemon away from every such
-  ticket (`gudo --no-relay forward` then timed out "waiting for layout"; with relays, address
-  lookup hid it). The daemon now records the sockets it bound (`endpoint.json` `bound`) and
+  random UDP ports, so a restart or upgrade would move the daemon away from every such
+  ticket. The daemon records the sockets it bound (`endpoint.json` `bound`) and
   binds the same ports on the next start (the default binds and `--bind` with port 0; a port
   taken in the meantime falls back to a fresh one, which a direct-only device only learns
   from a new ticket). `gudo` reports a daemon it never reached as such, with the last dial
-  error, instead of "timed out waiting for layout", and `gudo forward` no longer attaches.
+  error, and `gudo forward` does not attach.
   Test: `a_direct_only_ticket_still_reaches_the_daemon_after_a_restart`.
 - `service install` writes `~/.config/systemd/user/gudo-hostd.service`
   (`Restart=on-failure`); run `sudo loginctl enable-linger $USER` once so it starts at boot and
@@ -467,14 +483,15 @@ Loopback, release build, M5 Max, 3 runs each (Linux: OrbStack Ubuntu 24.04 arm64
 
 | | macOS 26 | Linux |
 |---|---|---|
-| first attach: client endpoint bind, two handshakes (device refused, then pairing), attach, first snapshot | 22–26 ms | 3.3–3.5 ms |
-| resume from ring (reconnect → missed output on screen) | 2.1–2.5 ms | 2.2–3.3 ms |
-| resume after eviction (reconnect → snapshot on screen) | 3.2–3.3 ms | 4.4–4.8 ms |
-| worst keystroke → echo during a 40 MB flood in a visible pane | 3.3–6.6 ms | 2.9–6.8 ms |
+| first attach: client endpoint bind, two handshakes (device refused, then pairing), attach, first snapshot | 22-26 ms | 3.3-3.5 ms |
+| resume from ring (reconnect → missed output on screen) | 2.1-2.5 ms | 2.2-3.3 ms |
+| resume after eviction (reconnect → snapshot on screen) | 3.2-3.3 ms | 4.4-4.8 ms |
+| worst keystroke → echo during a 40 MB flood in a visible pane | 3.3-6.6 ms | 2.9-6.8 ms |
 
 Cross-host (Mac ↔ OrbStack Linux VM, both directions) and relay-only (ticket stripped of direct
 addresses, n0 relay, ~1.8 s to pair including relay setup) were exercised by hand with `gudo`.
 
+## 5. Developer workflow (daemon side)
 
 All requests are one ctl message pair: `ClientCtl::Workspace{req_id, WorkspaceRequest}` →
 `ServerCtl::WorkspaceResult{req_id, Result<WorkspaceResponse, WsError>}` (types in
@@ -511,6 +528,7 @@ default = "vscode"               # what `Auto` launches: "vscode" (default) | "v
 compress = true                  # brotli/gzip proxy in front of the editor server (§5.3)
 ```
 
+Every workspace request is gated by role and scope (§6.3): files, git, worktrees and forwards need a
 driver with a daemon- or session-wide grant; editor and tunnel launches need the owner.
 
 ### 5.1 Port forwarding
@@ -542,7 +560,7 @@ Loopback, one connection, 128 MiB, release build (`forward_throughput_and_latenc
 
 | | macOS 26 (M5 Max) | Linux (OrbStack VM) |
 |---|---|---|
-| throughput | 80–110 MB/s | 690–780 MB/s |
+| throughput | 80-110 MB/s | 690-780 MB/s |
 | 1-byte RTT direct / forwarded, p50 | 0.08 / 0.23 ms | 0.004 / 0.057 ms |
 | p99 | 0.17 / 0.31 ms | 0.014 / 0.097 ms |
 
@@ -565,7 +583,8 @@ it changes. Gap: a URL that scrolls off within one tick is missed (the listener 
 
 ### 5.3 Editor (Microsoft's VS Code server over our forward by default; VS Code tunnel opt-in; VSCodium as automatic fallback; openvscode-server explicit only)
 
-on the host — the server `code serve-web` runs, run directly (`ws/vscode_server.rs`) — reached
+**Default path: Microsoft's VS Code server
+on the host (the server `code serve-web` runs, started directly by `ws/vscode_server.rs`), reached
 over our direct iroh port forward** (`EditorLaunch` below; apple-ffi
 `DaemonClient::open_editor`). No Microsoft relay, no tunnel quota, and **never a GitHub or Microsoft
 sign-in**. The app shows Microsoft's licence terms (VS Code licence, VS Code Server licence, Microsoft
@@ -577,7 +596,7 @@ user taps Accept there; Cancel starts and installs nothing.
   `127.0.0.1:<stable per-host port>` forwarded to the host's `127.0.0.1:22`; see "Desktop Remote-SSH"
   below). It needs no licence sheet from us (desktop VS Code and Remote-SSH have their own terms). When
   VS Code is not installed, or the host has no sshd answering, the app opens the in-app editor instead.
-- **Fallback, opt-in: the VS Code Remote Tunnel** (`ws/tunnel.rs`, research
+- **Fallback, opt-in: the VS Code Remote Tunnel** (`ws/tunnel.rs`). Only when the user picks it (editor More menu, the failure screen, or the
   palette). The daemon runs Microsoft's `code tunnel` on the host. The user signs in with their own
   GitHub or Microsoft account by device code, which the app shows (code, Copy, open the verification
   page in the user's browser) and never completes itself. The app opens
@@ -623,13 +642,14 @@ The tunnel RPCs:
 - **Tests.**
   - `tests/it/vscode.rs` uses a fake `code`: device code, sign-in, running, crash restart, daemon-restart
     autostart, stop, adopt, Microsoft code, CLI install with hash mismatch, and `forward_io`.
-  - Real host (Hetzner, 2026-10-18): the managed install from Microsoft took 0.57 s with the hash verified.
+  - On a real Linux host the managed install from Microsoft took 0.57 s with the hash verified,
+    up to a real GitHub device code.
 - **Desktop Remote-SSH to iroh-only hosts.**
   - `Client::forward(<stable port>, Tcp{22})` plus `client_core::vscode::remote_ssh_uri(
     SshHost::local_forward(user, port), …)`. This uses Remote-SSH's hex-JSON authority.
   - Or `gudo ssh-proxy` as `ProxyCommand` (`Client::forward_io`).
 
-The per-folder servers below remain. **`Auto` no longer falls back to openvscode-server**: it means
+The per-folder servers below remain. **`Auto` never falls back to openvscode-server**: it means
 `code serve-web` and fails with `Unavailable` (no CLI) or `Denied` (licence not accepted).
 openvscode-server must be asked for with `Only(OpenVsCode)`.
 
@@ -654,8 +674,8 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   - Fallback: when Microsoft publishes no server for the host or the download fails with none
     here, `code serve-web` as before. `editor.serve_web = true` forces serve-web (tests with a
     stand-in `code`).
-  - Run for real on macOS arm64 (2026-10-22, VS Code 1.143.0: CLI and server download, launch and
-    workbench through the forward in 34 s on first open, 1.5–2.2 s per warm load in WebKit); the
+  - Run for real on macOS arm64 (VS Code 1.143.0: CLI and server download, launch and
+    workbench through the forward in 34 s on first open, 1.5-2.2 s per warm load in WebKit); the
     Linux builds go through the same code but were not run yet.
 - `EditorLaunch{folder, choice: Auto|Only(kind), accept_vscode_license}`. Auto runs
   VS Code (the server directly, else `code serve-web`; the user's CLI or the managed one must be
@@ -669,6 +689,7 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   The returned port is the **compressing proxy's** (below), not the server's; the app forwards
   whatever port it gets, so nothing changed there.
 - **Compression (`ws/editor_proxy.rs`).** The VS Code server sends everything uncompressed
+  whatever `Accept-Encoding` says (~24 MB on a cold load). Each editor server gets an
   HTTP/1.1 reverse proxy (hyper) on another loopback port; it is what `EditorInstance.port`
   names and what the forward reaches. Generic port forwards are untouched.
   - Honours `Accept-Encoding` with q-values, brotli preferred, then gzip. Compresses `text/*`,
@@ -689,25 +710,27 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
     brotli at level 5 (≈50 MB/s on one core) and stores it; a background job then rewrites
     it once at level 11 (workbench.js: 4.6 → 3.9 MB, ~20 s of one core per server version,
     one job at a time, stopped at shutdown and resumed on the next hit). Later loads are
-    served from the file with a `Content-Length`. The server is still asked every time — it
-    checks the connection token and says what the asset is — only its body is not read.
+    served from the file with a `Content-Length`. The server is still asked every time (it
+    checks the connection token and says what the asset is); only its body is not read.
   - `editor.compress = false` hands out the server's own port instead.
-  - Measured 2026-10-21 (pinned VSCodium Web Host — the same server code as serve-web, which
-    is not installed on the Mac — over iroh, `--no-relay`, Playwright 1.64.1, release build,
+  - Measured (pinned VSCodium Web Host, the same server code as serve-web, which
+    is not installed on the Mac; over iroh, `--no-relay`, Playwright 1.64.1, release build,
+    M5 Max; Chromium network emulation):
 
     | Chromium, cold load to editor | bytes | workbench | editor |
     |---|---|---|---|
-    | loopback, off | 23.3 MB | 1.5–2.0 s | 3.1–3.9 s |
+    | loopback, off | 23.3 MB | 1.5-2.0 s | 3.1-3.9 s |
     | loopback, on (cached) | 4.4 MB | 1.7 s | 3.1 s |
+    | 10 MB/s + 55 ms (a typical remote link), off | 22.6 MB | 3.2-3.7 s | 5.4-5.5 s |
     | same, on, first load ever (q5 streamed) | 6.1 MB | 1.6 s | 3.9 s |
-    | same, on, cached (q11) | 4.3 MB | 1.5–1.7 s | 3.3–4.2 s |
-    | 2 MB/s + 80 ms (cellular-like), off | 22.6 MB | 13.0 s | 21.0–22.8 s |
+    | same, on, cached (q11) | 4.3 MB | 1.5-1.7 s | 3.3-4.2 s |
+    | 2 MB/s + 80 ms (cellular-like), off | 22.6 MB | 13.0 s | 21.0-22.8 s |
     | same, on, cached | 4.3 MB | 3.3 s | 11.1 s |
 
     **WebKit offers only `gzip, deflate` to an `http://` origin** (checked: Playwright WebKit
     on `127.0.0.1` and `localhost`; Chromium offers `br, zstd` too), and WKWebView loads the
     editor from `http://localhost:<port>`, so the app gets gzip: 23.3 → 5.8 MB (loopback
-    WebKit, editor 2.1–2.5 s vs 2.2–3.2 s off). Getting brotli into WKWebView would need the
+    WebKit, editor 2.1-2.5 s vs 2.2-3.2 s off). Getting brotli into WKWebView would need the
     client side of the forward to ask for it and decode locally (not built).
   - Tests: unit tests (negotiation, what is compressed, immutability, ETag round trip, cache
     keys, rewrite, pruning, shutdown) and HTTP tests over sockets in
@@ -722,15 +745,17 @@ openvscode-server must be asked for with `Only(OpenVsCode)`.
   start 8.9 s, token redirect, workbench page via a forward: ignored test
   `real_openvscode_server_downloads_and_serves`). **Gitpod publishes no macOS build**, so on a
   Mac host the editor is `code serve-web` (VS Code installed) or a configured `editor.openvscode`.
-- `EditorOpen{path, line, col}`: first through the editor's own CLI channel — the extension
+- `EditorOpen{path, line, col}`: first through the editor's own CLI channel: the extension
   host of a connected window exports `VSCODE_IPC_HOOK_CLI`; the daemon reads it from the
   server's process tree (Linux `/proc/<pid>/environ`, macOS `KERN_PROCARGS2`) and runs the
   server's bundled `bin/remote-cli/*  --goto path:line:col` (`in_window: true`). Otherwise it
   returns a `url_path` with `payload=[["openFile","vscode-remote://localhost:<port>/path:L:C"],
   ["gotoLineMode","true"]]` for the app to load (the authority assumes the in-app proxy keeps
-  in tests); this is S-ED1 territory.
+  the real origin `localhost:<host port>`). **Not verified in a browser** (no window
+  in tests).
 
-no editor picker; VS Code is the editor and must just work).
+**VSCodium: automatic fallback, not a user choice** (the app shows no editor picker; VS Code is
+the editor and must just work).
 
 - **Fallback rule** (`DaemonClient::open_editor`, apple-ffi): with the VS Code licence accepted,
   the host's default editor (VS Code) is tried first, installing the `code` CLI from Microsoft
@@ -759,9 +784,9 @@ no editor picker; VS Code is the editor and must just work).
   (`extensionsGallery.serviceUrl = https://open-vsx.org/vscode/gallery`); server data in
   `~/.vscodium-server`. One server per folder, own process group, killed on `EditorStop` and
   daemon shutdown; `EditorOpen`'s remote-CLI path works the same (`bin/remote-cli/codium`).
-- **Verified live (2026-10-19)**, ignored test `real_vscodium_downloads_and_serves`
+- **Verified live**, ignored test `real_vscodium_downloads_and_serves`
   (download + verify + unpack + start + token redirect + workbench through an iroh forward):
-  macOS 26 arm64 (M5 Max) 14.6 s; Linux arm64 OrbStack VM (Ubuntu 24.04) 11.9 s. Both ~95–100 MB at ~9 MB/s from GitHub. The
+  macOS 26 arm64 (M5 Max) 14.6 s; Linux arm64 OrbStack VM (Ubuntu 24.04) 11.9 s. Both ~95-100 MB at ~9 MB/s from GitHub. The
   workbench HTML has no `<title>` (the workbench sets it from script);
   `apple-mobile-web-app-title` is `Code` and the served web manifest's `name` is `VSCodium`.
   Without the token `/` is refused. Fake-binary e2e: `vscodium_launches_without_a_licence_and_as_the_default`
@@ -773,26 +798,25 @@ no editor picker; VS Code is the editor and must just work).
 | Licence | Microsoft VS Code + Server licence, accepted once in the app | MIT (<https://github.com/VSCodium/vscodium/blob/master/LICENSE>); no prompt |
 | Sign-in | none | none |
 | Extensions | Microsoft Marketplace | Open VSX only (Marketplace terms forbid non-Microsoft products) |
-| Not available | — | Pylance, C# Dev Kit, Remote-* (SSH, Containers, WSL), Live Share, GitHub Copilot (not on Open VSX; checked 2026-10-19, 404). Python, rust-analyzer, etc. are there |
+| Not available | - | Pylance, C# Dev Kit, Remote-* (SSH, Containers, WSL), Live Share, GitHub Copilot (not on Open VSX). Python, rust-analyzer, etc. are there |
 | Platforms | wherever Microsoft ships the CLI | Linux x64/arm64, macOS arm64/x64 (pinned) |
 | Who downloads | Microsoft's update service | VSCodium's GitHub releases, SHA-256 pinned |
 
-- Licences (ARCHITECTURE §9): Microsoft's VS Code Server licence
-  (<https://code.visualstudio.com/license/server>, read 2026-10-18) allows use "with Microsoft
+- Licences (ARCHITECTURE §7): Microsoft's VS Code Server licence
+  (<https://code.visualstudio.com/license/server>) allows use "with Microsoft
   Visual Studio Code" on the user's devices and internal network, and forbids hosting,
   sharing, publishing, redistributing, or "provide the software as a stand-alone offering or
-  combine it with any of your applications for others to use" (§5.4–5.5). So:
+  combine it with any of your applications for others to use" (§5.4-5.5). So:
   - We never ship, mirror or host it.
   - The `code` CLI comes from Microsoft's update service only, on the user's request after the
     VS Code licence is shown.
   - We never run it on our infrastructure.
   - We launch it only after the user accepted the Server licence in the app, and only for that
     user's own use.
-    consulted): the user runs Microsoft's server on their own machine for their own use, with
+  - `code serve-web` over our forward is the default: the user runs Microsoft's server on their own machine for their own use, with
     the terms accepted by the user in the app. The tunnel (Microsoft's own client and relay)
     stays available as the opt-in fallback, and on the Mac desktop VS Code with Remote-SSH is
     Microsoft's own client end to end.
-  - The Remote FAQ's "cannot build a public or commercial service on top of … VS Code Server"
   - openvscode-server (MIT, Open VSX extensions only; the Microsoft Marketplace terms forbid
     non-Microsoft products from using it) is an explicit fallback only.
 
@@ -829,7 +853,7 @@ no editor picker; VS Code is the editor and must just work).
 ### 5.5 Worktrees and `PORT`
 
 `WorktreeCreate{repo, branch?, base?, path?}` runs `git worktree add -b` into
-`<root>/<repo>/<branch with / → ->`; a missing branch name becomes `gudo/<word>-<hex>`
+`<root>/<repo>/<branch with / → ->`; a missing branch name becomes `gudo/<word>-<hex>`. `WorktreeList` parses `worktree list --porcelain -z`. `WorktreeRemove` refuses
 the main worktree and, unless `force`, any worktree with changes or untracked files (`Conflict`
 with the count), and can `branch -d` the branch. Each worktree gets a stable `PORT` from
 `port_base` up (skipping ports held by other worktrees or bound now), kept in
@@ -872,8 +896,7 @@ running), Linux 705 / 393 MB/s.
 ### 5.8 Attention feed
 
 One feed per daemon for local notifications and the inbox: `AgentBlocked{agent, request_id}`,
-`AgentDone`, `AgentFailed` (from the arbiter's own notification decisions, which the daemon
-previously dropped) and `CommandFinished(mark)` (the long command finished unseen; also still
+`AgentDone`, `AgentFailed` (from the arbiter's own notification decisions) and `CommandFinished(mark)` (the long command finished unseen; also still
 sent as `CommandFinishedUnseen`). Items carry pane, session, title, body (last assistant
 message, blocker summary), `seen` and `while_viewed` (a client showed the pane: no
 notification needed; such items start seen). `seen` is shared by all devices: set by
@@ -903,6 +926,7 @@ attention (blocked → seen when work resumes, done with the last message, unsee
 on focus, mark all). Unit tests cover the porcelain/worktree/hunk parsers, path policy,
 atomic writes, URL detection, the review formatter, trash dates and the attention store.
 
+### 5.10 Push notifications and relays
 
 Attention items that stay unseen for `push.delay` (3 s) are sealed to each registered device
 that wants that kind and is not looking at this host, and posted to the push relay with the
@@ -913,6 +937,7 @@ daemon's signature; approvals carry a daemon-signed action token that the app re
 URLs with token and private CA, local-only) and how pairing tickets carry them:
 `docs/RELAYS.md`. Tests: `cargo test -p daemon --test it notify relays`.
 
+### 5.11 Agent plan usage
 
 `crates/daemon/src/usage/` reports Claude Code's and Codex's plan windows (5h, weekly, per-model)
 to owner connections that watch: `WorkspaceRequest::UsageWatch` answers with the
@@ -968,6 +993,7 @@ to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests op
   merged or closed, soon after a commit or push; errors back off 1 → 32 min; a repository with no
   GitHub remote is not asked again; nothing while `gh auth status` says missing or signed out
   (re-checked every 5 min). `gh` is found on `PATH`, then Homebrew, Linuxbrew and `~/.local/bin`
+  (`worktrees.gh` in `config.toml` overrides). Checks map like this: any non-completed
   run is pending; `SUCCESS` succeeds; `NEUTRAL`, `SKIPPED`, `CANCELLED` are their own; every other
   conclusion fails; status contexts `ERROR`/`FAILURE` fail. Failures sort first.
 - **Requests** (`WorkspaceRequest`; Drive on the host, like the git and worktree requests):
@@ -1020,7 +1046,8 @@ to clients that announce `Caps::REPO_STATUS` (the app does; the CLI and tests op
 
 ### 5.13 Workflows (`proto::workflow`)
 
-format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template functions in
+Named, parameterised commands kept as YAML files on the host, in the Warp workflow
+file format. Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template functions in
 `crates/proto/src/workflow.rs`.
 
 - **Where**: `~/.config/gudo/workflows/*.yaml|*.yml` (`$XDG_CONFIG_HOME/gudo/workflows` when
@@ -1028,6 +1055,7 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   directory is in: the nearest ancestor with `.git`; a linked worktree without its own directory
   falls back to the main worktree's, found through `.git` → `gitdir` → `commondir`). Hidden
   files are skipped; symlinked files are followed.
+- **Format**: the public Warp workflow schema, so existing files drop in: `name`, `command` (with
   `{{arg}}`), `description`, `tags`, `arguments: [{name, description, default_value}]`,
   `shells`, `author`, `source_url` (`author_url` and any other field are ignored). Ours on top:
   `shell` (one shell) and `raw: true` on an argument. A file holds one workflow or a list
@@ -1061,6 +1089,7 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
   arguments go in as typed. The app types the result into the pane as a bracketed paste and
   never presses Return unless asked (⌘↩).
 - **Tests**: `cargo test -p proto` (placeholders, quoting in each context, defaults, raw);
+  `cargo test -p daemon --lib workflows` (workflow files, lists, numbers, bad files and a
   billion-laughs file refused with short messages, YAML round trip of drafts with quotes,
   control characters and multi-line commands, slugs, repository and linked-worktree discovery,
   directory limits, XDG); `cargo test -p daemon --test it workflows` (a pane in a repository vs
@@ -1099,7 +1128,7 @@ format). Code: `crates/daemon/src/ws/workflows.rs`; wire types and the template 
 Several Claude Code and Codex sign-ins on one host, such as Personal and Work. This follows the vendors' documented mechanism: one configuration directory per account, `CLAUDE_CONFIG_DIR` for Claude (documented for exactly this, concurrent use included) and `CODEX_HOME` for Codex. Codex's keyring item is keyed by a hash of `CODEX_HOME`. Codex profiles are not accounts. Code: `crates/daemon/src/accounts.rs`.
 
 - **System account.** Each agent has an implicit account with id `system`: the user's own `~/.claude` / `~/.codex`, or whatever the panes' environment already says. Agents under it are launched with **no** directory variable, so a host without accounts behaves byte for byte as before. Whether an explicit `CLAUDE_CONFIG_DIR=~/.claude` changes Claude's Keychain item could not be confirmed offline. The 2.1.316 binary is compiled bytecode that holds `Claude Code`, `-credentials`, `sha256` and `.claude` together. Since the variable is never set for the system account, either answer is safe.
-- **Storage.** Each account is `<state>/accounts/<claude|codex>/<id>/`. The id is 8 hex digits the daemon mints; ids read from disk that are not of that form are dropped, so they never become a path. The directory and its parents are mode 0700. A Codex account's `config.toml` starts with `mcp_oauth_credentials_store = "file"`, because Codex keys MCP OAuth keyring items by server alone, so they would otherwise be shared by every home. `<state>/accounts.json` holds names, colours (palette 0–7, as projects), host and per-project defaults, and which account created each session (the last 2048). It never holds a credential, and credential files are never copied between accounts.
+- **Storage.** Each account is `<state>/accounts/<claude|codex>/<id>/`. The id is 8 hex digits the daemon mints; ids read from disk that are not of that form are dropped, so they never become a path. The directory and its parents are mode 0700. A Codex account's `config.toml` starts with `mcp_oauth_credentials_store = "file"`, because Codex keys MCP OAuth keyring items by server alone, so they would otherwise be shared by every home. `<state>/accounts.json` holds names, colours (palette 0-7, as projects), host and per-project defaults, and which account created each session (the last 2048). It never holds a credential, and credential files are never copied between accounts.
 - **Requests** (owner device only, `DaemonFeatures::ACCOUNTS`). Each answers `Accounts(AccountsReport)` or `Account(AgentAccount)`.
   - `Accounts`: the list. Any account not asked about yet is checked in the background.
   - `AccountAdd {agent, label, color}`: makes the directory; the account starts signed out.
@@ -1143,7 +1172,7 @@ Several Claude Code and Codex sign-ins on one host, such as Personal and Work. T
   - a driver's plain agent launch uses the host default.
 - **Isolation.** All accounts are readable by the host user, as the vendors' own directories are. The isolation guards against mix-ups and environment leakage, not against a malicious process running as that user.
 - **Wire.**
-  - Append-only: `Caps::ACCOUNTS = 23` and `DaemonFeatures::ACCOUNTS = 18` (bits 21–22 / 16–17 are floating panes' and agent driving's).
+  - Append-only: `Caps::ACCOUNTS = 23` and `DaemonFeatures::ACCOUNTS = 18` (bits 21-22 / 16-17 are floating panes' and agent driving's).
   - New last variants: `PaneLaunch::AccountAgent`, `AccountSignIn`; `WorkspaceRequest::Accounts` … `AccountSetDefault`; `WorkspaceResponse::Accounts`, `Account`; `ServerCtl::Accounts`, `AccountUsage`.
   - Goldens: `crates/proto/tests/golden_accounts.rs`.
 - **Tests:**
@@ -1160,10 +1189,11 @@ Several Claude Code and Codex sign-ins on one host, such as Personal and Work. T
     - a full-role guest is refused.
   - `mp::policy` unit test. Nothing signs in for real.
 
+## 6. Multiplayer (Rust side)
 
-Amp's multiplayer (a thread toggle that lets every workspace member prompt the agent) rests on
-hosted threads and one workspace-wide role. Ours runs on the daemon over iroh, end to end
+Multiplayer runs on the daemon over iroh, end to end
 encrypted, with no account: an invite is a link or QR code, roles are per person, a pane has
+one driver at a time, approvals are signed, and everything is audited (ARCHITECTURE D17/D18).
 Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
 `crates/daemon/src/mp/` (grant table, policy, leases, presence, audit),
 `crates/client-core/src/mp.rs`, `crates/cli/src/mp.rs`. Tests: `crates/grants/tests/props.rs`,
@@ -1225,7 +1255,7 @@ Code: `crates/grants` (signing and verification), `proto::mp` (wire types),
   revoke itself. Re-dials are refused (`RefuseReason::Revoked`) until an owner device pairs
   again with a fresh ticket, or a guest joins with an invite whose root is newer than the
   revocation.
-- Not undone by revocation (as Amp's docs warn): processes a guest started and files it
+- Not undone by revocation: processes a guest started and files it
   changed.
 
 ### 6.3 Enforcement table
@@ -1247,7 +1277,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Decide` | **approver**; valid Ed25519 signature by the deciding device | the request's pane in scope |
 | `LeaseRequest{Ask}`, `TakeControl` | driver | pane in scope |
 | `LeaseRequest{Force}`, `TakeControl{force}` | **owner** | pane in scope |
-| `AnswerControl`, `ReleaseControl` | the lease holder | — |
+| `AnswerControl`, `ReleaseControl` | the lease holder | - |
 | `GiveControl` | the holder, or owner; the recipient must be a connected driver | pane in scope |
 | `Op`: `Focus`, `Resize` (divider), `ToggleZoom` | driver | pane in scope |
 | `Op`: `FocusDirection`, `SelectTab`, `MoveTab`, `RenameTab` | driver | tab in scope |
@@ -1266,7 +1296,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Workspace`: `WorktreeLaunch` | driver | the pane's session |
 | `Workspace`: `EditorLaunch`, `EditorStop`, `VsCodeCliInstall`, `VsCodeTunnelStart`, `VsCodeTunnelStop` | **owner** | daemon |
 | Streams: `PortForward`, `Forward`, `Upload`, `Download` | driver | host |
-| `RegisterGrant` | owner, or the chain's leaf issuer | — |
+| `RegisterGrant` | owner, or the chain's leaf issuer | - |
 | `ListGrants`, `InviteLink`, `ListDevices`, `Revoke`, `Audit` | **owner** | daemon |
 | `Artifact`: `List`, `Get`, `Export`; blob download | any role | artifact visible (below) |
 | `Artifact`: `Create`, `Apply`, `Delete`, `SetAnchor`, `SetPreview`; `InkLive`; blob upload | **prompter or driver** | artifact visible; anchor pane / session in scope |
@@ -1319,6 +1349,7 @@ rename and focus change. Clients send `ClientCtl::Presence` (typing, cursor, vie
 knows and fans `ServerCtl::Presence` out to the others, hiding panes outside each recipient's
 scope. `Client::set_typing(pane, bool)` is the composer's typing indicator.
 
+**Live presence** (`DaemonFeatures::PRESENCE`, `Caps::PRESENCE`, `proto::peer`).
 Clients that announce it send `ClientCtl::Peer(PeerUpdate)`: device class, `State` (away in
 the background), `Viewport` (rows from the bottom of the focused pane), `Draft` (the line
 editor's or composer's text and caret, `None` once sent or discarded), `Follow(principal)` and
@@ -1382,7 +1413,7 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 
 ### 6.8 Tests
 
-- `cargo test -p grants`: property tests (64 cases each) — narrowing chains of up to 6 links
+- `cargo test -p grants`: property tests (64 cases each): narrowing chains of up to 6 links
   verify with roles never above the root's; any flipped signature byte or edited field is
   refused; wider roles, later or missing expiry, more uses or a wider scope are refused both by
   `attenuate` and, hand-signed, by `verify`; expiry, revocation of any link or issuer, a wrong
@@ -1406,6 +1437,7 @@ parent). Separate identities on one machine: separate `XDG_CONFIG_HOME`.
 - Unit tests: prompt sanitizer, audit chain (reopen, edit detection).
 - `proto` goldens for every new message and variant; invite text round trip.
 
+### 6.9 Knock to join, approval policies, scrollback since joining
 
 Clients and daemons find each other through `Caps::KNOCK`, `Caps::APPROVAL_POLICY` and
 `DaemonFeatures::MP2`. Code: `crates/daemon/src/mp/approvals.rs`, `mp/mod.rs` (knocks, terms),
@@ -1430,11 +1462,13 @@ knocking again replaces its knock. Owner devices with the cap get `ServerCtl::Kn
 Gone)` (and every pending knock right after `Joined`). `MpRequest::AnswerKnock{knock_id,
 admit}` (owner, daemon scope): `Admit{roles, history, expires}` mints a new root grant signed
 by the daemon key, on the invite's scope, bound to the knocking device, single use, expiring
+after `expires` or 7 days, registered with the chosen history; the knocker gets
 `KnockAnswer::Admitted(chain)` and reconnects with it (`knock::knock` returns the invite to
 join with). `None` sends `Denied`. Revoking or expiring the knock invite turns its waiting
 knockers away. Audited: `Knock`, `KnockAnswered` (admitted as …, turned away, stopped
 waiting). `gudo knocks [--watch]`, `gudo admit N --role driver`, `gudo deny N`, `gudo join` knocks.
 
+**Approval policies**, per session, owner sets them
 (`MpRequest::SetApprovalPolicy`, `gudo policy --mode two-person --max-risk edits`), everyone in
 the session hears `ServerCtl::ApprovalPolicy` on attach and on change. Enforced where
 decisions are signed, before the agent is answered: `Decide`, push actions and on-screen
@@ -1454,6 +1488,7 @@ mode, held approvals, claim) goes to clients in scope when a request opens and o
 claim. Refusals name the rule and are audited as `Denied`; claims and policy changes as
 `Claim` and `Policy`.
 
+**Scrollback since joining**. With `History::SinceJoin` a guest sees, of every pane
 that existed when its device first redeemed the grant, only what was written afterwards: the
 daemon keeps a *view* per guest principal and pane, a copy of the terminal made from the
 snapshot's READY section with all history erased (`Terminal::forget_history`, both screens),
@@ -1485,7 +1520,7 @@ the pane; pushes go to connections whose scope covers the pane.
   one tool and, for shell tools, a command prefix: the program, plus the subcommand for programs
   that have one (`cargo test`, `git status`). A shell rule never matches a command that chains,
   pipes, redirects, backgrounds, substitutes or expands (`; & | > < \` $ ( ) { } \\`, newline),
-  never covers `sudo`/`env`/shells, and never has an empty prefix. Limits: expiry ≤ 8 h, 1–50
+  never covers `sudo`/`env`/shells, and never has an empty prefix. Limits: expiry ≤ 8 h, 1-50
   agent turns (the turn it was added in counts). It ends when it expires, when its turns are used
   (counted on `TurnStarted`), when the agent session ends, starts again or changes id (including
   `/clear` and compaction: the user approves again), when the pane closes, when it is revoked,
@@ -1500,7 +1535,9 @@ the pane; pushes go to connections whose scope covers the pane.
   rule's signature, then revoked; turn limit, session end, expiry, too-wide and too-long rules;
   a viewer can neither add nor revoke); goldens in `proto/tests/golden_approve.rs`.
 
+## 7. Drawings and images
 
+Code:
 `proto::artifact` (wire), `crates/drawing` (model shared with client-core and `gudo`: packed
 ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/src/art/`
 (store, send, blob streams), `crates/daemon/src/anchor.rs` (row anchors),
@@ -1549,6 +1586,7 @@ Closing the pane keeps the drawing; deleting the drawing closes its canvas panes
 on its VT (accounting for rows scrolled since `at_seq`), answers `RowAnchor{screen, at_seq,
 from_bottom, command_id, state}` and clients track the row in their own VT. Anchors detach
 (`RowGone` after eviction or `clear`, `AltScreenExited`, `PaneClosed`, `DaemonRestart`) and a
+1 s tick pushes the change.
 
 ### 7.4 Send to agent
 
@@ -1557,6 +1595,7 @@ from_bottom, command_id, state}` and clients track the row in their own VT. Anch
 client's render (inline ≤ 1 MiB, else an uploaded blob), or for `Artifact` the image, the
 preview of that version, or the daemon's own rasterisation. It is written to
 `<state>/artifacts/<session>/send/<artifact>@<version>.png` (atomically) and the path is pasted
+bracketed when the program enabled it, escaped (backslash before every
 character outside `[A-Za-z0-9_./@:-]`, e.g. `Application\ Support`), never followed by Enter.
 The answer (`Sent{path, pasted, bracketed}`) comes 120 ms after the paste so the client's next
 keystroke cannot overtake Claude's asynchronous attach. A bare image (no artifact) is kept as
@@ -1564,7 +1603,7 @@ an image artifact. Each send is audited (`Prompt` kind, path only).
 
 ### 7.5 Export
 
-`Ascii`: `drawing::to_ascii` — box glyphs (`┌─┐`, `├`, `┼`) with junctions where lines
+`Ascii`: `drawing::to_ascii`: box glyphs (`┌─┐`, `├`, `┼`) with junctions where lines
 meet, arrows as orthogonal elbows ending in `▶◀▲▼`, ellipses `╭╮╰╯`, text in place, ink as
 dots; Excalidraw scenes map 10 × 20 scene px to a character. `Png`: passthrough of the image blob or of the preview at the asked version; with no preview
 the daemon rasterises (`drawing::rasterize`: anti-aliased pressure strokes, shapes; text and
@@ -1598,7 +1637,7 @@ creates one; concurrent puts reconcile with the version / nonce rule on both cli
 daemon, stale offers come back as winners, deletions, resync after a reconnect, ASCII/SVG/PNG
 export, a viewer reads but cannot put or import); a canvas pane with peers
 (`canvas_pane_with_peers_syncs_inks_resyncs_and_closes`: owner, second device, driver guest
-and viewer on one `Split` canvas — `Canvases` on attach and reconnect, realistic rectangle /
+and viewer on one `Split` canvas: `Canvases` on attach and reconnect, realistic rectangle /
 freedraw / text elements pushed live with put→push latency printed, edits of each other's
 elements, a concurrent tie settled by `versionNonce` on every client and the daemon, live ink
 stamped and not echoed, tombstones, resync after suspend, viewer refused, closing a `NewTab`
@@ -1606,7 +1645,7 @@ canvas keeps the scene, deleting the scene closes its pane everywhere); inline p
 (placed at the cursor row, followed through 40 lines of output, sent to a client attaching later, replaced after
 an edit, a dropped `.excalidraw` file and photo imported and placed,
 detached by `clear`, removed, kept detached after a restart with the scene intact); two
-clients — live ink fan-out
+clients: live ink fan-out
 (200 chunks, latency printed, no echo to the sender), batches from both converge, the second
 client suspended while the first draws resyncs to the same scene on reconnect, an anchor
 detaches after `clear`; a viewer lists, reads and exports but cannot create, apply, delete,
@@ -1623,8 +1662,8 @@ simplification, scene convergence, SVG golden, rasteriser, PNG), anchors
 The non-Pencil editor (finger, mouse, trackpad) is Excalidraw (MIT), bundled offline in a
 WKWebView; the daemon is its sync and persistence backend. Elements stay Excalidraw's JSON
 (`ExElement{id, version, version_nonce, deleted, json}`; the daemon checks the fields
-against the JSON). `ExcalidrawPut` reconciles each element with Excalidraw's own rule —
-higher `version` wins, a tie goes to the lower `versionNonce`, deletions are tombstones — and
+against the JSON). `ExcalidrawPut` reconciles each element with Excalidraw's own rule:
+higher `version` wins, a tie goes to the lower `versionNonce`, deletions are tombstones. It
 answers `ExcalidrawApplied{version, rejected}` (the stored winners for offers that lost); the
 winners go to everyone else as `ArtifactEvent::Excalidraw`. `ExcalidrawGet{since}` returns the
 elements changed after a revision (every element at 0), app state and files. Images are blobs
@@ -1727,7 +1766,7 @@ Roles: `Place`, `Unplace`, `Import` need the draw role on the pane; `Placements`
    shapes, connected arrows and text from the embedded editor in transparent mode, and Pencil
    strokes converted from `PKStroke` to Excalidraw `freedraw` elements (points + pressures).
    Overlay scene units: **10 scene px = one column, 20 = one row**, origin at the anchor
-   row's left edge — the app maps to points with its own cell size, so ink stays on the text
+   row's left edge: the app maps to points with its own cell size, so ink stays on the text
    across fonts and devices, and the ASCII export lines up with cells. While the pen moves,
    stream `ink_live` every ~16 ms (peers draw it in the author's presence colour); commit
    with `excalidraw_put`.
@@ -1794,7 +1833,7 @@ method −32601, unknown tool −32602, unparsable line −32700. Tools (both re
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `list_drawings` | — | text: one line per artifact, newest first; then the same as JSON |
+| `list_drawings` | - | text: one line per artifact, newest first; then the same as JSON |
 | `get_drawing` | `id?` (default: newest non-image), `format?` `png`\|`svg`\|`ascii`\|`excalidraw` (default `png`), `version?` | caption + PNG as `image` content, SVG/ASCII/the `.excalidraw` scene as `text` |
 
 Failures (daemon down, bad id, too large) are `isError: true` results, never JSON-RPC errors.
@@ -1871,8 +1910,11 @@ same placement id; the height follows the image), and the restore is itself reco
 drop a connection that sends them; client-core refuses locally). CLI: `gudo draw history <id>`,
 `gudo draw restore <id> <version>`, `gudo draw export <id> --format excalidraw`. App: Version
 History in a placement's menu (each version with its render, the shown one checked; picking
+another restores it). Test: `cargo test -p daemon --test it history`.
 
-D9). Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
+## 8. Input assistance for the mobile line editor
+
+The daemon side of the mobile input design. Wire types: `proto::assist` (append-only; goldens in `crates/proto/tests/golden_assist.rs`).
 Requests are `ClientCtl::Assist{req_id, AssistRequest}` → `ServerCtl::AssistResult{req_id,
 Result<AssistResponse, AssistError>}`; pushes are `ServerCtl::Assist(AssistPush)`. A daemon
 without them never sends them, so an older daemon leaves the app in direct-typing mode.
@@ -1908,7 +1950,7 @@ script), `Claude`, `Codex` (also as `node …/claude`), `Other`.
   under the pane's VT lock (`Terminal::row`, new in `ghostty-vt`: text, width, style and OSC 133
   role per cell), the parsing after it.
 - **Autosuggestions** (zsh-autosuggestions `POSTDISPLAY`, fish): text from the cursor to the end
-  drawn faint, in palette color 8, in the grey ramp 232–250, or in a dim grey RGB, when the text
+  drawn faint, in palette color 8, in the grey ramp 232-250, or in a dim grey RGB, when the text
   before the cursor is not, is cut and reported as `suggestion`. Another single non-default
   style after the cursor that the typed text does not use is kept but flagged
   `PossibleGhostText`. Syntax highlighting (zsh-syntax-highlighting colours words before and
@@ -1981,6 +2023,7 @@ quoted for an open `'`/`"` or with backslashes).
 
 Measured (`completion_sources_and_latency_with_10k_history`, a 10 000-entry history, a git
 repo, 300 requests over the client, loopback; Linux: the OrbStack Ubuntu 24.04 arm64 VM).
+The 150 ms budget is met with two orders of magnitude to spare once the caches
 are warm; the cold costs are the first ref and `$PATH` lookups after their 3 s / 30 s expiry.
 
 | | macOS 26, M5 Max (release) | Linux VM (release) |
@@ -2215,7 +2258,7 @@ the tools.
 
 Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v, token, pane, term:
 {tool, args}}` line per call on the hook socket, answered by `TermReply::Ok(value)` or
-`TermReply::Error({code, message, retryable, hint})`. Design and the competitors it is measured
+`TermReply::Error({code, message, retryable, hint})`. 
 
 - **Identity.** `GUDO_TOKEN` in a pane is that pane's own token (an HMAC of its id under
   `hook.token`), so a pane's programs cannot act as another pane. `hook.token` itself, which only
@@ -2354,6 +2397,7 @@ New types may appear; ignore unknown ones. Two sources, one schema:
   the daemon's and skips other sessions' events.
 
 **TypeScript client** (`sdk/typescript/gudo.ts`, no dependencies, Node ≥ 22.18, Bun, Deno), for
+scripts running in a pane: `Terminal.fromEnv()` reads
 `GUDO_ENDPOINT_FILE`/`GUDO_SOCK`, `GUDO_TOKEN` and `GUDO_PANE_ID` and speaks the hook socket's line
 protocol, so a script has an agent's rights exactly (its own panes; the user's after the owner
 says yes). `term.run(cmd)`, `term.panes.list/split/read/wait/send/close`,
@@ -2389,7 +2433,7 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
 - **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last
   directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
   state are lost. Handing PTY masters and VT snapshots to the new process (fd passing over a
-  Unix socket, then `exec`) is the design for a seamless upgrade; not built.
+  Unix socket, then `exec`) is the design for an upgrade that keeps them; not built.
 - History paging serves the last two snapshots sent per pane; a client that resumed from the
   ring holds an older snapshot and gets `HistoryGone` until its next snapshot. Those snapshots
   are kept whole and uncompressed (each up to about the scrollback size); compressing the
@@ -2403,21 +2447,23 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   macOS's `/bin/bash` 3.2 gets no automatic integration (as in Ghostty).
 - A Codex started by hand in a shell pane is detected for status but its session id is not
   captured (only launched agents are restored).
-- Multiplayer (§6), not built yet: knock-to-join (owner approves a redemption), approval
-  policies (`owner_only`, `two_person`, `claim`), `approve_max_risk`, `history: since_join`
-  snapshot trimming, short PAKE codes, guest push registration, per-pane redaction, the
+- Links: git SHAs, IPs and ports are not detected yet.
+- Multiplayer (§6), not built yet: short PAKE codes, guest push registration, per-pane redaction, the
   structured lane for prompters (today prompts are sanitized keystrokes into the TUI), the
   App Clip; the app UI (share sheet, avatars, take-control button, revoke sheet) is the Swift
   side's. Presence `Away` grace periods are not tracked (a leaving device just disappears).
   Grants are checked against the live layout, so a pane-scoped grant dies with its pane.
   Audit records stay in memory up to 10 000 for queries; older ones only on disk.
 - Snapshots are encoded in full then truncated at READY (libghostty has no READY-only encode).
+- On Linux arm64, READY sections are ~4× larger than on macOS for the same screen (the
   `size` test fails its "typical < 50 KB" assertion there: 148 KB for colored logs); zstd keeps
   the wire size small, but the cause (page layout) needs a look.
+- Developer workflow (§5): turn snapshots, attention items
   and editor servers live in memory and end with the daemon; worktree setup scripts are not
   run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
   untested against a real browser; no transfer resume by offset for uploads (downloads take an
   offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
+- Drawings (§7): no MCP server for agents to read/draw artifacts yet (`gudo mcp`); no
   `.excalidraw` export (import works); kitty images cannot be dragged out of a pane (they
   are not placements, §7.10);
   Excalidraw scenes keep no history (only the current revision exports); live ink is relayed without per-connection
@@ -2428,6 +2474,7 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   are caught as detected prompts, curses pinentry is not); raw-mode password readers are not
   detected; a prompt in a pane of another session than the one attached waits until the app
   attaches there (or times out); the app does not yet badge a tab whose pane has an open prompt.
+- Workflows (§5.13): enum arguments (`arg_type: Enum` with values from a command) are
   ignored (they are free text); no per-shell quoting (fish reads the POSIX quoting the same way
   except inside `"…"`, where it does not treat `` ` `` specially); a watched directory that is
   deleted and recreated is re-armed only on the next event or list.
