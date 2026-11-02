@@ -44,7 +44,7 @@ pub fn var_os(suffix: &str) -> Option<std::ffi::OsString> {
 
 /// [`var_os`] as UTF-8; `None` when unset or not Unicode.
 pub fn var(suffix: &str) -> Option<String> {
-    var_os(suffix).and_then(|v| v.into_string().ok())
+    var_os(suffix).and_then(|value| value.into_string().ok())
 }
 
 /// URL scheme for links into the app, such as pairing tickets (`<scheme>://pair/…`).
@@ -67,7 +67,7 @@ pub const SERVICE_LABEL: &str = "dev.gudo.hostd";
 /// app's relay settings name others. See `docs/RELAYS.md`.
 pub const RELAY_URL: &str = "https://relay.gudo.dev";
 
-/// The push relay (a Cloudflare Worker, D16) daemons send sealed notifications to, unless
+/// The push relay (a Cloudflare Worker) daemons send sealed notifications to, unless
 /// `push.relay` in the daemon's `config.toml` names another. See `docs/PUSH.md`.
 pub const PUSH_RELAY_URL: &str = "https://push.gudo.dev";
 
