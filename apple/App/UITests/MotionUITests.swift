@@ -152,11 +152,11 @@ final class MotionUITests: XCTestCase {
         XCTAssertEqual(counts[1], start[1].map { $0 + 1 }, "keyboard up: \(counts)")
         XCTAssertEqual(counts[3], start[3].map { $0 + 1 }, "keyboard up: \(counts)")
 
-        let up = counts
+        let keyboardUpCounts = counts
         for pane in ["pane-3", "pane-1", "pane-3"] {
             element(app, pane).tap()
             counts = settledResizes(app)
-            XCTAssertEqual(counts, up, "focus to \(pane), keyboard still up: \(counts)")
+            XCTAssertEqual(counts, keyboardUpCounts, "focus to \(pane), keyboard still up: \(counts)")
         }
 
         element(app, "keybar-hide-keyboard").tap()

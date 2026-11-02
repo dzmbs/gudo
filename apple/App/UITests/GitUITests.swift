@@ -114,7 +114,7 @@ final class GitUITests: XCTestCase {
         XCTAssertEqual(nameField.value as? String, name, "the task is named \(name)")
         shot("new-task")
         element("launch-start").tap()
-        // The repository's setup command runs only once the owner trusts it (asked once per
+        // The repository's setup command runs only once the user trusts it (asked once per
         // daemon and command).
         let trust = app.alerts["Run Setup Commands for proj?"]
         if trust.waitForExistence(timeout: 10) {
@@ -134,8 +134,8 @@ final class GitUITests: XCTestCase {
         XCTAssertTrue(element("pr-button").waitForExistence(timeout: 30), "the focused pane's worktree in the toolbar")
         newTask("quiet-otter")
 
-        let pr = element("pr-button")
-        XCTAssertTrue(pr.waitForExistence(timeout: 30), "the toolbar shows the new worktree's pull request")
+        let prButton = element("pr-button")
+        XCTAssertTrue(prButton.waitForExistence(timeout: 30), "the toolbar shows the new worktree's pull request")
         XCTAssertTrue(text(containing: "#42").waitForExistence(timeout: 30), "#42 from gh")
         let worktree = fixtures + "/work/.gudo/worktrees/proj/quiet-otter"
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktree), "the worktree exists at \(worktree)")
@@ -145,7 +145,7 @@ final class GitUITests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: setup), "the repository's setup ran in the new tab")
         shot("toolbar-pr")
 
-        pr.tap()
+        prButton.tap()
         XCTAssertTrue(element("pr-popover").waitForExistence(timeout: 5), "the checks popover opens")
         XCTAssertTrue(text(containing: "Fix the login redirect loop").exists)
         XCTAssertTrue(text(containing: "integration tests").exists, "one row per check")
@@ -170,15 +170,15 @@ final class GitUITests: XCTestCase {
         try XCTSkipIf(isPhone, "the sidebar is the iPad and Mac layout")
         try launch()
         XCTAssertTrue(element("repo-header-proj").waitForExistence(timeout: 30), "the repository's header")
-        let main = element("worktree-row-main")
-        XCTAssertTrue(main.waitForExistence(timeout: 10), "the main worktree's row (the pane is in it)")
-        let fix = element("worktree-row-fix-login")
-        XCTAssertTrue(fix.waitForExistence(timeout: 10), "the other worktree, without a tab")
-        XCTAssertTrue(fix.label.contains("+2"), "its diff count: \(fix.label)")
-        XCTAssertTrue(text(containing: "pull request 41").waitForExistence(timeout: 30), "its pull request: \(fix.label)")
+        let mainRow = element("worktree-row-main")
+        XCTAssertTrue(mainRow.waitForExistence(timeout: 10), "the main worktree's row (the pane is in it)")
+        let fixLoginRow = element("worktree-row-fix-login")
+        XCTAssertTrue(fixLoginRow.waitForExistence(timeout: 10), "the other worktree, without a tab")
+        XCTAssertTrue(fixLoginRow.label.contains("+2"), "its diff count: \(fixLoginRow.label)")
+        XCTAssertTrue(text(containing: "pull request 41").waitForExistence(timeout: 30), "its pull request: \(fixLoginRow.label)")
         shot("sidebar")
         // A click on the idle worktree opens a tab there.
-        fix.tap()
+        fixLoginRow.tap()
         XCTAssertTrue(element("pr-button").waitForExistence(timeout: 20), "the new tab is in fix-login (#41 in the toolbar)")
         shot("sidebar-fix-login")
     }

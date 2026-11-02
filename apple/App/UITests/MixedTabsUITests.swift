@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// Mixed tabs and Two Columns (docs/APP-ARCHITECTURE.md §19).
+/// Mixed tabs and Two Columns.
 ///
 /// The mixed case needs two daemons (apple/scripts/mixed-ui-test.sh starts "alpha" and "beta",
 /// passes their tickets and kills alpha when asked): Split with Host puts a beta pane beside
@@ -40,8 +40,8 @@ final class MixedTabsUITests: XCTestCase {
     }
 
     private func signal(_ name: String) {
-        guard let dir = ProcessInfo.processInfo.environment["MARKER_DIR"] else { return }
-        FileManager.default.createFile(atPath: dir + "/" + name, contents: Data())
+        guard let directory = ProcessInfo.processInfo.environment["MARKER_DIR"] else { return }
+        FileManager.default.createFile(atPath: directory + "/" + name, contents: Data())
     }
 
     /// The panes on screen, left to right (then top to bottom).

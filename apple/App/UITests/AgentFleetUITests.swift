@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// The agent-fleet polish on the design fixtures (`-mock`): agent toasts, the Inbox's filters and
+/// Agent fleet features on the design fixtures (`-mock`): agent toasts, the Inbox's filters and
 /// keys, approve-all and its revoke, and Settings search. The same flows against a real daemon
 /// and the stand-in Claude are `AgentApprovalsUITests` (apple/scripts/w3-ui-test.sh).
 @MainActor
@@ -135,9 +135,9 @@ final class AgentFleetUITests: XCTestCase {
         let menu = element("inbox-approve-menu-a1")
         XCTAssertTrue(menu.waitForExistence(timeout: 10))
         menu.tap()
-        let all = app.buttons["Approve All Like This for This Task"].firstMatch
-        XCTAssertTrue(all.waitForExistence(timeout: 3))
-        all.tap()
+        let approveAll = app.buttons["Approve All Like This for This Task"].firstMatch
+        XCTAssertTrue(approveAll.waitForExistence(timeout: 3))
+        approveAll.tap()
         XCTAssertTrue(element("inbox-approve-a1").waitForNonExistence(timeout: 5), "this request is approved too")
         let rules = app.descendants(matching: .any).matching(identifier: "inbox-auto-approval")
         // The renderer agent's standing rule, and now this one.
@@ -174,6 +174,7 @@ final class AgentFleetUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'No Results'")).firstMatch.waitForExistence(timeout: 3))
     }
 
+    // MARK: Host agents and theme pair
 
     /// The host header's agent glyph peeks at the host's agents (tap on touch; hover with a
     /// pointer), and a row focuses its pane.

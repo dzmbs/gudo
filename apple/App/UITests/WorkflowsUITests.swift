@@ -17,8 +17,6 @@ final class WorkflowsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    // MARK: Helpers
-
     private func launch() throws {
         let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
         try XCTSkipIf(ticket.isEmpty, "no daemon ticket (run apple/scripts/workflows-ui-test.sh)")
@@ -105,8 +103,6 @@ final class WorkflowsUITests: XCTestCase {
         field.typeKey("a", modifierFlags: .command)
         field.typeText(text)
     }
-
-    // MARK: Tests
 
     /// The "/" scope lists the repository's workflows first, then the global ones, with
     /// descriptions and their source.

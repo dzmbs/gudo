@@ -45,8 +45,8 @@ final class EchoPredictionUITests: XCTestCase {
         // `cat` reads a cooked line with echo on: the daemon's hint allows prediction.
         app.typeText("cat\n")
         sleep(6)
-        // After a quiet spell one key is drawn ahead (the S6 rule: the program may have gone
-        // silent into hidden input); once its echo is back, typing runs ahead of the link.
+        // After a quiet spell only one key is drawn ahead (the program may have gone silent
+        // into hidden input); once its echo is back, typing runs ahead of the link.
         let confirmed = count("confirmed", prediction)
         app.typeText("p")
         waitFor("value CONTAINS 'ahead=p'", prediction, timeout: 2)

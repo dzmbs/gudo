@@ -47,8 +47,8 @@ final class MultiHostUITests: XCTestCase {
 
     /// Tells the driver script (which owns the daemons) to act: a marker file in its directory.
     private func signal(_ name: String) {
-        guard let dir = ProcessInfo.processInfo.environment["MARKER_DIR"] else { return }
-        FileManager.default.createFile(atPath: dir + "/" + name, contents: Data())
+        guard let directory = ProcessInfo.processInfo.environment["MARKER_DIR"] else { return }
+        FileManager.default.createFile(atPath: directory + "/" + name, contents: Data())
     }
 
     private func shot(_ app: XCUIApplication, _ name: String) {
@@ -74,6 +74,7 @@ final class MultiHostUITests: XCTestCase {
         waitFor(NSPredicate(format: "count > 0"), matching, timeout: timeout, "a screen shows \(text)")
     }
 
+    /// A place whose tabs all closed must still offer a terminal,
     /// in the sidebar (New Terminal under it) and in the terminal area (the welcome view with
     /// New Terminal ⌘T), never a dead end; on the Inbox, + is New Terminal first. A daemon host
     /// cannot be held at zero tabs (the daemon drops an empty session and the client attaches a
@@ -132,8 +133,7 @@ final class MultiHostUITests: XCTestCase {
         // The prompt line editor is off (a plist `<false/>`: the editor reads `as? Bool`, and a
         // plain "NO" argument is a string). With it on, its text field holds the keyboard at a
         // daemon prompt, inside the keyboard's accessory window, so ⌘ shortcuts never reach the
-        // scene's commands, and typed text goes to the field (main's DaemonUITests fails the
-        // same way). Reported to the key bar's owner.
+        // scene's commands, and typed text goes to the field.
         app.launchArguments += extra + [
             "-testTickets", "\(alpha),\(beta)", "-testTicketNames", names, "-testRelay", "disabled",
             "-hostsDirectory", NSTemporaryDirectory() + "multihost-\(alpha.suffix(10))\(beta.suffix(10))", "-connectionProbe", "YES",
@@ -147,7 +147,7 @@ final class MultiHostUITests: XCTestCase {
     /// other host switches at once.
     func testPhoneSwitcherGroupsTabsByHost() throws {
         try XCTSkipIf(!Self.isPhone, "iPhone only")
-        let app = try launch(names: "studio,hetzner", extra: ["-noAutoFocus", "YES"])
+        let app = try launch(names: "studio,cloud", extra: ["-noAutoFocus", "YES"])
         let switcher = element(app, "tab-switcher")
         XCTAssertTrue(switcher.waitForExistence(timeout: 40))
         XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 40), "studio's pane")
@@ -157,10 +157,10 @@ final class MultiHostUITests: XCTestCase {
         waitFor(NSPredicate(format: "count == 2"), buttons, timeout: 10, "a section per host")
         XCTAssertTrue(app.staticTexts["studio"].exists || app.otherElements["studio"].exists || app.buttons["New Terminal on studio"].exists)
         shot(app, "multihost-iphone-switcher")
-        app.buttons["New Terminal on hetzner"].tap()
-        waitFor(NSPredicate(format: "label CONTAINS 'hetzner'"), switcher, timeout: 20, "now on hetzner")
+        app.buttons["New Terminal on cloud"].tap()
+        waitFor(NSPredicate(format: "label CONTAINS 'cloud'"), switcher, timeout: 20, "now on cloud")
         XCTAssertEqual(stale(app).count, 0)
-        shot(app, "multihost-iphone-hetzner")
+        shot(app, "multihost-iphone-cloud")
     }
 
     func testTwoHostsLiveSwitchAndOneGoesDown() throws {

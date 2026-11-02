@@ -257,10 +257,10 @@ final class MultiplayerFlowsUITests: XCTestCase {
         // With people here the button lists them; Share Session is its last row.
         let share = element(app, "people-share-session")
         if share.waitForExistence(timeout: 3) { share.tap() }
-        let me = app.descendants(matching: .any)
+        let ownRow = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'person-' AND label CONTAINS '(you)'")).firstMatch
-        XCTAssertTrue(me.waitForExistence(timeout: 10))
-        XCTAssertTrue(me.label.contains("Driving"), me.label)
+        XCTAssertTrue(ownRow.waitForExistence(timeout: 10))
+        XCTAssertTrue(ownRow.label.contains("Driving"), ownRow.label)
         shot(app, "flows-7-driving")
     }
 }

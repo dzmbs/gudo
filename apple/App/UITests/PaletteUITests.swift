@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 
+/// The command palette: one row is always selected, a query narrows the list
 /// and ⌘1 runs the first match.
 @MainActor
 final class PaletteUITests: XCTestCase {

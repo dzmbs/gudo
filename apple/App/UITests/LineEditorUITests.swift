@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 
+/// The line editor at the prompt against a real local `gudo-hostd` with
 /// zsh: at the prompt typing goes into the native editor, the smart row offers host completions,
 /// Return runs the line in one atomic submit, and esc hands the draft back to the shell.
 /// Needs `PAIR_TICKET` (run with `TEST_RUNNER_PAIR_TICKET=$(apple/scripts/local-daemon.sh start)`).
