@@ -43,6 +43,9 @@ public final class DaemonLayoutStore: LayoutStore {
     /// for a frame as the split it is in the tree.
     @ObservationIgnored private var heldLayout: SessionLayout?
     @ObservationIgnored private var heldTimeout: Task<Void, Never>?
+    /// The held layout's projects: the daemon sends them between the layout and its floats,
+    /// and a first layout's report would otherwise be dropped as another session's.
+    @ObservationIgnored private var heldProjects: DaemonProjects?
     /// How long a layout waits for its floats before it shows anyway.
     @ObservationIgnored public var floatsWait = Duration.milliseconds(250)
     @ObservationIgnored private var pending: [(id: UInt64, change: Pending)] = []
@@ -95,9 +98,8 @@ public final class DaemonLayoutStore: LayoutStore {
             heldTimeout?.cancel()
             heldTimeout = Task { [weak self, floatsWait] in
                 try? await Task.sleep(for: floatsWait)
-                guard !Task.isCancelled, let self, let held = self.heldLayout else { return }
-                self.heldLayout = nil
-                self.show(held)
+                guard !Task.isCancelled, let self else { return }
+                self.showHeld()
             }
             return
         }
@@ -129,16 +131,29 @@ public final class DaemonLayoutStore: LayoutStore {
         floatsRevision = report.revision
         confirmedFloats = LayoutConversion.floats(report)
         if let held = heldLayout, held.revision <= report.revision {
-            heldLayout = nil
             heldTimeout?.cancel()
-            show(held)
+            showHeld()
         } else if report.sessionId == sessionId {
             rebase()
         }
     }
 
+    private func showHeld() {
+        guard let held = heldLayout else { return }
+        heldLayout = nil
+        show(held)
+        if let projects = heldProjects {
+            heldProjects = nil
+            receive(projects)
+        }
+    }
+
     /// A `Projects` report (sent with every layout, to owner connections only).
     func receive(_ report: DaemonProjects) {
+        if let held = heldLayout, held.sessionId == report.sessionId {
+            if heldProjects.map({ $0.revision <= report.revision }) ?? true { heldProjects = report }
+            return
+        }
         guard report.sessionId == sessionId else { return }
         if let projectsRevision, report.revision < projectsRevision { return }
         projectsRevision = report.revision
