@@ -61,8 +61,8 @@ async function limit(
   nonce: string | null = null,
   nonceUntil?: number,
 ): Promise<Verdict> {
-  const stub = env.LIMITER.get(env.LIMITER.idFromName(key));
-  return stub.take(bucket, nonce, Date.now(), nonceUntil);
+  const limiter = env.LIMITER.get(env.LIMITER.idFromName(key));
+  return limiter.take(bucket, nonce, Date.now(), nonceUntil);
 }
 
 /** Reads at most [`MAX_BODY`] bytes; `null` for a larger body, without buffering it. */
@@ -83,13 +83,13 @@ async function readBody(request: Request): Promise<Uint8Array | null> {
     }
     parts.push(value);
   }
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
+  const joined = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    joined.set(part, offset);
+    offset += part.length;
   }
-  return out;
+  return joined;
 }
 
 /**
@@ -109,7 +109,7 @@ export function addressKey(ip: string): string {
     : left;
   return `${groups
     .slice(0, 4)
-    .map((g) => g.replace(/^0+(?=.)/, ""))
+    .map((group) => group.replace(/^0+(?=.)/, ""))
     .join(":")}::/64`;
 }
 
@@ -137,11 +137,11 @@ async function register(request: Request, env: Env): Promise<Response> {
   const ip = request.headers.get("cf-connecting-ip") ?? "local";
   const verdict = await limit(env, `ip:${addressKey(ip)}`, REGISTER_BUCKET);
   if (!verdict.ok) return limited(verdict, "too many registrations");
-  const raw = await readBody(request);
-  if (!raw) return error(413, "body too large");
+  const bytes = await readBody(request);
+  if (!bytes) return error(413, "body too large");
   let body: RegisterBody;
   try {
-    body = JSON.parse(new TextDecoder().decode(raw));
+    body = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return error(400, "body is not JSON");
   }
@@ -168,39 +168,41 @@ async function register(request: Request, env: Env): Promise<Response> {
 async function push(request: Request, env: Env): Promise<Response> {
   const body = await readBody(request);
   if (!body) return error(413, "body too large");
-  const req = parseRequest(body);
-  if (typeof req === "string") return error(400, req);
-  if (!(await verifySignature(req.daemon, body, request.headers.get(SIGNATURE_HEADER)))) {
+  const relayRequest = parseRequest(body);
+  if (typeof relayRequest === "string") return error(400, relayRequest);
+  if (!(await verifySignature(relayRequest.daemon, body, request.headers.get(SIGNATURE_HEADER)))) {
     return error(401, "bad signature");
   }
-  if (Math.abs(Date.now() - req.ts) > NONCE_TTL_MS) return error(401, "stale request");
-  const cap = await openCap(req.cap, [env.PUSH_CAP_KEY, env.PUSH_CAP_KEY_PREVIOUS]);
+  if (Math.abs(Date.now() - relayRequest.ts) > NONCE_TTL_MS) return error(401, "stale request");
+  const cap = await openCap(relayRequest.cap, [env.PUSH_CAP_KEY, env.PUSH_CAP_KEY_PREVIOUS]);
   if (!cap) return error(403, "bad capability");
-  if (cap.d !== req.daemon.toLowerCase()) return error(403, "capability is for another daemon");
+  if (cap.d !== relayRequest.daemon.toLowerCase()) return error(403, "capability is for another daemon");
   if (cap.x * 1000 < Date.now()) return error(410, "capability expired; the app re-registers");
-  const wanted: CapKind = req.push_type === "alert" ? "alert" : "activity";
-  if (cap.k !== wanted) return error(403, `capability is not for ${req.push_type}`);
+  const wanted: CapKind = relayRequest.push_type === "alert" ? "alert" : "activity";
+  if (cap.k !== wanted) return error(403, `capability is not for ${relayRequest.push_type}`);
 
   // The nonce is remembered for as long as `ts` passes the skew check, so a request signed
   // with a future `ts` cannot be replayed once the nonce would otherwise be forgotten.
-  const daemon = await limit(
+  const daemonVerdict = await limit(
     env,
-    `daemon:${req.daemon.toLowerCase()}`,
+    `daemon:${relayRequest.daemon.toLowerCase()}`,
     DAEMON_BUCKET,
-    req.nonce,
-    req.ts + NONCE_TTL_MS,
+    relayRequest.nonce,
+    relayRequest.ts + NONCE_TTL_MS,
   );
-  if (!daemon.ok) {
-    return daemon.reason === "replay" ? error(409, "replayed request") : limited(daemon, "rate limited");
+  if (!daemonVerdict.ok) {
+    return daemonVerdict.reason === "replay"
+      ? error(409, "replayed request")
+      : limited(daemonVerdict, "rate limited");
   }
-  const device = await limit(
+  const deviceVerdict = await limit(
     env,
     await tokenKey(cap),
     cap.k === "alert" ? ALERT_TOKEN_BUCKET : ACTIVITY_TOKEN_BUCKET,
   );
-  if (!device.ok) return limited(device, "too many pushes to this device");
+  if (!deviceVerdict.ok) return limited(deviceVerdict, "too many pushes to this device");
 
-  const outcome = await sendToApns(env, buildApnsRequest(env, cap, req));
+  const outcome = await sendToApns(env, buildApnsRequest(env, cap, relayRequest));
   switch (outcome.kind) {
     case "sent":
       return json(200, { id: outcome.id });

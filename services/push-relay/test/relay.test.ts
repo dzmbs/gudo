@@ -13,7 +13,7 @@ import { type RelayRequest, parseRequest, verifySignature } from "../src/request
 
 /** The bindings, as wrangler.jsonc and vitest.config.ts define them. */
 const env = cfEnv as unknown as Env & { TEST_APNS_PUBLIC_KEY: string };
-const worker = (cfExports as unknown as { default: { fetch(r: Request): Promise<Response> } })
+const worker = (cfExports as unknown as { default: { fetch(request: Request): Promise<Response> } })
   .default;
 
 /** A fresh device per test: rate-limit state outlives a test. */
@@ -41,43 +41,43 @@ async function call(path: string, init: RequestInit = {}): Promise<Response> {
 }
 
 async function register(
-  d: Daemon,
+  host: Daemon,
   extra: Record<string, unknown> = {},
 ): Promise<{ cap: string; expires: number }> {
   // A fresh client address each time, so tests stay clear of the per-address limit.
-  const [a, b, c] = crypto.getRandomValues(new Uint8Array(3));
-  const res = await call("/v1/register", {
+  const octets = crypto.getRandomValues(new Uint8Array(3));
+  const response = await call("/v1/register", {
     method: "POST",
-    headers: { "cf-connecting-ip": `10.${a}.${b}.${c}` },
-    body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id, ...extra }),
+    headers: { "cf-connecting-ip": `10.${octets.join(".")}` },
+    body: JSON.stringify({ token: TOKEN, env: "production", daemon: host.id, ...extra }),
   });
-  expect(res.status).toBe(200);
-  return res.json();
+  expect(response.status).toBe(200);
+  return response.json();
 }
 
-async function signed(d: Daemon, req: Partial<RelayRequest>): Promise<RequestInit> {
+async function signed(host: Daemon, fields: Partial<RelayRequest>): Promise<RequestInit> {
   const body = utf8.encode(
     JSON.stringify({
       v: 1,
-      daemon: d.id,
+      daemon: host.id,
       push_type: "alert",
       category: "approval",
       collapse: "c0ffee".repeat(5) + "00",
       sealed: b64url(crypto.getRandomValues(new Uint8Array(200))),
       ts: Date.now(),
       nonce: nonce(),
-      ...req,
+      ...fields,
     }),
   );
-  const sig = await crypto.subtle.sign(
+  const signature = await crypto.subtle.sign(
     { name: "Ed25519" },
-    d.key,
+    host.key,
     concat(utf8.encode("push-relay/v1\0"), body),
   );
   return {
     method: "POST",
     body,
-    headers: { "x-push-signature": b64url(new Uint8Array(sig)) },
+    headers: { "x-push-signature": b64url(new Uint8Array(signature)) },
   };
 }
 
@@ -111,7 +111,7 @@ afterEach(() => {
 });
 
 async function verifyJwt(jwt: string): Promise<{ header: any; claims: any }> {
-  const [h, c, s] = jwt.split(".");
+  const [encodedHeader, encodedClaims, signature] = jwt.split(".");
   const der = Uint8Array.from(
     atob(env.TEST_APNS_PUBLIC_KEY.replace(/-----[^-]+-----|\s/g, "")),
     (ch) => ch.charCodeAt(0),
@@ -126,12 +126,12 @@ async function verifyJwt(jwt: string): Promise<{ header: any; claims: any }> {
   const ok = await crypto.subtle.verify(
     { name: "ECDSA", hash: "SHA-256" },
     key,
-    unb64url(s)!,
-    utf8.encode(`${h}.${c}`),
+    unb64url(signature)!,
+    utf8.encode(`${encodedHeader}.${encodedClaims}`),
   );
   expect(ok).toBe(true);
-  const dec = (part: string) => JSON.parse(new TextDecoder().decode(unb64url(part)!));
-  return { header: dec(h), claims: dec(c) };
+  const decode = (part: string) => JSON.parse(new TextDecoder().decode(unb64url(part)!));
+  return { header: decode(encodedHeader), claims: decode(encodedClaims) };
 }
 
 describe("push relay", () => {
@@ -142,16 +142,16 @@ describe("push relay", () => {
   });
 
   it("forwards a signed approval to APNs as a mutable, time-sensitive alert", async () => {
-    const d = await daemon();
-    const { cap, expires } = await register(d);
+    const host = await daemon();
+    const { cap, expires } = await register(host);
     expect(cap.startsWith("v1.")).toBe(true);
     expect(cap).not.toContain(TOKEN);
     expect(expires * 1000).toBeGreaterThan(Date.now() + 170 * 86400 * 1000);
 
-    const init = await signed(d, { cap });
-    const res = await call("/v1/push", init);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ id: "id-1" });
+    const init = await signed(host, { cap });
+    const response = await call("/v1/push", init);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ id: "id-1" });
 
     expect(apnsCalls).toHaveLength(1);
     const [apns] = apnsCalls;
@@ -179,10 +179,10 @@ describe("push relay", () => {
   });
 
   it("uses the sandbox for development tokens and a low priority for done", async () => {
-    const d = await daemon();
-    const { cap } = await register(d, { env: "sandbox" });
-    const res = await call("/v1/push", await signed(d, { cap, category: "done" }));
-    expect(res.status).toBe(200);
+    const host = await daemon();
+    const { cap } = await register(host, { env: "sandbox" });
+    const response = await call("/v1/push", await signed(host, { cap, category: "done" }));
+    expect(response.status).toBe(200);
     expect(apnsCalls[0].url).toBe(`https://api.sandbox.push.apple.com/3/device/${TOKEN}`);
     expect(apnsCalls[0].headers.get("apns-priority")).toBe("5");
     expect(apnsCalls[0].body.aps.category).toBe("AGENT_DONE");
@@ -190,38 +190,38 @@ describe("push relay", () => {
   });
 
   it("refuses bad signatures, stale requests, replays and foreign capabilities", async () => {
-    const d = await daemon();
+    const host = await daemon();
     const other = await daemon();
-    const { cap } = await register(d);
+    const { cap } = await register(host);
 
     const forged = await signed(other, { cap });
     const forgedBody = JSON.parse(new TextDecoder().decode(forged.body as Uint8Array));
-    forgedBody.daemon = d.id; // claims to be d, signed by other
-    const res1 = await call("/v1/push", { ...forged, body: JSON.stringify(forgedBody) });
-    expect(res1.status).toBe(401);
+    forgedBody.daemon = host.id; // claims to be host, signed by other
+    const forgedResponse = await call("/v1/push", { ...forged, body: JSON.stringify(forgedBody) });
+    expect(forgedResponse.status).toBe(401);
 
-    const stale = await call("/v1/push", await signed(d, { cap, ts: Date.now() - 10 * 60 * 1000 }));
+    const stale = await call("/v1/push", await signed(host, { cap, ts: Date.now() - 10 * 60 * 1000 }));
     expect(stale.status).toBe(401);
 
-    const once = await signed(d, { cap });
+    const once = await signed(host, { cap });
     expect((await call("/v1/push", once)).status).toBe(200);
     expect((await call("/v1/push", once)).status).toBe(409);
 
-    // other's own valid signature, but d's capability.
+    // other's own valid signature, but host's capability.
     expect((await call("/v1/push", await signed(other, { cap }))).status).toBe(403);
     // A garbled capability.
-    expect((await call("/v1/push", await signed(d, { cap: cap.slice(0, -4) + "AAAA" }))).status).toBe(
+    expect((await call("/v1/push", await signed(host, { cap: cap.slice(0, -4) + "AAAA" }))).status).toBe(
       403,
     );
     // An alert capability cannot start a Live Activity.
-    const la = await signed(d, { cap, push_type: "live_activity", event: "update", category: undefined });
-    expect((await call("/v1/push", la)).status).toBe(403);
+    const liveActivity = await signed(host, { cap, push_type: "live_activity", event: "update", category: undefined });
+    expect((await call("/v1/push", liveActivity)).status).toBe(403);
     expect(apnsCalls).toHaveLength(1);
   });
 
   it("rejects malformed requests", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     expect((await call("/v1/push", { method: "POST", body: "{" })).status).toBe(400);
     for (const bad of [
       { category: "nope" },
@@ -231,7 +231,7 @@ describe("push relay", () => {
       { sealed: "A".repeat(4000) },
       { daemon: "00" },
     ] as Partial<RelayRequest>[]) {
-      expect((await call("/v1/push", await signed(d, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(400);
+      expect((await call("/v1/push", await signed(host, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(400);
     }
     expect(
       (await call("/v1/register", { method: "POST", body: JSON.stringify({ token: "xyz" }) })).status,
@@ -239,38 +239,38 @@ describe("push relay", () => {
   });
 
   it("rate-limits each daemon", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     let limited: Response | undefined;
     for (let i = 0; i < DAEMON_BUCKET.capacity + 1; i++) {
-      const res = await call("/v1/push", await signed(d, { cap }));
-      if (res.status === 429) {
-        limited = res;
+      const response = await call("/v1/push", await signed(host, { cap }));
+      if (response.status === 429) {
+        limited = response;
         break;
       }
-      expect(res.status).toBe(200);
+      expect(response.status).toBe(200);
     }
     expect(limited, "the bucket ran out").toBeDefined();
     expect(Number(limited!.headers.get("retry-after"))).toBeGreaterThan(0);
     // Another daemon (pushing to another device) is unaffected.
-    const e = await daemon();
-    const { cap: capE } = await register(e, { token: "b2".repeat(32) });
-    expect((await call("/v1/push", await signed(e, { cap: capE }))).status).toBe(200);
+    const otherHost = await daemon();
+    const { cap: otherCap } = await register(otherHost, { token: "b2".repeat(32) });
+    expect((await call("/v1/push", await signed(otherHost, { cap: otherCap }))).status).toBe(200);
   });
 
   it("maps APNs answers for the daemon", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     apnsReply = () => Response.json({ reason: "Unregistered" }, { status: 410 });
-    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(410);
+    expect((await call("/v1/push", await signed(host, { cap }))).status).toBe(410);
     apnsReply = () => Response.json({ reason: "BadDeviceToken" }, { status: 400 });
-    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(410);
+    expect((await call("/v1/push", await signed(host, { cap }))).status).toBe(410);
     apnsReply = () => Response.json({ reason: "InternalServerError" }, { status: 500 });
-    const busy = await call("/v1/push", await signed(d, { cap }));
+    const busy = await call("/v1/push", await signed(host, { cap }));
     expect(busy.status).toBe(502);
     expect(busy.headers.get("retry-after")).toBe("5");
     apnsReply = () => Response.json({ reason: "PayloadTooLarge" }, { status: 413 });
-    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(422);
+    expect((await call("/v1/push", await signed(host, { cap }))).status).toBe(422);
 
     // An expired provider token is renewed once.
     let first = true;
@@ -281,13 +281,13 @@ describe("push relay", () => {
       }
       return new Response(null, { status: 200 });
     };
-    expect((await call("/v1/push", await signed(d, { cap }))).status).toBe(200);
+    expect((await call("/v1/push", await signed(host, { cap }))).status).toBe(200);
   });
 
   it("drives Live Activities on the liveactivity topic", async () => {
-    const d = await daemon();
-    const { cap } = await register(d, { kind: "activity" });
-    const start = await signed(d, {
+    const host = await daemon();
+    const { cap } = await register(host, { kind: "activity" });
+    const start = await signed(host, {
       cap,
       push_type: "live_activity",
       category: undefined,
@@ -297,20 +297,20 @@ describe("push relay", () => {
     });
     expect((await call("/v1/push", start)).status).toBe(200);
     const sealed = JSON.parse(new TextDecoder().decode(start.body as Uint8Array)).sealed;
-    const [call0] = apnsCalls;
-    expect(call0.headers.get("apns-push-type")).toBe("liveactivity");
-    expect(call0.headers.get("apns-topic")).toBe("dev.gudo.app.push-type.liveactivity");
-    expect(call0.headers.get("apns-priority")).toBe("10");
-    expect(call0.body.aps).toMatchObject({
+    const [firstCall] = apnsCalls;
+    expect(firstCall.headers.get("apns-push-type")).toBe("liveactivity");
+    expect(firstCall.headers.get("apns-topic")).toBe("dev.gudo.app.push-type.liveactivity");
+    expect(firstCall.headers.get("apns-priority")).toBe("10");
+    expect(firstCall.body.aps).toMatchObject({
       event: "start",
       "content-state": { s: sealed, v: 1 },
       "stale-date": 1_900_000_000,
       "attributes-type": "AgentsActivityAttributes",
       attributes: { v: 1 },
     });
-    expect(call0.body.aps.alert.title).toBe("Agents");
+    expect(firstCall.body.aps.alert.title).toBe("Agents");
 
-    const end = await signed(d, {
+    const end = await signed(host, {
       cap,
       push_type: "live_activity",
       category: undefined,
@@ -324,14 +324,14 @@ describe("push relay", () => {
   });
 
   it("limits registrations per client address", async () => {
-    const d = await daemon();
+    const host = await daemon();
     let status = 200;
     for (let i = 0; i < 25 && status === 200; i++) {
       status = (
         await call("/v1/register", {
           method: "POST",
           headers: { "cf-connecting-ip": "203.0.113.9" },
-          body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id }),
+          body: JSON.stringify({ token: TOKEN, env: "production", daemon: host.id }),
         })
       ).status;
     }
@@ -339,14 +339,14 @@ describe("push relay", () => {
   });
 
   it("counts a whole IPv6 /64 as one client", async () => {
-    const d = await daemon();
+    const host = await daemon();
     let status = 200;
     for (let i = 0; i < 25 && status === 200; i++) {
       status = (
         await call("/v1/register", {
           method: "POST",
           headers: { "cf-connecting-ip": `2001:db8:1:2::${(i + 1).toString(16)}` },
-          body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id }),
+          body: JSON.stringify({ token: TOKEN, env: "production", daemon: host.id }),
         })
       ).status;
     }
@@ -358,10 +358,10 @@ describe("push relay", () => {
   });
 
   it("does not let a request with a future timestamp be replayed later", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     const start = Date.now();
-    const once = await signed(d, { cap, ts: start + 4 * 60 * 1000 });
+    const once = await signed(host, { cap, ts: start + 4 * 60 * 1000 });
     expect((await call("/v1/push", once)).status).toBe(200);
     // Six minutes on, the request's own timestamp is still within the accepted skew.
     vi.spyOn(Date, "now").mockReturnValue(start + 6 * 60 * 1000);
@@ -374,11 +374,11 @@ describe("push relay", () => {
     // device still gets no more than its own budget.
     let limited: Response | undefined;
     for (let i = 0; i < ALERT_TOKEN_BUCKET.capacity + 1 && !limited; i++) {
-      const d = await daemon();
-      const { cap } = await register(d);
-      const res = await call("/v1/push", await signed(d, { cap, category: "done" }));
-      if (res.status === 429) limited = res;
-      else expect(res.status).toBe(200);
+      const host = await daemon();
+      const { cap } = await register(host);
+      const response = await call("/v1/push", await signed(host, { cap, category: "done" }));
+      if (response.status === 429) limited = response;
+      else expect(response.status).toBe(200);
     }
     expect(limited, "the device's bucket ran out").toBeDefined();
     expect(await limited!.json()).toEqual({ error: "too many pushes to this device" });
@@ -389,12 +389,12 @@ describe("push relay", () => {
     const big = "x".repeat(MAX_BODY + 1);
     expect((await call("/v1/register", { method: "POST", body: big })).status).toBe(413);
     // No content-length: a streamed body is cut off at the limit.
-    const chunks = (n: number) => {
+    const chunks = (chunkCount: number) => {
       const pulled = { count: 0 };
       const body = new ReadableStream<Uint8Array>({
-        pull(c) {
-          if (pulled.count++ === n) c.close();
-          else c.enqueue(new Uint8Array(4096));
+        pull(controller) {
+          if (pulled.count++ === chunkCount) controller.close();
+          else controller.enqueue(new Uint8Array(4096));
         },
       });
       return { pulled, init: { method: "POST", body, duplex: "half" } as RequestInit };
@@ -410,8 +410,8 @@ describe("push relay", () => {
   });
 
   it("refuses header injection and loose types", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     for (const bad of [
       { collapse: "a\r\nx-evil: 1" },
       { collapse: "not hex" },
@@ -420,24 +420,24 @@ describe("push relay", () => {
       { stale: -1 },
       { category: ["approval"] },
     ] as unknown as Partial<RelayRequest>[]) {
-      expect((await call("/v1/push", await signed(d, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(400);
+      expect((await call("/v1/push", await signed(host, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(400);
     }
     expect(
-      (await call("/v1/register", { method: "POST", body: JSON.stringify({ token: "abc", env: "production", daemon: d.id }) }))
+      (await call("/v1/register", { method: "POST", body: JSON.stringify({ token: "abc", env: "production", daemon: host.id }) }))
         .status,
     ).toBe(400);
     expect(apnsCalls).toHaveLength(0);
   });
 
   it("sends security headers and no CORS on every answer", async () => {
-    for (const res of [
+    for (const response of [
       await call("/healthz"),
       await call("/v1/push", { method: "POST", body: "{" }),
       await call("/v1/push", { method: "OPTIONS", headers: { origin: "https://evil.test" } }),
     ]) {
-      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
-      expect(res.headers.get("cache-control")).toBe("no-store");
-      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
     }
   });
 });
@@ -447,31 +447,31 @@ describe("formats shared with the daemon", () => {
     const body = utf8.encode(vectors.relay_request.body);
     const parsed = parseRequest(body);
     expect(typeof parsed).toBe("object");
-    const req = parsed as RelayRequest;
-    expect(req.daemon).toBe(vectors.daemon_public);
-    expect(req.category).toBe("approval");
-    expect(await verifySignature(req.daemon, body, vectors.relay_request.signature)).toBe(true);
+    const relayRequest = parsed as RelayRequest;
+    expect(relayRequest.daemon).toBe(vectors.daemon_public);
+    expect(relayRequest.category).toBe("approval");
+    expect(await verifySignature(relayRequest.daemon, body, vectors.relay_request.signature)).toBe(true);
     const tampered = utf8.encode(vectors.relay_request.body.replace("approval", "done"));
-    expect(await verifySignature(req.daemon, tampered, vectors.relay_request.signature)).toBe(false);
+    expect(await verifySignature(relayRequest.daemon, tampered, vectors.relay_request.signature)).toBe(false);
   });
 
   it("builds the APNs request for a Rust-sealed payload without touching it", () => {
-    const req = parseRequest(utf8.encode(vectors.relay_request.body)) as RelayRequest;
+    const relayRequest = parseRequest(utf8.encode(vectors.relay_request.body)) as RelayRequest;
     const apns = buildApnsRequest(
       env,
-      { t: TOKEN, e: "production", d: req.daemon, k: "alert", x: 0 },
-      req,
+      { t: TOKEN, e: "production", d: relayRequest.daemon, k: "alert", x: 0 },
+      relayRequest,
       1_760_000_000_000,
     );
     expect(JSON.parse(apns.body).s).toBe(vectors.payloads[0].sealed);
   });
 
   it("expires approvals with their action token", () => {
-    const req = parseRequest(utf8.encode(vectors.relay_request.body)) as RelayRequest;
-    const cap = { t: TOKEN, e: "production" as const, d: req.daemon, k: "alert" as const, x: 0 };
+    const relayRequest = parseRequest(utf8.encode(vectors.relay_request.body)) as RelayRequest;
+    const cap = { t: TOKEN, e: "production" as const, d: relayRequest.daemon, k: "alert" as const, x: 0 };
     const at = 1_760_000_000;
     const expiry = (category: RelayRequest["category"]) =>
-      Number(buildApnsRequest(env, cap, { ...req, category }, at * 1000).headers["apns-expiration"]);
+      Number(buildApnsRequest(env, cap, { ...relayRequest, category }, at * 1000).headers["apns-expiration"]);
     // An approval held by APNs past its token would offer buttons that can only fail.
     expect(expiry("approval")).toBe(at + APPROVAL_TTL_S);
     expect(APPROVAL_TTL_S).toBe(15 * 60);
@@ -486,9 +486,9 @@ describe("formats shared with the daemon", () => {
   });
 
   it("caches the provider JWT", async () => {
-    const a = await providerJwt(env, 1_000_000);
-    expect(await providerJwt(env, 1_000_000 + 30 * 60 * 1000)).toBe(a);
-    expect(await providerJwt(env, 1_000_000 + 41 * 60 * 1000)).not.toBe(a);
+    const jwt = await providerJwt(env, 1_000_000);
+    expect(await providerJwt(env, 1_000_000 + 30 * 60 * 1000)).toBe(jwt);
+    expect(await providerJwt(env, 1_000_000 + 41 * 60 * 1000)).not.toBe(jwt);
   });
 });
 
@@ -496,34 +496,36 @@ describe("attacks on the relay", () => {
   const TTL = 5 * 60 * 1000;
 
   it("lets exactly one of many concurrent copies of a request through", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     for (let round = 0; round < 10; round++) {
-      const once = await signed(d, { cap, category: "done" });
+      const once = await signed(host, { cap, category: "done" });
       const statuses = await Promise.all(
-        Array.from({ length: 16 }, () => call("/v1/push", once).then((r) => r.status)),
+        Array.from({ length: 16 }, () => call("/v1/push", once).then((response) => response.status)),
       );
-      expect(statuses.filter((s) => s === 200), `round ${round}`).toHaveLength(1);
-      expect(statuses.filter((s) => s === 409)).toHaveLength(15);
+      expect(statuses.filter((status) => status === 200), `round ${round}`).toHaveLength(1);
+      expect(statuses.filter((status) => status === 409)).toHaveLength(15);
     }
     expect(apnsCalls).toHaveLength(10);
   });
 
   it("does not let concurrent requests overdraw a bucket", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     const requests = await Promise.all(
-      Array.from({ length: DAEMON_BUCKET.capacity + 10 }, () => signed(d, { cap, category: "done" })),
+      Array.from({ length: DAEMON_BUCKET.capacity + 10 }, () => signed(host, { cap, category: "done" })),
     );
-    const statuses = await Promise.all(requests.map((r) => call("/v1/push", r).then((x) => x.status)));
-    expect(statuses.filter((s) => s === 200)).toHaveLength(DAEMON_BUCKET.capacity);
+    const statuses = await Promise.all(
+      requests.map((init) => call("/v1/push", init).then((response) => response.status)),
+    );
+    expect(statuses.filter((status) => status === 200)).toHaveLength(DAEMON_BUCKET.capacity);
   });
 
   it("refuses a replay while the clock crosses the edge of the skew window", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     const ts = Date.now();
-    const once = await signed(d, { cap, ts });
+    const once = await signed(host, { cap, ts });
     expect((await call("/v1/push", once)).status).toBe(200);
     // The skew check sees the last accepted millisecond; the clock moves on before the nonce
     // lookup.
@@ -534,22 +536,22 @@ describe("attacks on the relay", () => {
   });
 
   it("keeps a future-dated nonce through cleanup until its request goes stale", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     const start = Date.now();
-    const once = await signed(d, { cap, ts: start + TTL - 1000 });
+    const once = await signed(host, { cap, ts: start + TTL - 1000 });
     expect((await call("/v1/push", once)).status).toBe(200);
     // Seven minutes on, the cleanup alarm runs; the request is still inside the skew window.
     vi.spyOn(Date, "now").mockReturnValue(start + 7 * 60 * 1000);
-    const limiter = env.LIMITER.get(env.LIMITER.idFromName(`daemon:${d.id}`));
+    const limiter = env.LIMITER.get(env.LIMITER.idFromName(`daemon:${host.id}`));
     expect(await runDurableObjectAlarm(limiter)).toBe(true);
     expect((await call("/v1/push", once)).status).toBe(409);
     expect(apnsCalls).toHaveLength(1);
   });
 
   it("accepts the window's edges and nothing beyond", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
     for (const [ts, status] of [
@@ -558,16 +560,16 @@ describe("attacks on the relay", () => {
       [now - TTL - 1, 401],
       [now + TTL + 1, 401],
     ]) {
-      expect((await call("/v1/push", await signed(d, { cap, ts }))).status, String(ts - now)).toBe(
+      expect((await call("/v1/push", await signed(host, { cap, ts }))).status, String(ts - now)).toBe(
         status,
       );
     }
   });
 
   it("refuses any change to a signed body", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
-    const good = await signed(d, { cap });
+    const host = await daemon();
+    const { cap } = await register(host);
+    const good = await signed(host, { cap });
     const text = new TextDecoder().decode(good.body as Uint8Array);
     const parsed = JSON.parse(text);
     for (const body of [
@@ -588,17 +590,17 @@ describe("attacks on the relay", () => {
   });
 
   it("refuses a body longer than its content-length claims", async () => {
-    const res = await call("/v1/push", {
+    const response = await call("/v1/push", {
       method: "POST",
       headers: { "content-length": "10" },
       body: "x".repeat(MAX_BODY + 1),
     });
-    expect(res.status).toBe(413);
+    expect(response.status).toBe(413);
   });
 
   it("answers malformed JSON of every shape with 400, never 500", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
+    const host = await daemon();
+    const { cap } = await register(host);
     for (const body of ["null", "[]", '"x"', "1", "true", "{}", '{"v":"1"}']) {
       expect((await call("/v1/push", { method: "POST", body })).status, body).toBe(400);
       expect((await call("/v1/register", { method: "POST", body })).status, body).toBe(400);
@@ -617,7 +619,7 @@ describe("attacks on the relay", () => {
       { collapse: "" },
       { v: 2 },
     ] as unknown as Partial<RelayRequest>[]) {
-      expect((await call("/v1/push", await signed(d, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(
+      expect((await call("/v1/push", await signed(host, { cap, ...bad }))).status, JSON.stringify(bad)).toBe(
         400,
       );
     }
@@ -628,16 +630,16 @@ describe("attacks on the relay", () => {
       { env: "Production" },
       { token: `${"ab".repeat(8)}\r\n` },
     ]) {
-      const body = JSON.stringify({ token: TOKEN, env: "production", daemon: d.id, ...bad });
+      const body = JSON.stringify({ token: TOKEN, env: "production", daemon: host.id, ...bad });
       expect((await call("/v1/register", { method: "POST", body })).status, JSON.stringify(bad)).toBe(400);
     }
     expect(apnsCalls).toHaveLength(0);
   });
 
   it("puts only the relay's own headers on the APNs request", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
-    expect((await call("/v1/push", await signed(d, { cap, collapse: "ab" }))).status).toBe(200);
+    const host = await daemon();
+    const { cap } = await register(host);
+    expect((await call("/v1/push", await signed(host, { cap, collapse: "ab" }))).status).toBe(200);
     const [sent] = apnsCalls;
     expect([...sent.headers.keys()].sort()).toEqual([
       "apns-collapse-id",
@@ -656,28 +658,28 @@ describe("attacks on the relay", () => {
     const token = TOKEN;
     let limited = false;
     for (let i = 0; i < ALERT_TOKEN_BUCKET.capacity + 1 && !limited; i++) {
-      const d = await daemon();
-      const { cap } = await register(d, { token: i % 2 ? token.toUpperCase() : token });
-      limited = (await call("/v1/push", await signed(d, { cap, category: "done" }))).status === 429;
+      const host = await daemon();
+      const { cap } = await register(host, { token: i % 2 ? token.toUpperCase() : token });
+      limited = (await call("/v1/push", await signed(host, { cap, category: "done" }))).status === 429;
     }
     expect(limited).toBe(true);
     expect(apnsCalls).toHaveLength(ALERT_TOKEN_BUCKET.capacity);
   });
 
   it("does not let activity pushes refill a device's alert budget", async () => {
-    const d = await daemon();
-    const { cap } = await register(d);
-    const { cap: act } = await register(d, { kind: "activity" });
+    const host = await daemon();
+    const { cap } = await register(host);
+    const { cap: activityCap } = await register(host, { kind: "activity" });
     const start = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(start);
     const alert = async () =>
-      (await call("/v1/push", await signed(d, { cap, category: "done" }))).status;
+      (await call("/v1/push", await signed(host, { cap, category: "done" }))).status;
     for (let i = 0; i < ALERT_TOKEN_BUCKET.capacity; i++) expect(await alert()).toBe(200);
     expect(await alert()).toBe(429);
     // A minute on the alert budget has regained 5; an activity push in between changes nothing.
     vi.spyOn(Date, "now").mockReturnValue(start + 60_000);
-    const update = await signed(d, {
-      cap: act,
+    const update = await signed(host, {
+      cap: activityCap,
       push_type: "live_activity",
       category: undefined,
       event: "update",
@@ -692,19 +694,19 @@ describe("attacks on the relay", () => {
     expect(addressKey("::ffff:203.0.113.9")).toBe("203.0.113.9");
     expect(addressKey("::FFFF:198.51.100.1")).toBe("198.51.100.1");
     expect(addressKey("0:0:0:0:0:ffff:203.0.113.9")).toBe("203.0.113.9");
-    expect(addressKey("2001:DB8:1:2::5")).toBe(addressKey("2001:db8:1:2:a:b:c:d"));
+    expect(addressKey("2001:DB8:1:2::5")).toBe(addressKey("2001:db8:1:2:a:b:c:host"));
     // Mapped clients do not all share one budget.
-    const d = await daemon();
-    const reg = (ip: string) =>
+    const host = await daemon();
+    const registerFrom = (ip: string) =>
       call("/v1/register", {
         method: "POST",
         headers: { "cf-connecting-ip": ip },
-        body: JSON.stringify({ token: TOKEN, env: "production", daemon: d.id }),
-      }).then((r) => r.status);
+        body: JSON.stringify({ token: TOKEN, env: "production", daemon: host.id }),
+      }).then((response) => response.status);
     let status = 200;
-    for (let i = 0; i < 25 && status === 200; i++) status = await reg("::ffff:198.51.100.77");
+    for (let i = 0; i < 25 && status === 200; i++) status = await registerFrom("::ffff:198.51.100.77");
     expect(status).toBe(429);
-    expect(await reg("198.51.100.77")).toBe(429);
-    expect(await reg("::ffff:198.51.100.78")).toBe(200);
+    expect(await registerFrom("198.51.100.77")).toBe(429);
+    expect(await registerFrom("::ffff:198.51.100.78")).toBe(200);
   });
 });

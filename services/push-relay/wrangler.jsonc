@@ -7,7 +7,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
-  // Owner: set your zone and hostname (must match `brand::PUSH_RELAY_URL`), then deploy.
+  // Set your zone and hostname (must match `brand::PUSH_RELAY_URL`), then deploy.
   "routes": [{ "pattern": "push.gudo.dev", "custom_domain": true }],
   // Errors only: invocation logs would keep every caller's address and request metadata.
   "observability": {
@@ -16,7 +16,7 @@
     "logs": { "enabled": true, "invocation_logs": false }
   },
   "vars": {
-    // Owner: fill in from the Apple Developer account (Keys → the APNs key).
+    // Fill in from the Apple Developer account (Keys → the APNs key).
     "APNS_TEAM_ID": "TEAMID0000",
     "APNS_KEY_ID": "KEYID00000",
     // The app's bundle id (`apple/Brand.xcconfig`: $(BRAND_BUNDLE_ID_PREFIX).app).

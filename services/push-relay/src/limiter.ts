@@ -15,6 +15,7 @@ export interface Bucket {
   refill: number;
 }
 
+/** 300 per 15 minutes with a burst of 30. */
 export const DAEMON_BUCKET: Bucket = { capacity: 30, refill: 300 / (15 * 60) };
 /** Registrations per client IP (an IPv6 /64): 20 an hour. */
 export const REGISTER_BUCKET: Bucket = { capacity: 20, refill: 20 / 3600 };
@@ -70,7 +71,6 @@ export class RateLimiter extends DurableObject {
     return { ok: true };
   }
 
-  /** Forgets expired nonces. */
   async alarm(): Promise<void> {
     const now = Date.now();
     const kv = this.ctx.storage.kv;

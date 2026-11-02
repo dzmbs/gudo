@@ -1,4 +1,5 @@
 /**
+ * Push capabilities: the relay's stateless stand-in for a token database.
  *
  * A capability is `v1.<base64url(iv || AES-256-GCM(PUSH_CAP_KEY, json))>`, where the JSON names
  * the APNs token, its environment, the one daemon allowed to use it, the push kind and an
@@ -28,19 +29,19 @@ const PREFIX = "v1.";
 const AAD = utf8.encode("push-cap/v1");
 
 async function aesKey(secret: string): Promise<CryptoKey> {
-  const raw = unb64url(secret);
-  if (!raw || raw.length !== 32) throw new Error("PUSH_CAP_KEY must be 32 bytes, base64url");
-  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+  const keyBytes = unb64url(secret);
+  if (!keyBytes || keyBytes.length !== 32) throw new Error("PUSH_CAP_KEY must be 32 bytes, base64url");
+  return crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
 export async function sealCap(secret: string, cap: Cap): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt(
+  const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: AAD },
     await aesKey(secret),
     utf8.encode(JSON.stringify(cap)),
   );
-  return PREFIX + b64url(concat(iv, new Uint8Array(ct)));
+  return PREFIX + b64url(concat(iv, new Uint8Array(ciphertext)));
 }
 
 /** Opens a capability with the current key, then the previous one; `null` if neither opens it. */
@@ -49,17 +50,17 @@ export async function openCap(
   secrets: (string | undefined)[],
 ): Promise<Cap | null> {
   if (!text.startsWith(PREFIX)) return null;
-  const raw = unb64url(text.slice(PREFIX.length));
-  if (!raw || raw.length < 12 + 16) return null;
+  const sealed = unb64url(text.slice(PREFIX.length));
+  if (!sealed || sealed.length < 12 + 16) return null;
   for (const secret of secrets) {
     if (!secret) continue;
     try {
-      const pt = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: raw.slice(0, 12), additionalData: AAD },
+      const plaintext = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: sealed.slice(0, 12), additionalData: AAD },
         await aesKey(secret),
-        raw.slice(12),
+        sealed.slice(12),
       );
-      return JSON.parse(new TextDecoder().decode(pt)) as Cap;
+      return JSON.parse(new TextDecoder().decode(plaintext)) as Cap;
     } catch {
       // Try the next key.
     }

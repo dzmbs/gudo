@@ -14,22 +14,22 @@ import { randomUUID } from "node:crypto";
 const port = Number(process.env.FAKE_APNS_PORT ?? 8790);
 const log = [];
 
-createServer((req, res) => {
-  if (req.method === "GET" && req.url === "/log") {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(log, null, 2));
+createServer((request, response) => {
+  if (request.method === "GET" && request.url === "/log") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(log, null, 2));
     return;
   }
   let body = "";
-  req.on("data", (chunk) => (body += chunk));
-  req.on("end", () => {
-    const token = (req.url ?? "").replace(/^\/3\/device\//, "");
+  request.on("data", (chunk) => (body += chunk));
+  request.on("end", () => {
+    const token = (request.url ?? "").replace(/^\/3\/device\//, "");
     const problems = [];
-    if (!req.url?.startsWith("/3/device/")) problems.push("path is not /3/device/<token>");
-    if (!/^bearer [\w-]+\.[\w-]+\.[\w-]+$/.test(req.headers.authorization ?? ""))
+    if (!request.url?.startsWith("/3/device/")) problems.push("path is not /3/device/<token>");
+    if (!/^bearer [\w-]+\.[\w-]+\.[\w-]+$/.test(request.headers.authorization ?? ""))
       problems.push("no provider JWT");
-    for (const h of ["apns-topic", "apns-push-type", "apns-priority"]) {
-      if (!req.headers[h]) problems.push(`missing ${h}`);
+    for (const header of ["apns-topic", "apns-push-type", "apns-priority"]) {
+      if (!request.headers[header]) problems.push(`missing ${header}`);
     }
     let payload;
     try {
@@ -42,10 +42,10 @@ createServer((req, res) => {
       at: new Date().toISOString(),
       token,
       headers: {
-        topic: req.headers["apns-topic"],
-        pushType: req.headers["apns-push-type"],
-        priority: req.headers["apns-priority"],
-        collapseId: req.headers["apns-collapse-id"],
+        topic: request.headers["apns-topic"],
+        pushType: request.headers["apns-push-type"],
+        priority: request.headers["apns-priority"],
+        collapseId: request.headers["apns-collapse-id"],
       },
       payload,
       problems,
@@ -53,17 +53,17 @@ createServer((req, res) => {
     log.push(entry);
     console.log(JSON.stringify(entry, null, 2));
     if (problems.length) {
-      res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ reason: "BadRequest", problems }));
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ reason: "BadRequest", problems }));
     } else if (token.startsWith("dead")) {
-      res.writeHead(410, { "content-type": "application/json" });
-      res.end(JSON.stringify({ reason: "Unregistered", timestamp: Date.now() }));
+      response.writeHead(410, { "content-type": "application/json" });
+      response.end(JSON.stringify({ reason: "Unregistered", timestamp: Date.now() }));
     } else if (token.startsWith("busy")) {
-      res.writeHead(503, { "content-type": "application/json" });
-      res.end(JSON.stringify({ reason: "ServiceUnavailable" }));
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ reason: "ServiceUnavailable" }));
     } else {
-      res.writeHead(200, { "apns-id": randomUUID() });
-      res.end();
+      response.writeHead(200, { "apns-id": randomUUID() });
+      response.end();
     }
   });
 }).listen(port, "127.0.0.1", () => {

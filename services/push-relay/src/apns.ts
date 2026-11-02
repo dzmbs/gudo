@@ -26,10 +26,10 @@ function pemToDer(pem: string): Uint8Array {
     .replace(/-----BEGIN [^-]+-----/, "")
     .replace(/-----END [^-]+-----/, "")
     .replace(/\s+/g, "");
-  const bin = atob(body);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  const binary = atob(body);
+  const der = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) der[i] = binary.charCodeAt(i);
+  return der;
 }
 
 export async function providerJwt(env: Env, now = Date.now()): Promise<string> {
@@ -47,10 +47,14 @@ export async function providerJwt(env: Env, now = Date.now()): Promise<string> {
   const claims = b64url(
     utf8.encode(JSON.stringify({ iss: env.APNS_TEAM_ID, iat: Math.floor(now / 1000) })),
   );
-  const input = `${header}.${claims}`;
+  const signingInput = `${header}.${claims}`;
   // WebCrypto's ECDSA signature is r || s, which is exactly JWS's ES256 format.
-  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, utf8.encode(input));
-  const jwt = `${input}.${b64url(new Uint8Array(sig))}`;
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    key,
+    utf8.encode(signingInput),
+  );
+  const jwt = `${signingInput}.${b64url(new Uint8Array(signature))}`;
   cached = { jwt, at: now, keyId: env.APNS_KEY_ID };
   return jwt;
 }
@@ -80,16 +84,20 @@ export interface ApnsRequest {
   body: string;
 }
 
-/** Builds the APNs request for a verified relay request and its opened capability. */
-export function buildApnsRequest(env: Env, cap: Cap, req: RelayRequest, nowMs = Date.now()): ApnsRequest {
+export function buildApnsRequest(
+  env: Env,
+  cap: Cap,
+  relayRequest: RelayRequest,
+  nowMs = Date.now(),
+): ApnsRequest {
   const origin =
     env.APNS_ORIGIN ||
     (cap.e === "sandbox" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com");
   const now = Math.floor(nowMs / 1000);
   const headers: Record<string, string> = {};
   let payload: unknown;
-  if (req.push_type === "alert") {
-    const category = req.category!;
+  if (relayRequest.push_type === "alert") {
+    const category = relayRequest.category!;
     const urgent = category === "approval" || category === "blocked";
     headers["apns-push-type"] = "alert";
     headers["apns-topic"] = env.APNS_TOPIC;
@@ -105,29 +113,29 @@ export function buildApnsRequest(env: Env, cap: Cap, req: RelayRequest, nowMs = 
         sound: "default",
         "interruption-level": urgent ? "time-sensitive" : "active",
       },
-      s: req.sealed,
+      s: relayRequest.sealed,
       v: 1,
     };
   } else {
     headers["apns-push-type"] = "liveactivity";
     headers["apns-topic"] = `${env.APNS_TOPIC}.push-type.liveactivity`;
-    headers["apns-priority"] = req.urgent ? "10" : "5";
+    headers["apns-priority"] = relayRequest.urgent ? "10" : "5";
     const aps: Record<string, unknown> = {
       timestamp: now,
-      event: req.event,
+      event: relayRequest.event,
       // The widget decrypts `s` while rendering (docs/PUSH.md, Live Activities).
-      "content-state": { s: req.sealed, v: 1 },
+      "content-state": { s: relayRequest.sealed, v: 1 },
     };
-    if (req.stale !== undefined) aps["stale-date"] = req.stale;
-    if (req.dismiss !== undefined) aps["dismissal-date"] = req.dismiss;
-    if (req.event === "start") {
+    if (relayRequest.stale !== undefined) aps["stale-date"] = relayRequest.stale;
+    if (relayRequest.dismiss !== undefined) aps["dismissal-date"] = relayRequest.dismiss;
+    if (relayRequest.event === "start") {
       aps["attributes-type"] = ACTIVITY_ATTRIBUTES_TYPE;
       aps.attributes = { v: 1 };
       aps.alert = { title: "Agents", body: "Your agents are running." };
     }
     payload = { aps };
   }
-  if (req.collapse) headers["apns-collapse-id"] = req.collapse;
+  if (relayRequest.collapse) headers["apns-collapse-id"] = relayRequest.collapse;
   return {
     url: `${origin}/3/device/${cap.t}`,
     headers,
@@ -142,41 +150,44 @@ export type ApnsOutcome =
   | { kind: "retry"; status: number; reason: string; retryAfter?: string }
   | { kind: "rejected"; status: number; reason: string };
 
-export async function sendToApns(env: Env, req: ApnsRequest): Promise<ApnsOutcome> {
+export async function sendToApns(env: Env, apnsRequest: ApnsRequest): Promise<ApnsOutcome> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const jwt = await providerJwt(env);
-    const res = await fetch(req.url, {
+    const response = await fetch(apnsRequest.url, {
       method: "POST",
-      headers: { ...req.headers, authorization: `bearer ${jwt}`, "content-type": "application/json" },
-      body: req.body,
+      headers: {
+        ...apnsRequest.headers,
+        authorization: `bearer ${jwt}`,
+        "content-type": "application/json",
+      },
+      body: apnsRequest.body,
     });
-    if (res.ok) return { kind: "sent", id: res.headers.get("apns-id") };
+    if (response.ok) return { kind: "sent", id: response.headers.get("apns-id") };
     let reason = "";
     try {
-      reason = ((await res.json()) as { reason?: string }).reason ?? "";
+      reason = ((await response.json()) as { reason?: string }).reason ?? "";
     } catch {
       // Not JSON.
     }
-    // A stale or revoked provider token: mint a new one once.
-    if (res.status === 403 && reason === "ExpiredProviderToken" && attempt === 0) {
+    if (response.status === 403 && reason === "ExpiredProviderToken" && attempt === 0) {
       resetJwt();
       continue;
     }
     if (
-      res.status === 410 ||
-      (res.status === 400 && (reason === "BadDeviceToken" || reason === "DeviceTokenNotForTopic"))
+      response.status === 410 ||
+      (response.status === 400 && (reason === "BadDeviceToken" || reason === "DeviceTokenNotForTopic"))
     ) {
       return { kind: "gone", reason };
     }
-    if (res.status === 429 || res.status >= 500) {
+    if (response.status === 429 || response.status >= 500) {
       return {
         kind: "retry",
-        status: res.status,
+        status: response.status,
         reason,
-        retryAfter: res.headers.get("retry-after") ?? undefined,
+        retryAfter: response.headers.get("retry-after") ?? undefined,
       };
     }
-    return { kind: "rejected", status: res.status, reason };
+    return { kind: "rejected", status: response.status, reason };
   }
   return { kind: "retry", status: 403, reason: "ExpiredProviderToken" };
 }

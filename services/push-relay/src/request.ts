@@ -36,36 +36,36 @@ const EVENTS = new Set(["start", "update", "end"]);
 
 /** Parses and shape-checks a body; returns an error message for a malformed one. */
 export function parseRequest(body: Uint8Array): RelayRequest | string {
-  let r: RelayRequest;
+  let request: RelayRequest;
   try {
-    r = JSON.parse(new TextDecoder().decode(body));
+    request = JSON.parse(new TextDecoder().decode(body));
   } catch {
     return "body is not JSON";
   }
-  if (typeof r !== "object" || r === null || Array.isArray(r)) return "body is not an object";
-  if (r.v !== 1) return "unsupported version";
-  if (typeof r.daemon !== "string" || !unhex(r.daemon, 32)) return "bad daemon key";
-  if (typeof r.cap !== "string" || r.cap.length > 4096) return "bad cap";
-  if (typeof r.sealed !== "string" || !unb64url(r.sealed)) return "bad sealed payload";
-  if (r.sealed.length > MAX_SEALED) return "sealed payload too large";
-  if (!Number.isSafeInteger(r.ts) || r.ts < 0) return "bad ts";
-  if (typeof r.nonce !== "string" || !/^[0-9a-f]{16,64}$/.test(r.nonce)) return "bad nonce";
+  if (typeof request !== "object" || request === null || Array.isArray(request)) return "body is not an object";
+  if (request.v !== 1) return "unsupported version";
+  if (typeof request.daemon !== "string" || !unhex(request.daemon, 32)) return "bad daemon key";
+  if (typeof request.cap !== "string" || request.cap.length > 4096) return "bad cap";
+  if (typeof request.sealed !== "string" || !unb64url(request.sealed)) return "bad sealed payload";
+  if (request.sealed.length > MAX_SEALED) return "sealed payload too large";
+  if (!Number.isSafeInteger(request.ts) || request.ts < 0) return "bad ts";
+  if (typeof request.nonce !== "string" || !/^[0-9a-f]{16,64}$/.test(request.nonce)) return "bad nonce";
   // Goes into an HTTP header: the daemon's hex digest, never free text.
-  if (r.collapse !== undefined && (typeof r.collapse !== "string" || !/^[0-9a-f]{1,64}$/.test(r.collapse)))
+  if (request.collapse !== undefined && (typeof request.collapse !== "string" || !/^[0-9a-f]{1,64}$/.test(request.collapse)))
     return "bad collapse id";
-  if (r.push_type === "alert") {
-    if (typeof r.category !== "string" || !CATEGORIES.has(r.category)) return "alerts need a category";
-  } else if (r.push_type === "live_activity") {
-    if (typeof r.event !== "string" || !EVENTS.has(r.event)) return "live activities need an event";
+  if (request.push_type === "alert") {
+    if (typeof request.category !== "string" || !CATEGORIES.has(request.category)) return "alerts need a category";
+  } else if (request.push_type === "live_activity") {
+    if (typeof request.event !== "string" || !EVENTS.has(request.event)) return "live activities need an event";
   } else {
     return "bad push_type";
   }
-  for (const k of ["stale", "dismiss"] as const) {
-    const t = r[k];
-    if (t !== undefined && (!Number.isSafeInteger(t) || t < 0)) return `bad ${k}`;
+  for (const field of ["stale", "dismiss"] as const) {
+    const seconds = request[field];
+    if (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds < 0)) return `bad ${field}`;
   }
-  if (r.urgent !== undefined && typeof r.urgent !== "boolean") return "bad urgent";
-  return r;
+  if (request.urgent !== undefined && typeof request.urgent !== "boolean") return "bad urgent";
+  return request;
 }
 
 /** Verifies the daemon's Ed25519 signature over the exact body bytes. */
@@ -74,12 +74,12 @@ export async function verifySignature(
   body: Uint8Array,
   signature: string | null,
 ): Promise<boolean> {
-  const sig = signature ? unb64url(signature) : null;
-  const pub = unhex(daemonHex, 32);
-  if (!sig || sig.length !== 64 || !pub) return false;
+  const signatureBytes = signature ? unb64url(signature) : null;
+  const publicKey = unhex(daemonHex, 32);
+  if (!signatureBytes || signatureBytes.length !== 64 || !publicKey) return false;
   try {
-    const key = await crypto.subtle.importKey("raw", pub, { name: "Ed25519" }, false, ["verify"]);
-    return await crypto.subtle.verify({ name: "Ed25519" }, key, sig, concat(DOMAIN, body));
+    const key = await crypto.subtle.importKey("raw", publicKey, { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.verify({ name: "Ed25519" }, key, signatureBytes, concat(DOMAIN, body));
   } catch {
     return false;
   }
