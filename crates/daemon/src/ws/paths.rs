@@ -9,7 +9,6 @@ use std::path::{Component, Path, PathBuf};
 
 use proto::WsError;
 
-/// The allowed roots, canonicalized once.
 #[derive(Debug, Clone)]
 pub(crate) struct Policy {
     home: PathBuf,
@@ -19,9 +18,9 @@ pub(crate) struct Policy {
 }
 
 impl Policy {
-    pub fn new(home: &Path, extra: &[PathBuf]) -> Self {
+    pub fn new(home: &Path, extra_roots: &[PathBuf]) -> Self {
         let roots = std::iter::once(home)
-            .chain(extra.iter().map(PathBuf::as_path))
+            .chain(extra_roots.iter().map(PathBuf::as_path))
             .map(canonical)
             .collect();
         Self {
@@ -35,16 +34,15 @@ impl Policy {
     /// refuse everything).
     pub fn deny(mut self, dir: &Path) -> Self {
         let dir = canonical(dir);
-        if !self.roots.iter().any(|r| r.starts_with(&dir)) {
+        if !self.roots.iter().any(|root| root.starts_with(&dir)) {
             self.denied.push(dir);
         }
         self
     }
 
-    /// Whether the real path `real` may be served.
     fn allows(&self, real: &Path) -> bool {
-        self.roots.iter().any(|r| real.starts_with(r))
-            && !self.denied.iter().any(|d| real.starts_with(d))
+        self.roots.iter().any(|root| real.starts_with(root))
+            && !self.denied.iter().any(|denied| real.starts_with(denied))
     }
 
     pub fn home(&self) -> &Path {
@@ -72,10 +70,12 @@ impl Policy {
                 "{raw:?} is not absolute (use / or ~/)"
             )));
         }
-        if path.components().any(|c| c == Component::ParentDir) {
+        if path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
             return Err(WsError::Denied(format!("{raw:?} contains '..'")));
         }
-        // Lexically normalise `.` and repeated separators.
         let path: PathBuf = path.components().collect();
         // The final component is not followed: a symlink is itself inside the root.
         if self.allows(&real_of(&path)) {
@@ -108,7 +108,7 @@ impl Policy {
     pub fn resolve_movable(&self, raw: &str) -> Result<PathBuf, WsError> {
         let path = self.resolve(raw)?;
         let real = real_of(&path);
-        if self.denied.iter().any(|d| d.starts_with(&real)) {
+        if self.denied.iter().any(|denied| denied.starts_with(&real)) {
             return Err(WsError::Denied(format!(
                 "{} holds the daemon's state",
                 path.display()
@@ -143,9 +143,9 @@ fn real_prefix(path: &Path) -> PathBuf {
     let mut rest = Vec::new();
     loop {
         if let Ok(real) = existing.canonicalize() {
-            let mut out = real;
-            out.extend(rest.iter().rev());
-            return out;
+            let mut resolved = real;
+            resolved.extend(rest.iter().rev());
+            return resolved;
         }
         match (existing.parent(), existing.file_name()) {
             (Some(parent), Some(name)) => {
@@ -158,10 +158,10 @@ fn real_prefix(path: &Path) -> PathBuf {
 }
 
 /// Maps an I/O error to the closest [`WsError`], naming `path`.
-pub(crate) fn io_error(path: &Path, e: &std::io::Error) -> WsError {
+pub(crate) fn io_error(path: &Path, error: &std::io::Error) -> WsError {
     use std::io::ErrorKind;
-    let what = format!("{}: {e}", path.display());
-    match e.kind() {
+    let what = format!("{}: {error}", path.display());
+    match error.kind() {
         ErrorKind::NotFound => WsError::NotFound(what),
         ErrorKind::PermissionDenied => WsError::Denied(what),
         ErrorKind::AlreadyExists | ErrorKind::DirectoryNotEmpty => WsError::Conflict(what),

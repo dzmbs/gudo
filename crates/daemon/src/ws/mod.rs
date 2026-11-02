@@ -1,4 +1,5 @@
-//! worktrees, files and the attention feed. See `docs/DAEMON.md` §5.
+//! Developer-workflow requests: ports, editor, git, agent-turn diffs, review notes,
+//! worktrees, files and the attention feed.
 //!
 //! [`handle`] answers one [`WorkspaceRequest`]. Blocking work (git, the file system, process
 //! tables) runs on `spawn_blocking`; every path goes through [`paths::Policy`] first.
@@ -44,7 +45,6 @@ pub(crate) use watch::Watch;
 use crate::config::Config;
 use crate::core::{Core, Event, lock};
 
-/// Workspace state owned by the core.
 pub(crate) struct Ws {
     pub policy: Policy,
     pub ports: ports::Ports,
@@ -59,38 +59,36 @@ pub(crate) struct Ws {
     pub hook_trust: trust::HookTrust,
     worktree_root: PathBuf,
     pub usage: Arc<crate::usage::Usage>,
-    /// Agent accounts (`proto::account`).
     pub accounts: Arc<crate::accounts::Accounts>,
     /// How the agents' own commands run for an account.
     pub tools: crate::accounts::Tools,
-    /// Workflow files (`proto::workflow`).
     pub workflows: Arc<workflows::Workflows>,
     /// `PATH` as the user's terminal panes see it.
     pub terminal_path: installs::TerminalPath,
 }
 
 impl Ws {
-    pub fn new(cfg: &Config, events: tokio::sync::broadcast::Sender<Event>) -> Self {
-        let home = cfg.home();
-        let accounts = Arc::new(crate::accounts::Accounts::load(&cfg.state_dir));
+    pub fn new(config: &Config, events: tokio::sync::broadcast::Sender<Event>) -> Self {
+        let home = config.home();
+        let accounts = Arc::new(crate::accounts::Accounts::load(&config.state_dir));
         Self {
-            policy: Policy::new(&home, &cfg.fs_allow).deny(&cfg.state_dir),
+            policy: Policy::new(&home, &config.fs_allow).deny(&config.state_dir),
             ports: ports::Ports::new(),
             attention: Attention::default(),
             turns: turns::Turns::new(),
             editors: editor::Editors::default(),
             tunnel: tunnel::Tunnel::new(events.clone()),
             workflows: Arc::new(workflows::Workflows::new(events)),
-            worktrees: worktree::Worktrees::load(&cfg.state_dir, cfg.worktree_port_base),
+            worktrees: worktree::Worktrees::load(&config.state_dir, config.worktree_port_base),
             repos: repo::Repos::new(),
-            hook_trust: trust::HookTrust::load(&cfg.state_dir),
-            worktree_root: cfg
+            hook_trust: trust::HookTrust::load(&config.state_dir),
+            worktree_root: config
                 .worktree_root
                 .clone()
                 .unwrap_or_else(|| home.join(format!(".{}", brand::DIR_NAME)).join("worktrees")),
-            usage: Arc::new(crate::usage::Usage::new(cfg, Arc::clone(&accounts))),
+            usage: Arc::new(crate::usage::Usage::new(config, Arc::clone(&accounts))),
             accounts,
-            tools: crate::accounts::Tools::new(cfg),
+            tools: crate::accounts::Tools::new(config),
             terminal_path: installs::TerminalPath::default(),
         }
     }
@@ -114,13 +112,12 @@ pub(crate) struct ConnCtx {
     pub owner: bool,
 }
 
-/// Runs `f` on the blocking pool.
 async fn blocking<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, WsError> + Send + 'static,
+    work: impl FnOnce() -> Result<T, WsError> + Send + 'static,
 ) -> Result<T, WsError> {
-    tokio::task::spawn_blocking(f)
+    tokio::task::spawn_blocking(work)
         .await
-        .unwrap_or_else(|e| Err(WsError::Failed(e.to_string())))
+        .unwrap_or_else(|error| Err(WsError::Failed(error.to_string())))
 }
 
 fn existing_dir(policy: &Policy, raw: &str) -> Result<PathBuf, WsError> {
@@ -138,59 +135,58 @@ fn existing_dir(policy: &Policy, raw: &str) -> Result<PathBuf, WsError> {
 fn workspace_folder(file: &Path) -> PathBuf {
     let dir = file.parent().unwrap_or(file);
     dir.ancestors()
-        .find(|d| d.join(".git").exists())
+        .find(|ancestor| ancestor.join(".git").exists())
         .unwrap_or(dir)
         .to_owned()
 }
 
 static NEXT_WATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// Answers one request.
 pub(crate) async fn handle(
     core: &Arc<Core>,
     conn: &ConnCtx,
-    req: WorkspaceRequest,
+    request: WorkspaceRequest,
 ) -> Result<WorkspaceResponse, WsError> {
-    use WorkspaceRequest as R;
-    use WorkspaceResponse as A;
+    use WorkspaceRequest as Request;
+    use WorkspaceResponse as Response;
     let ws = &core.ws;
     let policy = ws.policy.clone();
-    match req {
-        R::Accounts
-        | R::AccountAdd(_)
-        | R::AccountEdit { .. }
-        | R::AccountRemove { .. }
-        | R::AccountCheck { .. }
-        | R::AccountSetDefault { .. }
+    match request {
+        Request::Accounts
+        | Request::AccountAdd(_)
+        | Request::AccountEdit { .. }
+        | Request::AccountRemove { .. }
+        | Request::AccountCheck { .. }
+        | Request::AccountSetDefault { .. }
             if !conn.owner =>
         {
             Err(WsError::Denied(
                 "only the host's owner sees or changes its agent accounts".into(),
             ))
         }
-        req @ (R::Accounts
-        | R::AccountAdd(_)
-        | R::AccountEdit { .. }
-        | R::AccountRemove { .. }
-        | R::AccountCheck { .. }
-        | R::AccountSetDefault { .. }) => accounts(core, req).await,
-        R::ListPorts => Ok(A::Ports(ports::scan(core).await)),
-        R::EditorStatus => Ok(A::Editors(ws.editors.status(&core.cfg).await)),
-        R::EditorLaunch(launch) => {
+        request @ (Request::Accounts
+        | Request::AccountAdd(_)
+        | Request::AccountEdit { .. }
+        | Request::AccountRemove { .. }
+        | Request::AccountCheck { .. }
+        | Request::AccountSetDefault { .. }) => accounts(core, request).await,
+        Request::ListPorts => Ok(Response::Ports(ports::scan(core).await)),
+        Request::EditorStatus => Ok(Response::Editors(ws.editors.status(&core.cfg).await)),
+        Request::EditorLaunch(launch) => {
             let folder = existing_dir(&policy, &launch.folder)?;
             let folder = folder.canonicalize().unwrap_or(folder);
             ws.editors
                 .launch(&core.cfg, &launch, &folder)
                 .await
-                .map(A::Editor)
+                .map(Response::Editor)
         }
-        R::EditorStop { folder } => {
+        Request::EditorStop { folder } => {
             let folder = policy.resolve(&folder)?;
             let folder = folder.canonicalize().unwrap_or(folder);
             ws.editors.stop(&folder.to_string_lossy()).await?;
-            Ok(A::Done)
+            Ok(Response::Done)
         }
-        R::EditorOpen {
+        Request::EditorOpen {
             folder,
             path,
             line,
@@ -199,29 +195,37 @@ pub(crate) async fn handle(
             let path = policy.resolve_followed(&path)?;
             let path = path.canonicalize().unwrap_or(path);
             let folder = match folder {
-                Some(f) => {
-                    let f = policy.resolve(&f)?;
-                    Some(f.canonicalize().unwrap_or(f).to_string_lossy().into_owned())
+                Some(folder) => {
+                    let folder = policy.resolve(&folder)?;
+                    Some(
+                        folder
+                            .canonicalize()
+                            .unwrap_or(folder)
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
                 }
                 None => None,
             };
             ws.editors
                 .open(folder.as_deref(), &path, line, column)
                 .await
-                .map(A::EditorOpened)
+                .map(Response::EditorOpened)
         }
-        R::GitStatus { path } => {
+        Request::GitStatus { path } => {
             let dir = existing_dir(&policy, &path)?;
-            blocking(move || git::status(&dir)).await.map(A::GitStatus)
-        }
-        R::GitDiff(req) => {
-            let dir = existing_dir(&policy, &req.path)?;
-            blocking(move || git::diff(&req, &dir))
+            blocking(move || git::status(&dir))
                 .await
-                .map(A::GitDiff)
+                .map(Response::GitStatus)
         }
-        R::ListTurns { pane_id } => Ok(A::Turns(ws.turns.list(pane_id))),
-        R::TurnDiff {
+        Request::GitDiff(diff) => {
+            let dir = existing_dir(&policy, &diff.path)?;
+            blocking(move || git::diff(&diff, &dir))
+                .await
+                .map(Response::GitDiff)
+        }
+        Request::ListTurns { pane_id } => Ok(Response::Turns(ws.turns.list(pane_id))),
+        Request::TurnDiff {
             pane_id,
             turn,
             context,
@@ -230,9 +234,9 @@ pub(crate) async fn handle(
             let core = Arc::clone(core);
             blocking(move || core.ws.turns.diff(pane_id, turn, context, hunks))
                 .await
-                .map(A::GitDiff)
+                .map(Response::GitDiff)
         }
-        R::SendReview(review) => {
+        Request::SendReview(review) => {
             let entry = core
                 .pane(review.pane_id)
                 .ok_or_else(|| WsError::NotFound(format!("pane {}", review.pane_id)))?;
@@ -251,47 +255,46 @@ pub(crate) async fn handle(
                 tokio::time::sleep(Duration::from_millis(80)).await;
                 let _ = entry.pane.write(b"\r".to_vec()).await;
             }
-            Ok(A::ReviewSent { prompt })
+            Ok(Response::ReviewSent { prompt })
         }
-        R::WorktreeCreate(mut create) => {
+        Request::WorktreeCreate(mut create) => {
             let repo = existing_dir(&policy, &create.repo)?;
             create.repo = repo.to_string_lossy().into_owned();
-            if let Some(p) = &create.path {
-                create.path = Some(policy.resolve(p)?.to_string_lossy().into_owned());
+            if let Some(path) = &create.path {
+                create.path = Some(policy.resolve(path)?.to_string_lossy().into_owned());
             }
-            let core2 = Arc::clone(core);
+            let core = Arc::clone(core);
             let root = ws.worktree_root.clone();
-            let made = blocking(move || core2.ws.worktrees.create(&create, &root)).await;
+            let made = blocking(move || core.ws.worktrees.create(&create, &root)).await;
             ws.repos.relist();
-            made.map(A::Worktree)
+            made.map(Response::Worktree)
         }
-        R::WorktreeList { repo } => {
+        Request::WorktreeList { repo } => {
             let dir = existing_dir(&policy, &repo)?;
-            let core2 = Arc::clone(core);
-            blocking(move || core2.ws.worktrees.list(&dir))
+            let core = Arc::clone(core);
+            blocking(move || core.ws.worktrees.list(&dir))
                 .await
-                .map(A::Worktrees)
+                .map(Response::Worktrees)
         }
-        R::WorktreeRemove {
+        Request::WorktreeRemove {
             path,
             force,
             delete_branch,
         } => {
             let path = policy.resolve(&path)?;
-            let core2 = Arc::clone(core);
+            let core = Arc::clone(core);
             blocking(move || {
                 let main = repo_ops::main_of(&path).ok();
-                let hooks = repo::runnable_hooks(&core2, &path, main.as_deref());
-                core2
-                    .ws
+                let hooks = repo::runnable_hooks(&core, &path, main.as_deref());
+                core.ws
                     .worktrees
                     .remove(&path, force, delete_branch, hooks.teardown.as_deref())
             })
             .await?;
             ws.repos.relist();
-            Ok(A::Done)
+            Ok(Response::Done)
         }
-        R::WorktreeLaunch {
+        Request::WorktreeLaunch {
             path,
             split_from,
             axis,
@@ -299,7 +302,7 @@ pub(crate) async fn handle(
         } => {
             let dir = existing_dir(&policy, &path)?;
             let cwd = Some(dir.to_string_lossy().into_owned());
-            // Make sure the worktree has its port even if it was created outside the daemon.
+            // A worktree created outside the daemon has no port yet.
             ws.worktrees.allocate(&dir);
             let launch = match agent {
                 Some(agent) => PaneLaunch::Agent {
@@ -314,69 +317,76 @@ pub(crate) async fn handle(
                 axis,
                 launch,
             }) {
-                proto::OpOutcome::PaneCreated { pane_id } => Ok(A::PaneCreated { pane_id }),
+                proto::OpOutcome::PaneCreated { pane_id } => Ok(Response::PaneCreated { pane_id }),
                 proto::OpOutcome::Failed { message, .. } => Err(WsError::Failed(message)),
                 other => Err(WsError::Failed(format!("unexpected outcome {other:?}"))),
             }
         }
-        R::FsList { path, show_hidden } => {
+        Request::FsList { path, show_hidden } => {
             blocking(move || files::list(&policy, &path, show_hidden))
                 .await
-                .map(A::Dir)
+                .map(Response::Dir)
         }
-        R::FsStat { path } => blocking(move || files::stat(&policy.resolve(&path)?))
+        Request::FsStat { path } => blocking(move || files::stat(&policy.resolve(&path)?))
             .await
-            .map(A::Stat),
-        R::FsRead { path, offset, len } => {
+            .map(Response::Stat),
+        Request::FsRead { path, offset, len } => {
             blocking(move || files::read(&policy, &path, offset, len))
                 .await
-                .map(A::FileData)
+                .map(Response::FileData)
         }
-        R::FsWrite { target, data } => {
+        Request::FsWrite { target, data } => {
             blocking(move || files::write_small(&policy, &target, &data))
                 .await
-                .map(A::Stat)
+                .map(Response::Stat)
         }
-        R::FsMkdir { path, parents } => blocking(move || files::mkdir(&policy, &path, parents))
-            .await
-            .map(A::Stat),
-        R::FsRename {
+        Request::FsMkdir { path, parents } => {
+            blocking(move || files::mkdir(&policy, &path, parents))
+                .await
+                .map(Response::Stat)
+        }
+        Request::FsRename {
             from,
             to,
             overwrite,
         } => blocking(move || files::rename(&policy, &from, &to, overwrite))
             .await
-            .map(A::Stat),
-        R::FsDelete {
+            .map(Response::Stat),
+        Request::FsDelete {
             path,
             mode,
             recursive,
         } => {
             blocking(move || files::delete(&policy, &path, mode, recursive)).await?;
-            Ok(A::Done)
+            Ok(Response::Done)
         }
-        R::FsWatch { path } => {
+        Request::FsWatch { path } => {
             let dir = policy.resolve_followed(&path)?;
             let watch_id = NEXT_WATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let watch = watch::start(&dir, watch_id, conn.ctl.clone())?;
             lock(&conn.watches).insert(watch_id, watch);
-            Ok(A::Watching { watch_id })
+            Ok(Response::Watching { watch_id })
         }
-        R::FsUnwatch { watch_id } => lock(&conn.watches)
+        Request::FsUnwatch { watch_id } => lock(&conn.watches)
             .remove(&watch_id)
-            .map(|_| A::Done)
+            .map(|_| Response::Done)
             .ok_or_else(|| WsError::NotFound(format!("watch {watch_id}"))),
-        R::VsCodeTunnelStatus => Ok(A::VsCodeTunnel(ws.tunnel.status(&core.cfg).await)),
-        R::VsCodeCliInstall(install) => {
+        Request::VsCodeTunnelStatus => {
+            Ok(Response::VsCodeTunnel(ws.tunnel.status(&core.cfg).await))
+        }
+        Request::VsCodeCliInstall(install) => {
             if !install.accept_license {
                 return Err(WsError::Denied(format!(
                     "installing the VS Code CLI needs Microsoft's licence accepted ({})",
                     proto::VSCODE_LICENSE_URL
                 )));
             }
-            ws.tunnel.install_cli(&core.cfg).await.map(A::VsCodeTunnel)
+            ws.tunnel
+                .install_cli(&core.cfg)
+                .await
+                .map(Response::VsCodeTunnel)
         }
-        R::VsCodeTunnelStart(start) => {
+        Request::VsCodeTunnelStart(start) => {
             if !start.accept_server_license {
                 return Err(WsError::Denied(format!(
                     "the VS Code tunnel needs the VS Code Server licence accepted ({})",
@@ -386,19 +396,19 @@ pub(crate) async fn handle(
             ws.tunnel
                 .start(&core.cfg, &start)
                 .await
-                .map(A::VsCodeTunnel)
+                .map(Response::VsCodeTunnel)
         }
-        R::VsCodeTunnelStop => ws.tunnel.stop(&core.cfg).await.map(A::VsCodeTunnel),
-        R::VsCodeTunnelOpen(open) => {
+        Request::VsCodeTunnelStop => ws.tunnel.stop(&core.cfg).await.map(Response::VsCodeTunnel),
+        Request::VsCodeTunnelOpen(open) => {
             let path = policy.resolve_followed(&open.path)?;
             let path = path.canonicalize().unwrap_or(path);
             if !path.exists() {
                 return Err(WsError::NotFound(path.display().to_string()));
             }
             let folder = match &open.folder {
-                Some(f) => {
-                    let f = policy.resolve_followed(f)?;
-                    f.canonicalize().unwrap_or(f)
+                Some(folder) => {
+                    let folder = policy.resolve_followed(folder)?;
+                    folder.canonicalize().unwrap_or(folder)
                 }
                 None if path.is_dir() => path.clone(),
                 None => workspace_folder(&path),
@@ -406,87 +416,99 @@ pub(crate) async fn handle(
             ws.tunnel
                 .open(&folder, &path, open.line, open.column)
                 .await
-                .map(A::VsCodeTunnelOpened)
+                .map(Response::VsCodeTunnelOpened)
         }
-        R::PushRegister(reg) => Ok(A::Push(crate::notifier::register(core, conn.actor, reg)?)),
-        R::PushUnregister => Ok(A::Push(crate::notifier::unregister(core, conn.actor))),
-        R::PushStatus => Ok(A::Push(crate::notifier::status(core, conn.actor.device))),
-        R::PushActivity(token) => Ok(A::Push(crate::notifier::activity_token(
+        Request::PushRegister(registration) => Ok(Response::Push(crate::notifier::register(
+            core,
+            conn.actor,
+            registration,
+        )?)),
+        Request::PushUnregister => Ok(Response::Push(crate::notifier::unregister(
+            core, conn.actor,
+        ))),
+        Request::PushStatus => Ok(Response::Push(crate::notifier::status(
+            core,
+            conn.actor.device,
+        ))),
+        Request::PushActivity(token) => Ok(Response::Push(crate::notifier::activity_token(
             core, conn.actor, token,
         )?)),
-        R::PushAction(action) => {
-            crate::notifier::action(core, conn.actor, &action).map(A::PushDecided)
+        Request::PushAction(action) => {
+            crate::notifier::action(core, conn.actor, &action).map(Response::PushDecided)
         }
-        R::RepoRefresh { .. }
-        | R::PrMerge(_)
-        | R::PrRerunFailed { .. }
-        | R::PrCreate(_)
-        | R::PrCheckout(_)
-        | R::WorktreeArchive { .. }
-        | R::WorktreeArchived { .. }
-        | R::WorktreeRestore { .. }
-        | R::WorktreeSettings(_)
-        | R::TaskCreate(_)
-        | R::ScriptRun(_)
-        | R::RepoHooks(_) => {
+        Request::RepoRefresh { .. }
+        | Request::PrMerge(_)
+        | Request::PrRerunFailed { .. }
+        | Request::PrCreate(_)
+        | Request::PrCheckout(_)
+        | Request::WorktreeArchive { .. }
+        | Request::WorktreeArchived { .. }
+        | Request::WorktreeRestore { .. }
+        | Request::WorktreeSettings(_)
+        | Request::TaskCreate(_)
+        | Request::ScriptRun(_)
+        | Request::RepoHooks(_) => {
             let root = ws.worktree_root.clone();
-            repo_ops::handle(core, &policy, &root, req).await
+            repo_ops::handle(core, &policy, &root, request).await
         }
-        R::RepoTrust { .. } if !conn.owner => Err(WsError::Denied(
+        Request::RepoTrust { .. } if !conn.owner => Err(WsError::Denied(
             "only the host's owner can trust a repository's commands".into(),
         )),
-        R::RepoTrust { .. } => {
+        Request::RepoTrust { .. } => {
             let root = ws.worktree_root.clone();
-            repo_ops::handle(core, &policy, &root, req).await
+            repo_ops::handle(core, &policy, &root, request).await
         }
-        R::AttentionList => Ok(A::Attention(ws.attention.list())),
-        R::AttentionSeen(seen) => {
+        Request::AttentionList => Ok(Response::Attention(ws.attention.list())),
+        Request::AttentionSeen(seen) => {
             if let Some(update) = ws.attention.mark(&seen) {
                 core.emit(Event::Attention(update));
             }
-            Ok(A::Attention(ws.attention.list()))
+            Ok(Response::Attention(ws.attention.list()))
         }
-        R::UsageWatch(opts) => Ok(A::AgentUsage(
-            ws.usage.watch(&conn.ctl, conn.caps, opts).await,
+        Request::UsageWatch(options) => Ok(Response::AgentUsage(
+            ws.usage.watch(&conn.ctl, conn.caps, options).await,
         )),
-        R::UsageUnwatch => {
+        Request::UsageUnwatch => {
             ws.usage.unwatch(&conn.ctl);
-            Ok(A::Done)
+            Ok(Response::Done)
         }
-        R::WorkflowList { pane_id } => {
-            let cwd = pane_id.map(|p| pane_cwd(core, p)).transpose()?.flatten();
+        Request::WorkflowList { pane_id } => {
+            let cwd = pane_id
+                .map(|pane| pane_cwd(core, pane))
+                .transpose()?
+                .flatten();
             let global = workflow_dir(&core.cfg);
             let workflows = Arc::clone(&ws.workflows);
             blocking(move || Ok(workflows.list(&global, cwd.as_deref())))
                 .await
-                .map(A::Workflows)
+                .map(Response::Workflows)
         }
-        R::WorkflowSave(save) => {
+        Request::WorkflowSave(save) => {
             let cwd = save
                 .pane_id
-                .map(|p| pane_cwd(core, p))
+                .map(|pane| pane_cwd(core, pane))
                 .transpose()?
                 .flatten();
             let global = workflow_dir(&core.cfg);
             let workflows = Arc::clone(&ws.workflows);
             blocking(move || workflows.save(save.scope, &save.workflow, &global, cwd.as_deref()))
                 .await
-                .map(A::WorkflowSaved)
+                .map(Response::WorkflowSaved)
         }
-        R::AgentInstalls => {
+        Request::AgentInstalls => {
             let path = ws.terminal_path.refresh(&core.cfg).await;
-            Ok(A::AgentInstalls(installs::check(&core.cfg, path)))
+            Ok(Response::AgentInstalls(installs::check(&core.cfg, path)))
         }
-        R::AgentMcpCommands { register } => {
+        Request::AgentMcpCommands { register } => {
             let path = ws.terminal_path.cached(&core.cfg).await;
             let accounts: Vec<_> = ws
                 .accounts
                 .list()
                 .into_iter()
-                .filter(|a| !a.is_system())
-                .map(|a| (a.agent, ws.accounts.dir(a.agent, &a.id)))
+                .filter(|account| !account.is_system())
+                .map(|account| (account.agent, ws.accounts.dir(account.agent, &account.id)))
                 .collect();
-            Ok(A::AgentMcpCommands(installs::mcp_commands(
+            Ok(Response::AgentMcpCommands(installs::mcp_commands(
                 &core.cfg, path, register, &accounts,
             )))
         }
@@ -494,30 +516,33 @@ pub(crate) async fn handle(
 }
 
 /// Answers an `Account*` request from the owner.
-async fn accounts(core: &Arc<Core>, req: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
-    use WorkspaceRequest as R;
-    use WorkspaceResponse as A;
+async fn accounts(
+    core: &Arc<Core>,
+    request: WorkspaceRequest,
+) -> Result<WorkspaceResponse, WsError> {
+    use WorkspaceRequest as Request;
+    use WorkspaceResponse as Response;
     let ws = &core.ws;
     let changed = |core: &Core| {
         core.emit(Event::Accounts);
-        Ok(A::Accounts(core.accounts_report()))
+        Ok(Response::Accounts(core.accounts_report()))
     };
-    match req {
-        R::Accounts => {
+    match request {
+        Request::Accounts => {
             // Accounts nobody asked about yet are asked about now; clients hear the answer.
             for account in ws.accounts.list() {
                 if account.status == proto::AccountStatus::Unknown {
                     core.check_account(account.agent, account.id);
                 }
             }
-            Ok(A::Accounts(core.accounts_report()))
+            Ok(Response::Accounts(core.accounts_report()))
         }
-        R::AccountAdd(add) => {
+        Request::AccountAdd(add) => {
             let account = ws.accounts.add(&add).map_err(WsError::Invalid)?;
             core.emit(Event::Accounts);
-            Ok(A::Account(account))
+            Ok(Response::Account(account))
         }
-        R::AccountEdit {
+        Request::AccountEdit {
             agent,
             account,
             label,
@@ -528,12 +553,12 @@ async fn accounts(core: &Arc<Core>, req: WorkspaceRequest) -> Result<WorkspaceRe
                 .map_err(WsError::Invalid)?;
             changed(core)
         }
-        R::AccountRemove { agent, account } => {
+        Request::AccountRemove { agent, account } => {
             let in_use = core
                 .accounts_report()
                 .panes
                 .iter()
-                .filter(|p| p.agent == agent && p.account == account)
+                .filter(|pane| pane.agent == agent && pane.account == account)
                 .count();
             if in_use > 0 {
                 return Err(WsError::Conflict(format!(
@@ -549,7 +574,7 @@ async fn accounts(core: &Arc<Core>, req: WorkspaceRequest) -> Result<WorkspaceRe
                 .map_err(WsError::Failed)?;
             changed(core)
         }
-        R::AccountCheck { agent, account } => {
+        Request::AccountCheck { agent, account } => {
             let (account, updated) = ws
                 .accounts
                 .check(&ws.tools, agent, &account)
@@ -558,9 +583,9 @@ async fn accounts(core: &Arc<Core>, req: WorkspaceRequest) -> Result<WorkspaceRe
             if updated {
                 core.emit(Event::Accounts);
             }
-            Ok(A::Account(account))
+            Ok(Response::Account(account))
         }
-        R::AccountSetDefault {
+        Request::AccountSetDefault {
             agent,
             project,
             account,
@@ -575,9 +600,9 @@ async fn accounts(core: &Arc<Core>, req: WorkspaceRequest) -> Result<WorkspaceRe
 }
 
 /// The global workflow directory of the daemon's user.
-fn workflow_dir(cfg: &Config) -> PathBuf {
-    let xdg = cfg.pane_var("XDG_CONFIG_HOME").map(PathBuf::from);
-    workflows::global_dir(xdg.as_deref(), &cfg.home())
+fn workflow_dir(config: &Config) -> PathBuf {
+    let xdg_config = config.pane_var("XDG_CONFIG_HOME").map(PathBuf::from);
+    workflows::global_dir(xdg_config.as_deref(), &config.home())
 }
 
 /// A pane's directory: OSC 7, else where it was launched.
@@ -585,19 +610,17 @@ fn pane_cwd(core: &Core, pane: PaneId) -> Result<Option<PathBuf>, WsError> {
     let entry = core
         .pane(pane)
         .ok_or_else(|| WsError::NotFound(format!("pane {pane}")))?;
-    let meta = lock(&entry.meta).cwd.clone();
-    Ok(meta
+    let reported = lock(&entry.meta).cwd.clone();
+    Ok(reported
         .or_else(|| lock(&entry.record).cwd.clone())
         .map(PathBuf::from))
 }
 
-// --- hooks from the rest of the daemon ------------------------------------------------------
-
 /// A long command finished unseen. The body says how long it ran and ends with its last line
 /// of output, the line that usually says what happened.
 pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
-    let duration = mark.finished.map_or(0, |f| f.duration_ms) / 1000;
-    let status = match mark.finished.and_then(|f| f.exit) {
+    let duration = mark.finished.map_or(0, |finished| finished.duration_ms) / 1000;
+    let status = match mark.finished.and_then(|finished| finished.exit) {
         Some(0) => "succeeded".to_owned(),
         Some(code) => format!("failed ({code})"),
         None => "finished".to_owned(),
@@ -606,8 +629,8 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
     let command = mark
         .command
         .as_deref()
-        .map(|c| proto::clean_prompt_text(c, COMMAND_CHARS))
-        .filter(|c| !c.is_empty())
+        .map(|command| proto::clean_prompt_text(command, COMMAND_CHARS))
+        .filter(|command| !command.is_empty())
         .unwrap_or_else(|| "command".into());
     let last_line = core
         .pane(mark.pane_id)
@@ -628,17 +651,21 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
     core.emit(Event::Attention(update));
 }
 
-/// Longest last line put in a notification body, in characters.
+/// In characters.
 const LAST_LINE_CHARS: usize = 120;
-/// Longest command put in a notification title, in characters.
+/// In characters.
 const COMMAND_CHARS: usize = 80;
 
 /// The last line of output with something on it, trimmed and cut to [`LAST_LINE_CHARS`].
 fn last_output_line(text: &str) -> Option<String> {
-    let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    let line = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
     let line: String = line
         .chars()
-        .filter(|&c| !c.is_control() && !proto::is_invisible_format(c))
+        .filter(|&ch| !ch.is_control() && !proto::is_invisible_format(ch))
         .collect();
     if line.chars().count() > LAST_LINE_CHARS {
         let cut: String = line.chars().take(LAST_LINE_CHARS - 1).collect();

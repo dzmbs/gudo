@@ -1,6 +1,5 @@
-//! Trust for a repository's setup and teardown commands (`.gudo.json`), like VS Code's
-//! workspace trust or `direnv allow`: a clone or an unpacked archive must not run commands as
-//! the user just because a task was started in it.
+//! Trust for a repository's setup and teardown commands (`.gudo.json`): a clone or an unpacked
+//! archive must not run commands as the user just because a task was started in it.
 //!
 //! The owner trusts a repository's exact commands (SHA-256 of both) from the app; they run
 //! from then on until they change. Kept in `<state>/repo-trust.json`:
@@ -22,21 +21,20 @@ const MAX_PER_REPO: usize = 16;
 /// SHA-256 of the commands that would run, hex. Each part is tagged and length-prefixed so
 /// no two different pairs hash alike.
 pub(crate) fn hash(hooks: &RepoHooks) -> String {
-    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut hasher = ring::digest::Context::new(&ring::digest::SHA256);
     for part in [&hooks.setup, &hooks.teardown] {
         match part {
-            Some(cmd) => {
-                ctx.update(&[1]);
-                ctx.update(&(cmd.len() as u64).to_le_bytes());
-                ctx.update(cmd.as_bytes());
+            Some(command) => {
+                hasher.update(&[1]);
+                hasher.update(&(command.len() as u64).to_le_bytes());
+                hasher.update(command.as_bytes());
             }
-            None => ctx.update(&[0]),
+            None => hasher.update(&[0]),
         }
     }
-    fsutil::hex(ctx.finish().as_ref())
+    fsutil::hex(hasher.finish().as_ref())
 }
 
-/// The trusted hashes per repository.
 pub(crate) struct HookTrust {
     file: PathBuf,
     repos: Mutex<BTreeMap<String, Vec<String>>>,
@@ -48,7 +46,7 @@ impl HookTrust {
         let repos = fsutil::read_optional(&file)
             .ok()
             .flatten()
-            .and_then(|b| serde_json::from_slice(&b).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         Self {
             file,
@@ -77,22 +75,21 @@ impl HookTrust {
         RepoHooks::default()
     }
 
-    /// Trusts the commands hashing to `hash` in `repo`.
     pub fn trust(&self, repo: &Path, hash: &str) {
         let mut repos = lock(&self.repos);
         let hashes = repos.entry(key(repo)).or_default();
-        hashes.retain(|h| h != hash);
+        hashes.retain(|trusted| trusted != hash);
         hashes.push(hash.to_owned());
         if hashes.len() > MAX_PER_REPO {
             hashes.remove(0);
         }
         match serde_json::to_vec_pretty(&*repos) {
             Ok(data) => {
-                if let Err(e) = fsutil::write_atomic(&self.file, &data) {
-                    tracing::warn!("saving repository trust: {e}");
+                if let Err(error) = fsutil::write_atomic(&self.file, &data) {
+                    tracing::warn!("saving repository trust: {error}");
                 }
             }
-            Err(e) => tracing::warn!("encoding repository trust: {e}"),
+            Err(error) => tracing::warn!("encoding repository trust: {error}"),
         }
     }
 }
@@ -138,7 +135,6 @@ mod tests {
         assert!(!trust.trusted(repo.path(), &hooks(None, Some("make deps"))));
         assert!(!trust.trusted(repo.path(), &hooks(Some("make deps"), Some(""))));
 
-        // Kept across restarts.
         assert!(HookTrust::load(state.path()).trusted(repo.path(), &setup));
     }
 }

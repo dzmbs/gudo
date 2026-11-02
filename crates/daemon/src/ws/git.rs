@@ -24,7 +24,7 @@ const MAX_FILE_PATCH: usize = 1 << 20;
 /// Hunks stop being collected once the whole patch is this large.
 const MAX_TOTAL_PATCH: usize = 8 << 20;
 
-/// Runs git in `dir` and returns stdout.
+/// Returns stdout.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, WsError> {
     git_env(dir, args, &[])
 }
@@ -46,38 +46,45 @@ const HOOKED: &[&str] = &["push"];
 /// The config every daemon-run git in `dir` gets (`key=value`), and so does the git `gh`
 /// runs there.
 pub(crate) fn guard(dir: &Path, hooks: bool) -> Vec<String> {
-    let mut out: Vec<String> = SAFE_CONFIG.iter().map(|s| (*s).to_owned()).collect();
+    let mut settings: Vec<String> = SAFE_CONFIG
+        .iter()
+        .map(|setting| (*setting).to_owned())
+        .collect();
     if !hooks {
-        out.push("core.hooksPath=/dev/null".into());
+        settings.push("core.hooksPath=/dev/null".into());
     }
-    out.extend(neutralised_filters(dir));
-    out
+    settings.extend(neutralised_filters(dir));
+    settings
 }
 
 fn command(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.current_dir(dir)
+    let mut command = Command::new("git");
+    command
+        .current_dir(dir)
         .args(["-c", "core.quotePath=false", "-c", "color.ui=false"]);
-    let hooks = args.first().is_some_and(|a| HOOKED.contains(a));
+    let hooks = args
+        .first()
+        .is_some_and(|subcommand| HOOKED.contains(subcommand));
     for setting in guard(dir, hooks) {
-        cmd.arg("-c").arg(setting);
+        command.arg("-c").arg(setting);
     }
-    cmd.args(args.first());
+    command.args(args.first());
     // Status and diff look into a submodule's files by running `git status` inside it, under
     // that repository's own filters, which the overrides above do not name.
     if matches!(args.first(), Some(&("status" | "diff"))) {
-        cmd.arg("--ignore-submodules=dirty");
+        command.arg("--ignore-submodules=dirty");
     }
-    cmd.args(args.iter().skip(1))
+    command
+        .args(args.iter().skip(1))
         // Status must not take the index lock behind the user's back.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
         .stdin(Stdio::null());
-    for (k, v) in env {
-        cmd.env(k, v);
+    for (name, value) in env {
+        command.env(name, value);
     }
-    cmd
+    command
 }
 
 /// Git LFS's own filter commands, as `git lfs install --local` writes them.
@@ -92,7 +99,7 @@ const LFS_FILTERS: &[&str] = &[
 /// includes, and the worktree's config. Filters in the user's global or system config are
 /// theirs and stay.
 fn neutralised_filters(dir: &Path) -> Vec<String> {
-    let Ok(out) = Command::new("git")
+    let Ok(output) = Command::new("git")
         .current_dir(dir)
         .args(["config", "--show-scope", "--null", "--get-regexp"])
         .arg(r"^filter\..*\.(clean|smudge|process)$")
@@ -102,14 +109,14 @@ fn neutralised_filters(dir: &Path) -> Vec<String> {
     else {
         return Vec::new();
     };
-    overrides_for(&out.stdout)
+    overrides_for(&output.stdout)
 }
 
 /// The overrides for `git config --show-scope --null --get-regexp` output
 /// (`scope\0key\nvalue\0`…).
 fn overrides_for(listing: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut fields = listing.split(|&b| b == 0);
+    let mut overrides = Vec::new();
+    let mut fields = listing.split(|&byte| byte == 0);
     while let (Some(scope), Some(entry)) = (fields.next(), fields.next()) {
         if matches!(scope, b"global" | b"system") {
             continue;
@@ -117,50 +124,49 @@ fn overrides_for(listing: &[u8]) -> Vec<String> {
         let entry = String::from_utf8_lossy(entry);
         let (key, value) = entry.split_once('\n').unwrap_or((&entry, ""));
         if !LFS_FILTERS.contains(&value.trim()) {
-            out.push(format!("{key}="));
+            overrides.push(format!("{key}="));
             if let Some(name) = key.rsplit_once('.').map(|(name, _)| name) {
-                out.push(format!("{name}.required=false"));
+                overrides.push(format!("{name}.required=false"));
             }
         }
     }
-    out.dedup();
-    out
+    overrides.dedup();
+    overrides
 }
 
 fn git_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<Vec<u8>, WsError> {
-    let out = command(dir, args, env).output().map_err(spawn_error)?;
-    if out.status.success() {
-        Ok(out.stdout)
+    let output = command(dir, args, env).output().map_err(spawn_error)?;
+    if output.status.success() {
+        Ok(output.stdout)
     } else {
-        Err(git_failed(args, &out.stderr))
+        Err(git_failed(args, &output.stderr))
     }
 }
 
-fn spawn_error(e: std::io::Error) -> WsError {
-    if e.kind() == std::io::ErrorKind::NotFound {
+fn spawn_error(error: std::io::Error) -> WsError {
+    if error.kind() == std::io::ErrorKind::NotFound {
         WsError::Unavailable("git is not installed on the host".into())
     } else {
-        WsError::Failed(format!("running git: {e}"))
+        WsError::Failed(format!("running git: {error}"))
     }
 }
 
 fn git_failed(args: &[&str], stderr: &[u8]) -> WsError {
-    let msg = String::from_utf8_lossy(stderr).trim().to_owned();
-    if msg.contains("not a git repository") {
-        WsError::NotFound(msg)
+    let message = String::from_utf8_lossy(stderr).trim().to_owned();
+    if message.contains("not a git repository") {
+        WsError::NotFound(message)
     } else {
         WsError::Failed(format!(
-            "git {}: {msg}",
+            "git {}: {message}",
             args.first().copied().unwrap_or_default()
         ))
     }
 }
 
-fn text(out: Vec<u8>) -> String {
-    String::from_utf8_lossy(&out).trim_end().to_owned()
+fn text(stdout: Vec<u8>) -> String {
+    String::from_utf8_lossy(&stdout).trim_end().to_owned()
 }
 
-/// The top level of the worktree containing `dir`.
 pub(crate) fn toplevel(dir: &Path) -> Result<PathBuf, WsError> {
     let dir = if dir.is_dir() {
         dir
@@ -182,11 +188,9 @@ fn check_rev(rev: &str) -> Result<(), WsError> {
     }
 }
 
-// --- status ---------------------------------------------------------------------------------
-
 pub(crate) fn status(dir: &Path) -> Result<GitStatus, WsError> {
     let root = toplevel(dir)?;
-    let out = git(
+    let porcelain = git(
         &root,
         &[
             "status",
@@ -196,11 +200,11 @@ pub(crate) fn status(dir: &Path) -> Result<GitStatus, WsError> {
             "--untracked-files=normal",
         ],
     )?;
-    Ok(parse_status(&root, &out))
+    Ok(parse_status(&root, &porcelain))
 }
 
-fn change_of(c: u8) -> FileChange {
-    match c {
+fn change_of(code: u8) -> FileChange {
+    match code {
         b'M' => FileChange::Modified,
         b'A' => FileChange::Added,
         b'D' => FileChange::Deleted,
@@ -212,7 +216,7 @@ fn change_of(c: u8) -> FileChange {
     }
 }
 
-fn parse_status(root: &Path, out: &[u8]) -> GitStatus {
+fn parse_status(root: &Path, porcelain: &[u8]) -> GitStatus {
     let mut status = GitStatus {
         root: root.to_string_lossy().into_owned(),
         branch: None,
@@ -222,7 +226,9 @@ fn parse_status(root: &Path, out: &[u8]) -> GitStatus {
         behind: 0,
         files: Vec::new(),
     };
-    let mut fields = out.split(|&b| b == 0).map(|f| String::from_utf8_lossy(f));
+    let mut fields = porcelain
+        .split(|&byte| byte == 0)
+        .map(|field| String::from_utf8_lossy(field));
     while let Some(entry) = fields.next() {
         if let Some(header) = entry.strip_prefix("# ") {
             let (key, value) = header.split_once(' ').unwrap_or((header, ""));
@@ -232,10 +238,10 @@ fn parse_status(root: &Path, out: &[u8]) -> GitStatus {
                 "branch.upstream" => status.upstream = Some(value.to_owned()),
                 "branch.ab" => {
                     for part in value.split(' ') {
-                        if let Some(n) = part.strip_prefix('+') {
-                            status.ahead = n.parse().unwrap_or(0);
-                        } else if let Some(n) = part.strip_prefix('-') {
-                            status.behind = n.parse().unwrap_or(0);
+                        if let Some(count) = part.strip_prefix('+') {
+                            status.ahead = count.parse().unwrap_or(0);
+                        } else if let Some(count) = part.strip_prefix('-') {
+                            status.behind = count.parse().unwrap_or(0);
                         }
                     }
                 }
@@ -262,9 +268,9 @@ fn parse_status(root: &Path, out: &[u8]) -> GitStatus {
             }
             _ => continue,
         };
-        let mut cols = rest.splitn(skip + 1, ' ');
-        let xy = cols.next().unwrap_or("..").as_bytes().to_vec();
-        let path = cols.nth(skip - 1).unwrap_or_default().to_owned();
+        let mut columns = rest.splitn(skip + 1, ' ');
+        let xy = columns.next().unwrap_or("..").as_bytes().to_vec();
+        let path = columns.nth(skip - 1).unwrap_or_default().to_owned();
         let orig_path = (kind == "2").then(|| fields.next().unwrap_or_default().into_owned());
         let (staged, unstaged) = if kind == "u" {
             (FileChange::Unmerged, FileChange::Unmerged)
@@ -284,24 +290,22 @@ fn parse_status(root: &Path, out: &[u8]) -> GitStatus {
     status
 }
 
-// --- trees ----------------------------------------------------------------------------------
-
-/// The tree of an empty directory (object format aware).
+/// Hashed rather than hard-coded so it matches the repository's object format.
 fn empty_tree(root: &Path) -> Result<String, WsError> {
-    let out = command(root, &["hash-object", "-t", "tree", "--stdin"], &[])
+    let output = command(root, &["hash-object", "-t", "tree", "--stdin"], &[])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(spawn_error)?
         .wait_with_output()
-        .map_err(|e| WsError::Failed(e.to_string()))?;
-    Ok(text(out.stdout))
+        .map_err(|error| WsError::Failed(error.to_string()))?;
+    Ok(text(output.stdout))
 }
 
 fn head_tree(root: &Path) -> Result<String, WsError> {
     match git(root, &["rev-parse", "--verify", "-q", "HEAD^{tree}"]) {
-        Ok(out) => Ok(text(out)),
+        Ok(stdout) => Ok(text(stdout)),
         // No commits yet.
         Err(_) => empty_tree(root),
     }
@@ -327,14 +331,14 @@ impl TempIndex {
         };
         // In a private directory: the index lists the repository's paths and hashes.
         let dir = crate::fsutil::create_private_temp_dir(&format!("{}-index", brand::DIR_NAME))
-            .map_err(|e| WsError::Failed(e.to_string()))?;
-        let tmp = Self(dir.join("index"));
+            .map_err(|error| WsError::Failed(error.to_string()))?;
+        let copy = Self(dir.join("index"));
         // Starting from the real index keeps its stat cache, so unchanged files are not
         // re-hashed.
         if index.exists() {
-            std::fs::copy(&index, &tmp.0).map_err(|e| WsError::Failed(e.to_string()))?;
+            std::fs::copy(&index, &copy.0).map_err(|error| WsError::Failed(error.to_string()))?;
         }
-        Ok(tmp)
+        Ok(copy)
     }
 }
 
@@ -346,29 +350,32 @@ impl Drop for TempIndex {
     }
 }
 
-/// The index as a tree.
 fn index_tree(root: &Path) -> Result<String, WsError> {
-    let tmp = TempIndex::new(root)?;
-    git_env(root, &["write-tree"], &[("GIT_INDEX_FILE", &tmp.0)])
+    let index = TempIndex::new(root)?;
+    git_env(root, &["write-tree"], &[("GIT_INDEX_FILE", &index.0)])
         .map(text)
-        .map_err(|e| match e {
-            WsError::Failed(m) if m.contains("unmerged") => {
+        .map_err(|error| match error {
+            WsError::Failed(message) if message.contains("unmerged") => {
                 WsError::Conflict("the index has unmerged paths".into())
             }
-            e => e,
+            error => error,
         })
 }
 
 /// The working directory as a tree (tracked changes plus untracked, non-ignored files).
 /// Writes blobs into the object database; the user's index is untouched.
 pub(crate) fn worktree_tree(root: &Path) -> Result<String, WsError> {
-    let tmp = TempIndex::new(root)?;
-    let env = [("GIT_INDEX_FILE", tmp.0.as_path())];
+    let index = TempIndex::new(root)?;
+    let env = [("GIT_INDEX_FILE", index.0.as_path())];
     // `add` looks for changes inside a submodule by running `git status` in it, under that
     // repository's own filters. Submodules are recorded at their HEAD instead, as `add` would.
     let gitlinks = gitlinks(&git_env(root, &["ls-files", "--stage", "-z"], &env)?);
     let mut add = vec!["add".to_owned(), "-A".into(), "--".into(), ".".into()];
-    add.extend(gitlinks.iter().map(|p| format!(":(exclude,literal){p}")));
+    add.extend(
+        gitlinks
+            .iter()
+            .map(|path| format!(":(exclude,literal){path}")),
+    );
     git_env(
         root,
         &add.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -391,20 +398,20 @@ pub(crate) fn worktree_tree(root: &Path) -> Result<String, WsError> {
 /// The submodule paths in `git ls-files --stage -z` output.
 fn gitlinks(listing: &[u8]) -> Vec<String> {
     listing
-        .split(|&b| b == 0)
+        .split(|&byte| byte == 0)
         .filter_map(|record| {
-            let (meta, path) = record.split_at(record.iter().position(|&b| b == b'\t')?);
-            meta.starts_with(b"160000 ")
+            let (mode_and_oid, path) =
+                record.split_at(record.iter().position(|&byte| byte == b'\t')?);
+            mode_and_oid
+                .starts_with(b"160000 ")
                 .then(|| String::from_utf8_lossy(&path[1..]).into_owned())
         })
         .collect()
 }
 
-// --- diffs ----------------------------------------------------------------------------------
-
-pub(crate) fn diff(req: &GitDiffRequest, dir: &Path) -> Result<GitDiff, WsError> {
+pub(crate) fn diff(request: &GitDiffRequest, dir: &Path) -> Result<GitDiff, WsError> {
     let root = toplevel(dir)?;
-    let (from, to) = match &req.base {
+    let (from, to) = match &request.base {
         DiffBase::Head => (head_tree(&root)?, worktree_tree(&root)?),
         DiffBase::Index => (index_tree(&root)?, worktree_tree(&root)?),
         DiffBase::Staged => (head_tree(&root)?, index_tree(&root)?),
@@ -417,10 +424,16 @@ pub(crate) fn diff(req: &GitDiffRequest, dir: &Path) -> Result<GitDiff, WsError>
             (rev_tree(&root, &base)?, worktree_tree(&root)?)
         }
     };
-    diff_trees(&root, &from, &to, &req.files, req.context, req.hunks)
+    diff_trees(
+        &root,
+        &from,
+        &to,
+        &request.files,
+        request.context,
+        request.hunks,
+    )
 }
 
-/// Diff between two trees, file by file.
 pub(crate) fn diff_trees(
     root: &Path,
     from: &str,
@@ -437,26 +450,26 @@ pub(crate) fn diff_trees(
         args
     };
     let base = |extra: &[&str]| {
-        let mut v: Vec<String> = ["diff-tree", "-r", "-M", "--no-commit-id"]
+        let mut args: Vec<String> = ["diff-tree", "-r", "-M", "--no-commit-id"]
             .iter()
-            .map(|s| (*s).to_owned())
+            .map(|arg| (*arg).to_owned())
             .collect();
-        v.extend(extra.iter().map(|s| (*s).to_owned()));
-        v.push(from.to_owned());
-        v.push(to.to_owned());
-        with_files(v)
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args.push(from.to_owned());
+        args.push(to.to_owned());
+        with_files(args)
     };
-    fn as_refs(v: &[String]) -> Vec<&str> {
-        v.iter().map(String::as_str).collect()
+    fn as_refs(args: &[String]) -> Vec<&str> {
+        args.iter().map(String::as_str).collect()
     }
     let raw = git(root, &as_refs(&base(&["-z", "--raw"])))?;
     let numstat = git(root, &as_refs(&base(&["-z", "--numstat"])))?;
-    let mut out = parse_raw(&raw);
-    for (file, (add, del)) in out.iter_mut().zip(parse_numstat(&numstat)) {
-        match (add, del) {
-            (Some(a), Some(d)) => {
-                file.additions = a;
-                file.deletions = d;
+    let mut file_diffs = parse_raw(&raw);
+    for (file, counts) in file_diffs.iter_mut().zip(parse_numstat(&numstat)) {
+        match counts {
+            (Some(additions), Some(deletions)) => {
+                file.additions = additions;
+                file.deletions = deletions;
             }
             _ => file.binary = true,
         }
@@ -472,39 +485,39 @@ pub(crate) fn diff_trees(
             "--dst-prefix=b/",
             &unified,
         ]);
-        truncated = attach_hunks(root, &as_refs(&args), &mut out)?;
+        truncated = attach_hunks(root, &as_refs(&args), &mut file_diffs)?;
     } else {
-        for f in &mut out {
-            f.hunks_omitted = !f.binary;
+        for file in &mut file_diffs {
+            file.hunks_omitted = !file.binary;
         }
     }
     Ok(GitDiff {
         root: root.to_string_lossy().into_owned(),
         from: from.to_owned(),
         to: to.to_owned(),
-        files: out,
+        files: file_diffs,
         truncated,
     })
 }
 
 /// `:old_mode new_mode old_oid new_oid STATUS\0path\0[path2\0]`.
 fn parse_raw(raw: &[u8]) -> Vec<FileDiff> {
-    let mut fields = raw.split(|&b| b == 0);
+    let mut fields = raw.split(|&byte| byte == 0);
     let mut files = Vec::new();
-    while let Some(meta) = fields.next() {
-        let Some(meta) = meta.strip_prefix(b":") else {
+    while let Some(header) = fields.next() {
+        let Some(header) = header.strip_prefix(b":") else {
             continue;
         };
-        let meta = String::from_utf8_lossy(meta);
-        let status = meta.split(' ').nth(4).unwrap_or("M");
+        let header = String::from_utf8_lossy(header);
+        let status = header.split(' ').nth(4).unwrap_or("M");
         let code = status.as_bytes().first().copied().unwrap_or(b'M');
         let first = fields
             .next()
-            .map(|p| String::from_utf8_lossy(p).into_owned());
+            .map(|path| String::from_utf8_lossy(path).into_owned());
         let (path, old_path) = if matches!(code, b'R' | b'C') {
             let second = fields
                 .next()
-                .map(|p| String::from_utf8_lossy(p).into_owned());
+                .map(|path| String::from_utf8_lossy(path).into_owned());
             (second.unwrap_or_default(), first)
         } else {
             (first.unwrap_or_default(), None)
@@ -524,23 +537,23 @@ fn parse_raw(raw: &[u8]) -> Vec<FileDiff> {
 }
 
 /// `added\tdeleted\tpath\0` or, for renames, `added\tdeleted\t\0old\0new\0`; `-` for binary.
-fn parse_numstat(out: &[u8]) -> Vec<(Option<u32>, Option<u32>)> {
-    let mut fields = out.split(|&b| b == 0);
+fn parse_numstat(numstat: &[u8]) -> Vec<(Option<u32>, Option<u32>)> {
+    let mut fields = numstat.split(|&byte| byte == 0);
     let mut counts = Vec::new();
     while let Some(entry) = fields.next() {
         if entry.is_empty() {
             continue;
         }
         let entry = String::from_utf8_lossy(entry);
-        let mut cols = entry.splitn(3, '\t');
-        let add = cols.next().and_then(|n| n.parse().ok());
-        let del = cols.next().and_then(|n| n.parse().ok());
-        if cols.next().unwrap_or_default().is_empty() {
+        let mut columns = entry.splitn(3, '\t');
+        let additions = columns.next().and_then(|count| count.parse().ok());
+        let deletions = columns.next().and_then(|count| count.parse().ok());
+        if columns.next().unwrap_or_default().is_empty() {
             // A rename: the two paths follow as separate fields.
             fields.next();
             fields.next();
         }
-        counts.push((add, del));
+        counts.push((additions, deletions));
     }
     counts
 }
@@ -562,13 +575,13 @@ fn attach_hunks(root: &Path, args: &[&str], files: &mut [FileDiff]) -> Result<bo
     let mut line = Vec::new();
     loop {
         line.clear();
-        let n = reader
+        let read = reader
             .read_until(b'\n', &mut line)
-            .map_err(|e| WsError::Failed(e.to_string()))?;
-        if n == 0 {
+            .map_err(|error| WsError::Failed(error.to_string()))?;
+        if read == 0 {
             break;
         }
-        total += n;
+        total += read;
         if line.starts_with(b"diff --git ") {
             index = Some(index.map_or(0, |i| i + 1));
             file_bytes = 0;
@@ -581,7 +594,7 @@ fn attach_hunks(root: &Path, args: &[&str], files: &mut [FileDiff]) -> Result<bo
         let Some(file) = index.and_then(|i| files.get_mut(i)) else {
             continue;
         };
-        file_bytes += n;
+        file_bytes += read;
         if file.hunks_omitted {
             continue;
         }
@@ -596,8 +609,8 @@ fn attach_hunks(root: &Path, args: &[&str], files: &mut [FileDiff]) -> Result<bo
             file.binary = true;
             continue;
         }
-        if let Some(h) = parse_hunk_header(body) {
-            file.hunks.push(h);
+        if let Some(hunk) = parse_hunk_header(body) {
+            file.hunks.push(hunk);
             continue;
         }
         let Some(hunk) = file.hunks.last_mut() else {
@@ -622,10 +635,10 @@ fn attach_hunks(root: &Path, args: &[&str], files: &mut [FileDiff]) -> Result<bo
     if truncated {
         let _ = child.kill();
         let start = index.unwrap_or(0);
-        for f in files.iter_mut().skip(start) {
-            if !f.binary {
-                f.hunks.clear();
-                f.hunks_omitted = true;
+        for file in files.iter_mut().skip(start) {
+            if !file.binary {
+                file.hunks.clear();
+                file.hunks_omitted = true;
             }
         }
     } else {
@@ -641,10 +654,10 @@ fn parse_hunk_header(line: &[u8]) -> Option<Hunk> {
     let line = std::str::from_utf8(line.strip_prefix(b"@@ -")?).ok()?;
     let (ranges, header) = line.split_once(" @@")?;
     let (old, new) = ranges.split_once(" +")?;
-    let range = |r: &str| -> Option<(u32, u32)> {
-        match r.split_once(',') {
-            Some((s, n)) => Some((s.parse().ok()?, n.parse().ok()?)),
-            None => Some((r.parse().ok()?, 1)),
+    let range = |range: &str| -> Option<(u32, u32)> {
+        match range.split_once(',') {
+            Some((start, lines)) => Some((start.parse().ok()?, lines.parse().ok()?)),
+            None => Some((range.parse().ok()?, 1)),
         }
     };
     let (old_start, old_lines) = range(old)?;
@@ -713,8 +726,7 @@ mod tests {
         std::fs::write(repo.join("a.txt"), "two\n").unwrap();
         std::fs::write(repo.join("b.txt"), "new\n").unwrap();
 
-        let s = status(&repo).unwrap();
-        assert!(!s.files.is_empty());
+        assert!(!status(&repo).unwrap().files.is_empty());
         let _ = worktree_tree(&repo);
         assert!(
             !marker.exists(),
@@ -757,8 +769,8 @@ mod tests {
         run(&repo, &["init", "-q"]);
         run(&repo, &["config", "user.email", "t@t"]);
         run(&repo, &["config", "user.name", "t"]);
-        for f in ["inc.txt", "wt.txt", "cond.txt"] {
-            std::fs::write(repo.join(f), "one\n").unwrap();
+        for name in ["inc.txt", "wt.txt", "cond.txt"] {
+            std::fs::write(repo.join(name), "one\n").unwrap();
         }
         // Committed, so a checkout applies them too.
         std::fs::write(
@@ -820,8 +832,8 @@ mod tests {
         std::fs::write(sub.join("s.txt"), "two\n").unwrap();
         run(&repo, &["config", "commit.gpgSign", "true"]);
         run(&repo, &["config", "gpg.program", &evil("gpg")]);
-        for f in ["inc.txt", "wt.txt", "cond.txt"] {
-            std::fs::write(repo.join(f), "two\n").unwrap();
+        for name in ["inc.txt", "wt.txt", "cond.txt"] {
+            std::fs::write(repo.join(name), "two\n").unwrap();
         }
 
         assert!(!status(&repo).unwrap().files.is_empty());
@@ -833,16 +845,16 @@ mod tests {
         let head = text(git(&repo, &["rev-parse", "HEAD"]).unwrap());
         // As the worktree archive does.
         git(&repo, &["commit-tree", &tree, "-p", &head, "-m", "x"]).unwrap();
-        let req = GitDiffRequest {
+        let request = GitDiffRequest {
             path: repo.to_string_lossy().into_owned(),
             base: DiffBase::Head,
             files: Vec::new(),
             context: 3,
             hunks: true,
         };
-        assert!(!diff(&req, &repo).unwrap().files.is_empty());
+        assert!(!diff(&request, &repo).unwrap().files.is_empty());
         // Checking out runs smudge filters.
-        let wt = dir.path().join("wt");
+        let worktree = dir.path().join("wt");
         git(
             &repo,
             &[
@@ -850,7 +862,7 @@ mod tests {
                 "add",
                 "--detach",
                 "--",
-                &wt.to_string_lossy(),
+                &worktree.to_string_lossy(),
                 "HEAD",
             ],
         )
@@ -870,34 +882,39 @@ mod tests {
 
     #[test]
     fn parses_porcelain_v2() {
-        let out = b"# branch.oid 1234\0# branch.head main\0# branch.upstream origin/main\0\
+        let porcelain = b"# branch.oid 1234\0# branch.head main\0# branch.upstream origin/main\0\
 # branch.ab +2 -1\0\
 1 .M N... 100644 100644 100644 aaa aaa src/a b.rs\0\
 2 R. N... 100644 100644 100644 bbb bbb R100 new.rs\0old.rs\0\
 u UU N... 100644 100644 100644 100644 c1 c2 c3 conflict.txt\0\
 ? untracked.txt\0";
-        let s = parse_status(Path::new("/r"), out);
-        assert_eq!(s.branch.as_deref(), Some("main"));
-        assert_eq!(s.head.as_deref(), Some("1234"));
-        assert_eq!((s.ahead, s.behind), (2, 1));
-        assert_eq!(s.files.len(), 4);
-        assert_eq!(s.files[0].path, "src/a b.rs");
-        assert_eq!(s.files[0].unstaged, FileChange::Modified);
-        assert_eq!(s.files[0].staged, FileChange::Unmodified);
-        assert_eq!(s.files[1].path, "new.rs");
-        assert_eq!(s.files[1].orig_path.as_deref(), Some("old.rs"));
-        assert_eq!(s.files[1].staged, FileChange::Renamed);
-        assert_eq!(s.files[2].staged, FileChange::Unmerged);
-        assert_eq!(s.files[3].unstaged, FileChange::Untracked);
+        let status = parse_status(Path::new("/r"), porcelain);
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert_eq!(status.head.as_deref(), Some("1234"));
+        assert_eq!((status.ahead, status.behind), (2, 1));
+        assert_eq!(status.files.len(), 4);
+        assert_eq!(status.files[0].path, "src/a b.rs");
+        assert_eq!(status.files[0].unstaged, FileChange::Modified);
+        assert_eq!(status.files[0].staged, FileChange::Unmodified);
+        assert_eq!(status.files[1].path, "new.rs");
+        assert_eq!(status.files[1].orig_path.as_deref(), Some("old.rs"));
+        assert_eq!(status.files[1].staged, FileChange::Renamed);
+        assert_eq!(status.files[2].staged, FileChange::Unmerged);
+        assert_eq!(status.files[3].unstaged, FileChange::Untracked);
     }
 
     #[test]
     fn parses_hunk_headers() {
-        let h = parse_hunk_header(b"@@ -1,3 +1 @@ fn main()").unwrap();
+        let hunk = parse_hunk_header(b"@@ -1,3 +1 @@ fn main()").unwrap();
         assert_eq!(
-            (h.old_start, h.old_lines, h.new_start, h.new_lines),
+            (
+                hunk.old_start,
+                hunk.old_lines,
+                hunk.new_start,
+                hunk.new_lines
+            ),
             (1, 3, 1, 1)
         );
-        assert_eq!(h.header, "fn main()");
+        assert_eq!(hunk.header, "fn main()");
     }
 }

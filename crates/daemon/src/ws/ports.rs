@@ -1,6 +1,8 @@
+//! Port auto-detection: listening TCP sockets owned by processes in each pane's
 //! process tree, plus URLs the pane printed (`Local: http://localhost:5173/`).
 //!
 //! Attribution is exact because the daemon owns the PTYs: a port belongs to the pane whose
+//! shell is an ancestor of the listening process. Scans run
 //! every [`Config::port_scan_interval`](crate::Config::port_scan_interval) while a client is
 //! connected, and at once when a pane prints a new URL or a command starts or ends; nothing
 //! is scanned while no client is connected. The kind of a port is guessed from the printed
@@ -28,20 +30,19 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 
 #[derive(Default)]
 struct State {
-    /// Last published list, sorted by port.
+    /// Sorted by port.
     ports: Vec<PortInfo>,
     /// Printed URLs per pane: port → URL.
     urls: HashMap<PaneId, BTreeMap<u16, String>>,
-    /// Probe results per (pid, port).
+    /// Keyed by (pid, port).
     kinds: HashMap<(u32, u16), PortKind>,
 }
 
-/// Port detection state, owned by the core.
 pub(crate) struct Ports {
     state: Mutex<State>,
     /// Wakes the scanner early.
     pub trigger: Notify,
-    url_re: Regex,
+    url_pattern: Regex,
 }
 
 impl Ports {
@@ -49,14 +50,13 @@ impl Ports {
         Self {
             state: Mutex::new(State::default()),
             trigger: Notify::new(),
-            url_re: Regex::new(
+            url_pattern: Regex::new(
                 r"(?i)\b(https?)://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|[a-z0-9.-]+\.localhost|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|100\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})(/[^\s'\x22<>)\]]*)?",
             )
             .expect("valid regex"),
         }
     }
 
-    /// The last published list.
     pub fn current(&self) -> Vec<PortInfo> {
         lock(&self.state).ports.clone()
     }
@@ -64,29 +64,35 @@ impl Ports {
     /// Looks for dev-server URLs in a pane's screen text; triggers a scan when one is new.
     pub fn observe_screen(&self, pane: PaneId, screen: &str) {
         let mut found = Vec::new();
-        for cap in self.url_re.captures_iter(screen) {
-            let Some(port) = cap.get(3).and_then(|p| p.as_str().parse::<u16>().ok()) else {
+        for captures in self.url_pattern.captures_iter(screen) {
+            let Some(port) = captures
+                .get(3)
+                .and_then(|port| port.as_str().parse::<u16>().ok())
+            else {
                 continue;
             };
-            let host = cap.get(2).map_or("", |h| h.as_str()).to_ascii_lowercase();
+            let host = captures
+                .get(2)
+                .map_or("", |host| host.as_str())
+                .to_ascii_lowercase();
             // 0.0.0.0 means "all interfaces"; a browser wants localhost.
             let host = if host == "0.0.0.0" || host == "[::]" {
                 "localhost".to_owned()
             } else {
                 host
             };
-            let scheme = cap
+            let scheme = captures
                 .get(1)
-                .map_or("http", |s| s.as_str())
+                .map_or("http", |scheme| scheme.as_str())
                 .to_ascii_lowercase();
-            let path = cap.get(4).map_or("/", |p| p.as_str());
+            let path = captures.get(4).map_or("/", |path| path.as_str());
             let url = format!("{scheme}://{host}:{port}{path}");
             found.push((port, is_loopback_url(&url), url));
         }
         if found.is_empty() {
             return;
         }
-        let mut new = false;
+        let mut any_new = false;
         {
             let mut state = lock(&self.state);
             let urls = state.urls.entry(pane).or_default();
@@ -100,11 +106,11 @@ impl Ports {
                 };
                 if replace {
                     urls.insert(port, url);
-                    new = true;
+                    any_new = true;
                 }
             }
         }
-        if new {
+        if any_new {
             self.trigger.notify_one();
         }
     }
@@ -122,7 +128,7 @@ fn is_loopback_url(url: &str) -> bool {
         || host
             .split(':')
             .next()
-            .is_some_and(|h| h.ends_with(".localhost"))
+            .is_some_and(|hostname| hostname.ends_with(".localhost"))
 }
 
 /// Scans now and returns the list (also published if it changed).
@@ -130,28 +136,31 @@ pub(crate) async fn scan(core: &Arc<Core>) -> Vec<PortInfo> {
     let panes: Vec<(PaneId, u32)> = core
         .pane_entries()
         .into_iter()
-        .map(|(id, e)| (id, e.pane.pty().pid()))
+        .map(|(id, entry)| (id, entry.pane.pty().pid()))
         .collect();
     let found = tokio::task::spawn_blocking(move || listeners_by_pane(&panes))
         .await
         .unwrap_or_default();
-    let ws = &core.ws.ports;
+    let detector = &core.ws.ports;
     let (urls, mut kinds) = {
-        let state = lock(&ws.state);
+        let state = lock(&detector.state);
         (state.urls.clone(), state.kinds.clone())
     };
     let mut ports: Vec<PortInfo> = Vec::new();
     for (pane, listener, process) in found {
-        let url = urls.get(&pane).and_then(|u| u.get(&listener.port)).cloned();
+        let url = urls
+            .get(&pane)
+            .and_then(|pane_urls| pane_urls.get(&listener.port))
+            .cloned();
         let key = (listener.pid, listener.port);
         let kind = match (&url, kinds.get(&key)) {
-            (Some(u), _) if u.starts_with("https:") => PortKind::Https,
+            (Some(url), _) if url.starts_with("https:") => PortKind::Https,
             (Some(_), _) => PortKind::Http,
-            (None, Some(k)) => *k,
+            (None, Some(kind)) => *kind,
             (None, None) => {
-                let k = probe(listener.port).await;
-                kinds.insert(key, k);
-                k
+                let kind = probe(listener.port).await;
+                kinds.insert(key, kind);
+                kind
             }
         };
         ports.push(PortInfo {
@@ -164,13 +173,13 @@ pub(crate) async fn scan(core: &Arc<Core>) -> Vec<PortInfo> {
             url,
         });
     }
-    ports.sort_by_key(|p| p.port);
-    ports.dedup_by_key(|p| p.port);
+    ports.sort_by_key(|port| port.port);
+    ports.dedup_by_key(|port| port.port);
     let changed = {
-        let mut state = lock(&ws.state);
+        let mut state = lock(&detector.state);
         // Forget probes of sockets that went away, so a restarted server is probed again.
-        let live: Vec<(u32, u16)> = ports.iter().map(|p| (p.pid, p.port)).collect();
-        kinds.retain(|k, _| live.contains(k));
+        let live: Vec<(u32, u16)> = ports.iter().map(|port| (port.pid, port.port)).collect();
+        kinds.retain(|key, _| live.contains(key));
         state.kinds = kinds;
         let changed = state.ports != ports;
         state.ports.clone_from(&ports);
@@ -187,7 +196,7 @@ pub(crate) async fn scan(core: &Arc<Core>) -> Vec<PortInfo> {
 fn listeners_by_pane(panes: &[(PaneId, u32)]) -> Vec<(PaneId, procinfo::Listener, String)> {
     let roots: Vec<u32> = panes.iter().map(|&(_, pid)| pid).collect();
     let trees = procinfo::process_trees(&roots);
-    let mut out = Vec::new();
+    let mut listeners = Vec::new();
     for (&(pane, _), tree) in panes.iter().zip(&trees) {
         let mut seen = Vec::new();
         for listener in procinfo::listening_ports(tree) {
@@ -199,17 +208,18 @@ fn listeners_by_pane(panes: &[(PaneId, u32)]) -> Vec<(PaneId, procinfo::Listener
                 continue;
             }
             let name = procinfo::process_name(listener.pid).unwrap_or_default();
-            out.push((pane, listener, name));
+            listeners.push((pane, listener, name));
         }
     }
-    out
+    listeners
 }
 
 /// An agent CLI's own sockets (its sign-in callback, editor bridges) are not dev servers:
 /// their `/` is an empty 404, and a sign-in callback only works at the URL the CLI built.
 fn is_agent_cli(pid: u32) -> bool {
-    pty::ForegroundProcess::of(pid)
-        .is_some_and(|p| AGENT_CLIS.contains(&p.program()) || AGENT_CLIS.contains(&p.name.as_str()))
+    pty::ForegroundProcess::of(pid).is_some_and(|process| {
+        AGENT_CLIS.contains(&process.program()) || AGENT_CLIS.contains(&process.name.as_str())
+    })
 }
 
 const AGENT_CLIS: &[&str] = &["claude", "codex"];
@@ -221,26 +231,26 @@ async fn probe(port: u16) -> PortKind {
     }
     let attempt = async {
         let mut tcp = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-            Ok(t) => t,
+            Ok(stream) => stream,
             Err(_) => tokio::net::TcpStream::connect(("::1", port)).await.ok()?,
         };
         tcp.write_all(b"HEAD / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: port-probe\r\n\r\n")
             .await
             .ok()?;
-        let mut buf = [0u8; 5];
+        let mut head = [0u8; 5];
         let mut got = 0;
-        while got < buf.len() {
-            match tcp.read(&mut buf[got..]).await {
+        while got < head.len() {
+            match tcp.read(&mut head[got..]).await {
                 Ok(0) | Err(_) => break,
-                Ok(n) => got += n,
+                Ok(read) => got += read,
             }
         }
-        Some((buf, got))
+        Some((head, got))
     };
     match tokio::time::timeout(PROBE_TIMEOUT, attempt).await {
-        Ok(Some((buf, got))) if got >= 5 && &buf == b"HTTP/" => PortKind::Http,
+        Ok(Some((head, got))) if got >= 5 && &head == b"HTTP/" => PortKind::Http,
         // A TLS record (alert or handshake) in answer to plaintext.
-        Ok(Some((buf, got))) if got >= 2 && matches!(buf[0], 0x15 | 0x16) && buf[1] == 3 => {
+        Ok(Some((head, got))) if got >= 2 && matches!(head[0], 0x15 | 0x16) && head[1] == 3 => {
             PortKind::Https
         }
         Ok(Some((_, got))) if got > 0 => PortKind::Other,
