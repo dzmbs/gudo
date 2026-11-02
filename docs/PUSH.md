@@ -246,11 +246,11 @@ Live Activity (`AgentRunAttributes`, `AgentActivityWidget`). Everything builds a
 free account; APNs registration activates only with `PUSH_ENTITLEMENT = YES` and the groups in
 `apple/Brand.xcconfig` (step 9).
 
-9. App: in `apple/Brand.xcconfig` set `PUSH_ENTITLEMENT = YES`,
-   `PUSH_ENTITLEMENTS_FILE = App/Push.entitlements`, `PUSH_KEYCHAIN_GROUP =
-   <TEAMID>.dev.gudo.shared`, `PUSH_APP_GROUP = group.dev.gudo.app`; give the App and
-   NotificationService targets the team (`DEVELOPMENT_TEAM`, automatic signing) and the same
-   entitlements; `xcodegen`. Release builds need `aps-environment = production`.
+9. App: in `apple/Brand.xcconfig` set `PUSH_ENTITLEMENT = YES`. That switches on the
+   entitlement files (`App/App.entitlements` for the app, with universal links for
+   `gudo.dev`; `App/Push.entitlements` for the extensions) and the groups
+   `8SP2H5J666.dev.gudo.shared` and `group.dev.gudo.app` (`BRAND_TEAM_ID`); give the App and
+   NotificationService targets provisioning profiles for the team; `xcodegen`. Release builds need `aps-environment = production`.
 
 ## 9. Security notes
 
