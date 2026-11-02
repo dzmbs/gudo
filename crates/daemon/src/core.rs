@@ -597,6 +597,9 @@ impl Core {
 
     /// The pane whose agent asked approval request `id`.
     pub fn request_pane(&self, id: proto::RequestId) -> Option<PaneId> {
+        if let Some(pane) = self.term.asks.caller_of(id) {
+            return Some(pane);
+        }
         self.pane_entries().into_iter().find_map(|(pane, entry)| {
             lock(&entry.agent)
                 .as_ref()
@@ -612,6 +615,19 @@ impl Core {
         id: proto::RequestId,
         option: Option<proto::OptionId>,
     ) -> Option<(PaneId, crate::agent::RequestFacts)> {
+        if let Some(facts) = self.term.asks.facts(id) {
+            let chosen = option.and_then(crate::term::ask::option_label);
+            return Some((
+                facts.caller,
+                crate::agent::RequestFacts {
+                    tool: Some(facts.tool.to_owned()),
+                    allows: option.map(|o| o != proto::DriveAsk::DENY),
+                    option: chosen.map(str::to_owned),
+                    summary: facts.summary,
+                    request: crate::term::ask::agent_request(id),
+                },
+            ));
+        }
         self.pane_entries().into_iter().find_map(|(pane, entry)| {
             lock(&entry.agent)
                 .as_ref()
@@ -638,7 +654,12 @@ impl Core {
     pub fn pane_meta(&self, id: PaneId) -> Option<PaneMeta> {
         let entry = self.pane(id)?;
         let meta = lock(&entry.meta);
-        let agent = lock(&entry.agent).as_mut().map(AgentRuntime::wire_status);
+        let mut agent = lock(&entry.agent).as_mut().map(AgentRuntime::wire_status);
+        // Waiting on the owner to let it drive a pane is a block like any approval.
+        if let Some(blocker) = self.term.asks.blocker(id) {
+            let kind = agent.map_or_else(|| "program".to_owned(), |a| a.kind);
+            agent = Some(crate::term::ask::status(kind, blocker));
+        }
         Some(PaneMeta {
             pane_id: id,
             title: meta.title.clone(),
@@ -985,6 +1006,7 @@ impl Core {
                 self.mp.forget_pane(*id);
                 if !self.shutting_down.load(Ordering::Acquire) {
                     self.remember_closed(*id, &lock(&entry.record));
+                    self.term.forget(*id);
                     if let Some((agent, account)) = self.ws.accounts.sign_in_closed(*id) {
                         self.check_account(agent, account);
                     }
@@ -1632,6 +1654,17 @@ impl Core {
         edited: Option<&str>,
         record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
     ) -> Result<Decided, Option<Actor>> {
+        if self.term.asks.caller_of(decide.request_id).is_some() {
+            // A drive request runs exactly the action asked; it has no edited form.
+            if edited.is_some() {
+                return Err(None);
+            }
+            return self
+                .term
+                .asks
+                .decide(self, actor, decide, record)
+                .ok_or(None);
+        }
         for (id, entry) in self.pane_entries() {
             let mut agent = lock(&entry.agent);
             let Some(rt) = agent.as_mut() else {
@@ -2153,7 +2186,7 @@ pub(crate) fn saved_state(core: &Core) -> persist::Saved {
         .into_iter()
         .map(|(id, e)| (id.0, lock(&e.record).clone()))
         .collect();
-    persist::Saved::new(layout, panes, core.closed_panes())
+    persist::Saved::new(layout, panes, core.closed_panes()).with_creators(core.term.creators())
 }
 
 /// A notification's share of an agent's message.

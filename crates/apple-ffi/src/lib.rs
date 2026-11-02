@@ -60,7 +60,7 @@ pub use accounts::{
 };
 pub use approvals::{
     ApprovalError, ApprovalEvent, ApprovalInfo, ApprovalListener, ApprovalRuleMatch,
-    AutoApproveRule, approval_like_this,
+    AutoApproveRule, DriveAsk, DriveKind, DriveOption, approval_like_this,
 };
 pub use art_types::*;
 pub use artifacts::{

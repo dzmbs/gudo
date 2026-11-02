@@ -230,7 +230,7 @@ final class LiveAgentFeed: AgentFeed {
         let sources = daemons.map { hostId, hostName, daemon in
             Source(
                 hostId: hostId, hostName: hostName, meta: daemon.meta.all, programs: daemon.programs.all,
-                attention: daemon.existingWorkspace?.attention ?? [])
+                attention: daemon.existingWorkspace?.attention ?? [], drives: daemon.approvals.drives)
         }
         let key = ItemsKey(sources: sources, answered: answered, dismissed: dismissed)
         // The Inbox, the sidebar's badge and the toasts all read the feed in one render; unchanged
@@ -240,7 +240,7 @@ final class LiveAgentFeed: AgentFeed {
         for source in sources {
             result += Self.items(
                 hostId: source.hostId, hostName: source.hostName, meta: source.meta, programs: source.programs,
-                attention: source.attention, answered: answered
+                attention: source.attention, drives: source.drives, answered: answered
             ).filter { dismissed[$0.id] != $0.state }
         }
         let items = result.map { item in
@@ -258,6 +258,7 @@ final class LiveAgentFeed: AgentFeed {
         var meta: [PaneId: PaneMeta]
         var programs: [PaneId: ProgramReport]
         var attention: [AttentionItem]
+        var drives: [UInt64: DriveRequestInfo]
     }
 
     private struct ItemsKey: Equatable {
@@ -279,7 +280,7 @@ final class LiveAgentFeed: AgentFeed {
     /// then finished history whose pane is gone, and long commands. Pure, for tests.
     static func items(
         hostId: String, hostName: String, meta: [PaneId: PaneMeta], programs: [PaneId: ProgramReport] = [:],
-        attention: [AttentionItem], answered: [AgentItem.ID: UInt64] = [:]
+        attention: [AttentionItem], drives: [UInt64: DriveRequestInfo] = [:], answered: [AgentItem.ID: UInt64] = [:]
     ) -> [AgentItem] {
         var result: [AgentItem] = []
         let byPane = Dictionary(grouping: attention, by: \.paneId).mapValues { $0.max { $0.id < $1.id }! }
@@ -291,11 +292,15 @@ final class LiveAgentFeed: AgentFeed {
             var state = DesignSystem.AgentState(agent.state)
             var request: AgentItem.Request?
             var prompt = meta.title
+            var drive = false
             if case .blocked(let requestId, let summary, let options) = agent.state {
                 if answered[id] == requestId {
                     state = .working
                 } else {
-                    if !options.isEmpty {
+                    if let ask = drives[requestId], ask.paneId == pane.rawValue {
+                        request = .permission(tool: ask.title, detail: ask.action)
+                        drive = true
+                    } else if !options.isEmpty {
                         request = .permission(tool: "Wants to run", detail: summary)
                     } else if SharedApproval.shows(summary: summary) {
                         request = .question(summary)
@@ -331,7 +336,8 @@ final class LiveAgentFeed: AgentFeed {
                 since: latest.map { Date(timeIntervalSince1970: Double($0.atMs) / 1000) } ?? .now,
                 prompt: prompt.nonEmpty ?? AgentKind(agent.kind).title,
                 request: request, summary: summary, hostId: hostId, paneId: pane.rawValue,
-                unseen: latest.map { !$0.seen } ?? false, canReply: request == nil || options(agent).isEmpty))
+                unseen: latest.map { !$0.seen } ?? false, canReply: request == nil || options(agent).isEmpty,
+                drive: drive))
         }
         // Other programs' own reports: status only, never a request to answer here.
         for (pane, program) in programs where meta[pane]?.agent == nil {
@@ -596,9 +602,24 @@ final class LiveAgentFeed: AgentFeed {
               let agent = daemon.meta[PaneId(raw)]?.agent,
               case .blocked(let request, _, let options) = agent.state, !options.isEmpty
         else { return }
-        guard let option = Self.option(options, allow: allow) else { return }
+        // A drive request's answers are fixed ids: Approve is "Allow once", never the wider one.
+        let drive = daemon.approvals.drives[request]
+        guard let option = drive.map({ allow ? $0.allowOnce : $0.deny }) ?? Self.option(options, allow: allow)?.id
+        else { return }
         answered[id] = request
-        daemon.decide(requestId: request, optionId: option.id)
+        daemon.decide(requestId: request, optionId: option)
+    }
+
+    func allowForPane(_ id: AgentItem.ID) {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let raw = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
+              let agent = daemon.meta[PaneId(raw)]?.agent,
+              case .blocked(let request, _, _) = agent.state,
+              let drive = daemon.approvals.drives[request], drive.paneId == raw
+        else { return }
+        answered[id] = request
+        daemon.decide(requestId: request, optionId: drive.allowPane)
     }
 
     // MARK: Approval verbs (edited input, approve all like this)

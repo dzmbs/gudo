@@ -53,13 +53,13 @@ fn account_messages_match_their_frozen_bytes() {
         &mut failures,
         "Caps::ACCOUNTS",
         Caps::ACCOUNTS,
-        "050000000180808002",
+        "050000000180808004",
     );
     check(
         &mut failures,
         "DaemonFeatures::ACCOUNTS",
         DaemonFeatures::ACCOUNTS,
-        "0400000001808008",
+        "0400000001808010",
     );
     check(
         &mut failures,

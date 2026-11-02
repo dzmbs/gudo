@@ -1,0 +1,26 @@
+{
+  "commands": [
+    {
+      "command": "cargo test",
+      "cwd": "/src/app",
+      "durationMs": 2500,
+      "exitCode": 101,
+      "id": 2,
+      "pane": "p4",
+      "startedAt": 1700000000000,
+      "status": "exited"
+    },
+    {
+      "command": "cargo test",
+      "cwd": "/src/app",
+      "durationMs": null,
+      "exitCode": null,
+      "id": 2,
+      "pane": "p4",
+      "startedAt": 1700000000000,
+      "status": "running"
+    }
+  ],
+  "kind": "marks",
+  "v": 1
+}

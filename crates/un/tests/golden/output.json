@@ -1,0 +1,16 @@
+{
+  "command": {
+    "command": "cargo test",
+    "cwd": "/src/app",
+    "durationMs": 2500,
+    "exitCode": 101,
+    "id": 2,
+    "pane": "p4",
+    "startedAt": 1700000000000,
+    "status": "exited"
+  },
+  "kind": "output",
+  "text": "error[E0308]: mismatched types",
+  "truncated": false,
+  "v": 1
+}
