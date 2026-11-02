@@ -211,6 +211,24 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
         #expect(store.projects.members.count == 1)
     }
 
+    /// The daemon sends a layout, its projects, then its floats: the first layout of a session
+    /// is still held for its floats when the projects arrive.
+    @Test func projectsArrivingWhileTheFirstLayoutWaitsForFloatsShow() {
+        let store = DaemonLayoutStore { _ in 1 }
+        store.supportsProjects = true
+        store.supportsFloats = true
+        store.receive(tabsLayout(revision: 1, [1, 2]))
+        store.receive(DaemonProjects(
+            sessionId: 7, revision: 1,
+            projects: [DaemonProject(id: "p", name: "app", color: 0, order: 0, updatedMs: 1)],
+            tabs: [DaemonTabProject(tabId: 2, projectId: "p", rank: 1024)]))
+        #expect(!store.hasLayout)
+        store.receive(DaemonFloats(sessionId: 7, revision: 1, floats: []))
+        #expect(store.session.tabs.map(\.id.rawValue) == [1, 2])
+        #expect(store.projects.projects["p"]?.name == "app")
+        #expect(store.projects.members[TabId(2)]?.rank == 1024)
+    }
+
     @Test func aDaemonWithoutProjectsIsNeverSentThem() {
         var sent: [GudoCore.LayoutOp] = []
         let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
