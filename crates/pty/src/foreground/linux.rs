@@ -15,7 +15,7 @@ fn parse_tpgid(stat: &str) -> Option<u32> {
     // tpgid(8).
     let after_comm = &stat[stat.rfind(')')? + 1..];
     let tpgid: i64 = after_comm.split_whitespace().nth(5)?.parse().ok()?;
-    u32::try_from(tpgid).ok().filter(|&p| p > 0)
+    u32::try_from(tpgid).ok().filter(|&pgid| pgid > 0)
 }
 
 pub(super) fn process_name(pid: u32) -> Option<String> {
@@ -28,7 +28,7 @@ pub(super) fn process_argv(pid: u32) -> Option<Vec<String>> {
     // Empty for kernel threads and zombies; otherwise each argument is NUL-terminated.
     let args = cmdline.strip_suffix(b"\0")?;
     Some(
-        args.split(|&b| b == 0)
+        args.split(|&byte| byte == 0)
             .map(|arg| String::from_utf8_lossy(arg).into_owned())
             .collect(),
     )

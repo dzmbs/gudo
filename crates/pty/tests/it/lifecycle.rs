@@ -4,7 +4,7 @@ use pty::{RecvError, Seq, Signal, SignalError, SpawnOptions, WinSize};
 
 use crate::support::{read_to_end, read_until, spawn, spawn_with, within};
 
-/// A program that never reads its input used to let queued input grow without bound.
+/// Queued input for a program that never reads it stays bounded.
 #[tokio::test]
 async fn input_for_a_program_that_never_reads_is_bounded() {
     // Raw mode: a canonical tty discards input past its line limit, so writes would never back
@@ -14,8 +14,8 @@ async fn input_for_a_program_that_never_reads_is_bounded() {
         "-c",
         "stty raw -echo; echo ready; exec sleep 100",
     ]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-    read_until(&mut out, "ready").await;
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut output, "ready").await;
     let chunk = vec![b'x'; 64 * 1024];
     let mut accepted = 0;
     let end = std::time::Instant::now() + std::time::Duration::from_millis(500);
@@ -40,10 +40,10 @@ async fn input_for_a_program_that_never_reads_is_bounded() {
 #[tokio::test]
 async fn echo_round_trip() {
     let pty = spawn(&["/bin/cat"]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
     pty.write("hello pty\n").await.unwrap();
     // Once from the line discipline's echo, once from cat; the tty maps \n to \r\n.
-    let seen = read_until(&mut out, "hello pty\r\nhello pty\r\n").await;
+    let seen = read_until(&mut output, "hello pty\r\nhello pty\r\n").await;
     assert_eq!(seen, "hello pty\r\nhello pty\r\n");
     assert_eq!(pty.head(), Seq::new(seen.len() as u64));
 }
@@ -58,8 +58,8 @@ async fn large_input_does_not_block_and_stays_ordered() {
         "-c",
         "stty raw -echo; echo READY; head -c 262144 | cksum",
     ]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-    read_until(&mut out, "READY").await;
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut output, "READY").await;
     let data: Vec<u8> = (0..262_144u32).map(|i| b'a' + (i % 26) as u8).collect();
     for piece in data.chunks(1000) {
         pty.write(piece.to_vec()).await.unwrap();
@@ -74,7 +74,7 @@ async fn large_input_does_not_block_and_stays_ordered() {
         cksum.stdin.take().unwrap().write_all(&data).unwrap();
         String::from_utf8(cksum.wait_with_output().unwrap().stdout).unwrap()
     };
-    let seen = read_to_end(&mut out).await;
+    let seen = read_to_end(&mut output).await;
     assert_eq!(seen.trim(), expected.trim());
 }
 
@@ -88,8 +88,8 @@ async fn resize_updates_winsize_and_signals_child() {
         ],
         SpawnOptions::new(WinSize::new(24, 80)),
     );
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-    read_until(&mut out, "READY").await;
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut output, "READY").await;
     assert_eq!(pty.size().unwrap(), WinSize::new(24, 80));
 
     let size = WinSize {
@@ -100,18 +100,18 @@ async fn resize_updates_winsize_and_signals_child() {
     };
     pty.resize(size).unwrap();
     assert_eq!(pty.size().unwrap(), size);
-    read_until(&mut out, "WINCH\r\n40 132").await;
+    read_until(&mut output, "WINCH\r\n40 132").await;
     pty.signal(Signal::Kill).unwrap();
 }
 
 #[tokio::test]
 async fn exit_status_and_output_close() {
     let pty = spawn(&["/bin/sh", "-c", "echo bye; exit 7"]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
     let status = within("wait", pty.wait()).await.unwrap();
     assert_eq!(status.code(), Some(7));
-    assert_eq!(read_to_end(&mut out).await, "bye\r\n");
-    assert_eq!(out.recv().await, Err(RecvError::Closed));
+    assert_eq!(read_to_end(&mut output).await, "bye\r\n");
+    assert_eq!(output.recv().await, Err(RecvError::Closed));
     assert_eq!(pty.try_wait().unwrap().unwrap().code(), Some(7));
 }
 
@@ -131,9 +131,9 @@ async fn signal_terminates_and_is_refused_after_reap() {
 #[tokio::test]
 async fn write_after_exit_reports_closed() {
     let pty = spawn(&["/usr/bin/true"]);
-    let mut out = pty.subscribe();
+    let mut output = pty.subscribe();
     within("wait", pty.wait()).await.unwrap();
-    read_to_end(&mut out).await;
+    read_to_end(&mut output).await;
     // The I/O thread has stopped, so the queue's receiver is gone.
     assert!(pty.write("x").await.is_err());
 }

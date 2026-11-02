@@ -1,3 +1,4 @@
+//! Does `tcgetattr` on the master reflect the slave's ECHO/ICANON, and how quickly do
 //! changes reach `echo_updates`? Run with `--nocapture` to see the measured latencies.
 
 use std::path::Path;
@@ -34,23 +35,23 @@ async fn stty_echo_off_and_on() {
         "-c",
         "stty -echo; echo OFF; read x; stty echo; echo ON; read y; echo \"got:$x\"",
     ]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
 
-    read_until(&mut out, "OFF").await;
-    let state = wait_echo(&pty, |s| !s.echo).await;
+    read_until(&mut output, "OFF").await;
+    let state = wait_echo(&pty, |state| !state.echo).await;
     assert_eq!(state, HIDDEN);
     assert!(state.is_hidden_input());
 
     pty.write("secret\n").await.unwrap();
-    let seen = read_until(&mut out, "ON").await;
+    let seen = read_until(&mut output, "ON").await;
     assert!(
         !seen.contains("secret"),
         "typed while -echo was echoed: {seen:?}"
     );
-    assert_eq!(wait_echo(&pty, |s| s.echo).await, COOKED);
+    assert_eq!(wait_echo(&pty, |state| state.echo).await, COOKED);
 
     pty.write("z\n").await.unwrap();
-    read_until(&mut out, "got:secret").await;
+    read_until(&mut output, "got:secret").await;
 }
 
 #[tokio::test]
@@ -62,18 +63,21 @@ async fn bash_read_s_password_prompt() {
         "-c",
         "read -s -p 'Password: ' pw; echo; echo \"len=${#pw}\"",
     ]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-    read_until(&mut out, "Password: ").await;
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut output, "Password: ").await;
     let at_prompt = pty.echo_state();
     let start = Instant::now();
-    assert_eq!(wait_echo(&pty, |s| s.is_hidden_input()).await, HIDDEN);
+    assert_eq!(
+        wait_echo(&pty, |state| state.is_hidden_input()).await,
+        HIDDEN
+    );
     eprintln!(
-        "S6 read -s: state when prompt arrived {at_prompt:?}, hidden after {:?}",
+        "read -s: state when prompt arrived {at_prompt:?}, hidden after {:?}",
         start.elapsed()
     );
 
     pty.write("hunter2\n").await.unwrap();
-    let rest = read_to_end(&mut out).await;
+    let rest = read_to_end(&mut output).await;
     assert!(!rest.contains("hunter2"), "password echoed: {rest:?}");
     assert!(rest.contains("len=7"), "{rest:?}");
 }
@@ -81,9 +85,9 @@ async fn bash_read_s_password_prompt() {
 #[tokio::test]
 async fn raw_mode_is_not_hidden_input() {
     let pty = spawn(&["/bin/sh", "-c", "stty raw -echo; echo RAW; read x"]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-    read_until(&mut out, "RAW").await;
-    let state = wait_echo(&pty, |s| !s.canonical).await;
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut output, "RAW").await;
+    let state = wait_echo(&pty, |state| !state.canonical).await;
     assert_eq!(state, RAW);
     assert!(!state.is_hidden_input());
 }
@@ -94,12 +98,12 @@ async fn silent_change_is_detected_by_polling() {
     for delay in ["0.2", "1.5"] {
         let script = format!("echo GO; sleep {delay}; stty -echo; sleep 5");
         let pty = spawn(&["/bin/sh", "-c", &script]);
-        let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-        read_until(&mut out, "GO").await;
+        let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+        read_until(&mut output, "GO").await;
         let start = Instant::now();
-        wait_echo(&pty, |s| !s.echo).await;
+        wait_echo(&pty, |state| !state.echo).await;
         let elapsed = start.elapsed();
-        eprintln!("S6 silent stty -echo after {delay}s seen after {elapsed:?}");
+        eprintln!("silent stty -echo after {delay}s seen after {elapsed:?}");
         let delay: f64 = delay.parse().unwrap();
         // Within the 500 ms active window the re-check runs every 25 ms, after it every 1 s.
         // Allow 300 ms for `stty` startup and scheduling.
@@ -121,25 +125,29 @@ async fn interactive_shells_line_editor_and_read_s() {
         .into_iter()
         .filter(|argv| Path::new(argv[0]).exists())
     {
-        let mut cmd = crate::support::command(argv);
-        cmd.env("PS1", "PROMPT> ");
-        let pty = pty::PtyActor::spawn(cmd, pty::SpawnOptions::default()).unwrap();
-        let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
+        let mut command = crate::support::command(argv);
+        command.env("PS1", "PROMPT> ");
+        let pty = pty::PtyActor::spawn(command, pty::SpawnOptions::default()).unwrap();
+        let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
 
-        read_until(&mut out, "PROMPT> ").await;
-        let at_prompt = wait_echo(&pty, |s| !s.canonical).await;
-        eprintln!("S6 {} at prompt: {at_prompt:?}", argv[0]);
+        read_until(&mut output, "PROMPT> ").await;
+        let at_prompt = wait_echo(&pty, |state| !state.canonical).await;
+        eprintln!("{} at prompt: {at_prompt:?}", argv[0]);
         assert!(!at_prompt.is_hidden_input());
 
         pty.write("read -s v; echo \"n=${#v}\"\n").await.unwrap();
-        let hidden = wait_echo(&pty, |s| s.is_hidden_input()).await;
+        let hidden = wait_echo(&pty, |state| state.is_hidden_input()).await;
         assert_eq!(hidden, HIDDEN);
         pty.write("abc\n").await.unwrap();
-        let seen = read_until(&mut out, "n=3").await;
+        let seen = read_until(&mut output, "n=3").await;
         assert!(!seen.contains("abc"), "{seen:?}");
 
-        read_until(&mut out, "PROMPT> ").await;
-        assert!(!wait_echo(&pty, |s| !s.canonical).await.is_hidden_input());
+        read_until(&mut output, "PROMPT> ").await;
+        assert!(
+            !wait_echo(&pty, |state| !state.canonical)
+                .await
+                .is_hidden_input()
+        );
         pty.write("exit\n").await.unwrap();
         crate::support::within("exit", pty.wait()).await.unwrap();
     }
@@ -155,11 +163,11 @@ async fn python_getpass() {
         "-c",
         "import getpass; p = getpass.getpass('Pw: '); print('len', len(p))",
     ]);
-    let mut out = pty.subscribe_from(Seq::ZERO).unwrap();
-    read_until(&mut out, "Pw: ").await;
-    assert_eq!(wait_echo(&pty, |s| !s.echo).await, HIDDEN);
+    let mut output = pty.subscribe_from(Seq::ZERO).unwrap();
+    read_until(&mut output, "Pw: ").await;
+    assert_eq!(wait_echo(&pty, |state| !state.echo).await, HIDDEN);
     pty.write("swordfish\n").await.unwrap();
-    let rest = read_to_end(&mut out).await;
+    let rest = read_to_end(&mut output).await;
     assert!(
         !rest.contains("swordfish") && rest.contains("len 9"),
         "{rest:?}"

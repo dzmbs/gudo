@@ -14,7 +14,7 @@ use tokio::sync::mpsc::{self, error::TryRecvError};
 use super::{Input, OutputHook, Shared};
 use crate::termios::EchoState;
 
-const READ_BUF: usize = 64 * 1024;
+const READ_CHUNK: usize = 64 * 1024;
 /// Most bytes read per loop iteration, so a flooding child cannot starve input.
 const READ_BUDGET: usize = 1024 * 1024;
 /// A macOS PTY hands out at most ~1 KiB per read, so a flooding child leaves the master empty
@@ -90,7 +90,7 @@ impl IoLoop {
     }
 
     pub(super) fn run(mut self) {
-        let mut buf = vec![0u8; READ_BUF];
+        let mut read_buf = vec![0u8; READ_CHUNK];
         let mut last_activity = Instant::now();
         let mut echo_read: Option<Instant> = None;
         loop {
@@ -104,7 +104,7 @@ impl IoLoop {
             }
             // Input (and wakes) re-read at once; a stream of output at most every ACTIVE_POLL,
             // not once per read.
-            if typed || echo_read.is_none_or(|t| t.elapsed() >= ACTIVE_POLL) {
+            if typed || echo_read.is_none_or(|read_at| read_at.elapsed() >= ACTIVE_POLL) {
                 self.refresh_echo();
                 echo_read = Some(Instant::now());
             }
@@ -126,7 +126,7 @@ impl IoLoop {
                 self.flush_input();
             }
             if ready.readable || ready.hangup {
-                match self.read_output(&mut buf, ready.hangup) {
+                match self.read_output(&mut read_buf, ready.hangup) {
                     ReadOutcome::Open { read_any } => {
                         if read_any {
                             last_activity = Instant::now();
@@ -150,7 +150,7 @@ impl IoLoop {
     fn take_input(&mut self) -> bool {
         loop {
             match self.input.try_recv() {
-                Ok(data) => self.pending.push_back(data),
+                Ok(input) => self.pending.push_back(input),
                 Err(TryRecvError::Empty) => return true,
                 Err(TryRecvError::Disconnected) => return false,
             }
@@ -160,8 +160,8 @@ impl IoLoop {
     fn flush_input(&mut self) {
         while let Some(front) = self.pending.front_mut() {
             match rustix::io::write(&*self.master, &front.data) {
-                Ok(n) => {
-                    front.data.advance(n);
+                Ok(written) => {
+                    front.data.advance(written);
                     if front.data.is_empty() {
                         let done = self.pending.pop_front().expect("front exists");
                         self.shared.input_budget.add_permits(done.permits as usize);
@@ -172,7 +172,11 @@ impl IoLoop {
                 Err(err) => {
                     // Typically EIO once the child side is gone; output EOF follows.
                     tracing::debug!(%err, "pty write failed; dropping queued input");
-                    let permits: usize = self.pending.drain(..).map(|i| i.permits as usize).sum();
+                    let permits: usize = self
+                        .pending
+                        .drain(..)
+                        .map(|input| input.permits as usize)
+                        .sum();
                     self.shared.input_budget.add_permits(permits);
                     return;
                 }
@@ -182,21 +186,21 @@ impl IoLoop {
 
     fn read_output(&mut self, buf: &mut [u8], hangup: bool) -> ReadOutcome {
         let mut total = 0;
-        let mut last = 0;
+        let mut last_read = 0;
         let mut retries = 0;
         while total < READ_BUDGET {
             match rustix::io::read(&*self.master, &mut *buf) {
                 // Linux reports a closed slave as EIO, macOS as a 0-byte read.
                 Ok(0) | Err(Errno::IO) => return ReadOutcome::Eof,
-                Ok(n) => {
-                    self.publish(&buf[..n]);
-                    total += n;
-                    last = n;
+                Ok(read) => {
+                    self.publish(&buf[..read]);
+                    total += read;
+                    last_read = read;
                     retries = 0;
                 }
                 Err(Errno::INTR) => {}
                 Err(Errno::AGAIN) if hangup && total == 0 => return ReadOutcome::Eof,
-                Err(Errno::AGAIN) if last >= FULL_READ && retries < BRIDGE_RETRIES => {
+                Err(Errno::AGAIN) if last_read >= FULL_READ && retries < BRIDGE_RETRIES => {
                     retries += 1;
                     std::hint::spin_loop();
                 }
@@ -227,12 +231,13 @@ impl IoLoop {
     }
 
     fn refresh_echo(&self) {
-        let Ok(now) = EchoState::read(&*self.master) else {
+        // tcgetattr on the master returns the slave's termios on macOS and Linux.
+        let Ok(current) = EchoState::read(&*self.master) else {
             return;
         };
         self.shared.echo.send_if_modified(|echo| {
-            let changed = *echo != now;
-            *echo = now;
+            let changed = *echo != current;
+            *echo = current;
             changed
         });
     }
@@ -246,21 +251,22 @@ impl IoLoop {
             PollFd::new(&*self.master, master_events),
             PollFd::new(&self.wake, PollFlags::IN),
         ];
-        let timeout =
-            timeout.map(|t| Timespec::try_from(t).expect("constant timeouts fit in a timespec"));
+        let timeout = timeout.map(|timeout| {
+            Timespec::try_from(timeout).expect("constant timeouts fit in a timespec")
+        });
         match rustix::event::poll(&mut fds, timeout.as_ref()) {
             Ok(_) => {}
             Err(Errno::INTR) => return Ok(Ready::default()),
             Err(err) => return Err(err),
         }
-        let master = fds[0].revents();
-        if master.contains(PollFlags::NVAL) {
+        let master_revents = fds[0].revents();
+        if master_revents.contains(PollFlags::NVAL) {
             return Err(Errno::BADF);
         }
         Ok(Ready {
-            readable: master.contains(PollFlags::IN),
-            writable: master.contains(PollFlags::OUT),
-            hangup: master.intersects(PollFlags::HUP | PollFlags::ERR),
+            readable: master_revents.contains(PollFlags::IN),
+            writable: master_revents.contains(PollFlags::OUT),
+            hangup: master_revents.intersects(PollFlags::HUP | PollFlags::ERR),
             wake: !fds[1].revents().is_empty(),
         })
     }
@@ -287,6 +293,6 @@ struct Ready {
 }
 
 fn drain(fd: &OwnedFd) {
-    let mut buf = [0u8; 64];
-    while matches!(rustix::io::read(fd, &mut buf), Ok(n) if n > 0) {}
+    let mut scratch = [0u8; 64];
+    while matches!(rustix::io::read(fd, &mut scratch), Ok(read) if read > 0) {}
 }

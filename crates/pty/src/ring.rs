@@ -5,6 +5,7 @@ use std::ops::Add;
 
 use bytes::Bytes;
 
+/// Default ring capacity per pane: 1 MiB.
 pub const DEFAULT_RING_CAPACITY: usize = 1 << 20;
 
 /// An absolute byte offset into a pane's output stream.
@@ -111,7 +112,7 @@ pub enum ReadError {
 /// assert!(matches!(ring.read_from(Seq::new(1)), Err(ReadError::Evicted { .. })));
 /// ```
 pub struct OutputRing {
-    buf: Box<[u8]>,
+    bytes: Box<[u8]>,
     head: u64,
 }
 
@@ -124,14 +125,14 @@ impl OutputRing {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "ring capacity must be non-zero");
         Self {
-            buf: vec![0; capacity].into_boxed_slice(),
+            bytes: vec![0; capacity].into_boxed_slice(),
             head: 0,
         }
     }
 
     /// Returns the maximum number of bytes retained.
     pub fn capacity(&self) -> usize {
-        self.buf.len()
+        self.bytes.len()
     }
 
     /// Returns the number of bytes currently retained.
@@ -152,20 +153,20 @@ impl OutputRing {
     /// Returns the offset of the oldest byte still retained (equal to [`head`](Self::head) when
     /// nothing is retained).
     pub fn oldest(&self) -> Seq {
-        Seq(self.head.saturating_sub(self.buf.len() as u64))
+        Seq(self.head.saturating_sub(self.bytes.len() as u64))
     }
 
     /// Appends bytes, evicting the oldest bytes beyond capacity.
     pub fn push(&mut self, data: &[u8]) {
-        let cap = self.buf.len();
+        let capacity = self.bytes.len();
         let total = data.len() as u64;
         // Only the tail that fits can survive; skip the rest without copying it.
-        let data = &data[data.len().saturating_sub(cap)..];
+        let data = &data[data.len().saturating_sub(capacity)..];
         let start = self.head + (total - data.len() as u64);
-        let pos = (start % cap as u64) as usize;
-        let first = data.len().min(cap - pos);
-        self.buf[pos..pos + first].copy_from_slice(&data[..first]);
-        self.buf[..data.len() - first].copy_from_slice(&data[first..]);
+        let position = (start % capacity as u64) as usize;
+        let first = data.len().min(capacity - position);
+        self.bytes[position..position + first].copy_from_slice(&data[..first]);
+        self.bytes[..data.len() - first].copy_from_slice(&data[first..]);
         self.head += total;
     }
 
@@ -199,16 +200,16 @@ impl OutputRing {
                 oldest: self.oldest(),
             });
         }
-        let cap = self.buf.len();
+        let capacity = self.bytes.len();
         let len = ((self.head - seq.0) as usize).min(max_len);
-        let pos = (seq.0 % cap as u64) as usize;
-        let first = len.min(cap - pos);
-        let mut out = Vec::with_capacity(len);
-        out.extend_from_slice(&self.buf[pos..pos + first]);
-        out.extend_from_slice(&self.buf[..len - first]);
+        let position = (seq.0 % capacity as u64) as usize;
+        let first = len.min(capacity - position);
+        let mut data = Vec::with_capacity(len);
+        data.extend_from_slice(&self.bytes[position..position + first]);
+        data.extend_from_slice(&self.bytes[..len - first]);
         Ok(Chunk {
             seq,
-            data: out.into(),
+            data: data.into(),
         })
     }
 }
@@ -288,9 +289,9 @@ mod tests {
         ) {
             let mut ring = OutputRing::new(cap);
             let mut model = Vec::new();
-            for p in &pushes {
-                ring.push(p);
-                model.extend_from_slice(p);
+            for push in &pushes {
+                ring.push(push);
+                model.extend_from_slice(push);
             }
             let head = model.len() as u64;
             let oldest = head.saturating_sub(cap as u64);
@@ -307,14 +308,14 @@ mod tests {
                         prop_assert_eq!(&chunk.data[..], &model[at as usize..end]);
                         prop_assert_eq!(chunk.seq, Seq::new(at));
                     }
-                    Err(ReadError::Evicted { requested, oldest: o }) => {
+                    Err(ReadError::Evicted { requested, oldest: reported_oldest }) => {
                         prop_assert!(at < oldest);
                         prop_assert_eq!(requested, Seq::new(at));
-                        prop_assert_eq!(o, Seq::new(oldest));
+                        prop_assert_eq!(reported_oldest, Seq::new(oldest));
                     }
-                    Err(ReadError::Ahead { head: h, .. }) => {
+                    Err(ReadError::Ahead { head: reported_head, .. }) => {
                         prop_assert!(at > head);
-                        prop_assert_eq!(h, Seq::new(head));
+                        prop_assert_eq!(reported_head, Seq::new(head));
                     }
                 }
             }
@@ -332,16 +333,16 @@ mod tests {
                 ring.push(piece);
             }
             let mut at = ring.oldest();
-            let mut got = Vec::new();
+            let mut reassembled = Vec::new();
             loop {
                 let chunk = ring.read_at_most(at, step).unwrap();
                 if chunk.data.is_empty() {
                     break;
                 }
-                got.extend_from_slice(&chunk.data);
+                reassembled.extend_from_slice(&chunk.data);
                 at = chunk.end();
             }
-            prop_assert_eq!(&got[..], &data[data.len().saturating_sub(cap)..]);
+            prop_assert_eq!(&reassembled[..], &data[data.len().saturating_sub(cap)..]);
         }
     }
 }

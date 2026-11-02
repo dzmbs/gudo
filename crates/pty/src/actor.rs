@@ -4,7 +4,7 @@
 //!
 //! - **I/O thread** (`pty-io-<pid>`): `poll(2)` over the non-blocking master and a self-pipe.
 //!   It reads output into the [`OutputRing`], drains queued input with non-blocking writes, and
-//!   (Apache-2.0): one poll thread per PTY plus a wake pipe.
+//!   re-reads the slave's [`EchoState`].
 //! - **Wait thread** (`pty-wait-<pid>`): blocks in `waitid` until the child exits.
 //!
 //! Subscribers never receive pushed data. They hold a cursor into the ring and are woken through a
@@ -189,7 +189,6 @@ struct OutputState {
     closed: bool,
 }
 
-/// State shared between the actor handle, its threads, and subscribers.
 struct Shared {
     ring: Mutex<OutputRing>,
     output: watch::Sender<OutputState>,
@@ -264,9 +263,9 @@ fn permits_for(len: usize) -> u32 {
 }
 
 impl PtyActor {
-    /// Spawns `cmd` in a new PTY and starts its I/O and wait threads.
+    /// Spawns `command` in a new PTY and starts its I/O and wait threads.
     ///
-    /// `cmd` supplies argv, environment, and working directory as usual. Its stdin, stdout, and
+    /// `command` supplies argv, environment, and working directory as usual. Its stdin, stdout, and
     /// stderr are replaced by the PTY slave, and it becomes a session leader with the PTY as its
     /// controlling terminal. Nothing is added to the environment; set `TERM` yourself.
     ///
@@ -278,9 +277,9 @@ impl PtyActor {
     /// # Panics
     ///
     /// Panics if the ring capacity in `options` is zero.
-    pub fn spawn(cmd: Command, options: SpawnOptions) -> io::Result<Self> {
+    pub fn spawn(command: Command, options: SpawnOptions) -> io::Result<Self> {
         let ring = OutputRing::new(options.ring_capacity);
-        let spawn::Spawned { master, child } = spawn::spawn(cmd, options.size)?;
+        let spawn::Spawned { master, child } = spawn::spawn(command, options.size)?;
         rustix::fs::fcntl_setfl(&master, rustix::fs::OFlags::NONBLOCK)?;
         let master = Arc::new(master);
 
@@ -311,7 +310,7 @@ impl PtyActor {
 
         let (input, input_rx) = mpsc::channel(INPUT_QUEUE);
         let (waker, wake_rx) = io_loop::wake_pipe()?;
-        let io = io_loop::IoLoop::new(
+        let io_loop = io_loop::IoLoop::new(
             Arc::clone(&master),
             wake_rx,
             input_rx,
@@ -320,7 +319,7 @@ impl PtyActor {
         );
         let started = thread::Builder::new()
             .name(format!("pty-io-{}", pid.as_raw_nonzero()))
-            .spawn(move || io.run());
+            .spawn(move || io_loop.run());
         if let Err(err) = started {
             let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
             return Err(err);
@@ -362,11 +361,11 @@ impl PtyActor {
 
     /// Returns a subscriber positioned at the current head (new output only).
     pub fn subscribe(&self) -> Subscriber {
-        let rx = self.shared.output.subscribe();
+        let output_rx = self.shared.output.subscribe();
         let next = self.head();
         Subscriber {
             shared: Arc::clone(&self.shared),
-            rx,
+            output_rx,
             next,
         }
     }
@@ -419,7 +418,7 @@ impl PtyActor {
         let data = data.into();
         let permits = permits_for(data.len());
         match self.shared.input_budget.try_acquire_many(permits) {
-            Ok(p) => p.forget(),
+            Ok(permit) => permit.forget(),
             Err(tokio::sync::TryAcquireError::NoPermits) => return Err(TryWriteError::Full(data)),
             Err(tokio::sync::TryAcquireError::Closed) => return Err(TryWriteError::Closed(data)),
         }
@@ -456,12 +455,12 @@ impl PtyActor {
     ///
     /// Returns the `ioctl` error.
     pub fn size(&self) -> io::Result<WinSize> {
-        let ws = rustix::termios::tcgetwinsize(&*self.master)?;
+        let winsize = rustix::termios::tcgetwinsize(&*self.master)?;
         Ok(WinSize {
-            rows: ws.ws_row,
-            cols: ws.ws_col,
-            pixel_width: ws.ws_xpixel,
-            pixel_height: ws.ws_ypixel,
+            rows: winsize.ws_row,
+            cols: winsize.ws_col,
+            pixel_width: winsize.ws_xpixel,
+            pixel_height: winsize.ws_ypixel,
         })
     }
 
@@ -503,8 +502,8 @@ impl PtyActor {
     /// Returns an error if the status could not be collected (for example because something
     /// else in this process reaped the child).
     pub async fn wait(&self) -> io::Result<ExitStatus> {
-        let mut rx = self.process.exit.subscribe();
-        let result = *rx
+        let mut exit_rx = self.process.exit.subscribe();
+        let result = *exit_rx
             .wait_for(Option::is_some)
             .await
             .expect("the sender lives in `self.process`");
@@ -578,7 +577,7 @@ impl fmt::Debug for PtyActor {
 /// can drain the remaining retained output after the child exits.
 pub struct Subscriber {
     shared: Arc<Shared>,
-    rx: watch::Receiver<OutputState>,
+    output_rx: watch::Receiver<OutputState>,
     next: Seq,
 }
 
@@ -609,7 +608,7 @@ impl Subscriber {
         loop {
             // Mark the current head as seen *before* reading, so a push after the read always
             // wakes `changed` below.
-            let state = *self.rx.borrow_and_update();
+            let state = *self.output_rx.borrow_and_update();
             let read = self
                 .shared
                 .ring()
@@ -627,7 +626,7 @@ impl Subscriber {
             if state.closed {
                 return Err(RecvError::Closed);
             }
-            if self.rx.changed().await.is_err() {
+            if self.output_rx.changed().await.is_err() {
                 return Err(RecvError::Closed);
             }
         }

@@ -38,7 +38,7 @@ async fn slow_subscriber_is_evicted_and_can_resync() {
     // A subscriber that keeps up sees the full stream even though the ring is smaller.
     let all = read_to_end(&mut fast).await;
     assert_eq!(all.len() as u64, PRODUCED);
-    assert!(all.bytes().all(|b| b == b'a'));
+    assert!(all.bytes().all(|byte| byte == b'a'));
     within("wait", pty.wait()).await.unwrap();
 
     assert_eq!(pty.head(), Seq::new(PRODUCED));
@@ -62,14 +62,14 @@ async fn slow_subscriber_is_evicted_and_can_resync() {
 #[tokio::test]
 async fn read_from_serves_ring_and_reports_out_of_range() {
     let pty = spawn_with(FLOOD, flood());
-    let mut out = pty.subscribe();
+    let mut output = pty.subscribe();
     within("wait", pty.wait()).await.unwrap();
     // Wait for output to end, skipping whatever this subscriber missed.
     within("output end", async {
         loop {
-            match out.recv().await {
+            match output.recv().await {
                 Ok(_) => {}
-                Err(RecvError::Evicted { oldest, .. }) => out.seek(oldest).unwrap(),
+                Err(RecvError::Evicted { oldest, .. }) => output.seek(oldest).unwrap(),
                 Err(RecvError::Closed) => break,
             }
         }
