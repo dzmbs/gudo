@@ -66,16 +66,13 @@ struct PairingEntry {
 pub struct EndpointInfo {
     /// The daemon's endpoint id, hex.
     pub daemon_id: String,
-    /// Direct addresses.
     pub addrs: Vec<SocketAddr>,
-    /// Home relay, if any.
     pub relay_url: Option<String>,
     /// The relays the daemon uses (default, self-hosted or none), for pairing tickets.
     #[serde(default)]
     pub relays: proto::TicketRelays,
-    /// Process id of the daemon.
     pub pid: u32,
-    /// When it started.
+    /// Unix ms.
     pub started_at: u64,
     /// The UDP sockets the endpoint bound (`0.0.0.0:p`, `[::]:p`). The next start binds the
     /// same ports again, so the direct addresses in tickets already handed out keep working
@@ -87,11 +84,11 @@ pub struct EndpointInfo {
 pub(crate) fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 
-fn json_error(e: serde_json::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, e)
+fn json_error(error: serde_json::Error) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> io::Result<Option<T>> {
@@ -117,14 +114,15 @@ struct Stamp {
 fn stamp(path: &Path) -> io::Result<Option<Stamp>> {
     use std::os::unix::fs::MetadataExt;
     match std::fs::metadata(path) {
-        Ok(m) => Ok(Some(Stamp {
-            dev: m.dev(),
-            ino: m.ino(),
-            mtime_ns: i128::from(m.mtime()) * 1_000_000_000 + i128::from(m.mtime_nsec()),
-            len: m.len(),
+        Ok(metadata) => Ok(Some(Stamp {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000
+                + i128::from(metadata.mtime_nsec()),
+            len: metadata.len(),
         })),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -201,8 +199,8 @@ impl Identity {
 
     /// [`Self::load_devices`], keeping the last good list if the file is unreadable.
     fn refresh(&self) {
-        if let Err(e) = self.load_devices() {
-            tracing::warn!("reading paired devices: {e}");
+        if let Err(error) = self.load_devices() {
+            tracing::warn!("reading paired devices: {error}");
         }
     }
 
@@ -259,12 +257,12 @@ impl Identity {
                 // A fresh ticket brings a removed device back, but not its old invites: they
                 // stay void by its removal time (`removed_at`).
                 self.update_devices(|list, _| {
-                    list.retain(|d| d.device != device_hex);
+                    list.retain(|paired| paired.device != device_hex);
                     list.push(entry);
                     true
                 })
-                .map_err(|e| {
-                    tracing::warn!("saving paired devices: {e}");
+                .map_err(|error| {
+                    tracing::warn!("saving paired devices: {error}");
                     RefuseReason::InvalidGrant
                 })?;
                 tracing::info!(?device, "paired new device");
@@ -276,7 +274,7 @@ impl Identity {
                 let entry = devices
                     .list
                     .iter()
-                    .find(|d| d.device == device_hex)
+                    .find(|paired| paired.device == device_hex)
                     .ok_or(RefuseReason::InvalidGrant)?;
                 let principal =
                     PrincipalId(unhex(&entry.principal).ok_or(RefuseReason::InvalidGrant)?);
@@ -290,7 +288,6 @@ impl Identity {
         }
     }
 
-    /// Number of paired devices.
     pub fn device_count(&self) -> usize {
         self.refresh();
         self.lock_devices().list.len()
@@ -305,21 +302,23 @@ impl Identity {
     pub fn is_owner_device(&self, device: DeviceId) -> bool {
         self.refresh();
         let hex_id = hex(&device.0);
-        self.lock_devices().list.iter().any(|d| d.device == hex_id)
+        self.lock_devices()
+            .list
+            .iter()
+            .any(|paired| paired.device == hex_id)
     }
 
-    /// The paired owner devices.
     pub fn paired(&self) -> Vec<Owner> {
         self.refresh();
         self.lock_devices()
             .list
             .iter()
-            .filter_map(|d| {
+            .filter_map(|paired| {
                 Some(Owner {
-                    device: DeviceId(unhex(&d.device)?),
-                    principal: PrincipalId(unhex(&d.principal)?),
-                    name: d.name.clone(),
-                    paired_at: UnixMillis(d.paired_at),
+                    device: DeviceId(unhex(&paired.device)?),
+                    principal: PrincipalId(unhex(&paired.principal)?),
+                    name: paired.name.clone(),
+                    paired_at: UnixMillis(paired.paired_at),
                 })
             })
             .collect()
@@ -342,18 +341,18 @@ impl Identity {
             .lock_devices()
             .list
             .iter()
-            .any(|d| d.device == hex_id && d.name != name);
+            .any(|paired| paired.device == hex_id && paired.name != name);
         if !known {
             return;
         }
         let saved = self.update_devices(|list, _| {
             list.iter_mut()
-                .find(|d| d.device == hex_id && d.name != name)
-                .map(|d| d.name = name.to_owned())
+                .find(|paired| paired.device == hex_id && paired.name != name)
+                .map(|paired| paired.name = name.to_owned())
                 .is_some()
         });
-        if let Err(e) = saved {
-            tracing::warn!("saving paired devices: {e}");
+        if let Err(error) = saved {
+            tracing::warn!("saving paired devices: {error}");
         }
     }
 
@@ -361,8 +360,8 @@ impl Identity {
     pub fn unpair(&self, device: DeviceId) -> bool {
         let hex_id = hex(&device.0);
         self.update_devices(|list, removed| remove_device(list, removed, &hex_id))
-            .unwrap_or_else(|e| {
-                tracing::warn!("saving paired devices: {e}");
+            .unwrap_or_else(|error| {
+                tracing::warn!("saving paired devices: {error}");
                 false
             })
     }
@@ -372,7 +371,7 @@ impl Identity {
 /// void even if it pairs again.
 fn remove_device(list: &mut Vec<DeviceEntry>, removed: &mut Removed, device: &str) -> bool {
     let before = list.len();
-    list.retain(|d| d.device != device);
+    list.retain(|paired| paired.device != device);
     if list.len() == before {
         return false;
     }
@@ -417,12 +416,13 @@ fn consume_pairing_secret(dir: &Path, secret: PairingSecret) -> io::Result<Optio
         let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
         let before = entries.len();
         let now = now_millis();
-        let found = entries.iter().position(|e| {
-            e.expires > now
-                && unhex::<16>(&e.secret).is_some_and(|s| fsutil::constant_eq(&s, &secret.0))
+        let found = entries.iter().position(|entry| {
+            entry.expires > now
+                && unhex::<16>(&entry.secret)
+                    .is_some_and(|stored| fsutil::constant_eq(&stored, &secret.0))
         });
         let principal = found.and_then(|i| unhex(&entries.remove(i).principal).map(PrincipalId));
-        entries.retain(|e| e.expires > now);
+        entries.retain(|entry| entry.expires > now);
         // A wrong guess costs no disk write: anyone who knows the daemon id can send them.
         if entries.len() != before {
             write_json(&path, &entries)?;
@@ -473,7 +473,7 @@ pub fn mint_ticket(state_dir: &Path, ttl: Duration) -> io::Result<Ticket> {
     fsutil::with_lock(&path, || {
         let mut entries: Vec<PairingEntry> = read_json(&path)?.unwrap_or_default();
         let now = now_millis();
-        entries.retain(|e| e.expires > now);
+        entries.retain(|entry| entry.expires > now);
         entries.push(PairingEntry {
             secret: hex(&secret.0),
             principal: hex(&owner.0),
@@ -521,11 +521,11 @@ pub struct PairedDevice {
 }
 
 impl From<DeviceEntry> for PairedDevice {
-    fn from(d: DeviceEntry) -> Self {
+    fn from(entry: DeviceEntry) -> Self {
         Self {
-            device: d.device,
-            paired_at: d.paired_at,
-            name: d.name,
+            device: entry.device,
+            paired_at: entry.paired_at,
+            name: entry.name,
         }
     }
 }
@@ -551,7 +551,7 @@ pub fn list_paired(state_dir: &Path) -> io::Result<Vec<PairedDevice>> {
 ///
 /// Returns an error if `devices.json` is unreadable.
 pub fn paired_devices(state_dir: &Path) -> io::Result<usize> {
-    list_paired(state_dir).map(|d| d.len())
+    list_paired(state_dir).map(|devices| devices.len())
 }
 
 /// Removes the paired device whose key starts with `prefix` (at least 8 hex digits). A
@@ -565,7 +565,7 @@ pub fn paired_devices(state_dir: &Path) -> io::Result<usize> {
 /// [`io::ErrorKind::NotFound`] if it matches none, or any error reading or writing the file.
 pub fn unpair_device(state_dir: &Path, prefix: &str) -> io::Result<PairedDevice> {
     let prefix = prefix.trim().to_ascii_lowercase();
-    if prefix.len() < 8 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if prefix.len() < 8 || !prefix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "give at least 8 hex digits of the device key",
@@ -626,16 +626,15 @@ mod tests {
     }
 
     /// The daemon mints its startup ticket while `hostd pair` (another process) mints one, and
-    /// devices pair while others are minted: every secret handed out stays valid, once. (A
-    /// lost write here was a ticket the daemon refused with `InvalidGrant`.)
+    /// devices pair while others are minted: every secret handed out stays valid, once.
     #[test]
     fn concurrent_mints_and_consumes_lose_no_secret() {
         let dir = started_daemon();
         let dir = dir.path();
-        let minted: Vec<PairingSecret> = thread::scope(|s| {
+        let minted: Vec<PairingSecret> = thread::scope(|scope| {
             let minters: Vec<_> = (0..6)
                 .map(|_| {
-                    s.spawn(|| {
+                    scope.spawn(|| {
                         (0..10)
                             .map(|_| mint_ticket(dir, PAIRING_TTL).expect("mint").secret)
                             .collect::<Vec<_>>()
@@ -649,11 +648,11 @@ mod tests {
         });
         assert_eq!(minted.len(), 60);
 
-        let consumed: usize = thread::scope(|s| {
+        let consumed: usize = thread::scope(|scope| {
             let consumers: Vec<_> = minted
                 .chunks(10)
                 .map(|chunk| {
-                    s.spawn(move || {
+                    scope.spawn(move || {
                         chunk
                             .iter()
                             .filter(|secret| {
@@ -671,7 +670,7 @@ mod tests {
                 .collect();
             let consumed = consumers
                 .into_iter()
-                .map(|c| c.join().expect("consumer"))
+                .map(|consumer| consumer.join().expect("consumer"))
                 .sum();
             for secret in late {
                 assert!(
@@ -742,7 +741,7 @@ mod tests {
         let listed: Vec<String> = list_paired(dir.path())
             .expect("list")
             .into_iter()
-            .map(|d| d.device)
+            .map(|paired| paired.device)
             .collect();
         assert_eq!(
             listed,

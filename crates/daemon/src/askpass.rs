@@ -7,9 +7,9 @@
 //!   daemon pushes the prompt to every owner device with [`Caps::ASKPASS`] that shows the
 //!   pane's session, never to a guest's (a host that is not theirs must not ask for their
 //!   passwords); the first answer wins. While a guest holds the pane's lease the prompt
-//!   names them ([`AskpassPush::PromptWhileGuestDrives`]): they may have typed the command. With nobody able to answer (now,
-//!   or for [`AskpassConfig::grace`] while the prompt is open), the helper is told to ask on
-//!   the terminal itself.
+//!   names them ([`AskpassPush::PromptWhileGuestDrives`]): they may have typed the command.
+//!   With nobody able to answer (now, or for [`AskpassConfig::grace`] while the prompt is
+//!   open), the helper is told to ask on the terminal itself.
 //! - **Detected prompts.** While a pane's termios is `-echo icanon` and the cursor row looks
 //!   like a password prompt, [`AskpassPush::Detected`] is pushed; `TypeSecret` writes a
 //!   secret plus Return only while echo is still off.
@@ -56,11 +56,9 @@ pub struct AskpassCall {
     pub token: String,
     /// The pane id from the pane's environment.
     pub pane: String,
-    /// The question.
     pub askpass: HelperQuery,
 }
 
-/// The helper's question.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HelperQuery {
     /// The prompt the program passed as the helper's first argument.
@@ -88,7 +86,6 @@ pub enum HelperReply {
     Cancelled,
     /// Nobody can answer in the app: ask on the terminal.
     Terminal,
-    /// Answer to a probe.
     Available(bool),
 }
 
@@ -98,15 +95,15 @@ impl std::fmt::Debug for HelperReply {
             Self::Answer(_) => f.write_str("Answer(…)"),
             Self::Cancelled => f.write_str("Cancelled"),
             Self::Terminal => f.write_str("Terminal"),
-            Self::Available(a) => write!(f, "Available({a})"),
+            Self::Available(available) => write!(f, "Available({available})"),
         }
     }
 }
 
 impl Drop for HelperReply {
     fn drop(&mut self) {
-        if let Self::Answer(s) = self {
-            zeroize::Zeroize::zeroize(s);
+        if let Self::Answer(secret) = self {
+            zeroize::Zeroize::zeroize(secret);
         }
     }
 }
@@ -153,7 +150,7 @@ pub(crate) struct Askpass {
 impl Askpass {
     /// Writes the helper script and the shell wrappers under `state_dir`. Failures are logged
     /// and leave the feature off.
-    pub fn install(cfg: &AskpassConfig, state_dir: &Path, hook_bin: &Path) -> Self {
+    pub fn install(config: &AskpassConfig, state_dir: &Path, hook_bin: &Path) -> Self {
         let mut this = Self {
             helper: None,
             wrappers: None,
@@ -162,7 +159,7 @@ impl Askpass {
             conns: Mutex::default(),
             answered: Mutex::default(),
         };
-        if !cfg.enabled {
+        if !config.enabled {
             return this;
         }
         let dir = state_dir.join("askpass");
@@ -170,26 +167,25 @@ impl Askpass {
         let script = format!(
             "#!/bin/sh\n# Written by {}: asks the app for a password (docs/DAEMON.md §9).\nexec {} askpass \"$@\"\n",
             brand::DAEMON_BIN,
-            agents_quote(&hook_bin.to_string_lossy()),
+            shell_quote(&hook_bin.to_string_lossy()),
         );
         match write_executable(&helper, &script) {
             Ok(()) => this.helper = Some(helper),
-            Err(e) => {
-                tracing::warn!("writing the askpass helper: {e}");
+            Err(error) => {
+                tracing::warn!("writing the askpass helper: {error}");
                 return this;
             }
         }
-        if cfg.sudo {
-            let si = state_dir.join("shell-integration");
-            match write_wrappers(&dir, &si) {
+        if config.sudo {
+            let integration_dir = state_dir.join("shell-integration");
+            match write_wrappers(&dir, &integration_dir) {
                 Ok(()) => this.wrappers = Some(dir),
-                Err(e) => tracing::warn!("writing the sudo wrappers: {e}"),
+                Err(error) => tracing::warn!("writing the sudo wrappers: {error}"),
             }
         }
         this
     }
 
-    /// Variables every pane gets while askpass is on.
     pub fn pane_env(&self, core: &Core, pane: PaneId) -> Vec<(String, std::ffi::OsString)> {
         let Some(helper) = &self.helper else {
             return Vec::new();
@@ -217,15 +213,15 @@ impl Askpass {
     /// Points the shell at the wrappers that define `sudo` (zsh: our `ZDOTDIR`, which loads
     /// Ghostty's; bash: our `ENV`, which sources Ghostty's). fish finds its wrapper next to
     /// Ghostty's in `vendor_conf.d` by itself.
-    pub fn wrap_injection(&self, inj: &mut Injection) {
+    pub fn wrap_injection(&self, injection: &mut Injection) {
         let Some(dir) = &self.wrappers else {
             return;
         };
-        for (k, v) in &mut inj.env {
-            match k.as_str() {
-                "ZDOTDIR" => *v = dir.join("zsh").to_string_lossy().into_owned(),
-                "ENV" if v.ends_with("ghostty.bash") => {
-                    *v = dir.join("askpass.bash").to_string_lossy().into_owned();
+        for (name, value) in &mut injection.env {
+            match name.as_str() {
+                "ZDOTDIR" => *value = dir.join("zsh").to_string_lossy().into_owned(),
+                "ENV" if value.ends_with("ghostty.bash") => {
+                    *value = dir.join("askpass.bash").to_string_lossy().into_owned();
                 }
                 _ => {}
             }
@@ -242,16 +238,18 @@ impl Askpass {
         lock(&self.conns).remove(&conn);
     }
 
-    /// The open prompts of `pane`, as pushes.
     pub fn open_in(&self, pane: PaneId) -> Vec<AskpassPush> {
         let open = lock(&self.open);
-        let mut mine: Vec<&Open> = open.values().filter(|o| o.prompt.pane_id == pane).collect();
-        mine.sort_by_key(|o| o.prompt.id);
-        mine.into_iter().map(Open::push).collect()
+        let mut in_pane: Vec<&Open> = open
+            .values()
+            .filter(|open| open.prompt.pane_id == pane)
+            .collect();
+        in_pane.sort_by_key(|open| open.prompt.id);
+        in_pane.into_iter().map(Open::push).collect()
     }
 
     fn pane_of(&self, id: AskpassId) -> Option<PaneId> {
-        lock(&self.open).get(&id).map(|o| o.prompt.pane_id)
+        lock(&self.open).get(&id).map(|open| open.prompt.pane_id)
     }
 
     fn resolve(&self, id: AskpassId, outcome: Outcome) -> Result<(), AskpassError> {
@@ -269,7 +267,7 @@ impl Core {
         };
         let conns: Vec<(ConnId, Authz)> = lock(&self.askpass.conns)
             .iter()
-            .map(|(c, a)| (*c, a.clone()))
+            .map(|(conn, authz)| (*conn, authz.clone()))
             .collect();
         conns.into_iter().any(|(conn, authz)| {
             self.attached_session(conn) == Some(session)
@@ -278,8 +276,6 @@ impl Core {
         })
     }
 }
-
-// --- the helper's side of the hook socket ---------------------------------------------------
 
 /// Serves one askpass call. `rest` is the rest of the helper's connection: it reaching EOF
 /// means the program gave up (Ctrl-C, its own timeout).
@@ -293,7 +289,7 @@ pub(crate) async fn serve(
         tracing::warn!("askpass call with a bad token");
         return HelperReply::Terminal;
     }
-    // Same user only: the socket is in the state directory, this is belt and braces.
+    // Same user only: the socket is in the state directory, this is defence in depth.
     // SAFETY: getuid has no preconditions and cannot fail.
     if peer_uid.is_some_and(|uid| uid != unsafe { libc::getuid() }) {
         tracing::warn!("askpass call from another user");
@@ -382,9 +378,9 @@ pub(crate) async fn serve(
 
 /// Resolves once the helper's side of the connection closes.
 pub(crate) async fn gone(rest: &mut (impl AsyncRead + Unpin)) {
-    let mut buf = [0u8; 64];
+    let mut discard = [0u8; 64];
     loop {
-        match rest.read(&mut buf).await {
+        match rest.read(&mut discard).await {
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
@@ -418,7 +414,7 @@ fn classify(program: &str) -> SecretSource {
     if matches!(
         name.as_str(),
         "sh" | "bash" | "zsh" | "dash" | "fish" | "env" | "perl" | "python" | "python3"
-    ) && let Some(script) = words.find(|w| !w.starts_with('-'))
+    ) && let Some(script) = words.find(|word| !word.starts_with('-'))
     {
         name = base(script);
     }
@@ -427,28 +423,28 @@ fn classify(program: &str) -> SecretSource {
         "ssh" | "scp" | "sftp" | "ssh-add" | "ssh-keygen" | "ssh-agent" | "rsync" => {
             SecretSource::Ssh
         }
-        n if n == "git" || n.starts_with("git-") => SecretSource::Git,
-        n if n.starts_with("gpg") || n.starts_with("pinentry") => SecretSource::Gpg,
+        name if name == "git" || name.starts_with("git-") => SecretSource::Git,
+        name if name.starts_with("gpg") || name.starts_with("pinentry") => SecretSource::Gpg,
         _ => SecretSource::Other,
     }
 }
 
-// --- client requests ------------------------------------------------------------------------
-
 /// Whether `secret` holds bytes the terminal or the reading program would act on.
 fn has_controls(secret: &Secret) -> bool {
-    secret.expose().iter().any(|&b| b < 0x20 || b == 0x7f)
+    secret
+        .expose()
+        .iter()
+        .any(|&byte| byte < 0x20 || byte == 0x7f)
 }
 
-/// Handles an [`AskpassRequest`] from a connection acting as `authz`.
 pub(crate) async fn request(
     core: &Arc<Core>,
     authz: &Authz,
-    req: AskpassRequest,
+    request: AskpassRequest,
 ) -> Result<(), AskpassError> {
     let allow = |pane| {
         policy::check(core, authz, Need::Drive, Target::Pane(pane))
-            .map_err(|e| AskpassError::Denied(e.to_string()))
+            .map_err(|error| AskpassError::Denied(error.to_string()))
     };
     // Prompts go to owner devices only; so do their answers.
     let owner = || {
@@ -458,7 +454,7 @@ pub(crate) async fn request(
             .ok_or_else(|| AskpassError::Denied("password prompts are the host owner's".into()))
     };
     let principal = authz.actor.principal;
-    match req {
+    match request {
         AskpassRequest::Answer { id, secret } => {
             owner()?;
             allow(core.askpass.pane_of(id).ok_or(AskpassError::Gone)?)?;
@@ -509,8 +505,6 @@ pub(crate) async fn request(
     }
 }
 
-// --- detected prompts -----------------------------------------------------------------------
-
 /// Re-checks `entry` for a password prompt the program printed itself and pushes a change.
 pub(crate) fn detect(core: &Core, entry: &PaneEntry) {
     if core.askpass.helper.is_none() {
@@ -553,26 +547,26 @@ pub(crate) fn detected(core: &Core, pane: PaneId) -> Option<DetectedPrompt> {
     })
 }
 
-/// The pane a push is about.
 pub(crate) fn push_pane(push: &AskpassPush) -> PaneId {
     match push {
-        AskpassPush::Prompt(p) | AskpassPush::PromptWhileGuestDrives { prompt: p, .. } => p.pane_id,
+        AskpassPush::Prompt(prompt) | AskpassPush::PromptWhileGuestDrives { prompt, .. } => {
+            prompt.pane_id
+        }
         AskpassPush::Closed { pane_id, .. }
         | AskpassPush::DetectedGone { pane_id }
         | AskpassPush::Detected(DetectedPrompt { pane_id, .. }) => *pane_id,
     }
 }
 
-// --- files ----------------------------------------------------------------------------------
-
-fn agents_quote(s: &str) -> String {
-    if !s.is_empty()
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&b))
+fn shell_quote(text: &str) -> String {
+    if !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/._-+=:,@".contains(&byte))
     {
-        return s.to_owned();
+        return text.to_owned();
     }
-    format!("'{}'", s.replace('\'', r"'\''"))
+    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 pub(crate) fn write_executable(path: &Path, contents: &str) -> io::Result<()> {
@@ -628,11 +622,11 @@ end
 "#;
 
 /// Writes the zsh `ZDOTDIR` and bash `ENV` wrappers under `dir`, and fish's next to Ghostty's
-/// `vendor_conf.d` script under `si`.
-fn write_wrappers(dir: &Path, si: &Path) -> io::Result<()> {
+/// `vendor_conf.d` script under `integration_dir`.
+fn write_wrappers(dir: &Path, integration_dir: &Path) -> io::Result<()> {
     let prefix = brand::ENV_PREFIX;
     let sudo_sh = SUDO_SH.replace("GUDO_", prefix);
-    let ghostty_zshenv = agents_quote(&si.join("zsh/.zshenv").to_string_lossy());
+    let ghostty_zshenv = shell_quote(&integration_dir.join("zsh/.zshenv").to_string_lossy());
     let zshenv = format!(
         "# Written by {daemon}: Ghostty's zsh integration, then the askpass `sudo` wrapper\n\
          # (docs/DAEMON.md §9).\n\
@@ -641,7 +635,7 @@ fn write_wrappers(dir: &Path, si: &Path) -> io::Result<()> {
         daemon = brand::DAEMON_BIN,
     );
     write_executable(&dir.join("zsh/.zshenv"), &zshenv)?;
-    let ghostty_bash = agents_quote(&si.join("bash/ghostty.bash").to_string_lossy());
+    let ghostty_bash = shell_quote(&integration_dir.join("bash/ghostty.bash").to_string_lossy());
     let bash = format!(
         "# Written by {daemon}: Ghostty's bash integration, then the askpass `sudo` wrapper\n\
          # (docs/DAEMON.md §9).\n\
@@ -656,7 +650,7 @@ fn write_wrappers(dir: &Path, si: &Path) -> io::Result<()> {
         SUDO_FISH.replace("GUDO_", prefix)
     );
     write_executable(
-        &si.join(format!(
+        &integration_dir.join(format!(
             "fish/vendor_conf.d/{}-askpass.fish",
             brand::CLI_BIN
         )),
@@ -705,7 +699,7 @@ mod tests {
     #[test]
     fn writes_the_helper_and_wrappers() {
         let dir = tempfile::tempdir().unwrap();
-        let si = crate::shell::ShellIntegration::install(dir.path()).unwrap();
+        let integration = crate::shell::ShellIntegration::install(dir.path()).unwrap();
         let askpass = Askpass::install(
             &AskpassConfig::default(),
             dir.path(),
@@ -721,11 +715,16 @@ mod tests {
         assert!(zshenv.contains("shell-integration/zsh/.zshenv"));
         assert!(zshenv.contains("command sudo -A \"$@\""));
 
-        let mut inj = si
+        let mut injection = integration
             .injection(Path::new("/bin/zsh"), |_| None)
             .expect("zsh is integrated");
-        askpass.wrap_injection(&mut inj);
-        let zdotdir = &inj.env.iter().find(|(k, _)| k == "ZDOTDIR").unwrap().1;
+        askpass.wrap_injection(&mut injection);
+        let zdotdir = &injection
+            .env
+            .iter()
+            .find(|(name, _)| name == "ZDOTDIR")
+            .unwrap()
+            .1;
         assert!(zdotdir.ends_with("askpass/zsh"), "{zdotdir}");
 
         let off = Askpass::install(

@@ -1,3 +1,4 @@
+//! Approval policies: who may answer a session's agent approvals, how risky a
 //! call a non-owner may allow, the two-person rule and claims. The policies live in the grant
 //! store; the votes and claims of open requests live here, in memory, until the request is
 //! decided or goes away.
@@ -15,7 +16,6 @@ use proto::{
 use crate::core::lock;
 use crate::identity::now_millis;
 
-/// Someone answering or claiming a request.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Ballot<'a> {
     pub actor: Actor,
@@ -35,7 +35,6 @@ impl Ballot<'_> {
     }
 }
 
-/// What to do with a decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Verdict {
     /// Apply it: the agent gets the answer.
@@ -44,7 +43,6 @@ pub(crate) enum Verdict {
     Held(ApprovalStatus),
 }
 
-/// The votes and claim of one open request.
 #[derive(Debug, Clone)]
 struct Open {
     pane: PaneId,
@@ -76,7 +74,6 @@ fn needed(policy: ApprovalPolicy, risk: Risk) -> u8 {
     }
 }
 
-/// Open requests' votes and claims.
 #[derive(Debug, Default)]
 pub(crate) struct Approvals {
     open: Mutex<HashMap<RequestId, Open>>,
@@ -142,7 +139,7 @@ impl Approvals {
         let theirs = entry
             .claimed
             .as_ref()
-            .filter(|c| c.actor.principal != ballot.actor.principal);
+            .filter(|claim| claim.actor.principal != ballot.actor.principal);
         if let Some(other) = theirs
             && !ballot.owner
         {
@@ -180,7 +177,7 @@ impl Approvals {
     pub fn all(&self, policy_of: impl Fn(PaneId) -> ApprovalPolicy) -> Vec<ApprovalStatus> {
         lock(&self.open)
             .iter()
-            .map(|(id, o)| o.status(*id, policy_of(o.pane)))
+            .map(|(request, open)| open.status(*request, policy_of(open.pane)))
             .collect()
     }
 
@@ -188,18 +185,17 @@ impl Approvals {
     pub fn claimant_on(&self, pane: PaneId) -> Option<ApprovalVote> {
         lock(&self.open)
             .values()
-            .filter(|o| o.pane == pane)
-            .find_map(|o| o.claimed.clone())
+            .filter(|open| open.pane == pane)
+            .find_map(|open| open.claimed.clone())
     }
 
-    /// The request was decided or went away.
     pub fn forget(&self, request: RequestId) {
         lock(&self.open).remove(&request);
     }
 
     /// Requests on `pane` other than `current` went away (the agent moved on).
     pub fn forget_pane_except(&self, pane: PaneId, current: Option<RequestId>) {
-        lock(&self.open).retain(|id, o| o.pane != pane || Some(*id) == current);
+        lock(&self.open).retain(|request, open| open.pane != pane || Some(*request) == current);
     }
 }
 
@@ -244,7 +240,7 @@ fn rule(
     if open
         .approvals
         .iter()
-        .any(|v| v.actor.principal == ballot.actor.principal)
+        .any(|vote| vote.actor.principal == ballot.actor.principal)
     {
         return Err(MpError::Conflict(
             "you already approved this; it needs a second person".into(),
@@ -257,9 +253,8 @@ fn rule(
     })
 }
 
-/// "read-only calls", "reads and edits", "anything".
-fn allowed(max: Risk) -> &'static str {
-    match max {
+fn allowed(max_risk: Risk) -> &'static str {
+    match max_risk {
         Risk::ReadOnly => "read-only calls",
         Risk::Edits => "reads and edits",
         Risk::Any => "anything",
@@ -310,16 +305,16 @@ mod tests {
 
     use super::*;
 
-    fn actor(n: u8) -> Actor {
+    fn actor(seed: u8) -> Actor {
         Actor {
-            principal: PrincipalId([n; 16]),
-            device: DeviceId([n; 32]),
+            principal: PrincipalId([seed; 16]),
+            device: DeviceId([seed; 32]),
         }
     }
 
-    fn ballot(n: u8, owner: bool) -> Ballot<'static> {
+    fn ballot(seed: u8, owner: bool) -> Ballot<'static> {
         Ballot {
-            actor: actor(n),
+            actor: actor(seed),
             name: if owner { "owner" } else { "guest" },
             owner,
         }
@@ -333,18 +328,25 @@ mod tests {
 
     #[test]
     fn any_approver_decides_at_once() {
-        let a = Approvals::default();
-        let p = ApprovalPolicy::default();
-        let v = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(2, false));
-        assert_eq!(v, Ok(Verdict::Decide));
+        let votes = Approvals::default();
+        let policy = ApprovalPolicy::default();
+        let verdict = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            true,
+            ballot(2, false),
+        );
+        assert_eq!(verdict, Ok(Verdict::Decide));
     }
 
     #[test]
     fn owner_only_refuses_guests_but_not_the_owner() {
-        let a = Approvals::default();
-        let p = policy(ApprovalMode::OwnerOnly, Risk::Any);
-        let guest = a.judge(
-            p,
+        let votes = Approvals::default();
+        let policy = policy(ApprovalMode::OwnerOnly, Risk::Any);
+        let guest = votes.judge(
+            policy,
             PANE,
             RequestId(1),
             Risk::ReadOnly,
@@ -352,29 +354,52 @@ mod tests {
             ballot(2, false),
         );
         assert!(matches!(guest, Err(MpError::Forbidden(_))));
-        let owner = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(1, true));
+        let owner = votes.judge(policy, PANE, RequestId(1), Risk::Any, true, ballot(1, true));
         assert_eq!(owner, Ok(Verdict::Decide));
     }
 
     #[test]
     fn max_risk_caps_allowing_but_not_denying() {
-        let a = Approvals::default();
-        let p = policy(ApprovalMode::AnyApprover, Risk::Edits);
-        let bash = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(2, false));
-        assert!(matches!(bash, Err(MpError::Forbidden(m)) if m.contains("needs the owner")));
-        let deny = a.judge(p, PANE, RequestId(1), Risk::Any, false, ballot(2, false));
+        let votes = Approvals::default();
+        let policy = policy(ApprovalMode::AnyApprover, Risk::Edits);
+        let bash = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            true,
+            ballot(2, false),
+        );
+        assert!(
+            matches!(bash, Err(MpError::Forbidden(message)) if message.contains("needs the owner"))
+        );
+        let deny = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            false,
+            ballot(2, false),
+        );
         assert_eq!(deny, Ok(Verdict::Decide));
-        let edit = a.judge(p, PANE, RequestId(2), Risk::Edits, true, ballot(2, false));
+        let edit = votes.judge(
+            policy,
+            PANE,
+            RequestId(2),
+            Risk::Edits,
+            true,
+            ballot(2, false),
+        );
         assert_eq!(edit, Ok(Verdict::Decide));
-        let owner = a.judge(p, PANE, RequestId(3), Risk::Any, true, ballot(1, true));
+        let owner = votes.judge(policy, PANE, RequestId(3), Risk::Any, true, ballot(1, true));
         assert_eq!(owner, Ok(Verdict::Decide));
     }
 
     #[test]
     fn two_person_holds_the_first_approval_of_a_command() {
-        let a = Approvals::default();
-        let p = policy(ApprovalMode::TwoPerson, Risk::Any);
-        let first = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(1, true));
+        let votes = Approvals::default();
+        let policy = policy(ApprovalMode::TwoPerson, Risk::Any);
+        let first = votes.judge(policy, PANE, RequestId(1), Risk::Any, true, ballot(1, true));
         let Ok(Verdict::Held(status)) = first else {
             panic!("first approval should be held: {first:?}");
         };
@@ -387,44 +412,113 @@ mod tests {
             },
             ..ballot(1, true)
         };
-        let twice = a.judge(p, PANE, RequestId(1), Risk::Any, true, again);
+        let twice = votes.judge(policy, PANE, RequestId(1), Risk::Any, true, again);
         assert!(matches!(twice, Err(MpError::Conflict(_))));
-        let second = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(2, false));
+        let second = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            true,
+            ballot(2, false),
+        );
         assert_eq!(second, Ok(Verdict::Decide));
     }
 
     #[test]
     fn two_person_lets_one_deny_and_one_approve_safer_calls() {
-        let a = Approvals::default();
-        let p = policy(ApprovalMode::TwoPerson, Risk::Any);
-        let deny = a.judge(p, PANE, RequestId(1), Risk::Any, false, ballot(2, false));
+        let votes = Approvals::default();
+        let policy = policy(ApprovalMode::TwoPerson, Risk::Any);
+        let deny = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            false,
+            ballot(2, false),
+        );
         assert_eq!(deny, Ok(Verdict::Decide));
-        let edit = a.judge(p, PANE, RequestId(2), Risk::Edits, true, ballot(2, false));
+        let edit = votes.judge(
+            policy,
+            PANE,
+            RequestId(2),
+            Risk::Edits,
+            true,
+            ballot(2, false),
+        );
         assert_eq!(edit, Ok(Verdict::Decide));
     }
 
     #[test]
     fn a_claim_reserves_the_request() {
-        let a = Approvals::default();
-        let p = policy(ApprovalMode::Claim, Risk::Any);
-        let status = a
-            .claim(p, PANE, RequestId(1), Risk::Any, ballot(2, false), true)
+        let votes = Approvals::default();
+        let policy = policy(ApprovalMode::Claim, Risk::Any);
+        let status = votes
+            .claim(
+                policy,
+                PANE,
+                RequestId(1),
+                Risk::Any,
+                ballot(2, false),
+                true,
+            )
             .unwrap();
-        assert_eq!(status.claimed_by.map(|c| c.actor), Some(actor(2)));
-        let other = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(3, false));
-        assert!(matches!(other, Err(MpError::Conflict(m)) if m.contains("claimed")));
-        let steal = a.claim(p, PANE, RequestId(1), Risk::Any, ballot(3, false), true);
+        assert_eq!(status.claimed_by.map(|claim| claim.actor), Some(actor(2)));
+        let other = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            true,
+            ballot(3, false),
+        );
+        assert!(matches!(other, Err(MpError::Conflict(message)) if message.contains("claimed")));
+        let steal = votes.claim(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            ballot(3, false),
+            true,
+        );
         assert!(matches!(steal, Err(MpError::Conflict(_))));
-        let claimer = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(2, false));
+        let claimer = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            true,
+            ballot(2, false),
+        );
         assert_eq!(claimer, Ok(Verdict::Decide));
-        let owner = a.judge(p, PANE, RequestId(1), Risk::Any, false, ballot(1, true));
+        let owner = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            false,
+            ballot(1, true),
+        );
         assert_eq!(owner, Ok(Verdict::Decide));
-        // Releasing frees it for others.
-        let released = a
-            .claim(p, PANE, RequestId(1), Risk::Any, ballot(2, false), false)
+        let released = votes
+            .claim(
+                policy,
+                PANE,
+                RequestId(1),
+                Risk::Any,
+                ballot(2, false),
+                false,
+            )
             .unwrap();
         assert!(released.claimed_by.is_none());
-        let now_free = a.judge(p, PANE, RequestId(1), Risk::Any, true, ballot(3, false));
+        let now_free = votes.judge(
+            policy,
+            PANE,
+            RequestId(1),
+            Risk::Any,
+            true,
+            ballot(3, false),
+        );
         assert_eq!(now_free, Ok(Verdict::Decide));
     }
 

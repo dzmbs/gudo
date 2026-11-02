@@ -1,3 +1,4 @@
+//! Live presence (`proto::peer`): drafts, viewports, following, typing, idle and
 //! away, per connection. All of it is ephemeral: kept in [`Live`](super::Live), never persisted
 //! or audited, and gone with the connection.
 //!
@@ -19,7 +20,6 @@ use tokio::sync::Notify;
 use super::{Authz, Live, Mp};
 use crate::core::{ConnId, Core, Event, lock};
 
-/// A connection's presence.
 pub(super) struct PeerState {
     /// Announced `Caps::PRESENCE`: it heartbeats, so silence means trouble.
     pub heartbeats: bool,
@@ -69,26 +69,30 @@ impl Mp {
     /// The state others see: away when the client said so or went silent, idle after a
     /// while without activity.
     pub(super) fn state_of(&self, live: &Live) -> PresenceState {
-        let p = &live.peer;
-        if p.said == PresenceState::Away || (p.heartbeats && p.heard.elapsed() >= self.times.away) {
+        let peer = &live.peer;
+        if peer.said == PresenceState::Away
+            || (peer.heartbeats && peer.heard.elapsed() >= self.times.away)
+        {
             PresenceState::Away
-        } else if p.said == PresenceState::Idle || p.active.elapsed() >= self.times.idle {
+        } else if peer.said == PresenceState::Idle || peer.active.elapsed() >= self.times.idle {
             PresenceState::Idle
         } else {
             PresenceState::Active
         }
     }
 
-    /// Any message from the connection: it is still there.
     pub fn heard(&self, core: &Core, id: ConnId) {
         let woke = {
             let mut live = lock(&self.live);
-            let Some(l) = live.get_mut(&id) else { return };
-            l.peer.heard = Instant::now();
-            let woke = l.peer.shown == PresenceState::Away && self.state_of(l) != l.peer.shown;
+            let Some(connection) = live.get_mut(&id) else {
+                return;
+            };
+            connection.peer.heard = Instant::now();
+            let woke = connection.peer.shown == PresenceState::Away
+                && self.state_of(connection) != connection.peer.shown;
             if woke {
-                l.peer.shown = self.state_of(l);
-                self.bump(l);
+                connection.peer.shown = self.state_of(connection);
+                self.bump(connection);
             }
             woke
         };
@@ -99,60 +103,67 @@ impl Mp {
 
     /// Applies a client's report of its own state; the caller checked roles and scope.
     pub fn peer_update(&self, core: &Core, id: ConnId, update: PeerUpdate) {
-        let (changed, old) = {
+        let (changed, legacy_presence) = {
             let mut live = lock(&self.live);
-            let Some(l) = live.get_mut(&id) else { return };
-            let was_typing = l.typing;
-            let p = &mut l.peer;
+            let Some(connection) = live.get_mut(&id) else {
+                return;
+            };
+            let was_typing = connection.typing;
+            let peer = &mut connection.peer;
             let changed = match update {
                 PeerUpdate::Heartbeat => false,
-                PeerUpdate::Device(d) => std::mem::replace(&mut p.device, d) != d,
-                PeerUpdate::State(s) => {
-                    if s == PresenceState::Active {
-                        p.active = Instant::now();
+                PeerUpdate::Device(device) => std::mem::replace(&mut peer.device, device) != device,
+                PeerUpdate::State(said) => {
+                    if said == PresenceState::Active {
+                        peer.active = Instant::now();
                     }
-                    std::mem::replace(&mut p.said, s) != s
+                    std::mem::replace(&mut peer.said, said) != said
                 }
-                PeerUpdate::Viewport(v) => {
-                    p.active = Instant::now();
-                    std::mem::replace(&mut p.viewport, v) != v
+                PeerUpdate::Viewport(viewport) => {
+                    peer.active = Instant::now();
+                    std::mem::replace(&mut peer.viewport, viewport) != viewport
                 }
-                PeerUpdate::Draft(mut d) => {
-                    if let Some(d) = &mut d {
-                        d.clamp();
-                        p.typing = Some((d.pane_id, Instant::now()));
-                    } else if p.draft.is_some() {
-                        p.typing = None;
+                PeerUpdate::Draft(mut draft) => {
+                    if let Some(draft) = &mut draft {
+                        draft.clamp();
+                        peer.typing = Some((draft.pane_id, Instant::now()));
+                    } else if peer.draft.is_some() {
+                        peer.typing = None;
                     }
-                    p.active = Instant::now();
-                    let changed = std::mem::replace(&mut p.draft, d) != p.draft;
-                    // The old `Presence.typing`, for clients without live presence.
-                    l.typing = p.draft.as_ref().is_some_and(|d| !d.text.is_empty());
+                    peer.active = Instant::now();
+                    let changed = std::mem::replace(&mut peer.draft, draft) != peer.draft;
+                    // Feeds `Presence.typing` for clients without live presence.
+                    connection.typing = peer
+                        .draft
+                        .as_ref()
+                        .is_some_and(|draft| !draft.text.is_empty());
                     changed
                 }
-                PeerUpdate::Follow(f) => std::mem::replace(&mut p.following, f) != f,
+                PeerUpdate::Follow(following) => {
+                    std::mem::replace(&mut peer.following, following) != following
+                }
             };
-            let state = self.state_of(l);
-            let changed = changed || state != l.peer.shown;
+            let state = self.state_of(connection);
+            let changed = changed || state != connection.peer.shown;
             if changed {
-                l.peer.shown = state;
-                self.bump(l);
+                connection.peer.shown = state;
+                self.bump(connection);
             }
-            // Clients without live presence hear typing the old way.
-            let old = (l.typing != was_typing).then_some(proto::Presence {
-                actor: l.authz.actor,
+            // Clients without live presence hear typing through `Presence`.
+            let legacy_presence = (connection.typing != was_typing).then_some(proto::Presence {
+                actor: connection.authz.actor,
                 state,
-                focus: l.focus,
-                typing: l.typing,
+                focus: connection.focus,
+                typing: connection.typing,
                 viewport: None,
-                cursor: l.cursor,
+                cursor: connection.cursor,
             });
-            (changed, old)
+            (changed, legacy_presence)
         };
         if changed {
             core.emit(Event::Peer(id));
         }
-        if let Some(presence) = old {
+        if let Some(presence) = legacy_presence {
             core.emit(Event::Presence(presence));
         }
     }
@@ -161,15 +172,18 @@ impl Mp {
     pub fn typed(&self, core: &Core, id: ConnId, pane: proto::PaneId) {
         let changed = {
             let mut live = lock(&self.live);
-            let Some(l) = live.get_mut(&id) else { return };
+            let Some(connection) = live.get_mut(&id) else {
+                return;
+            };
             let now = Instant::now();
-            let was = l.peer.typing.map(|(p, _)| p);
-            l.peer.typing = Some((pane, now));
-            l.peer.active = now;
-            let changed = was != Some(pane) || l.peer.shown != PresenceState::Active;
+            let was_typing_in = connection.peer.typing.map(|(pane, _)| pane);
+            connection.peer.typing = Some((pane, now));
+            connection.peer.active = now;
+            let changed =
+                was_typing_in != Some(pane) || connection.peer.shown != PresenceState::Active;
             if changed {
-                l.peer.shown = self.state_of(l);
-                self.bump(l);
+                connection.peer.shown = self.state_of(connection);
+                self.bump(connection);
             }
             changed
         };
@@ -181,8 +195,8 @@ impl Mp {
     /// One connection's presence as `viewer` may see it.
     pub fn peer(&self, core: &Core, id: ConnId, viewer: &Authz) -> Option<Peer> {
         let live = lock(&self.live);
-        let l = live.get(&id)?;
-        let peer = self.wire(id, l);
+        let connection = live.get(&id)?;
+        let peer = self.wire(id, connection);
         drop(live);
         Some(redact(core, peer, viewer))
     }
@@ -191,27 +205,29 @@ impl Mp {
     pub fn peers(&self, core: &Core, viewer: &Authz) -> Vec<Peer> {
         let mut all: Vec<Peer> = lock(&self.live)
             .iter()
-            .map(|(&id, l)| self.wire(id, l))
+            .map(|(&id, connection)| self.wire(id, connection))
             .collect();
-        all.sort_by_key(|p| (p.since, p.peer));
-        all.into_iter().map(|p| redact(core, p, viewer)).collect()
+        all.sort_by_key(|peer| (peer.since, peer.peer));
+        all.into_iter()
+            .map(|peer| redact(core, peer, viewer))
+            .collect()
     }
 
-    fn wire(&self, id: ConnId, l: &Live) -> Peer {
+    fn wire(&self, id: ConnId, connection: &Live) -> Peer {
         Peer {
             peer: PeerId(id),
-            rev: l.peer.rev,
-            actor: l.authz.actor,
-            name: l.name.clone(),
-            roles: l.authz.roles,
-            device: l.peer.device,
-            since: l.since,
-            state: self.state_of(l),
-            focus: l.focus,
-            viewport: l.peer.viewport,
-            typing: l.peer.typing.map(|(p, _)| p),
-            draft: l.peer.draft.clone(),
-            following: l.peer.following,
+            rev: connection.peer.rev,
+            actor: connection.authz.actor,
+            name: connection.name.clone(),
+            roles: connection.authz.roles,
+            device: connection.peer.device,
+            since: connection.since,
+            state: self.state_of(connection),
+            focus: connection.focus,
+            viewport: connection.peer.viewport,
+            typing: connection.peer.typing.map(|(pane, _)| pane),
+            draft: connection.peer.draft.clone(),
+            following: connection.peer.following,
         }
     }
 
@@ -221,26 +237,28 @@ impl Mp {
         let mut gone = Vec::new();
         {
             let mut live = lock(&self.live);
-            for (&id, l) in live.iter_mut() {
+            for (&id, connection) in live.iter_mut() {
                 let mut dirty = false;
-                if l.peer
+                if connection
+                    .peer
                     .typing
                     .is_some_and(|(_, at)| at.elapsed() >= self.times.typing)
                 {
-                    l.peer.typing = None;
+                    connection.peer.typing = None;
                     dirty = true;
                 }
-                let state = self.state_of(l);
-                if state != l.peer.shown {
-                    l.peer.shown = state;
+                let state = self.state_of(connection);
+                if state != connection.peer.shown {
+                    connection.peer.shown = state;
                     dirty = true;
                 }
                 if dirty {
-                    self.bump(l);
+                    self.bump(connection);
                     changed.push(id);
                 }
-                if l.peer.heartbeats && l.peer.heard.elapsed() >= self.times.gone {
-                    gone.push(l.conn.clone());
+                if connection.peer.heartbeats && connection.peer.heard.elapsed() >= self.times.gone
+                {
+                    gone.push(connection.conn.clone());
                 }
             }
         }
@@ -255,24 +273,31 @@ impl Mp {
 }
 
 /// Hides what a peer does outside the viewer's scope.
-fn redact(core: &Core, mut p: Peer, viewer: &Authz) -> Peer {
+fn redact(core: &Core, mut peer: Peer, viewer: &Authz) -> Peer {
     if viewer.scope == Scope::Daemon {
-        return p;
+        return peer;
     }
     let visible = |pane: proto::PaneId| core.scope_within(Scope::Pane(pane), viewer.scope);
-    if p.focus.is_some_and(|f| !visible(f)) {
-        p.focus = None;
+    if peer.focus.is_some_and(|pane| !visible(pane)) {
+        peer.focus = None;
     }
-    if p.viewport.is_some_and(|v| !visible(v.pane_id)) {
-        p.viewport = None;
+    if peer
+        .viewport
+        .is_some_and(|viewport| !visible(viewport.pane_id))
+    {
+        peer.viewport = None;
     }
-    if p.typing.is_some_and(|t| !visible(t)) {
-        p.typing = None;
+    if peer.typing.is_some_and(|pane| !visible(pane)) {
+        peer.typing = None;
     }
-    if p.draft.as_ref().is_some_and(|d| !visible(d.pane_id)) {
-        p.draft = None;
+    if peer
+        .draft
+        .as_ref()
+        .is_some_and(|draft| !visible(draft.pane_id))
+    {
+        peer.draft = None;
     }
-    p
+    peer
 }
 
 /// Peer pushes waiting for one connection's `ctl` writer: the newest state per peer, so a
@@ -293,16 +318,19 @@ impl Mailbox {
     /// Queues a push; a whole list replaces everything queued before it.
     pub fn put(&self, push: PeerPush) {
         {
-            let mut p = lock(&self.pending);
+            let mut pending = lock(&self.pending);
             match push {
                 all @ PeerPush::All { .. } => {
-                    p.changed.clear();
-                    p.all = Some(all);
+                    pending.changed.clear();
+                    pending.all = Some(all);
                 }
                 PeerPush::Changed(peer) => {
-                    let newer = p.changed.get(&peer.peer).is_none_or(|q| q.rev <= peer.rev);
+                    let newer = pending
+                        .changed
+                        .get(&peer.peer)
+                        .is_none_or(|queued| queued.rev <= peer.rev);
                     if newer {
-                        p.changed.insert(peer.peer, peer);
+                        pending.changed.insert(peer.peer, peer);
                     }
                 }
             }
@@ -312,9 +340,9 @@ impl Mailbox {
 
     /// Everything queued, as `ctl` messages, oldest kind first.
     pub fn take(&self) -> Vec<ServerCtl> {
-        let mut p = lock(&self.pending);
-        let all = p.all.take();
-        let changed = std::mem::take(&mut p.changed);
+        let mut pending = lock(&self.pending);
+        let all = pending.all.take();
+        let changed = std::mem::take(&mut pending.changed);
         all.into_iter()
             .chain(changed.into_values().map(PeerPush::Changed))
             .map(ServerCtl::Peers)
