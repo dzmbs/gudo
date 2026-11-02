@@ -758,6 +758,10 @@ with `-snapshot`, so it works on a locked Mac — glass and the sidebar list are
 `cacheDisplay` and show as white). Screens: `single splits bar hosts inbox palette search
 keybar reconnect overlays welcome pairing launchAgent invite links diff files browser editor
 settings toggle programs` (`programs`: one tab per program for the marks, `-fixtureTabs N` for
+`devices`, `app-lock` (locked, stays so) and `stopped-following` (with `-mockPresence YES`: the
+banner above someone's draft). `AppUITests/AccessibilityAuditUITests` runs the system's
+accessibility audit at the largest text size over `projects`, `tab-history`, `tab-selection`,
+`devices` and `app-lock`.
 
 `hosts` (live hosts list), `hetzner-splits` / `hetzner` (the Hetzner daemon session, split on the
 host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn by the app itself

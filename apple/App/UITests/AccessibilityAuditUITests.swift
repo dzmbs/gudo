@@ -28,6 +28,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         shot.lifetime = .keepAlways
         add(shot)
         let area = region(app)
+        XCTAssertGreaterThan(area.width * area.height, 10_000, "\(screen): the region audited is on screen: \(area)")
         try app.performAccessibilityAudit(for: types) { issue in
             // Only what this screen draws; an issue no element is named for cannot be placed.
             guard let element = issue.element, area.intersects(element.frame) else { return true }

@@ -414,7 +414,8 @@ final class InstantStartTests: XCTestCase {
         // The shell's screen is the same: its input is sent. The test run moved on: dropped.
         InstantStartFixture.goLive(client)
         let deadline = ContinuousClock.now + .seconds(5)
-        while client.inputs.isEmpty || tests.heldInput != .dropped, ContinuousClock.now < deadline {
+        // The toast follows the drop on a later turn of the main actor.
+        while client.inputs.isEmpty || tests.heldInput != .dropped || model.toasts.current == nil, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(client.inputs, ["ls\r"])
