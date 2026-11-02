@@ -5,7 +5,7 @@ import path from 'node:path';
 import esbuild from 'esbuild';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
-const pw = path.join(here, 'playwright', 'packages');
+const playwrightPackages = path.join(here, 'playwright', 'packages');
 
 // Playwright imports its overlay CSS as text (`highlight.css?inline`).
 const inlineCSS = {
@@ -19,9 +19,9 @@ const inlineCSS = {
 };
 
 const alias = {
-  '@injected': path.join(pw, 'injected', 'src'),
-  '@isomorphic': path.join(pw, 'isomorphic'),
-  '@protocol': path.join(pw, 'protocol', 'src'),
+  '@injected': path.join(playwrightPackages, 'injected', 'src'),
+  '@isomorphic': path.join(playwrightPackages, 'isomorphic'),
+  '@protocol': path.join(playwrightPackages, 'protocol', 'src'),
 };
 
 const common = { bundle: true, format: 'iife', platform: 'browser', target: 'safari17', minify: true, legalComments: 'none', logLevel: 'warning' };

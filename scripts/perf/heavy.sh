@@ -17,9 +17,7 @@ else
   printf '#!/bin/sh\ncat %s\nexec sleep 100000\n' $OUT/big.txt > $ROOT/flood.sh
 fi
 chmod +x $ROOT/flood.sh
-# The daemon starts with no pane; pairing creates the first, so start it with zsh and
-# point new panes at the flood script afterwards via a second daemon run is not possible:
-# instead the flood script is the shell from the start.
+# The flood script is the daemon's shell, so the first pane (created by pairing) floods.
 $BIN/gudo-hostd --state-dir $STATE run --no-relay --bind 127.0.0.1:0 --shell $ROOT/flood.sh 2>$ROOT/daemon.log &
 DPID=$!
 trap "kill $DPID 2>/dev/null; pkill -f '$BIN/gudo --no-relay attach' 2>/dev/null; pkill -f 'sleep 100000'; rm -rf $ROOT" EXIT

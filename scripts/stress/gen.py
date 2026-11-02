@@ -10,9 +10,9 @@ import time
 
 kind = sys.argv[1]
 rate = float(sys.argv[2]) if len(sys.argv) > 2 else 0
-out = os.fdopen(1, "wb", buffering=0)
-rnd = random.Random(1)
-n = 0
+stdout = os.fdopen(1, "wb", buffering=0)
+rng = random.Random(1)
+count = 0
 
 
 def chunk(i):
@@ -38,7 +38,7 @@ def chunk(i):
             "👩‍👩‍👧‍👦", "🇺🇳", "e" + "́" * 40, "漢字かな", "\u202eabc", "a‍b",
             "\U0001F600" * 3, "กิ์" * 5, "️" * 10, "각",
         ]
-        return ("".join(rnd.choice(parts) for _ in range(20)) + "\r\n").encode()
+        return ("".join(rng.choice(parts) for _ in range(20)) + "\r\n").encode()
     if kind == "altscreen":
         return b"\x1b[?1049h\x1b[2J\x1b[Hframe %d\x1b[?1049l" % i
     if kind == "longline":
@@ -52,13 +52,13 @@ def chunk(i):
 
 start = time.monotonic()
 while True:
-    n += 1
+    count += 1
     try:
-        out.write(chunk(n))
+        stdout.write(chunk(count))
     except BrokenPipeError:
         break
     if rate:
-        due = start + n / rate
+        due = start + count / rate
         delay = due - time.monotonic()
         if delay > 0:
             time.sleep(delay)

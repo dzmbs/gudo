@@ -44,7 +44,7 @@ const state = {
   viewport: null,
   lastPointer: 0,
   // The editor has applied the loaded scene (initialData is applied asynchronously; elements
-  // added before that were replaced by the scene and lost: strokes vanished on a real iPad).
+  // added before that are replaced by the scene and lost).
   loaded: false,
   // Ink and other work that arrived before the scene loaded.
   waiting: [],
@@ -156,10 +156,10 @@ function setViewport(viewport) {
 
 function applyViewport() {
   const api = state.api;
-  const v = state.viewport;
-  if (!api || !v) return;
+  const viewport = state.viewport;
+  if (!api || !viewport) return;
   api.updateScene({
-    appState: { scrollX: v.originX / v.zoom, scrollY: v.originY / v.zoom, zoom: { value: v.zoom } },
+    appState: { scrollX: viewport.originX / viewport.zoom, scrollY: viewport.originY / viewport.zoom, zoom: { value: viewport.zoom } },
     captureUpdate: CaptureUpdateAction.NEVER,
   });
 }
@@ -235,14 +235,14 @@ async function darken(blob) {
   const ctx = canvas.getContext("2d");
   ctx.drawImage(bitmap, 0, 0);
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const p = image.data;
-  const m = [-0.574, 1.43, 0.144, 0.426, 0.43, 0.144, 0.426, 1.43, -0.856];
-  for (let i = 0; i < p.length; i += 4) {
-    if (p[i + 3] === 0) continue;
-    const r = 0.93 - 0.86 * (p[i] / 255), g = 0.93 - 0.86 * (p[i + 1] / 255), b = 0.93 - 0.86 * (p[i + 2] / 255);
-    p[i] = Math.max(0, Math.min(255, (m[0] * r + m[1] * g + m[2] * b) * 255));
-    p[i + 1] = Math.max(0, Math.min(255, (m[3] * r + m[4] * g + m[5] * b) * 255));
-    p[i + 2] = Math.max(0, Math.min(255, (m[6] * r + m[7] * g + m[8] * b) * 255));
+  const pixels = image.data;
+  const matrix = [-0.574, 1.43, 0.144, 0.426, 0.43, 0.144, 0.426, 1.43, -0.856];
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i + 3] === 0) continue;
+    const r = 0.93 - 0.86 * (pixels[i] / 255), g = 0.93 - 0.86 * (pixels[i + 1] / 255), b = 0.93 - 0.86 * (pixels[i + 2] / 255);
+    pixels[i] = Math.max(0, Math.min(255, (matrix[0] * r + matrix[1] * g + matrix[2] * b) * 255));
+    pixels[i + 1] = Math.max(0, Math.min(255, (matrix[3] * r + matrix[4] * g + matrix[5] * b) * 255));
+    pixels[i + 2] = Math.max(0, Math.min(255, (matrix[6] * r + matrix[7] * g + matrix[8] * b) * 255));
   }
   ctx.putImageData(image, 0, 0);
   return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
@@ -406,10 +406,10 @@ function onPointerUpdate({ pointer }) {
 
 // The overlay's viewport belongs to the terminal: Excalidraw must not pan or zoom it.
 function onScrollChange(scrollX, scrollY, zoom) {
-  const v = state.viewport;
-  if (state.config?.mode !== "overlay" || !v) return;
-  const want = { x: v.originX / v.zoom, y: v.originY / v.zoom };
-  if (Math.abs(scrollX - want.x) > 0.01 || Math.abs(scrollY - want.y) > 0.01 || Math.abs(zoom.value - v.zoom) > 1e-4) {
+  const viewport = state.viewport;
+  if (state.config?.mode !== "overlay" || !viewport) return;
+  const want = { x: viewport.originX / viewport.zoom, y: viewport.originY / viewport.zoom };
+  if (Math.abs(scrollX - want.x) > 0.01 || Math.abs(scrollY - want.y) > 0.01 || Math.abs(zoom.value - viewport.zoom) > 1e-4) {
     queueMicrotask(applyViewport);
   }
 }
@@ -418,11 +418,11 @@ function onScrollChange(scrollX, scrollY, zoom) {
 // moves the viewport with it), so ink stays on its rows.
 window.addEventListener(
   "wheel",
-  (e) => {
+  (event) => {
     if (state.config?.mode !== "overlay") return;
-    e.preventDefault();
-    e.stopPropagation();
-    post({ type: "wheel", dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode });
+    event.preventDefault();
+    event.stopPropagation();
+    post({ type: "wheel", dx: event.deltaX, dy: event.deltaY, mode: event.deltaMode });
   },
   { capture: true, passive: false },
 );
@@ -435,43 +435,43 @@ const touches = new Set();
 let multi = null;
 let pencilFallback = false;
 
-function overlayPointerDown(e) {
+function overlayPointerDown(event) {
   if (state.config?.mode !== "overlay" || !state.api) return;
-  if (e.pointerType === "pen" && state.api.getAppState().activeTool.type === "selection") {
+  if (event.pointerType === "pen" && state.api.getAppState().activeTool.type === "selection") {
     pencilFallback = true;
     flushSync(() => state.api.setActiveTool({ type: "freedraw" }));
     post({ type: "log", message: "pencil reached the page with Select: freedraw for this stroke" });
   }
-  if (e.pointerType !== "touch") return;
-  touches.add(e.pointerId);
+  if (event.pointerType !== "touch") return;
+  touches.add(event.pointerId);
   if (touches.size === 1) {
-    multi = { before: new Set(state.api.getSceneElementsIncludingDeleted().map((el) => el.id)), first: e.pointerId, active: false };
+    multi = { before: new Set(state.api.getSceneElementsIncludingDeleted().map((el) => el.id)), first: event.pointerId, active: false };
     return;
   }
   if (multi && !multi.active) {
     multi.active = true;
     post({ type: "log", message: "two fingers: the terminal scrolls" });
   }
-  e.preventDefault();
-  e.stopImmediatePropagation();
+  event.preventDefault();
+  event.stopImmediatePropagation();
 }
 
-function overlayPointerMove(e) {
-  if (multi?.active && e.pointerType === "touch") e.stopImmediatePropagation();
+function overlayPointerMove(event) {
+  if (multi?.active && event.pointerType === "touch") event.stopImmediatePropagation();
 }
 
-function overlayPointerUp(e) {
-  if (e.pointerType === "pen" && pencilFallback) {
+function overlayPointerUp(event) {
+  if (event.pointerType === "pen" && pencilFallback) {
     pencilFallback = false;
     setTimeout(() => {
       state.api?.setActiveTool({ type: "selection" });
       state.reportedTool = "selection";
     }, 0);
   }
-  if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
-  touches.delete(e.pointerId);
+  if (event.pointerType !== "touch" || !touches.has(event.pointerId)) return;
+  touches.delete(event.pointerId);
   const gesture = multi;
-  if (gesture?.active && e.pointerId !== gesture.first) e.stopImmediatePropagation();
+  if (gesture?.active && event.pointerId !== gesture.first) event.stopImmediatePropagation();
   if (touches.size) return;
   multi = null;
   if (!gesture?.active) return;
@@ -497,10 +497,10 @@ window.addEventListener("pointercancel", overlayPointerUp, { capture: true });
 for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
   window.addEventListener(
     type,
-    (e) => {
+    (event) => {
       if (state.config?.mode !== "overlay") return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
+      event.preventDefault();
+      event.stopImmediatePropagation();
     },
     { capture: true, passive: false },
   );
@@ -508,16 +508,16 @@ for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
 
 window.addEventListener(
   "keydown",
-  (e) => {
+  (event) => {
     if (state.config?.mode !== "overlay") return;
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
       post({ type: "done" });
     }
     // Esc leaves draw mode (the host's Cancel), once the editor has nothing of its own to end:
     // text being typed, a shape or line being drawn, a selection. Those take Esc first, as in
     // Excalidraw. (With the keyboard focus on the host's overlay, the host handles Esc itself.)
-    if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const app = state.api?.getAppState();
       const busy =
         !app ||
@@ -528,8 +528,8 @@ window.addEventListener(
         app.selectedLinearElement?.isEditing ||
         Object.keys(app.selectedElementIds || {}).length > 0;
       if (!busy) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
+        event.preventDefault();
+        event.stopImmediatePropagation();
         post({ type: "cancel" });
       }
     }
@@ -576,7 +576,7 @@ function Editor() {
   }, [config]);
   if (!config) return null;
   const overlay = config.mode === "overlay";
-  const v = config.viewport;
+  const viewport = config.viewport;
   const appState = {
     ...(config.appState || {}),
     viewBackgroundColor: "transparent",
@@ -584,7 +584,7 @@ function Editor() {
     penMode: false,
     penDetected: true,
     gridModeEnabled: false,
-    ...(v ? { scrollX: v.originX / v.zoom, scrollY: v.originY / v.zoom, zoom: { value: v.zoom } } : {}),
+    ...(viewport ? { scrollX: viewport.originX / viewport.zoom, scrollY: viewport.originY / viewport.zoom, zoom: { value: viewport.zoom } } : {}),
   };
   return (
     <Excalidraw
