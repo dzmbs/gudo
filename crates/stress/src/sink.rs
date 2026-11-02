@@ -14,7 +14,7 @@ use proto::{PushPrefs, PushRegistration};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-use crate::Conn;
+use crate::Connection;
 
 /// A fake relay answering `status` to every POST; returns its URL and the request count.
 async fn fake_relay(status: u16) -> Result<(String, Arc<AtomicU64>)> {
@@ -32,7 +32,7 @@ async fn fake_relay(status: u16) -> Result<(String, Arc<AtomicU64>)> {
                     if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
                         return;
                     }
-                    let mut len = 0;
+                    let mut content_length = 0;
                     loop {
                         let mut header = String::new();
                         if reader.read_line(&mut header).await.unwrap_or(0) == 0 {
@@ -45,10 +45,10 @@ async fn fake_relay(status: u16) -> Result<(String, Arc<AtomicU64>)> {
                         if let Some((name, value)) = header.split_once(':')
                             && name.eq_ignore_ascii_case("content-length")
                         {
-                            len = value.trim().parse().unwrap_or(0);
+                            content_length = value.trim().parse().unwrap_or(0);
                         }
                     }
-                    let mut body = vec![0; len];
+                    let mut body = vec![0; content_length];
                     if reader.read_exact(&mut body).await.is_err() {
                         return;
                     }
@@ -76,10 +76,10 @@ pub async fn push_sink(
     status: u16,
 ) -> Result<()> {
     let (url, count) = fake_relay(status).await?;
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     conn.layout().await?;
     let (_secret, public) = client_core::push::x25519_keypair();
-    let reg = PushRegistration {
+    let registration = PushRegistration {
         cap: "stress".into(),
         seal_key: public,
         relay_url: Some(url),
@@ -93,21 +93,21 @@ pub async fn push_sink(
         activity_cap: None,
     };
     conn.client
-        .push_register(reg)
+        .push_register(registration)
         .await
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     // In the background: nothing on screen, so everything is pushed.
     conn.client.set_view(None, vec![]);
     let start = Instant::now();
-    let mut last = 0;
+    let mut last_total = 0;
     let mut tick = tokio::time::interval(Duration::from_secs(10));
     tick.tick().await;
     while start.elapsed() < Duration::from_secs(secs) {
         tokio::select! {
             _ = tick.tick() => {
-                let now = count.load(Ordering::Relaxed);
-                println!("  push sink: t={:>4}s pushes {now} (+{})", start.elapsed().as_secs(), now - last);
-                last = now;
+                let total = count.load(Ordering::Relaxed);
+                println!("  push sink: t={:>4}s pushes {total} (+{})", start.elapsed().as_secs(), total - last_total);
+                last_total = total;
             }
             event = conn.next() => { event?; }
         }
@@ -116,7 +116,7 @@ pub async fn push_sink(
         .client
         .attention_list()
         .await
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     println!(
         "push sink: {} pushes in {secs} s; inbox holds {} items ({} unseen)",
         count.load(Ordering::Relaxed),
@@ -174,7 +174,7 @@ pub async fn knocks(invite: &str, secs: u64, parallel: usize, hold_ms: u64) -> R
 pub fn read_invite(path: &std::path::Path) -> Result<String> {
     std::fs::read_to_string(path)?
         .split_whitespace()
-        .find(|w| w.contains("join"))
+        .find(|word| word.contains("join"))
         .map(str::to_owned)
         .context("no join link in the invite file")
 }

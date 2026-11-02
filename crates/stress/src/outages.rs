@@ -13,20 +13,17 @@ use anyhow::{Result, bail};
 use client_core::ClientEvent;
 use proto::{LayoutOp, OpOutcome, PaneLaunch};
 
-use crate::Conn;
+use crate::Connection;
 
-/// The run's settings.
 pub struct Plan {
     pub secs: u64,
     /// Freeze the daemon this often (0: never) ...
     pub every: u64,
     /// ... for this long.
     pub outage_secs: u64,
-    /// The daemon's process.
     pub pid: u32,
     /// One numbered line every `interval_ms`.
     pub interval_ms: u64,
-    /// Where the pane writes what it receives.
     pub file: PathBuf,
 }
 
@@ -37,14 +34,13 @@ fn freeze(pid: u32, frozen: bool) {
         .status();
 }
 
-/// Types numbered lines across outages and checks the pane got each exactly once.
 pub async fn run(
     handle: &tokio::runtime::Handle,
     key: Vec<u8>,
     ticket: &str,
     plan: Plan,
 ) -> Result<()> {
-    let mut conn = Conn::open(handle, key, ticket, false)?;
+    let mut conn = Connection::open(handle, key, ticket, false)?;
     let layout = conn.layout().await?;
     let _ = std::fs::remove_file(&plan.file);
     let command = format!("stty raw -echo; exec cat > '{}'", plan.file.display());
@@ -101,8 +97,8 @@ pub async fn run(
                 }
                 ClientEvent::Connected { resumed: true, .. } => {
                     resumes += 1;
-                    if let Some(at) = down_since.take() {
-                        gaps.push(at.elapsed());
+                    if let Some(down_at) = down_since.take() {
+                        gaps.push(down_at.elapsed());
                     }
                 }
                 _ => {}
@@ -116,7 +112,7 @@ pub async fn run(
     let settle = Instant::now() + Duration::from_secs(40);
     loop {
         let text = std::fs::read_to_string(&plan.file).unwrap_or_default();
-        if text.lines().any(|l| l.trim_end_matches('\r') == last) || Instant::now() > settle {
+        if text.lines().any(|line| line.trim_end_matches('\r') == last) || Instant::now() > settle {
             break;
         }
         tokio::select! {
@@ -125,28 +121,30 @@ pub async fn run(
         }
     }
     let text = std::fs::read_to_string(&plan.file).unwrap_or_default();
-    let got: Vec<u64> = text
+    let received: Vec<u64> = text
         .lines()
-        .filter_map(|l| l.trim_end_matches('\r').parse().ok())
+        .filter_map(|line| line.trim_end_matches('\r').parse().ok())
         .collect();
     let mut seen = vec![0u32; sent as usize + 1];
     let mut out_of_order = 0;
-    let mut prev = 0;
-    for &n in &got {
-        if let Some(c) = seen.get_mut(n as usize) {
-            *c += 1;
+    let mut previous = 0;
+    for &line_number in &received {
+        if let Some(count) = seen.get_mut(line_number as usize) {
+            *count += 1;
         }
-        if n < prev {
+        if line_number < previous {
             out_of_order += 1;
         }
-        prev = n;
+        previous = line_number;
     }
-    let lost: Vec<u64> = (1..=sent).filter(|&n| seen[n as usize] == 0).collect();
-    let dup = seen.iter().filter(|&&c| c > 1).count();
+    let lost: Vec<u64> = (1..=sent)
+        .filter(|&line_number| seen[line_number as usize] == 0)
+        .collect();
+    let duplicated = seen.iter().filter(|&&count| count > 1).count();
     println!(
-        "outages: sent {sent} lines, pane got {} (lost {}, duplicated {dup}, out of order \
+        "outages: sent {sent} lines, pane got {} (lost {}, duplicated {duplicated}, out of order \
          {out_of_order}); {drops} disconnects, {resumes} resumes; back after {}",
-        got.len(),
+        received.len(),
         lost.len(),
         crate::percentiles(gaps),
     );
