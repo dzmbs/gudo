@@ -32,7 +32,6 @@ public struct OverlayGeometry: Equatable, Sendable {
     /// Scene px per column in the contract (exact for a 1 : 2 cell).
     public static let pxPerColumn: CGFloat = 10
 
-    /// One cell in view points.
     public var cell: CGSize
     /// The view point of the scene origin: the grid's left edge at the anchor row's top.
     public var origin: CGPoint
@@ -54,31 +53,31 @@ public struct OverlayGeometry: Equatable, Sendable {
     /// Scene px per column on this device.
     public var sceneColumnWidth: CGFloat { cell.width / zoom }
 
-    public func view(fromScene p: CGPoint) -> CGPoint {
-        CGPoint(x: origin.x + p.x * zoom, y: origin.y + p.y * zoom)
+    public func view(fromScene point: CGPoint) -> CGPoint {
+        CGPoint(x: origin.x + point.x * zoom, y: origin.y + point.y * zoom)
     }
 
-    public func scene(fromView p: CGPoint) -> CGPoint {
-        CGPoint(x: (p.x - origin.x) / zoom, y: (p.y - origin.y) / zoom)
+    public func scene(fromView point: CGPoint) -> CGPoint {
+        CGPoint(x: (point.x - origin.x) / zoom, y: (point.y - origin.y) / zoom)
     }
 
-    public func view(fromScene r: CGRect) -> CGRect {
-        let o = view(fromScene: r.origin)
-        return CGRect(x: o.x, y: o.y, width: r.width * zoom, height: r.height * zoom)
+    public func view(fromScene rect: CGRect) -> CGRect {
+        let topLeft = view(fromScene: rect.origin)
+        return CGRect(x: topLeft.x, y: topLeft.y, width: rect.width * zoom, height: rect.height * zoom)
     }
 
     /// The cells a scene rect touches, clamped to columns `0..<maxCols`; at least one cell.
     public func cells(covering scene: CGRect, maxCols: Int) -> CellBox {
-        let v = CGRect(x: scene.minX * zoom, y: scene.minY * zoom, width: scene.width * zoom, height: scene.height * zoom)
-        let eps: CGFloat = 1e-6
-        var col0 = Int((v.minX / cell.width + eps).rounded(.down))
-        var col1 = Int((v.maxX / cell.width - eps).rounded(.up))
-        let row0 = Int((v.minY / cell.height + eps).rounded(.down))
-        var row1 = Int((v.maxY / cell.height - eps).rounded(.up))
-        col0 = min(max(col0, 0), max(maxCols - 1, 0))
-        col1 = min(max(col1, col0 + 1), max(maxCols, col0 + 1))
-        row1 = max(row1, row0 + 1)
-        return CellBox(col: col0, row: row0, cols: col1 - col0, rows: row1 - row0)
+        let viewRect = CGRect(x: scene.minX * zoom, y: scene.minY * zoom, width: scene.width * zoom, height: scene.height * zoom)
+        let epsilon: CGFloat = 1e-6
+        var firstCol = Int((viewRect.minX / cell.width + epsilon).rounded(.down))
+        var endCol = Int((viewRect.maxX / cell.width - epsilon).rounded(.up))
+        let firstRow = Int((viewRect.minY / cell.height + epsilon).rounded(.down))
+        var endRow = Int((viewRect.maxY / cell.height - epsilon).rounded(.up))
+        firstCol = min(max(firstCol, 0), max(maxCols - 1, 0))
+        endCol = min(max(endCol, firstCol + 1), max(maxCols, firstCol + 1))
+        endRow = max(endRow, firstRow + 1)
+        return CellBox(col: firstCol, row: firstRow, cols: endCol - firstCol, rows: endRow - firstRow)
     }
 
     /// A cell box in scene px (the export bounds that make the PNG cover exactly those cells).
@@ -88,7 +87,6 @@ public struct OverlayGeometry: Equatable, Sendable {
             width: CGFloat(box.cols) * sceneColumnWidth, height: CGFloat(box.rows) * Self.pxPerRow)
     }
 
-    /// The viewport row of a view point (relative to the grid origin `gridOriginY`).
     public static func viewportRow(atY y: CGFloat, gridOriginY: CGFloat, cellHeight: CGFloat) -> Int {
         Int(((y - gridOriginY) / cellHeight).rounded(.down))
     }

@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
-/// PNG and the `.excalidraw` scene; a pane of this app gets this reference too, so a drop
+/// A drawing in the output, dragged somewhere. Other apps get a PNG and the `.excalidraw` scene; a pane of this app gets this reference too, so a drop
 /// places the same drawing there (same host), uploads it (another host), or hands it to the
 /// agent running in that pane.
 public struct DrawingDragRef: Codable, Equatable, Sendable {
@@ -15,7 +15,6 @@ public struct DrawingDragRef: Codable, Equatable, Sendable {
     /// The image shown (a blob on the source host).
     public var imageHash: String
 
-    /// The private pasteboard type that carries it inside the app (Mac).
     public static let typeIdentifier = "dev.gudo.drawing-ref"
 
     public init(hostId: String, paneId: UInt64, placementId: UInt64, artifactId: UInt64, imageHash: String) {
@@ -27,12 +26,10 @@ public struct DrawingDragRef: Codable, Equatable, Sendable {
     }
 }
 
-/// What a drawing dragged out of a pane offers other apps.
 public enum DrawingTransfer {
     /// `.excalidraw` scenes (Excalidraw declares no UTI; imported, not owned).
     public static let sceneType = UTType(importedAs: "com.excalidraw.json", conformingTo: .json)
 
-    /// Why a drag's data could not be produced.
     public enum Failure: Error, Equatable {
         /// The image is not available (not downloaded, the host gone).
         case imageUnavailable
@@ -75,13 +72,13 @@ public enum DrawingTransfer {
 public final class DrawingFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate {
     private let png: Data
     private let scene: Data?
-    private let ref: DrawingDragRef
+    private let reference: DrawingDragRef
     private let name: String
 
     public init(png: Data, scene: Data?, ref: DrawingDragRef, name: String) {
         self.png = png
         self.scene = scene
-        self.ref = ref
+        self.reference = ref
         self.name = name
         super.init()
         fileType = UTType.png.identifier
@@ -104,7 +101,7 @@ public final class DrawingFilePromise: NSFilePromiseProvider, NSFilePromiseProvi
     override public func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         switch type {
         case .png: png
-        case Self.refType: try? JSONEncoder().encode(ref)
+        case Self.refType: try? JSONEncoder().encode(reference)
         case Self.sceneType: scene
         default: super.pasteboardPropertyList(forType: type)
         }

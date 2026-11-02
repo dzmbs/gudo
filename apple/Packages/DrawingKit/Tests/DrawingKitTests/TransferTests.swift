@@ -6,12 +6,13 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
-/// app's panes get. The Mac's `NSDraggingSource` writes a `DrawingFilePromise`; the iPad's
-/// `UIDragInteraction` an item provider. Both are checked here without UI (no app, no screen).
+/// A drawing dragged out of a pane: what other apps and this app's panes get. The Mac's
+/// `NSDraggingSource` writes a `DrawingFilePromise`; the iPad's `UIDragInteraction` an item
+/// provider. Both are checked here without UI (no app, no screen).
 @MainActor @Suite struct TransferTests {
     private let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3])
     private let scene = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
-    private let ref = DrawingDragRef(hostId: "studio", paneId: 4, placementId: 9, artifactId: 12, imageHash: "abc")
+    private let reference = DrawingDragRef(hostId: "studio", paneId: 4, placementId: 9, artifactId: 12, imageHash: "abc")
 
     @Test func itemProviderOffersThePNGAndTheSceneOnDemand() async throws {
         let sceneURL = FileManager.default.temporaryDirectory.appending(path: "drawing-\(UUID().uuidString).excalidraw")
@@ -41,7 +42,7 @@ import AppKit
     @Test func macDragCarriesAPromisedFilePNGSceneAndReference() throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("drawing-test-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
-        let promise = DrawingFilePromise(png: png, scene: scene, ref: ref, name: "Drawing.png")
+        let promise = DrawingFilePromise(png: png, scene: scene, ref: reference, name: "Drawing.png")
         let types = promise.writableTypes(for: pasteboard)
         // Finder and Mail get a promised file; image apps PNG data; Excalidraw the scene; this
         // app's panes the drawing itself.
@@ -53,7 +54,7 @@ import AppKit
         #expect(promise.pasteboardPropertyList(forType: .png) as? Data == png)
         #expect(promise.pasteboardPropertyList(forType: DrawingFilePromise.sceneType) as? Data == scene)
         let refData = try #require(promise.pasteboardPropertyList(forType: DrawingFilePromise.refType) as? Data)
-        #expect(try JSONDecoder().decode(DrawingDragRef.self, from: refData) == ref)
+        #expect(try JSONDecoder().decode(DrawingDragRef.self, from: refData) == reference)
         // Our own types are written at once, not promised.
         #expect(promise.writingOptions(forType: .png, pasteboard: pasteboard) == [])
         #expect(DrawingFilePromise.operation == .copy, "dragging out copies; the drawing stays")
@@ -64,19 +65,19 @@ import AppKit
         #expect(pasteboard.data(forType: .png) == png)
         #expect(pasteboard.data(forType: DrawingFilePromise.sceneType) == scene)
         let read = try #require(pasteboard.data(forType: DrawingFilePromise.refType))
-        #expect(try JSONDecoder().decode(DrawingDragRef.self, from: read) == ref)
+        #expect(try JSONDecoder().decode(DrawingDragRef.self, from: read) == reference)
     }
 
     @Test func macDragWithoutTheSceneOffersNone() {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("drawing-test-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
-        let promise = DrawingFilePromise(png: png, scene: nil, ref: ref, name: "Drawing.png")
+        let promise = DrawingFilePromise(png: png, scene: nil, ref: reference, name: "Drawing.png")
         #expect(!promise.writableTypes(for: pasteboard).contains(DrawingFilePromise.sceneType))
         #expect(promise.pasteboardPropertyList(forType: DrawingFilePromise.sceneType) == nil)
     }
 
     @Test func macPromisedFileIsThePNG() async throws {
-        let promise = DrawingFilePromise(png: png, scene: nil, ref: ref, name: "Drawing.png")
+        let promise = DrawingFilePromise(png: png, scene: nil, ref: reference, name: "Drawing.png")
         #expect(promise.filePromiseProvider(promise, fileNameForType: UTType.png.identifier) == "Drawing.png")
         let url = FileManager.default.temporaryDirectory.appending(path: "promise-\(UUID().uuidString).png")
         let error: (any Error)? = await withCheckedContinuation { done in

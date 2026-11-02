@@ -21,9 +21,11 @@ extension InkStroke {
         }
         let srgb = stroke.ink.color.cgColor.converted(
             to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil)
-        let c = srgb?.components ?? [0, 0, 0, 1]
-        let rgb = c.count >= 3 ? (c[0], c[1], c[2]) : (c[0], c[0], c[0])
-        let alpha = c.last ?? 1
+        let components = srgb?.components ?? [0, 0, 0, 1]
+        let rgb = components.count >= 3
+            ? (components[0], components[1], components[2])
+            : (components[0], components[0], components[0])
+        let alpha = components.last ?? 1
         let markerOpacity: CGFloat = stroke.ink.inkType == .marker ? 0.5 : 1
         self.init(samples: samples, color: Freedraw.hex(r: rgb.0, g: rgb.1, b: rgb.2), opacity: alpha * markerOpacity)
     }

@@ -1,8 +1,7 @@
 import Foundation
 
 /// The draw overlay's tools: one choice shared by the toolbar, Excalidraw's active tool and the
-/// PencilKit layer, so a finger and the Pencil draw with the same tool (owner test on an iPad Air
-/// M3, 2026-10-19: a shape picked with a finger only drew with the Pencil).
+/// PencilKit layer, so a finger and the Pencil draw with the same tool.
 public enum DrawTool: String, CaseIterable, Sendable, Hashable {
     case select, pen, rectangle, ellipse, arrow, text, eraser
 
@@ -69,11 +68,9 @@ public enum DrawTool: String, CaseIterable, Sendable, Hashable {
     }
 }
 
-/// Which layer of the draw overlay gets a touch.
 public enum DrawLayer: Sendable, Equatable {
     /// PencilKit (`InkCanvas`): Apple's latency and prediction, converted to `freedraw` on lift.
     case ink
-    /// The Excalidraw editor in the web view underneath.
     case editor
 }
 
@@ -102,11 +99,12 @@ public enum DrawRouting {
     }
 }
 
-/// without PencilKit: a stroke is converted on lift and sent to the page; the PencilKit stroke
-/// stays until the page confirms it drew the element (`inkApplied`). Elements made before the
-/// page has loaded its scene wait (sending them earlier lost them: the scene load replaced
-/// them). Removing PencilKit strokes while the Pencil is down cancels the stroke in flight, so
-/// confirmed strokes are only removed between strokes.
+/// The Pencil → Excalidraw hand-off of committed strokes, as bookkeeping without PencilKit: a
+/// stroke is converted on lift and sent to the page; the PencilKit stroke stays until the page
+/// confirms it drew the element (`inkApplied`). Elements made before the page has loaded its
+/// scene wait, since the scene load would replace them. Removing PencilKit strokes while the
+/// Pencil is down cancels the stroke in flight, so confirmed strokes are only removed between
+/// strokes.
 public struct InkHandoff: Sendable {
     public struct Pending: Sendable, Equatable {
         public var id: String
@@ -131,13 +129,13 @@ public struct InkHandoff: Sendable {
     /// The page loaded its scene: the ids to send now (held until then).
     public mutating func loaded(at time: Double) -> [String] {
         pageLoaded = true
-        var send: [String] = []
+        var toSend: [String] = []
         for i in pending.indices where pending[i].sentAt == nil {
             pending[i].sentAt = time
             pending[i].attempts += 1
-            send.append(pending[i].id)
+            toSend.append(pending[i].id)
         }
-        return send
+        return toSend
     }
 
     /// The page is loading a new scene (a reload): later strokes wait again.
@@ -188,13 +186,10 @@ public struct InkHandoff: Sendable {
     public var isSettled: Bool { pending.isEmpty }
 }
 
-/// One pane draws (or writes) at a time (owner test: a Pencil touch opened draw mode in a
-/// second split pane while the first was still open).
+/// One pane draws (or writes) at a time.
 public enum DrawExclusivity {
     public enum Decision: Sendable, Equatable {
-        /// Nobody else draws: open.
         case open
-        /// The same pane already draws: nothing to do.
         case alreadyOpen
         /// Another pane draws with nothing on it: close it quietly and open.
         case closeOtherAndOpen
@@ -212,7 +207,6 @@ public enum DrawExclusivity {
 /// Placements that can no longer be drawn at their row go to the pane's loose tray instead of
 /// vanishing (docs/DAEMON.md §7.11).
 public enum PlacementPlace: Sendable, Equatable {
-    /// Drawn over its row.
     case pinned
     /// Waiting for the terminal to apply the output it was anchored to.
     case pending

@@ -16,19 +16,18 @@ import Testing
 
     @Test func tenByTwentyScenePxIsOneCellForAOneToTwoCell() {
         #expect(geometry.sceneColumnWidth == OverlayGeometry.pxPerColumn)
-        let p = geometry.view(fromScene: CGPoint(x: 10, y: 20))
-        #expect(p == CGPoint(x: geometry.origin.x + 8, y: geometry.origin.y + 16))
-        // Round trip.
-        let back = geometry.scene(fromView: p)
+        let point = geometry.view(fromScene: CGPoint(x: 10, y: 20))
+        #expect(point == CGPoint(x: geometry.origin.x + 8, y: geometry.origin.y + 16))
+        let back = geometry.scene(fromView: point)
         #expect(abs(back.x - 10) < 1e-9 && abs(back.y - 20) < 1e-9)
     }
 
     @Test func rowsStayExactForOtherAspects() {
         // JetBrains Mono at 13 pt on a 2x screen: 8 × 17 pt cells.
-        let g = OverlayGeometry(cell: CGSize(width: 8, height: 17), origin: .zero)
-        #expect(g.view(fromScene: CGPoint(x: 0, y: 60)).y == 51)  // three rows
-        #expect(abs(g.sceneColumnWidth - 20 * 8 / 17) < 1e-9)
-        #expect(abs(g.view(fromScene: CGPoint(x: g.sceneColumnWidth * 4, y: 0)).x - 32) < 1e-9)  // four columns
+        let tallCells = OverlayGeometry(cell: CGSize(width: 8, height: 17), origin: .zero)
+        #expect(tallCells.view(fromScene: CGPoint(x: 0, y: 60)).y == 51)  // three rows
+        #expect(abs(tallCells.sceneColumnWidth - 20 * 8 / 17) < 1e-9)
+        #expect(abs(tallCells.view(fromScene: CGPoint(x: tallCells.sceneColumnWidth * 4, y: 0)).x - 32) < 1e-9)  // four columns
     }
 
     @Test func coveredCellsSpanTouchedCells() {
