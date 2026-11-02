@@ -2,7 +2,9 @@
 //! saved (`$XDG_CONFIG_HOME/unnamed`) and drives the daemon over the real protocol. The
 //! scenarios in `scripts/stress/` start the daemon and call this; results go to stdout.
 
+mod outages;
 mod raw;
+mod sink;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -103,6 +105,41 @@ enum Cmd {
         rate: u64,
         #[arg(long, default_value_t = 10)]
         secs: u64,
+    },
+    /// Numbered lines typed into a pane that writes them to `file` while the daemon (`pid`)
+    /// is frozen every `every` seconds for `outage_secs`; checks each arrived exactly once.
+    Outages {
+        #[arg(long)]
+        pid: u32,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long, default_value_t = 60)]
+        secs: u64,
+        #[arg(long, default_value_t = 30)]
+        every: u64,
+        #[arg(long, default_value_t = 20)]
+        outage_secs: u64,
+        #[arg(long, default_value_t = 20)]
+        interval_ms: u64,
+    },
+    /// Registers for pushes with a local fake relay answering `status`, stays in the
+    /// background for `secs` and counts the pushes.
+    PushSink {
+        #[arg(long, default_value_t = 60)]
+        secs: u64,
+        #[arg(long, default_value_t = 200)]
+        status: u16,
+    },
+    /// Fresh devices knocking on the knock invite in `invite_file`, `parallel` at a time.
+    Knocks {
+        #[arg(long)]
+        invite_file: PathBuf,
+        #[arg(long, default_value_t = 30)]
+        secs: u64,
+        #[arg(long, default_value_t = 16)]
+        parallel: usize,
+        #[arg(long, default_value_t = 500)]
+        hold_ms: u64,
     },
     /// Project definitions and tab memberships at `rate` per second.
     Projects {
@@ -309,6 +346,33 @@ async fn run(cli: Cli, handle: tokio::runtime::Handle) -> Result<()> {
         Cmd::Paste { mb } => paste(&handle, key, &ticket, mb).await,
         Cmd::Layout { rate, secs } => layout_storm(&handle, key, &ticket, rate, secs).await,
         Cmd::Projects { rate, secs } => projects(&handle, key, &ticket, rate, secs).await,
+        Cmd::PushSink { secs, status } => {
+            sink::push_sink(&handle, key, &ticket, secs, status).await
+        }
+        Cmd::Knocks {
+            invite_file,
+            secs,
+            parallel,
+            hold_ms,
+        } => sink::knocks(&sink::read_invite(&invite_file)?, secs, parallel, hold_ms).await,
+        Cmd::Outages {
+            pid,
+            file,
+            secs,
+            every,
+            outage_secs,
+            interval_ms,
+        } => {
+            let plan = outages::Plan {
+                secs,
+                every,
+                outage_secs,
+                pid,
+                interval_ms,
+                file,
+            };
+            outages::run(&handle, key, &ticket, plan).await
+        }
     }
 }
 
