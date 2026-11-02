@@ -149,7 +149,9 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `swipe` | spring 0.32 / 0.86 | a row settling open or shut after a swipe | iOS Mail |
 | `reorder` | spring 0.3 / 0.84 | sidebar rows making room for a dragged tab, a drop settling; a collapsed project springs open after 0.6 s | Finder, Safari's sidebar |
 | `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
-| `lift` | spring 0.42 s, bounce 0.12 | a pane floating out of its tab or docking back, a window to the tray and back, a dragged pane dropping into place, zoom: the pane and every neighbour making room move in this one spring; the grids hold for `liftDuration` (0.5 s) and reflow once at rest | — |
+| `split` | spring 0.3 s, no bounce (within a point by `splitSettle`, 0.42 s) | panes splitting, closing, zooming in and out, a drop landing, a dragged pane's neighbours making room (that preview uses `reorder`) | — |
+| `lift` | spring 0.42 s, bounce 0.12 | a pane floating out of its tab or docking back, a window to the tray and back: the pane and every neighbour making room move in this one spring | — |
+| layout motion | every terminal a layout change moves | travels as its last frame, anchored top-left (cropped as it shrinks, on its background as it grows); its grid changes once, for where it is going, before it moves (one SIGWINCH), and it draws again when it is there and the program's redraw has come in (quiet 30 ms, 150 ms at most). Nothing reflows on the way, nothing jumps at rest, no cols × rows overlay. The sidebar's animation holds frames the same way and changes the grids once it settles (`TerminalSurface.prepareResize`, `holdFrames`) | Ghostty's resize coalescing |
 | lift beat | keyframes: 1.03 (snappy 0.16 s) → 1 (smooth 0.36 s) floating; 0.985 → 1 docking | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion | macOS window drag-out |
 | `settle` | spring 0.34 / 0.86 | a floating window let go, carried by its flick onto the line it snaps to; a keyboard move or resize; picture in picture settling in a corner | iOS PiP |
 
@@ -364,15 +366,19 @@ minimizing only move and resize views in one `lift` spring, and no terminal is e
   the header zooms. Right-click: Reset Terminal, splits, Float/Dock, Minimize, Pin Across Tabs,
   Zoom, Pop Out to Window, Copy Pane ID, Close.
 - **Drag to rearrange.** The header is the handle (6 pt to start). The pane dims to 45 %, a
-  glass chip with its mark, name and directory follows the hand, and a region in the accent at
-  20 % with a 1.5 pt rim (radius `pane`, inset 4) shows where the pane will go. Over a pane:
-  the half on the side nearest the pointer by the diagonals; along the tab's edge (28 pt): the
-  whole edge, a third deep; on the Float target (a glass capsule at the top centre, below the
-  pane headers, prominent while over it) or outside the tab: a window where it was let go. Over
-  itself: nothing. On drop the panes move into place in the `lift` spring and the region stays
-  lit until the host has moved the pane, then fades as it settles there. (Tried and dropped:
-  lighting the pane's exact frame after the drop; when the pane leaves its own place the
-  others reflow, so that frame rarely lines up with what is under the hand.)
+  glass chip with its mark, name and directory follows the hand, and the canvas shows the drop
+  before it happens: the other panes make room in the `reorder` spring (as pictures of their
+  last frame) and the dragged pane sits where it will land, lit by a region in the accent at
+  20 % with a 1.5 pt rim (radius `pane`, inset 4). That region is exactly the frame the drop
+  gives (worked out by applying the op to a copy of the session), so a pane dragged out of a
+  two-pane split onto its sibling's left half lights the tab's whole left half, as it will be.
+  The zones are the panes as they were when the drag began, so panes making room never move
+  them: over a pane, the half on the side nearest the pointer by the diagonals; along the tab's
+  edge (28 pt), the whole edge, a third deep; on the Float target (a glass capsule at the top
+  centre, below the pane headers, prominent while over it) or outside the tab, a window where
+  it was let go. Over itself: nothing. A zone holds until the hand is 12 pt past its boundary,
+  so it never flickers between two. On drop the preview stays until the host has moved the
+  pane, then the region fades; nothing moves, since it is already there.
 - **Floating windows.** A card over the tab: corners `pane` (10), the glass rim, the `panel`
   shadow, an accent rim at 70 % while it has the focus; a window of several panes draws its
   panes on a divider-coloured backdrop with a 14 pt grip on top. The header of a one-pane
@@ -396,8 +402,10 @@ minimizing only move and resize views in one `lift` spring, and no terminal is e
   to the front (macOS's genie, without the bend). A window in the tray keeps its size, so its
   terminals keep their grids: the program, and every other device, sees no resize. ⌥⌘F hides
   every window for a look underneath.
-- **Zoom** (⇧⌘↩, the header's button, double-click): the pane takes the tab (or its window,
-  in a window of several) in the `lift` spring and the windows step aside; its header stays,
+- **Zoom** (⇧⌘↩, the header's button, double-click): the pane grows over its neighbours to
+  take the tab (or its window, in a window of several) in the `split` spring, a picture of its
+  last frame on the way, and the windows step aside; zooming out it shrinks back onto them. Its
+  header stays,
   with Zoom lit as the way back, and the title's subtitle says "Zoomed".
 - **Keys** (Pane menu, palette section "Pane", the ⌘-hold overlay): Float/Dock ⌥⌘↩, Minimize
   ⇧⌘M, Next Window ⌥⌘], Hide/Show Windows ⌥⌘F, Focus Next/Previous Pane ⌘] / ⌘[, Move Pane
@@ -413,7 +421,11 @@ Screenshots: `MacSnapshotTests.testFloating*` (`floating`, `-multi`, `-tray`, `-
 `-ipad` at 1024 × 768; frame sequences `floating-{drag,drop,lift,dock,minimize,restore,split}-N`,
 the last of each at rest after the reflow) and `TouchSnapshotTests.testFloating` (iPad, iPhone
 picture in picture), fixtures `-screen floating|floating-tiled|floating-multi|floating-tray|
-floating-zoom` (`Model/FloatingFixtures.swift`). Off a display (a locked Mac) the sequences are
+floating-zoom` (`Model/FloatingFixtures.swift`). Layout motion: `MacSnapshotTests.testTransitions`
+(`zoom-{columns,rows}-{in,out}-N`, `split-columns-N`, `close-columns-N`, each ending `-rest`;
+two shells at a prompt with a right-aligned clock, `-screen transitions-columns|transitions-rows`,
+`Model/TransitionFixtures.swift`) and `testDragPreview` (`drag-preview-N`, `drag-drop-N`: two
+stacked panes, the lower dragged onto the upper's left half). Off a display (a locked Mac) the sequences are
 drawn at points along the `lift` spring (`CanvasLayout.blended`) and each terminal is drawn into
 the capture from its own frame, since such a window gets no animation or display-link frames.
 

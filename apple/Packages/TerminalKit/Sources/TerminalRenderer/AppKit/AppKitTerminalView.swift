@@ -59,9 +59,14 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
+        // A frame held through a layout motion stays at the top left as the view resizes.
+        layerContentsPlacement = .topLeft
         // Off screen the surface swaps in a fresh layer to give back its drawables; set after
         // `wantsLayer`, it stays this view's backing layer.
-        surface.onLayerReplaced = { [weak self] _, new in self?.layer = new }
+        surface.onLayerReplaced = { [weak self] _, new in
+            self?.layer = new
+            self?.layerContentsPlacement = .topLeft
+        }
         // Off screen until it is first responder of a key window: a hollow, steady cursor.
         surface.isFocused = false
         registerForDraggedTypes([.string, .fileURL, .png, .tiff, NSPasteboard.PasteboardType("public.jpeg")])

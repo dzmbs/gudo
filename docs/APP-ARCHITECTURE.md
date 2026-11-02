@@ -1471,17 +1471,29 @@ tab as one flat `ForEach` of panes keyed by pane id; `CanvasLayout` turns the se
 tree, `FloatScene`, zoom, the canvas size, cell size and padding) into a frame, z, corner radii
 and visibility per pane, divider frames per layer, window cards and tray chips. Because the
 views never change identity, floating, docking, zooming, a drop and the tray are frame changes
-animated by one `DS.Motion.lift` spring; `ShapeMemo` picks `lift` or `split` by what changed
-and calls `TerminalSurface.holdGrids` before the first frame, so terminals keep their grid
-through the motion and reflow once at rest. A minimized window's panes sit hidden inside their
-chip's frame, so restoring grows them out of it.
+animated by one spring; `ShapeMemo` picks `lift` (a pane changing layer) or `split` by what
+changed. Before the first frame, every terminal the change resizes is told where it is going
+(`PaneArrangement.prepareTerminals` → `TerminalSurface.prepareResize`): its grid changes then,
+once (one SIGWINCH, so the shell redraws early), and its layer shows its last frame, anchored
+top-left, until the view is within a point of its new size and the program's output has gone
+quiet; only then does it draw, at its new size. No frame on the way reallocates a drawable or
+reflows. A zoomed pane grows over its neighbours (z above them, `CanvasLayout.zoomZ`), which
+stay laid out under it until it has settled; a new pane comes in under the panes making room
+for it. The sidebar holds frames the same way without a known end (`holdFrames`) and changes
+grids once it settles. A minimized window's panes sit hidden inside their chip's frame, so
+restoring grows them out of it.
 
 **Arranging (`PaneArrangement`, one per window: `WindowModel.arrangement`).** Live state only:
 frames of windows following the hand (`live`, not animated), snap `guides`, the dragged pane
-(`paneDrag`: point, drop, lit region), a held window's dock offer (`dockPreview`, after a
-0.38 s dwell over a pane's outer quarter) and the `landing` region kept lit until the pane
-arrives (until the host has moved the pane). Gestures end in one op each: `movePane`,
-`movePaneToEdge`, `float` (centred where let go), `dock`, `setFloat`.
+(`paneDrag`: point, drop, lit region), the `preview` layout the drop leads to, a held window's
+dock offer (`dockPreview`, after a 0.38 s dwell over a pane's outer quarter) and the `landing`
+region kept lit until the pane arrives (until the host has moved the pane). A drop's outcome is
+worked out by applying its op to a copy of the session (`outcome(of:)`, `CanvasLayout(session:
+like:)`), so what is lit, and where the preview puts every pane, is what the host's layout will
+be; the canvas draws the preview while dragging (terminals hold their frames, `holdFrame`) and
+until the host's layout arrives. Zones come from the layout as it was when the drag began, with
+12 pt of hysteresis. Gestures end in one op each: `movePane`, `movePaneToEdge`, `float`
+(centred where let go), `dock`, `setFloat`.
 
 **Stills.** A platform view (the Metal terminal) neither scales nor fades with its SwiftUI
 parents, so a pane that changes layer or goes in or out of sight is drawn, for the length of
@@ -1505,8 +1517,10 @@ resized, so the program and other devices keep their layout), resting in corners
 own composite and has no windows. A dragged pane cannot leave its host's session.
 
 Tests: PaneLayout `FloatTests`, `FloatGeometryTests`; App `PaneArrangementTests` (drop
-regions and their ops, edges, the Float target, snapping, dock after a dwell, resize limits,
-the tray keeping a pane's size); daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
+regions and their ops, every zone lighting exactly the frame its drop gives, a pane dragged out
+of a two-pane split, zone hysteresis, edges, the Float target, snapping, dock after a dwell,
+resize limits, the tray keeping a pane's size), `PaneResizeTests` (a zoom resizes a pane once,
+before it moves); TerminalKit `LayoutMotionTests`; daemon `layout` unit tests and `tests/it/floats.rs`; snapshots
 `MacSnapshotTests.testFloating*`, `TouchSnapshotTests.testFloating` (DESIGN.md "Floating
 panes").
 ## 27. Agent accounts (DAEMON.md §5.15)

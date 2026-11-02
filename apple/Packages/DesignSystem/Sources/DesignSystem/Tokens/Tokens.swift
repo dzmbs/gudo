@@ -149,11 +149,13 @@ public extension DS {
 
         // to wobble, quick enough to feel attached to the finger.
 
-        /// Panes splitting, closing and zooming: a spring-like curve that ends on time (a
-        /// spring's tail creeps on for another quarter second), with no overshoot. Terminals
-        /// keep their grids until it ends, then reflow once.
-        public static let split = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: splitDuration)
-        public static let splitDuration = 0.25
+        /// Panes splitting, closing, zooming, a dragged pane's neighbours making room and its
+        /// drop settling: quick and decisive, with no overshoot. Each terminal shows its last
+        /// frame on the way and draws at its new size once there (`splitSettle`, when a spring
+        /// this stiff is within a point).
+        public static let split = Animation.spring(duration: splitDuration, bounce: 0)
+        public static let splitDuration = 0.3
+        public static let splitSettle = 0.42
         /// Banners dropping in and lifting out.
         public static let banner = Animation.spring(response: 0.42, dampingFraction: 0.82)
         /// Menus, popovers and the highlight moving between their rows.

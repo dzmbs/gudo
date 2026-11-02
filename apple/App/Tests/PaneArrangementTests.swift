@@ -30,10 +30,16 @@ final class PaneArrangementTests: XCTestCase {
             session.apply(.split(second, .vertical))
             third = session.activeTab!.focused
         }
+        start(session)
+        return (first, second, third)
+    }
+
+    /// A fresh workspace on `session`, laid out.
+    private func start(_ session: Session) {
+        workspace?.close()
         workspace = Workspace(layout: LocalLayoutStore(session: session)) { _ in Quiet() }
         arrangement = PaneArrangement()
         relayout()
-        return (first, second, third)
     }
 
     /// Lays the canvas out from the session, as each layout pass does.
@@ -62,17 +68,109 @@ final class PaneArrangementTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDraggingOntoAPaneLightsTheHalfItWillTakeAndDropsThere() {
+    func testDraggingOntoAPaneLightsWhereItWillBeAndDropsThere() {
         let (left, right, _) = make()
         let target = frame(of: right)
         let point = CGPoint(x: target.maxX - 60, y: target.midY)
         arrangement.drag(left, to: point)
         XCTAssertEqual(arrangement.paneDrag?.drop, .beside(right, .right))
-        XCTAssertEqual(arrangement.paneDrag?.preview, CGRect(x: target.midX, y: target.minY, width: target.width / 2, height: target.height))
+        // Its own place closes, so it takes the tab's right half, not half of the right pane.
+        let lit = arrangement.paneDrag?.preview
+        XCTAssertEqual(lit?.minX ?? 0, size.width / 2, accuracy: 2)
+        XCTAssertEqual(lit?.width ?? 0, size.width / 2, accuracy: 2)
+        XCTAssertEqual(arrangement.preview?.leaf(right)?.frame.minX, 0, "the other pane makes room")
         arrangement.endDrag(left, at: point)
         XCTAssertNil(arrangement.paneDrag)
         XCTAssertEqual(tiledOrder, [right, left])
+        XCTAssertEqual(frame(of: left), lit)
         XCTAssertNotNil(arrangement.landing, "the region stays lit until the pane is there")
+    }
+
+    /// Two panes stacked; the bottom one dragged over the left part of the top one. The top
+    /// pane's left half lights, but with its own slot gone the bottom pane takes the tab's
+    /// whole left half: that is what must light.
+    func testDraggingOutOfATwoPaneSplitLightsTheFrameItReallyGets() {
+        var session = Session()
+        let top = session.activeTab!.focused
+        session.apply(.split(top, .vertical))
+        let bottom = session.activeTab!.focused
+        start(session)
+        let over = frame(of: top)
+        let point = CGPoint(x: over.minX + over.width * 0.15, y: over.midY)
+        arrangement.drag(bottom, to: point)
+        XCTAssertEqual(arrangement.paneDrag?.drop, .beside(top, .left))
+        let lit = try? XCTUnwrap(arrangement.paneDrag?.preview)
+        XCTAssertEqual(lit?.minY, 0)
+        XCTAssertEqual(lit?.height ?? 0, size.height, accuracy: 1, "the whole height: its slot below is gone")
+        XCTAssertEqual(lit?.width ?? 0, size.width / 2, accuracy: 2)
+        arrangement.endDrag(bottom, at: point)
+        XCTAssertEqual(frame(of: bottom), lit)
+    }
+
+    /// Every zone over every pane, and every edge of the tab, for every pane dragged, in a two
+    /// pane split each way and a three pane tab: the frame lit is the frame the drop gives.
+    func testEveryZoneLightsExactlyTheFrameTheDropGives() {
+        let layouts: [(String, (inout Session) -> Void)] = [
+            ("side by side", { $0.apply(.split($0.activeTab!.focused, .horizontal)) }),
+            ("stacked", { $0.apply(.split($0.activeTab!.focused, .vertical)) }),
+            ("three", { s in
+                s.apply(.split(s.activeTab!.focused, .horizontal))
+                s.apply(.split(s.activeTab!.focused, .vertical))
+            }),
+        ]
+        var checked = 0
+        for (name, build) in layouts {
+            var initial = Session()
+            build(&initial)
+            let panes = initial.activeTab!.root.panes
+            for dragged in panes {
+                start(initial)
+                var points: [CGPoint] = [
+                    CGPoint(x: 10, y: size.height / 2), CGPoint(x: size.width - 10, y: size.height / 2),
+                    CGPoint(x: size.width / 2, y: 10), CGPoint(x: size.width / 2, y: size.height - 10),
+                ]
+                for target in panes where target != dragged {
+                    let r = frame(of: target)
+                    points += [
+                        CGPoint(x: r.minX + r.width * 0.2, y: r.midY), CGPoint(x: r.maxX - r.width * 0.2, y: r.midY),
+                        CGPoint(x: r.midX, y: r.minY + r.height * 0.2), CGPoint(x: r.midX, y: r.maxY - r.height * 0.2),
+                    ]
+                }
+                for point in points {
+                    start(initial)
+                    arrangement.drag(dragged, to: point)
+                    guard let drop = arrangement.paneDrag?.drop, drop != .cancel, drop != .float else { continue }
+                    let lit = arrangement.paneDrag?.preview
+                    let shown = arrangement.preview.map { $0.leaves.map { ($0.pane, $0.frame) } }
+                    arrangement.endDrag(dragged, at: point)
+                    let after = relayout()
+                    XCTAssertEqual(after.leaf(dragged)?.frame, lit, "\(name): pane \(dragged) at \(point) (\(drop))")
+                    // The panes making room were shown where they end up, too.
+                    for (pane, frame) in shown ?? [] {
+                        XCTAssertEqual(after.leaf(pane)?.frame, frame, "\(name): pane \(pane) beside the drop at \(point)")
+                    }
+                    checked += 1
+                }
+            }
+        }
+        XCTAssertGreaterThan(checked, 40)
+    }
+
+    /// Along a boundary between two zones the lit one stays until the hand is clearly in the
+    /// other: no flicker.
+    func testTheZoneUnderTheHandHoldsNearItsBoundary() {
+        let (left, right, _) = make()
+        let r = frame(of: right)
+        // The diagonal between the right pane's top and right zones.
+        let onTop = CGPoint(x: r.maxX - r.width * 0.3, y: r.minY + r.height * 0.1)
+        arrangement.drag(left, to: onTop)
+        XCTAssertEqual(arrangement.paneDrag?.drop, .beside(right, .up))
+        let x = r.maxX - r.width * 0.25
+        let diagonalY = r.minY + (r.maxX - x) * r.height / r.width
+        arrangement.drag(left, to: CGPoint(x: x, y: diagonalY + 4))
+        XCTAssertEqual(arrangement.paneDrag?.drop, .beside(right, .up), "4 pt past the diagonal: still the top")
+        arrangement.drag(left, to: CGPoint(x: x, y: diagonalY + 40))
+        XCTAssertEqual(arrangement.paneDrag?.drop, .beside(right, .right))
     }
 
     func testDroppingOnItselfChangesNothing() {
@@ -90,8 +188,10 @@ final class PaneArrangementTests: XCTestCase {
         let point = CGPoint(x: 10, y: size.height / 2)
         arrangement.drag(below!, to: point)
         XCTAssertEqual(arrangement.paneDrag?.drop, .edge(.left))
-        XCTAssertEqual(arrangement.paneDrag?.preview, CGRect(x: 0, y: 0, width: size.width / 3, height: size.height))
+        let lit = arrangement.paneDrag?.preview
+        XCTAssertEqual(lit?.width ?? 0, size.width / 3, accuracy: 2)
         arrangement.endDrag(below!, at: point)
+        XCTAssertEqual(frame(of: below!), lit)
         XCTAssertEqual(frame(of: below!).width, size.width / 3, accuracy: 2, "a third of the tab, as lit")
         XCTAssertEqual(tiledOrder.first, below)
         XCTAssertEqual(frame(of: below!).height, size.height, accuracy: 1, "along the whole edge")
@@ -139,10 +239,13 @@ final class PaneArrangementTests: XCTestCase {
         arrangement.move(card.id, by: by, at: point)
         XCTAssertNil(arrangement.dockPreview, "passing over a pane offers nothing at once")
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(arrangement.dockPreview, CGRect(x: target.minX, y: target.minY, width: target.width / 2, height: target.height))
+        let lit = try XCTUnwrap(arrangement.dockPreview)
+        XCTAssertEqual(lit.minX, target.minX)
+        XCTAssertEqual(lit.width, target.width / 2, accuracy: 2)
         arrangement.endMove(card.id, by: by, velocity: .zero)
         XCTAssertFalse(workspace.session.isFloating(below!))
         XCTAssertEqual(tiledOrder, [below!, left, right])
+        XCTAssertEqual(frame(of: below!), lit, "it docks where it was lit")
     }
 
     func testAWindowResizedSmallStopsAtTheSmallestUsefulSize() {

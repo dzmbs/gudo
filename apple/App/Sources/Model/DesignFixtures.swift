@@ -40,6 +40,9 @@ enum DesignFixtures {
         case _ where FloatingFixtures.screens.contains(screen):
             await FloatingFixtures.apply(screen, workspace: workspace, model: model)
             return
+        case _ where TransitionFixtures.screens.contains(screen):
+            await TransitionFixtures.apply(screen, workspace: workspace)
+            return
         default:
             break
         }

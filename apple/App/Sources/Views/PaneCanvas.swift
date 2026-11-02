@@ -10,10 +10,20 @@ import TerminalRenderer
 /// panes, the tray's chips, and what a drag can land on. Plain values from the session and the
 /// canvas size, so every frame of an animation is a layout of the same kind.
 struct CanvasLayout {
+    /// What the canvas lays panes out with, besides the session and its size.
+    struct Metrics {
+        var gap: CGFloat
+        var header: CGFloat
+        var cell: CGSize?
+        var padding: CGFloat
+        /// Tiled panes show their header (more than one pane is on the canvas).
+        var headers = true
+    }
+
     struct Leaf {
         let pane: PaneId
         var frame: CGRect
-        let z: Double
+        var z: Double
         let radii: RectangleCornerRadii
         /// The window it floats in.
         let window: FloatId?
@@ -73,6 +83,9 @@ struct CanvasLayout {
     #endif
 
     let bounds: CGRect
+    let metrics: Metrics
+    /// Every window is out of sight (⌥⌘F).
+    let floatsHidden: Bool
     private(set) var leaves: [Leaf] = []
     private(set) var dividers: [Divider] = []
     private(set) var cards: [Card] = []
@@ -82,24 +95,39 @@ struct CanvasLayout {
     /// Every visible pane's frame, front to back: what a dragged pane can land beside.
     private(set) var targets: [(PaneId, CGRect)] = []
 
+    /// Above the tiled panes and their dividers, under the windows: a zoomed pane, which grows
+    /// over its neighbours and shrinks back onto them.
+    static let zoomZ = 2.0
+
+    /// - Parameters:
+    ///   - zoomSettled: the zoomed pane has finished growing: the panes under it are put out
+    ///     of sight (until then they stay, so it grows over them and shrinks back onto them).
     init(
         node: Node, floats: FloatScene, zoomed: PaneId?, focused: PaneId?, size: CGSize, gap: CGFloat,
-        header: CGFloat, cell: CGSize?, padding: CGFloat, live: [FloatId: CGRect] = [:]
+        header: CGFloat, cell: CGSize?, padding: CGFloat, headers: Bool = true, live: [FloatId: CGRect] = [:],
+        zoomSettled: Bool = true
     ) {
         bounds = CGRect(origin: .zero, size: size)
+        metrics = Metrics(gap: gap, header: header, cell: cell, padding: padding, headers: headers)
+        floatsHidden = floats.hidden
         let zoomedWindow = zoomed.flatMap { z in floats.windows.first { $0.window.panes.contains(z) } }
 
-        // Tiled panes: the zoomed one alone, or the tree.
-        let tiledNode: Node = if let zoomed, zoomedWindow == nil, node.contains(zoomed) { .leaf(zoomed) } else { node }
-        let base = SplitLayout(node: tiledNode, in: bounds, gap: gap, header: header, cell: cell, padding: padding)
+        // Tiled panes: the tree, the zoomed one over it at the tab's size.
+        let zoomedTile = zoomed.flatMap { zoomedWindow == nil && node.contains($0) ? $0 : nil }
+        let base = SplitLayout(node: node, in: bounds, gap: gap, header: header, cell: cell, padding: padding)
         // A zoomed window hides the tiled panes under it; they stay laid out.
-        tiled = base.leaves.map { ($0.pane, $0.frame) }
+        tiled = zoomedTile.map { [($0, bounds)] } ?? base.leaves.map { ($0.pane, $0.frame) }
         for leaf in base.leaves {
+            let isZoomed = leaf.pane == zoomedTile
             leaves.append(Leaf(
-                pane: leaf.pane, frame: leaf.frame, z: 0, radii: .init(), window: nil, lifted: false,
-                focusedWindow: false, visible: true, hiddenScale: 1, hiddenAnchor: .center))
+                pane: leaf.pane, frame: isZoomed ? bounds : leaf.frame,
+                z: isZoomed ? Self.zoomZ : 0, radii: .init(), window: nil,
+                lifted: false, focusedWindow: false, visible: zoomedTile == nil || isZoomed || !zoomSettled,
+                hiddenScale: 1, hiddenAnchor: .center))
         }
-        dividers += base.dividers.map { Divider(id: "tiled-\($0.id)", divider: $0, z: 1, visible: true) }
+        if zoomedTile == nil {
+            dividers += base.dividers.map { Divider(id: "tiled-\($0.id)", divider: $0, z: 1, visible: true) }
+        }
 
         // The tray: windows sent there, in a stable order.
         let trayed = floats.windows.filter(\.window.minimized).sorted { $0.window.id < $1.window.id }
@@ -177,6 +205,50 @@ struct CanvasLayout {
     }
 
     func card(_ id: FloatId) -> Card? { cards.first { $0.id == id } }
+
+    func leaf(_ pane: PaneId) -> Leaf? { leaves.first { $0.pane == pane } }
+
+    /// Tiled panes not in `before`.
+    func newTiles(since before: CanvasLayout?) -> Set<PaneId> {
+        guard let before else { return [] }
+        return Set(leaves.filter { $0.window == nil && before.leaf($0.pane) == nil }.map(\.pane))
+    }
+
+    /// A tiled pane drawn over its neighbours: the one just unzoomed, shrinking back onto them.
+    mutating func raise(_ pane: PaneId?) {
+        guard let pane, let index = leaves.firstIndex(where: { $0.pane == pane && $0.window == nil }) else { return }
+        leaves[index].z = Self.zoomZ
+    }
+
+    /// `panes` go under the other tiled panes, which uncover them as they make room.
+    mutating func lower(_ panes: Set<PaneId>) {
+        for index in leaves.indices where panes.contains(leaves[index].pane) && leaves[index].window == nil {
+            leaves[index].z = -1
+        }
+    }
+
+    /// The terminal's part of a leaf: its frame less the pane header.
+    func terminalSize(of leaf: Leaf) -> CGSize {
+        let header = metrics.headers || leaf.window != nil ? metrics.header : 0
+        return CGSize(width: leaf.frame.width, height: max(0, leaf.frame.height - header))
+    }
+
+    /// The canvas `session`'s active tab gets at this layout's size: what an op would lead to.
+    init?(session: Session, like layout: CanvasLayout) {
+        guard let tab = session.activeTab else { return nil }
+        let m = layout.metrics
+        self.init(
+            node: session.tiledRoot(of: tab) ?? tab.root, floats: FloatScene(session: session, tab: tab, hidden: layout.floatsHidden),
+            zoomed: tab.zoomed, focused: tab.focused, size: layout.bounds.size, gap: m.gap, header: m.header, cell: m.cell,
+            padding: m.padding, headers: m.headers)
+    }
+
+    /// Each pane where it is and whether it shows: two layouts that draw the panes alike.
+    func placesPanes(like other: CanvasLayout) -> Bool {
+        leaves.count == other.leaves.count && leaves.allSatisfy { leaf in
+            other.leaf(leaf.pane).map { $0.frame == leaf.frame && $0.visible == leaf.visible && $0.window == leaf.window } ?? false
+        }
+    }
 
     /// This layout `progress` of the way from `from` (0) to here (1), as an animation between
     /// the two draws it: frames move, what appears or goes fades. For design review, where a
@@ -269,6 +341,8 @@ final class PaneArrangement {
     func still(of pane: PaneId) -> CGImage? { stills[pane] }
     /// How long stills stand in: the motion's length (design review stretches it).
     static var stillDuration = DS.Motion.liftDuration
+    /// Stretches how long a layout motion may take to settle (design review draws it slowly).
+    static var settleStretch = 1.0
 
     /// Takes stills of `panes` (`image` draws one) for the length of the `lift` motion.
     func holdStills(of panes: [PaneId], image: (PaneId) -> CGImage?) {
@@ -294,10 +368,15 @@ final class PaneArrangement {
     var dockPreview: CGRect?
     /// A drop sent to a host: its region stays lit until the layout answers.
     var landing: CGRect?
+    /// The layout the drop under the hand leads to, drawn while a pane is dragged (the panes
+    /// making room, the dragged one where it lands) and until the host has made it so.
+    var preview: CanvasLayout?
 
     @ObservationIgnored private(set) var layout: CanvasLayout?
-    @ObservationIgnored private var landingPane: (PaneId, CGRect)?
     @ObservationIgnored private(set) var tree: (any PaneTree)?
+    /// The preview a drop was sent with, until the layout matches it.
+    @ObservationIgnored private var landingLayout: CanvasLayout?
+    @ObservationIgnored private var landingTimeout: Task<Void, Never>?
     @ObservationIgnored private var startFrame: CGRect?
     @ObservationIgnored private var dockDrop: FloatGeometry.Drop?
     @ObservationIgnored private var dwell: Task<Void, Never>?
@@ -307,12 +386,43 @@ final class PaneArrangement {
     func update(layout: CanvasLayout, tree: any PaneTree) {
         self.layout = layout
         self.tree = tree
-        // The host has moved the pane: the lit region fades as it settles there.
-        if landing != nil, let (pane, from) = landingPane, layout.leaves.contains(where: { $0.pane == pane && $0.frame != from }) {
-            landingPane = nil
-            Task { @MainActor [weak self] in
-                withAnimation(DS.Motion.overlay) { self?.landing = nil }
-            }
+        // The host has made the drop: the layout takes over from the preview (where it already
+        // is), and the lit region fades.
+        if let from = landingLayout, !layout.placesPanes(like: from) {
+            landingLayout = nil
+            Task { @MainActor [weak self] in self?.land() }
+        }
+    }
+
+    /// The drop has landed, or never will: the canvas draws its own layout again.
+    private func land() {
+        landingLayout = nil
+        landingTimeout?.cancel()
+        withAnimation(DS.Motion.split) { preview = nil }
+        withAnimation(DS.Motion.overlay) { landing = nil }
+        // Panes the preview held go to where the layout has them.
+        if let layout { prepareTerminals(for: layout, within: DS.Motion.splitSettle) }
+    }
+
+    /// Each terminal of `layout` is on its way to its size there: its grid changes once, now,
+    /// and its last frame shows until it arrives (`TerminalSurface.prepareResize`).
+    func prepareTerminals(for layout: CanvasLayout, within duration: Double) {
+        guard let tree, layout.bounds.width > 0, layout.bounds.height > 0 else { return }
+        for leaf in layout.leaves {
+            let size = layout.terminalSize(of: leaf)
+            guard size.width >= 1, size.height >= 1, tree.editor(leaf.pane) == nil, tree.browser(leaf.pane) == nil,
+                  tree.tool(leaf.pane) == nil, let (workspace, pane) = tree.resolve(leaf.pane), let terminal = workspace.panes[pane]
+            else { continue }
+            terminal.view.surface.prepareResize(to: size, within: .milliseconds(Int(duration * 1000)))
+        }
+    }
+
+    /// The terminals of the layout keep showing their frame while a preview moves them about.
+    private func holdTerminals() {
+        guard let tree, let layout else { return }
+        for leaf in layout.leaves {
+            guard let (workspace, pane) = tree.resolve(leaf.pane) else { continue }
+            workspace.panes[pane]?.view.surface.holdFrame()
         }
     }
 
@@ -404,10 +514,34 @@ final class PaneArrangement {
         guard drop != .cancel, drop != .float else { return }
         dwell = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(380))
-            guard !Task.isCancelled, let self, let layout = self.layout else { return }
+            guard !Task.isCancelled, let self, let op = self.op(placing: pane, drop, docking: true),
+                  let frame = self.outcome(of: op)?.leaf(pane)?.frame else { return }
             self.dockDrop = drop
-            withAnimation(DS.Motion.menu) { self.dockPreview = FloatGeometry.preview(of: drop, in: layout.bounds, panes: layout.tiled) }
+            withAnimation(DS.Motion.menu) { self.dockPreview = frame }
         }
+    }
+
+    // MARK: Outcomes
+
+    /// The op that puts `pane` where `drop` says: moving it there, or docking its window.
+    func op(placing pane: PaneId, _ drop: FloatGeometry.Drop, docking: Bool = false) -> LayoutOp? {
+        switch drop {
+        case .beside(let target, let side):
+            docking ? .dock(pane, beside: target, side: side) : .movePane(pane, beside: target, side: side)
+        case .edge(let side):
+            workspace?.session.activeTab.map { .movePaneToEdge(pane, tab: $0.id, side: side) }
+        case .float, .cancel:
+            nil
+        }
+    }
+
+    /// The canvas `op` leads to, worked out on a copy of the session as the host will apply
+    /// it: what a preview shows is what the drop gives.
+    func outcome(of op: LayoutOp) -> CanvasLayout? {
+        guard let workspace, let layout else { return nil }
+        var session = workspace.session
+        session.apply(op)
+        return CanvasLayout(session: session, like: layout)
     }
 
     /// Within the outer quarter of `rect` on `side`: deliberate, not passing through.
@@ -453,20 +587,52 @@ final class PaneArrangement {
 
     // MARK: Dragging a pane
 
+    /// How far past a zone's edge the hand may stray before the zone under it changes: no
+    /// flicker between two zones along their boundary.
+    static let zoneHysteresis: CGFloat = 12
+
     func drag(_ pane: PaneId, to point: CGPoint) {
         guard let layout, let workspace, workspace.canMovePanes else { return }
         let floatTarget = workspace.canFloat ? layout.floatTarget : nil
-        let drop = FloatGeometry.drop(at: point, in: layout.bounds, panes: layout.targets, dragged: pane, floatTarget: floatTarget)
-        let preview = FloatGeometry.preview(of: drop, in: layout.bounds, panes: layout.targets)
+        // Zones are the panes as they were when the drag began, not as the preview has them:
+        // the panes making room never move the zones under the hand.
+        func zone(at point: CGPoint) -> FloatGeometry.Drop {
+            FloatGeometry.drop(at: point, in: layout.bounds, panes: layout.targets, dragged: pane, floatTarget: floatTarget)
+        }
+        var drop = zone(at: point)
+        if let current = paneDrag?.drop, drop != current {
+            let h = Self.zoneHysteresis
+            let near = [CGPoint(x: -h, y: 0), CGPoint(x: h, y: 0), CGPoint(x: 0, y: -h), CGPoint(x: 0, y: h)]
+            if near.contains(where: { zone(at: CGPoint(x: point.x + $0.x, y: point.y + $0.y)) == current }) { drop = current }
+        }
+        let starting = paneDrag == nil
         untracked {
-            if paneDrag == nil, let tab = workspace.session.tab(containing: pane), tab.focused != pane { workspace.apply(.focus(pane)) }
-            paneDrag = PaneDrag(pane: pane, point: point, drop: paneDrag?.drop ?? drop, preview: paneDrag?.preview ?? preview)
+            if starting, let tab = workspace.session.tab(containing: pane), tab.focused != pane { workspace.apply(.focus(pane)) }
+            paneDrag = PaneDrag(pane: pane, point: point, drop: paneDrag?.drop ?? .cancel, preview: paneDrag?.preview)
+        }
+        if starting {
+            landingLayout = nil
+            holdTerminals()
         }
         guard paneDrag?.drop != drop else { return }
-        withAnimation(DS.Motion.menu) {
-            paneDrag?.drop = drop
-            paneDrag?.preview = preview
+        var outcome = op(placing: pane, drop).flatMap(outcome(of:))
+        // A drop that leaves every pane where it is offers nothing.
+        if let result = outcome, result.placesPanes(like: layout) {
+            drop = .cancel
+            outcome = nil
         }
+        guard paneDrag?.drop != drop else { return }
+        // The panes make room, and the dragged one shows where it lands.
+        withAnimation(DS.Motion.reorder) {
+            paneDrag?.drop = drop
+            paneDrag?.preview = outcome?.leaf(pane)?.frame
+            preview = outcome
+        }
+    }
+
+    func cancelDrag() {
+        paneDrag = nil
+        land()
     }
 
     func endDrag(_ pane: PaneId, at point: CGPoint) {
@@ -474,33 +640,28 @@ final class PaneArrangement {
             paneDrag = nil
             return
         }
-        let drop = drag.drop
+        var op = op(placing: pane, drag.drop)
+        if drag.drop == .float, workspace.canToggleFloat(pane) || workspace.session.isFloating(pane) {
+            // Where it was let go: a window centred there, two fifths of the tab.
+            let size = CGSize(width: layout.bounds.width * 0.42, height: layout.bounds.height * 0.46)
+            let rect = CGRect(x: point.x - size.width / 2, y: point.y - 16, width: size.width, height: size.height)
+            op = .float(pane, frame: FloatFrame(rect, in: layout.bounds).clamped)
+        }
         TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.liftDuration * 1000)))
         withAnimation(DS.Motion.lift) {
             paneDrag = nil
             landing = drag.preview
-            landingPane = drag.preview == nil ? nil : layout.leaves.first { $0.pane == pane }.map { (pane, $0.frame) }
-            switch drop {
-            case .beside(let target, let side):
-                workspace.apply(.movePane(pane, beside: target, side: side))
-            case .edge(let side):
-                if let tab = workspace.session.activeTab?.id { workspace.apply(.movePaneToEdge(pane, tab: tab, side: side)) }
-            case .float:
-                // Where it was let go: a window centred there, two fifths of the tab.
-                let size = CGSize(width: layout.bounds.width * 0.42, height: layout.bounds.height * 0.46)
-                let rect = CGRect(x: point.x - size.width / 2, y: point.y - 16, width: size.width, height: size.height)
-                if workspace.canToggleFloat(pane) || workspace.session.isFloating(pane) {
-                    workspace.apply(.float(pane, frame: FloatFrame(rect, in: layout.bounds).clamped))
-                }
-            case .cancel:
-                break
-            }
+            if let op { workspace.apply(op) }
         }
-        // A host answers a move a round trip later: the region stays lit until the pane
-        // arrives there (`update`), or this long at most.
-        Task { [weak self] in
+        guard preview != nil, op != nil else { return land() }
+        // A host answers a round trip later: the preview stays, and the region lit, until the
+        // layout changes (`update`), or this long at most.
+        landingLayout = layout
+        landingTimeout?.cancel()
+        landingTimeout = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(1500))
-            withAnimation(DS.Motion.overlay) { self?.landing = nil }
+            guard !Task.isCancelled else { return }
+            self?.land()
         }
     }
 }
