@@ -1083,9 +1083,10 @@ Several Claude Code and Codex sign-ins on one host, such as Personal and Work. T
     3. Otherwise the default of the tab's project, then the host default, then `system`.
   - The record keeps the account (`AgentRecord.account`), so restore and Reopen come back under it.
   - **Environment** (`agents::account_env`, `LaunchSpec::shell_line`):
-    - Every agent pane, the system account's too, has `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_PROFILE`, `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_ACCESS_TOKEN` and the other agent's directory variable removed. These outrank a `/login` and would silently bill another account.
-    - The removal happens twice: on the spawned process, and with `unset` in the login shell's command line after its startup files ran. A `.profile` that exports a key cannot reach the agent.
-    - Only the account's directory is exported, plus `UN_ACCOUNT=<id>` and `UN_ACCOUNT_DIR` (directories only, never a secret, since the line is visible in the process list).
+    - **System account: unchanged.** Its panes keep the environment exactly as before accounts, API keys included, because many users run the agents with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Only `UN_ACCOUNT=system` is added.
+    - **Named account:** the pane has `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_PROFILE`, `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_ACCESS_TOKEN` and the other agent's directory variable removed. These outrank a `/login` and would silently override the account's own sign-in and bill another.
+    - For a named account the removal happens twice: on the spawned process, and with `unset` in the login shell's command line after its startup files ran. A `.profile` that exports a key cannot reach the agent.
+    - Only the account's directory is exported, plus `UN_ACCOUNT=<id>` and `UN_ACCOUNT_DIR` (directories only, never a secret, since the line is visible in the process list). The account's own commands (status, logout, usage) run with the same rules.
     - Plain shell panes are untouched; the shell left after an agent exits keeps the account's directory.
 - **Where one account was assumed:**
   - Codex session capture reads rollouts under the pane's account home.
@@ -1111,10 +1112,10 @@ Several Claude Code and Codex sign-ins on one host, such as Personal and Work. T
   - Goldens: `crates/proto/tests/golden_accounts.rs`.
 - **Tests:**
   - `cargo test -p daemon --lib accounts`: 0700 directories, ids from disk, resolution order, resume pinning across a restart and after removal, limits, identity parsing.
-  - `cargo test -p agents`: the scrub list for both agents and every account, and `shell_line` unsetting before it exports.
+  - `cargo test -p agents`: a named account scrubs every credential for both agents, the system account removes nothing, and `shell_line` unsets before it exports.
   - `cargo test -p daemon --test it accounts`, against fake `claude` / `codex` that honour `CLAUDE_CONFIG_DIR` / `CODEX_HOME`:
     - sign-in in the account's directory only;
-    - a launch with a key in the daemon's environment and in `.profile` sees none;
+    - a Work launch with a key in the daemon's environment and in `.profile` sees none, while a system launch keeps the key, as before accounts;
     - resume pinned, and refused after removal;
     - logout runs before the directory goes;
     - defaults and the account survive a restart;

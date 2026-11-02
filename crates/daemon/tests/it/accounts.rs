@@ -1,6 +1,6 @@
 //! Agent accounts against a real daemon: an account's sign-in runs the agent's own login in
-//! its own directory, agent panes run under their account with every credential variable
-//! removed (even one a startup file exports), resume stays with the account that made the
+//! its own directory, agent panes under a named account run with every credential variable
+//! removed (even one a startup file exports) while the system account keeps them, resume stays with the account that made the
 //! session, sign-out runs the agent's logout before the directory goes, usage counts per
 //! account, and guests neither see nor choose accounts. `claude` is a script that honours
 //! `CLAUDE_CONFIG_DIR` the way Claude Code documents it; nothing signs in for real.
@@ -243,7 +243,7 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
             .any(|p| p.pane_id == pane && p.account == work.id)
     );
 
-    // The system account inherits the user's own directory, still without credentials.
+    // The system account behaves as before accounts: the user's own directory and keys.
     let own = agent_tab(&mut c, None, None).await;
     let text = c.flat_text(own);
     assert_eq!(
@@ -251,7 +251,8 @@ async fn accounts_sign_in_launch_resume_and_sign_out_in_their_own_directory() {
         host.home.join(".claude").display().to_string()
     );
     assert_eq!(field(&text, "ACC"), SYSTEM_ACCOUNT);
-    assert_eq!(field(&text, "KEY"), "none", "{text}");
+    assert_eq!(field(&text, "KEY"), "from-profile", "{text}");
+    assert_eq!(field(&text, "TOKEN"), "from-profile", "{text}");
 
     // Removing an account in use is refused.
     let remove = WorkspaceRequest::AccountRemove {

@@ -53,7 +53,7 @@ pub const SYSTEM_ACCOUNT: &str = "system";
 
 /// Variables that outrank an account's own sign-in (an API key or token in the environment wins
 /// over `/login` and `codex login`), so they would silently bill another account. They are
-/// removed from every agent pane the daemon launches.
+/// removed from agent panes launched under a named account; the system account keeps them.
 pub const CREDENTIAL_VARS: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -174,8 +174,10 @@ impl LaunchSpec {
 /// `CODEX_HOME`) under `account`: the variables to remove and the ones to set
 /// (docs/DAEMON.md "Agent accounts").
 ///
-/// Credential variables and the other agent's directory variable always go. An account's
-/// directory is set; the system account keeps the inherited one.
+/// The system account keeps the pane's environment exactly as before accounts, API keys
+/// included: many users run the agents with one. A named account has its directory set and the
+/// credential variables and the other agent's directory variable removed, since a stray key would
+/// outrank that account's own sign-in.
 ///
 /// # Examples
 ///
@@ -183,11 +185,20 @@ impl LaunchSpec {
 /// use agents::{AccountContext, account_env};
 ///
 /// let (remove, set) = account_env(&AccountContext::system(), "CODEX_HOME");
+/// assert!(remove.is_empty());
+/// assert!(!set.iter().any(|(k, _)| k == "CODEX_HOME"));
+///
+/// let work = AccountContext { id: "a1b2c3d4".into(), dir: Some("/s/accounts/codex/a1b2c3d4".into()) };
+/// let (remove, set) = account_env(&work, "CODEX_HOME");
 /// assert!(remove.iter().any(|v| v == "OPENAI_API_KEY"));
 /// assert!(remove.iter().any(|v| v == "CLAUDE_CONFIG_DIR"));
-/// assert!(!set.iter().any(|(k, _)| k == "CODEX_HOME"));
+/// assert!(set.iter().any(|(k, _)| k == "CODEX_HOME"));
 /// ```
 pub fn account_env(account: &AccountContext, own: &str) -> (Vec<String>, Vec<(String, OsString)>) {
+    let mut pinned = vec![(brand::env_var("ACCOUNT"), account.id.clone().into())];
+    let Some(dir) = &account.dir else {
+        return (Vec::new(), pinned);
+    };
     let other = if own == CLAUDE_DIR_VAR {
         CODEX_DIR_VAR
     } else {
@@ -198,12 +209,9 @@ pub fn account_env(account: &AccountContext, own: &str) -> (Vec<String>, Vec<(St
         .chain([&other])
         .map(|v| (*v).to_owned())
         .collect();
-    let mut pinned = vec![(brand::env_var("ACCOUNT"), account.id.clone().into())];
-    if let Some(dir) = &account.dir {
-        pinned.push((own.to_owned(), dir.clone().into()));
-        // The hook shim reads it: Claude may scrub its own variable from hook environments.
-        pinned.push((brand::env_var("ACCOUNT_DIR"), dir.clone().into()));
-    }
+    pinned.push((own.to_owned(), dir.clone().into()));
+    // The hook shim reads it: Claude may scrub its own variable from hook environments.
+    pinned.push((brand::env_var("ACCOUNT_DIR"), dir.clone().into()));
     (remove, pinned)
 }
 
@@ -402,24 +410,27 @@ mod tests {
         vars.iter().map(|(k, _)| k.as_str()).collect()
     }
 
-    /// Every credential that outranks a sign-in goes, for both agents and every account; the
-    /// system account sets no directory, so it behaves as before accounts.
+    /// A named account loses every credential that outranks its sign-in, for both agents; the
+    /// system account keeps its environment as before accounts, API keys included.
     #[test]
-    fn credentials_and_the_other_agents_dir_are_always_removed() {
+    fn named_accounts_scrub_credentials_the_system_account_keeps_them() {
         for own in [CLAUDE_DIR_VAR, CODEX_DIR_VAR] {
-            for ctx in [test_context(), work_context()] {
-                let (remove, _) = account_env(&ctx.account, own);
-                for var in CREDENTIAL_VARS {
-                    assert!(remove.iter().any(|r| r == var), "{own}: {var} kept");
-                }
-                let other = if own == CLAUDE_DIR_VAR {
-                    CODEX_DIR_VAR
-                } else {
-                    CLAUDE_DIR_VAR
-                };
-                assert!(remove.iter().any(|r| r == other));
-                assert!(!remove.iter().any(|r| r == own), "{own} removed");
+            let (remove, _) = account_env(&work_context().account, own);
+            for var in CREDENTIAL_VARS {
+                assert!(remove.iter().any(|r| r == var), "{own}: {var} kept");
             }
+            let other = if own == CLAUDE_DIR_VAR {
+                CODEX_DIR_VAR
+            } else {
+                CLAUDE_DIR_VAR
+            };
+            assert!(remove.iter().any(|r| r == other));
+            assert!(!remove.iter().any(|r| r == own), "{own} removed");
+            let (remove, _) = account_env(&test_context().account, own);
+            assert!(
+                remove.is_empty(),
+                "{own}: system account scrubbed {remove:?}"
+            );
         }
         let (_, set) = account_env(&test_context().account, CLAUDE_DIR_VAR);
         assert_eq!(names(&set), ["UN_ACCOUNT"]);

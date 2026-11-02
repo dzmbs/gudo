@@ -780,7 +780,7 @@ mod tests {
         assert!(spec.env_remove.iter().any(|v| v == "CODEX_HOME"));
         // Nothing secret is pinned: pinned values are on the shell's command line.
         assert!(!spec.env_pinned.iter().any(|(k, _)| k.contains("TOKEN")));
-        // The system account inherits the user's own directory.
+        // The system account inherits the user's own directory and keys, as before accounts.
         let spec = ClaudeCode::new().launch(&test_context(), &mode);
         assert!(
             !spec
@@ -788,11 +788,8 @@ mod tests {
                 .iter()
                 .any(|(k, _)| k == "CLAUDE_CONFIG_DIR")
         );
-        assert!(
-            spec.env_remove
-                .iter()
-                .any(|v| v == "CLAUDE_CODE_OAUTH_TOKEN")
-        );
+        assert!(spec.env_remove.is_empty());
+        assert!(!spec.shell_line().contains("unset"));
     }
 
     #[test]
