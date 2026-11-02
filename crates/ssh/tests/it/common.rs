@@ -50,20 +50,20 @@ impl Env {
         SecretKey::load(self.keys.join(name), None).unwrap()
     }
 
-    pub fn key_creds(&self) -> Credentials {
+    pub fn key_credentials(&self) -> Credentials {
         Credentials::new().with(AuthMethod::Key(self.key("id_ed25519")))
     }
 
-    pub fn options(&self, creds: Credentials) -> ConnectOptions {
+    pub fn options(&self, credentials: Credentials) -> ConnectOptions {
         ConnectOptions::new(
-            creds,
+            credentials,
             Arc::new(KnownHosts::in_memory()),
             HostKeyPolicy::AcceptNew,
         )
     }
 
     pub async fn connect(&self) -> Connection {
-        Connection::connect(&self.target(), &self.options(self.key_creds()))
+        Connection::connect(&self.target(), &self.options(self.key_credentials()))
             .await
             .unwrap()
     }
@@ -71,14 +71,14 @@ impl Env {
 
 /// A TCP forwarder to `upstream` whose traffic can be frozen without closing sockets.
 pub struct Proxy {
-    pub addr: SocketAddr,
+    pub address: SocketAddr,
     blackhole: Arc<AtomicBool>,
 }
 
 impl Proxy {
     pub async fn start(upstream: String) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+        let address = listener.local_addr().unwrap();
         let blackhole = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&blackhole);
         tokio::spawn(async move {
@@ -89,27 +89,27 @@ impl Proxy {
                     let Ok(server) = TcpStream::connect(&upstream).await else {
                         return;
                     };
-                    let (cr, cw) = client.into_split();
-                    let (sr, sw) = server.into_split();
+                    let (client_read, client_write) = client.into_split();
+                    let (server_read, server_write) = server.into_split();
                     tokio::join!(
-                        pump(cr, sw, Arc::clone(&flag)),
-                        pump(sr, cw, Arc::clone(&flag))
+                        pump(client_read, server_write, Arc::clone(&flag)),
+                        pump(server_read, client_write, Arc::clone(&flag))
                     );
                 });
             }
         });
-        Self { addr, blackhole }
+        Self { address, blackhole }
     }
 
     /// Drops all traffic from now on (both directions), keeping the sockets open.
-    pub fn blackhole(&self, on: bool) {
-        self.blackhole.store(on, Ordering::SeqCst);
+    pub fn blackhole(&self, enabled: bool) {
+        self.blackhole.store(enabled, Ordering::SeqCst);
     }
 
     pub fn spec(&self, user: &str) -> HostSpec {
         HostSpec {
-            host: self.addr.ip().to_string(),
-            port: self.addr.port(),
+            host: self.address.ip().to_string(),
+            port: self.address.port(),
             user: user.to_owned(),
             host_key_alias: None,
         }
@@ -121,31 +121,31 @@ async fn pump(
     mut to: tokio::net::tcp::OwnedWriteHalf,
     blackhole: Arc<AtomicBool>,
 ) {
-    let mut buf = vec![0u8; 32 * 1024];
+    let mut buffer = vec![0u8; 32 * 1024];
     loop {
-        let n = match from.read(&mut buf).await {
+        let len = match from.read(&mut buffer).await {
             Ok(0) | Err(_) => return,
-            Ok(n) => n,
+            Ok(len) => len,
         };
         if blackhole.load(Ordering::SeqCst) {
             // Swallow it, like a dead NAT mapping, and never close: the peer only learns
             // from its own timers.
             continue;
         }
-        if to.write_all(&buf[..n]).await.is_err() {
+        if to.write_all(&buffer[..len]).await.is_err() {
             return;
         }
     }
 }
 
-/// Polls `f` until it is true or `timeout` passes.
-pub async fn eventually(timeout: Duration, mut f: impl FnMut() -> bool) -> bool {
+/// Polls `condition` until it is true or `timeout` passes.
+pub async fn eventually(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     while tokio::time::Instant::now() < deadline {
-        if f() {
+        if condition() {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    f()
+    condition()
 }

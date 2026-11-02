@@ -1,5 +1,5 @@
 //! A self-healing SSH session: one logical handle whose connection underneath is redialled
-//! with backoff whenever it dies (04 R7–R10).
+//! with backoff whenever it dies.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,7 +28,6 @@ pub enum ConnectionState {
     Reconnecting {
         /// Failed attempts since the last success.
         attempt: u32,
-        /// Delay before the next attempt.
         retry_in: Duration,
         /// Why the previous connection or attempt failed.
         reason: String,
@@ -36,10 +35,7 @@ pub enum ConnectionState {
     /// In the background with the attempt budget spent; waits for
     /// [`Session::set_foreground`], [`Session::network_changed`] or
     /// [`Session::reconnect_now`].
-    Offline {
-        /// The last failure.
-        reason: String,
-    },
+    Offline { reason: String },
     /// Needs the user (wrong credentials, host key changed or refused). Not retried
     /// until [`Session::reconnect_now`].
     NeedsAttention {
@@ -52,7 +48,6 @@ pub enum ConnectionState {
 
 /// Receives [`ConnectionState`] changes. Runs on the session's task; return quickly.
 pub trait SessionListener: Send + Sync {
-    /// Called on every state change, in order.
     fn on_state(&self, state: ConnectionState);
 }
 
@@ -61,7 +56,6 @@ pub trait SessionListener: Send + Sync {
 pub struct ReconnectPolicy {
     /// Delay after the first failed attempt; doubles per failure.
     pub initial_delay: Duration,
-    /// Cap on the delay.
     pub max_delay: Duration,
     /// Random spread applied to each delay, in percent (±).
     pub jitter_percent: u8,
@@ -95,11 +89,11 @@ impl ReconnectPolicy {
     ///
     /// ```
     /// use std::time::Duration;
-    /// let p = ssh::ReconnectPolicy::default();
-    /// assert_eq!(p.delay(0), Duration::ZERO);
-    /// assert_eq!(p.delay(1), Duration::from_millis(250));
-    /// assert_eq!(p.delay(4), Duration::from_secs(2));
-    /// assert_eq!(p.delay(30), Duration::from_secs(8));
+    /// let policy = ssh::ReconnectPolicy::default();
+    /// assert_eq!(policy.delay(0), Duration::ZERO);
+    /// assert_eq!(policy.delay(1), Duration::from_millis(250));
+    /// assert_eq!(policy.delay(4), Duration::from_secs(2));
+    /// assert_eq!(policy.delay(30), Duration::from_secs(8));
     /// ```
     pub fn delay(&self, failures: u32) -> Duration {
         if failures == 0 {
@@ -126,9 +120,9 @@ struct Inner {
     policy: ReconnectPolicy,
     listener: Option<Arc<dyn SessionListener>>,
     state: watch::Sender<ConnectionState>,
-    conn: watch::Sender<Option<Connection>>,
+    connection: watch::Sender<Option<Connection>>,
     foreground: AtomicBool,
-    force: AtomicBool,
+    reconnect_requested: AtomicBool,
     closed: AtomicBool,
     wake: Notify,
     generation: AtomicU64,
@@ -146,7 +140,7 @@ impl Inner {
 
 /// A logical SSH session to one target that keeps itself connected.
 ///
-/// Views hold the `Session`, never a socket (04 R7); the [`Connection`] underneath is
+/// Views hold the `Session`, never a socket; the [`Connection`] underneath is
 /// swapped on every redial. Cheap to clone.
 #[derive(Clone)]
 pub struct Session {
@@ -188,9 +182,9 @@ impl Session {
             policy,
             listener,
             state: watch::channel(ConnectionState::Connecting { attempt: 1 }).0,
-            conn: watch::channel(None).0,
+            connection: watch::channel(None).0,
             foreground: AtomicBool::new(true),
-            force: AtomicBool::new(false),
+            reconnect_requested: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             wake: Notify::new(),
             generation: AtomicU64::new(0),
@@ -199,12 +193,10 @@ impl Session {
         Self { inner }
     }
 
-    /// The target.
     pub fn target(&self) -> &Target {
         &self.inner.target
     }
 
-    /// The current state.
     pub fn state(&self) -> ConnectionState {
         self.inner.state.borrow().clone()
     }
@@ -216,7 +208,7 @@ impl Session {
 
     /// The live connection, if there is one right now.
     pub fn connection(&self) -> Option<Connection> {
-        self.inner.conn.borrow().clone()
+        self.inner.connection.borrow().clone()
     }
 
     /// Waits for a live connection.
@@ -225,13 +217,13 @@ impl Session {
     ///
     /// The error behind [`ConnectionState::NeedsAttention`], or [`SshError::Closed`].
     pub async fn connected(&self) -> Result<Connection, SshError> {
-        let mut conn = self.inner.conn.subscribe();
+        let mut connection = self.inner.connection.subscribe();
         let mut state = self.inner.state.subscribe();
         loop {
-            if let Some(c) = conn.borrow_and_update().clone()
-                && !c.is_dead()
+            if let Some(live) = connection.borrow_and_update().clone()
+                && !live.is_dead()
             {
-                return Ok(c);
+                return Ok(live);
             }
             match &*state.borrow_and_update() {
                 ConnectionState::NeedsAttention { error } => return Err(error.clone()),
@@ -239,14 +231,14 @@ impl Session {
                 _ => {}
             }
             tokio::select! {
-                r = conn.changed() => if r.is_err() { return Err(SshError::Closed) },
-                r = state.changed() => if r.is_err() { return Err(SshError::Closed) },
+                changed = connection.changed() => if changed.is_err() { return Err(SshError::Closed) },
+                changed = state.changed() => if changed.is_err() { return Err(SshError::Closed) },
             }
         }
     }
 
     /// Tells the session whether the UI is in the foreground. Coming to the foreground
-    /// probes a live connection at once and cuts any backoff wait short (04 R1, R10).
+    /// probes a live connection at once and cuts any backoff wait short.
     pub fn set_foreground(&self, foreground: bool) {
         self.inner.foreground.store(foreground, Ordering::SeqCst);
         if foreground {
@@ -256,8 +248,8 @@ impl Session {
 
     /// The network path changed (Wi-Fi ↔ cellular): probe a live connection, or redial now.
     pub fn network_changed(&self) {
-        if let Some(c) = self.connection() {
-            c.probe();
+        if let Some(connection) = self.connection() {
+            connection.probe();
         }
         self.inner.wake.notify_one();
     }
@@ -265,18 +257,16 @@ impl Session {
     /// Drops the current connection (if any) and dials again immediately; also retries
     /// after [`ConnectionState::NeedsAttention`] (e.g. once the user accepted a new key).
     pub fn reconnect_now(&self) {
-        self.inner.force.store(true, Ordering::SeqCst);
+        self.inner.reconnect_requested.store(true, Ordering::SeqCst);
         self.inner.wake.notify_one();
     }
 
-    /// Closes the session for good.
     pub fn close(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
         self.inner.wake.notify_one();
     }
 }
 
-/// How a wait ended.
 enum Woken {
     Timer,
     Wake,
@@ -284,8 +274,8 @@ enum Woken {
 
 async fn wait(inner: &Inner, delay: Option<Duration>) -> Woken {
     match delay {
-        Some(d) => tokio::select! {
-            () = tokio::time::sleep(d) => Woken::Timer,
+        Some(delay) => tokio::select! {
+            () = tokio::time::sleep(delay) => Woken::Timer,
             () = inner.wake.notified() => Woken::Wake,
         },
         None => {
@@ -301,47 +291,47 @@ async fn supervise(inner: Arc<Inner>) {
         if inner.closed.load(Ordering::SeqCst) {
             break;
         }
-        inner.force.store(false, Ordering::SeqCst);
+        inner.reconnect_requested.store(false, Ordering::SeqCst);
         inner.set_state(ConnectionState::Connecting {
             attempt: failures + 1,
         });
         let attempt = Connection::connect(&inner.target, &inner.options);
         let result = tokio::select! {
-            r = attempt => Some(r),
+            result = attempt => Some(result),
             () = wait_closed(&inner) => None,
         };
         let reason = match result {
             None => break,
-            Some(Ok(conn)) => {
-                inner.force.store(false, Ordering::SeqCst);
+            Some(Ok(connection)) => {
+                inner.reconnect_requested.store(false, Ordering::SeqCst);
                 let generation = inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
-                inner.conn.send_replace(Some(conn.clone()));
+                inner.connection.send_replace(Some(connection.clone()));
                 inner.set_state(ConnectionState::Connected { generation });
-                let since = Instant::now();
+                let connected_at = Instant::now();
                 let reason = loop {
                     tokio::select! {
-                        why = conn.closed() => break why,
+                        why = connection.closed() => break why,
                         () = inner.wake.notified() => {
                             if inner.closed.load(Ordering::SeqCst) {
                                 break "closed".into();
                             }
-                            if inner.force.load(Ordering::SeqCst) {
+                            if inner.reconnect_requested.load(Ordering::SeqCst) {
                                 break "reconnect requested".into();
                             }
                             // Foreground or network change: check the link is really alive.
-                            conn.probe();
+                            connection.probe();
                         }
                     }
                 };
-                inner.conn.send_replace(None);
-                conn.mark_dead(reason.clone());
+                inner.connection.send_replace(None);
+                connection.mark_dead(reason.clone());
                 if inner.closed.load(Ordering::SeqCst) {
-                    conn.disconnect().await;
+                    connection.disconnect().await;
                     break;
                 }
-                tokio::spawn(async move { conn.disconnect().await });
-                if since.elapsed() >= inner.policy.stable_after
-                    || inner.force.load(Ordering::SeqCst)
+                tokio::spawn(async move { connection.disconnect().await });
+                if connected_at.elapsed() >= inner.policy.stable_after
+                    || inner.reconnect_requested.load(Ordering::SeqCst)
                 {
                     // A healthy connection dropped: redial at once.
                     failures = 0;
@@ -349,18 +339,20 @@ async fn supervise(inner: Arc<Inner>) {
                 }
                 reason
             }
-            Some(Err(e)) if e.is_fatal() => {
-                inner.set_state(ConnectionState::NeedsAttention { error: e });
+            Some(Err(error)) if error.is_fatal() => {
+                inner.set_state(ConnectionState::NeedsAttention { error });
                 loop {
                     wait(&inner, None).await;
-                    if inner.closed.load(Ordering::SeqCst) || inner.force.load(Ordering::SeqCst) {
+                    if inner.closed.load(Ordering::SeqCst)
+                        || inner.reconnect_requested.load(Ordering::SeqCst)
+                    {
                         break;
                     }
                 }
                 failures = 0;
                 continue;
             }
-            Some(Err(e)) => e.to_string(),
+            Some(Err(error)) => error.to_string(),
         };
 
         failures = failures.saturating_add(1);
@@ -369,7 +361,7 @@ async fn supervise(inner: Arc<Inner>) {
             && inner
                 .policy
                 .background_attempts
-                .is_some_and(|n| failures >= n)
+                .is_some_and(|budget| failures >= budget)
         {
             inner.set_state(ConnectionState::Offline { reason });
             // Wait for the foreground, a network change or an explicit reconnect.
@@ -384,7 +376,7 @@ async fn supervise(inner: Arc<Inner>) {
             reason,
         });
         if let Woken::Wake = wait(&inner, Some(delay)).await {
-            // User action or network change: dial now with a fresh budget (04 R10).
+            // User action or network change: dial now with a fresh budget.
             failures = 0;
         }
     }
@@ -403,9 +395,9 @@ async fn wait_closed(inner: &Inner) {
 }
 
 fn random_unit() -> f64 {
-    let mut b = [0u8; 4];
-    let _ = getrandom::fill(&mut b);
-    f64::from(u32::from_le_bytes(b)) / (f64::from(u32::MAX) + 1.0)
+    let mut bytes = [0u8; 4];
+    let _ = getrandom::fill(&mut bytes);
+    f64::from(u32::from_le_bytes(bytes)) / (f64::from(u32::MAX) + 1.0)
 }
 
 #[cfg(test)]
@@ -414,22 +406,24 @@ mod tests {
 
     #[test]
     fn backoff_doubles_and_caps() {
-        let p = ReconnectPolicy::default();
-        let ms: Vec<u128> = (0..9).map(|n| p.delay(n).as_millis()).collect();
-        assert_eq!(ms, [0, 250, 500, 1000, 2000, 4000, 8000, 8000, 8000]);
-        assert_eq!(p.delay(u32::MAX), Duration::from_secs(8));
+        let policy = ReconnectPolicy::default();
+        let delays_ms: Vec<u128> = (0..9)
+            .map(|failures| policy.delay(failures).as_millis())
+            .collect();
+        assert_eq!(delays_ms, [0, 250, 500, 1000, 2000, 4000, 8000, 8000, 8000]);
+        assert_eq!(policy.delay(u32::MAX), Duration::from_secs(8));
     }
 
     #[test]
     fn jitter_stays_in_band() {
-        let p = ReconnectPolicy::default();
-        assert_eq!(p.jittered(3, 0.0), Duration::from_millis(800));
-        assert_eq!(p.jittered(3, 0.5), Duration::from_millis(1000));
-        assert!(p.jittered(3, 0.999_999) <= Duration::from_millis(1200));
-        assert_eq!(p.jittered(0, 0.7), Duration::ZERO);
+        let policy = ReconnectPolicy::default();
+        assert_eq!(policy.jittered(3, 0.0), Duration::from_millis(800));
+        assert_eq!(policy.jittered(3, 0.5), Duration::from_millis(1000));
+        assert!(policy.jittered(3, 0.999_999) <= Duration::from_millis(1200));
+        assert_eq!(policy.jittered(0, 0.7), Duration::ZERO);
         for _ in 0..1000 {
-            let d = p.jittered(6, random_unit());
-            assert!(d >= Duration::from_millis(6400) && d <= Duration::from_millis(9600));
+            let delay = policy.jittered(6, random_unit());
+            assert!(delay >= Duration::from_millis(6400) && delay <= Duration::from_millis(9600));
         }
     }
 
@@ -437,7 +431,7 @@ mod tests {
     struct Recorder(std::sync::Mutex<Vec<String>>);
     impl SessionListener for Recorder {
         fn on_state(&self, state: ConnectionState) {
-            let s = match state {
+            let label = match state {
                 ConnectionState::Connecting { attempt } => format!("connecting {attempt}"),
                 ConnectionState::Reconnecting { attempt, .. } => format!("reconnecting {attempt}"),
                 ConnectionState::Offline { .. } => "offline".into(),
@@ -445,7 +439,7 @@ mod tests {
                 ConnectionState::NeedsAttention { .. } => "attention".into(),
                 ConnectionState::Closed => "closed".into(),
             };
-            self.0.lock().unwrap().push(s);
+            self.0.lock().unwrap().push(label);
         }
     }
 
@@ -485,12 +479,19 @@ mod tests {
                 seen += 1;
             }
         }
-        assert!(!recorder.0.lock().unwrap().iter().any(|s| s == "offline"));
+        assert!(
+            !recorder
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|label| label == "offline")
+        );
         // Background: the budget runs out and the session parks.
         session.set_foreground(false);
         tokio::time::timeout(
             Duration::from_secs(5),
-            states.wait_for(|s| matches!(s, ConnectionState::Offline { .. })),
+            states.wait_for(|state| matches!(state, ConnectionState::Offline { .. })),
         )
         .await
         .unwrap()
@@ -499,7 +500,7 @@ mod tests {
         session.set_foreground(true);
         tokio::time::timeout(
             Duration::from_secs(5),
-            states.wait_for(|s| matches!(s, ConnectionState::Connecting { .. })),
+            states.wait_for(|state| matches!(state, ConnectionState::Connecting { .. })),
         )
         .await
         .unwrap()
@@ -507,7 +508,7 @@ mod tests {
         session.close();
         tokio::time::timeout(
             Duration::from_secs(5),
-            states.wait_for(|s| matches!(s, ConnectionState::Closed)),
+            states.wait_for(|state| matches!(state, ConnectionState::Closed)),
         )
         .await
         .unwrap()
@@ -527,13 +528,13 @@ mod tests {
         let session = unreachable_session(policy, Arc::clone(&recorder));
         let mut states = session.subscribe();
         states
-            .wait_for(|s| matches!(s, ConnectionState::Reconnecting { .. }))
+            .wait_for(|state| matches!(state, ConnectionState::Reconnecting { .. }))
             .await
             .unwrap();
         let started = Instant::now();
         session.reconnect_now();
         states
-            .wait_for(|s| matches!(s, ConnectionState::Connecting { .. }))
+            .wait_for(|state| matches!(state, ConnectionState::Connecting { .. }))
             .await
             .unwrap();
         assert!(started.elapsed() < Duration::from_secs(5));

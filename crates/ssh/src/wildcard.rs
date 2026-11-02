@@ -3,27 +3,29 @@
 /// Whether `text` matches `pattern`, where `*` is any run of characters and `?` any one.
 /// Comparison is exact; callers lower-case host names first.
 pub(crate) fn matches(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let (mut pi, mut ti) = (0, 0);
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    let (mut pattern_pos, mut text_pos) = (0, 0);
     // Position of the last `*` and the text index it was tried at, for backtracking.
-    let mut star: Option<(usize, usize)> = None;
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = Some((pi, ti));
-            pi += 1;
-        } else if let Some((sp, st)) = star {
-            pi = sp + 1;
-            ti = st + 1;
-            star = Some((sp, st + 1));
+    let mut last_star: Option<(usize, usize)> = None;
+    while text_pos < text.len() {
+        if pattern_pos < pattern.len()
+            && (pattern[pattern_pos] == '?' || pattern[pattern_pos] == text[text_pos])
+        {
+            pattern_pos += 1;
+            text_pos += 1;
+        } else if pattern_pos < pattern.len() && pattern[pattern_pos] == '*' {
+            last_star = Some((pattern_pos, text_pos));
+            pattern_pos += 1;
+        } else if let Some((star_pos, star_text_pos)) = last_star {
+            pattern_pos = star_pos + 1;
+            text_pos = star_text_pos + 1;
+            last_star = Some((star_pos, star_text_pos + 1));
         } else {
             return false;
         }
     }
-    p[pi..].iter().all(|&c| c == '*')
+    pattern[pattern_pos..].iter().all(|&c| c == '*')
 }
 
 #[cfg(test)]

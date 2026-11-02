@@ -65,7 +65,7 @@ impl AuthMethod {
     }
 
     fn allowed_by(&self, methods: &MethodSet) -> bool {
-        let has = |k: MethodKind| methods.contains(&k);
+        let has = |kind: MethodKind| methods.contains(&kind);
         match self {
             Self::Agent(_) | Self::Key(_) | Self::External(_) => has(MethodKind::PublicKey),
             Self::Password(_) => has(MethodKind::Password) || has(MethodKind::KeyboardInteractive),
@@ -77,8 +77,8 @@ impl AuthMethod {
 impl std::fmt::Debug for AuthMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Key(k) => write!(f, "Key({})", k.fingerprint()),
-            Self::Agent(p) => write!(f, "Agent({p:?})"),
+            Self::Key(key) => write!(f, "Key({})", key.fingerprint()),
+            Self::Agent(socket) => write!(f, "Agent({socket:?})"),
             other => f.write_str(other.label()),
         }
     }
@@ -87,17 +87,14 @@ impl std::fmt::Debug for AuthMethod {
 /// The authentication methods to try, in order, for every hop of a route.
 #[derive(Debug, Clone, Default)]
 pub struct Credentials {
-    /// Methods in order.
     pub methods: Vec<AuthMethod>,
 }
 
 impl Credentials {
-    /// No methods.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Adds a method.
     #[must_use]
     pub fn with(mut self, method: AuthMethod) -> Self {
         self.methods.push(method);
@@ -108,9 +105,9 @@ impl Credentials {
     /// each readable unencrypted key among `identity_files` (from ssh_config) and
     /// `~/.ssh/id_{ed25519,ecdsa,rsa}`.
     pub fn openssh_defaults(identity_files: &[String]) -> Self {
-        let mut creds = Self::new();
+        let mut credentials = Self::new();
         if std::env::var_os("SSH_AUTH_SOCK").is_some() {
-            creds.methods.push(AuthMethod::Agent(None));
+            credentials.methods.push(AuthMethod::Agent(None));
         }
         let mut files: Vec<PathBuf> = identity_files.iter().map(PathBuf::from).collect();
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
@@ -120,10 +117,10 @@ impl Credentials {
         }
         for file in files {
             if let Ok(key) = SecretKey::load(&file, None) {
-                creds.methods.push(AuthMethod::Key(key));
+                credentials.methods.push(AuthMethod::Key(key));
             }
         }
-        creds
+        credentials
     }
 }
 
@@ -137,7 +134,10 @@ pub(crate) async fn authenticate(
     let mut tried: Vec<&str> = Vec::new();
     let mut allowed: Option<MethodSet> = None;
     for method in &credentials.methods {
-        if allowed.as_ref().is_some_and(|a| !method.allowed_by(a)) {
+        if allowed
+            .as_ref()
+            .is_some_and(|methods| !method.allowed_by(methods))
+        {
             continue;
         }
         if !tried.contains(&method.label()) {
@@ -151,12 +151,12 @@ pub(crate) async fn authenticate(
                     .await?
             }
             AuthMethod::Agent(path) => match agent_auth(handle, user, path.as_ref()).await? {
-                Some(r) => r,
+                Some(result) => result,
                 None => continue,
             },
             AuthMethod::External(signer) => {
                 let public = PublicKey::from_openssh(signer.public_key().trim())
-                    .map_err(|e| SshError::Signer(format!("bad public key: {e}")))?;
+                    .map_err(|error| SshError::Signer(format!("bad public key: {error}")))?;
                 let mut adapter = ExternalSignerAdapter {
                     signer: Arc::clone(signer),
                     algorithm: public.algorithm(),
@@ -165,43 +165,46 @@ pub(crate) async fn authenticate(
                     .authenticate_publickey_with(user, public, None, &mut adapter)
                     .await
                 {
-                    Ok(r) => r,
+                    Ok(result) => result,
                     // A failing signer (cancelled Face ID) fails this method, not the login.
-                    Err(SshError::Signer(e)) => {
-                        tracing::info!("external signer failed: {e}");
+                    Err(SshError::Signer(error)) => {
+                        tracing::info!("external signer failed: {error}");
                         continue;
                     }
-                    Err(e) => return Err(e),
+                    Err(error) => return Err(error),
                 }
             }
             AuthMethod::Password(password) => {
                 let allows_password = allowed
                     .as_ref()
-                    .is_none_or(|a| a.contains(&MethodKind::Password));
+                    .is_none_or(|methods| methods.contains(&MethodKind::Password));
                 let mut result = None;
                 if allows_password {
-                    let r = handle
+                    let response = handle
                         .authenticate_password(user, password.as_str())
                         .await?;
                     if let AuthResult::Failure {
                         remaining_methods, ..
-                    } = &r
+                    } = &response
                     {
                         allowed = Some(remaining_methods.clone());
                     }
-                    result = Some(r);
+                    result = Some(response);
                 }
-                let kbd = allowed
+                let allows_interactive = allowed
                     .as_ref()
-                    .is_some_and(|a| a.contains(&MethodKind::KeyboardInteractive));
-                if result.as_ref().is_none_or(|r| !r.success()) && kbd {
+                    .is_some_and(|methods| methods.contains(&MethodKind::KeyboardInteractive));
+                if result.as_ref().is_none_or(|result| !result.success()) && allows_interactive {
                     let password = password.clone();
                     let answered = interactive(handle, user, move |_, _, prompts| {
                         // Only answer what looks like a password prompt; anything else
                         // (an OTP) needs a real responder.
                         prompts
                             .iter()
-                            .all(|p| !p.echo && p.prompt.to_ascii_lowercase().contains("password"))
+                            .all(|prompt| {
+                                !prompt.echo
+                                    && prompt.prompt.to_ascii_lowercase().contains("password")
+                            })
                             .then(|| vec![password.clone(); prompts.len()])
                     })
                     .await?;
@@ -210,7 +213,7 @@ pub(crate) async fn authenticate(
                     }
                 }
                 match result {
-                    Some(r) => r,
+                    Some(result) => result,
                     None => continue,
                 }
             }
@@ -221,7 +224,7 @@ pub(crate) async fn authenticate(
                 })
                 .await?
                 {
-                    Some(r) => r,
+                    Some(result) => result,
                     None => continue,
                 }
             }
@@ -243,7 +246,13 @@ pub(crate) async fn authenticate(
         },
         allowed: allowed.map_or_else(
             || "?".into(),
-            |a| a.iter().map(<&str>::from).collect::<Vec<_>>().join(", "),
+            |methods| {
+                methods
+                    .iter()
+                    .map(<&str>::from)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
         ),
     })
 }
@@ -266,37 +275,37 @@ async fn agent_auth(
     path: Option<&PathBuf>,
 ) -> Result<Option<AuthResult>, SshError> {
     let path = match path {
-        Some(p) => p.clone(),
+        Some(path) => path.clone(),
         None => match std::env::var_os("SSH_AUTH_SOCK") {
-            Some(p) => PathBuf::from(p),
+            Some(socket) => PathBuf::from(socket),
             None => return Ok(None),
         },
     };
     let mut agent = match AgentClient::connect_uds(&path).await {
         Ok(agent) => agent,
-        Err(e) => {
-            tracing::info!("ssh-agent at {} unavailable: {e}", path.display());
+        Err(error) => {
+            tracing::info!("ssh-agent at {} unavailable: {error}", path.display());
             return Ok(None);
         }
     };
     let identities = agent
         .request_identities()
         .await
-        .map_err(|e| SshError::Signer(format!("ssh-agent: {e}")))?;
-    let mut last = None;
+        .map_err(|error| SshError::Signer(format!("ssh-agent: {error}")))?;
+    let mut last_result = None;
     for identity in identities {
         let key = identity.public_key().into_owned();
         let hash = rsa_hash(handle, key.algorithm()).await?;
-        let r = handle
+        let result = handle
             .authenticate_publickey_with(user, key, hash, &mut agent)
             .await
-            .map_err(|e| SshError::Signer(format!("ssh-agent: {e}")))?;
-        if r.success() {
-            return Ok(Some(r));
+            .map_err(|error| SshError::Signer(format!("ssh-agent: {error}")))?;
+        if result.success() {
+            return Ok(Some(result));
         }
-        last = Some(r);
+        last_result = Some(result);
     }
-    Ok(last)
+    Ok(last_result)
 }
 
 /// Runs a keyboard-interactive exchange. `None` when `respond` gave up (the server's
@@ -333,9 +342,9 @@ where
             } => {
                 let prompts: Vec<InteractivePrompt> = prompts
                     .into_iter()
-                    .map(|p| InteractivePrompt {
-                        prompt: p.prompt,
-                        echo: p.echo,
+                    .map(|prompt| InteractivePrompt {
+                        prompt: prompt.prompt,
+                        echo: prompt.echo,
                     })
                     .collect();
                 let answers = if prompts.is_empty() {
@@ -344,7 +353,7 @@ where
                     let respond = Arc::clone(&respond);
                     tokio::task::spawn_blocking(move || respond(name, instructions, prompts))
                         .await
-                        .map_err(|e| SshError::Protocol(e.to_string()))?
+                        .map_err(|error| SshError::Protocol(error.to_string()))?
                 };
                 let Some(answers) = answers else {
                     return Ok(None);

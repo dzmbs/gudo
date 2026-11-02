@@ -14,9 +14,7 @@ use crate::client::Connection;
 /// The result of a remote command.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecOutput {
-    /// Standard output.
     pub stdout: Vec<u8>,
-    /// Standard error.
     pub stderr: Vec<u8>,
     /// Exit status, if the server sent one.
     pub exit_status: Option<u32>,
@@ -45,7 +43,7 @@ impl ExecOutput {
             return Ok(self);
         }
         let status = match (&self.exit_status, &self.exit_signal) {
-            (_, Some(sig)) => format!("signal {sig}"),
+            (_, Some(signal)) => format!("signal {signal}"),
             (Some(code), None) => format!("exit {code}"),
             (None, None) => "no exit status".into(),
         };
@@ -61,9 +59,7 @@ impl ExecOutput {
 pub struct PtyRequest {
     /// `TERM` for the remote side.
     pub term: String,
-    /// Columns.
     pub cols: u32,
-    /// Rows.
     pub rows: u32,
     /// Environment to set first (servers only accept names in their `AcceptEnv`, usually
     /// `LANG` and `LC_*`; the rest are silently dropped).
@@ -94,7 +90,6 @@ pub enum ShellEvent {
     Stderr(Vec<u8>),
     /// The remote process exited.
     Exit {
-        /// Exit status.
         status: Option<u32>,
         /// Signal name, if killed by one.
         signal: Option<String>,
@@ -105,13 +100,13 @@ pub enum ShellEvent {
 #[derive(Clone)]
 pub struct Shell {
     write: Arc<ChannelWriteHalf<Msg>>,
-    conn: Connection,
+    connection: Connection,
 }
 
 /// The reading side of an interactive shell.
 pub struct ShellOutput {
     read: ChannelReadHalf,
-    conn: Connection,
+    connection: Connection,
 }
 
 impl Connection {
@@ -152,15 +147,17 @@ impl Connection {
             Ok::<_, SshError>(())
         };
         let reader = async {
-            let mut out = ExecOutput::default();
+            let mut output = ExecOutput::default();
             let mut closed = false;
-            while let Some(msg) = read.wait().await {
-                match msg {
-                    ChannelMsg::Data { data } => out.stdout.extend_from_slice(&data),
-                    ChannelMsg::ExtendedData { data, .. } => out.stderr.extend_from_slice(&data),
-                    ChannelMsg::ExitStatus { exit_status } => out.exit_status = Some(exit_status),
+            while let Some(message) = read.wait().await {
+                match message {
+                    ChannelMsg::Data { data } => output.stdout.extend_from_slice(&data),
+                    ChannelMsg::ExtendedData { data, .. } => output.stderr.extend_from_slice(&data),
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        output.exit_status = Some(exit_status);
+                    }
                     ChannelMsg::ExitSignal { signal_name, .. } => {
-                        out.exit_signal = Some(signal_name_str(&signal_name));
+                        output.exit_signal = Some(signal_name_str(&signal_name));
                     }
                     ChannelMsg::Close => {
                         closed = true;
@@ -169,19 +166,19 @@ impl Connection {
                     _ => {}
                 }
             }
-            if !closed && out.exit_status.is_none() && out.exit_signal.is_none() {
+            if !closed && output.exit_status.is_none() && output.exit_signal.is_none() {
                 return Err(SshError::Disconnected(format!("while running {command:?}")));
             }
-            Ok(out)
+            Ok(output)
         };
         let (written, output) = tokio::join!(writer, reader);
         let output = output?;
         // The command may exit without reading all of its input (that is its business),
         // so a write error only matters if it never reported a status.
-        if let Err(e) = written
+        if let Err(error) = written
             && output.exit_status.is_none()
         {
-            return Err(e);
+            return Err(error);
         }
         Ok(output)
     }
@@ -218,18 +215,18 @@ impl Connection {
             )
             .await?;
         match &request.command {
-            Some(cmd) => channel.exec(true, cmd.as_str()).await?,
+            Some(command) => channel.exec(true, command.as_str()).await?,
             None => channel.request_shell(true).await?,
         }
         let (read, write) = channel.split();
         Ok((
             Shell {
                 write: Arc::new(write),
-                conn: self.clone(),
+                connection: self.clone(),
             },
             ShellOutput {
                 read,
-                conn: self.clone(),
+                connection: self.clone(),
             },
         ))
     }
@@ -242,8 +239,8 @@ impl Shell {
     ///
     /// [`SshError::Disconnected`] if the channel or connection is gone.
     pub async fn write(&self, data: &[u8]) -> Result<(), SshError> {
-        self.conn.note_input();
-        self.conn
+        self.connection.note_input();
+        self.connection
             .guard(async { self.write.data(data).await.map_err(SshError::from) })
             .await
     }
@@ -254,7 +251,7 @@ impl Shell {
     ///
     /// [`SshError::Disconnected`] if the channel or connection is gone.
     pub async fn resize(&self, cols: u32, rows: u32) -> Result<(), SshError> {
-        self.conn
+        self.connection
             .guard(async {
                 self.write
                     .window_change(cols, rows, 0, 0)
@@ -270,9 +267,8 @@ impl Shell {
         let _ = self.write.close().await;
     }
 
-    /// The connection the shell runs on.
     pub fn connection(&self) -> &Connection {
-        &self.conn
+        &self.connection
     }
 }
 
@@ -280,11 +276,11 @@ impl ShellOutput {
     /// The next event; `None` once the channel is closed or the connection is dead.
     pub async fn next(&mut self) -> Option<ShellEvent> {
         loop {
-            let msg = tokio::select! {
-                msg = self.read.wait() => msg?,
-                _ = self.conn.closed() => return None,
+            let message = tokio::select! {
+                message = self.read.wait() => message?,
+                _ = self.connection.closed() => return None,
             };
-            match msg {
+            match message {
                 ChannelMsg::Data { data } => return Some(ShellEvent::Data(data.to_vec())),
                 ChannelMsg::ExtendedData { data, .. } => {
                     return Some(ShellEvent::Stderr(data.to_vec()));
@@ -308,8 +304,8 @@ impl ShellOutput {
     }
 }
 
-fn signal_name_str(sig: &russh::Sig) -> String {
-    let debug = format!("{sig:?}");
+fn signal_name_str(signal: &russh::Sig) -> String {
+    let debug = format!("{signal:?}");
     match debug.strip_prefix("Custom(\"") {
         Some(rest) => rest.trim_end_matches("\")").to_owned(),
         None => debug,
@@ -319,7 +315,6 @@ fn signal_name_str(sig: &russh::Sig) -> String {
 /// What [`Connection::upload`] wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadReport {
-    /// Remote path as given.
     pub path: String,
     /// Bytes of the file.
     pub size: u64,
@@ -361,13 +356,14 @@ impl Connection {
         let wire = match encoding {
             UploadEncoding::Raw => data.to_vec(),
             UploadEncoding::Gzip => {
-                let mut gz = flate2::write::GzEncoder::new(
+                let mut encoder = flate2::write::GzEncoder::new(
                     Vec::with_capacity(data.len() / 2),
                     flate2::Compression::new(6),
                 );
-                gz.write_all(data)
-                    .and_then(|()| gz.finish())
-                    .map_err(|e| SshError::io("compressing the upload", e))?
+                encoder
+                    .write_all(data)
+                    .and_then(|()| encoder.finish())
+                    .map_err(|error| SshError::io("compressing the upload", error))?
             }
         };
         let decode = match encoding {
@@ -390,22 +386,22 @@ mv -f "$t" "$f"
 trap - EXIT"#,
             path = remote_path(path),
         );
-        let out = self
+        let output = self
             .exec_with_input(&sh_command(&script), wire.as_slice())
             .await?;
-        let remote_hash = out
+        let remote_hash = output
             .stdout_text()
             .lines()
-            .find_map(|l| l.strip_prefix("sha256=").map(str::to_owned))
+            .find_map(|line| line.strip_prefix("sha256=").map(str::to_owned))
             .unwrap_or_default();
-        if out.exit_status == Some(3) {
+        if output.exit_status == Some(3) {
             return Err(SshError::ChecksumMismatch {
                 path: path.to_owned(),
                 expected: sha256,
                 actual: remote_hash,
             });
         }
-        out.check()?;
+        output.check()?;
         Ok(UploadReport {
             path: path.to_owned(),
             size: data.len() as u64,
@@ -420,29 +416,33 @@ trap - EXIT"#,
     ///
     /// [`SshError::Remote`] if it cannot be read.
     pub async fn download(&self, path: &str) -> Result<Vec<u8>, SshError> {
-        let out = self
+        let output = self
             .exec(&sh_command(&format!("cat {}", remote_path(path))))
             .await?
             .check()?;
-        Ok(out.stdout)
+        Ok(output.stdout)
     }
 }
 
 /// Lower-case hex SHA-256.
 pub fn sha256_hex(data: &[u8]) -> String {
     let digest = ring::digest::digest(&ring::digest::SHA256, data);
-    digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
-/// Single-quotes `s` for POSIX sh.
+/// Single-quotes `text` for POSIX sh.
 ///
 /// # Examples
 ///
 /// ```
 /// assert_eq!(ssh::shell_quote("it's"), r#"'it'\''s'"#);
 /// ```
-pub fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
+pub fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 /// A shell expression for a remote path: `~/x` becomes `"$HOME"/'x'`, anything else is

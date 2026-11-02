@@ -13,9 +13,7 @@ pub const DEFAULT_PORT: u16 = 22;
 pub struct HostSpec {
     /// Name or address to dial (for a hop behind a jump host, as seen from that jump host).
     pub host: String,
-    /// TCP port.
     pub port: u16,
-    /// User to log in as.
     pub user: String,
     /// Name to look the host key up under instead of `host` (`HostKeyAlias`).
     pub host_key_alias: Option<String>,
@@ -32,7 +30,6 @@ impl HostSpec {
         }
     }
 
-    /// Sets the port.
     #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
@@ -65,7 +62,6 @@ impl fmt::Display for HostSpec {
 pub struct Target {
     /// Jump hosts: `jumps[0]` is dialled directly, each later one through the previous.
     pub jumps: Vec<HostSpec>,
-    /// The destination.
     pub host: HostSpec,
 }
 
@@ -98,11 +94,9 @@ impl fmt::Display for Target {
 /// A parsed `[ssh://][user@]host[:port]` destination, as typed or as in `ProxyJump`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
-    /// User, if given.
     pub user: Option<String>,
     /// Host name, alias or address (IPv6 without brackets).
     pub host: String,
-    /// Port, if given.
     pub port: Option<u16>,
 }
 
@@ -114,25 +108,25 @@ impl FromStr for Destination {
     /// # Examples
     ///
     /// ```
-    /// let d: ssh::Destination = "me@box:2222".parse().unwrap();
-    /// assert_eq!((d.user.as_deref(), d.host.as_str(), d.port), (Some("me"), "box", Some(2222)));
+    /// let destination: ssh::Destination = "me@box:2222".parse().unwrap();
+    /// assert_eq!(destination.port, Some(2222));
     /// ```
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bad = || SshError::Config(format!("bad destination {s:?}"));
-        let s = s.trim();
-        let (url, rest) = match s.strip_prefix("ssh://") {
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let bad = || SshError::Config(format!("bad destination {input:?}"));
+        let input = input.trim();
+        let (is_url, rest) = match input.strip_prefix("ssh://") {
             Some(rest) => (true, rest.trim_end_matches('/')),
-            None => (false, s),
+            None => (false, input),
         };
         let (user, hostport) = match rest.rsplit_once('@') {
-            Some((user, hp)) if !user.is_empty() => (Some(user.to_owned()), hp),
+            Some((user, hostport)) if !user.is_empty() => (Some(user.to_owned()), hostport),
             Some(_) => return Err(bad()),
             None => (None, rest),
         };
         let (host, port) = if let Some(v6) = hostport.strip_prefix('[') {
             let (host, after) = v6.split_once(']').ok_or_else(bad)?;
             let port = match after.strip_prefix(':') {
-                Some(p) => Some(p.parse().map_err(|_| bad())?),
+                Some(port) => Some(port.parse().map_err(|_| bad())?),
                 None if after.is_empty() => None,
                 None => return Err(bad()),
             };
@@ -140,7 +134,7 @@ impl FromStr for Destination {
         } else if hostport.matches(':').count() == 1 {
             let (host, port) = hostport.split_once(':').ok_or_else(bad)?;
             (host.to_owned(), Some(port.parse().map_err(|_| bad())?))
-        } else if hostport.contains(':') && !url {
+        } else if hostport.contains(':') && !is_url {
             // A bare IPv6 address.
             (hostport.to_owned(), None)
         } else {
@@ -157,27 +151,27 @@ impl FromStr for Destination {
 mod tests {
     use super::*;
 
-    fn d(s: &str) -> (Option<String>, String, Option<u16>) {
-        let d: Destination = s.parse().unwrap();
-        (d.user, d.host, d.port)
+    fn parts(input: &str) -> (Option<String>, String, Option<u16>) {
+        let destination: Destination = input.parse().unwrap();
+        (destination.user, destination.host, destination.port)
     }
 
     #[test]
     fn destinations() {
-        assert_eq!(d("box"), (None, "box".into(), None));
-        assert_eq!(d("me@box"), (Some("me".into()), "box".into(), None));
+        assert_eq!(parts("box"), (None, "box".into(), None));
+        assert_eq!(parts("me@box"), (Some("me".into()), "box".into(), None));
         assert_eq!(
-            d("me@box:2222"),
+            parts("me@box:2222"),
             (Some("me".into()), "box".into(), Some(2222))
         );
         assert_eq!(
-            d("ssh://me@box:22/"),
+            parts("ssh://me@box:22/"),
             (Some("me".into()), "box".into(), Some(22))
         );
-        assert_eq!(d("[::1]:2200"), (None, "::1".into(), Some(2200)));
-        assert_eq!(d("fe80::1"), (None, "fe80::1".into(), None));
+        assert_eq!(parts("[::1]:2200"), (None, "::1".into(), Some(2200)));
+        assert_eq!(parts("fe80::1"), (None, "fe80::1".into(), None));
         assert_eq!(
-            d("first.last@corp@bastion"),
+            parts("first.last@corp@bastion"),
             (Some("first.last@corp".into()), "bastion".into(), None)
         );
         assert!("@box".parse::<Destination>().is_err());
@@ -187,10 +181,10 @@ mod tests {
 
     #[test]
     fn display() {
-        let t = Target {
+        let target = Target {
             jumps: vec![HostSpec::new("bastion", "a").with_port(2222)],
             host: HostSpec::new("10.0.0.5", "b"),
         };
-        assert_eq!(t.to_string(), "b@10.0.0.5 via a@bastion:2222");
+        assert_eq!(target.to_string(), "b@10.0.0.5 via a@bastion:2222");
     }
 }

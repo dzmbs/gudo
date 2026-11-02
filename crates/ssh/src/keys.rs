@@ -29,7 +29,7 @@ impl SecretKey {
     /// assert_eq!(key.public_key(), generated.public_key);
     /// ```
     pub fn decode(pem: &str, passphrase: Option<&str>) -> Result<Self, SshError> {
-        let key = russh::keys::decode_secret_key(pem, passphrase).map_err(|e| match e {
+        let key = russh::keys::decode_secret_key(pem, passphrase).map_err(|error| match error {
             russh::keys::Error::KeyIsEncrypted => SshError::KeyEncrypted,
             other if passphrase.is_some() => SshError::Key(format!("{other} (wrong passphrase?)")),
             other => SshError::Key(other.to_string()),
@@ -45,7 +45,7 @@ impl SecretKey {
     pub fn load(path: impl AsRef<Path>, passphrase: Option<&str>) -> Result<Self, SshError> {
         let path = path.as_ref();
         let pem = std::fs::read_to_string(path)
-            .map_err(|e| SshError::io(format!("reading {}", path.display()), e))?;
+            .map_err(|error| SshError::io(format!("reading {}", path.display()), error))?;
         Self::decode(&pem, passphrase)
     }
 
@@ -62,7 +62,6 @@ impl SecretKey {
         public_openssh(self.0.public_key(), self.0.comment().as_str_lossy())
     }
 
-    /// `SHA256:…` fingerprint.
     pub fn fingerprint(&self) -> String {
         self.0.fingerprint(HashAlg::Sha256).to_string()
     }
@@ -99,14 +98,14 @@ pub struct GeneratedKey {
 /// ```
 pub fn generate_ed25519(comment: &str) -> Result<GeneratedKey, SshError> {
     let mut seed = [0u8; 32];
-    getrandom::fill(&mut seed).map_err(|e| SshError::Key(format!("random source: {e}")))?;
+    getrandom::fill(&mut seed).map_err(|error| SshError::Key(format!("random source: {error}")))?;
     let keypair = Ed25519Keypair::from_seed(&seed);
     seed.fill(0);
     let key = PrivateKey::new(KeypairData::Ed25519(keypair), comment)
-        .map_err(|e| SshError::Key(e.to_string()))?;
+        .map_err(|error| SshError::Key(error.to_string()))?;
     let private_key = key
         .to_openssh(LineEnding::LF)
-        .map_err(|e| SshError::Key(e.to_string()))?
+        .map_err(|error| SshError::Key(error.to_string()))?
         .to_string();
     Ok(GeneratedKey {
         private_key,
@@ -165,13 +164,13 @@ impl russh::Signer for ExternalSignerAdapter {
         let data = to_sign.clone();
         let raw = tokio::task::spawn_blocking(move || signer.sign(data))
             .await
-            .map_err(|e| SshError::Signer(e.to_string()))?
-            .map_err(|e| SshError::Signer(e.0))?;
+            .map_err(|error| SshError::Signer(error.to_string()))?
+            .map_err(|error| SshError::Signer(error.0))?;
         let blob = signature_blob(&self.algorithm, &raw)?;
-        let mut out = to_sign;
-        put_u32(&mut out, blob.len());
-        out.extend_from_slice(&blob);
-        Ok(out)
+        let mut signed = to_sign;
+        put_u32(&mut signed, blob.len());
+        signed.extend_from_slice(&blob);
+        Ok(signed)
     }
 }
 
@@ -225,22 +224,22 @@ pub(crate) fn signature_blob(algorithm: &Algorithm, raw: &[u8]) -> Result<Vec<u8
 
 /// `SEQUENCE { INTEGER r, INTEGER s }` → (r, s) as unsigned big-endian bytes.
 fn parse_der_signature(der: &[u8]) -> Option<(&[u8], &[u8])> {
-    fn len_and_rest(b: &[u8]) -> Option<(usize, &[u8])> {
-        let (&first, rest) = b.split_first()?;
+    fn len_and_rest(bytes: &[u8]) -> Option<(usize, &[u8])> {
+        let (&first, rest) = bytes.split_first()?;
         if first < 0x80 {
             return Some((usize::from(first), rest));
         }
-        let n = usize::from(first & 0x7f);
-        if n == 0 || n > 2 || rest.len() < n {
+        let len_octets = usize::from(first & 0x7f);
+        if len_octets == 0 || len_octets > 2 || rest.len() < len_octets {
             return None;
         }
-        let len = rest[..n]
+        let len = rest[..len_octets]
             .iter()
-            .fold(0usize, |acc, &b| (acc << 8) | usize::from(b));
-        Some((len, &rest[n..]))
+            .fold(0usize, |acc, &byte| (acc << 8) | usize::from(byte));
+        Some((len, &rest[len_octets..]))
     }
-    fn integer(b: &[u8]) -> Option<(&[u8], &[u8])> {
-        let (&tag, rest) = b.split_first()?;
+    fn integer(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+        let (&tag, rest) = bytes.split_first()?;
         if tag != 0x02 {
             return None;
         }
@@ -263,25 +262,28 @@ fn parse_der_signature(der: &[u8]) -> Option<(&[u8], &[u8])> {
     rest.is_empty().then_some((r, s))
 }
 
-fn put_u32(out: &mut Vec<u8>, n: usize) {
-    let n = u32::try_from(n).expect("SSH fields are far below 4 GiB");
-    out.extend_from_slice(&n.to_be_bytes());
+fn put_u32(out: &mut Vec<u8>, value: usize) {
+    let value = u32::try_from(value).expect("SSH fields are far below 4 GiB");
+    out.extend_from_slice(&value.to_be_bytes());
 }
 
-fn put_string(out: &mut Vec<u8>, s: &[u8]) {
-    put_u32(out, s.len());
-    out.extend_from_slice(s);
+fn put_string(out: &mut Vec<u8>, bytes: &[u8]) {
+    put_u32(out, bytes.len());
+    out.extend_from_slice(bytes);
 }
 
-fn put_mpint(out: &mut Vec<u8>, n: &[u8]) {
-    let start = n.iter().position(|&b| b != 0).unwrap_or(n.len());
-    let n = &n[start..];
-    let pad = n.first().is_some_and(|&b| b & 0x80 != 0);
-    put_u32(out, n.len() + usize::from(pad));
-    if pad {
+fn put_mpint(out: &mut Vec<u8>, big_endian: &[u8]) {
+    let start = big_endian
+        .iter()
+        .position(|&byte| byte != 0)
+        .unwrap_or(big_endian.len());
+    let magnitude = &big_endian[start..];
+    let needs_pad = magnitude.first().is_some_and(|&byte| byte & 0x80 != 0);
+    put_u32(out, magnitude.len() + usize::from(needs_pad));
+    if needs_pad {
         out.push(0);
     }
-    out.extend_from_slice(n);
+    out.extend_from_slice(magnitude);
 }
 
 #[cfg(test)]
@@ -290,30 +292,34 @@ mod tests {
 
     #[test]
     fn generated_key_round_trips() {
-        let g = generate_ed25519("test").unwrap();
+        let generated = generate_ed25519("test").unwrap();
         assert!(
-            g.private_key
+            generated
+                .private_key
                 .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----")
         );
-        let k = SecretKey::decode(&g.private_key, None).unwrap();
-        assert_eq!(k.public_key(), g.public_key);
-        assert_eq!(k.fingerprint(), g.fingerprint);
-        assert_eq!(k.algorithm(), "ssh-ed25519");
-        assert!(!SecretKey::is_encrypted(&g.private_key));
-        assert_ne!(generate_ed25519("x").unwrap().public_key, g.public_key);
+        let key = SecretKey::decode(&generated.private_key, None).unwrap();
+        assert_eq!(key.public_key(), generated.public_key);
+        assert_eq!(key.fingerprint(), generated.fingerprint);
+        assert_eq!(key.algorithm(), "ssh-ed25519");
+        assert!(!SecretKey::is_encrypted(&generated.private_key));
+        assert_ne!(
+            generate_ed25519("x").unwrap().public_key,
+            generated.public_key
+        );
     }
 
     #[test]
     fn mpint_encoding() {
-        let mut v = Vec::new();
-        put_mpint(&mut v, &[0x00, 0x00, 0x7f]);
-        assert_eq!(v, [0, 0, 0, 1, 0x7f]);
-        v.clear();
-        put_mpint(&mut v, &[0x80, 0x01]);
-        assert_eq!(v, [0, 0, 0, 3, 0, 0x80, 0x01]);
-        v.clear();
-        put_mpint(&mut v, &[0, 0]);
-        assert_eq!(v, [0, 0, 0, 0]);
+        let mut encoded = Vec::new();
+        put_mpint(&mut encoded, &[0x00, 0x00, 0x7f]);
+        assert_eq!(encoded, [0, 0, 0, 1, 0x7f]);
+        encoded.clear();
+        put_mpint(&mut encoded, &[0x80, 0x01]);
+        assert_eq!(encoded, [0, 0, 0, 3, 0, 0x80, 0x01]);
+        encoded.clear();
+        put_mpint(&mut encoded, &[0, 0]);
+        assert_eq!(encoded, [0, 0, 0, 0]);
     }
 
     #[test]
@@ -329,14 +335,14 @@ mod tests {
         der.extend([0x02, 31]);
         der.extend(&s[1..]);
         der[1] = u8::try_from(der.len() - 2).unwrap();
-        let alg = Algorithm::Ecdsa {
+        let algorithm = Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP256,
         };
         assert_eq!(
-            signature_blob(&alg, &raw).unwrap(),
-            signature_blob(&alg, &der).unwrap()
+            signature_blob(&algorithm, &raw).unwrap(),
+            signature_blob(&algorithm, &der).unwrap()
         );
-        assert!(signature_blob(&alg, &[1, 2, 3]).is_err());
+        assert!(signature_blob(&algorithm, &[1, 2, 3]).is_err());
         assert!(signature_blob(&Algorithm::Ed25519, &[0; 63]).is_err());
     }
 }
