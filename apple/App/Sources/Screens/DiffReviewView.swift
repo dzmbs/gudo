@@ -6,10 +6,7 @@ import UIKit
 import AppKit
 #endif
 
-/// Review changes: uncommitted, staged, or exactly what one agent turn changed. One scroll with
-/// every file, terminal-quiet: monospace on the terminal's background, no syntax colours, the
-/// palette's green and red only for added and removed lines. Side by side where there is room
-/// (iPad, Mac), unified on iPhone. Tap a line to leave a note; the notes go to the agent as one
+/// Review uncommitted, staged, or one agent turn's changes; line notes go to the agent as one
 /// numbered review prompt.
 struct DiffReviewView: View {
     let source: any DiffSource
@@ -32,7 +29,6 @@ struct DiffReviewView: View {
     @State private var notes: [ReviewNote] = []
     @State private var composing: NoteAnchor?
     @State private var isSending = false
-    /// The review's width: side by side only where both sides have room (a narrow leaf is unified).
     @State private var width = CGFloat.infinity
     @Environment(\.toolLeaf) private var leaf
 
@@ -95,7 +91,6 @@ struct DiffReviewView: View {
         } else if let problem {
             EmptyState(problem.title ?? "Couldn't Load Changes", systemImage: problem.systemImage, message: problem.message, detail: problem.detail) {
                 if case .notARepository = problem {
-                    // Changes follow the focused pane's folder: pick one, or cd into a repository.
                     Button("Browse Files") { model.sheet = .files }
                         .buttonStyle(.glass)
                 }
@@ -113,6 +108,7 @@ struct DiffReviewView: View {
             .opacity(showsProgress ? 1 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task {
+                // No visible loading state for fast loads.
                 try? await Task.sleep(for: DS.Motion.feedbackDelay)
                 showsProgress = true
             }
@@ -218,7 +214,7 @@ struct DiffReviewView: View {
                 }
             }
         } label: {
-            // A leaf's bar keeps its room for the title: the scope by its symbol there.
+            // A leaf's bar keeps its room for the title.
             if leaf == nil {
                 Label(scopeShort, systemImage: scopeSymbol).labelStyle(.titleAndIcon)
             } else {
@@ -309,7 +305,6 @@ struct DiffReviewView: View {
         }
     }
 
-    /// The notes as the agent would read them (for Copy).
     private var formattedNotes: String {
         notes.enumerated().map { index, note in
             var text = "\(index + 1). \(note.path):\(note.startLine)"
@@ -474,8 +469,7 @@ struct SplitDiffRow: Identifiable, Hashable {
 }
 
 extension DiffHunk {
-    /// Pairs a hunk's lines for side by side: context on both sides; each run of removed lines
-    /// beside the run of added lines that follows it.
+    /// Pairs each run of removed lines with the run of added lines that follows it.
     var splitRows: [SplitDiffRow] {
         var rows: [SplitDiffRow] = []
         var removed: [DiffLine] = []
@@ -564,7 +558,6 @@ private struct FileDiffBody: View {
                 .frame(minWidth: viewport, alignment: .leading)
             }
             .scrollIndicators(.automatic)
-            // Row fills reach the right edge even when every line is short.
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewport = $0 }
             .background(theme.background)
         }
@@ -654,7 +647,6 @@ private struct FileDiffBody: View {
         }
     }
 
-    /// Notes under a line, and the composer when it is the one being annotated.
     @ViewBuilder private func annotations(for line: DiffLine?, oldSide: Bool) -> some View {
         if let line {
             let number = (oldSide ? line.oldNumber : line.newNumber) ?? -1

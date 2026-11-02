@@ -6,9 +6,8 @@ import Synchronization
 import TerminalRenderer
 import GudoCore
 
-/// One daemon client's drawing state, on the main actor: placements per pane, canvas panes,
-/// artifact infos, open scenes, and decoded images by blob hash. Fed by the client's
-/// `ArtifactListener` (one per client, docs/APPLE-FFI.md "Drawings and images").
+/// One daemon client's drawing state: placements per pane, canvas panes, artifact infos, open
+/// scenes, and decoded images by blob hash. Fed by the client's single `ArtifactListener`.
 @MainActor
 final class DrawingHub {
     let client: DaemonClient
@@ -44,14 +43,13 @@ final class DrawingHub {
     func register(_ pane: PaneDrawing) {
         panes.setObject(pane, forKey: NSNumber(value: pane.paneId))
         reloadPlacements(pane: pane.paneId)
-        // The session's canvas panes as the client cached them: the list pushed on attach can
-        // arrive before this hub's listener exists (a relaunch), and is not pushed again.
+        // The list pushed on attach can arrive before this hub's listener exists (a relaunch),
+        // and is not pushed again, so read the client's cache.
         for canvas in client.canvasPanes(sessionId: pane.sessionId) where canvases[canvas.paneId] == nil {
             canvases[canvas.paneId] = canvas.artifactId
         }
     }
 
-    /// The pushed placements of a pane as the client caches them (after attach / resume).
     func reloadPlacements(pane: UInt64) {
         let current = client.placements(paneId: pane)
         placements[pane] = Dictionary(current.map { ($0.placementId, $0) }, uniquingKeysWith: { $1 })
@@ -68,7 +66,7 @@ final class DrawingHub {
 
     private func pane(_ id: UInt64) -> PaneDrawing? { panes.object(forKey: NSNumber(value: id)) }
 
-    /// Records a placement this client just made (before its `Placed` push arrives).
+    /// Records a placement this client just made, before its `Placed` push arrives.
     func noteLocal(_ placement: Placement, replacing: UInt64?) {
         if let replacing { placements[placement.paneId]?[replacing] = nil }
         placements[placement.paneId, default: [:]][placement.placementId] = placement
@@ -127,7 +125,7 @@ final class DrawingHub {
         return result
     }
 
-    /// Seeds the cache with a PNG this device rendered (no download for its own placements).
+    /// Seeds the cache with a PNG this device rendered, so its own placements need no download.
     func seed(hash: String, png: Data) {
         pngs[hash] = png
         guard images[hash] == nil else { return }
@@ -142,7 +140,7 @@ final class DrawingHub {
         return blob.data
     }
 
-    /// A blob's bytes if this device has them (drag sources must answer at once).
+    /// Drag sources must answer at once, so this never downloads.
     func cachedPNG(hash: String) -> Data? { pngs[hash] }
 
     nonisolated static func decode(_ data: Data) -> InlineImagePixels? {
@@ -183,9 +181,9 @@ final class WeakScene {
     init(_ value: SceneSync) { self.value = value }
 }
 
-/// Keeps one open editor (overlay or canvas pane) in step with the daemon's Excalidraw scene
-/// (docs/DAEMON.md §7.9): loads it, puts local changes, applies remote ones and winners of lost
-/// offers, and turns images added in the editor into blobs.
+/// Keeps one open editor (overlay or canvas pane) in step with the daemon's Excalidraw scene:
+/// puts local changes, applies remote ones and winners of lost offers, and turns images added in
+/// the editor into blobs.
 @MainActor
 final class SceneSync {
     let artifactId: UInt64
@@ -201,7 +199,6 @@ final class SceneSync {
     var readOnly = false
     /// The scene's live elements' types by id, as this editor knows them.
     private(set) var liveElements: [String: String] = [:]
-    /// Called when `liveElements` changed.
     var onElementsChanged: (() -> Void)?
 
     init(artifactId: UInt64, sessionId: UInt64, hub: DrawingHub, web: CanvasWebView) {
@@ -216,7 +213,6 @@ final class SceneSync {
         hub.unregister(scene: self)
     }
 
-    /// Fetches the scene and loads the editor with it.
     func load(mode: String, theme: String, viewport: [String: Any]?, extra: [String: Any] = [:]) async {
         var elements: [Any] = []
         var fileList: [[String: Any]] = []
@@ -231,18 +227,17 @@ final class SceneSync {
                 }
             }
         }
-        var config: [String: Any] = [
+        var options: [String: Any] = [
             "elements": elements, "files": fileList, "mode": mode, "readOnly": readOnly, "theme": theme,
             "appState": appState.filter { ["viewBackgroundColor", "gridSize"].contains($0.key) },
         ]
-        if let viewport { config["viewport"] = viewport }
-        config.merge(extra) { $1 }
-        web.call("load", config)
-        note(elements)
+        if let viewport { options["viewport"] = viewport }
+        options.merge(extra) { $1 }
+        web.call("load", options)
+        trackLiveElements(elements)
     }
 
-    /// Keeps `liveElements` in step with elements the editor loaded, changed or received.
-    private func note(_ elements: [Any]) {
+    private func trackLiveElements(_ elements: [Any]) {
         guard !elements.isEmpty else { return }
         for case let element as [String: Any] in elements {
             guard let id = element["id"] as? String else { continue }
@@ -251,7 +246,7 @@ final class SceneSync {
         onElementsChanged?()
     }
 
-    /// "rectangle:1" per element type, sorted (accessibility value of the editor).
+    /// "rectangle:1" per element type, sorted; the editor's accessibility value.
     var elementSummary: String {
         Dictionary(grouping: liveElements.values, by: { $0 }).map { "\($0.key):\($0.value.count)" }.sorted().joined(separator: " ")
     }
@@ -262,7 +257,6 @@ final class SceneSync {
         json.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }
     }
 
-    /// `{type: "change"}` from the editor: puts the changed elements.
     func changed(_ message: [String: Any]) {
         guard !readOnly, let list = message["elements"] as? [[String: Any]] else { return }
         let elements = list.compactMap { object -> ExElement? in
@@ -270,11 +264,11 @@ final class SceneSync {
             return try? excalidrawElement(json: json)
         }
         if let state = message["appState"] as? [String: Any] { appState.merge(state) { $1 } }
-        note(list)
+        trackLiveElements(list)
         put(elements)
     }
 
-    /// `{type: "files"}`: images added in the editor become blobs, referenced by the next put.
+    /// Images added in the editor become blobs, referenced by the next put.
     func filesAdded(_ message: [String: Any]) {
         guard !readOnly, let list = message["files"] as? [[String: Any]] else { return }
         enqueue { [self] in
@@ -312,7 +306,7 @@ final class SceneSync {
         }
     }
 
-    /// Runs `work` after everything queued before it (puts stay in order).
+    /// Runs `work` after everything queued before it, so puts stay in order.
     private func enqueue(_ work: @escaping @MainActor () async -> Void) {
         let previous = chain
         chain = Task { @MainActor in
@@ -321,12 +315,11 @@ final class SceneSync {
         }
     }
 
-    /// Waits for every queued put.
     func settle() async {
         await chain?.value
     }
 
-    /// Pushes and winners: reconciled into the editor without entering its undo stack.
+    /// Reconciles pushes and winners into the editor without entering its undo stack.
     func applyRemote(elements: [ExElement], files: [ExFile]) {
         Task { [self] in
             var fileList: [[String: Any]] = []
@@ -338,7 +331,7 @@ final class SceneSync {
             }
             let objects = elements.compactMap(Self.object)
             web.call("applyRemote", ["elements": objects, "files": fileList])
-            note(objects)
+            trackLiveElements(objects)
         }
     }
 }

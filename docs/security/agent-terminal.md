@@ -68,6 +68,7 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   finish, and their exit codes (it could already read the panes).
 - **Same-user processes.** Anything that can read the state directory can speak for any pane.
 
+## Decisions
 
 - Requests wait 120 s; a shorter wait is safer for unattended agents, a longer one kinder on a
   phone in a pocket.

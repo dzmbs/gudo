@@ -13,7 +13,6 @@ struct PaneReport: Hashable {
     /// The program's own line ("Which framework?"); nil for agent integrations, whose blocked
     /// summary has its own place.
     var message: String?
-    /// Percent complete.
     var progress: Int?
     /// What a blocked program waits for.
     var kind: ProgramKind?
@@ -51,7 +50,6 @@ struct PaneReport: Hashable {
 }
 
 extension ProgramKind {
-    /// What a blocked program waits for, in words.
     var waitingFor: String {
         switch self {
         case .permission: "Wants permission"
@@ -75,7 +73,6 @@ extension DesignSystem.AgentState {
 }
 
 extension DaemonConnection {
-    /// What the program in `pane` reports (`PaneReport`), nil for a plain shell.
     func report(of pane: PaneId) -> PaneReport? {
         PaneReport(meta: meta[pane], program: programs[pane])
     }

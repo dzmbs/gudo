@@ -4,14 +4,11 @@ import SwiftUI
 import TerminalCore
 import TerminalRenderer
 
-/// The find bar on the focused pane (⌘F): Ghostty's search, over the pane's own terminal.
+/// The find bar on the focused pane (⌘F).
 ///
-/// Every match in view is highlighted by the renderer and the selected one is emphasized;
-/// Return / ⌘G go to the next (older) match and ⇧Return / ⇧⌘G to the previous one, scrolling
-/// the pane to it. Local and plain-SSH panes hold their whole scrollback, so their terminal's
-/// search (libghostty-vt's) is the answer. A daemon pane holds only the recent part: the count
-/// comes from the daemon's search over the whole scrollback, and going past the oldest match
-/// the pane holds pages older scrollback in from the daemon until the next match is there.
+/// Local and plain-SSH panes hold their whole scrollback, so libghostty-vt's search is the answer.
+/// A daemon pane holds only the recent part: the count comes from the daemon's search over the
+/// whole scrollback, and going past the oldest match pages older scrollback in until the next match is there.
 struct PaneSearchBar: View {
     let model: WindowModel
     let pane: Pane?
@@ -45,7 +42,6 @@ extension WindowModel {
         return (local.selected, total)
     }
 
-    /// Starts searching `pane` (the focused one, when the bar shows on it).
     func attachSearch(_ pane: Pane?) {
         guard let pane else { return }
         if searchPane !== pane {
@@ -60,7 +56,6 @@ extension WindowModel {
         applySearch()
     }
 
-    /// Ends the search on `pane`: its highlights go.
     func detachSearch(_ pane: Pane?) {
         guard let pane else { return }
         pane.view.surface.onSearchStatus = nil
@@ -71,7 +66,6 @@ extension WindowModel {
         searchHistoryTask?.cancel()
     }
 
-    /// The needle and case on the searched pane (nothing while the bar is closed).
     func applySearch() {
         guard let surface = searchPane?.view.surface else { return }
         searchHistoryTask?.cancel()
@@ -85,7 +79,6 @@ extension WindowModel {
     /// ⇧⌘G / ⇧Return: the next match down, wrapping at the newest.
     func findPrevious() { stepSearch(.previous) }
 
-    /// Esc or ✕: the bar closes, the highlights go and the terminal has the keyboard again.
     func closeSearch() {
         let pane = searchPane ?? workspace?.focusedPane.flatMap { workspace?.pane($0) }
         isSearchShown = false
@@ -99,8 +92,8 @@ extension WindowModel {
     }
 
     private func stepSearch(_ direction: TerminalSearch.Direction) {
+        // ⌘G with the bar closed brings it back with the last needle.
         if !isSearchShown {
-            // ⌘G with the bar closed brings it back with the last needle.
             isSearchShown = true
         }
         if searchPane == nil { attachSearch(workspace?.focusedPane.flatMap { workspace?.pane($0) }) }
@@ -120,9 +113,8 @@ extension WindowModel {
         PaneSearchLog.log.debug("selected found=\(found) sel=\(self.searchStatus.selected ?? -1) total=\(self.searchStatus.total)")
     }
 
-    /// Asks the pane's host for older scrollback, page after page, until a match older than
-    /// the `matchesBefore` the pane had shows up; then selects it. Wraps to the newest match
-    /// when the host has nothing more.
+    /// Pages older scrollback in until a match beyond `matchesBefore` shows up, then selects it;
+    /// wraps to the newest match when the host has nothing more.
     private func pageOlderScrollback(_ pane: Pane, matchesBefore: Int) {
         searchHistoryTask = Task { @MainActor [weak self, weak pane] in
             var lastProgress = ContinuousClock.now

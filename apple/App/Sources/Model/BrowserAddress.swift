@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 
-/// The search engine the address field searches with (Settings ▸ Browser).
 nonisolated enum SearchEngine: String, CaseIterable, Identifiable, Sendable {
     case google, duckDuckGo, bing, kagi, brave
 
@@ -33,8 +32,7 @@ nonisolated enum SearchEngine: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// `locale`: Google and Bing take the interface language and result region as parameters
-    /// (the language header alone loses to the network's country there).
+    /// Google and Bing get the locale as parameters: the language header alone loses to the network's country.
     func url(searching query: String, locale: SearchLocale = SearchLocale()) -> URL {
         var components = URLComponents(string: base)!
         var items = [URLQueryItem(name: "q", value: query)]
@@ -57,9 +55,7 @@ nonisolated enum SearchEngine: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// What the address field makes of what was typed: a URL (`https://…`, `about:blank`), a local
-/// server (`localhost:3000`, `127.0.0.1:8080`, `:5173`, `app.localhost`), a bare host
-/// (`example.com`, `example.com/docs`, `devbox:8080`), else a search.
+/// Turns typed text into a URL (`https://…`, `localhost:3000`, `:5173`, `example.com/docs`), else a search.
 nonisolated enum BrowserAddress {
     static func url(for input: String, engine: SearchEngine = .current, locale: SearchLocale = SearchLocale()) -> URL? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,9 +63,7 @@ nonisolated enum BrowserAddress {
         return address(text) ?? engine.url(searching: text, locale: locale)
     }
 
-    /// Chrome's short form of an address: no scheme, no `www.`, no lone trailing slash
-    /// (`https://www.example.com/` as `example.com`, `http://localhost:3000/app` as
-    /// `localhost:3000/app`). Other schemes stay whole.
+    /// No scheme, `www.` or lone trailing slash for http(s); other schemes stay whole.
     static func display(_ url: URL) -> String {
         var text = url.absoluteString
         guard let scheme = url.scheme, scheme == "http" || scheme == "https" else { return text }
@@ -122,8 +116,7 @@ nonisolated enum BrowserAddress {
     }
 }
 
-/// Pages visited in the in-app browser, on this device: the start page's frequent and recent
-/// pages and the address field's suggestions.
+/// Pages visited in the in-app browser on this device.
 @MainActor
 @Observable
 final class BrowserHistory {
@@ -147,7 +140,7 @@ final class BrowserHistory {
         entries = defaults.data(forKey: Self.key).flatMap { try? JSONDecoder().decode([Entry].self, from: $0) } ?? []
     }
 
-    /// A page the browser reached. Sign-in callbacks and blank pages are not kept.
+    /// Sign-in callbacks and blank pages are not kept.
     func record(_ url: URL, title: String?) {
         guard url.scheme == "http" || url.scheme == "https", SignInLink.pastedCode(from: url) == nil,
               URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "code" }) != true
@@ -167,7 +160,6 @@ final class BrowserHistory {
         save()
     }
 
-    /// A title that arrived after the page was recorded.
     func retitle(_ url: URL, _ title: String) {
         guard !title.isEmpty, let index = entries.firstIndex(where: { $0.url == url.absoluteString }),
               entries[index].title != title else { return }
@@ -193,7 +185,6 @@ final class BrowserHistory {
     }
 }
 
-/// One row under the address field while typing.
 nonisolated struct AddressSuggestion: Identifiable, Hashable, Sendable {
     enum Kind: Hashable, Sendable { case devServer, page, search }
     var kind: Kind
@@ -210,15 +201,14 @@ nonisolated struct AddressSuggestion: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Dev servers whose `localhost:<port>` or process matches, then visited pages whose
-    /// address or title does (address prefixes first, then by visits), then the search.
+    /// Matching dev servers, then visited pages (address prefixes first, then by visits), then the search.
     static func make(
         for input: String, history: [BrowserHistory.Entry], devServers: [DetectedPort], engine: SearchEngine,
         locale: SearchLocale = SearchLocale(), limit: Int = 6
     ) -> [AddressSuggestion] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty else { return [] }
-        var out: [AddressSuggestion] = devServers.filter(\.isHTTP).compactMap { port in
+        var suggestions: [AddressSuggestion] = devServers.filter(\.isHTTP).compactMap { port in
             let name = "localhost:\(port.port)"
             guard name.contains(query) || port.process.lowercased().contains(query) || String(port.port).hasPrefix(query)
             else { return nil }
@@ -234,16 +224,16 @@ nonisolated struct AddressSuggestion: Identifiable, Hashable, Sendable {
             return nil
         }
         .sorted { ($0.0, -$0.1.visits) < ($1.0, -$1.1.visits) }
-        out += pages.map { _, entry, url in
+        suggestions += pages.map { _, entry, url in
             AddressSuggestion(kind: .page, title: entry.title.isEmpty ? Self.bare(entry.url) : entry.title, detail: Self.bare(entry.url), url: url)
         }
-        out = Array(out.prefix(limit - 1))
+        suggestions = Array(suggestions.prefix(limit - 1))
         if BrowserAddress.address(query) == nil {
-            out.append(AddressSuggestion(
+            suggestions.append(AddressSuggestion(
                 kind: .search, title: input.trimmingCharacters(in: .whitespaces), detail: "\(engine.title) Search",
                 url: engine.url(searching: input.trimmingCharacters(in: .whitespaces), locale: locale)))
         }
-        return out
+        return suggestions
     }
 
     /// The selection after an arrow key: -1 is none (the typed text).

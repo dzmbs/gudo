@@ -17,8 +17,7 @@ extension EnvironmentValues {
     /// Set inside a tool leaf: screens draw the leaf's bar instead of a navigation bar or the
     /// window's toolbar, which belong to the whole window there.
     @Entry var toolLeaf: ToolLeafContext?
-    /// A tool's way around where nothing pushes (a leaf, a Mac tool window): set by the screen
-    /// that keeps the history, drawn by `toolChrome`.
+    /// History for tools shown where nothing pushes (a leaf, a Mac tool window).
     @Entry var toolNavigation: ToolNavigation?
 }
 
@@ -106,7 +105,6 @@ private struct ToolChrome<Actions: View>: ViewModifier {
     }
 }
 
-/// Finder's ‹ › pair.
 private struct HistoryButtons: View {
     let navigation: ToolNavigation
 
@@ -122,7 +120,6 @@ private struct HistoryButtons: View {
     }
 }
 
-/// The places enclosing the one shown, nearest first (Finder's title menu).
 private struct EnclosingMenu: View {
     let navigation: ToolNavigation
 
@@ -133,7 +130,6 @@ private struct EnclosingMenu: View {
     }
 }
 
-/// ⌘[ ⌘] ⌘↑, as Finder has them.
 private struct HistoryShortcuts: View {
     let navigation: ToolNavigation
 
@@ -174,9 +170,7 @@ private struct ToolMinimumSize: ViewModifier {
     }
 }
 
-/// A tool leaf's strip, an editor leaf's twin: close, back and forward where the tool keeps a
-/// history, the tool and what it shows (its title a menu of the places around it), its actions,
-/// and more. A pane header's 24 pt beside other panes.
+/// A tool leaf's header bar; 24 pt when split, to match the pane headers beside it.
 private struct ToolLeafBar<Actions: View>: View {
     let leaf: ToolLeafContext
     let title: String
@@ -252,7 +246,6 @@ private struct ToolLeafBar<Actions: View>: View {
         .accessibilityIdentifier("tool-title")
     }
 
-    /// Finder's title menu: the enclosing places, from a click on the title.
     @ViewBuilder private var titleMenu: some View {
         if let navigation, !navigation.enclosing.isEmpty {
             Menu {
@@ -296,8 +289,7 @@ struct ToolContent: View {
     }
 }
 
-/// A tool leaf of a split tree: the tool's screens under its bar, focused by a tap, closed and
-/// moved to a window through the window.
+/// A tool shown as a leaf of the split tree.
 struct ToolLeafView: View {
     let member: ToolMember
     let isSplit: Bool

@@ -1,14 +1,9 @@
 import DesignSystem
 import SwiftUI
 
-/// A new browser tab's page: a search and address field, the pages visited most and last, and
-/// the host's dev servers one tap away. Native, on the terminal theme's colours.
-///
-/// Safari's order: what this device knows comes first and is there from the first frame; dev
-/// servers come and go with the host's scans, so they sit last, where arriving or leaving never
-/// moves what is above them.
+/// A new browser tab's page. Dev servers come and go with the host's scans, so they sit last,
+/// where appearing or leaving never moves the history above them.
 struct BrowserStartPage: View {
-    /// The host whose dev servers show, by name, and its HTTP ports.
     var hostName: String
     var devServers: [DetectedPort]
     var focusOnAppear: Bool
@@ -18,7 +13,7 @@ struct BrowserStartPage: View {
     @Environment(\.terminalTheme) private var theme
     @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
     @State private var text = ""
-    /// The suggestion arrow keys picked (none: Return goes where the text says).
+    /// -1 when no suggestion is picked: Return goes where the text says.
     @State private var selection = -1
     @FocusState private var isFocused: Bool
     private var history: BrowserHistory { .shared }
@@ -57,8 +52,6 @@ struct BrowserStartPage: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("start-page")
     }
-
-    // MARK: Field
 
     private var field: some View {
         VStack(spacing: 0) {
@@ -114,8 +107,6 @@ struct BrowserStartPage: View {
             open(url)
         }
     }
-
-    // MARK: Sections
 
     private let columns = [GridItem(.adaptive(minimum: 220), spacing: DS.Space.m)]
 
@@ -190,7 +181,6 @@ struct BrowserStartPage: View {
     }
 }
 
-/// A start page tile: a mark, a title and a line under it.
 private struct Tile<Mark: View>: View {
     let title: String
     let subtitle: String
@@ -235,8 +225,7 @@ private struct Monogram: View {
     }
 }
 
-/// Settings ▸ Browser: what the address field searches with, the language and appearance pages
-/// are asked for, and the pages it remembers.
+/// Settings ▸ Browser.
 struct BrowserSettingsSection: View {
     @AppStorage(SearchEngine.key) private var engine = SearchEngine.google
     @AppStorage(WebsiteLanguage.key) private var language = WebsiteLanguage.defaultTag
@@ -274,7 +263,7 @@ struct BrowserSettingsSection: View {
     }
 }
 
-/// Suggestions under an address field; `selection` is lit (arrow keys move it).
+/// Suggestions under an address field; `selection` is the highlighted index.
 struct AddressSuggestionList: View {
     let suggestions: [AddressSuggestion]
     let selection: Int

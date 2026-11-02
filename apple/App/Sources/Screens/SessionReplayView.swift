@@ -18,7 +18,7 @@ extension WindowModel {
     }
 }
 
-/// The Replays sheet: recorded sessions, newest first, each opening in Session Replay.
+/// Recorded sessions, newest first.
 struct SessionReplaysSheet: View {
     let request: ReplayRequest
     @State private var store = ReplayStore.shared
@@ -136,8 +136,7 @@ private struct ReplaySessionRow: View {
 
 // MARK: - Session Replay
 
-/// One session: the agent's steps beside the page as it changed. Scrub, play at a speed, or
-/// step from action to action; the step list follows the playhead.
+/// One session's steps beside the recorded page, with a scrubber and playback controls.
 struct SessionReplayView: View {
     let session: ReplaySession
     @State private var player: ReplayPlayer?
@@ -197,11 +196,11 @@ struct SessionReplayView: View {
 
     private func load() async {
         guard player == nil else { return }
-        let made = await ReplayPlayer(offline: session.imported)
-        player = made
+        let newPlayer = await ReplayPlayer(offline: session.imported)
+        player = newPlayer
         let lines = ReplayStore.shared.eventLines(session.id)
-        await made.load(events: "[" + lines.joined(separator: ",") + "]", size: CGSize(width: 800, height: 600))
-        if made.isEmpty { selected = session.actions.first?.id }
+        await newPlayer.load(events: "[" + lines.joined(separator: ",") + "]", size: CGSize(width: 800, height: 600))
+        if newPlayer.isEmpty { selected = session.actions.first?.id }
     }
 
     // MARK: Stage
@@ -315,8 +314,8 @@ struct SessionReplayView: View {
         return "\(Self.clock(player.current)) / \(Self.clock(player.duration))"
     }
 
-    static func clock(_ ms: Double) -> String {
-        let seconds = Int(ms / 1000)
+    static func clock(_ milliseconds: Double) -> String {
+        let seconds = Int(milliseconds / 1000)
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
@@ -533,8 +532,6 @@ private struct PlaywrightTestSheet: View {
         .macMinimumSize(width: 640, height: 480)
     }
 }
-
-// MARK: - Sharing
 
 /// A session as its `.gudoreplay` file.
 struct ReplayFile: Transferable {

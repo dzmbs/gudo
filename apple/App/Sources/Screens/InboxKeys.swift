@@ -7,11 +7,9 @@ enum InboxKey: CaseIterable {
 #if os(iOS)
 import UIKit
 
-/// The Inbox's keyboard on iPad: a responder that holds the keyboard while the Inbox is on screen
-/// and no field is typing. SwiftUI's shortcuts never see plain ↩ and letters on iPadOS (the focus
-/// system and text input take them first); key commands on the first responder, with priority over
-/// system behaviour, do. A field that takes the keyboard (reply, edited command) simply becomes the
-/// first responder instead, and the catcher takes it back when `active` returns.
+/// The Inbox's keyboard on iPad: a first responder that holds the keyboard while no field is typing.
+// SwiftUI shortcuts never see plain ↩ and letters on iPadOS (focus and text input take them first);
+// key commands on the first responder, with priority over system behaviour, do.
 struct InboxKeyCatcher: UIViewRepresentable {
     var active: Bool
     var handle: (InboxKey) -> Void
@@ -39,7 +37,6 @@ struct InboxKeyCatcher: UIViewRepresentable {
             claim()
         }
 
-        /// Takes the keyboard (from a terminal behind the Inbox, or back from a closed field).
         func claim() {
             guard active, window != nil, !isFirstResponder else { return }
             DispatchQueue.main.async { [weak self] in
@@ -65,7 +62,7 @@ struct InboxKeyCatcher: UIViewRepresentable {
             ]
         }
 
-        /// ↩ as a press too, should a focused control's "select" let it through to the responder.
+        // ↩ as a press too, in case a focused control's "select" lets it through to the responder.
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             guard active, let key = presses.first?.key, key.keyCode == .keyboardReturnOrEnter || key.keyCode == .keypadEnter,
                   key.modifierFlags.isDisjoint(with: [.command, .control, .alternate])

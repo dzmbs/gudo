@@ -5,9 +5,12 @@ output, a malicious repo's README or build script, a compromised host reached ov
 agent's own output. Terminal emulators have a long record of bugs here:
 
 - Title and DECRQSS echoback: xterm CVE-2003-0063 and CVE-2008-2383, Ghostty CVE-2024-56803,
-  CVE-2026-41253 (SSH conductor).
+  CVE-2024-38395/38396, mintty CVE-2022-47583.
+- In-band control protocols trusted from plain output: CVE-2019-9535 (tmux integration) and
+  CVE-2026-41253 (SSH integration).
 - Kitty graphics error text echoing a filename (CVE-2020-35605), and file transmission
   (GHSA-mhff-mv4q-fp63).
+- OSC 52 clipboard read (CVE-2026-48725).
 - OSC 8 and detected links launching apps (Ghostty GHSA-cw69-wm67-5pv8, GHSA-mfw9-xcr3-7gfp).
 - Control characters in pastes (Ghostty CVE-2026-26982, GHSA-4hwh-wx3w-3fqg).
 - ANSI and invisible text that hides instructions from people but not from models (Trail of
@@ -173,6 +176,7 @@ interactive stream. Shell-integration marks (OSC 133) are trusted only for displ
 - **Forged command lines.** OSC 133 command text is forgeable, so a "command finished"
   notification title can say anything, cleaned and always suffixed with its outcome.
 - **Mac OSC 8 links.** On the Mac, OSC 8 web links open on ⌘-click after the hover preview,
+  as in Ghostty. There is no confirmation.
 - **Clipboard writes.** A program can replace the clipboard of the device that typed last, at
   any time (a toast shows it), as in Ghostty's default.
 - **Guest marking.** Only connected guests mark a pane. Text a guest typed before leaving
@@ -185,6 +189,7 @@ interactive stream. Shell-integration marks (OSC 133) are trusted only for displ
 ## Decisions
 
 - OSC 52: write supported as in Ghostty, with a toast; read never.
+- Mac OSC 8 links keep Ghostty's behaviour (the hover shows the target).
 - Reads of a pane a guest can type into are marked in `source`.
 
 ## Validation

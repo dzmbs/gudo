@@ -5,9 +5,7 @@ import Synchronization
 import TerminalCore
 import TerminalRenderer
 
-/// Stand-in for a shell on iOS (and on the Mac under `-mock`): a line editor that
-/// echoes input and answers each line, so the renderer, keyboard and key bar can be exercised.
-/// Output is delivered asynchronously from its own queue, like network bytes.
+/// Stand-in for a shell on iOS and under `-mock`: a line editor that echoes input and answers each line.
 nonisolated final class EchoBackend: PaneBackend {
     private struct State {
         var line: [UInt8] = []
@@ -19,8 +17,7 @@ nonisolated final class EchoBackend: PaneBackend {
         var rightPrompt: (left: String, leftWidth: Int, right: String, rightWidth: Int)?
     }
 
-    /// Draws `left` with `right` at the right edge on the cursor's line, and redraws it after
-    /// every resize as zsh does on SIGWINCH (design fixtures).
+    /// Draws `left` with `right` at the right edge, redrawn after every resize as zsh does on SIGWINCH.
     func showPrompt(_ left: String, width leftWidth: Int, right: String, width rightWidth: Int) {
         let cols = state.withLock { state in
             state.rightPrompt = (left, leftWidth, right, rightWidth)
@@ -36,8 +33,7 @@ nonisolated final class EchoBackend: PaneBackend {
     private let pane: PaneId
     private let state = Mutex(State())
     private let queue = DispatchQueue(label: "echo-backend", qos: .userInteractive)
-    /// Simulated one-way network delay (the `echoLatencyMs` default, e.g. `-echoLatencyMs 150` as a
-    /// launch argument), to exercise echo prediction without a daemon.
+    /// Simulated one-way network delay (`-echoLatencyMs`), to exercise echo prediction without a daemon.
     private let latency: Double
     private let predictionFeed = Mutex<(@Sendable (PredictionUpdate) -> Void)?>(nil)
 
@@ -56,13 +52,12 @@ nonisolated final class EchoBackend: PaneBackend {
     ) {
         state.withLock { $0.onOutput = onOutput }
         var banner = "\u{1b}[1m\(Brand.name)\u{1b}[0m \u{1b}[2m· \(pane) · local echo (the host daemon connection comes later)\u{1b}[0m\r\n\r\n"
-        // `-echoFixture glyphs` (launch argument) prints the renderer's glyph test screen first.
         if LaunchArguments().string(forKey: "echoFixture") == "glyphs" { banner = GlyphFixture.text + "\r\n" }
         emit(Array((banner + Self.prompt).utf8))
         emit(state.withLock { state in defer { state.shown = [] }; return state.shown })
     }
 
-    /// Draws `text` as if the shell had printed it (design fixtures), after the greeting.
+    /// Draws `text` as if the shell had printed it, after the greeting.
     func show(_ text: String) {
         let started = state.withLock { state in
             if state.onOutput == nil { state.shown = Array(text.utf8) }
@@ -81,14 +76,14 @@ nonisolated final class EchoBackend: PaneBackend {
         queue.asyncAfter(deadline: .now() + latency) {
             self.handle(input)
             guard let inputSeq else { return }
-            // After the echo (which `emit` delays by the same latency).
+            // Must land after the echo, which `emit` delays by the same latency.
             self.queue.asyncAfter(deadline: .now() + self.latency + 0.001) {
                 self.predictionFeed.withLock { $0 }?(.acknowledged(upTo: inputSeq, hint: Self.hint))
             }
         }
     }
 
-    /// Counts the resizes the "shell" was sent (tests: one SIGWINCH per layout change).
+    /// Resizes sent to the "shell"; tests expect one per layout change.
     let resizes = Atomic<Int>(0)
 
     func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {
@@ -119,7 +114,7 @@ nonisolated final class EchoBackend: PaneBackend {
                 case 0x0D:
                     output += Array("\r\n".utf8)
                     if state.line.starts(with: Array("title ".utf8)) {
-                        // `title <text>` sets the title (OSC 2), like a program would.
+                        // `title <text>` sets the title (OSC 2).
                         output += Array("\u{1b}]2;".utf8) + state.line.dropFirst(6) + [0x07]
                     } else if !state.line.isEmpty {
                         output += Array("\u{1b}[2mecho:\u{1b}[0m ".utf8) + state.line + Array("\r\n".utf8)

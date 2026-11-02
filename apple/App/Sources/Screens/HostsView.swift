@@ -21,8 +21,8 @@ struct HostsScreen: View {
     }
 }
 
-/// Hosts: daemon and SSH hosts, "Needs you" first, then active, pinned and the rest
-/// (docs/DESIGN.md "Hosts"). A quick-connect field on top takes `user@host` and Return.
+/// Daemon and SSH hosts, "Needs you" first, then active, pinned and the rest, under a
+/// quick-connect field that takes `user@host`.
 struct HostsView: View {
     let directory: any HostDirectory
     /// The real hosts model, for ssh_config import (nil with mock data).
@@ -94,11 +94,8 @@ struct HostsView: View {
         }
     }
 
-    // MARK: List
-
     private func list(_ hosts: [HostSummary]) -> some View {
         let groups = HostGroups(hosts)
-        // the text column), not a stock grouped Settings list.
         return List {
             quickConnect
                 .listRowBackground(Color.clear)
@@ -185,14 +182,12 @@ struct HostsView: View {
         }
     }
 
-    /// radius 6, on the raised surface with a hairline: not a full-width system capsule.
     private var quickConnect: some View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: "terminal")
                 .font(.subheadline)
                 .foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: 16)
-            // What is typed is a literal (SF Mono); the prompt is prose.
             TextField("Connect", text: $destination, prompt: Text("Connect to user@host or an ssh alias").font(.body))
                 .font(DS.Font.literal)
                 .textFieldStyle(.plain)
@@ -262,8 +257,8 @@ struct HostsView: View {
         }
     }
 
-    private func run(_ body: () throws -> Void) {
-        do { try body() } catch { model.report(error, "Couldn't read the ssh_config") }
+    private func run(_ importConfig: () throws -> Void) {
+        do { try importConfig() } catch { model.report(error, "Couldn't read the ssh_config") }
     }
 
     private func pasteboardText() -> String {
@@ -314,7 +309,6 @@ private struct HostRow: View {
     let emphasizeNeedsYou: Bool
     @Environment(WindowModel.self) private var model
 
-    /// A 16 pt glyph slot (18 on touch), then the text column where separators start.
     #if os(macOS)
     static let glyphSlot: CGFloat = 16
     #else
@@ -440,8 +434,8 @@ private struct HostRow: View {
                     .font(.footnote)
                     .foregroundStyle(DS.Palette.textSecondary)
             case .unreachable(let reason, let hint):
-                let why = [reason, hint].compactMap(\.self).joined(separator: " ")
-                Text("\(Text("Can't reach").foregroundStyle(DS.Palette.error)) · \(why)")
+                let explanation = [reason, hint].compactMap(\.self).joined(separator: " ")
+                Text("\(Text("Can't reach").foregroundStyle(DS.Palette.error)) · \(explanation)")
                     .foregroundStyle(DS.Palette.textSecondary)
                     .font(.footnote)
                     .lineLimit(2)
@@ -456,7 +450,6 @@ private struct HostRow: View {
                     .foregroundStyle(DS.Palette.textTertiary)
             case .connected, .slow, .paused:
                 if let helper = host.helper, helper.canUpdate {
-                    // Quiet: a newer helper is an offer, not a problem (the menu has the action).
                     Label(helper.message, systemImage: "arrow.down.circle")
                         .labelStyle(.titleAndIcon)
                         .font(.footnote)

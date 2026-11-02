@@ -24,7 +24,6 @@ struct AgentToastStack: View {
         // Under the toolbar's band (its trailing controls stay reachable).
         .padding(.top, compact ? DS.Space.s : 58)
         .onHover { toasts.hold($0) }
-        // A finger on a card holds the stack too.
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in toasts.hold(true) }
@@ -80,6 +79,7 @@ private struct AgentToastCard: View {
         .accessibilityIdentifier("agent-toast-\(item.id)")
     }
 
+    /// The agent's mark with its state glyph cut into the corner.
     private var mark: some View {
         ProgramMark(item.identity, size: 22)
             .foregroundStyle(.primary)

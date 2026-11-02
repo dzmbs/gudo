@@ -4,12 +4,9 @@ import AppKit
 #endif
 
 /// New windows and closing for a page. `WebPage` has no API for either, so its web view's UI
-/// delegate is wrapped: `window.open` and `target=_blank` become a new browser leaf holding the
-/// web view WebKit configured for it (`BrowserPane.makePopup`, so `window.opener` works), and
-/// everything else goes on to the inner delegate (`WebPage`'s, or a popup's `PopupDelegate`).
+/// delegate is wrapped and everything else is forwarded to the inner delegate.
 ///
-/// A page opened by URL alone (no `window.opener`), WebKit would not let `window.close()`;
-/// `closeScript` lets it close its leaf instead.
+/// WebKit won't let a page opened by URL alone `window.close()`; `closeScript` closes its leaf instead.
 @MainActor
 final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
     /// The message handler a popup's `window.close()` posts to.
@@ -19,17 +16,15 @@ final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
         injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)
 
     private weak var webView: WKWebView?
-    /// The wrapped delegate (`WebPage` keeps its own alive). Read by the forwarding below,
-    /// which WebKit calls on the main thread.
+    /// `WebPage` keeps its own alive. WebKit calls the forwarding below on the main thread.
     nonisolated(unsafe) private weak var inner: (any WKUIDelegate)?
-    /// The web view for a new window, made with the given configuration; nil opens none.
+    /// Nil opens no window.
     var onCreate: ((WKWebViewConfiguration, WKNavigationAction) -> WKWebView?)?
     var onClose: (() -> Void)?
 
-    /// Whether new windows come here (else WebKit's own delegate would drop them).
+    /// Otherwise WebKit's own delegate drops new windows.
     var isAdopted: Bool { webView != nil }
 
-    /// Puts itself in front of `webView`'s delegate, once.
     func adopt(_ webView: WKWebView) {
         guard self.webView !== webView, webView.uiDelegate !== self else { return }
         self.webView = webView
@@ -37,9 +32,8 @@ final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
         webView.uiDelegate = self
     }
 
-    /// Lets scripts open windows without a user gesture (while an agent acts).
-    func allowPopups(_ on: Bool) {
-        webView?.configuration.preferences.javaScriptCanOpenWindowsAutomatically = on
+    func allowPopups(_ allowed: Bool) {
+        webView?.configuration.preferences.javaScriptCanOpenWindowsAutomatically = allowed
     }
 
     func webView(
@@ -65,8 +59,7 @@ final class BrowserWindows: NSObject, WKUIDelegate, WKScriptMessageHandler {
     }
 }
 
-/// A popup's navigation and dialogs, as `BrowserPane`'s decider and dialog presenter do them
-/// for a `WebPage`.
+/// A popup's navigation and dialogs, matching what `BrowserPane` does for a `WebPage`.
 @MainActor
 final class PopupDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
     weak var pane: BrowserPane?
@@ -98,7 +91,6 @@ final class PopupDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     #if os(macOS)
-    /// The agent's upload while it acts; else the user picks, as Safari asks.
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
         if let pane, pane.agentActing { return await pane.chooseFiles(multiple: parameters.allowsMultipleSelection) }
         let panel = NSOpenPanel()

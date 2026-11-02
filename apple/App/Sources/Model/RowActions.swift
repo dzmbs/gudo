@@ -10,7 +10,6 @@ nonisolated enum RowAction: String, Hashable, CaseIterable, Sendable {
     case archiveWorktree, deleteWorktree
     case disconnect, removeHost, pin, unpin
 
-    /// The menu title.
     var title: String {
         switch self {
         case .closeTab: "Close Tab"
@@ -163,7 +162,6 @@ nonisolated struct RowActions: Equatable, Sendable {
         }
     }
 
-    /// Whether `action` asks first.
     func needsConfirmation(_ action: RowAction) -> Bool { confirms.contains(action) }
 }
 

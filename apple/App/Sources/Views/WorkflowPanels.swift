@@ -19,9 +19,8 @@ struct WorkflowPanelHost: View {
     }
 }
 
-/// defaults filled in, ⇥/⇧⇥ between fields, the final command previewed live as it will be
-/// typed (values shell-quoted). ↩ types it at the pane's prompt without running it; ⌘↩ runs it;
-/// ⎋ cancels.
+/// A workflow's arguments as a form, one field per placeholder, with the final command
+/// previewed live. ↩ types it at the pane's prompt without running it; ⌘↩ runs it.
 struct WorkflowArgumentsForm: View {
     let workflow: Workflow
     let pane: PaneId
@@ -114,7 +113,7 @@ struct WorkflowArgumentsForm: View {
     }
 
     #if os(iOS)
-    /// UIKit's field: its key commands get ⌘↩ and ⇥ ahead of text input (`WorkflowField`).
+    /// UIKit's field, so its key commands get ⌘↩ and ⇥ ahead of text input.
     private func input(_ argument: WorkflowArgument, index: Int) -> some View {
         WorkflowField(
             placeholder: argument.description ?? argument.name, text: binding(argument.name), isFocused: current == index,
@@ -209,9 +208,7 @@ struct WorkflowArgumentsForm: View {
     }
 }
 
-/// New Workflow from Last Command: the command (editable; `{{name}}` marks an argument), a
-/// name, a description and where the file goes: the pane's repository (shared through git) or
-/// the user's global workflows.
+/// New Workflow from Last Command, saved to the pane's repository or the user's global workflows.
 struct NewWorkflowForm: View {
     let seed: NewWorkflowSeed
     @Environment(WindowModel.self) private var model

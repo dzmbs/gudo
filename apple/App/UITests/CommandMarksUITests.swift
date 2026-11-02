@@ -16,8 +16,6 @@ final class CommandMarksUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    // MARK: Helpers
-
     private func launch() throws {
         let ticket = ProcessInfo.processInfo.environment["PAIR_TICKET"] ?? ""
         try XCTSkipIf(ticket.isEmpty, "no daemon ticket (TEST_RUNNER_PAIR_TICKET)")
@@ -94,8 +92,6 @@ final class CommandMarksUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5), "the palette opens")
         field.typeText(title + "\n")
     }
-
-    // MARK: Tests
 
     func testMarksMenuPromptJumpsAndResume() throws {
         try launch()

@@ -54,8 +54,8 @@ enum DogfoodEvents {
         if spec.hasSuffix("++") || spec == "+" { parts = parts.filter { !$0.isEmpty } + ["+"] }
         let name = parts.removeLast()
         var flags: NSEvent.ModifierFlags = []
-        for mod in parts {
-            switch mod.lowercased() {
+        for modifier in parts {
+            switch modifier.lowercased() {
             case "cmd", "command", "super": flags.insert(.command)
             case "shift": flags.insert(.shift)
             case "ctrl", "control": flags.insert(.control)
@@ -63,10 +63,10 @@ enum DogfoodEvents {
             default: throw ParseError.unknownKey(spec)
             }
         }
-        if let (code, chars) = named[name.lowercased()] {
-            if chars.unicodeScalars.first!.value >= 0xF700 { flags.formUnion([.function]) }
+        if let (code, characters) = named[name.lowercased()] {
+            if characters.unicodeScalars.first!.value >= 0xF700 { flags.formUnion([.function]) }
             if (123...126).contains(code) { flags.insert(.numericPad) }
-            return Key(code: code, characters: chars, charactersIgnoringModifiers: chars, flags: flags)
+            return Key(code: code, characters: characters, charactersIgnoringModifiers: characters, flags: flags)
         }
         guard name.count == 1, var char = name.first else { throw ParseError.unknownKey(spec) }
         if let base = shifted[char] {
@@ -111,17 +111,17 @@ enum DogfoodEvents {
 
     private static func key(code: UInt16, base: Character, flags: NSEvent.ModifierFlags) -> Key {
         let ignoring = flags.contains(.shift) ? Self.shiftedString(base) : String(base)
-        var chars = ignoring
+        var characters = ignoring
         if flags.contains(.control), !flags.contains(.command), let ascii = base.asciiValue {
             // Control-letter produces the C0 control (^C = 0x03), like the hardware path.
             let upper = Character(base.uppercased()).asciiValue ?? ascii
-            if (0x40...0x5F).contains(upper) { chars = String(UnicodeScalar(upper & 0x1F)) }
+            if (0x40...0x5F).contains(upper) { characters = String(UnicodeScalar(upper & 0x1F)) }
         }
-        return Key(code: code, characters: chars, charactersIgnoringModifiers: ignoring, flags: flags)
+        return Key(code: code, characters: characters, charactersIgnoringModifiers: ignoring, flags: flags)
     }
 
     private static func shiftedString(_ base: Character) -> String {
-        if let s = shifted.first(where: { $0.value == base })?.key { return String(s) }
+        if let shiftedCharacter = shifted.first(where: { $0.value == base })?.key { return String(shiftedCharacter) }
         return base.uppercased()
     }
 
@@ -148,16 +148,16 @@ enum DogfoodEvents {
     /// A line-based scroll-wheel event at a window point (positive `lines` scrolls content up,
     /// i.e. towards older lines, as a wheel rolled away from the user does).
     static func scroll(lines: Int32, at windowPoint: CGPoint, window: NSWindow) -> NSEvent? {
-        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0)
+        guard let wheelEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0)
         else { return nil }
         let screenPoint = window.convertPoint(toScreen: windowPoint)
         // CG global coordinates have a top-left origin on the primary screen.
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        cg.location = CGPoint(x: screenPoint.x, y: primaryHeight - screenPoint.y)
+        wheelEvent.location = CGPoint(x: screenPoint.x, y: primaryHeight - screenPoint.y)
         let number = Int64(window.windowNumber)
-        cg.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: number)
-        cg.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: number)
-        return NSEvent(cgEvent: cg)
+        wheelEvent.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: number)
+        wheelEvent.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: number)
+        return NSEvent(cgEvent: wheelEvent)
     }
 }
 
@@ -256,11 +256,11 @@ final class DogfoodEventPump {
                 }
                 // Edit menu items validate against the key window's responder chain; send their
                 // actions to our first responder instead.
-                let edit: [String: Selector] = [
+                let editActions: [String: Selector] = [
                     "c": #selector(NSText.copy(_:)), "v": #selector(NSText.paste(_:)), "a": #selector(NSText.selectAll(_:)),
                 ]
                 if flags.isDisjoint(with: [.shift, .option, .control]), let key = event.charactersIgnoringModifiers?.lowercased(),
-                   let action = edit[key], window.firstResponder?.tryToPerform(action, with: nil) == true
+                   let action = editActions[key], window.firstResponder?.tryToPerform(action, with: nil) == true
                 {
                     lastShortcutRoute = "responder"
                     return
@@ -280,13 +280,13 @@ final class DogfoodEventPump {
         guard let menu else { return nil }
         menu.update()
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
-        let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
         for item in menu.items {
             if let found = enabledMenuItem(item.submenu, matching: event) { return found }
             guard item.isEnabled, !item.keyEquivalent.isEmpty else { continue }
-            var itemMods = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
-            if item.keyEquivalent != item.keyEquivalent.lowercased() { itemMods.insert(.shift) }
-            if item.keyEquivalent.lowercased() == key, itemMods == mods { return item }
+            var itemModifiers = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
+            if item.keyEquivalent != item.keyEquivalent.lowercased() { itemModifiers.insert(.shift) }
+            if item.keyEquivalent.lowercased() == key, itemModifiers == modifiers { return item }
         }
         return nil
     }

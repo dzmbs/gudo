@@ -34,19 +34,19 @@ nonisolated final class DogfoodWatchdog: Sendable {
 
     private func beat() {
         let now = ProcessInfo.processInfo.systemUptime
-        state.withLock { s in
-            s.maxGap = max(s.maxGap, now - s.lastBeat)
-            s.lastBeat = now
+        state.withLock { current in
+            current.maxGap = max(current.maxGap, now - current.lastBeat)
+            current.lastBeat = now
         }
     }
 
     /// The longest main-thread gap since the last call, in seconds.
     func takeMaxStall() -> Double {
         let now = ProcessInfo.processInfo.systemUptime
-        return state.withLock { s in
-            let gap = max(s.maxGap, now - s.lastBeat)
-            s.maxGap = 0
-            s.lastBeat = now
+        return state.withLock { current in
+            let gap = max(current.maxGap, now - current.lastBeat)
+            current.maxGap = 0
+            current.lastBeat = now
             return gap
         }
     }
@@ -59,10 +59,10 @@ nonisolated final class DogfoodWatchdog: Sendable {
         while true {
             usleep(20_000)
             let now = ProcessInfo.processInfo.systemUptime
-            let (gap, report) = state.withLock { s -> (Double, Data?) in
-                let gap = now - s.lastBeat
-                s.maxGap = max(s.maxGap, gap)
-                return (gap, s.partialReport)
+            let (gap, report) = state.withLock { current -> (Double, Data?) in
+                let gap = now - current.lastBeat
+                current.maxGap = max(current.maxGap, gap)
+                return (gap, current.partialReport)
             }
             if gap > hangSeconds { abort(reason: "main thread hung for \(Int(gap)) s", report: report) }
             if now > deadline { abort(reason: "scenario exceeded its time limit", report: report) }

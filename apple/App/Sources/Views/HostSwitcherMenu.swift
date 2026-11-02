@@ -5,9 +5,8 @@ import SwiftUI
 import UIKit
 #endif
 
-/// chevron; the symbol gives way to the link's glyph while the link is not healthy. A click or
-/// tap opens the host switcher (`HostSwitcher`): every host with ✓ on this window's and its
-/// ⌃⌘ number, filter or connect to a new address, New Tab, New Agent, Add Remote Host….
+/// The window's host in the toolbar; the symbol gives way to the link's glyph while the link is
+/// not healthy. A click or tap opens the host switcher.
 struct HostToolbarButton: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -54,8 +53,6 @@ struct HostToolbarButton: View {
     @Environment(\.chrome) private var chrome
 
     private var commands: [HostSwitcherCommand] {
-        // Start something here, then reach another machine: the switcher is where a new
-        // connection starts too, so its ways in are one click away.
         let rawCommands: [HostSwitcherCommand] = [
             HostSwitcherCommand(id: "new-tab", title: "New Tab", systemImage: "plus", shortcut: ["⌘", "T"]) {
                 model.newTab()
@@ -126,6 +123,7 @@ extension WindowModel {
         }
     }
 
+    /// The device's own symbol for this device, a server for the rest.
     static func symbol(forHost id: String, kind: HostKind?) -> String {
         if id == HostGroups.localId || kind == .local {
             #if os(macOS)

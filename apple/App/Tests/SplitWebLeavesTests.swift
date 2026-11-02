@@ -60,9 +60,9 @@ final class SplitWebLeavesTests: XCTestCase {
         action.perform(on: try XCTUnwrap(model.workspace), window: model)
     }
 
-    /// Open Browser Beside, then the page's own view once it has one.
+    /// Open Browser Beside, then the page's own view once it has one. `url`: a page on this Mac
+    /// (no host's `localhost`).
     @discardableResult
-    /// `url`: a page on this Mac (no host's `localhost`).
     private func openBeside(_ url: URL? = nil) async throws -> BrowserPane {
         let member = model.openBrowser(url ?? URL(string: "about:blank")!, hostId: url == nil ? model.workspace?.hostId : nil, placement: .split)
         for _ in 0..<50 where model.browsers.existing(member.id)?.shownBy == nil { await pump(0.05) }

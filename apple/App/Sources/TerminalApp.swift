@@ -36,18 +36,17 @@ struct TerminalApp: App {
         // One window per scene (iPad windows and Stage Manager, an external display's own
         // windows, Mac windows). A window opened with a request starts on its hosts and tab
         // (New Window, Open in New Window); otherwise it restores its own, else the last
-        // window's (docs/APP-ARCHITECTURE.md "Windows").
+        // window's.
         WindowGroup(for: WindowRequest.self) { $request in
             WindowRoot(request: request)
                 .environment(app)
         }
         .commands { WorkspaceCommands() }
         .onChange(of: scenePhase) { _, phase in
-            // 04-mobile-ux C3 "background and foreground contract": suspend with resume state
-            // kept once the background time iOS grants runs out (`BackgroundGrace`), probe and
-            // resume at once on return (R1, R5, R10). macOS keeps connections up in the
-            // background. The app's phase, not a window's: one window in the background while
-            // another is on screen keeps every host live.
+            // iOS suspends with resume state kept once its granted background time runs out
+            // (`BackgroundGrace`) and resumes at once on return; macOS keeps connections up in
+            // the background. The app's phase, not a window's: one window in the background
+            // while another is on screen keeps every host live.
             AppNotifications.shared.appIsActive = phase == .active
             switch phase {
             case .active:
@@ -159,10 +158,6 @@ struct WindowContent: View {
     /// The request this scene already opened (a restored scene must not open it again).
     @SceneStorage("openedRequest") private var openedRequest: String?
     @State private var restored = false
-    #if DEBUG
-    /// UI tests: a narrower window than the simulator's screen (`<scheme>://debug/width/<pt>`,
-    /// `-windowWidth <pt>`), to cross the width boundary as Split View and Stage Manager do.
-    #endif
 
     /// The window's content with what it follows: errors, what to persist, its phase.
     private var observed: some View {
@@ -217,11 +212,10 @@ struct WindowContent: View {
                 if UserDefaults.standard.bool(forKey: "resetWindows") { WindowContent.closeOtherWindows(keeping: model) }
                 #endif
                 app.hosts.foreground()
-                let hooked = await app.runLaunchHooks()
-                if !hooked.isEmpty {
-                    // Open every hooked host (they stay connected), show the first.
-                    for target in hooked { model.show(target) }
-                    model.show(hooked[0])
+                let launchTargets = await app.runLaunchHooks()
+                if !launchTargets.isEmpty {
+                    for target in launchTargets { model.show(target) }
+                    model.show(launchTargets[0])
                 } else if let request, openedRequest != request.id.uuidString {
                     openedRequest = request.id.uuidString
                     model.open(request)
@@ -346,10 +340,10 @@ struct WindowContent: View {
 
     /// Destroys every scene but one (once per launch; UI tests).
     private static func closeOtherWindows(keeping window: WindowModel) {
-        guard !closedOtherWindows, let keep = window.scene?.session else { return }
+        guard !closedOtherWindows, let keptSession = window.scene?.session else { return }
         closedOtherWindows = true
         let sessions = UIApplication.shared.openSessions.filter { $0.role == .windowApplication }
-        for session in sessions where session !== keep {
+        for session in sessions where session !== keptSession {
             UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
         }
     }
@@ -413,10 +407,10 @@ struct WindowContent: View {
         }
         // "A New Terminal" (Settings ▸ General) for windows coming back at launch: the old tabs
         // keep running, out of sight, and one new terminal opens. A window opened later
-        // (New Window) restores as before.
-        let fresh = LaunchTabs.current == .newTerminal && AppModel.isLaunching
-        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: fresh ? nil : focus, mixedTabs: mixed)
-        if fresh { model.startFresh(lastHost: focus?.hostId) }
+        // (New Window) restores its tabs.
+        let startsFresh = LaunchTabs.current == .newTerminal && AppModel.isLaunching
+        model.restore(openHosts: hosts ?? [], collapsed: Set(collapsed), focus: startsFresh ? nil : focus, mixedTabs: mixed)
+        if startsFresh { model.startFresh(lastHost: focus?.hostId) }
     }
 
     private static let lastProjectsKey = "window.projects"

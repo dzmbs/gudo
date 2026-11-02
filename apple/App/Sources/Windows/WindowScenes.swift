@@ -5,12 +5,9 @@ import PaneLayout
 import UIKit
 #endif
 
-/// What a new window opens on (docs/APP-ARCHITECTURE.md "Windows"): New Window (⌘N) carries
-/// the current window's hosts and tab, Open in New Window a host or a tab. The window then goes
-/// its own way: its own selection, its own terminals.
+/// What a new window opens on. After that the window keeps its own selection and terminals.
 struct WindowRequest: Codable, Hashable {
-    /// Whether this device shows more than one window of the app: the Mac and iPad, not iPhone,
-    /// where New Window and Open in New Window would do nothing.
+    /// False on iPhone, where New Window would do nothing.
     @MainActor static var isSupported: Bool {
         #if os(iOS)
         UIApplication.shared.supportsMultipleScenes
@@ -25,11 +22,10 @@ struct WindowRequest: Codable, Hashable {
     var tab: TabRef?
     /// The pane to focus in that tab.
     var pane: UInt64?
-    /// Every request is its own window (`openWindow(value:)` brings a window with an equal value
-    /// forward instead of opening one).
+    /// Makes every request unique: `openWindow(value:)` brings a window with an equal value
+    /// forward instead of opening one.
     var id = UUID()
 
-    /// A new window like `window`: the same hosts, on the same tab.
     @MainActor
     static func like(_ window: WindowModel) -> WindowRequest {
         // Mixed tabs belong to their window: the new one opens on the focused pane's host tab.
@@ -39,28 +35,25 @@ struct WindowRequest: Codable, Hashable {
     }
 }
 
-/// The Handoff and drag-out activity of a window (`NSUserActivity`): which host, tab and pane it
-/// shows, and the drawing open there (draw mode, or a focused canvas pane). Another device
-/// continues it on the same host if it has that host (matched by the daemon's id or the SSH
-/// address, never by this device's host ids), with the drawing open again; this device (a tab
-/// dragged out into a new window) uses the host id.
+/// The Handoff and drag-out activity of a window. Another device matches the host by the daemon's
+/// id or the SSH address, never by host ids, which are per device; a drag within this device uses the host id.
 struct HandoffPayload: Codable, Equatable {
     enum Kind: String, Codable {
         case daemon, ssh, local
     }
 
-    /// A drawing open in the window: a daemon artifact, the same on every device of the host.
+    /// A daemon artifact, the same on every device of the host.
     struct Drawing: Codable, Equatable {
         /// The Excalidraw scene.
         var artifact: UInt64
-        /// The placement being edited in draw mode (nil: a new drawing, not placed yet).
+        /// The placement being edited in draw mode; nil for a new drawing not placed yet.
         var placement: UInt64?
-        /// A canvas pane (focused), rather than draw mode over a terminal.
+        /// A focused canvas pane, rather than draw mode over a terminal.
         var canvas: Bool
     }
 
     var kind: Kind
-    /// The host's id on the device that made the activity (nil for this device's own shell).
+    /// The host's id on the device that made the activity; nil for that device's own shell.
     var hostId: String?
     var hostName: String
     /// A paired daemon's endpoint id (hex): the same on every device paired with it.
@@ -69,17 +62,16 @@ struct HandoffPayload: Codable, Equatable {
     var ssh: String?
     var tab: UInt64?
     var pane: UInt64?
-    /// The installation that made it (a drag within this device vs Handoff from another).
+    /// The installation that made it, telling a drag within this device from Handoff.
     var origin: String
     /// Where it was made ("This iPad"), for messages.
     var device: String
-    /// The drawing open in `pane` (absent in payloads from builds before drawing Handoff).
+    /// The drawing open in `pane`; optional so older payloads still decode.
     var drawing: Drawing?
 
     static let activityType = (Bundle.main.bundleIdentifier ?? "dev.gudo.app") + ".terminal"
     static let userInfoKey = "payload"
 
-    /// This installation's id (activities it made itself are drags between its own windows).
     static var installation: String {
         let key = "window.installationId"
         if let existing = UserDefaults.standard.string(forKey: key) { return existing }
@@ -88,7 +80,6 @@ struct HandoffPayload: Codable, Equatable {
         return made
     }
 
-    /// The payload for what a window shows, nil when it shows nothing continuable.
     @MainActor
     static func current(in window: WindowModel) -> HandoffPayload? {
         guard window.destination == .terminal, let workspace = window.workspace,
@@ -108,8 +99,7 @@ struct HandoffPayload: Codable, Equatable {
             origin: installation, device: WindowModel.deviceName, drawing: drawing?.drawing)
     }
 
-    /// The drawing a tab shows: draw mode on any of its panes (one pane draws at a time), else
-    /// the focused pane's canvas.
+    /// Draw mode on any of the tab's panes (one draws at a time), else the focused pane's canvas.
     static func openDrawing(
         focus: [PaneId: Drawing], tabPanes: [PaneId], focused: PaneId
     ) -> (pane: PaneId, drawing: Drawing)? {
@@ -120,7 +110,6 @@ struct HandoffPayload: Codable, Equatable {
         return nil
     }
 
-    /// Whether another device can continue it: this device's own shell lives here only.
     var isContinuable: Bool { kind != .local }
 
     var title: String { hostName }
@@ -167,8 +156,6 @@ struct HandoffPayload: Codable, Equatable {
         case elsewhere
     }
 
-    /// Where to continue: by host id on the device that made it, else the saved host with the
-    /// same daemon or SSH address.
     func resolve(records: [HostRecord], installation: String = HandoffPayload.installation) -> Resolution {
         let tab = tab.map(TabId.init)
         let pane = pane.map(PaneId.init)
@@ -188,10 +175,8 @@ struct HandoffPayload: Codable, Equatable {
     }
 }
 
-/// The window's layout by width, never by device (DESIGN.md "Size classes"): compact is the
-/// iPhone layout (one pane, the tab switcher, the tab bar), regular the sidebar with splits. The
-/// same bucket applies on an iPhone, a foldable's inner screen, an iPad in Split View or Slide
-/// Over, a Stage Manager window and the Mac.
+/// The window's layout by width, never by device: compact is one pane with a tab bar, regular
+/// the sidebar with splits.
 enum WidthBucket: String, Equatable, Sendable {
     case compact
     case regular
@@ -204,7 +189,6 @@ enum WidthBucket: String, Equatable, Sendable {
     /// so a drag that hovers at the edge never flips the layout back and forth.
     static let hysteresis: Double = 12
 
-    /// The bucket for `width`, given the window's current one.
     static func of(width: Double, current: WidthBucket?) -> WidthBucket {
         switch current {
         case .compact?: width >= boundary + hysteresis ? .regular : .compact

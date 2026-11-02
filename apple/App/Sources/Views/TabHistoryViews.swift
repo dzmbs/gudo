@@ -27,11 +27,7 @@ enum ClickModifiers {
     }
 }
 
-// The sidebar's tab-history rows, the selection bar, and the History menu's items
-// (docs/APP-ARCHITECTURE.md §25, docs/DESIGN.md "Sidebar").
-
-/// "Restore 6 Tabs": the tabs a launch under "A New Terminal" kept out of sight, one tap away.
-/// Shown while there is something to restore; gone when used or dismissed.
+/// "Restore 6 Tabs": the tabs a launch under "A New Terminal" kept out of sight.
 struct RestoreTabsRow: View {
     let count: Int
     @Environment(WindowModel.self) private var model
@@ -72,9 +68,7 @@ struct IdleTabsRow: View {
     }
 }
 
-/// A quiet one-line offer at the top of the sidebar, in the project suggestion's voice: a
-/// glyph, the verb in secondary ink, the rest in tertiary, a dismiss ×. No card: it sits among
-/// the rows and leaves the tabs the attention. What it means in full is its tooltip.
+/// A quiet one-line offer at the top of the sidebar; its full meaning is in the tooltip.
 private struct SidebarNoticeRow: View {
     let systemImage: String
     let title: String
@@ -228,7 +222,6 @@ struct HistoryMenuItems: View {
                 }
             }
         }
-        // Safari's Show All History (⌘Y): the same list, searchable.
         Button("Show All Recently Closed…") { model?.showRecentlyClosed() }
             .keyboardShortcut("y")
             .disabled(model?.recentlyClosed.tabs.isEmpty ?? true)

@@ -456,6 +456,7 @@ final class WindowModel {
         return app.hosts.record(id)?.name ?? id
     }
 
+    /// Why New Tab and splits do nothing right now.
     var layoutUnavailableHelp: String { "Not available until \(hostName) is connected" }
 
     /// Whether the window shows a remote host.
@@ -945,7 +946,7 @@ final class WindowModel {
 
     /// Tells each daemon what this window shows of it: the shown host's visible panes and
     /// focus, nothing for the hosts it does not show (stream priorities, attention seen, push
-    /// suppression; DAEMON.md).
+    /// suppression).
     /// With a mixed tab or Two Columns on screen, every host with a visible pane hears it; only
     /// the focused pane's host hears a focus (`screenViews`).
     func reportViews() {
@@ -1029,7 +1030,7 @@ final class WindowModel {
 }
 
 extension ConnectionState {
-    /// the link went down.
+    /// HostKit's status in the design system's vocabulary. `since` is when the link went down.
     init(_ status: ConnectionStatus, since: Date) {
         switch status {
         case .connected(let rtt):
@@ -1051,16 +1052,15 @@ extension ConnectionState {
     }
 }
 
-/// Launch arguments for design review and screenshots:
-/// `-mock` fills the screens with sample hosts, agents and statuses; `-screen <name>` opens
-/// straight to one screen.
-/// See `WindowModel.newAgentSeed`.
+/// What the next New Agent sheet starts with (`WindowModel.newAgentSeed`).
 struct NewAgentSeed {
     var prompt: String?
     var host: String?
     var repo: String?
 }
 
+/// Launch arguments for design review and screenshots: `-mock` fills the screens with sample
+/// hosts, agents and statuses; `-screen <name>` opens straight to one screen.
 enum LaunchOptions {
     /// `-mock`, or `GUDO_MOCK` in the environment (in-process snapshot tests).
     static let mock = ProcessInfo.processInfo.arguments.contains("-mock") || ProcessInfo.processInfo.environment["GUDO_MOCK"] != nil

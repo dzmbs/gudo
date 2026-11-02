@@ -5,21 +5,8 @@ import TerminalCore
 import TerminalRenderer
 import VoiceKit
 
-/// The app's push-to-talk: one `PushToTalk` (VoiceKit) for every window, dictating into the pane
-/// that has the keyboard. docs/APP-ARCHITECTURE.md §13.
-///
-/// For the key bar's mic button:
-///
-/// ```swift
-/// let voice = VoiceDictation.shared.voice   // PushToTalk, @Observable
-/// voice.start()                             // touch down (returns false if it could not start: see voice.phase)
-/// Task { await voice.stop() }               // touch up: commits the words, no Return
-/// voice.cancel()                            // touch cancelled / dragged off: commits nothing
-/// voice.isActive, voice.phase, voice.transcript, voice.transcripts()   // state for the button
-/// ```
-///
-/// `start(pane:in:)` targets a given pane (the hardware ⌃⌥Space chord uses it); plain `start()`
-/// targets the terminal that is first responder, else the focused pane of the key window.
+/// The app's push-to-talk: one `PushToTalk` for every window. `voice.start()` dictates into the
+/// terminal that is first responder, else the key window's focused pane.
 @MainActor
 final class VoiceDictation {
     static let shared = VoiceDictation()
@@ -33,7 +20,6 @@ final class VoiceDictation {
         voice.targetProvider = { Self.focusedTarget() }
     }
 
-    /// Starts dictating into a specific pane.
     @discardableResult
     func start(pane: Pane, in workspace: Workspace) -> Bool {
         voice.start(target: PaneDictationTarget(pane: pane, workspace: workspace))
@@ -149,14 +135,13 @@ final class PaneDictationTarget: DictationTarget {
     /// Cells from the cursor to the end of its row (the preview is drawn there).
     private static func columnsLeft(_ surface: TerminalSurface) -> Int {
         guard let grid = surface.grid else { return 40 }
-        let cols = Int(grid.cols)
-        guard let cursor = surface.cursorRect, cursor.width > 0 else { return cols / 2 }
-        return max(1, cols - Int((cursor.minX / cursor.width).rounded(.down)) - 1)
+        let columns = Int(grid.cols)
+        guard let cursor = surface.cursorRect, cursor.width > 0 else { return columns / 2 }
+        return max(1, columns - Int((cursor.minX / cursor.width).rounded(.down)) - 1)
     }
 }
 
 extension TerminalView {
-    /// This terminal is first responder (it has the keyboard).
     var hasKeyboardFocus: Bool {
         #if os(macOS)
         window?.firstResponder === self

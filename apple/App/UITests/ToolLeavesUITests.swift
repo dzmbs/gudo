@@ -24,7 +24,6 @@ final class ToolLeavesUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         XCTAssertTrue(field.waitForNonExistence(timeout: 5))
 
-        // The pane stays on screen beside the tool's leaf.
         XCTAssertTrue(app.staticTexts["Changes"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(pane.isHittable, "the terminal is not covered")
         // The keyboard going down with the palette must not cost the terminal its screen.

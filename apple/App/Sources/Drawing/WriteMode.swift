@@ -7,13 +7,12 @@ import TerminalRenderer
 import UIKit
 #endif
 
-/// Write mode's text path, without UI: recognised handwriting (and anything typed while
-/// writing) collects in a draft shown at the prompt as marked text; nothing reaches the shell
-/// until `commit` (Return or Send), which types it as one line and presses Return.
+/// Write mode's text path: handwriting collects in a draft shown at the prompt; nothing reaches
+/// the shell until `commit` types it as one line and presses Return.
 @MainActor
 final class WriteController {
     private(set) var draft = HandwritingDraft()
-    /// Shows (or clears, nil) the preview at the prompt.
+    /// Shows the preview at the prompt; nil clears it.
     let preview: (String?) -> Void
     /// Types a committed line into the pane and submits it.
     let send: (String) -> Void
@@ -25,7 +24,6 @@ final class WriteController {
 
     var isEmpty: Bool { draft.isEmpty }
 
-    /// The field's text after an edit (Scribble insert, strike-through delete, typing).
     func update(_ text: String) {
         draft.update(text)
         preview(draft.isEmpty ? nil : draft.preview)
@@ -36,7 +34,7 @@ final class WriteController {
         preview(nil)
     }
 
-    /// Sends the draft; false (and nothing sent) when it is empty.
+    /// False, sending nothing, when the draft is empty.
     @discardableResult
     func commit() -> Bool {
         guard let line = draft.commit() else { return false }
@@ -45,14 +43,12 @@ final class WriteController {
         return true
     }
 
-    /// Leaves without sending anything.
     func cancel() {
         draft.clear()
         preview(nil)
     }
 }
 
-/// Write mode's bar (bottom of the pane, where the draw toolbar sits).
 @Observable
 final class WriteModel {
     var isEmpty = true
@@ -100,11 +96,9 @@ struct WriteToolbar: View {
 }
 
 #if os(iOS)
-/// Write mode over a terminal pane (iPad): write with Apple Pencil anywhere over the pane;
-/// Scribble (`UIIndirectScribbleInteraction`) turns it into text in a hidden field, which shows
-/// live at the terminal prompt as marked text (the renderer's IME preview). Return or Send types
-/// it into the shell; Cancel drops it. The terminal itself never takes Scribble
-/// (`TerminalView.allowsHandwriting` stays off), so nothing reaches the shell unseen.
+/// Write mode over a terminal pane: Scribble turns Pencil writing into text in a hidden field,
+/// shown live at the prompt as marked text. The terminal itself never takes Scribble, so nothing
+/// reaches the shell unseen.
 @MainActor
 final class WriteOverlay: UIView, UIIndirectScribbleInteractionDelegate, UITextViewDelegate {
     typealias ElementIdentifier = String
@@ -201,7 +195,7 @@ final class WriteOverlay: UIView, UIIndirectScribbleInteractionDelegate, UITextV
     }
 
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-        // Return sends (Scribble never inserts a bare newline; the keyboard's Return does).
+        // Scribble never inserts a bare newline; only the keyboard's Return does.
         guard text == "\n" else { return true }
         send()
         return false
@@ -262,8 +256,8 @@ final class WriteOverlay: UIView, UIIndirectScribbleInteractionDelegate, UITextV
     }
 }
 
-/// The hidden field Scribble writes into: no visible text, caret or software keyboard (the
-/// preview is at the prompt); Escape cancels.
+/// The hidden field Scribble writes into: no visible text, caret or software keyboard, since the
+/// preview is at the prompt.
 final class HandwritingField: UITextView {
     var onEscape: (() -> Void)?
 

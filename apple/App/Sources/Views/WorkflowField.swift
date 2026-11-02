@@ -3,10 +3,9 @@ import DesignSystem
 import SwiftUI
 import UIKit
 
-/// A workflow argument field on iPad and iPhone: a plain `UITextField` whose own key commands
-/// take ⌘↩ (run), ⇥ / ⇧⇥ (next / previous field) and ⎋ (cancel) ahead of the system's text
-/// handling. SwiftUI's `.keyboardShortcut` and `.onKeyPress` never see ⌘↩ while a text field is
-/// first responder (UIKit's text input claims it, as `ComposerTextView` found).
+/// A workflow argument field on iPad and iPhone: a `UITextField` whose own key commands take
+/// ⌘↩, ⇥ / ⇧⇥ and ⎋ ahead of the system's text handling. SwiftUI's `.keyboardShortcut` and
+/// `.onKeyPress` never see ⌘↩ while a text field is first responder.
 struct WorkflowField: UIViewRepresentable {
     let placeholder: String
     @Binding var text: String

@@ -7,17 +7,11 @@ import UIKit
 import AppKit
 #endif
 
-/// Browse a host's files: directories first, git status at the trailing edge, open a folder to
-/// descend, a file to preview it (text, images). Upload from Files or by dropping, download to
-/// share or save, new folder, rename, move to the host's trash. The directory is watched, so
-/// changes made in the terminal or by an agent show up by themselves.
-/// In a leaf and on the Mac it keeps Finder's history and draws each place itself; in an iOS
-/// sheet it pushes onto the caller's NavigationStack.
+/// Browses a host's files. In a leaf and on the Mac it keeps its own back/forward history and
+/// draws each place itself; in an iOS sheet it pushes onto the caller's NavigationStack.
 struct FilesBrowserView: View {
     let source: any FileSource
-    /// Opens a file in the editor (VS Code on the host).
     var onOpenInEditor: ((String) -> Void)?
-    /// "Reveal in Terminal" (cd into the directory) and "Insert Path in Terminal".
     var onRevealInTerminal: (String) -> Void = { _ in }
     var onInsertPath: (String) -> Void = { _ in }
 
@@ -247,11 +241,11 @@ private struct DirectoryListing: View {
     @State private var isImporting = false
     @State private var isDropTargeted = false
     @State private var naming: Naming?
-    @State private var name = ""
+    @State private var draftName = ""
     @State private var trashing: FileEntry?
     @State private var transfer: Transfer?
     @State private var shared: SharedFile?
-    /// `-screen file-preview`: Cargo.toml opened once the root is listed (design review).
+    /// `-screen file-preview`: Cargo.toml opened once the root is listed.
     @State private var fixtureFile: FileEntry?
 
     enum Naming: Identifiable {
@@ -314,7 +308,7 @@ private struct DirectoryListing: View {
                 Menu("Add", systemImage: "plus") {
                     Button("Upload Files…", systemImage: "square.and.arrow.up") { isImporting = true }
                     Button("New Folder", systemImage: "folder.badge.plus") {
-                        name = ""
+                        draftName = ""
                         naming = .newFolder
                     }
                 }
@@ -344,7 +338,7 @@ private struct DirectoryListing: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { transferBar }
             .alert(namingTitle, isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
-                TextField(namingPlaceholder, text: $name)
+                TextField(namingPlaceholder, text: $draftName)
                     .autocorrectionDisabled()
                 Button(namingAction) { commitName() }
                 Button("Cancel", role: .cancel) {}
@@ -411,7 +405,6 @@ private struct DirectoryListing: View {
                     .buttonStyle(.glass)
             }
         } else {
-            // The design's spinner (a TimelineView), not a looping UIActivityIndicator.
             Spinner()
                 .frame(width: 16, height: 16)
                 .opacity(showsProgress ? 1 : 0)
@@ -454,7 +447,7 @@ private struct DirectoryListing: View {
             Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
             Divider()
             Button("Rename…", systemImage: "pencil") {
-                name = entry.name
+                draftName = entry.name
                 naming = .rename(entry)
             }
             Button("Reveal in Terminal", systemImage: "terminal") {
@@ -652,7 +645,7 @@ private struct DirectoryListing: View {
     }
 
     private func commitName() {
-        var trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty, case .newFolder? = naming { trimmed = "untitled folder" }
         guard !trimmed.isEmpty, !trimmed.contains("/"), let naming else { return }
         Task {
@@ -719,8 +712,7 @@ struct SharedFile: Identifiable {
 
 // MARK: - Preview
 
-/// A file's preview: text in the terminal's monospace with line numbers, images fit to the
-/// width, anything else as a card with its size. Share / download, open in VS Code.
+/// A file's preview: text with line numbers, an image, or a card with its size.
 struct FilePreviewScreen: View {
     let source: any FileSource
     let entry: FileEntry
@@ -838,8 +830,8 @@ struct FilePreviewScreen: View {
         var parts: [String] = []
         if let size = entry.size { parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
         if case .text(let text, let truncated)? = preview {
-            let lines = text.reduce(into: 1) { count, character in if character == "\n" { count += 1 } }
-            parts.append(truncated ? "first MiB" : "\(lines) line\(lines == 1 ? "" : "s")")
+            let lineCount = text.reduce(into: 1) { count, character in if character == "\n" { count += 1 } }
+            parts.append(truncated ? "first MiB" : "\(lineCount) line\(lineCount == 1 ? "" : "s")")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

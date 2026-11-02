@@ -45,8 +45,8 @@ extension RGB {
         let level: (Int) -> UInt8 = { $0 == 0 ? 0 : UInt8($0 * 40 + 55) }
         for r in 0..<6 { for g in 0..<6 { for b in 0..<6 { result.append(RGB(r: level(r), g: level(g), b: level(b))) } } }
         for i in 0..<24 {
-            let v = UInt8(8 + i * 10)
-            result.append(RGB(r: v, g: v, b: v))
+            let gray = UInt8(8 + i * 10)
+            result.append(RGB(r: gray, g: gray, b: gray))
         }
         return result
     }

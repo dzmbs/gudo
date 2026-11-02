@@ -61,14 +61,14 @@ enum WorkspaceShortcuts {
     }
 
     private static func action(for event: NSEvent) -> WorkspaceAction? {
-        var mods: EventModifiers = []
+        var modifiers: EventModifiers = []
         let flags = event.modifierFlags
-        if flags.contains(.command) { mods.insert(.command) }
-        if flags.contains(.shift) { mods.insert(.shift) }
-        if flags.contains(.option) { mods.insert(.option) }
-        if flags.contains(.control) { mods.insert(.control) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.control) { modifiers.insert(.control) }
         let key = keyEquivalent(of: event)
-        return actions.first { $0.shortcut.modifiers == mods && $0.shortcut.key == key }
+        return actions.first { $0.shortcut.modifiers == modifiers && $0.shortcut.key == key }
     }
 
     /// The key as a menu would name it: arrows and Return by key, others by the character the

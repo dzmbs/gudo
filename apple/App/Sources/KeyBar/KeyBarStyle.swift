@@ -13,16 +13,14 @@ struct KeyBarStyle {
         var isChip = false
     }
 
-    /// Height of the key row above the software keyboard (04-mobile-ux C5: 44 pt iPhone, 52 pt iPad).
     var rowHeight: CGFloat
-    /// Height of the strip shown instead when a hardware keyboard is attached (C5/A15).
+    /// The strip shown instead when a hardware keyboard is attached.
     var compactRowHeight: CGFloat
-    /// Height of the buttons inside a regular / compact row.
     var buttonHeight: CGFloat
     var compactButtonHeight: CGFloat
     var minimumButtonWidth: CGFloat
+    /// The fixed spine keys (`esc ctl alt tab`, the profile glyph).
     var spineKeyWidth: CGFloat
-    /// The arrow joystick: 52 pt, at the trailing edge.
     var joystickWidth: CGFloat
     /// The small flick glyph in a key's corner.
     var alternateFont: UIFont
@@ -31,7 +29,6 @@ struct KeyBarStyle {
     var alternateColor: UIColor
     var spacing: CGFloat
     var horizontalInset: CGFloat
-    /// Snippet chips row height.
     var snippetRowHeight: CGFloat
 
     var composerFont: UIFont
@@ -42,7 +39,7 @@ struct KeyBarStyle {
     /// The composer grows with its text up to this many lines, then scrolls.
     var composerMaxLines: Int
 
-    /// Builds a button's configuration; called again whenever its state changes.
+    /// Called again whenever the button's state changes.
     var button: (ButtonContent) -> UIButton.Configuration
 
     static var `default`: KeyBarStyle {

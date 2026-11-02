@@ -27,8 +27,7 @@ enum KeyboardSettings {
 /// One window's view of one host (or this device): the host's layout, seen through the window's
 /// own tab and pane selection (`WindowLayoutStore`), and this window's live panes. Two windows on
 /// the same host share the host's layout store and its pane streams but each has its own
-/// `Workspace`, so each has its own terminals, renderers and views (docs/APP-ARCHITECTURE.md
-/// "Windows"). Views read `session` and `pane(_:)`; every change goes through `apply`, which keeps
+/// `Workspace`, so each has its own terminals, renderers and views. Views read `session` and `pane(_:)`; every change goes through `apply`, which keeps
 /// the pane set in step with the layout (creating panes for new leaves, terminating closed ones).
 ///
 /// Panes are made in stages: the window's tab (and any pane a view asks for) at once, the rest a
@@ -106,8 +105,8 @@ final class Workspace {
     /// hardware keys, ⌘ shortcuts included, while it runs).
     @ObservationIgnored let keyBar = Workspace.sharedKeyBar
     static var sharedKeyBar: KeyBar {
-        // Created on first use, not as a `static let`: its UIKit setup must not run inside a
-        // one-time initializer (it crashed there, `_dispatch_once_wait`).
+        // Created on first use, not as a `static let`: its UIKit setup crashes inside a
+        // one-time initializer (`_dispatch_once_wait`).
         if let existing = sharedKeyBarStorage { return existing }
         let created = KeyBar(style: .designSystem)
         sharedKeyBarStorage = created
@@ -126,7 +125,7 @@ final class Workspace {
     @ObservationIgnored private var namingRequested: Set<TabId> = []
     @ObservationIgnored private let makeBackend:@MainActor (PaneId) throws -> any PaneBackend
     /// The remote host this window shows (nil: the local workspace). Its status drives the
-    /// connection banner and retry (04-mobile-ux R8, R9).
+    /// connection banner and retry.
     @ObservationIgnored let host: (any HostConnection)?
     /// The host id (for the hosts list and persistence), nil for the local workspace.
     let hostId: String?
@@ -197,10 +196,6 @@ final class Workspace {
 
     private func start() {
         reconcilePanes()
-        #if os(iOS)
-        // The key bar takes the terminal theme's light or dark itself (`KeyBarTheme`), like the
-        // keyboard (`applyKeyboardSettings`).
-        #endif
         if let daemon = host as? DaemonConnection {
             // Daemon panes report through the daemon's metadata: follow it, never a timer.
             followMeta(of: daemon)
@@ -217,15 +212,15 @@ final class Workspace {
         #if os(iOS)
         NotificationCenter.default.addObserver(
             forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
-        ) { [weak self] note in
-            let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0
-            let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        ) { [weak self] notification in
+            let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0
+            let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.keyboardFrameChangeUntil = .now + .milliseconds(800)
                 // The keyboard slides: the terminals' grids change once it has.
                 if duration > 0 { TerminalSurface.holdGrids(for: .seconds(duration + Self.keyboardSettle)) }
-                let top = self.keyboardTop(screenFrame: end)
+                let top = self.keyboardTop(screenFrame: endFrame)
                 guard top != self.keyboardTop else { return }
                 withAnimation(duration > 0 ? .easeOut(duration: duration) : nil) { self.keyboardTop = top }
             }
@@ -315,30 +310,28 @@ final class Workspace {
     }
 
     /// The live line under a tab's name: what its agent (or a program's own report) says it is
-    /// doing, else the program running in the
-    /// focused pane, else the program's own title (OSC 0/2), else the git checkout as
-    /// `repo:branch`, else the directory.
+    /// doing, else the program running in the focused pane, else the program's own title
+    /// (OSC 0/2), else the git checkout as `repo:branch`, else the directory.
     func context(of tab: Tab) -> String? {
-        let pane = tab.focused
+        let paneId = tab.focused
         let name = title(of: tab)
-        if let daemon = host as? DaemonConnection, let agent = daemon.meta[pane]?.agent {
+        if let daemon = host as? DaemonConnection, let agent = daemon.meta[paneId]?.agent {
             let kind = agent.kind.prefix(1).uppercased() + agent.kind.dropFirst()
             switch agent.state {
             case .blocked(_, let summary, _): return SharedApproval.shows(summary: summary) ? "\(kind): \(summary)" : "\(kind) needs you"
-            case .running: return daemon.meta[pane].map { $0.title.isEmpty ? "\(kind) working" : "\(kind): \($0.title)" }
+            case .running: return daemon.meta[paneId].map { $0.title.isEmpty ? "\(kind) working" : "\(kind): \($0.title)" }
             case .idle, .done: break
             }
-        } else if let daemon = host as? DaemonConnection, let report = daemon.report(of: pane), report.state != .idle {
-            // Any other program's own report: its words, else its state.
+        } else if let daemon = host as? DaemonConnection, let report = daemon.report(of: paneId), report.state != .idle {
             let words = report.detail ?? report.state.title
             return report.program.map { "\($0): \(words)" } ?? words
         }
-        if let program = self.pane(pane)?.foregroundProgram ?? foregrounds[pane]?.program, !program.isEmpty,
+        if let program = pane(paneId)?.foregroundProgram ?? foregrounds[paneId]?.program, !program.isEmpty,
            !PaneForeground.shells.contains(program)
         {
             return program
         }
-        if let shellTitle = self.pane(pane)?.title, !shellTitle.isEmpty, shellTitle != name { return shellTitle }
+        if let shellTitle = pane(paneId)?.title, !shellTitle.isEmpty, shellTitle != name { return shellTitle }
         if !isRemote, let directory = absoluteDirectory(of: tab), let repo = GitContext.repoBranch(at: directory) { return repo }
         if let directory = directory(of: tab), directory != name { return directory }
         let count = tab.root.panes.count
@@ -488,14 +481,14 @@ final class Workspace {
 
     // MARK: Keyboard focus
 
-    /// Whether the focused pane should take first responder when it appears or gains focus. On iOS
-    /// only while typing already goes to a terminal or a hardware keyboard is attached, so that
-    /// focusing a pane never pops up the software keyboard unasked (04-mobile-ux A1.5, R6).
     /// Set when the window switches here from another host's workspace while typing went to a
     /// terminal: the focused pane takes the keyboard as it appears, so switching hosts never
     /// drops typing (or the ⌘ shortcuts that need a responder) on iPhone and iPad.
     @ObservationIgnored var inheritsKeyboardFocus = false
 
+    /// Whether the focused pane should take first responder when it appears or gains focus. On iOS
+    /// only while typing already goes to a terminal or a hardware keyboard is attached, so that
+    /// focusing a pane never pops up the software keyboard unasked.
     var claimsKeyboardFocus: Bool {
         #if os(iOS)
         // `-noAutoFocus YES` (screenshots): never raise the software keyboard by itself.
@@ -631,7 +624,7 @@ final class Workspace {
     private func makePane(_ id: PaneId) throws -> Pane {
         let saved = (host as? DaemonConnection)?.cachedScreen(for: id)
         let pane = try Pane(id: id, backend: makeBackend(id), appearance: appearance, saved: saved) { [weak self] in
-            // The process exited: close its pane, as Ghostty does.
+            // The process exited: close its pane.
             Task { @MainActor in self?.apply(.close(id)) }
         }
         pane.onGridChange = { [weak self] grid in
@@ -646,17 +639,14 @@ final class Workspace {
         }
         applyKeyboardSettings(to: pane)
         PaneDrawing.attach(to: pane, workspace: self)
-        // Shell command marks: gutter stripes, the command menu, ⌘↑/⌘↓ between prompts.
         PaneCommandMarks.attach(to: pane, workspace: self)
-        // Links: localhost in the in-app browser, paths in the editor, the rest per the setting.
         PaneLinks.attach(to: pane, workspace: self)
         #if os(iOS)
         pane.view.accessibilityIdentifier = id.description
         pane.view.keyBar = keyBar
         pane.view.takeLatchedModifiers = { [keyBar] in keyBar.takeLatchedModifiers() }
-        // Every app shortcut: the terminal answers them itself, so they work right after the
-        // window switched hosts (the menu commands, found through the responder chain, could
-        // miss them then: ⌘K did nothing).
+        // The terminal answers every app shortcut itself: right after the window switches
+        // hosts, the menu commands found through the responder chain can miss them.
         let shortcuts = WorkspaceAction.allShortcutActions
         pane.view.appKeyCommands = shortcuts.map { action in
             UIKeyCommand(
@@ -752,9 +742,9 @@ struct PaneQueue {
         return rest[restStart]
     }
 
-    /// Drops the waiting panes `keep` rejects.
-    mutating func keep(_ keep: (PaneId) -> Bool) {
-        members = members.filter(keep)
+    /// Drops the waiting panes `isKept` rejects.
+    mutating func keep(_ isKept: (PaneId) -> Bool) {
+        members = members.filter(isKept)
         promoted = promoted.intersection(members)
         rest = rest[restStart...].filter { members.contains($0) }
         restStart = 0

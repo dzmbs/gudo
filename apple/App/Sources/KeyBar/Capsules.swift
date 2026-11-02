@@ -1,8 +1,8 @@
 #if os(iOS)
 import UIKit
 
-/// press shows a soft pill behind it; a latched modifier keeps a tinted pill, and a locked one adds
-/// rootshell's underline. A long-press opens its `menu` when it has one.
+/// A key inside a capsule: a bare label or symbol with no fill of its own. A press shows a soft pill
+/// behind it; a latched modifier keeps a tinted pill, and a locked one adds an underline.
 final class CapsuleKey: UIButton {
     enum Latch: Equatable {
         case off, oneShot, locked
@@ -14,7 +14,6 @@ final class CapsuleKey: UIButton {
     var symbol: String? {
         didSet { setNeedsUpdateConfiguration() }
     }
-    /// Modifier state (ctrl, alt): drawn and announced.
     var latch = Latch.off {
         didSet { if latch != oldValue { setNeedsUpdateConfiguration() } }
     }
@@ -26,11 +25,10 @@ final class CapsuleKey: UIButton {
         didSet { if metrics != oldValue { setNeedsUpdateConfiguration() } }
     }
 
-    /// Touch down / up / cancel, for keys that repeat while held.
+    /// For keys that repeat while held.
     var onDown: (() -> Void)?
     var onUp: (() -> Void)?
     var onCancel: (() -> Void)?
-    /// A tap (touch up inside, not after a menu opened).
     var onTap: (() -> Void)?
 
     private let underline = UIView()
@@ -63,8 +61,8 @@ final class CapsuleKey: UIButton {
         configuration.contentInsets = .zero
         configuration.titleLineBreakMode = .byClipping
         let active = latch != .off || isOn
-        let label = KeyBarTheme.ink.withAlphaComponent(isHighlighted || active ? 1 : 0.9)
-        configuration.baseForegroundColor = label
+        let foreground = KeyBarTheme.ink.withAlphaComponent(isHighlighted || active ? 1 : 0.9)
+        configuration.baseForegroundColor = foreground
         if let title {
             var attributes = AttributeContainer()
             attributes.font = UIFont.systemFont(ofSize: metrics.fontSize, weight: active ? .semibold : .medium)
@@ -73,7 +71,6 @@ final class CapsuleKey: UIButton {
         if let symbol {
             configuration.image = UIImage(systemName: symbol, withConfiguration: metrics.symbolConfiguration)
         }
-        // The pressed / latched pill, inset 4 pt inside the slot.
         var background = UIBackgroundConfiguration.clear()
         background.backgroundColor = active
             ? tintColor.withAlphaComponent(0.22)
@@ -117,7 +114,6 @@ final class CapsuleView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    /// Replaces the keys; `widths` are their slots, in order.
     func setKeys(_ views: [UIView]) {
         keys.forEach { $0.removeFromSuperview() }
         keys = views
@@ -125,12 +121,10 @@ final class CapsuleView: UIView {
         setNeedsLayout()
     }
 
-    /// The capsule's width for slots of these widths.
     static func width(slots: [CGFloat], metrics: CapsuleMetrics) -> CGFloat {
         slots.reduce(0, +) + metrics.padding * 2
     }
 
-    /// Lays the keys out in slots of the given widths.
     func layout(slots: [CGFloat]) {
         glass.frame = bounds
         glass.layer.cornerRadius = bounds.height / 2

@@ -13,9 +13,8 @@ import AppKit
 
 #if os(iOS)
 extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
-    /// Pencil on the terminal → draw mode at that row, the stroke becoming the drawing's first;
-    /// Pencil held still → Write; two-finger long press → draw mode; tap on a placement → reopen
-    /// it; drop and paste of images and `.excalidraw` files → import.
+    /// Pencil on the terminal opens draw mode at that row (held still: Write); a two-finger long
+    /// press opens draw mode; dropped and pasted images and `.excalidraw` files are imported.
     func installInput(on view: TerminalView) {
         // Fingers keep scrolling and selecting: the terminal's own recognizers take direct
         // touches only.
@@ -29,9 +28,6 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         twoFinger.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         twoFinger.delegate = self
         view.addGestureRecognizer(twoFinger)
-
-        // A tap on a drawing in the output opens its menu: its marker is a menu button
-        // (`PlacementMarker.offerMenu`).
 
         view.addInteraction(UIDropInteraction(delegate: self))
         view.onPasteAttachment = { [weak self] pasteboard in
@@ -48,9 +44,8 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
 
     private static nonisolated(unsafe) var captureKey: UInt8 = 0
 
-    /// A Pencil touch on the terminal outside draw and write mode. Moving draws: draw mode opens
-    /// at the touched row and the stroke (drawn meanwhile as a preview) becomes its first
-    /// stroke. Held still for half a second: Write. A tap: draw mode, nothing drawn.
+    /// A Pencil touch outside draw and write mode. Moving opens draw mode and the stroke, drawn
+    /// meanwhile as a preview, becomes its first. Held still for half a second opens Write.
     @objc private func pencilCaptured(_ gesture: PencilCaptureGesture) {
         guard let view = gesture.view else { return }
         switch gesture.state {
@@ -117,8 +112,7 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     }
 
     func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
-        // Draw and write mode take their own touches (and the Pencil in them is PencilKit's or
-        // Scribble's).
+        // Draw and write mode take their own touches, the Pencil included.
         isIdle
     }
 
@@ -126,8 +120,6 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         true
     }
 
-    /// A placement's menu as a `UIMenu`: sections inline, Export and Version History as
-    /// submenus (the history is fetched when it opens).
     func uiMenu(forPlacement id: UInt64) -> [UIMenuElement] {
         guard let placement = placement(id: id) else { return [] }
         let anchor = frame(of: placement) ?? .zero
@@ -153,8 +145,7 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         }
     }
 
-    /// Version History: every finished version with its render, the shown one checked; picking
-    /// another restores it.
+    /// Fetched when it opens; picking a version restores it.
     private func historyMenu(_ placement: Placement) -> UIMenu {
         let list = UIDeferredMenuElement.uncached { [weak self] completion in
             MainActor.assumeIsolated {
@@ -206,7 +197,7 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: any UIDropSession) {
-        // A drawing dragged from a pane of this app: the same drawing, not a copy of its pixels.
+        // A drawing dragged from a pane of this app moves the drawing itself, not a copy of its pixels.
         let refs = session.localDragSession?.items.compactMap { $0.localObject as? DrawingDragRef } ?? []
         if !refs.isEmpty {
             refs.forEach(dropped)
@@ -237,8 +228,8 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     }
 }
 
-/// Follows one Pencil touch on the terminal with its coalesced samples (never cancels the
-/// terminal's touches; the terminal's own recognizers take fingers only).
+/// Follows one Pencil touch on the terminal with its coalesced samples, never cancelling the
+/// terminal's touches.
 final class PencilCaptureGesture: UIGestureRecognizer {
     private(set) var samples: [PencilSample] = []
     private var touch: UITouch?
@@ -283,14 +274,14 @@ final class PencilCaptureGesture: UIGestureRecognizer {
 
     private func append(_ touch: UITouch, _ event: UIEvent) {
         guard let view else { return }
-        for t in event.coalescedTouches(for: touch) ?? [touch] { samples.append(PencilSample(t, in: view)) }
+        for coalesced in event.coalescedTouches(for: touch) ?? [touch] { samples.append(PencilSample(coalesced, in: view)) }
     }
 
     override func canPrevent(_ gesture: UIGestureRecognizer) -> Bool { false }
 }
 
-/// The Pencil touch being followed outside draw mode, and its live preview (drawn until the
-/// overlay's PencilKit layer has the stroke).
+/// The Pencil touch being followed outside draw mode, and its live preview, drawn until the
+/// overlay's PencilKit layer has the stroke.
 @MainActor
 final class PencilCapture {
     enum Phase { case pending, drawing, writing }
@@ -316,9 +307,9 @@ final class PencilCapture {
         guard let first = samples.first else { return }
         let path = CGMutablePath()
         path.move(to: first.location)
-        for s in samples.dropFirst() {
-            path.addLine(to: s.location)
-            moved = max(moved, hypot(s.location.x - start.x, s.location.y - start.y))
+        for sample in samples.dropFirst() {
+            path.addLine(to: sample.location)
+            moved = max(moved, hypot(sample.location.x - start.x, sample.location.y - start.y))
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -327,15 +318,13 @@ final class PencilCapture {
     }
 }
 
-/// Over a drawing placed in the output: its accessibility element (VoiceOver, UI tests) and,
-/// with `offerMenu`, its menu: a tap (finger or pointer) opens Send to… / Start… / Copy / Share
-/// / Edit / Delete, anchored to the drawing. The Pencil, two-finger scrolls and every touch while
-/// the pane draws or writes pass through to the terminal.
+/// Over a drawing placed in the output: its accessibility element and, with `offerMenu`, its menu
+/// and drag source. The Pencil and every touch while the pane draws or writes pass through.
 final class PlacementMarker: UIView, UIDragInteractionDelegate {
     private weak var drawing: PaneDrawing?
     private var placementId: UInt64 = 0
-    /// Presents the menu (a tap asks it to). A menu button of its own would open on touch
-    /// down and swallow the long press that lifts the drawing.
+    /// Not interactive itself: a menu button would open on touch down and swallow the long press
+    /// that lifts the drawing, so a tap gesture presents it instead.
     private let menuButton = UIButton()
 
     override init(frame: CGRect) {
@@ -357,8 +346,6 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
         self.drawing = drawing
         self.placementId = placementId
         isUserInteractionEnabled = true
-        // Long press lifts the drawing: into other apps (PNG + `.excalidraw`), other panes,
-        // windows and hosts (`PaneDrawing.dropped`).
         let drag = UIDragInteraction(delegate: self)
         drag.isEnabled = true
         addInteraction(drag)
@@ -412,7 +399,7 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
     }
 
     func dragInteraction(_ interaction: UIDragInteraction, previewForLifting item: UIDragItem, session: any UIDragSession) -> UITargetedDragPreview? {
-        // The image is drawn by Metal under this (transparent) marker: lift a copy of it.
+        // The image is drawn by Metal under this transparent marker, so lift a copy of it.
         guard let drawing, let placement = drawing.placement(id: placementId),
               let png = drawing.hub.cachedPNG(hash: placement.image.hash), let image = UIImage(data: png), let superview
         else { return nil }
@@ -424,7 +411,7 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
         return UITargetedDragPreview(view: view, parameters: parameters, target: UIDragPreviewTarget(container: superview, center: center))
     }
 
-    /// Outlines the placement for a moment: where Done put it.
+    /// Outlines the placement for a moment, so the user sees where it went.
     func flash() {
         layer.borderColor = UIColor(ChromePalette.fromPreferences().accentColor).cgColor
         layer.cornerRadius = 3
@@ -441,10 +428,9 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
 }
 #else
 extension PaneDrawing {
-    /// Click on a placement → reopen it; drop and paste of images and `.excalidraw` files →
-    /// import (⌥-drop onto an agent pane sends the image to the agent).
+    /// Dropped and pasted images and `.excalidraw` files are imported; ⌥-drop onto an agent pane
+    /// sends the image to the agent.
     func installInput(on view: TerminalView) {
-        // Clicks and drags on a drawing go to its marker (`PlacementMarker`).
         view.onPasteAttachment = { [weak self] pasteboard in
             self?.importFromPasteboard(pasteboard, send: false) ?? false
         }
@@ -455,7 +441,7 @@ extension PaneDrawing {
 
     private func importFromPasteboard(_ pasteboard: NSPasteboard, send: Bool) -> Bool {
         guard !isReadOnly else { return false }
-        // A drawing dragged from a pane of this app: the same drawing, not a copy of its pixels.
+        // A drawing dragged from a pane of this app moves the drawing itself, not a copy of its pixels.
         if let data = pasteboard.data(forType: NSPasteboard.PasteboardType(DrawingDragRef.typeIdentifier)),
            let ref = try? JSONDecoder().decode(DrawingDragRef.self, from: data) {
             dropped(ref)
@@ -475,8 +461,6 @@ extension PaneDrawing {
         return true
     }
 
-    /// A click on a drawing in the output opens its menu (Send to… / Start… / Copy / Export /
-    /// Share / Version History / Edit / Delete) at the click.
     func showMenu(forPlacement id: UInt64, at point: CGPoint) {
         guard let view = pane?.view, let placement = placement(id: id) else { return }
         let anchor = frame(of: placement) ?? CGRect(origin: point, size: .zero)
@@ -507,8 +491,7 @@ extension PaneDrawing {
         popup.popUp(positioning: nil, at: point, in: view)
     }
 
-    /// Version History: fetched as the menu opens; every finished version with its render,
-    /// the shown one checked; picking another restores it.
+    /// Fetched as the menu opens; picking a version restores it.
     private func historyItem(_ placement: Placement) -> NSMenuItem {
         let parent = NSMenuItem(title: "Version History", action: nil, keyEquivalent: "")
         parent.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
@@ -550,15 +533,15 @@ extension PaneDrawing {
         return parent
     }
 
-    /// What dragging `placement` out offers: a PNG file (Finder, Mail), PNG data, the
-    /// `.excalidraw` scene when it is at hand, and a reference for this app's panes.
+    /// A PNG file and data, the `.excalidraw` scene when it is at hand, and a reference for this
+    /// app's panes.
     func dragWriter(for placement: Placement) -> NSPasteboardWriting? {
         guard let ref = dragRef(placement), let png = hub.cachedPNG(hash: placement.image.hash) else { return nil }
         let scene = sceneCache[placement.artifactId]
         return DrawingFilePromise(png: png, scene: scene, ref: ref, name: Self.fileName(.png))
     }
 
-    /// Fetches the scene a drag may carry, ahead of the drag (pasteboards are answered at once).
+    /// Fetches the scene ahead of a drag, because pasteboards must be answered at once.
     func prefetchScene(_ placement: Placement) {
         guard sceneCache[placement.artifactId] == nil else { return }
         let client = hub.client
@@ -576,13 +559,12 @@ extension PaneDrawing {
     private static nonisolated(unsafe) var sceneKey: UInt8 = 0
 }
 
-/// Over a drawing placed in the output: its accessibility element (VoiceOver, UI tests), its
-/// menu on a click, and a drag source (into other apps as a PNG file + data + the scene, into
-/// this app's panes as the drawing itself). Passes everything through while the pane draws.
+/// Over a drawing placed in the output: its accessibility element, its menu on a click, and a
+/// drag source. Passes everything through while the pane draws.
 final class PlacementMarker: NSView, NSDraggingSource {
     private weak var drawing: PaneDrawing?
     private var placementId: UInt64 = 0
-    private var down: NSPoint?
+    private var mouseDownPoint: NSPoint?
 
     override var isFlipped: Bool { true }
 
@@ -592,15 +574,15 @@ final class PlacementMarker: NSView, NSDraggingSource {
     }
 
     override func mouseDown(with event: NSEvent) {
-        down = convert(event.locationInWindow, from: nil)
+        mouseDownPoint = convert(event.locationInWindow, from: nil)
         if let drawing, let placement = drawing.placement(id: placementId) { drawing.prefetchScene(placement) }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let start = down, let drawing, let placement = drawing.placement(id: placementId) else { return }
-        let at = convert(event.locationInWindow, from: nil)
-        guard hypot(at.x - start.x, at.y - start.y) > 4 else { return }
-        down = nil
+        guard let start = mouseDownPoint, let drawing, let placement = drawing.placement(id: placementId) else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        guard hypot(location.x - start.x, location.y - start.y) > 4 else { return }
+        mouseDownPoint = nil
         guard let writer = drawing.dragWriter(for: placement) else { return }
         let item = NSDraggingItem(pasteboardWriter: writer)
         let image = drawing.hub.cachedPNG(hash: placement.image.hash).flatMap(NSImage.init(data:))
@@ -610,8 +592,8 @@ final class PlacementMarker: NSView, NSDraggingSource {
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard down != nil, let drawing, let view = drawing.pane?.view else { return }
-        down = nil
+        guard mouseDownPoint != nil, let drawing, let view = drawing.pane?.view else { return }
+        mouseDownPoint = nil
         drawing.showMenu(forPlacement: placementId, at: view.convert(event.locationInWindow, from: nil))
     }
 
@@ -626,7 +608,7 @@ final class PlacementMarker: NSView, NSDraggingSource {
         setAccessibilityLabel(label)
     }
 
-    /// Outlines the placement for a moment: where Done put it.
+    /// Outlines the placement for a moment, so the user sees where it went.
     func flash() {
         wantsLayer = true
         layer?.borderColor = NSColor(ChromePalette.fromPreferences().accentColor).cgColor

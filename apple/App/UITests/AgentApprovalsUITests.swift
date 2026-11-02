@@ -207,9 +207,9 @@ final class AgentApprovalsUITests: XCTestCase {
         let menu = element(prefix: "inbox-approve-menu-")
         XCTAssertTrue(menu.waitForExistence(timeout: 30))
         menu.tap()
-        let all = app.buttons["Approve All Like This for This Task"].firstMatch
-        XCTAssertTrue(all.waitForExistence(timeout: 5))
-        all.tap()
+        let approveAll = app.buttons["Approve All Like This for This Task"].firstMatch
+        XCTAssertTrue(approveAll.waitForExistence(timeout: 5))
+        approveAll.tap()
         let rule = element("inbox-auto-approval")
         XCTAssertTrue(rule.waitForExistence(timeout: 15), "the rule shows on the agent's row")
         shot("inbox-auto-approval")

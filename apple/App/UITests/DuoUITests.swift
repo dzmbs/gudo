@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 
-/// iPhone Duo (docs/APP-ARCHITECTURE.md "Foldable"), on a Duo simulator:
+/// iPhone Duo, on a Duo simulator:
 ///
 ///   xcodebuild test -destination 'platform=iOS Simulator,name=<your Duo>' -only-testing:AppUITests/DuoUITests
 ///

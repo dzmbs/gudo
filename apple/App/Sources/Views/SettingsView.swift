@@ -5,6 +5,8 @@ import GudoCore
 
 /// Ghostty's config surfaced as native settings. Each control shows the Ghostty key it mirrors, so
 /// a Ghostty user can map their config file; the values are the same names and defaults.
+/// macOS: a list of panes beside a grouped form, shaped like System Settings. iOS: one grouped
+/// form in a sheet.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     #if os(macOS)
@@ -331,7 +333,6 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .notifications: "Notifications"
         case .privacy: "Privacy & Security"
         case .agents: "Agents"
-        case .browser: "Browser"
         case .git: "Git"
         case .network: "Network"
         case .devices: "Devices"
@@ -349,7 +350,6 @@ nonisolated enum SettingsPane: String, CaseIterable, Identifiable, Hashable, Sen
         case .notifications: "bell.badge"
         case .privacy: "hand.raised"
         case .agents: "sparkle"
-        case .browser: "globe"
         case .git: "arrow.triangle.branch"
         case .network: "network"
         case .devices: "laptopcomputer.and.iphone"
@@ -393,7 +393,7 @@ private struct ConfigLabel: View {
     }
 }
 
-/// What a window opens with (Safari's "Safari opens with").
+/// What a window opens with.
 private struct TabsSettingsSection: View {
     @AppStorage(LaunchTabs.key) private var launch = LaunchTabs.previous
 
@@ -682,6 +682,7 @@ private struct PaneSectionTitle: View {
     }
 }
 
+/// Four of a theme's ANSI colours: red, green, blue, yellow.
 private struct ThemeSwatches: View {
     let theme: TerminalTheme
     var size: CGFloat = 12
@@ -719,7 +720,7 @@ private struct ThemeSwatch: View {
 
 // MARK: - Key bar profiles
 
-/// Editing lands with custom profiles.
+/// The key bar profiles, shown as key caps in bar order.
 private struct KeyBarProfilesView: View {
     var body: some View {
         List {

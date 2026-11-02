@@ -2,8 +2,8 @@ import DesignSystem
 import Foundation
 import enum GudoCore.InstallState
 
-// Data the upcoming screens show, behind protocols. The views only read these types; the wiring
-// (daemon, SSH, agent hooks) replaces the mocks in MockData.swift without touching a view.
+// What the screens show, behind protocols. The views only read these types; the live sources
+// and the `-mock` stand-ins in MockData.swift implement them alike.
 
 // MARK: - Hosts
 
@@ -75,7 +75,7 @@ protocol HostDirectory: AnyObject, Observable {
     func forget(_ id: HostSummary.ID)
     func togglePin(_ id: HostSummary.ID)
     func rename(_ id: HostSummary.ID, to name: String)
-    /// Redial now and reset the backoff (04-mobile-ux R9).
+    /// Redial now and reset the backoff.
     func retry(_ id: HostSummary.ID)
     /// Drops the connection; the host stays saved.
     func disconnect(_ id: HostSummary.ID)
@@ -312,8 +312,7 @@ nonisolated struct DetectedLink: Identifiable, Hashable, Sendable {
     var resolved: String { target ?? text }
 }
 
-/// The focused pane's links, its last command's output, and search over its whole scrollback
-/// (the daemon's pane RPCs, DAEMON.md "Search and links").
+/// The focused pane's links, its last command's output, and search over its whole scrollback.
 @MainActor
 protocol LinkSource: AnyObject {
     /// Whether the focused pane can answer (a daemon pane).
@@ -576,7 +575,6 @@ protocol EditorSource: AnyObject, Observable {
     func open() async
     /// Opens a file at a line in the running editor (starting it first if needed).
     func open(path: String, line: Int?, column: Int?) async
-    /// The workbench finished loading.
     func didLoad()
     /// Leaves the editor; `stopServer` also ends it on the host.
     func close(stopServer: Bool) async

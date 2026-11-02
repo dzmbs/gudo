@@ -2,9 +2,8 @@ import DesignSystem
 import PaneLayout
 import SwiftUI
 
-/// Files, Changes, Ports and Session Replays in a window of their own on the Mac (⌥, or a tool
-/// leaf's Open in New Window; leaves are the default, `ToolLeaves.swift`). Each belongs to the
-/// window that opened it and shows that window's host; asking again brings it forward.
+/// A browsing tool in a window of its own on the Mac. Each belongs to the window that opened it
+/// and shows that window's host; asking again brings it forward.
 struct ToolWindowRequest: Codable, Hashable {
     var route: String
     /// The opening window's `WindowModel.serial`.
@@ -14,7 +13,7 @@ struct ToolWindowRequest: Codable, Hashable {
 }
 
 extension SheetRoute {
-    /// A browsing tool's name (its window's title until its content names it).
+    /// The tool window's title until its content names it.
     var toolTitle: String {
         switch self {
         case .files: "Files"
@@ -26,13 +25,13 @@ extension SheetRoute {
     }
 }
 
-/// Whether a view is in a tool window: no Done button there (⌘W and the close button do).
+/// Tool windows show no Done button; ⌘W and the close button do that.
 extension EnvironmentValues {
     @Entry var isToolWindow = false
 }
 
 #if os(macOS)
-/// A tool window's content for its owning window's model; closes when that window has gone.
+/// Closes when the owning window has gone.
 struct ToolWindowRoot: View {
     let request: ToolWindowRequest
     @Environment(\.dismiss) private var dismiss
@@ -55,7 +54,6 @@ struct ToolWindowRoot: View {
     }
 }
 
-/// One tool, sized for what it shows, on the window's seamless titlebar.
 struct ToolWindowContent: View {
     let route: SheetRoute
     @Environment(\.terminalTheme) private var theme

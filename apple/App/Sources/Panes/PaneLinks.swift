@@ -7,21 +7,19 @@ import UIKit
 import AppKit
 #endif
 
-/// Links tapped (iPad, iPhone) or ⌘-clicked (Mac) in a pane: OSC 8 hyperlinks and URLs or paths
-/// printed as text.
+/// Links tapped or ⌘-clicked in a pane: OSC 8 hyperlinks and URLs or paths printed as text.
 ///
-/// - A sign-in for a program on a remote host (`SignInLink`): the system's sign-in sheet with
-///   the callback forwarded to the host, or the in-app browser typing the code it shows.
-/// - A dev server's URL (`localhost`, `127.0.0.1`, `[::1]`, `*.localhost`, or the host's own
-///   address on a port it listens on) opens in the in-app browser, through a forward when the
-///   pane is on a remote host, so it shows what the host serves.
-/// - A path opens in the editor at its `:line:col` (a host's pane), or in the Mac's default app
-///   (this Mac's pane; anything that would run is shown in the Finder instead).
-/// - Any other URL: the Mac's default browser; on iPad and iPhone, Safari or the in-app browser
-///   as the user chose the first time (Settings ▸ Terminal ▸ Links).
+/// - A sign-in for a program on a remote host goes to the system's sign-in sheet, with the
+///   callback forwarded to the host.
+/// - A dev server's URL opens in the in-app browser, through a forward when the pane is on a
+///   remote host, so it shows what the host serves.
+/// - A path opens in the editor at its `:line:col`, or in the Mac's default app (anything that
+///   would run is shown in the Finder instead).
+/// - Any other URL: the default browser; on iPad and iPhone, Safari or the in-app browser as the
+///   user chose.
 ///
-/// Before any of that, `LinkSafety` decides: a web address the user could see opens; one
-/// hidden behind an OSC 8 label, or any other scheme, asks first; script and data URLs never.
+/// `LinkSafety` gates all of it: a web address the user could see opens; one hidden behind an
+/// OSC 8 label, or any other scheme, asks first; script and data URLs never open.
 @MainActor
 enum PaneLinks {
     static func attach(to pane: Pane, workspace: Workspace) {
@@ -89,21 +87,18 @@ enum PaneLinks {
 
     private static func follow(_ url: URL, from pane: Pane, in workspace: Workspace, window: WindowModel) {
         if workspace.isRemote, let hostId = workspace.hostId, let signIn = SignInLink(url) {
-            // A sign-in for a program on the host (`codex login`'s URL, Claude's printed one).
             window.signIn(url, signIn, hostId: hostId, pane: pane.id.rawValue)
         } else if window.isDevServerURL(url) {
             Task { await window.openURL(url.absoluteString) }
         } else if url.scheme == "http" || url.scheme == "https" {
             openWebLink(url, window: window, from: pane)
         } else if !workspace.isRemote || HostLinks.mayOpenExternally(url) {
-            // mailto:, ssh:, …: whatever the system opens them with (after confirmOpen).
             openExternally(url)
         }
     }
 
     private static func openWebLink(_ url: URL, window: WindowModel, from pane: Pane) {
         #if os(macOS)
-        // ⌘-click: the default browser, as in Ghostty.
         openExternally(url)
         #else
         switch LinkOpening.current {
@@ -123,7 +118,7 @@ enum PaneLinks {
     }
 
     #if os(iOS)
-    /// The first web link: where links go from now on (Settings can change it).
+    /// Asks on the first web link where links go from now on.
     private static func ask(_ url: URL, window: WindowModel, from pane: Pane) {
         let sheet = UIAlertController(
             title: "Open Links in Safari or Here?",
@@ -179,7 +174,7 @@ enum LinkOpening: String, CaseIterable, Identifiable {
     }
 }
 
-/// Settings ▸ Terminal ▸ Links (iPad, iPhone): where web links open.
+/// Settings ▸ Terminal ▸ Links on iPad and iPhone.
 struct LinksSettingsSection: View {
     @AppStorage(LinkOpening.key) private var opening = LinkOpening.ask
 
@@ -200,9 +195,7 @@ struct LinksSettingsSection: View {
 }
 
 extension WindowModel {
-    /// A URL a dev server on the window's host (or this Mac) printed: loopback names, the
-    /// `*.localhost` names browsers resolve to loopback, or the host's own address (a LAN or
-    /// Tailscale IP, its name) on a port the host listens on.
+    /// A loopback URL, or the host's own address (name, LAN or Tailscale IP) on a port the host listens on.
     func isDevServerURL(_ url: URL) -> Bool {
         guard url.scheme == "http" || url.scheme == "https", let host = url.host()?.lowercased() else { return false }
         if Self.isLoopback(host) { return true }
@@ -218,20 +211,19 @@ extension WindowModel {
 
     /// RFC 1918, CGNAT (Tailscale's 100.64/10) and IPv6 unique-local addresses.
     nonisolated static func isPrivateAddress(_ host: String) -> Bool {
-        let parts = host.split(separator: ".").compactMap { Int($0) }
-        if parts.count == 4 {
-            switch (parts[0], parts[1]) {
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        if octets.count == 4 {
+            switch (octets[0], octets[1]) {
             case (10, _), (192, 168): return true
             case (172, 16...31): return true
             case (100, 64...127): return true
             default: return false
             }
         }
-        let v6 = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        return v6.hasPrefix("fd") || v6.hasPrefix("fc")
+        let ipv6 = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        return ipv6.hasPrefix("fd") || ipv6.hasPrefix("fc")
     }
 
-    /// A web page in the in-app browser.
     func showInBrowser(_ url: URL) {
         browserURL = url
         if sheet != .browser { sheet = .browser }

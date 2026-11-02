@@ -5,7 +5,7 @@ import XCTest
 /// clamped by design, Dynamic Type) over the newer screens on the design fixtures (`-mock`), at
 /// the largest accessibility text size: projects, tab history and multi-select in the sidebar,
 /// a host's Devices, and App Lock. Each audits its own region; the pane headers and toolbar
-/// around them are fixed-height bands that clamp their text by design (docs/DESIGN.md).
+/// around them are fixed-height bands that clamp their text by design.
 @MainActor
 final class AccessibilityAuditUITests: XCTestCase {
     override nonisolated func setUp() {

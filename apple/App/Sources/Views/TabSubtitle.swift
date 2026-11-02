@@ -15,9 +15,8 @@ extension Workspace {
     }
 }
 
-/// A tab row's second line: its context (agent task, program, repo:branch or directory), or,
-/// once a shell command has run a few seconds, the command and how long it has run
-/// ("cargo build · 1m 12s", digits monospaced so the line does not jitter as it counts).
+/// A tab row's second line: its context, or a shell command running for a few seconds and for
+/// how long ("cargo build · 1m 12s").
 struct TabSubtitle: View {
     let context: String?
     let running: CommandMark?
@@ -51,8 +50,7 @@ struct TabSubtitle: View {
         }
     }
 
-    /// Always one line, empty when there is nothing to say: a row keeps its height while its
-    /// context comes and goes (a prompt's brief `git`), so the rows under it never jump.
+    /// Always one line, so a row keeps its height while its context comes and goes.
     private var contextLine: some View {
         Text(context ?? " ")
             .font(DS.Font.sidebarSubtitle)
