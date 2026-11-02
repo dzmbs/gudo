@@ -184,9 +184,10 @@ final class FrameBuilder {
                     frame.text.append(instance)
                 }
             } else {
-                for var instance in cached.text {
-                    instance.gridPos.y = UInt16(y)
-                    frame.text.append(instance)
+                frame.text.append(contentsOf: cached.text)
+                let rowY = UInt16(y)
+                frame.text.withUnsafeMutableBufferPointer { text in
+                    for i in textStart..<text.count { text[i].gridPos.y = rowY }
                 }
             }
             if let ranges = highlightRows[Int(y)] {
