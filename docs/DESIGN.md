@@ -1,14 +1,15 @@
 # Design
 
-The Apple apps (iPhone, iPad, Mac; OS 26+) look like Ghostty's macOS app around the terminal and
-system: its tokens, its rules, every screen, and for each element the reference it copies. Code:
+The Apple apps (iPhone, iPad, Mac; OS 26+) look like Ghostty's macOS app around the terminal: native, dense, quiet, precise. This document
+is the design system: its tokens, its rules, every screen, and where an element follows Ghostty or
+the platform. Code:
 `apple/Packages/DesignSystem` (tokens and components) and `apple/App/Sources` (screens).
 
-Sources, and what may be taken from each:
+Ghostty's macOS app (MIT) is the one source of code:
 
-| Reference | Where | Licence | Taken |
-|---|---|---|---|
-| Ghostty macOS app | `reference/ghostty/macos/Sources` | MIT | Swift UI code ported 1:1 with attribution (`apple/THIRD_PARTY_NOTICES.md`); config names and defaults; default palette; bundled theme list. Not the name or icon. |
+| Reference | Licence | Taken |
+|---|---|---|
+| Ghostty macOS app | MIT | Swift UI code ported 1:1 with attribution (`apple/THIRD_PARTY_NOTICES.md`); config names and defaults; default palette; bundled theme list. Not the name or icon. |
 
 ## Principles
 
@@ -20,6 +21,7 @@ Sources, and what may be taken from each:
    searchable lists and Liquid Glass. Custom drawing only where the platform has no equivalent
    (dividers, tab strip, overlays on the grid), and then copied from Ghostty.
 4. **Words, not spinners.** Every waiting state says what is happening and offers the next step
+   Nothing visible under 200 ms, then a label.
 5. **Never blank.** Lost connections dim the last frame; empty lists name the next action.
 
 ## Tokens
@@ -31,6 +33,7 @@ JetBrains Mono (bundled, OFL, Ghostty's default face).
 ### Color
 
 Every chrome colour is derived from the active terminal theme (`ChromePalette`,
+`DesignSystem/Theme`). A theme gives background, foreground, cursor
 and 16 ANSI colours; the chrome is the foreground laid over the background at fixed strengths, so a
 light theme gets darker panels and a dark theme lighter ones with one rule, Solarized chrome is
 Solarized and Dracula's is Dracula. `DS.Palette.*` are `ChromeStyle`s that resolve from the
@@ -47,9 +50,10 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
 | `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | rows, tabs, the selected tab pill |
 | `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | 1 px lines (`Hairline`), the sidebar edge, tab strip rule |
-| `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48–0.62 (light chrome) / 0.68–0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
-| `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (Spotlight, Raycast) |
+| `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48-0.62 (light chrome) / 0.68-0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
+| `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (as in Spotlight) |
 | `prominent` / `onProminent` | the accent deepened toward the darker ink until the lighter ink reads on it at 4.5:1 | the one primary button (`.primaryGlass`) |
+| `done` / `error` / `attention` / `working` / `info` | the theme's ANSI green / red / yellow / magenta / blue mixed 35 % toward the foreground (50 % would turn a dark theme's amber into cream); a slot that is grey or off-hue keeps Ghostty's hue | state glyphs, status chips (10 %, radius 4), diff counts, PR states |
 | `terminal`, `ansi(n)` | the theme itself | the grid, presence avatars |
 | `bell` | `#FFCC00` 50 % | bell border (Ghostty `BellBorderOverlay`) |
 | split divider | background × 0.6 brightness (dark) / × 0.92 (light) | splits only (Ghostty `splitDividerColor`) |
@@ -78,7 +82,9 @@ terminal background.
 | `meta` | caption, monospaced digits | ages, counts, ⌘N hints |
 | `badge` | caption2 medium | pills (Ghostty palette badge) |
 | `literal` / `literalSmall` | SF Mono callout / caption | paths, commands, hosts, code |
+| `sidebarTitle` / `sidebarSubtitle` | body / caption (Mac), subheadline / footnote (touch) | sidebar rows |
 | `tabTitle` | callout (Mac), subheadline (touch) | tab strip |
+| `paletteQuery` | title3 light | command palette field (Ghostty 20 pt light on touch, 15 on the Mac) |
 | `keyCap` | 12 pt medium rounded | shortcut key caps (Ghostty `KeyCap`) |
 | `overlay` | callout, monospaced digits | cols × rows, exit bar |
 
@@ -97,9 +103,10 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Size | Value | Source |
 |---|---|---|
 | Divider visible / hit (pointer) / hit (touch) | 1 / +6 / 20 pt | Ghostty `SplitView` (1 + 6); touch is ours |
+| Pane header | 24 pt | Ghostty-quiet |
 | Tab strip / tab | 34 / 28 pt (selected pill inset 3) | macOS 26 titlebar tabs, Ghostty native tabs |
-| Command palette width | 580 pt Mac / 640 pt touch | Spotlight, Raycast: a title and its context on one line |
-| Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | 04-mobile-ux C5, keyboard key height |
+| Command palette width | 580 pt Mac / 640 pt touch | Spotlight: a title and its context on one line |
+| Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
 | Window padding | 2 pt, balanced | Ghostty `window-padding-x/y` = 2, `window-padding-balance` |
 
 | Radius | Value | Source |
@@ -108,6 +115,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | `field` | 6 | search field, bar buttons (Ghostty) |
 | `control` | 8 | row highlights, inline code blocks |
 | `paletteRow` | 8 | command palette rows, concentric with the 16 pt panel at an 8 pt inset |
+| `pane` | 10 | comfortable panes |
 | `tabPill` | 7 | Ghostty/AppKit selected tab |
 | `secureBadge` | 12 | Ghostty's secure-input badge |
 | `searchPanel` | 14 | scrollback search bar glass |
@@ -127,7 +135,8 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
    default "Match Terminal"): a dark theme gives dark chrome everywhere (sidebar, toolbar and
    title bar, tab strip, sheets, key bar) even with the system in light mode, and the reverse.
    Where chrome touches the terminal (toolbar band, tab strip, pane headers, iPhone top bar) it
-   is painted with the terminal background, seamless like Ghostty's transparent titlebar.
+   is painted with the terminal background, with no seam, like Ghostty's transparent titlebar.
+5. The sidebar is integrated, never a floating glass card: full height,
    flush with the window edge, on `DS.Palette.sidebar` (the theme background with its foreground
    at 5 %), separated by a one-pixel `separator` line.
    It is drawn by hand (a scroll view of rows), because the system sidebar list paints its own
@@ -137,23 +146,30 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 
 | Token | Curve | Use | Source |
 |---|---|---|---|
-| `snappy` | snappy 0.25 s | selection, rows, tab switch | — |
+| `snappy` | snappy 0.25 s | selection, rows, tab switch | - |
+| `quick` | easeInOut 0.15 s | tab pill, ⌘ hints, lit toolbar toggles | - |
+| `hover` | easeInOut 0.1 s | hover fills | - |
+| `palette` | none (Mac) / easeOut 0.15 s fade (touch) | command palette in/out | `animationBehavior = .none` on the Mac |
 | `overlay` | easeOut 0.2 s | overlays in/out, search corner snap | Ghostty search bar |
 | `indicator` | spring 0.3 / 0.8 | badges, status glyphs | Ghostty `KeyStateIndicator` |
 | `bell` | easeInOut 0.3 s | bell border | Ghostty |
-| `panel` | smooth 0.35 s | panels, tab style switch | — |
-| `fold` | smooth 0.4 s | the iPhone Duo's layout moving to a new posture (pages parting, the deck rising); ends on time so the grids reflow once | — |
+| `panel` | smooth 0.35 s | panels, tab style switch | - |
+| `fold` | smooth 0.4 s | the iPhone Duo's layout moving to a new posture (pages parting, the deck rising); ends on time so the grids reflow once | - |
 | resize overlay | visible 750 ms after the last change | cols × rows | Ghostty `resize-overlay-duration` |
-| `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from below, grown from 0.9, a 4 pt blur | — |
-| `menu` | spring 0.3 / 0.86 | menus, popovers, the host switcher's highlight | — |
+| `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from below, grown from 0.9, a 4 pt blur | - |
+| `menu` | spring 0.3 / 0.86 | menus, popovers, the host switcher's highlight | - |
 | `swipe` | spring 0.32 / 0.86 | a row settling open or shut after a swipe | iOS Mail |
 | `reorder` | spring 0.3 / 0.84 | sidebar rows making room for a dragged tab, a drop settling; a collapsed project springs open after 0.6 s | Finder, Safari's sidebar |
-| `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | — |
-| `split` | spring 0.3 s, no bounce (within a point by `splitSettle`, 0.42 s) | panes splitting, closing, zooming in and out, a drop landing, a dragged pane's neighbours making room (that preview uses `reorder`) | — |
-| `lift` | spring 0.42 s, bounce 0.12 | a pane floating out of its tab or docking back, a window to the tray and back: the pane and every neighbour making room move in this one spring | — |
+| `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | - |
+| `split` | spring 0.3 s, no bounce (within a point by `splitSettle`, 0.42 s) | panes splitting, closing, zooming in and out, a drop landing, a dragged pane's neighbours making room (that preview uses `reorder`) | - |
+| `lift` | spring 0.42 s, bounce 0.12 | a pane floating out of its tab or docking back, a window to the tray and back: the pane and every neighbour making room move in this one spring | - |
 | layout motion | every terminal a layout change moves | travels as its last frame, anchored top-left (cropped as it shrinks, on its background as it grows); its grid changes once, for where it is going, before it moves (one SIGWINCH), and it draws again when it is there and the program's redraw has come in (quiet 30 ms, 150 ms at most). Nothing reflows on the way, nothing jumps at rest, no cols × rows overlay. The sidebar's animation holds frames the same way and changes the grids once it settles (`TerminalSurface.prepareResize`, `holdFrames`) | Ghostty's resize coalescing |
 | lift beat | keyframes: 1.03 (snappy 0.16 s) → 1 (smooth 0.36 s) floating; 0.985 → 1 docking | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion | macOS window drag-out |
 | `settle` | spring 0.34 / 0.86 | a floating window let go, carried by its flick onto the line it snaps to; a keyboard move or resize; picture in picture settling in a corner | iOS PiP |
+| toast | 2.4 s; failures 4 s; with an action 5 s | | - |
+| agent toast | 8 s, held while the pointer or a finger is on the stack, +0.5 s after | needs you / finished / failed, max 3, newest on top | - |
+| shimmer | 3 s sweep, 6-glyph cosine band, secondary → full ink | a working agent's title (sidebar, Agents); plain text under Reduce Motion | - |
+| feedback delay | 200 ms before any progress UI | | - |
 
 Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
 "working"), and the secure-input gradient stops. Both loops are Core Animation on a layer (`LayerAnimations.swift`):
@@ -175,27 +191,36 @@ Motion it only fades.
 ### Shadows and edges
 
 Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.panel`: r 28, y 12,
+16 % / 45 %), never a third. Every floating glass surface (`floatingPanel`,
 `floatingCapsule`) carries `glassEdge`: 0.5 pt, white 16 % plus-lighter on dark, black 8 % on light
+(as Ghostty's key pill), and turns opaque under Reduce Transparency.
 
 ## Components (DesignSystem)
 
 | Component | File | Notes / reference |
 |---|---|---|
+| `StatusIndicator`, `Spinner`, `StatusPill`, `CountBadge`, `AgentState` | `Components/AgentStatus.swift` | OSC 7501 states: idle ring, working spinner, blocked `!`, done ✓, error ✕, no contact dashed ring. Shape carries meaning, not only color. |
+| `ListRow`, `SectionTitle`, `EmptyState`, `Hairline` | `Components/Rows.swift` | dense rows with fixed leading slot; empty states (glyph `title` large, 12, `title3` semibold + `subheadline` 4 apart, then the next step); 1 px lines |
+| `HoverPopover`, `hoverPopoverFrame()` | `Components/HoverPopover.swift` | opens on pointer hover, closes 150 ms after the pointer leaves anchor and popover, tap toggles, a medium sheet on iPhone; system padding, 260-480 × ≤ 400 |
 | `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the ink at 20 % behind the glyph (T4) |
 | `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | Ghostty `SearchButtonStyle` hover/press fills; iPad pointer highlight |
+| `QuietButtonStyle` (`.quiet`, `.quietProminent`) | `Components/Glass.swift` | verbs inside rows, banners and cards: no chrome, secondary ink (accent for `.quietProminent`), ink 8 % hover / 15 % press, radius 6. Glass stays on bars and floating surfaces |
 | `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and a soft 25 % halo while focused; typed literals in SF Mono, the prompt in prose |
 | `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
-| `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28–48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
+| `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28-48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
+| `HostSwitcher`, `HostSwitcherLabel`, `HostSwitcherHost`, `HostSwitcherCommand` | `Components/HostSwitcher.swift` | a session popup for hosts: "Filter or connect…", hosts with ⌃⌘N and ✓, a highlight that follows ↑/↓ and the pointer, then commands with their shortcuts; typing an unknown address offers Connect to it |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
 | `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
+| `ShimmerMath`, `.shimmering(_:text:)` | `Components/Shimmer.swift` | "working" on a title instead of a spinner |
 | `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N; stacks at any size, each avatar cutting a thin gap out of the one under it so they read on any background |
 | `PeopleSwitcher`, `PeopleSwitcherPerson` | `Components/PeopleSwitcher.swift` | the presence button's popover in the host switcher's form: "4 people here", one row per person (avatar, what they are doing, ✓ on the one followed; a tap follows or stops), then Share Session… |
 | `.switcherRow(isHighlighted:in:)`, `SwitcherCheck` | `Components/HostSwitcher.swift` | the switchers' shared row: 36 pt, the sliding highlight, the ✓ slot |
 | `KeyBarLook` | `Components/KeyBarLook.swift` | the key bar's look (app passes it as `KeyBarStyle.designSystem`) |
 | `ResizeOverlay`, `ProcessExitedBar`, `BellBorder`, `UnfocusedDim`, `SecureInputBadge`, `URLHoverBanner` | `Overlays/TerminalOverlays.swift` | Ghostty `SurfaceView.swift` 1:1 |
 | `TerminalSearchBar` | `Overlays/SearchBar.swift` | Ghostty `SurfaceSearchOverlay` 1:1 (glass instead of opaque) |
-| `CommandPalette`, `PaletteCommand`, `FuzzyMatch` | `Overlays/CommandPalette.swift` | Ghostty `CommandPaletteView` + Raycast sections |
+| `CommandPalette`, `PaletteCommand`, `FuzzyMatch` | `Overlays/CommandPalette.swift` | Ghostty `CommandPaletteView` with sections |
+| `ConnectionState`, `ConnectionDot`, `connectionOverlay` | `Overlays/ConnectionOverlay.swift` | health in words; never blank |
 | `TerminalTheme`, `ThemeCatalog` (463 themes), `TerminalPreferences` | `Terminal/` | Ghostty theme files and config keys |
 
 ## Brand
@@ -207,6 +232,7 @@ decision is independent of it, so a rename is one line.
 - **App icon**: `apple/App/Resources/AppIcon.icon` (Icon Composer, layered Liquid Glass). A
   graphite field (#333840 → #16181D), a white glass window frame split into three panes (the
   product: one session, split), and a solid block cursor in the accent in the first pane, its own
+  glass layer so it catches light separately. Original artwork; no Ghostty elements.
 - **Launch screen**: the terminal background (`LaunchBackground`), so launch never flashes white
   and the first terminal frame lands on the same color.
 
@@ -243,6 +269,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   own. Never accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
   buttons' frames in both placements and attaches screenshots.
 - The title's subtitle is the tab's context (agent task, program, `repo:branch` or directory)
+  when it differs from the title, then "3 panes". Find is lit with the ink at
+  20 % while the search bar is open. The host button is a title-bar picker: symbol,
+  name and a small chevron; it opens the host switcher (`HostSwitcher`): every host
   with its device symbol, ✓ on the window's and ⌃⌘1…⌃⌘9 (⌘1…⌘9 stay the tabs'), a word only
   when the link is not fine or agents wait (else the address, SF Mono), then New Tab, New Agent…,
   Connect via SSH…, Pair with a Ticket…, Join a Session… and All Hosts; only the hosts scroll.
@@ -252,12 +281,14 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   (`navigationDocument`) for local tabs.
 - Switching to vertical tabs always shows the sidebar; covered by
   `testSidebarAppearsAfterSwitchingFromTabStrip` and the `toggle` screenshot fixture. The divider
-  drags to resize (200–360 pt, double-click restores 248).
+  drags to resize (200-360 pt, double-click restores 248).
 
+### Sidebar (vertical tabs)
 
 - Agents (count badge, red only when something needs you) and Hosts at the top. Under a
   host's tabs, its agents under a quiet "Agents" label with + New Agent on that host (hover on
   the Mac, 0.6 on touch).
+- Projects first (like Safari's tab groups; docs/APP-ARCHITECTURE.md
   §23): a header with the project's colour dot (`ProjectColor`, the theme's ANSI hue softened like
   the states), its name in the section font and + New Terminal; its tabs under it with a 2 pt
   thread of its colour at their leading edge, each naming its host on the second line. Drop a tab
@@ -278,8 +309,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   selected row carries the others: they land in a run right after it with the same reorder
   spring. On iPhone the switcher's Select Tabs… opens a sheet with the system's multi-select
   list and the same actions.
-- Then one group per host the window shows (its loose tabs), all at once (owner, 2026-10-18: switching hosts never
+- Then one group per host the window shows (its loose tabs), all at once (switching hosts never
   goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
+  host in the order it was opened. Group header: `server.rack`
   (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font
   (`.primary` when live, `.tertiary` when not), an "SSH" outline badge for plain-SSH hosts, the
   host's aggregate agent glyph, a state glyph **only when not live** (§3.3: reconnecting
@@ -292,10 +324,12 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - A host with no tabs shows one row "New Terminal" (`plus` in `.secondary`) under its header
   (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
 - One row per tab: its number across all hosts (tertiary, monospaced), a leading slot (16 pt on
-  holds the focused pane's program mark (14 / 16 pt: the official logo, unmodified, where one ships (`ProgramCatalog.logos`; the owner's dark variant in dark),
+  the Mac, 18 on touch), the tab's name (one weight; a path keeps its end). The slot
+  holds the focused pane's program mark (14 / 16 pt: the official logo, unmodified, where one ships (`ProgramCatalog.logos`; the logo owner's dark variant in dark),
+  else a neutral SF Symbol per kind at 0.6 opacity),
   replaced by the agent glyph on unfocused tabs (§3.4: working = mini spinner, needs input =
   amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
-  every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1–8 index the
+  every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1-8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
   10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder or group; context
   menu Rename / Close / New Project from Tab / Move to Project ▸. Under a group's tabs, its agents. Rows touch (no gap); the host's agent
@@ -319,9 +353,10 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   directory. Settings ▸ "Tab Title from Shell" (`title-from-shell`) lets an OSC title replace a
   generated name.
 - A group's agents: every pane of that host whose program reports status, across its tabs:
+  glyph, program, tab number, state word right-aligned in its color. Tap
   focuses the pane, switching hosts if needed.
 
-### Tab strip (horizontal tabs) — Ghostty native tabs
+### Tab strip (horizontal tabs): Ghostty native tabs
 
 Equal-width tabs across the row; centered title led by the same slot as the sidebar
 (program mark, the agent glyph instead on unfocused tabs); ⌘N right-aligned only while ⌘ is held;
@@ -329,13 +364,14 @@ close button on hover at the leading edge; one-pixel separators between unselect
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
 tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill of the ink at 10 %
 (radius 7, hairline edge), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
-After a close under the pointer the tabs keep their width until the pointer leaves the strip
-decided against: it carries + and the drop target).
+After a close under the pointer the tabs keep their width until the pointer leaves the strip;
+⌘ hints appear after ⌘ is held 750 ms; a path title keeps its end; the tooltip is the
+title, host · directory, and the context line. The strip stays with a single tab (it carries + and the drop target).
 The strip sits under the shared toolbar (Mac and iPad alike) on the window base (the terminal
 background) with a one-pixel `separator` rule. Drag
 tabs to reorder.
 
-### Splits, panes, overlays — Ghostty 1:1
+### Splits, panes, overlays: Ghostty 1:1
 
 - Dividers 1 pt in the split-divider color, 7 pt hit area with resize pointer on Mac, 20 pt with
   pointer highlight on iPad; double-click/tap equalizes; adjustable for VoiceOver ("Horizontal
@@ -346,6 +382,7 @@ tabs to reorder.
   on the host), status glyph and state word in its color, an "At Limit" mark in the attention colour
   whose menu offers a new tab under another signed-in account, and the pane menu (… on
   hover/focus on the Mac; at 0.6 on touch, where there is no hover). Tap focuses.
+- Shell commands (OSC 133, daemon panes): a gutter stripe per command (red when
   it failed), a failed command's rows tinted with the theme's red at 6 %, its ✓ / ✗ exit and run
   time at the right of its prompt row on hover, and the command whose output fills the top of the
   pane pinned there as a small header while you scroll.
@@ -353,7 +390,9 @@ tabs to reorder.
   moves, so it only answers user resizes); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
   scrollback search bar top-right (draggable to any corner).
+- Comfortable pane style (Settings → Panes): inset rounded panes on a divider-colored field.
 
+### Floating panes, rearranging, zoom
 
 docs/APP-ARCHITECTURE.md §28 has the model. One canvas per tab (`PaneCanvas.swift`): every pane,
 tiled or floating, is one view keyed by its id, so floating, docking, zooming, dropping and
@@ -395,7 +434,7 @@ minimizing only move and resize views in one `lift` spring, and no terminal is e
   pixel size; the panes making room keep their grids through the motion (their last frame
   stays, clipped or padded). Everything reflows once at rest: no flicker, no cols × rows
   overlay.
-- **Tray.** Minimize (⇧⌘M, the header's –) sends a window to a row of glass capsules at the
+- **Tray.** Minimize (⇧⌘M, the header's minimize button) sends a window to a row of glass capsules at the
   tab's bottom right (188 × 28 Mac, 204 × 36 touch, 6 apart, wrapping upwards): its mark, name,
   `+N` for more panes, its live state glyph. Going, the window shrinks onto its chip, solid
   until the end; a click brings it back the same way, growing out of the chip to where it was,
@@ -447,6 +486,7 @@ Settings is in Hosts' toolbar.
 ### Foldable (iPhone Duo)
 
 Each posture has a job. The posture is read from the hinge and the fold's division region
+(APP-ARCHITECTURE §24), never guessed from size. Apple's own rule leads: small
 adjustments over rearrangement, nothing interactive under the fold.
 
 | Posture | Screen | Job | Layout |
@@ -562,10 +602,12 @@ hint (e.g. Tailscale). The sidebar footer and connection dots show the same stat
 
 ### Agents (`Screens/InboxView.swift`)
 
+The window's own surface, not a stock grouped list: a plain list on the base,
 one-pixel separators from the text column, an inline title with "2 need you · 3 new" as its
 subtitle, the cross-host feed of every agent (named Agents, not Inbox: it lists agents, not
 messages). Dense like a mail list. Filters All / Needs You / Running / Unread / Errors as a
 compact track as wide as its words, left-aligned under the bar, never stretched across the
+window. A row is two lines, 8 pt above and below:
 a 16 pt glyph slot on the title's line (glyphs at 0.6 unless something needs you), what the
 agent is on in subheadline (semibold while unread or waiting), a Failed pill for a failure,
 right-aligned the unread dot, the age (monospaced, ticking for running) and Reply and Open as
@@ -586,11 +628,12 @@ closes as soon as the pane exists.
 
 ### Share session (`Screens/InviteSheet.swift`) and presence
 
-Toolbar avatars (≤ 3 + N, typing ring; a share glyph when alone) open Share Session (live since
+Toolbar avatars (≤ 3 + N, typing ring; a share glyph when alone) open Share Session
+(docs/APP-ARCHITECTURE.md §11), a grouped form on the terminal's background family:
 
 - **Header**: tab name, "You and 3 others · you own this host", the others' avatars.
 - **Invite** (owner): a name field; four role tiles (Viewer locked on, Prompter, Driver,
-  Approver — SF Symbol, title, one line of what it allows; selected = accent hairline + 10 %
+  Approver), each with an SF Symbol, title, one line of what it allows (selected = accent hairline + 10 %
   accent fill, the only accent on the screen besides the primary button); scope segment Host /
   Session / Tab / Pane with its sentence; Expires (1 h, 24 h, 7 d, never) and Who Can Use It
   (1 person, 5 people, anyone) menus; Can Invite Others; "Create Invite Link" (prominent glass;
@@ -625,14 +668,12 @@ to agent panes" capsule. Refusals and hand-overs arrive as toasts in words ("Mir
 Take control to type.", "Needs an owner: …").
 
 Join a Session (deep link `<scheme>://join/…`, palette, paste): the link field, then a card
-read before dialling — inviter avatar, "Alex Kim invites you as Mira", each granted role with
-its sentence, scope, expiry, devices, the host key — a display-name field, and "Join as
+read before dialling (inviter avatar, "Alex Kim invites you as Mira", each granted role with
+its sentence, scope, expiry, devices, the host key), a display-name field, and "Join as
 Driver" (prominent). Refusals say why (expired or used up, revoked, offline).
 
-`ipad-presence`, `ipad-lease-request`, `ipad-viewer`, `ipad-prompter`, `ipad-driver-share`,
-`ipad-join`, `iphone-*` (`-mock`, `-mockPresence YES`, `-mockRole …`, `-shareRoute …`), and
-`ipad-live-1…5` from `MultiplayerUITests` against a real daemon (presence, signed invite with QR,
-grants, revoked guest, audit log).
+Mock screens: `-mock`, `-mockPresence YES`, `-mockRole …`, `-shareRoute …`. `MultiplayerUITests`
+runs the same flow against a real daemon.
 
 Notifications: Settings ▸ Notifications lists the five kinds with a sentence each and "Only
 When the App Is in the Background"; the footer says whether this build can receive pushes.
@@ -659,8 +700,9 @@ on iPhone (horizontal scroll per file, 18 pt rows). Tap a line → an inline not
 are accent-tinted cards under their line; a floating glass bar "2 notes · Goes to Claude Code as
 one prompt" with Copy and Send to Claude Code (⌘↩).
 
+### Git workspace (`App/Sources/Git`)
 
-The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. Values from
+The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces.
 
 - **Sidebar**: inside each host group, tabs outside a repository first (as before), then one
   section per repository: the name in the section style, `.secondary`, sentence case, no icon,
@@ -671,12 +713,13 @@ The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. V
   subheadline 15 on touch, regular weight always) with the worktree's name under it in
   footnote `.tertiary`, hidden when it repeats the branch; then a fixed-size trailing cluster,
   6 pt apart: `+N −M` (caption, monospaced digits, palette green/red), `#PR` (caption
+  `.secondary`), the agent glyph (none on the focused tab). Holding ⌘
   cross-fades the cluster to the row's ⌘N (0.15 s, no reflow). Rows: 6 pt vertical insets, title
   and subtitle touching, selection a neutral 10 % fill at radius 8, and on the selected row every
   coloured glyph and count drops to `.secondary`. A worktree with one tab is that tab's row; with
   several, the tabs follow one level in (14 pt); with none it is quiet and a click opens a tab
   there. Context menu: New Tab Here, Open on GitHub, Run ▸, Copy Path, Copy Branch Name,
-  Rename/Close Tab, Archive Worktree…, Delete Worktree…. The ⌘1–9 order follows the rows.
+  Rename/Close Tab, Archive Worktree…, Delete Worktree…. The ⌘1-9 order follows the rows.
 - **Needs you**: above the hosts, a highlight section (6 pt amber dot at 60 % with a hairline,
   "Needs you") hoists every tab, on any host, whose agent waits or failed: glyph, tab, "host ·
   branch", the state word in its colour. The rows also stay in place below.
@@ -686,6 +729,7 @@ The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. V
   sheet on iPhone). Then one glass group: Open In ▾ (VS Code, Files, Diff, GitHub) and Run ▾
   (the default script on click, ⌘R; the repository's scripts with their tinted symbols, then
   Global, then Edit Scripts…).
+- **PR popover**: system padding, width 260-480, at most 400 tall, scrolls.
   Headline "Open Title #42" with the state word and number `.secondary`; a `.secondary` line
   "branch · Ready to merge" (or why not: behind, blocked, conflicts, draft, still checking);
   `+128 −17` in subheadline green/red (and "· Merge conflicts" in red); the checks ring (12 pt,
@@ -710,12 +754,9 @@ The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces. V
   merge strategy, Delete Merged Worktrees (Never, 1, 3, 7 (default), 14, 30 days; sent to each
   host), global scripts (name, command, SF Symbol, tint, ⌘R).
 
-with a stand-in `gh`): `ipad-sidebar-dark`, `ipad-sidebar-fix-login-dark`, `ipad-toolbar-pr-dark`,
-`ipad-pr-popover-dark`, `ipad-merge-confirm-dark`, `ipad-new-task-dark` from `GitUITests`
-(`apple/scripts/git-ui-test.sh`); `mac-sidebar-dark` drawn by the app
-(`apple/scripts/git-mac-screenshot.sh`; glass toolbar items come out as white shapes in that
-path). `ipad-before-sidebar-dark` and `mac-before-sidebar-dark` are the same data before the
-grouping.
+`GitUITests` (`apple/scripts/git-ui-test.sh`) drives these on real data: a local daemon on
+`git-fixtures.sh` with a stand-in `gh`. `apple/scripts/git-mac-screenshot.sh` has the app draw
+the Mac sidebar itself.
 
 ### Files (`Screens/FilesBrowserView.swift`) and editor (`Screens/EditorView.swift`)
 
@@ -728,13 +769,13 @@ to Trash (confirmed). A file pushes a preview: text with a line-number gutter in
 fit, others a card with size and Download.
 
 Editor: VS Code's own workbench as a pane of the split tree (a tab of its own, or beside a terminal;
-APP-ARCHITECTURE §20) under a strip on the terminal background — 36 pt alone in its tab, a pane
+APP-ARCHITECTURE §20) under a strip on the terminal background: 36 pt alone in its tab, a pane
 header's 24 pt in a split, dimmed like an unfocused split when another pane has the focus: close,
 `</>`, folder name, host in SF Mono, Reload, More (Copy Folder Path, Open in Desktop VS Code on the
 Mac, Remote Tunnel, Stop Editor on host). Sidebar: a "VS Code" group above Mixed, each row the code
 glyph, the folder name and its host. A suspended editor coming back shows its last picture at 55 %
-under a "Resuming VS Code" capsule until the workbench is up. While it starts: a centred card of steps — Set up VS Code on
-host (first run only) / Start the editor / Open the workbench — each with a check, spinner or
+under a "Resuming VS Code" capsule until the workbench is up. While it starts: a centred card of steps (Set up VS Code on
+host (first run only) / Start the editor / Open the workbench), each with a check, spinner or
 ring and its seconds, and one line saying what is happening ("First time on studio: VS Code is
 being set up there. It takes about 15 seconds, once."). No licence prompt, no sign-in, no editor
 choice; failures say why with Try Again. The workbench fades in once loaded.
@@ -767,9 +808,11 @@ iPad and iPhone keep them as sheets.
 ### Settings (`Views/SettingsView.swift`)
 
 Ghostty's config as native settings; each control's Ghostty key is in its tooltip, in search
+results and, on the Mac, under the label while ⌥ is held (never a permanent second line). Appearance: Theme (463 Ghostty themes, searchable, Dark/Light filter; each theme a
 card in its own background with its name in its foreground, a prompt in its colours and four 12 pt
 swatches (red, green, blue, yellow), the selected card ringed in the accent; the setting row
 shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Panes (compact/comfortable).
+Follow Light and Dark Mode (Ghostty's `theme = light:X,dark:Y`): a light and a dark
 theme, each from the same picker; the system's appearance writes `theme` (`Views/ThemePair.swift`).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
@@ -793,9 +836,9 @@ says "Placed in terminal · scrolls with the output" in a glass capsule where th
 Send to Claude/Codex when an agent runs); a tap on it reopens it in place. Drawings whose row
 left the scrollback wait in a small glass chip (pin.slash + count) at the pane's top-right.
 Write (iPad) shows handwriting at the prompt as underlined marked text, like an IME, until
-Return. Canvas panes show the same editor full size on the terminal background. Screenshots:
+Return. Canvas panes show the same editor full size on the terminal background.
 
-## What makes it feel premium — checklist
+## Polish checklist
 
 - [x] Terminal frames at the display's rate (ProMotion key set; renderer display link); chrome
       animations are springs/short ease-outs, interruptible, nothing loops but the spinner.
@@ -820,7 +863,7 @@ Return. Canvas panes show the same editor full size on the terminal background. 
 - [x] Tooltips with the shortcut on every icon control (`.help`), hover-to-peek popovers, hover fills
       on rows and tabs, pointer highlight on bar buttons; hover-only affordances visible at 0.6 on touch.
 - [x] Dynamic Type from XS to AX5 without overlap: fixed bands clamp, the sidebar widens.
-- [ ] Context menu *previews* (live pane thumbnails) — needs the renderer's snapshot API wired
+- [ ] Context menu *previews* (live pane thumbnails): needs the renderer's snapshot API wired
       into `contextMenu(menuItems:preview:)`.
 
 ## Screenshots
@@ -836,25 +879,15 @@ draw inactive.
 
 `apple/scripts/screenshots.sh <udid> <prefix> <dir> [screens]` (simulator) and
 `apple/scripts/mac-screenshots.sh <app> <dir> [screens]` (Mac; the Debug app draws its own window
-with `-snapshot`, so it works on a locked Mac — glass and the sidebar list are not captured by
+with `-snapshot`, so it works on a locked Mac: glass and the sidebar list are not captured by
 `cacheDisplay` and show as white). Screens: `single splits bar hosts inbox palette search
 keybar reconnect overlays welcome pairing launchAgent invite links diff files browser editor
 settings toggle programs` (`programs`: one tab per program for the marks, `-fixtureTabs N` for
+the first N). Also `editor-licence` (with `-mockEditorPhase licence`),
 `devices`, `app-lock` (locked, stays so) and `stopped-following` (with `-mockPresence YES`: the
 banner above someone's draft). `AppUITests/AccessibilityAuditUITests` runs the system's
 accessibility audit at the largest text size over `projects`, `tab-history`, `tab-selection`,
 `devices` and `app-lock`.
-
-`hosts` (live hosts list), `hetzner-splits` / `hetzner` (the Hetzner daemon session, split on the
-host), `reconnect`, `sidebar`, `tabstrip`, `settings`, `pairing`; `mac-*` drawn by the app itself
-(`-snapshot`; glass controls come out as white shapes in that path). Live-data launch options:
-`-openHost <name>`, `-destination hosts|inbox`, `-screen live-splits`, `-noAutoFocus YES`.
-
-Multi-host sidebar (2026-10-19, real local daemons, `-testTickets a,b -testTicketNames …`):
-itself), `ipad-alpha.png` / `ipad-beta.png` (switching by click), `ipad-new-tab.png` (⌘T on the
-current host), `ipad-alpha-down.png` (one host reconnecting, the other live), `ipad-alpha-back.png`,
-`ipad-no-tabs.png` (New Terminal in the sidebar and the welcome view), `iphone-switcher.png` (the
-title menu grouped by host), `iphone-hetzner.png` (title + host line).
 
 ## Known gaps
 
@@ -878,6 +911,7 @@ title menu grouped by host), `iphone-hetzner.png` (title + host line).
 - **Mac snapshots** (`-snapshot`) leave system lists (Inbox, Hosts) and glass grey: the Mac
   theme screenshots show the chrome around them; check lists on a live window.
 
+### Live presence
 
 Someone's draft is a panel with their name tag (first name in white on their colour, Figma's
 cursor label), "iPad · writing a prompt" in meta and a thin caret in their colour; no coloured
@@ -885,7 +919,9 @@ side bar. "Kim is typing" and tab avatars use the cut-out `PresenceStack`. "Foll
 one glass capsule: their avatar, the words, a hairline, Stop in the accent; no second coloured
 edge. The shared approval reuses the Agents request block. Arrivals and departures are banners
 with the person's avatar. With people here the toolbar's avatars open `PeopleSwitcher`; alone
+the button is Share Session.
 
+### Browser chrome and remaining surfaces
 
 The browser bar's way back names where it goes ("‹ Ports") in the ink, never the accent; Done
 stays a word. Page dialogs and agent requests over a page are panels, not capsules (three lines
@@ -894,5 +930,4 @@ in a capsule read as a pill-shaped block), with the secondary verb `.quiet` besi
 and an accent verb. Text prompts are prose even where the typed value is a literal (Hosts quick
 connect, the Ports address). Reviewed without changes: Share Session, Join, Links, Diff, Files,
 Add Host, Settings and Theme, the key bar, pane headers, the welcome state and the iPhone tab
-layout (they already follow the system's components). Screenshots:
-`before-{invite,join,links,diff,files,pairing,settings,keybar,welcome,iphone-*}-*.png`.
+layout (they already follow the system's components).
