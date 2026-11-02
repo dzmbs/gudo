@@ -113,7 +113,7 @@ struct StressProbeTests {
         }
         let elapsed = CACurrentMediaTime() - startTime
         try await Task.sleep(for: .seconds(1))
-        print("PROBE 120 surfaces: +\((made - start) >> 20) MB made, +\((footprint() - start) >> 20) MB after floods; 16 visible frame worst \(worst)text avg \(elapsed / 120)")
+        print("PROBE 120 surfaces: +\((made - start) >> 20) MB made, +\((footprint() - start) >> 20) MB after floods; 16 visible frame worst \(worst)s avg \(elapsed / 120)")
         for text in surfaces { text.releaseGPUResources() }
         try await Task.sleep(for: .seconds(2))
         print("PROBE 120 surfaces released: +\((footprint() - start) >> 20) MB")
@@ -270,7 +270,7 @@ struct StressProbeTests {
             worst = max(worst, CACurrentMediaTime() - frameStart)
             frames += 1
         }
-        print("PROBE search during flood: setSearch \(setCost)text, worst frame \(worst)text over \(frames) frames, status \(String(describing: surface.search?.status))")
+        print("PROBE search during flood: setSearch \(setCost)s, worst frame \(worst)s over \(frames) frames, status \(String(describing: surface.search?.status))")
     }
 
     /// Reflow of a full scrollback of long wrapped lines on resize (runs on the main thread for
@@ -287,7 +287,7 @@ struct StressProbeTests {
             terminal.resize(cols: UInt16(80 + (i * 37) % 200), rows: UInt16(30 + i % 20), cellWidth: 10, cellHeight: 20)
             worst = max(worst, CACurrentMediaTime() - probeStart)
         }
-        print("PROBE reflow full scrollback: worst resize \(worst)text")
+        print("PROBE reflow full scrollback: worst resize \(worst)s")
         let start = footprint()
         let startTime = CACurrentMediaTime()
         terminal.write(Array("\u{1b}]2;".utf8))
