@@ -4591,17 +4591,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spike-transport"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "iroh",
- "proto",
- "serde",
- "tokio",
-]
-
-[[package]]
 name = "spin"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
