@@ -44,6 +44,8 @@ const START_WAIT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(50);
 /// Live panes one agent, with all the workers it started, may have opened at once.
 const MAX_OPEN_PANES: usize = 32;
+/// Calls one pane may have running at once (the hook socket serves 512 connections in all).
+const MAX_CALLS_PER_PANE: usize = 32;
 /// Output a wait holds at most (the pane's ring is 1 MiB).
 const WAIT_KEEP: usize = 1 << 20;
 /// How often a wait for a pattern renders and searches new output at most.
@@ -135,10 +137,29 @@ impl ToolError {
 
 type Result<T> = std::result::Result<T, ToolError>;
 
-/// Which pane created which, for ownership.
+/// Which pane created which, for ownership, and each pane's calls in progress.
 #[derive(Default)]
 pub(crate) struct Term {
     creators: Mutex<HashMap<PaneId, PaneId>>,
+    calls: Mutex<HashMap<PaneId, usize>>,
+}
+
+/// A call in progress, counted against its pane until dropped.
+struct CallSlot<'a> {
+    term: &'a Term,
+    pane: PaneId,
+}
+
+impl Drop for CallSlot<'_> {
+    fn drop(&mut self) {
+        let mut calls = lock(&self.term.calls);
+        if let Some(n) = calls.get_mut(&self.pane) {
+            *n -= 1;
+            if *n == 0 {
+                calls.remove(&self.pane);
+            }
+        }
+    }
 }
 
 impl Term {
@@ -184,6 +205,17 @@ impl Term {
     pub fn forget(&self, pane: PaneId) {
         lock(&self.creators).remove(&pane);
     }
+
+    /// Counts a call from `pane`; `None` past [`MAX_CALLS_PER_PANE`] at once.
+    fn enter(&self, pane: PaneId) -> Option<CallSlot<'_>> {
+        let mut calls = lock(&self.calls);
+        let n = calls.entry(pane).or_default();
+        if *n >= MAX_CALLS_PER_PANE {
+            return None;
+        }
+        *n += 1;
+        Some(CallSlot { term: self, pane })
+    }
 }
 
 /// Answers one call.
@@ -213,6 +245,17 @@ pub(crate) async fn serve(core: &Arc<Core>, call: TermCall, peer_uid: Option<u32
             ErrorCode::NotFound,
             "the calling pane is gone",
         ));
+    };
+    // Waits hold a hook-socket connection for minutes: one agent must not take them all.
+    let Some(_slot) = core.term.enter(caller) else {
+        return TermReply::Error(ToolError {
+            retryable: true,
+            ..ToolError::new(
+                ErrorCode::Failed,
+                format!("{MAX_CALLS_PER_PANE} calls from this pane are still running"),
+            )
+            .hint("wait for some to finish before starting more")
+        });
     };
     let ctx = Ctx {
         core: Arc::clone(core),
@@ -1643,6 +1686,21 @@ fn letter_key(c: char) -> Option<ghostty_vt::Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 600 waits from one agent took every hook-socket connection, so other agents' hooks
+    /// and approvals queued for minutes.
+    #[test]
+    fn one_pane_cannot_hold_every_call_slot() {
+        let term = Term::default();
+        let slots: Vec<_> = (0..MAX_CALLS_PER_PANE)
+            .map(|_| term.enter(PaneId(1)).expect("a slot"))
+            .collect();
+        assert!(term.enter(PaneId(1)).is_none());
+        assert!(term.enter(PaneId(2)).is_some(), "other panes are not held up");
+        drop(slots);
+        assert!(term.enter(PaneId(1)).is_some());
+        assert!(lock(&term.calls).len() <= 1);
+    }
 
     #[test]
     fn workers_count_against_the_agent_that_started_them() {
