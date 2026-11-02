@@ -15,13 +15,12 @@ use crate::layout::Layout;
 const FILE: &str = "layout.json";
 const VERSION: u32 = 1;
 
-/// The on-disk state.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Saved {
     version: u32,
     layout: Layout,
     panes: BTreeMap<u64, PaneRecord>,
-    /// Recently closed panes, oldest first.
+    /// Oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     closed: Vec<ClosedPane>,
     /// Which pane created which (`[pane, creator]`), so agents keep driving the panes they
@@ -41,18 +40,19 @@ impl Saved {
         }
     }
 
-    /// With the ownership map of the terminal tools.
     pub fn with_creators(mut self, creators: impl IntoIterator<Item = (PaneId, PaneId)>) -> Self {
-        self.creators = creators.into_iter().map(|(p, c)| (p.0, c.0)).collect();
+        self.creators = creators
+            .into_iter()
+            .map(|(pane, creator)| (pane.0, creator.0))
+            .collect();
         self.creators.sort_unstable();
         self
     }
 
-    /// Takes the ownership map out.
     pub fn take_creators(&mut self) -> Vec<(PaneId, PaneId)> {
         std::mem::take(&mut self.creators)
             .into_iter()
-            .map(|(p, c)| (PaneId(p), PaneId(c)))
+            .map(|(pane, creator)| (PaneId(pane), PaneId(creator)))
             .collect()
     }
 
@@ -60,7 +60,7 @@ impl Saved {
         let panes = self
             .panes
             .into_iter()
-            .map(|(k, v)| (PaneId(k), v))
+            .map(|(id, record)| (PaneId(id), record))
             .collect();
         (self.layout, panes, self.closed)
     }
@@ -87,8 +87,8 @@ pub(crate) fn load(state_dir: &Path) -> io::Result<Option<Saved>> {
             backup(&file)?;
             Ok(None)
         }
-        Err(e) => {
-            tracing::warn!("layout.json is unreadable ({e}); starting fresh");
+        Err(error) => {
+            tracing::warn!("layout.json is unreadable ({error}); starting fresh");
             backup(&file)?;
             Ok(None)
         }
@@ -96,11 +96,10 @@ pub(crate) fn load(state_dir: &Path) -> io::Result<Option<Saved>> {
 }
 
 fn backup(file: &Path) -> io::Result<()> {
-    let to = file.with_extension(format!("json.bad-{}", crate::identity::now_millis()));
-    std::fs::rename(file, to)
+    let aside = file.with_extension(format!("json.bad-{}", crate::identity::now_millis()));
+    std::fs::rename(file, aside)
 }
 
-/// Writes the current state now.
 pub(crate) async fn save(core: &Core) -> io::Result<()> {
     let saved = saved_state(core);
     let bytes = serde_json::to_vec_pretty(&saved).map_err(io::Error::other)?;
@@ -121,8 +120,8 @@ pub(crate) async fn run(core: Arc<Core>) {
                 break;
             }
         }
-        if let Err(e) = save(&core).await {
-            tracing::warn!("saving layout: {e}");
+        if let Err(error) = save(&core).await {
+            tracing::warn!("saving layout: {error}");
         }
     }
 }

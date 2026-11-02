@@ -7,7 +7,6 @@
 
 use proto::{DaemonFeatures, DaemonInfo};
 
-/// The build id baked in at compile time, or `dev`.
 pub const BUILD_ID: &str = match option_env!("GUDO_BUILD_ID") {
     Some(id) => id,
     None => "dev",
@@ -16,7 +15,7 @@ pub const BUILD_ID: &str = match option_env!("GUDO_BUILD_ID") {
 /// When the build's source was made (Unix seconds), or 0 for `dev` builds.
 pub fn built_unix() -> u64 {
     option_env!("GUDO_BUILD_UNIX")
-        .and_then(|s| s.trim().parse().ok())
+        .and_then(|seconds| seconds.trim().parse().ok())
         .unwrap_or(0)
 }
 
@@ -39,14 +38,17 @@ pub fn build_info(features: DaemonFeatures) -> DaemonInfo {
 
 /// The machine's host name (`gethostname`), as the system has it: possibly with a domain.
 pub fn hostname() -> String {
-    let mut buf = [0u8; 256];
+    let mut name = [0u8; 256];
     // SAFETY: the buffer is valid for its length; gethostname writes at most that many bytes.
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
-    if rc != 0 {
+    let status = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) };
+    if status != 0 {
         return String::new();
     }
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..len]).trim().to_owned()
+    let len = name
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(name.len());
+    String::from_utf8_lossy(&name[..len]).trim().to_owned()
 }
 
 /// The operating system in words: `PRETTY_NAME` from os-release on Linux, "macOS <version>"
@@ -56,7 +58,7 @@ fn os_name() -> String {
         let plist = std::fs::read_to_string("/System/Library/CoreServices/SystemVersion.plist")
             .unwrap_or_default();
         return plist_string(&plist, "ProductVersion")
-            .map_or_else(|| "macOS".to_owned(), |v| format!("macOS {v}"));
+            .map_or_else(|| "macOS".to_owned(), |version| format!("macOS {version}"));
     }
     ["/etc/os-release", "/usr/lib/os-release"]
         .iter()
@@ -70,8 +72,8 @@ fn os_release_name(text: &str) -> Option<String> {
     let value = |key: &str| {
         text.lines().find_map(|line| {
             let rest = line.trim().strip_prefix(key)?.strip_prefix('=')?;
-            let v = rest.trim().trim_matches(|c| c == '"' || c == '\'');
-            (!v.is_empty()).then(|| v.to_owned())
+            let unquoted = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+            (!unquoted.is_empty()).then(|| unquoted.to_owned())
         })
     };
     value("PRETTY_NAME").or_else(|| value("NAME"))

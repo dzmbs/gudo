@@ -23,7 +23,7 @@ use crate::mp::{Authz, Knocker, Mailbox, Need, Redeemed, Target, policy};
 use crate::net::{self, NetError};
 use crate::stream::{Class, PaneStream, Start, StreamCmd, priority};
 
-struct Sub {
+struct Subscription {
     acks: watch::Sender<Seq>,
     cmds: mpsc::UnboundedSender<StreamCmd>,
     task: AbortHandle,
@@ -35,7 +35,7 @@ struct ConnState {
     focus: Option<PaneId>,
     visible: Vec<PaneId>,
     sizes: HashMap<PaneId, PaneSize>,
-    subs: HashMap<PaneId, Sub>,
+    subscriptions: HashMap<PaneId, Subscription>,
     resume: HashMap<PaneId, ResumePoint>,
     /// The metadata last sent per pane: most changes the core announces (agent events, a
     /// title set again) leave what this client sees as it was.
@@ -61,14 +61,13 @@ struct Client {
     actor: Actor,
     /// Roles and scope, fixed at the handshake; re-validated on every message.
     authz: Authz,
-    /// Optional features the client announced in its `Hello`.
     caps: Caps,
     /// The input stream this connection continues, for clients that resend input after a
     /// reconnect (`Caps::INPUT_RESUME`).
     input_stream: Option<u64>,
     ctl: mpsc::UnboundedSender<ServerCtl>,
     state: Mutex<ConnState>,
-    /// The connection's `bulk` stream, opened on first use.
+    /// Opened on first use.
     bulk: tokio::sync::Mutex<Option<SendStream>>,
     /// Directory watches and the push channel for workspace requests.
     ws: crate::ws::ConnCtx,
@@ -78,11 +77,11 @@ struct Client {
 
 /// Serves one accepted connection until it closes. `pending` is its slot among the
 /// connections not yet past the `Hello`; it is released once the `Hello` is in.
-pub(crate) async fn serve(core: Arc<Core>, conn: Connection, pending: crate::preauth::Slot) {
-    let remote = conn.remote_id();
-    match run(core, conn, pending).await {
+pub(crate) async fn serve(core: Arc<Core>, connection: Connection, pending: crate::preauth::Slot) {
+    let remote = connection.remote_id();
+    match run(core, connection, pending).await {
         Ok(()) => tracing::debug!(%remote, "client left"),
-        Err(e) => tracing::debug!(%remote, "client connection ended: {e}"),
+        Err(error) => tracing::debug!(%remote, "client connection ended: {error}"),
     }
 }
 
@@ -98,7 +97,7 @@ async fn await_hello(
             Some(ClientCtl::Hello(hello)) => Some(hello),
             _ => None,
         };
-        Ok(hello.map(|h| (ctl_tx, ctl_rx, h)))
+        Ok(hello.map(|hello| (ctl_tx, ctl_rx, hello)))
     };
     match tokio::time::timeout(timeout, hello).await {
         Ok(result) => result,
@@ -244,13 +243,14 @@ async fn run(
     tasks.spawn(accept_uni(Arc::clone(&client)));
     tasks.spawn(accept_bi(Arc::clone(&client)));
 
-    // Resume: stream the panes the client already holds right away, in its order (focused
+    // Stream the panes the client already holds right away, in its order (focused first), so
+    // the focused pane is current one RTT after the handshake.
     let mut first = true;
     let mut seen = std::collections::HashSet::new();
     for point in hello
         .resume
         .into_iter()
-        .filter(|p| client.pane_allowed(p.pane_id) && seen.insert(p.pane_id))
+        .filter(|point| client.pane_allowed(point.pane_id) && seen.insert(point.pane_id))
         .take(MAX_RESUME_POINTS)
     {
         lock(&client.state).resume.insert(point.pane_id, point);
@@ -266,8 +266,8 @@ async fn run(
 
     let result = read_ctl(&client, ctl_rx).await;
     tasks.abort_all();
-    for (_, sub) in lock(&client.state).subs.drain() {
-        sub.task.abort();
+    for (_, subscription) in lock(&client.state).subscriptions.drain() {
+        subscription.task.abort();
     }
     core.detach(client.id);
     core.mp.leave(&core, client.id);
@@ -280,11 +280,10 @@ async fn run(
     result
 }
 
-fn conn_err(e: iroh::endpoint::ConnectionError) -> NetError {
-    NetError::Frame(proto::FrameError::Io(std::io::Error::other(e)))
+fn conn_err(error: iroh::endpoint::ConnectionError) -> NetError {
+    NetError::Frame(proto::FrameError::Io(std::io::Error::other(error)))
 }
 
-/// This daemon's build and machine, with what it offers.
 pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
     let mut features = DaemonFeatures::EMPTY;
     if core.cfg.self_exe.is_some() {
@@ -322,7 +321,6 @@ enum Admission {
     Knock(Knocker),
 }
 
-/// Checks a `Hello`.
 fn handshake(core: &Arc<Core>, hello: &Hello, device: DeviceId) -> Result<Admission, RefuseReason> {
     if hello.device_id != device {
         return Err(RefuseReason::DeviceMismatch);
@@ -376,22 +374,22 @@ async fn open_views(core: &Arc<Core>, authz: &Authz) {
     let panes: Vec<_> = core
         .pane_entries()
         .into_iter()
-        .filter(|(id, e)| {
-            core.scope_within(Scope::Pane(*id), authz.scope) && e.existed_at(authz.joined_at)
+        .filter(|(id, entry)| {
+            core.scope_within(Scope::Pane(*id), authz.scope) && entry.existed_at(authz.joined_at)
         })
-        .map(|(_, e)| Arc::clone(&e.pane))
+        .map(|(_, entry)| Arc::clone(&entry.pane))
         .collect();
     let principal = authz.actor.principal;
     let opened = tokio::task::spawn_blocking(move || {
         for pane in panes {
-            if let Err(e) = pane.open_view(principal) {
-                tracing::warn!(pane = %pane.id, "opening a since-join view: {e}");
+            if let Err(error) = pane.open_view(principal) {
+                tracing::warn!(pane = %pane.id, "opening a since-join view: {error}");
             }
         }
     })
     .await;
-    if let Err(e) = opened {
-        tracing::warn!("opening since-join views: {e}");
+    if let Err(error) = opened {
+        tracing::warn!("opening since-join views: {error}");
     }
 }
 
@@ -456,10 +454,10 @@ async fn serve_knock(
     // The knocker pings every few seconds; silence this long means it is gone.
     const LOBBY_IDLE: std::time::Duration = std::time::Duration::from_secs(45);
     let result = loop {
-        let Ok(msg) = tokio::time::timeout(LOBBY_IDLE, net::recv(&mut ctl_rx)).await else {
+        let Ok(message) = tokio::time::timeout(LOBBY_IDLE, net::recv(&mut ctl_rx)).await else {
             break Ok(());
         };
-        match msg {
+        match message {
             Ok(Some(ClientCtl::Ping { nonce })) => {
                 let _ = ctl.send(ServerCtl::Pong { nonce });
             }
@@ -477,7 +475,7 @@ async fn serve_knock(
             }
             Ok(Some(ClientCtl::Bye { .. }) | None) => break Ok(()),
             Ok(Some(_)) => {}
-            Err(e) => break Err(e),
+            Err(error) => break Err(error),
         }
     };
     core.mp.withdraw_knock(&core, id);
@@ -495,7 +493,7 @@ fn is_owner(core: &Core, authz: &Authz) -> bool {
 /// its owner and ignores everything else until the client leaves.
 async fn serve_upgrade_only(
     core: Arc<Core>,
-    conn: Connection,
+    connection: Connection,
     actor: Actor,
     mut ctl_rx: RecvStream,
 ) -> Result<(), NetError> {
@@ -503,9 +501,9 @@ async fn serve_upgrade_only(
     let owner = is_owner(&core, &Authz::owner(actor));
     let accept = {
         let core = Arc::clone(&core);
-        let conn = conn.clone();
+        let connection = connection.clone();
         tokio::spawn(async move {
-            while let Ok((mut send, mut recv)) = conn.accept_bi().await {
+            while let Ok((mut send, mut recv)) = connection.accept_bi().await {
                 let header = net::recv::<StreamHeader>(&mut recv).await;
                 match header
                     .as_ref()
@@ -537,9 +535,6 @@ async fn serve_upgrade_only(
     Ok(())
 }
 
-/// Writes `ctl`. Live presence comes from `peers` rather than the queue: while a write is
-/// stuck on a slow link it keeps only the newest state per peer, so the link catches up with
-/// the present instead of replaying every keystroke.
 /// Panes a reconnecting client may resume at once; the rest it subscribes to as usual.
 const MAX_RESUME_POINTS: usize = 256;
 /// `ctl` messages waiting for a client beyond which it is disconnected: it has stopped reading,
@@ -547,53 +542,55 @@ const MAX_RESUME_POINTS: usize = 256;
 const MAX_CTL_BACKLOG: usize = 8192;
 /// A `ctl` write that has not finished after this long ends the connection the same way.
 const CTL_STALL: Duration = Duration::from_secs(60);
-/// Most bytes coalesced into one `ctl` write.
 const MAX_CTL_BATCH: usize = 256 * 1024;
 
+/// Live presence comes from `peers` rather than the queue: while a write is stuck on a slow
+/// link it keeps only the newest state per peer, so the link catches up with the present
+/// instead of replaying every keystroke.
 async fn write_ctl(
-    conn: Connection,
+    connection: Connection,
     mut send: SendStream,
     mut out: mpsc::UnboundedReceiver<ServerCtl>,
     peers: Option<Arc<Mailbox>>,
 ) {
-    let mut buf = Vec::new();
+    let mut batch = Vec::new();
     loop {
         let first = tokio::select! {
-            msg = out.recv() => match msg {
-                Some(msg) => Some(msg),
+            message = out.recv() => match message {
+                Some(message) => Some(message),
                 None => return,
             },
             () = async {
                 match &peers {
-                    Some(p) => p.ready.notified().await,
+                    Some(mailbox) => mailbox.ready.notified().await,
                     None => std::future::pending().await,
                 }
             } => None,
         };
-        buf.clear();
+        batch.clear();
         let mut next = first;
         // Coalesce what is queued into one write, up to a bound: a producer that never pauses
         // must not keep this loop (and its buffer) growing.
-        while let Some(msg) = next {
-            if let Err(e) = proto::frame::encode(&msg, &mut buf) {
-                tracing::warn!("encoding ctl message: {e}");
+        while let Some(message) = next {
+            if let Err(error) = proto::frame::encode(&message, &mut batch) {
+                tracing::warn!("encoding ctl message: {error}");
             }
-            next = if buf.len() < MAX_CTL_BATCH {
+            next = if batch.len() < MAX_CTL_BATCH {
                 out.try_recv().ok()
             } else {
                 None
             };
         }
-        for msg in peers.iter().flat_map(|p| p.take()) {
-            if let Err(e) = proto::frame::encode(&msg, &mut buf) {
-                tracing::warn!("encoding ctl message: {e}");
+        for message in peers.iter().flat_map(|mailbox| mailbox.take()) {
+            if let Err(error) = proto::frame::encode(&message, &mut batch) {
+                tracing::warn!("encoding ctl message: {error}");
             }
         }
-        if buf.is_empty() {
+        if batch.is_empty() {
             continue;
         }
         let started = tokio::time::Instant::now();
-        let write = send.write_all(&buf);
+        let write = send.write_all(&batch);
         tokio::pin!(write);
         let mut check = tokio::time::interval(Duration::from_millis(250));
         loop {
@@ -601,7 +598,7 @@ async fn write_ctl(
                 written = &mut write => {
                     if written.is_err() {
                         // A client without its `ctl` stream cannot work; let it reconnect.
-                        conn.close(3u32.into(), b"ctl stream lost");
+                        connection.close(3u32.into(), b"ctl stream lost");
                         return;
                     }
                     break;
@@ -609,11 +606,11 @@ async fn write_ctl(
                 _ = check.tick() => {
                     if out.len() > MAX_CTL_BACKLOG || started.elapsed() > CTL_STALL {
                         tracing::info!(
-                            remote = %conn.remote_id(),
+                            remote = %connection.remote_id(),
                             backlog = out.len(),
                             "client stopped reading; disconnecting it"
                         );
-                        conn.close(3u32.into(), b"too slow");
+                        connection.close(3u32.into(), b"too slow");
                         return;
                     }
                 }
@@ -622,9 +619,9 @@ async fn write_ctl(
     }
 }
 
-async fn read_ctl(client: &Arc<Client>, mut rx: RecvStream) -> Result<(), NetError> {
-    while let Some(msg) = net::recv::<ClientCtl>(&mut rx).await? {
-        client.handle_ctl(msg).await;
+async fn read_ctl(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), NetError> {
+    while let Some(message) = net::recv::<ClientCtl>(&mut stream).await? {
+        client.handle_ctl(message).await;
     }
     Ok(())
 }
@@ -634,10 +631,11 @@ async fn forward_events(client: Arc<Client>, mut events: broadcast::Receiver<Eve
         match events.recv().await {
             Ok(event) => client.forward(event),
             Err(broadcast::error::RecvError::Lagged(_)) => {
+                // Events are hints; after missing some, resend the state itself.
                 client.send(client.core.sessions_message(client.authz.scope));
                 let session = lock(&client.state).session;
-                if let Some(s) = session {
-                    client.forward(Event::Layout(s));
+                if let Some(session) = session {
+                    client.forward(Event::Layout(session));
                 }
                 client.forward(Event::Participants);
             }
@@ -652,8 +650,8 @@ async fn accept_uni(client: Arc<Client>) {
             Ok(Some(StreamHeader::Input)) => {
                 let client = Arc::clone(&client);
                 tokio::spawn(async move {
-                    if let Err(e) = read_input(&client, stream).await {
-                        tracing::debug!("input stream: {e}");
+                    if let Err(error) = read_input(&client, stream).await {
+                        tracing::debug!("input stream: {error}");
                     }
                 });
             }
@@ -666,7 +664,7 @@ async fn accept_bi(client: Arc<Client>) {
     while let Ok((mut send, mut recv)) = client.conn.accept_bi().await {
         let header = net::recv::<StreamHeader>(&mut recv).await;
         // Forwards and file transfers reach the host beyond the terminal: driver, with a
-        // daemon- or session-wide grant (docs/DAEMON.md §6.3).
+        // daemon- or session-wide grant.
         let host = matches!(
             header,
             Ok(Some(
@@ -677,18 +675,18 @@ async fn accept_bi(client: Arc<Client>) {
             ))
         );
         if host
-            && let Err(e) = client
+            && let Err(error) = client
                 .live()
                 .and_then(|()| client.allow(Need::Drive, Target::Host))
         {
             let _ = match header {
                 Ok(Some(StreamHeader::Upload(_) | StreamHeader::Download(_))) => {
-                    let reply = TransferReply::Failed(WsError::Denied(e.to_string()));
+                    let reply = TransferReply::Failed(WsError::Denied(error.to_string()));
                     net::send(&mut send, &reply).await
                 }
                 _ => {
                     let reply = ForwardReply::Refused {
-                        reason: e.to_string(),
+                        reason: error.to_string(),
                     };
                     net::send(&mut send, &reply).await
                 }
@@ -724,8 +722,8 @@ async fn accept_bi(client: Arc<Client>) {
                 }
                 BlobHeader::Get { .. } => client.allow(Need::View, Target::Any),
             });
-            if let Err(e) = allowed {
-                let reply = BlobReply::Failed(ArtifactError::Forbidden(e.to_string()));
+            if let Err(error) = allowed {
+                let reply = BlobReply::Failed(ArtifactError::Forbidden(error.to_string()));
                 let _ = net::send(&mut send, &reply).await;
                 let _ = send.finish();
                 continue;
@@ -778,9 +776,9 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 .admit(client.actor.device, stream, input.input_seq.0)
         {
             if let Some(entry) = client.core.pane(input.pane_id)
-                && let Some(sub) = lock(&client.state).subs.get(&input.pane_id)
+                && let Some(subscription) = lock(&client.state).subscriptions.get(&input.pane_id)
             {
-                let _ = sub.cmds.send(StreamCmd::InputAck {
+                let _ = subscription.cmds.send(StreamCmd::InputAck {
                     input_seq: input.input_seq,
                     at_seq: entry.pane.head(),
                 });
@@ -799,12 +797,13 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             client.send(reject(InputRejectReason::UnknownPane));
             continue;
         };
-        // path (`MpRequest::Prompt`).
-        if let Err(e) = client.allow(Need::Drive, Target::Pane(input.pane_id)) {
+        // Raw keys, paste and mouse are the Driver's; prompters use the composer path
+        // (`MpRequest::Prompt`).
+        if let Err(error) = client.allow(Need::Drive, Target::Pane(input.pane_id)) {
             client.send(reject(InputRejectReason::Role));
             client.send(ServerCtl::Forbidden {
                 what: "Input".into(),
-                reason: e.to_string(),
+                reason: error.to_string(),
             });
             continue;
         }
@@ -822,9 +821,10 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
         // Keys, mouse and paste are encoded for the program's current modes, which only the
         // daemon's VT knows for sure (the client's may lag behind by the bytes in flight).
         let bytes = match input.payload {
-            InputPayload::Bytes(b) => b,
+            InputPayload::Bytes(bytes) => bytes,
             payload => entry.pane.encode_input(payload),
         };
+        // The PTY follows the client that typed last.
         let size = lock(&client.state).sizes.get(&input.pane_id).copied();
         if let Some(size) = size {
             client
@@ -837,16 +837,16 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 client.send(reject(InputRejectReason::UnknownPane));
                 continue;
             }
-            Err(e @ crate::pane::InputError::Stalled) => {
-                tracing::debug!(pane = %input.pane_id, "input refused: {e}");
+            Err(error @ crate::pane::InputError::Stalled) => {
+                tracing::debug!(pane = %input.pane_id, "input refused: {error}");
                 client.send(reject(InputRejectReason::Blocked));
                 continue;
             }
         };
         lock(&entry.meta).typed_by = Some(client.id);
         client.core.mp.typed(&client.core, client.id, input.pane_id);
-        if let Some(sub) = lock(&client.state).subs.get(&input.pane_id) {
-            let _ = sub.cmds.send(StreamCmd::InputAck {
+        if let Some(subscription) = lock(&client.state).subscriptions.get(&input.pane_id) {
+            let _ = subscription.cmds.send(StreamCmd::InputAck {
                 input_seq: input.input_seq,
                 at_seq,
             });
@@ -856,8 +856,8 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
 }
 
 impl Client {
-    fn send(&self, msg: ServerCtl) {
-        let _ = self.ctl.send(msg);
+    fn send(&self, message: ServerCtl) {
+        let _ = self.ctl.send(message);
     }
 
     /// Re-checks the grant (revocation, expiry). On failure the connection is told and
@@ -875,7 +875,6 @@ impl Client {
         policy::check(&self.core, &self.authz, need, target)
     }
 
-    /// Whether the pane is inside this connection's scope.
     fn pane_allowed(&self, pane: PaneId) -> bool {
         self.core.scope_within(Scope::Pane(pane), self.authz.scope)
     }
@@ -884,10 +883,10 @@ impl Client {
     fn permit(&self, what: &str, need: Need, target: Target) -> bool {
         match self.allow(need, target) {
             Ok(()) => true,
-            Err(e) => {
+            Err(error) => {
                 self.send(ServerCtl::Forbidden {
                     what: what.into(),
-                    reason: e.to_string(),
+                    reason: error.to_string(),
                 });
                 false
             }
@@ -932,35 +931,38 @@ impl Client {
 
     fn forward(&self, event: Event) {
         match event {
-            Event::Layout(s) => {
-                if lock(&self.state).session == Some(s)
-                    && let Some(layout) = self.core.layout_for(s, self.authz.scope)
+            Event::Layout(session) => {
+                if lock(&self.state).session == Some(session)
+                    && let Some(layout) = self.core.layout_for(session, self.authz.scope)
                 {
                     self.send_layout(layout);
                 }
             }
             Event::Sessions => self.send(self.core.sessions_message(self.authz.scope)),
-            Event::PaneMeta(p) => {
-                if self.in_session(p)
-                    && let Some(meta) = self.core.pane_meta(p)
+            Event::PaneMeta(pane) => {
+                if self.in_session(pane)
+                    && let Some(meta) = self.core.pane_meta(pane)
                 {
                     let mut state = lock(&self.state);
-                    if state.sent_meta.get(&p) != Some(&meta) {
-                        state.sent_meta.insert(p, meta.clone());
+                    if state.sent_meta.get(&pane) != Some(&meta) {
+                        state.sent_meta.insert(pane, meta.clone());
                         drop(state);
                         self.send(ServerCtl::PaneMeta(meta));
                     }
                 }
             }
-            Event::PaneClosed(p) => {
+            Event::PaneClosed(pane) => {
                 let had = {
                     let mut state = lock(&self.state);
-                    state.sent_meta.remove(&p);
-                    state.subs.remove(&p).map(|sub| sub.task.abort())
+                    state.sent_meta.remove(&pane);
+                    state
+                        .subscriptions
+                        .remove(&pane)
+                        .map(|subscription| subscription.task.abort())
                 };
                 // A scoped guest is only told about panes it could see.
                 if had.is_some() || self.authz.scope == Scope::Daemon {
-                    self.send(ServerCtl::PaneClosed { pane_id: p });
+                    self.send(ServerCtl::PaneClosed { pane_id: pane });
                 }
             }
             Event::Echo(hint) => {
@@ -976,9 +978,9 @@ impl Client {
                     });
                 }
             }
-            Event::Decided(d) => {
-                if self.pane_allowed(d.pane_id) {
-                    self.send(ServerCtl::Decided(d));
+            Event::Decided(decided) => {
+                if self.pane_allowed(decided.pane_id) {
+                    self.send(ServerCtl::Decided(decided));
                 }
             }
             Event::Command(mark) => {
@@ -1027,19 +1029,25 @@ impl Client {
                     mailbox.put(proto::PeerPush::Changed(peer));
                 }
             }
-            Event::Presence(mut p) => {
-                if p.focus.is_some_and(|f| !self.pane_allowed(f)) {
-                    p.focus = None;
-                    p.typing = false;
+            Event::Presence(mut presence) => {
+                if presence.focus.is_some_and(|pane| !self.pane_allowed(pane)) {
+                    presence.focus = None;
+                    presence.typing = false;
                 }
-                if p.cursor.is_some_and(|c| !self.pane_allowed(c.pane_id)) {
-                    p.cursor = None;
+                if presence
+                    .cursor
+                    .is_some_and(|cursor| !self.pane_allowed(cursor.pane_id))
+                {
+                    presence.cursor = None;
                 }
-                if p.viewport.is_some_and(|v| !self.pane_allowed(v.pane_id)) {
-                    p.viewport = None;
+                if presence
+                    .viewport
+                    .is_some_and(|viewport| !self.pane_allowed(viewport.pane_id))
+                {
+                    presence.viewport = None;
                 }
-                if p.actor != self.actor {
-                    self.send(ServerCtl::Presence(p));
+                if presence.actor != self.actor {
+                    self.send(ServerCtl::Presence(presence));
                 }
             }
             Event::Lease(lease) => {
@@ -1075,7 +1083,7 @@ impl Client {
                             .core
                             .art
                             .info(ink.artifact_id)
-                            .is_some_and(|i| self.artifact_visible(&i));
+                            .is_some_and(|info| self.artifact_visible(&info));
                         if !visible {
                             return;
                         }
@@ -1086,14 +1094,14 @@ impl Client {
                             .core
                             .art
                             .info(*artifact_id)
-                            .is_some_and(|i| self.artifact_visible(&i));
+                            .is_some_and(|info| self.artifact_visible(&info));
                         if !visible {
                             return;
                         }
                         (*event).clone()
                     }
-                    ArtifactEvent::Placed(p) => {
-                        if !self.pane_allowed(p.pane_id) {
+                    ArtifactEvent::Placed(placement) => {
+                        if !self.pane_allowed(placement.pane_id) {
                             return;
                         }
                         (*event).clone()
@@ -1111,7 +1119,7 @@ impl Client {
                         session_id: *session_id,
                         canvases: canvases
                             .iter()
-                            .filter(|c| self.pane_allowed(c.pane_id))
+                            .filter(|canvas| self.pane_allowed(canvas.pane_id))
                             .copied()
                             .collect(),
                     },
@@ -1120,7 +1128,9 @@ impl Client {
             }
             Event::Assist(push) => {
                 let send = match &push {
-                    proto::AssistPush::Foreground(fg) => self.in_session(fg.pane_id),
+                    proto::AssistPush::Foreground(foreground) => {
+                        self.in_session(foreground.pane_id)
+                    }
                     proto::AssistPush::Prompt(state) => {
                         self.core.assist.watching(self.id, state.pane_id)
                             && self.pane_allowed(state.pane_id)
@@ -1197,9 +1207,9 @@ impl Client {
                     self.send(ServerCtl::Approval(push));
                 }
             }
-            Event::Workflows(rev) => {
+            Event::Workflows(revision) => {
                 if self.caps.contains(Caps::WORKFLOWS) {
-                    self.send(ServerCtl::WorkflowsChanged { rev });
+                    self.send(ServerCtl::WorkflowsChanged { rev: revision });
                 }
             }
             Event::Browser { conn, push } => {
@@ -1247,7 +1257,7 @@ impl Client {
     fn sees_drive_asks(&self, pane: impl Into<Option<PaneId>>) -> bool {
         self.caps.contains(Caps::APPROVALS | Caps::DRIVE_ASKS)
             && is_owner(&self.core, &self.authz)
-            && pane.into().is_none_or(|p| self.in_session(p))
+            && pane.into().is_none_or(|pane| self.in_session(pane))
     }
 
     /// The open drive requests of the attached session, for a connection that just attached.
@@ -1287,13 +1297,14 @@ impl Client {
     /// Each needs Approver on the pane, and the first two a signature by this device.
     fn approval(
         &self,
-        req: proto::ApprovalRequest,
+        request: proto::ApprovalRequest,
     ) -> Result<proto::ApprovalResponse, proto::ApprovalError> {
         use proto::ApprovalError as E;
-        self.live().map_err(|e| E::Forbidden(e.to_string()))?;
+        self.live()
+            .map_err(|error| E::Forbidden(error.to_string()))?;
         let daemon = self.core.identity.daemon_id();
         let name = self.core.mp.name_of(self.id);
-        match req {
+        match request {
             proto::ApprovalRequest::ApproveEdited { decide, input } => {
                 if decide.actor != self.actor {
                     return Err(E::Forbidden(
@@ -1305,7 +1316,7 @@ impl Client {
                     .request_pane(decide.request_id)
                     .ok_or(E::NotFound)?;
                 self.allow(Need::Approve, Target::Pane(pane))
-                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                    .map_err(|error| E::Forbidden(error.to_string()))?;
                 if !grants::verify_approval(daemon, &decide) {
                     return Err(E::Forbidden(
                         "the decision is not signed by this device".into(),
@@ -1320,7 +1331,7 @@ impl Client {
                 if decide.option_id != allow {
                     return Err(E::Invalid("an edited request can only be allowed".into()));
                 }
-                let sig = decide.sig.clone();
+                let signature = decide.sig.clone();
                 let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
                     self.core.mp.audit.append(
                         AuditKind::Approval,
@@ -1343,7 +1354,7 @@ impl Client {
                                     decide.option_id,
                                     decide.actor,
                                 ),
-                                sig,
+                                sig: signature,
                             }),
                             ..self.authz.audit()
                         },
@@ -1365,15 +1376,15 @@ impl Client {
                     ));
                 }
                 self.allow(Need::Approve, Target::Pane(rule.pane_id))
-                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                    .map_err(|error| E::Forbidden(error.to_string()))?;
                 grants::check_rule(
                     daemon,
                     &rule,
                     proto::UnixMillis(crate::identity::now_millis()),
                 )
-                .map_err(|e| match e {
-                    grants::RuleError::Signature => E::Forbidden(e.to_string()),
-                    _ => E::Invalid(e.to_string()),
+                .map_err(|error| match error {
+                    grants::RuleError::Signature => E::Forbidden(error.to_string()),
+                    _ => E::Invalid(error.to_string()),
                 })?;
                 crate::approve::add_rule(&self.core, rule, name)?;
                 Ok(proto::ApprovalResponse::Done)
@@ -1381,7 +1392,7 @@ impl Client {
             proto::ApprovalRequest::RevokeRule { rule_id } => {
                 let pane = crate::approve::rule_pane(&self.core, rule_id).ok_or(E::NotFound)?;
                 self.allow(Need::Approve, Target::Pane(pane))
-                    .map_err(|e| E::Forbidden(e.to_string()))?;
+                    .map_err(|error| E::Forbidden(error.to_string()))?;
                 crate::approve::revoke(&self.core, rule_id, self.actor, &name)?;
                 Ok(proto::ApprovalResponse::Done)
             }
@@ -1390,9 +1401,8 @@ impl Client {
 
     /// Whether this connection is shown native password prompts for `pane`: it asked for
     /// them, shows the pane's session and may drive the pane. Guests who only watch never see
-    /// the prompt text.
-    /// Password prompts go to owner devices only: a host that is not a guest's own must never
-    /// ask for the guest's passwords.
+    /// the prompt text, and only owner devices qualify: a host that is not a guest's own must
+    /// never ask for the guest's passwords.
     fn may_answer(&self, pane: PaneId) -> bool {
         self.caps.contains(Caps::ASKPASS)
             && is_owner(&self.core, &self.authz)
@@ -1439,14 +1449,23 @@ impl Client {
         }
         let mut snapshot = (*snapshot).clone();
         if self.authz.scope != Scope::Daemon {
-            snapshot.panes.retain(|p| self.pane_allowed(p.pane_id));
+            snapshot
+                .panes
+                .retain(|pane| self.pane_allowed(pane.pane_id));
             let repos: std::collections::BTreeSet<String> = snapshot
                 .worktrees
                 .iter()
-                .filter(|w| snapshot.panes.iter().any(|p| p.worktree == w.path))
-                .map(|w| w.repo.clone())
+                .filter(|worktree| {
+                    snapshot
+                        .panes
+                        .iter()
+                        .any(|pane| pane.worktree == worktree.path)
+                })
+                .map(|worktree| worktree.repo.clone())
                 .collect();
-            snapshot.worktrees.retain(|w| repos.contains(&w.repo));
+            snapshot
+                .worktrees
+                .retain(|worktree| repos.contains(&worktree.repo));
         }
         Some(snapshot)
     }
@@ -1457,16 +1476,20 @@ impl Client {
     fn artifact_visible(&self, info: &ArtifactInfo) -> bool {
         match self.authz.scope {
             Scope::Daemon => true,
-            Scope::Session(s) => info.session_id == s,
+            Scope::Session(session) => info.session_id == session,
             Scope::Tab(_) | Scope::Pane(_) => {
-                info.anchor.is_some_and(|a| self.pane_allowed(a.pane_id))
-                    || info.canvas_panes.iter().any(|p| self.pane_allowed(*p))
+                info.anchor
+                    .is_some_and(|anchor| self.pane_allowed(anchor.pane_id))
+                    || info
+                        .canvas_panes
+                        .iter()
+                        .any(|pane| self.pane_allowed(*pane))
                     || self
                         .core
                         .art
                         .placement_panes(info.artifact_id)
                         .into_iter()
-                        .any(|p| self.pane_allowed(p))
+                        .any(|pane| self.pane_allowed(pane))
             }
         }
     }
@@ -1475,17 +1498,18 @@ impl Client {
         self.core
             .art
             .info(id)
-            .filter(|i| self.artifact_visible(i))
+            .filter(|info| self.artifact_visible(info))
             .ok_or_else(|| ArtifactError::NotFound(format!("artifact {id}")))
     }
 
-    async fn artifact(&self, req: ArtifactRequest) -> Result<ArtifactResponse, ArtifactError> {
-        let (need, target) = policy::artifact(&req);
+    /// Gated by the policy table and the artifact's visibility.
+    async fn artifact(&self, request: ArtifactRequest) -> Result<ArtifactResponse, ArtifactError> {
+        let (need, target) = policy::artifact(&request);
         self.allow(need, target)
-            .map_err(|e| ArtifactError::Forbidden(e.to_string()))?;
+            .map_err(|error| ArtifactError::Forbidden(error.to_string()))?;
         let core = &self.core;
         let art = &core.art;
-        match req {
+        match request {
             ArtifactRequest::List { session_id } => {
                 if !core.session_visible(session_id, self.authz.scope) {
                     return Err(ArtifactError::NotFound(format!("session {session_id}")));
@@ -1494,7 +1518,7 @@ impl Client {
                 Ok(ArtifactResponse::List(
                     art.list(session_id)
                         .into_iter()
-                        .filter(|i| self.artifact_visible(i))
+                        .filter(|info| self.artifact_visible(info))
                         .collect(),
                 ))
             }
@@ -1505,22 +1529,23 @@ impl Client {
                         create.session_id
                     )));
                 }
-                if let Some(a) = create.anchor
-                    && core.session_of_pane(a.pane_id) != Some(create.session_id)
+                if let Some(anchor) = create.anchor
+                    && core.session_of_pane(anchor.pane_id) != Some(create.session_id)
                 {
                     return Err(ArtifactError::Invalid(
                         "the anchor pane is in another session".into(),
                     ));
                 }
                 let (mut info, _) = art.create(self.actor, &create, None)?;
-                if let Some(req) = create.anchor {
-                    match crate::art::Art::resolve_anchor(core, info.artifact_id, req) {
+                if let Some(requested) = create.anchor {
+                    match crate::art::Art::resolve_anchor(core, info.artifact_id, requested) {
                         Ok(anchor) => {
-                            info = art.update(info.artifact_id, |i| i.anchor = Some(anchor))?
+                            info =
+                                art.update(info.artifact_id, |info| info.anchor = Some(anchor))?
                         }
-                        Err(e) => {
+                        Err(error) => {
                             let _ = art.delete(info.artifact_id);
-                            return Err(e);
+                            return Err(error);
                         }
                     }
                 }
@@ -1553,8 +1578,8 @@ impl Client {
             }
             ArtifactRequest::Delete { artifact_id } => {
                 let info = self.visible_artifact(artifact_id)?;
-                if let Some(a) = info.anchor
-                    && let Some(entry) = core.pane(a.pane_id)
+                if let Some(anchor) = info.anchor
+                    && let Some(entry) = core.pane(anchor.pane_id)
                 {
                     entry.pane.anchor_remove(artifact_id.0);
                 }
@@ -1567,7 +1592,7 @@ impl Client {
                     Ok(info) => info,
                     // Closing its last pane closed the session, and its artifacts with it.
                     Err(ArtifactError::NotFound(_)) if !info.canvas_panes.is_empty() => info,
-                    Err(e) => return Err(e),
+                    Err(error) => return Err(error),
                 };
                 core.emit_artifact(
                     info.session_id,
@@ -1595,17 +1620,21 @@ impl Client {
                     entry.pane.anchor_remove(artifact_id.0);
                 }
                 let anchor = match anchor {
-                    Some(req) => {
-                        if core.session_of_pane(req.pane_id) != Some(info.session_id) {
+                    Some(requested) => {
+                        if core.session_of_pane(requested.pane_id) != Some(info.session_id) {
                             return Err(ArtifactError::Invalid(
                                 "the anchor pane is in another session".into(),
                             ));
                         }
-                        Some(crate::art::Art::resolve_anchor(core, artifact_id, req)?)
+                        Some(crate::art::Art::resolve_anchor(
+                            core,
+                            artifact_id,
+                            requested,
+                        )?)
                     }
                     None => None,
                 };
-                let info = art.update(artifact_id, |i| i.anchor = anchor)?;
+                let info = art.update(artifact_id, |info| info.anchor = anchor)?;
                 core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
                 Ok(ArtifactResponse::Info(info))
             }
@@ -1619,8 +1648,8 @@ impl Client {
                     return Err(ArtifactError::NotFound(format!("version {version}")));
                 }
                 let (image, _) = art.read_blob(&png)?;
-                let info = art.update(artifact_id, |i| {
-                    i.preview = Some(proto::Preview { image, version });
+                let info = art.update(artifact_id, |info| {
+                    info.preview = Some(proto::Preview { image, version });
                 })?;
                 if version == info.version {
                     art.checkpoint(artifact_id, self.actor, Some(image), None);
@@ -1639,7 +1668,7 @@ impl Client {
                     crate::art::export(&core.art, artifact_id, version, format)
                 })
                 .await
-                .map_err(|e| ArtifactError::Failed(e.to_string()))?
+                .map_err(|error| ArtifactError::Failed(error.to_string()))?
                 .map(ArtifactResponse::Exported)
             }
             ArtifactRequest::ExcalidrawGet { artifact_id, since } => {
@@ -1673,26 +1702,26 @@ impl Client {
                     rejected: applied.lost,
                 })
             }
-            ArtifactRequest::Place(req) => {
-                self.visible_artifact(req.artifact_id)?;
-                if let Some(old) = req.replace {
+            ArtifactRequest::Place(place) => {
+                self.visible_artifact(place.artifact_id)?;
+                if let Some(old) = place.replace {
                     let mine = art
                         .placement(old)
-                        .is_some_and(|p| self.pane_allowed(p.pane_id));
+                        .is_some_and(|placement| self.pane_allowed(placement.pane_id));
                     if !mine {
                         return Err(ArtifactError::NotFound(format!("placement {old}")));
                     }
                 }
-                let core2 = Arc::clone(core);
+                let core_handle = Arc::clone(core);
                 let (placement, replaced) = tokio::task::spawn_blocking(move || {
-                    crate::art::place::place(&core2, req, proto::PlacementSource::User)
+                    crate::art::place::place(&core_handle, place, proto::PlacementSource::User)
                 })
                 .await
-                .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                .map_err(|error| ArtifactError::Failed(error.to_string()))??;
                 // Finishing a drawing from the overlay records that version.
                 if art
                     .info(placement.artifact_id)
-                    .is_some_and(|i| i.version == placement.version)
+                    .is_some_and(|info| info.version == placement.version)
                 {
                     art.checkpoint(
                         placement.artifact_id,
@@ -1717,16 +1746,16 @@ impl Client {
                 Ok(ArtifactResponse::Placed(placement))
             }
             ArtifactRequest::Unplace { placement_id } => {
-                let p = art
+                let placement = art
                     .placement(placement_id)
-                    .filter(|p| self.pane_allowed(p.pane_id))
+                    .filter(|placement| self.pane_allowed(placement.pane_id))
                     .ok_or_else(|| ArtifactError::NotFound(format!("placement {placement_id}")))?;
                 crate::art::place::unplace(core, placement_id);
-                if let Some(session) = core.session_of_pane(p.pane_id) {
+                if let Some(session) = core.session_of_pane(placement.pane_id) {
                     core.emit_artifact(
                         session,
                         ArtifactEvent::Unplaced {
-                            pane_id: p.pane_id,
+                            pane_id: placement.pane_id,
                             placement_id,
                         },
                         None,
@@ -1738,13 +1767,13 @@ impl Client {
                 let _ = art.check_placements(core);
                 Ok(ArtifactResponse::Placements(art.placements(pane_id)))
             }
-            ArtifactRequest::Import(req) => {
-                let (core2, actor) = (Arc::clone(core), self.actor);
+            ArtifactRequest::Import(import) => {
+                let (core_handle, actor) = (Arc::clone(core), self.actor);
                 let (placement, info) = tokio::task::spawn_blocking(move || {
-                    crate::art::place::import(&core2, actor, req)
+                    crate::art::place::import(&core_handle, actor, import)
                 })
                 .await
-                .map_err(|e| ArtifactError::Failed(e.to_string()))??;
+                .map_err(|error| ArtifactError::Failed(error.to_string()))??;
                 core.emit_artifact(info.session_id, ArtifactEvent::Created(info.clone()), None);
                 core.emit_artifact(
                     info.session_id,
@@ -1799,7 +1828,7 @@ impl Client {
         let core = &self.core;
         let art = &core.art;
         self.visible_artifact(artifact_id)?;
-        let then = art.history_entry(artifact_id, version)?;
+        let restored = art.history_entry(artifact_id, version)?;
         let info = match art.restore_plan(artifact_id, version)? {
             crate::art::history::RestorePlan::Excalidraw(put) => {
                 let applied = art.ex_put(put)?;
@@ -1830,17 +1859,17 @@ impl Client {
             }
         };
         // The old render shows the same content; without one the daemon renders it.
-        let image = match then.image {
+        let image = match restored.image {
             Some(image) => Some(image),
             None => {
-                let core2 = Arc::clone(core);
+                let core = Arc::clone(core);
                 tokio::task::spawn_blocking(move || {
-                    let e =
-                        crate::art::export(&core2.art, artifact_id, None, proto::ExportFormat::Png)
+                    let export =
+                        crate::art::export(&core.art, artifact_id, None, proto::ExportFormat::Png)
                             .ok()?;
-                    match e.blob {
-                        Some(hash) => core2.art.read_blob(&hash).ok().map(|(i, _)| i),
-                        None => core2.art.put_blob(&e.data).ok(),
+                    match export.blob {
+                        Some(hash) => core.art.read_blob(&hash).ok().map(|(image, _)| image),
+                        None => core.art.put_blob(&export.data).ok(),
                     }
                 })
                 .await
@@ -1849,19 +1878,19 @@ impl Client {
             }
         };
         let info = match image {
-            Some(image) => art.update(artifact_id, |i| {
-                i.preview = Some(proto::Preview {
+            Some(image) => art.update(artifact_id, |info| {
+                info.preview = Some(proto::Preview {
                     image,
-                    version: i.version,
+                    version: info.version,
                 });
             })?,
             None => info,
         };
         core.emit_artifact(info.session_id, ArtifactEvent::Info(info.clone()), None);
         if let Some(image) = image {
-            for p in crate::art::place::reshow(core, artifact_id, info.version, image) {
-                if let Some(session) = core.session_of_pane(p.pane_id) {
-                    core.emit_artifact(session, ArtifactEvent::Placed(p), None);
+            for placement in crate::art::place::reshow(core, artifact_id, info.version, image) {
+                if let Some(session) = core.session_of_pane(placement.pane_id) {
+                    core.emit_artifact(session, ArtifactEvent::Placed(placement), None);
                 }
             }
         }
@@ -1883,8 +1912,8 @@ impl Client {
                 reason,
             });
         };
-        if let Err(e) = self.allow(Need::Draw, Target::Any) {
-            return refuse(e.to_string());
+        if let Err(error) = self.allow(Need::Draw, Target::Any) {
+            return refuse(error.to_string());
         }
         let Ok(info) = self.visible_artifact(ink.artifact_id) else {
             return refuse(format!("no artifact {}", ink.artifact_id));
@@ -1921,7 +1950,9 @@ impl Client {
         };
         let session = session.ok_or("no such pane or session")?;
         if let Some(id) = artifact_id {
-            let info = self.visible_artifact(*id).map_err(|e| e.to_string())?;
+            let info = self
+                .visible_artifact(*id)
+                .map_err(|error| error.to_string())?;
             if info.session_id != session {
                 return Err("the drawing belongs to another session".into());
             }
@@ -1944,7 +1975,7 @@ impl Client {
                 },
                 None,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| error.to_string())?;
         *artifact_id = Some(info.artifact_id);
         self.core
             .emit_artifact(session, ArtifactEvent::Created(info.clone()), None);
@@ -1954,7 +1985,7 @@ impl Client {
     /// Ports of panes outside a scoped grant are hidden (host-wide ones too).
     fn scoped_ports(&self, mut ports: Vec<proto::PortInfo>) -> Vec<proto::PortInfo> {
         if self.authz.scope != Scope::Daemon {
-            ports.retain(|p| p.pane_id.is_some_and(|pane| self.pane_allowed(pane)));
+            ports.retain(|port| port.pane_id.is_some_and(|pane| self.pane_allowed(pane)));
         }
         ports
     }
@@ -1988,14 +2019,15 @@ impl Client {
                     let core = Arc::clone(&client.core);
                     tokio::task::spawn_blocking(move || run(&entry, &core))
                         .await
-                        .unwrap_or_else(|e| Err(RpcError::Internal(e.to_string())))
+                        .unwrap_or_else(|join_error| {
+                            Err(RpcError::Internal(join_error.to_string()))
+                        })
                 }
             };
             client.send(answer(result));
         });
     }
 
-    /// Serves one history page on the `bulk` stream.
     fn fetch_history(self: &Arc<Self>, pane_id: PaneId, snapshot_seq: Seq, offset: u64, max: u32) {
         let client = Arc::clone(self);
         tokio::spawn(async move {
@@ -2003,10 +2035,10 @@ impl Client {
                 .core
                 .pane(pane_id)
                 .filter(|_| client.in_session(pane_id))
-                .map(|e| Arc::clone(&e.pane));
+                .map(|entry| Arc::clone(&entry.pane));
             let max = max.clamp(16 << 10, 2 << 20);
             let viewer = client.viewer(pane_id);
-            let chunk = match pane {
+            let page = match pane {
                 Some(pane) => tokio::task::spawn_blocking(move || {
                     pane.history_page(viewer, snapshot_seq, offset, max)
                 })
@@ -2015,17 +2047,17 @@ impl Client {
                 .flatten(),
                 None => None,
             };
-            let msg = match chunk {
-                Some(c) => Bulk::HistoryPage {
+            let message = match page {
+                Some(page) => Bulk::HistoryPage {
                     pane_id,
                     snapshot_seq,
                     offset,
-                    next_offset: c.next_offset,
-                    total_len: c.total_len,
-                    raw_len: c.raw_len,
-                    pages: c.pages,
-                    done: c.done,
-                    data: c.zstd,
+                    next_offset: page.next_offset,
+                    total_len: page.total_len,
+                    raw_len: page.raw_len,
+                    pages: page.pages,
+                    done: page.done,
+                    data: page.zstd,
                 },
                 None => Bulk::HistoryGone {
                     pane_id,
@@ -2044,29 +2076,32 @@ impl Client {
                 *bulk = Some(stream);
             }
             if let Some(stream) = bulk.as_mut()
-                && let Err(e) = net::send(stream, &msg).await
+                && let Err(error) = net::send(stream, &message).await
             {
-                tracing::debug!("bulk stream: {e}");
+                tracing::debug!("bulk stream: {error}");
                 *bulk = None;
             }
         });
     }
 
-    async fn handle_ctl(self: &Arc<Self>, msg: ClientCtl) {
-        // expired grant ends the connection here, not at the next reconnect.
+    async fn handle_ctl(self: &Arc<Self>, message: ClientCtl) {
+        // Every message is checked against the live grant table: a revoked or expired grant
+        // ends the connection here, not at the next reconnect.
         if self.live().is_err() {
             return;
         }
         self.core.mp.heard(&self.core, self.id);
-        match msg {
+        match message {
             ClientCtl::Hello(_) => {}
             ClientCtl::Peer(update) => {
                 // Drafts are typed to be sent: the same roles as the composer path.
                 let allowed = match &update {
-                    proto::PeerUpdate::Draft(Some(d)) => {
-                        self.permit("Draft", Need::Prompt, Target::Pane(d.pane_id))
+                    proto::PeerUpdate::Draft(Some(draft)) => {
+                        self.permit("Draft", Need::Prompt, Target::Pane(draft.pane_id))
                     }
-                    proto::PeerUpdate::Viewport(Some(v)) => self.pane_allowed(v.pane_id),
+                    proto::PeerUpdate::Viewport(Some(viewport)) => {
+                        self.pane_allowed(viewport.pane_id)
+                    }
                     _ => true,
                 };
                 if allowed {
@@ -2081,18 +2116,18 @@ impl Client {
                 }
             }
             ClientCtl::Unsubscribe { pane_id } => {
-                if let Some(sub) = lock(&self.state).subs.remove(&pane_id) {
-                    sub.task.abort();
+                if let Some(subscription) = lock(&self.state).subscriptions.remove(&pane_id) {
+                    subscription.task.abort();
                 }
             }
             ClientCtl::Visible { mut pane_ids } => {
-                pane_ids.retain(|&p| self.pane_allowed(p));
+                pane_ids.retain(|&pane| self.pane_allowed(pane));
                 lock(&self.state).visible = pane_ids;
                 self.reclassify();
                 self.view_changed();
             }
             ClientCtl::Focus { pane_id } => {
-                let pane_id = pane_id.filter(|&p| self.pane_allowed(p));
+                let pane_id = pane_id.filter(|&pane| self.pane_allowed(pane));
                 if let Some(pane) = pane_id {
                     crate::ws::pane_focused(&self.core, pane);
                     // A quiet terminal stopped polling its modes: fresh ones before typing.
@@ -2121,7 +2156,7 @@ impl Client {
                 let viewer = self.viewer(pane_id);
                 self.query(
                     pane_id,
-                    move |e, _| e.pane.search(viewer, &query, cursor, limit),
+                    move |entry, _| entry.pane.search(viewer, &query, cursor, limit),
                     move |result| ServerCtl::SearchResult {
                         req_id,
                         pane_id,
@@ -2137,10 +2172,11 @@ impl Client {
                 let viewer = self.viewer(pane_id);
                 self.query(
                     pane_id,
-                    move |e, core| {
-                        let cwd = lock(&e.meta).cwd.clone().map(std::path::PathBuf::from);
+                    move |entry, core| {
+                        let cwd = lock(&entry.meta).cwd.clone().map(std::path::PathBuf::from);
                         let home = core.cfg.pane_var("HOME").map(std::path::PathBuf::from);
-                        Ok(e.pane
+                        Ok(entry
+                            .pane
                             .links(viewer, commands, cwd.as_deref(), home.as_deref()))
                     },
                     move |result| ServerCtl::LinksResult {
@@ -2154,7 +2190,7 @@ impl Client {
                 let viewer = self.viewer(pane_id);
                 self.query(
                     pane_id,
-                    move |e, _| Ok(e.pane.commands(viewer)),
+                    move |entry, _| Ok(entry.pane.commands(viewer)),
                     move |result| ServerCtl::CommandsResult {
                         req_id,
                         pane_id,
@@ -2170,7 +2206,7 @@ impl Client {
                 let viewer = self.viewer(pane_id);
                 self.query(
                     pane_id,
-                    move |e, _| e.pane.command_output(viewer, command_id),
+                    move |entry, _| entry.pane.command_output(viewer, command_id),
                     move |result| ServerCtl::CommandOutputResult {
                         req_id,
                         pane_id,
@@ -2184,6 +2220,7 @@ impl Client {
                 }
                 lock(&self.state).sizes.insert(pane_id, size);
                 // Viewers keep their size for later but never size the PTY; with a lease,
+                // only the holder does (`FollowLease`).
                 let sizes_pty = self.allow(Need::Drive, Target::Pane(pane_id)).is_ok()
                     && self.core.mp.may_size(pane_id, self.actor.principal);
                 if sizes_pty && let Some(entry) = self.core.pane(pane_id) {
@@ -2192,8 +2229,8 @@ impl Client {
                 }
             }
             ClientCtl::Ack { pane_id, seq } => {
-                if let Some(sub) = lock(&self.state).subs.get(&pane_id) {
-                    sub.acks.send_replace(seq);
+                if let Some(subscription) = lock(&self.state).subscriptions.get(&pane_id) {
+                    subscription.acks.send_replace(seq);
                 }
             }
             ClientCtl::Decide(decide) => self.decide(decide),
@@ -2205,16 +2242,17 @@ impl Client {
                     .take_control(&self.core, self.id, &self.authz, pane_id, force)
                 {
                     Ok(_) => self.send(ServerCtl::Lease(self.core.mp.lease(pane_id))),
-                    Err(e) => self.send(ServerCtl::Forbidden {
+                    Err(error) => self.send(ServerCtl::Forbidden {
                         what: "LeaseRequest".into(),
-                        reason: e.to_string(),
+                        reason: error.to_string(),
                     }),
                 }
             }
+            // Only `LastInput` / `FollowLease` sizing exist.
             ClientCtl::SetSizePolicy { .. } => {}
-            ClientCtl::Presence(p) => {
-                if p.actor == self.actor {
-                    self.core.mp.presence(&self.core, self.id, p);
+            ClientCtl::Presence(presence) => {
+                if presence.actor == self.actor {
+                    self.core.mp.presence(&self.core, self.id, presence);
                 }
             }
             ClientCtl::Ping { nonce } => self.send(ServerCtl::Pong { nonce }),
@@ -2293,15 +2331,15 @@ impl Client {
                             message,
                         },
                     },
-                    Err(e) => proto::OpOutcome::Failed {
+                    Err(error) => proto::OpOutcome::Failed {
                         code: proto::OpError::Forbidden,
-                        message: e.to_string(),
+                        message: error.to_string(),
                     },
                 };
                 // Send this client's layout first so the result never precedes it.
                 let session = lock(&self.state).session;
                 if let Some(layout) =
-                    session.and_then(|s| self.core.layout_for(s, self.authz.scope))
+                    session.and_then(|session| self.core.layout_for(session, self.authz.scope))
                 {
                     self.send_layout(layout);
                 }
@@ -2325,8 +2363,8 @@ impl Client {
         let Some(pane) = self.core.request_pane(decide.request_id) else {
             return refuse("no such approval request".into());
         };
-        if let Err(e) = self.allow(Need::Approve, Target::Pane(pane)) {
-            return refuse(e.to_string());
+        if let Err(error) = self.allow(Need::Approve, Target::Pane(pane)) {
+            return refuse(error.to_string());
         }
         // Letting an agent drive the user's panes is the owner's call alone, never a guest's.
         let drive = self.core.term.asks.caller_of(decide.request_id).is_some();
@@ -2357,7 +2395,7 @@ impl Client {
             return refuse("the decision is not signed by this device".into());
         }
         let name = self.core.mp.name_of(self.id);
-        let sig = decide.sig.clone();
+        let signature = decide.sig.clone();
         let signed_bytes = proto::approval_signing_bytes(
             daemon,
             decide.request_id,
@@ -2378,13 +2416,13 @@ impl Client {
                 ballot,
                 decide.request_id,
                 decide.option_id,
-                (signed_bytes, sig.clone()),
+                (signed_bytes, signature.clone()),
             )
         };
         match gate {
             Ok(crate::mp::Gate::Proceed) => {}
             Ok(crate::mp::Gate::Held) => return,
-            Err(e) => return refuse(e.to_string()),
+            Err(error) => return refuse(error.to_string()),
         }
         let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
             let signed = proto::approval_signing_bytes(
@@ -2406,7 +2444,7 @@ impl Client {
                         tool: details.tool.clone(),
                         summary: details.summary.clone(),
                         signed,
-                        sig,
+                        sig: signature,
                     }),
                     ..self.authz.audit()
                 },
@@ -2423,25 +2461,27 @@ impl Client {
     }
 
     /// A workspace request, gated by the policy table and filtered to the scope.
-    async fn workspace(&self, req: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
-        let (need, target) = policy::workspace(&req);
+    async fn workspace(&self, request: WorkspaceRequest) -> Result<WorkspaceResponse, WsError> {
+        let (need, target) = policy::workspace(&request);
         self.allow(need, target)
-            .map_err(|e| WsError::Denied(e.to_string()))?;
+            .map_err(|error| WsError::Denied(error.to_string()))?;
         // A prompter may review an agent's turns and send it notes, but only into an agent.
-        if let WorkspaceRequest::SendReview(r) = &req
-            && self.allow(Need::Drive, Target::Pane(r.pane_id)).is_err()
-            && !self.core.is_agent_pane(r.pane_id)
+        if let WorkspaceRequest::SendReview(review) = &request
+            && self
+                .allow(Need::Drive, Target::Pane(review.pane_id))
+                .is_err()
+            && !self.core.is_agent_pane(review.pane_id)
         {
             return Err(WsError::Denied(
                 "review notes from a prompter go to agent panes only".into(),
             ));
         }
-        let result = crate::ws::handle(&self.core, &self.ws, req).await?;
+        let result = crate::ws::handle(&self.core, &self.ws, request).await?;
         Ok(match result {
             WorkspaceResponse::Ports(ports) => WorkspaceResponse::Ports(self.scoped_ports(ports)),
             WorkspaceResponse::Attention(mut list) if self.authz.scope != Scope::Daemon => {
-                list.items.retain(|i| self.pane_allowed(i.pane_id));
-                list.unseen = list.items.iter().filter(|i| !i.seen).count() as u32;
+                list.items.retain(|item| self.pane_allowed(item.pane_id));
+                list.unseen = list.items.iter().filter(|item| !item.seen).count() as u32;
                 WorkspaceResponse::Attention(list)
             }
             other => other,
@@ -2451,29 +2491,31 @@ impl Client {
     /// An input-assistance request, gated by the policy table and the pane's scope.
     async fn assist(
         &self,
-        req: proto::AssistRequest,
+        request: proto::AssistRequest,
     ) -> Result<proto::AssistResponse, proto::AssistError> {
-        let (need, target) = policy::assist(&req);
+        let (need, target) = policy::assist(&request);
         self.allow(need, target)
-            .map_err(|e| proto::AssistError::Denied(e.to_string()))?;
-        if let Some(pane) = policy::assist_pane(&req)
+            .map_err(|error| proto::AssistError::Denied(error.to_string()))?;
+        if let Some(pane) = policy::assist_pane(&request)
             && !self.pane_allowed(pane)
         {
             return Err(proto::AssistError::UnknownPane);
         }
-        let audit = match &req {
-            proto::AssistRequest::AnswerBlocked(a) => Some((a.pane_id, a.label.clone())),
+        let audit = match &request {
+            proto::AssistRequest::AnswerBlocked(answer) => {
+                Some((answer.pane_id, answer.label.clone()))
+            }
             _ => None,
         };
         if let Some((pane, _)) = &audit {
             self.screen_answer_allowed(*pane)
-                .map_err(|e| proto::AssistError::Denied(e.to_string()))?;
+                .map_err(|error| proto::AssistError::Denied(error.to_string()))?;
         }
         let caller = crate::assist::Caller {
             conn: self.id,
             actor: self.actor,
         };
-        let result = crate::assist::handle(&self.core, caller, req).await;
+        let result = crate::assist::handle(&self.core, caller, request).await;
         if let (Some((pane, label)), Ok(_)) = (audit, &result) {
             let name = self.core.mp.name_of(self.id);
             self.core.mp.audit.append(
@@ -2548,11 +2590,10 @@ impl Client {
         Ok(MpResponse::Approval(status))
     }
 
-    /// A multiplayer request.
-    async fn multiplayer(&self, req: MpRequest) -> Result<MpResponse, MpError> {
+    async fn multiplayer(&self, request: MpRequest) -> Result<MpResponse, MpError> {
         let core = &self.core;
         let mp = &core.mp;
-        match req {
+        match request {
             MpRequest::WhoAmI => Ok(MpResponse::Me(self.authz.join_info(&mp.name_of(self.id)))),
             MpRequest::Participants => {
                 Ok(MpResponse::Participants(mp.participants(core, &self.authz)))
@@ -2634,7 +2675,7 @@ impl Client {
             MpRequest::Leases => Ok(MpResponse::Leases(
                 mp.leases()
                     .into_iter()
-                    .filter(|l| self.pane_allowed(l.pane_id))
+                    .filter(|lease| self.pane_allowed(lease.pane_id))
                     .collect(),
             )),
             MpRequest::Prompt {
@@ -2645,6 +2686,7 @@ impl Client {
         }
     }
 
+    /// The composer path: sanitized text into an agent pane as a bracketed paste,
     /// then Enter. Not leased: prompts from several people interleave per message, never per
     /// keystroke.
     async fn prompt(
@@ -2663,7 +2705,7 @@ impl Client {
                 "prompts go to agent panes only; this pane runs a shell".into(),
             ));
         }
-        crate::mp::prompt::check(&text).map_err(|e| MpError::Invalid(e.to_string()))?;
+        crate::mp::prompt::check(&text).map_err(|error| MpError::Invalid(error.to_string()))?;
         let bytes = entry.pane.encode_input(InputPayload::Paste(text.clone()));
         entry
             .pane
@@ -2708,17 +2750,17 @@ impl Client {
 
     fn attach(&self, requested: Option<SessionId>) {
         let scope = self.authz.scope;
-        let exists = requested.is_some_and(|s| {
-            let known = lock(&self.core.layout).session(s).is_some();
-            known && self.core.session_visible(s, scope)
+        let exists = requested.is_some_and(|session| {
+            let known = lock(&self.core.layout).session(session).is_some();
+            known && self.core.session_visible(session, scope)
         });
         // A requested session that is gone falls back like `None` does, so a client that
         // remembered a closed session still lands somewhere (it is told which one).
         let missing = requested.filter(|_| !exists);
-        let (session, via) = if let Some(s) = requested.filter(|_| exists) {
-            (s, AttachVia::Requested)
-        } else if let Some(s) = self.core.recent_session_in(scope) {
-            (s, AttachVia::MostRecent)
+        let (session, via) = if let Some(session) = requested.filter(|_| exists) {
+            (session, AttachVia::Requested)
+        } else if let Some(session) = self.core.recent_session_in(scope) {
+            (session, AttachVia::MostRecent)
         } else if self.allow(Need::Own, Target::Daemon).is_err() {
             self.attach_failed(
                 proto::OpError::NotFound,
@@ -2730,7 +2772,7 @@ impl Client {
                 .core
                 .create_session(String::new(), PaneLaunch::Shell { cwd: None })
             {
-                Ok((s, _, _)) => (s, AttachVia::Created),
+                Ok((session, _, _)) => (session, AttachVia::Created),
                 Err((code, message)) => {
                     self.attach_failed(code, message);
                     return;
@@ -2764,7 +2806,7 @@ impl Client {
         let panes: Vec<PaneId> = layout
             .tabs
             .iter()
-            .flat_map(|t| crate::layout::leaves(&t.root).collect::<Vec<_>>())
+            .flat_map(|tab| crate::layout::leaves(&tab.root).collect::<Vec<_>>())
             .collect();
         self.send_layout(layout);
         for pane in panes {
@@ -2797,7 +2839,7 @@ impl Client {
                 session_id: session,
                 policy: mp.policy(session),
             });
-            for status in mp.approvals.all(|p| mp.policy_of_pane(&self.core, p)) {
+            for status in mp.approvals.all(|pane| mp.policy_of_pane(&self.core, pane)) {
                 if self.pane_allowed(status.pane_id) {
                     self.send(ServerCtl::ApprovalStatus(status));
                 }
@@ -2808,7 +2850,7 @@ impl Client {
             .art
             .canvases(session)
             .into_iter()
-            .filter(|c| self.pane_allowed(c.pane_id))
+            .filter(|canvas| self.pane_allowed(canvas.pane_id))
             .collect();
         self.send(ServerCtl::Artifact(ArtifactEvent::Canvases {
             session_id: session,
@@ -2818,16 +2860,16 @@ impl Client {
         // daemon hands them over itself on every attach (resume, reattach, new device).
         let _ = self.core.art.check_placements(&self.core);
         for pane in panes_of(&self.core, session, scope) {
-            for p in self.core.art.placements(pane) {
-                self.send(ServerCtl::Artifact(ArtifactEvent::Placed(p)));
+            for placement in self.core.art.placements(pane) {
+                self.send(ServerCtl::Artifact(ArtifactEvent::Placed(placement)));
             }
         }
     }
 
     fn reclassify(&self) {
         let state = lock(&self.state);
-        for (pane, sub) in &state.subs {
-            let _ = sub.cmds.send(StreamCmd::Class(state.class(*pane)));
+        for (pane, subscription) in &state.subscriptions {
+            let _ = subscription.cmds.send(StreamCmd::Class(state.class(*pane)));
         }
     }
 
@@ -2835,7 +2877,7 @@ impl Client {
         if mode == SubscribeMode::Meta {
             return;
         }
-        if lock(&self.state).subs.contains_key(&pane_id) {
+        if lock(&self.state).subscriptions.contains_key(&pane_id) {
             return;
         }
         let Some(entry) = self.core.pane(pane_id) else {
@@ -2847,7 +2889,7 @@ impl Client {
         let viewer = self.viewer(pane_id);
         // A since-join guest never resumes from before its view opened: the ring would
         // replay output it must not see.
-        let floor = viewer.map_or(Seq(0), |p| pane.view_start(p));
+        let floor = viewer.map_or(Seq(0), |principal| pane.view_start(principal));
         let start = match lock(&self.state).resume.remove(&pane_id) {
             Some(point) if point.snap_gen == pane.snap_gen && point.last_seq >= floor => {
                 Start::Resume(point.last_seq)
@@ -2880,12 +2922,12 @@ impl Client {
         let task = tokio::spawn(async move {
             match stream.run(start).await {
                 Ok(stats) => tracing::trace!(%pane_id, ?stats, "pane stream done"),
-                Err(e) => tracing::debug!(%pane_id, "pane stream: {e}"),
+                Err(error) => tracing::debug!(%pane_id, "pane stream: {error}"),
             }
         });
-        lock(&self.state).subs.insert(
+        lock(&self.state).subscriptions.insert(
             pane_id,
-            Sub {
+            Subscription {
                 acks,
                 cmds,
                 task: task.abort_handle(),
@@ -2894,13 +2936,13 @@ impl Client {
     }
 }
 
-/// Panes of a session visible to `scope`.
 fn panes_of(core: &Core, session: SessionId, scope: Scope) -> Vec<PaneId> {
     core.layout_for(session, scope)
-        .map(|l| {
-            l.tabs
+        .map(|layout| {
+            layout
+                .tabs
                 .iter()
-                .flat_map(|t| crate::layout::leaves(&t.root).collect::<Vec<_>>())
+                .flat_map(|tab| crate::layout::leaves(&tab.root).collect::<Vec<_>>())
                 .collect()
         })
         .unwrap_or_default()

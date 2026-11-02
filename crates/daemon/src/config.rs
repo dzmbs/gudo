@@ -37,9 +37,9 @@ impl RelayMode {
         match self {
             Self::Default => proto::TicketRelays::Default,
             Self::Disabled => proto::TicketRelays::Disabled,
-            Self::Custom(c) => proto::TicketRelays::Custom {
-                urls: c.urls.clone(),
-                auth_token: c.auth_token.clone(),
+            Self::Custom(custom) => proto::TicketRelays::Custom {
+                urls: custom.urls.clone(),
+                auth_token: custom.auth_token.clone(),
             },
         }
     }
@@ -107,12 +107,12 @@ pub struct Config {
     /// UDP address the iroh endpoint binds (port 0 picks one). `None` binds every interface,
     /// IPv4 and IPv6, on random ports.
     pub bind: Option<SocketAddr>,
-    /// Relay usage.
     pub relay: RelayMode,
     /// Shell for new panes; `$SHELL`, then `/bin/sh`, when `None`.
     pub shell: Option<PathBuf>,
     /// Extra environment for every pane (tests set a predictable prompt with it).
     pub pane_env: Vec<(String, String)>,
+    /// Bytes of raw output retained per pane for resuming clients.
     pub ring_capacity: usize,
     /// Scrollback the daemon's VT keeps per pane, in bytes.
     pub scrollback_bytes: usize,
@@ -167,20 +167,22 @@ pub struct Config {
     /// Microsoft's update service, where the `code` CLI is downloaded from on the user's
     /// request (tests point it at a local `file://` tree).
     pub vscode_update_url: String,
-    /// Push notifications.
     pub push: PushConfig,
     /// A pane's control lease moves to someone who asked for it once the holder has not typed
+    /// for this long (`multiplayer.lease_idle_secs` in `config.toml`).
     pub lease_idle: Duration,
     /// How long a new connection has to complete the QUIC handshake and send its `Hello`.
     /// Anyone can connect with a fresh key, so a silent one must not hold a slot for long.
     pub hello_timeout: Duration,
     /// How many connections may be open before their `Hello`.
     pub pre_auth: crate::preauth::PreAuthLimits,
+    /// When live presence calls someone typing, idle, away or gone.
     pub presence: PresenceTimes,
     /// Command history for completion and the line editor (`[history]` in `config.toml`).
     pub history: crate::assist::HistoryConfig,
+    /// Size caps for drawings and images.
     pub artifacts: ArtifactLimits,
-    /// Native password prompts (`[askpass]` in `config.toml`; docs/DAEMON.md §9).
+    /// Native password prompts (`[askpass]` in `config.toml`).
     pub askpass: AskpassConfig,
     /// The executable this daemon runs from, when its owner may replace it over the
     /// connection (`proto::info`): the new build is written next to it and renamed over it.
@@ -190,6 +192,7 @@ pub struct Config {
     /// client that cannot decode it.
     #[doc(hidden)]
     pub test_snapshot_format: Option<u32>,
+    /// Agent plan usage: refresh intervals and endpoints.
     pub usage: crate::usage::UsageConfig,
     /// The git-native workspace: repository watching, `gh`, worktree housekeeping.
     pub repos: RepoConfig,
@@ -362,7 +365,7 @@ impl Config {
     /// [multiplayer]
     /// lease_idle_secs = 5
     ///
-    /// [history]                    # docs/DAEMON.md §7
+    /// [history]
     /// enabled = true
     /// ignore_space = true          # commands typed with a leading space are not kept
     /// max_entries = 50000
@@ -371,7 +374,7 @@ impl Config {
     /// [terminal]
     /// image_storage_mb = 64        # kitty graphics images per pane and screen; 0 = off
     ///
-    /// [askpass]                    # docs/DAEMON.md §9
+    /// [askpass]
     /// enabled = true               # askpass helper in panes, detected prompts
     /// sudo = true                  # interactive `sudo` runs `sudo -A` while the app can answer
     /// timeout_secs = 300
@@ -385,12 +388,12 @@ impl Config {
     pub fn apply_user_file(&mut self) -> std::io::Result<()> {
         let path = self.state_dir.join("config.toml");
         let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e),
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
         };
         let file: UserFile = toml::from_str(&text)
-            .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))?;
+            .map_err(|error| std::io::Error::other(format!("{}: {error}", path.display())))?;
         self.fs_allow.extend(file.files.allow);
         if let Some(root) = file.worktrees.root {
             self.worktree_root = Some(root);
@@ -426,7 +429,7 @@ impl Config {
             self.relay = file
                 .relay
                 .mode()
-                .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))?;
+                .map_err(|error| std::io::Error::other(format!("{}: {error}", path.display())))?;
         }
         if let Some(enabled) = file.push.enabled {
             self.push.enabled = enabled;
@@ -437,8 +440,8 @@ impl Config {
         if let Some(ms) = file.push.delay_ms {
             self.push.delay = Duration::from_millis(ms);
         }
-        if let Some(on) = file.push.live_activity {
-            self.push.live_activity = on;
+        if let Some(enabled) = file.push.live_activity {
+            self.push.live_activity = enabled;
         }
         if let Some(ms) = file.push.activity_interval_ms {
             self.push.activity_interval = Duration::from_millis(ms);
@@ -447,26 +450,26 @@ impl Config {
             self.lease_idle = Duration::from_secs(secs);
         }
         let history = file.history;
-        if let Some(on) = history.enabled {
-            self.history.enabled = on;
+        if let Some(enabled) = history.enabled {
+            self.history.enabled = enabled;
         }
-        if let Some(on) = history.ignore_space {
-            self.history.ignore_space = on;
+        if let Some(enabled) = history.ignore_space {
+            self.history.ignore_space = enabled;
         }
         if let Some(max) = history.max_entries {
             self.history.max_entries = max.max(1);
         }
-        if let Some(on) = history.import {
-            self.history.import = on;
+        if let Some(enabled) = history.import {
+            self.history.import = enabled;
         }
         if let Some(mb) = file.terminal.image_storage_mb {
             self.image_storage_bytes = mb << 20;
         }
-        if let Some(on) = file.askpass.enabled {
-            self.askpass.enabled = on;
+        if let Some(enabled) = file.askpass.enabled {
+            self.askpass.enabled = enabled;
         }
-        if let Some(on) = file.askpass.sudo {
-            self.askpass.sudo = on;
+        if let Some(enabled) = file.askpass.sudo {
+            self.askpass.sudo = enabled;
         }
         if let Some(secs) = file.askpass.timeout_secs {
             self.askpass.timeout = Duration::from_secs(secs.max(1));
@@ -487,8 +490,8 @@ impl Config {
         self.pane_env
             .iter()
             .rev()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.into())
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into())
             .or_else(|| std::env::var_os(name))
     }
 
@@ -530,7 +533,7 @@ pub fn legacy_state_dir() -> PathBuf {
 }
 
 fn state_dir_named(mac: &str, xdg: &str) -> PathBuf {
-    if let Some(root) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
+    if let Some(root) = std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(root).join(xdg);
     }
     let home = std::env::var_os("HOME")
