@@ -4,29 +4,24 @@ import HostKit
 import PaneLayout
 import WebKit
 
-/// One action an agent took on a page, reported after it ran (`BrowserAgent.onAction`);
-/// recordings build on these.
+/// One action an agent took on a page, reported after it ran; recordings build on these.
 struct BrowserActionEntry {
-    /// The tool (`browser_click`, …).
     var tool: String
-    /// The element acted on: its ref, role, accessible name and index among the elements with
-    /// both, as the agent's last snapshot showed it.
+    /// The element as the agent's last snapshot showed it; `nth` is its index among elements with the same role and name.
     var ref: String?
     var role: String?
     var name: String?
     var nth: Int?
-    /// The tool's arguments, as JSON.
+    /// JSON.
     var args: String
     var urlBefore: URL?
     var urlAfter: URL?
     var time: Date
-    /// What came of it: "done", what changed, or why nothing did.
     var verdict: String
-    /// Playwright's selector for the element (`internal:role=button[name="Go"i]`), taken
-    /// before the action, and the locator it makes (`getByRole('button', { name: 'Go' })`).
+    /// Playwright selector and locator for the element, taken before the action.
     var selector: String?
     var locator: String?
-    /// The page (`BrowserPane.id`) and the agent's pane.
+    /// `BrowserPane.id`.
     var page: UUID
     var pane: HostPane
 
@@ -36,35 +31,27 @@ struct BrowserActionEntry {
     }
 }
 
-/// Runs agents' browser tools (`browser_*`, `crates/hostd/src/browser_tools.rs`) on the page
-/// beside the agent's pane, the one the user sees: a browser leaf in the pane's tab, opened by
-/// the first `browser_navigate`. Steps that are the user's (sign-ins, payments, purchases) wait
-/// for them on the device; the user can take the page over at any time.
-///
-/// Every action waits for what it started (a navigation, requests, the DOM settling), then says
-/// what changed; one that changed nothing is retried once as a plain `click()`, and then
-/// reported as having no effect, with why it may have been ignored.
+/// Runs agents' `browser_*` tools on the browser leaf beside the agent's pane, the page the user
+/// sees. Steps that are the user's (sign-ins, payments) wait for them on the device, and the user
+/// can take the page over at any time.
 @MainActor
 final class BrowserAgent {
     static let shared = BrowserAgent()
 
-    /// Calls in flight, by id (a closed call is cancelled).
     private var calls: [UInt64: Task<Void, Never>] = [:]
     /// The page each agent's pane acts on, once it switched tabs.
     private var active: [HostPane: UUID] = [:]
-    /// Tab numbers (`t1`, `t2`, …), never reused.
+    /// `t1`, `t2`, …; never reused.
     private var tabNumbers: [UUID: Int] = [:]
     private var nextTab = 1
 
-    /// Called after each action an agent takes on a page, on the main actor.
     var onAction: ((BrowserActionEntry) -> Void)?
 
-    /// One answer: text, and an image for screenshots.
     struct Answer {
         var text: String
         var image: Data?
         var mime = "image/jpeg"
-        /// A step to put to the agent's client for approval (it asks, then calls again approved).
+        /// A step for the agent's client to approve; it asks, then calls again approved.
         var approval: String?
 
         var json: String {
@@ -101,8 +88,6 @@ final class BrowserAgent {
     func cancel(_ id: UInt64) {
         calls.removeValue(forKey: id)?.cancel()
     }
-
-    // MARK: Tools
 
     private func perform(_ tool: String, _ args: [String: Any], pane: HostPane, window: WindowModel) async throws -> Answer {
         switch tool {
@@ -144,8 +129,8 @@ final class BrowserAgent {
             let entries: [[String: Any]] = try await page.recorded("network")
             let lines = entries.map { entry in
                 let status = (entry["status"] as? NSNumber)?.intValue ?? 0
-                let ms = (entry["ms"] as? NSNumber)?.intValue ?? 0
-                return "\(entry["method"] as? String ?? "GET") \(status) \(entry["url"] as? String ?? "") (\(entry["type"] as? String ?? ""), \(ms) ms)"
+                let milliseconds = (entry["ms"] as? NSNumber)?.intValue ?? 0
+                return "\(entry["method"] as? String ?? "GET") \(status) \(entry["url"] as? String ?? "") (\(entry["type"] as? String ?? ""), \(milliseconds) ms)"
             }
             return Answer(text: lines.isEmpty ? "No requests since the last read." : lines.joined(separator: "\n"))
         default:
@@ -153,7 +138,7 @@ final class BrowserAgent {
         }
     }
 
-    /// The page beside the agent's pane (the one it switched to, else the first).
+    /// The page the agent switched to, else the first beside its pane.
     private func page(for pane: HostPane, in window: WindowModel) async throws -> (BrowserMember, BrowserPane) {
         let members = pages(beside: pane, in: window)
         guard let member = members.first(where: { $0.id == active[pane] }) ?? members.first else {
@@ -175,7 +160,7 @@ final class BrowserAgent {
     }
 
     private func tabId(_ member: BrowserMember) -> String {
-        if let n = tabNumbers[member.id] { return "t\(n)" }
+        if let number = tabNumbers[member.id] { return "t\(number)" }
         tabNumbers[member.id] = nextTab
         nextTab += 1
         return "t\(nextTab - 1)"
@@ -225,7 +210,6 @@ final class BrowserAgent {
             time: .now, verdict: page.page.url == nil ? "did not load" : "done", page: page.id, pane: pane))
     }
 
-    /// An http(s) URL from what an agent wrote (`example.com`, `localhost:3000`).
     static func url(_ text: String) throws -> URL {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         let full: String
@@ -284,8 +268,6 @@ final class BrowserAgent {
         }
     }
 
-    // MARK: Acting
-
     private func act(
         _ tool: String, _ args: [String: Any], page: BrowserPane, member: BrowserMember, pane: HostPane, window: WindowModel
     ) async throws -> Answer {
@@ -299,9 +281,9 @@ final class BrowserAgent {
         let target = try await page.locate(args["target"] as? [String: Any])
         input["target"] = target.target
         if kind == "drag" {
-            let to = try await page.locate(args["to"] as? [String: Any])
-            guard to.target != nil, to.frame == target.frame else { throw BrowserCallError("Drag needs a to target in the same frame as target.") }
-            input["to"] = to.target
+            let destination = try await page.locate(args["to"] as? [String: Any])
+            guard destination.target != nil, destination.frame == target.frame else { throw BrowserCallError("Drag needs a to target in the same frame as target.") }
+            input["to"] = destination.target
         }
         page.agentActivity = Self.activity(kind, args)
         defer { done(page) }
@@ -318,8 +300,8 @@ final class BrowserAgent {
                 return Answer(text: "", approval: message)
             }
             bringForward(member, in: window)
-            let ok = await ask(page, kind: handoff ? .handoff : .approve, message: message)
-            guard ok else { throw BrowserCallError("The user declined: \(message)") }
+            let allowed = await ask(page, kind: handoff ? .handoff : .approve, message: message)
+            guard allowed else { throw BrowserCallError("The user declined: \(message)") }
             if handoff {
                 note = "The user did this step on the device.\n"
                 result = ActResult(done: [:], changes: ["the user acted"])
@@ -372,8 +354,8 @@ final class BrowserAgent {
         var needsUser: [String: Any]? { done["needsUser"] as? [String: Any] }
     }
 
-    /// Highlights the target, waits a moment so the user sees it, acts, waits for what the
-    /// action started and asks the page what changed.
+    /// Highlights the target briefly so the user sees it, acts, waits for what the action started
+    /// and asks the page what changed.
     private func act(_ page: BrowserPane, _ args: [String: Any], frame: String?, wait: Bool) async throws -> ActResult {
         var input = args
         input["phase"] = "show"
@@ -383,8 +365,7 @@ final class BrowserAgent {
         input["phase"] = "do"
         let id = UUID().uuidString
         input["id"] = id
-        // The Mac's own input when the page is on screen; the page script checks and lists the
-        // events, the app sends them.
+        // Native input when the page is on screen: the page script lists the events, the app sends them.
         let native = frame == nil && Self.nativeKinds.contains(input["kind"] as? String ?? "") ? await BrowserNativeInput.for(page.page) : nil
         if native != nil { input["native"] = true }
         let before = await page.activity()
@@ -406,10 +387,8 @@ final class BrowserAgent {
         return ActResult(done: done, changes: changes, intercepted: effect["intercepted"] as? String)
     }
 
-    /// What goes through the Mac's own input (`BrowserNativeInput`) when it is there.
     static let nativeKinds: Set<String> = ["click", "double_click", "hover", "type", "press", "scroll", "drag", "fill"]
 
-    /// Why an action may have done nothing, and what to try instead.
     static func noEffect(_ kind: String, intercepted: String?) -> String {
         switch kind {
         case "hover":
@@ -427,8 +406,7 @@ final class BrowserAgent {
         }
     }
 
-    /// Runs `go` (leaving the page) once the page lets it, now or after its leave check is
-    /// answered: then the note saying the check waits.
+    /// Runs `go` once the page allows leaving; returns a note when its leave check is still waiting.
     private func leave(_ page: BrowserPane, then go: @escaping @MainActor @Sendable () -> Void) async -> String? {
         let allowed = Task { await page.leavingAllowed() }
         guard let now = try? await page.untilBlocked({ await allowed.value }) else {
@@ -460,7 +438,6 @@ final class BrowserAgent {
         return Answer(text: (accept ? "Accepted" : "Dismissed") + " the \(dialog.kind.rawValue).\n" + (try await page.snapshot(["filter": "interactive"])))
     }
 
-    /// Files an action's file picker waits for (or none, to cancel it).
     private func choose(_ args: [String: Any], page: BrowserPane) async throws -> Answer {
         guard let chooser = page.fileChooser else {
             throw BrowserCallError("No file picker is open. Pass target (the file field, or the button or label that opens it).")
@@ -471,11 +448,11 @@ final class BrowserAgent {
         }
         let files = Self.payloads(args)
         guard !files.isEmpty else { throw BrowserCallError("paths names no files.") }
-        let dir = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var urls: [URL] = []
         for file in files.prefix(chooser.multiple ? files.count : 1) {
-            let url = dir.appending(path: (file["name"] as? String ?? "file").replacingOccurrences(of: "/", with: "_"))
+            let url = folder.appending(path: (file["name"] as? String ?? "file").replacingOccurrences(of: "/", with: "_"))
             try Data(base64Encoded: file["buffer"] as? String ?? "")?.write(to: url)
             urls.append(url)
         }
@@ -485,8 +462,7 @@ final class BrowserAgent {
         return Answer(text: "Chose \(urls.map(\.lastPathComponent).joined(separator: ", ")).\n" + (try await page.snapshot(["filter": "interactive"])))
     }
 
-    /// The files `browser_upload` carries (`files: [{name, mime_type, data}]`, read on the host)
-    /// as Playwright's payloads.
+    /// `browser_upload`'s `files: [{name, mime_type, data}]` as Playwright payloads.
     static func payloads(_ args: [String: Any]) -> [[String: Any]] {
         (args["files"] as? [[String: Any]] ?? []).map {
             ["name": $0["name"] as? String ?? "file", "mimeType": $0["mime_type"] as? String ?? "application/octet-stream",
@@ -534,8 +510,6 @@ final class BrowserAgent {
         return Answer(text: (met ? "Done waiting.\n" : "Still not there after \(Int(seconds)) s.\n") + snapshot)
     }
 
-    // MARK: Pictures
-
     private func screenshot(_ page: BrowserPane, annotate: Bool) async throws -> Answer {
         if annotate { await page.label(true) }
         defer { if annotate { Task { await page.label(false) } } }
@@ -555,15 +529,14 @@ final class BrowserAgent {
             throw BrowserCallError("region is [x0, y0, x1, y1] with x1 > x0 and y1 > y0, in screenshot pixels.")
         }
         let view = try await page.viewport()
-        let s = page.shotScale
-        let rect = CGRect(x: view.x + region[0] / s, y: view.y + region[1] / s, width: (region[2] - region[0]) / s, height: (region[3] - region[1]) / s)
+        let scale = page.shotScale
+        let rect = CGRect(
+            x: view.x + region[0] / scale, y: view.y + region[1] / scale,
+            width: (region[2] - region[0]) / scale, height: (region[3] - region[1]) / scale)
         let image = try await page.picture(view, region: rect, width: min(BrowserPane.maxShotWidth, rect.width * 2))
         return Answer(text: "Close-up of [\(region.map { String(Int($0)) }.joined(separator: ", "))].", image: image)
     }
 
-    // MARK: The user
-
-    /// Waits for the user on the device: approve a step, or do it themselves.
     private func ask(_ page: BrowserPane, kind: BrowserPane.AgentRequest.Kind, message: String) async -> Bool {
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -589,13 +562,13 @@ final class BrowserAgent {
         }
     }
 
-    /// A WebKit JavaScript error's own message (the page's exception), else the error.
+    /// The page's exception message for a WebKit JavaScript error, else the error.
     static func describe(_ error: any Error) -> String {
-        let ns = error as NSError
-        if let message = ns.userInfo["WKJavaScriptExceptionMessage"] as? String {
+        let nsError = error as NSError
+        if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
             return message.replacingOccurrences(of: "Error: ", with: "")
         }
-        return ns.localizedDescription
+        return nsError.localizedDescription
     }
 }
 

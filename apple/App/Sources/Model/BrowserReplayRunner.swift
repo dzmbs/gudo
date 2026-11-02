@@ -2,9 +2,8 @@ import DesignSystem
 import Foundation
 import WebKit
 
-/// Replay in Browser: runs a recorded session again in a new browser tab, finding each
-/// step's element by its Playwright selector, or on a miss by its role, name and index (the
-/// page changed since). Steps without either are skipped; what happened shows as toasts.
+/// Runs a recorded session again in a new browser tab, finding each step's element by its
+/// Playwright selector, else by role, name and index when the page changed since.
 @MainActor
 enum BrowserReplayRunner {
     static func run(_ session: ReplaySession, in window: WindowModel) {
@@ -55,7 +54,7 @@ enum BrowserReplayRunner {
         }
     }
 
-    /// The element's centre in the viewport (CSS pixels), scrolled into view.
+    /// The element's centre in viewport CSS pixels, scrolled into view.
     private static func locate(_ action: ReplayAction, _ pane: BrowserPane) async -> (point: CGPoint, healed: Bool)? {
         guard action.selector != nil || action.role != nil else { return nil }
         let script = """
@@ -86,8 +85,7 @@ enum BrowserReplayRunner {
         return (CGPoint(x: x.doubleValue, y: y.doubleValue), found[2] as? Bool ?? false)
     }
 
-    /// The step through the agent's own page script, at a point (or the focus). Steps that
-    /// wait for the user (paying, signing in) are skipped, never approved here.
+    /// Steps that wait for the user (paying, signing in) are skipped, never approved here.
     private static func act(_ action: ReplayAction, _ pane: BrowserPane, at point: CGPoint?) async -> Bool {
         var input = action.arguments
         input["kind"] = action.kind

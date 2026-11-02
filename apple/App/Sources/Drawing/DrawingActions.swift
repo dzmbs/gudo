@@ -10,12 +10,8 @@ import UIKit
 import AppKit
 #endif
 
-/// Where a finished drawing can go (the overlay's Send menu and a placement's menu): an agent
-/// pane on any host this window shows, a new agent started with it, the pasteboard, a file, or
-/// just the terminal. Every destination keeps the drawing in the pane's output too, so it can be
-/// sent again, copied or edited later.
+/// An agent pane on any host this window shows, as a place to send a finished drawing.
 nonisolated struct AgentDestination: Identifiable, Equatable, Sendable {
-    /// `host/pane`.
     var id: String { "\(hostId)/\(pane)" }
     var hostId: String
     var hostName: String
@@ -23,34 +19,32 @@ nonisolated struct AgentDestination: Identifiable, Equatable, Sendable {
     var agent: AgentKind
     /// The tab (or pane) title, to tell two Claude Codes apart.
     var title: String
-    /// On the drawing's own host (the image is already there; elsewhere it is uploaded).
+    /// On the drawing's own host the image is already there; elsewhere it is uploaded.
     var sameHost: Bool
 
     /// "Claude Code" or "Claude Code · fix-login" when the title says more than the agent.
     var label: String {
-        let t = title.trimmingCharacters(in: .whitespaces)
-        if t.isEmpty || t == agent.title || t.lowercased() == agent.rawValue { return agent.title }
-        return "\(agent.title) · \(t)"
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty || trimmed == agent.title || trimmed.lowercased() == agent.rawValue { return agent.title }
+        return "\(agent.title) · \(trimmed)"
     }
 }
 
-/// What to do with a finished drawing.
+/// What to do with a finished drawing. Every action also keeps it in the pane's output.
 nonisolated enum DrawingAction: Equatable, Sendable {
     case send(AgentDestination)
-    /// Starts Claude Code or Codex next to the pane, then attaches the drawing once it is ready.
+    /// Starts an agent next to the pane, then attaches the drawing once it is ready.
     case start(AgentKind)
-    /// The image, with the `.excalidraw` scene alongside (apps that understand it take it).
+    /// The image, with the `.excalidraw` scene alongside for apps that understand it.
     case copy
     /// The drawing as box-glyph text, for chats, commit messages and agents that read text.
     case copyText
-    /// iOS: the share sheet (Save Image, AirDrop, Messages…). Mac: the sharing picker.
     case share
     /// A file in one format: a save panel on the Mac, the share sheet on iOS.
     case export(DrawingExportFormat)
-    /// Nothing else: the drawing stays in the terminal output.
     case keep
 
-    /// Takes a copy away (pasteboard, file, share sheet); changes nothing on the host.
+    /// Takes a copy away; changes nothing on the host.
     var isTakeaway: Bool {
         switch self {
         case .copy, .copyText, .share, .export: true
@@ -60,7 +54,7 @@ nonisolated enum DrawingAction: Equatable, Sendable {
 
     var id: String {
         switch self {
-        case .send(let d): "send-\(d.id)"
+        case .send(let destination): "send-\(destination.id)"
         case .start(let kind): "start-\(kind.rawValue)"
         case .copy: "copy"
         case .copyText: "copyText"
@@ -71,7 +65,6 @@ nonisolated enum DrawingAction: Equatable, Sendable {
     }
 }
 
-/// The file formats a drawing exports to.
 nonisolated enum DrawingExportFormat: String, CaseIterable, Sendable {
     case png, svg, excalidraw, ascii
 
@@ -113,12 +106,11 @@ nonisolated enum DrawingExportFormat: String, CaseIterable, Sendable {
 }
 
 extension UTType {
-    /// `.excalidraw` scenes (imported in Info.plist: Excalidraw declares no type of its own).
+    /// Imported in Info.plist: Excalidraw declares no type of its own.
     nonisolated static let excalidraw = UTType(importedAs: "com.excalidraw.json", conformingTo: .json)
 }
 
-/// The menu both surfaces show, as data (SwiftUI in the overlay, UIMenu / NSMenu on a
-/// placement), so the two never drift apart.
+/// The menu the overlay and a placement both show, as data, so the two never drift apart.
 struct DrawingMenu {
     struct Item: Identifiable {
         var title: String
@@ -145,14 +137,14 @@ struct DrawingMenu {
     var sections: [Section]
 
     /// `primary` is left out of the list when the surface shows it as its own button.
-    /// `history`: the placement's drawing has a version history (Version History submenu,
-    /// filled when it opens).
     static func make(destinations: [AgentDestination], primary: AgentDestination?, canStart: Bool, includeKeep: Bool, placement: Bool, history: Bool = false) -> DrawingMenu {
         var sections: [Section] = []
         let others = destinations.filter { $0 != primary || placement }
         if !others.isEmpty {
-            sections.append(Section(title: "Send to", items: others.map { d in
-                Item(title: d.label, subtitle: d.sameHost ? nil : d.hostName, systemImage: d.agent.systemImage, action: .send(d))
+            sections.append(Section(title: "Send to", items: others.map { destination in
+                Item(
+                    title: destination.label, subtitle: destination.sameHost ? nil : destination.hostName,
+                    systemImage: destination.agent.systemImage, action: .send(destination))
             }))
         }
         if canStart {
@@ -187,16 +179,15 @@ struct DrawingMenu {
 }
 
 extension PaneDrawing {
-    /// The window this pane is shown in.
     var window: WindowModel? {
         workspace.flatMap { ActiveWindow.model(for: $0) } ?? ActiveWindow.model
     }
 
-    /// Every agent pane on every daemon host this window shows: the default target
-    /// (`agentTarget`) first, then this host's, then other hosts'.
+    /// Every agent pane on every daemon host this window shows: the default target first, then
+    /// this host's, then other hosts'.
     func agentDestinations() -> [AgentDestination] {
         guard let window else { return [] }
-        let myHost = workspace?.hostId
+        let thisHost = workspace?.hostId
         var result: [AgentDestination] = []
         for group in window.groups.groups where !group.isLocal {
             guard let daemon = window.app.hosts.connection(group.id) as? DaemonConnection, daemon.status.isLive else { continue }
@@ -206,30 +197,28 @@ extension PaneDrawing {
                 guard let tab = tabs.first(where: { $0.root.panes.contains(pane) }) else { continue }
                 result.append(AgentDestination(
                     hostId: group.id, hostName: group.name, pane: pane.rawValue, agent: AgentKind(agent.kind),
-                    title: tab.title ?? meta.title, sameHost: group.id == myHost))
+                    title: tab.title ?? meta.title, sameHost: group.id == thisHost))
             }
         }
         let preferred = agentTarget()?.pane
-        return result.sorted { a, b in
-            let ka = (a.sameHost && a.pane == preferred ? 0 : a.sameHost ? 1 : 2, a.hostName, a.pane)
-            let kb = (b.sameHost && b.pane == preferred ? 0 : b.sameHost ? 1 : 2, b.hostName, b.pane)
-            return ka < kb
+        func sortKey(_ destination: AgentDestination) -> (Int, String, UInt64) {
+            let rank = destination.sameHost && destination.pane == preferred ? 0 : destination.sameHost ? 1 : 2
+            return (rank, destination.hostName, destination.pane)
         }
+        return result.sorted { sortKey($0) < sortKey($1) }
     }
 
-    /// The destination the primary button sends to: an agent in this pane or its tab.
+    /// An agent in this pane or its tab.
     func primaryDestination(in list: [AgentDestination]) -> AgentDestination? {
         guard let target = agentTarget() else { return nil }
         return list.first { $0.sameHost && $0.pane == target.pane }
     }
 
-    /// New agents can start next to this pane (a writer on a live daemon).
     var canStartAgent: Bool {
         !isReadOnly && (workspace?.host as? DaemonConnection)?.status.isLive == true
     }
 
-    /// Does `action` with a drawing already placed in this pane; returns what to tell the user.
-    /// `anchor` is where a share sheet or picker points (pane coordinates).
+    /// `anchor` is where a share sheet or picker points, in pane coordinates.
     func perform(_ action: DrawingAction, artifactId: UInt64?, png: Data, anchor: CGRect) async throws -> PlacedOutcome {
         switch action {
         case .keep:
@@ -250,8 +239,8 @@ extension PaneDrawing {
             try await startAgent(kind, artifactId: artifactId, png: png)
             return .sent(kind.title)
         case .copy:
-            // The scene rides along so apps that understand it (Excalidraw, this app on another
-            // device through Universal Clipboard) get the editable drawing, not just pixels.
+            // The scene rides along so apps that understand it, including this app on another
+            // device through Universal Clipboard, get the editable drawing, not just pixels.
             let scene = try? await artifactId.asyncMap { try await hub.client.excalidrawFile(artifactId: $0) }
             Self.copy(png: png, scene: scene)
             return .copied
@@ -290,7 +279,6 @@ extension PaneDrawing {
         }
     }
 
-    /// The drawing in `format`: the device's PNG, the daemon's SVG or ASCII, or the scene.
     func exportData(_ format: DrawingExportFormat, artifactId: UInt64?, png: Data) async throws -> Data {
         if format == .png { return png }
         guard let artifactId else { throw ArtifactError.Invalid(message: "the drawing is not saved yet") }
@@ -302,23 +290,21 @@ extension PaneDrawing {
         }
     }
 
-    /// Puts the image (and the `.excalidraw` scene, when there is one) on the pasteboard.
     static func copy(png: Data, scene: Data?) {
         #if os(iOS)
         var item: [String: Any] = [UTType.png.identifier: png]
         if let scene { item[UTType.excalidraw.identifier] = scene }
         UIPasteboard.general.setItems([item])
         #else
-        let board = NSPasteboard.general
-        board.clearContents()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
         let item = NSPasteboardItem()
         item.setData(png, forType: .png)
         if let scene { item.setData(scene, forType: NSPasteboard.PasteboardType(UTType.excalidraw.identifier)) }
-        board.writeObjects([item])
+        pasteboard.writeObjects([item])
         #endif
     }
 
-    /// The share sheet (iOS) or sharing picker (Mac) for `file`, pointing at `anchor`.
     private func share(_ file: URL, anchor: CGRect) -> Bool {
         #if os(iOS)
         guard let view = pane?.view, var presenter = view.window?.rootViewController else { return false }
@@ -339,17 +325,17 @@ extension PaneDrawing {
             .replacingOccurrences(of: ":", with: ".").replacingOccurrences(of: "/", with: "-")
     }
 
-    /// A file in the temporary directory, named for people (share sheets and drops show the
-    /// name).
+    /// Named for people, since share sheets and drops show the name.
     static func exportFile(_ data: Data, format: DrawingExportFormat) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Drawings", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(fileName(format))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Drawings", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(fileName(format))
         try data.write(to: url, options: .atomic)
         return url
     }
 
-    /// Starts Claude Code or Codex in a split next to this pane and attaches the drawing once
+    /// Attaches the drawing only once the agent reports it is ready: a paste before its prompt
+    /// is up is lost.
     private func startAgent(_ kind: AgentKind, artifactId: UInt64?, png: Data) async throws {
         guard let daemon = workspace?.host as? DaemonConnection, let hostId = workspace?.hostId else { throw ArtifactError.Disconnected }
         let api = try daemon.workspace.client()
@@ -372,7 +358,6 @@ extension PaneDrawing {
 }
 
 extension Optional {
-    /// `map` with an async throwing transform.
     func asyncMap<T>(_ transform: (Wrapped) async throws -> T) async rethrows -> T? {
         guard let self else { return nil }
         return try await transform(self)

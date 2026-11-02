@@ -3,8 +3,8 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
-/// then the pane's buttons: Split Right, Split Down, Float or Dock, Zoom, Close, and the pane
-/// menu. It sits on the terminal background so the pane still reads as one surface.
+/// A pane's title strip: program mark and name, status, then the pane's buttons. It sits on the
+/// terminal background so the pane still reads as one surface.
 ///
 /// It is also the pane's handle: drag it to rearrange (a tiled pane, or one of several in a
 /// window) or to move its window (a window of one pane); double-click to zoom; right-click or
@@ -142,8 +142,6 @@ struct PaneHeader: View {
     }
 }
 
-/// The header's quiet buttons: Split Right, Split Down, Float or Dock (lit while floating),
-/// Zoom (lit while zoomed), Close, and the pane menu.
 private struct PaneHeaderButtons: View {
     let id: PaneId
     let workspace: Workspace
@@ -253,7 +251,7 @@ private struct HeaderButton: View {
     }
 }
 
-/// to Window, Pin Across Tabs, Copy Pane ID, Close.
+/// The pane header's context menu.
 struct PaneContextItems: View {
     let workspace: Workspace
     let model: WindowModel

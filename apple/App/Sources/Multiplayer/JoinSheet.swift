@@ -3,10 +3,8 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-/// Joining someone's host: paste (or open) an invite link, read who invites and with which
-/// rights before anything is dialled, then join. Deep links (`<scheme>://join/…`) open this
-/// sheet pre-filled; joining is always the user's tap. A knock link asks the owner first: the
-/// sheet waits, in words, until they let this device in (or not).
+/// Shows what an invite link grants before anything is dialled. Deep links only pre-fill it:
+/// joining is always the user's tap.
 struct JoinSheet: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -130,7 +128,6 @@ struct JoinSheet: View {
         #endif
     }
 
-    /// Join (or Ask to Join) as the sheet's one action, once the link reads as an invite.
     private var primary: SheetAction? {
         guard case .success(let info) = card, phase != .knocking else { return nil }
         return SheetAction(
@@ -160,27 +157,25 @@ struct JoinSheet: View {
         }
     }
 
-
     private func buttonTitle(_ info: InviteInfo) -> String {
         let host = info.inviter.isEmpty ? "host" : info.inviter + "’s host"
         if phase == .joining { return "Joining \(host)…" }
         return info.knock ? "Ask to Join" : "Join as \(roleWords(info.roles))"
     }
 
-    /// Knocks and waits for the owner; joins the moment they let this device in.
     private func knock(_ info: InviteInfo) {
         phase = .knocking
         progress.asked = false
         let progress = progress
         let link = trimmed
-        let display = name.trimmingCharacters(in: .whitespaces)
+        let displayName = name.trimmingCharacters(in: .whitespaces)
         let hosts = model.app.hosts
         knocking = Task {
             do {
-                let id = try await hosts.knock(invite: link, name: display.isEmpty ? WindowModel.deviceName : display) {
+                let hostId = try await hosts.knock(invite: link, name: displayName.isEmpty ? WindowModel.deviceName : displayName) {
                     Task { @MainActor in progress.asked = true }
                 }
-                model.show(.host(id))
+                model.show(.host(hostId))
                 dismiss()
                 model.toasts.show(Toast("\(info.inviter.isEmpty ? "The owner" : info.inviter) let you in",
                                         systemImage: "person.2.fill", style: .success))
@@ -206,14 +201,14 @@ struct JoinSheet: View {
     private func join(_ info: InviteInfo) {
         phase = .joining
         let link = trimmed
-        let display = name.trimmingCharacters(in: .whitespaces)
+        let displayName = name.trimmingCharacters(in: .whitespaces)
         Task {
             do {
-                let id = try await model.app.hosts.join(invite: link)
-                if !display.isEmpty, let daemon = model.app.hosts.connection(id) as? DaemonConnection {
-                    await daemon.multiplayer.setName(display)
+                let hostId = try await model.app.hosts.join(invite: link)
+                if !displayName.isEmpty, let daemon = model.app.hosts.connection(hostId) as? DaemonConnection {
+                    await daemon.multiplayer.setName(displayName)
                 }
-                model.show(.host(id))
+                model.show(.host(hostId))
                 dismiss()
                 model.toasts.show(Toast("Joined \(info.inviter.isEmpty ? "the host" : info.inviter + "’s host") as \(roleWords(info.roles))",
                                         systemImage: "person.2.fill", style: .success))
@@ -245,8 +240,6 @@ struct JoinSheet: View {
     }
 }
 
-/// What the invite grants, as a card: who invites, the roles with what they allow, scope,
-/// expiry and uses.
 private struct JoinCard: View {
     let info: InviteInfo
 
@@ -302,7 +295,6 @@ private struct JoinCard: View {
     }
 }
 
-/// Waiting at the door: the owner has been asked (or is being asked), in words, with a way out.
 private struct KnockWaiting: View {
     let owner: String
     let asked: Bool
@@ -312,11 +304,11 @@ private struct KnockWaiting: View {
     var body: some View {
         HStack(alignment: .top, spacing: DS.Space.m) {
             TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion || !asked)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
+                let seconds = context.date.timeIntervalSinceReferenceDate
                 Circle()
                     .fill(DS.Palette.working)
                     .frame(width: 9, height: 9)
-                    .opacity(reduceMotion || !asked ? 1 : 0.45 + 0.55 * (0.5 + 0.5 * sin(t * 3)))
+                    .opacity(reduceMotion || !asked ? 1 : 0.45 + 0.55 * (0.5 + 0.5 * sin(seconds * 3)))
                     .padding(.top, 5)
             }
             VStack(alignment: .leading, spacing: 3) {

@@ -96,8 +96,8 @@ final class SecretEntry {
         guard canSend else { return false }
         let value = secret
         secret = ""
-        let ok = await deliver(value)
-        if ok, remember, canRemember {
+        let delivered = await deliver(value)
+        if delivered, remember, canRemember {
             do {
                 try vault.save(value, for: key)
             } catch {
@@ -105,16 +105,16 @@ final class SecretEntry {
                 failure = "Couldn't save to the Keychain: \(error.localizedDescription)"
             }
         }
-        return ok
+        return delivered
     }
 
     /// Sends the saved password after Face ID / Touch ID. Returns true when the card can close.
     func sendSaved() async -> Bool {
         do {
             let value = try await vault.read(key, reason: "Use the saved password for \(copy.kind)")
-            let ok = await deliver(value)
-            if ok { AskpassVaultStore.recentlyUsed[key] = .now }
-            return ok
+            let delivered = await deliver(value)
+            if delivered { AskpassVaultStore.recentlyUsed[key] = .now }
+            return delivered
         } catch AskpassVaultError.cancelled {
             return false
         } catch AskpassVaultError.notFound {

@@ -13,21 +13,20 @@ import os
 final class Pane {
     let id: PaneId
     @ObservationIgnored let view: TerminalView
-    /// SwiftUI host containers showing this pane (see `TerminalHost`).
+    /// SwiftUI host containers showing this pane.
     @ObservationIgnored let hosts = NSHashTable<TerminalHost.Container>.weakObjects()
 
     /// OSC 0/2 title ("" until the program sets one).
     private(set) var title = ""
     /// OSC 7 working directory, as a path ("" until the shell reports one).
     private(set) var workingDirectory = ""
-    /// The pane's foreground program as the backend reports it (the daemon's `tcgetpgrp`); nil
-    /// when the backend cannot tell (local backends), in which case the title stands in.
+    /// The foreground program as the daemon reports it; nil when the backend cannot tell, and the title stands in.
     private(set) var foregroundProgram: String?
-    /// Live, or showing stale content while its host reconnects (dimmed, never blank: R12).
+    /// Live, or showing stale content (dimmed, never blank) while its host reconnects.
     private(set) var connection = PaneConnection.live
-    /// Showing the screen this device saved last, until the host sends its own (instant start).
+    /// Showing the screen this device saved last, until the host sends its own.
     private(set) var showsSavedScreen = false
-    /// Input typed over the saved screen: held, then sent or dropped (`DaemonPaneBackend`).
+    /// Input typed over the saved screen: held, then sent or dropped.
     private(set) var heldInput: DaemonPaneBackend.HeldInputState?
     /// Held input was dropped: the host's screen was not the one it was typed at.
     @ObservationIgnored var onHeldInputDropped: (() -> Void)?
@@ -43,16 +42,15 @@ final class Pane {
     @ObservationIgnored let backend: any PaneBackend
     /// Grid changes, for the cols × rows overlay.
     @ObservationIgnored var onGridChange: ((TerminalSurface.Grid) -> Void)?
-    /// Resizes sent to the backend (UI tests: one per layout change).
+    /// Resizes sent to the backend; UI tests expect one per layout change.
     private(set) var resizesSent = 0
-    /// Scrolls and input so far, whoever made them: following tells its own from the user's.
+    /// Scrolls and input so far, whoever made them, so following can tell its own moves from the user's.
     @ObservationIgnored private(set) var moves = 0
 
     nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "pane")
     /// `showsSavedScreen` for the stream's thread.
     nonisolated private let savedScreenShown = OSAllocatedUnfairLock(initialState: false)
-    /// Bumped by every output and snapshot: whether the screen may have changed since the
-    /// workspace was last saved (`WorkspaceCacheWriter`).
+    /// Bumped by every output and snapshot, so the workspace cache knows the screen may have changed.
     nonisolated let outputGeneration = OSAllocatedUnfairLock(initialState: 0)
     /// The grid's cell size in pixels, for resizes that follow the stream (off the main actor).
     nonisolated let cellPixels = OSAllocatedUnfairLock<(width: UInt32, height: UInt32)>(initialState: (0, 0))
@@ -60,8 +58,7 @@ final class Pane {
     /// screen and enough of its scrollback are in (nil once done or the user moved).
     nonisolated private let keptScroll = OSAllocatedUnfairLock<Int?>(initialState: nil)
 
-    /// - Parameter saved: the pane's saved screen (instant start), drawn until the host's
-    ///   arrives; input typed over it waits for that.
+    /// - Parameter saved: the pane's saved screen, drawn until the host's arrives; input typed over it waits for that.
     init(
         id: PaneId, backend: any PaneBackend, appearance: TerminalAppearance = .init(), saved: CachedPane? = nil,
         onExit: @escaping @Sendable () -> Void
@@ -80,7 +77,6 @@ final class Pane {
         surface.sizeFollowsStream = backend.sizeFollowsStream
         terminal.answersQueries = !backend.hostAnswersQueries
         surface.onGridChange = { [weak self] grid in self?.gridChanged(grid) }
-        // Hold ⌃⌥Space to dictate into this pane (VoiceDictation).
         view.keyInterceptor = { [weak self] event in self.map { VoiceDictation.shared.handleKey(event, pane: $0) } ?? false }
 
         // A program can set its title or ring the bell hundreds of thousands of times a second:
@@ -101,8 +97,8 @@ final class Pane {
             view.onInput = { [weak self, weak surface] bytes in
                 self?.moves += 1
                 self?.keptScroll.withLock { $0 = nil }
-                let seq = surface?.predictor?.lastInputSeq ?? 0
-                bytes.withUnsafeBytes { feed.writeInput($0, inputSeq: seq) }
+                let inputSeq = surface?.predictor?.lastInputSeq ?? 0
+                bytes.withUnsafeBytes { feed.writeInput($0, inputSeq: inputSeq) }
             }
             feed.startPredictionFeed { [weak surface] update in
                 Task { @MainActor in surface?.applyPrediction(update) }
@@ -120,8 +116,8 @@ final class Pane {
         // asking for older pages until it does (or there are none).
         let restoreScroll: @Sendable (_ historyDone: Bool) -> Void = { historyDone in
             guard let rows = keptScroll.withLock({ $0 }) else { return }
-            let bar = terminal.scrollbar
-            let above = max(0, bar.total - bar.visible)
+            let scrollbar = terminal.scrollbar
+            let above = max(0, scrollbar.total - scrollbar.visible)
             if above < rows, !historyDone, backend.requestHistory() { return }
             keptScroll.withLock { $0 = nil }
             terminal.scrollViewport(by: -min(rows, above))
@@ -149,9 +145,9 @@ final class Pane {
                 // host's screen replacing a saved one keeps where that was scrolled to.
                 if let limit = backend.kittyImageStorageLimit { terminal.kittyImageStorageLimit = limit }
                 if savedShown.withLock({ $0 }), daemon?.isLive == true {
-                    let bar = terminal.scrollbar
-                    let back = bar.total - bar.offset - bar.visible
-                    keptScroll.withLock { $0 = back > 0 ? back : nil }
+                    let scrollbar = terminal.scrollbar
+                    let rowsBack = scrollbar.total - scrollbar.offset - scrollbar.visible
+                    keptScroll.withLock { $0 = rowsBack > 0 ? rowsBack : nil }
                 }
                 do {
                     try terminal.restore(snapshot: ready)
@@ -197,8 +193,8 @@ final class Pane {
             guard rows < 0, let terminal = surface?.terminal, terminal.scrollbar.offset == 0 else { return }
             _ = backend.requestHistory()
         }
-        if let program = backend as? any ForegroundProgramReporting {
-            program.onForegroundProgramChange { [weak self] name in
+        if let reporter = backend as? any ForegroundProgramReporting {
+            reporter.onForegroundProgramChange { [weak self] name in
                 Task { @MainActor in
                     self?.foregroundProgram = name
                     self?.onContextChange?()
@@ -278,7 +274,7 @@ final class Pane {
         cellPixels.withLock { $0 = (grid.cellWidth, grid.cellHeight) }
         onGridChange?(grid)
         if let size = view.surface.cellSize { onCellSize?(size) }
-        // With the grid, as Ghostty does: the surface already coalesced layout into grid
+        // Resize with the grid, as Ghostty does: the surface already coalesced layout into grid
         // changes, and a program redrawing after SIGWINCH must find the grid it was told of.
         resizesSent += 1
         backend.resize(cols: grid.cols, rows: grid.rows, cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)

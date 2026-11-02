@@ -1,8 +1,7 @@
 import DesignSystem
 import SwiftUI
 
-/// The browser sheet: the dev servers the host is running (detected listening ports), and the
-/// page once one is open, through a forward to the host's `localhost:<port>`.
+/// The host's listening ports, and a page once one is open through a forward to its `localhost`.
 struct BrowserSheet: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -42,7 +41,7 @@ struct PortsList: View {
     @Environment(\.terminalTheme) private var theme
     @State private var address = ""
     @State private var opening: UInt16?
-    /// The Ports leaf this list is in: pages open beside it.
+    /// The Ports leaf this list is in; pages open beside it.
     @Environment(\.toolLeaf) private var leaf
 
     private var ports: [DetectedPort] { model.ports.ports }
@@ -50,7 +49,6 @@ struct PortsList: View {
     var body: some View {
         Group {
             if let reason = model.ports.unavailableReason {
-                // Ports are read by a host's helper: none is running or connected.
                 EmptyState("No Helper Running", systemImage: "point.3.connected.trianglepath.dotted", message: reason) {
                     Button("Show Hosts") { model.showHosts() }
                         .buttonStyle(.glass)
@@ -161,7 +159,6 @@ struct PortsList: View {
     private func openAddress() {
         let input = address.trimmingCharacters(in: .whitespaces)
         guard !input.isEmpty else { return }
-        // A bare port or localhost:port goes through a forward to the host.
         let digits = input.replacingOccurrences(of: "localhost:", with: "").replacingOccurrences(of: "http://", with: "")
         if let number = UInt16(digits.split(separator: "/").first ?? "") {
             open(DetectedPort(port: number, process: "", url: nil, isHTTP: true, loopbackOnly: true, pane: nil))
@@ -176,11 +173,11 @@ struct PortsList: View {
     }
 }
 
-/// "localhost:5173 is up · Open": offered once when a pane starts a server on the window's host,
-/// at the bottom like the banners, never over a pane's top bar (the browser's address bar).
+/// Offered once when a pane starts a server on the window's host. Sits at the bottom so it never
+/// covers a page's address bar.
 struct PortOfferBanner: ViewModifier {
     let model: WindowModel
-    /// Its height, so a banner can sit above it.
+    /// Exposed so other banners can sit above it.
     static let height: CGFloat = 52
 
     /// Clear of the iPhone's tab bar and, while a page is in front there, of its address bar.
@@ -235,24 +232,20 @@ struct PortOfferBanner: ViewModifier {
 }
 
 extension View {
-    /// The "a dev server is up" offer for a window.
     func portOffers(_ model: WindowModel) -> some View {
         modifier(PortOfferBanner(model: model))
     }
 }
 
 extension WindowModel {
-    /// The dev servers a page on `hostId` offers (the start page, address suggestions): the
-    /// window's host's HTTP ports when the page is on it.
+    /// The window host's HTTP ports, when `hostId` is that host.
     func devServers(onHost hostId: String?) -> (hostName: String, ports: [DetectedPort]) {
         guard let hostId, ports.hostId == hostId else { return ("", []) }
         return (ports.hostName, ports.ports.filter(\.isHTTP))
     }
 
-    /// Shows a host port in the in-app browser: a page leaf beside, which reaches the host's
-    /// `localhost` itself, where tools are leaves; else the browser sheet, through a forward.
-    /// `besideTool`: the Ports leaf it was opened from, which the page goes beside (else
-    /// beside the focused leaf: the offer, a pane's link).
+    /// Where tools are leaves, a page leaf reaches the host's `localhost` itself; otherwise the
+    /// browser sheet goes through a forward. `besideTool` is the Ports leaf to open beside.
     func openPort(_ port: DetectedPort, besideTool tool: UUID? = nil) async {
         if opensToolsAsLeaves {
             ports.dismissOffer()
@@ -276,9 +269,7 @@ extension WindowModel {
         }
     }
 
-    /// A URL from a pane (a tap, the links sheet): a dev server's URL on a remote host (loopback,
-    /// `*.localhost`, the host's own address on a port it listens on: `isDevServerURL`) goes
-    /// through a forward; other URLs open in the in-app browser as they are.
+    /// A URL from a pane. A remote host's dev server URL goes through a forward; others open as they are.
     func openURL(_ text: String) async {
         guard let url = URL(string: text) else { return }
         if isDevServerURL(url), let port = url.port, workspace?.isRemote == true {
@@ -294,9 +285,8 @@ extension WindowModel {
         openPage(url, hostId: nil)
     }
 
-    /// A page in the in-app browser. Where tools are leaves, a page leaf beside the tool leaf it
-    /// came from (Ports stays a list), else beside the focused leaf; the one already showing it
-    /// comes forward. Elsewhere the sheet.
+    /// Where tools are leaves, a page leaf beside `tool` (or the focused leaf), reusing one already
+    /// showing the URL; otherwise the browser sheet.
     func openPage(_ url: URL, hostId: String?, besideTool tool: UUID? = nil) {
         guard opensToolsAsLeaves else {
             browserURL = url
@@ -307,8 +297,8 @@ extension WindowModel {
         if let tool, let tab = composites.tab(containingTool: tool), let leaf = tab.leaf(forTool: tool) {
             focusLeaf(leaf, inMixedTab: tab.id)
         }
-        if let mixed = activeMixed, let leaf = mixed.leaves.first(where: {
-            mixed.browsers[$0].map { $0.url == url.absoluteString && $0.hostId == hostId } ?? false
+        if let mixed = activeMixed, let leaf = mixed.leaves.first(where: { candidate in
+            mixed.browsers[candidate].map { $0.url == url.absoluteString && $0.hostId == hostId } ?? false
         }) {
             focusLeaf(leaf, inMixedTab: mixed.id)
             return

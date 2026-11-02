@@ -5,8 +5,7 @@ import Synchronization
 import XCTest
 @testable import App
 
-/// The window layer (docs/APP-ARCHITECTURE.md "Windows"): width buckets, Handoff payloads, and
-/// two windows' workspaces on one host.
+/// The window layer: width buckets, Handoff payloads, and two windows' workspaces on one host.
 @MainActor
 final class WindowsTests: XCTestCase {
     // MARK: Width buckets
@@ -167,19 +166,19 @@ final class WindowsTests: XCTestCase {
 
         // Each window has its own terminal and view for the same pane (the second window's
         // other tab's panes are made just after its own).
-        let a = try XCTUnwrap(first.panes[PaneId(1)])
+        let firstPane = try XCTUnwrap(first.panes[PaneId(1)])
         for _ in 0..<100 where second.panes[PaneId(1)] == nil { try await Task.sleep(for: .milliseconds(10)) }
-        let b = try XCTUnwrap(second.panes[PaneId(1)])
-        XCTAssertFalse(a === b)
-        XCTAssertFalse(a.view === b.view)
+        let secondPane = try XCTUnwrap(second.panes[PaneId(1)])
+        XCTAssertFalse(firstPane === secondPane)
+        XCTAssertFalse(firstPane.view === secondPane.view)
 
         // Typing in either reaches the one shell; both terminals show it.
-        a.backend.paste("echo one\r\n")
-        b.backend.paste("echo two\r\n")
-        let shell = try XCTUnwrap(SharedPaneBackend.underlying(a.backend) as? Shell)
+        firstPane.backend.paste("echo one\r\n")
+        secondPane.backend.paste("echo two\r\n")
+        let shell = try XCTUnwrap(SharedPaneBackend.underlying(firstPane.backend) as? Shell)
         XCTAssertEqual(shell.state.withLock { $0.typed }, "echo one\r\necho two\r\n")
-        XCTAssertTrue(a.view.surface.terminal.plainText().contains("echo two"))
-        XCTAssertTrue(b.view.surface.terminal.plainText().contains("echo one"))
+        XCTAssertTrue(firstPane.view.surface.terminal.plainText().contains("echo two"))
+        XCTAssertTrue(secondPane.view.surface.terminal.plainText().contains("echo one"))
 
         // Selecting a tab in one window leaves the other where it was.
         second.selectTab(TabId(2))
@@ -190,8 +189,8 @@ final class WindowsTests: XCTestCase {
         // Closing a window keeps the other's stream; the pane stays in the layout.
         first.close()
         XCTAssertFalse(shell.state.withLock { $0.terminated })
-        b.backend.paste("echo three\r\n")
-        XCTAssertTrue(b.view.surface.terminal.plainText().contains("echo three"))
+        secondPane.backend.paste("echo three\r\n")
+        XCTAssertTrue(secondPane.view.surface.terminal.plainText().contains("echo three"))
         XCTAssertTrue(layout.session.panes.contains(PaneId(1)))
 
         // Closing the pane in the remaining window ends the shell.
@@ -243,10 +242,10 @@ final class WindowsTests: XCTestCase {
             return shells[pane]!.makeTap()
         }
         let first = Workspace(layout: layout, makeBackend: make)
-        let a = try XCTUnwrap(first.panes[PaneId(1)])
-        a.backend.paste("printf before\r\n")
+        let firstPane = try XCTUnwrap(first.panes[PaneId(1)])
+        firstPane.backend.paste("printf before\r\n")
         let second = Workspace(layout: layout, makeBackend: make)
-        let b = try XCTUnwrap(second.panes[PaneId(1)])
-        XCTAssertTrue(b.view.surface.terminal.plainText().contains("printf before"))
+        let secondPane = try XCTUnwrap(second.panes[PaneId(1)])
+        XCTAssertTrue(secondPane.view.surface.terminal.plainText().contains("printf before"))
     }
 }

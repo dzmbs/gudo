@@ -10,10 +10,8 @@ import AppKit
 #endif
 
 extension PaneDrawing {
-    /// The host this pane is on.
     var hostId: String? { workspace?.hostId }
 
-    /// What a drag of `placement` carries.
     func dragRef(_ placement: Placement) -> DrawingDragRef? {
         guard let hostId else { return nil }
         return DrawingDragRef(
@@ -30,9 +28,8 @@ extension PaneDrawing {
         return DrawingHub.shared(for: client)
     }
 
-    /// A drawing dropped onto this pane from a pane of this app: on an agent pane it goes to
-    /// the agent; otherwise it is placed here at the cursor row, with its own render (same
-    /// host: the same drawing; another host: uploaded, the scene too when it has one).
+    /// A drawing dropped from another pane: sent to the agent on an agent pane, else placed here
+    /// at the cursor row (uploaded, scene included, when it comes from another host).
     func dropped(_ ref: DrawingDragRef) {
         guard !isReadOnly, ref.paneId != paneId || ref.hostId != hostId else { return }
         guard let source = hub(forHost: ref.hostId) else {
@@ -82,13 +79,12 @@ extension PaneDrawing {
 
     // MARK: Version history
 
-    /// The placement's drawing's finished versions, newest first (empty when there are none or
-    /// the host keeps no history).
+    /// Finished versions, newest first; empty when the host keeps no history.
     func history(of placement: Placement) async -> [ArtifactVersion] {
         (try? await hub.client.artifactHistory(artifactId: placement.artifactId)) ?? []
     }
 
-    /// Brings the drawing back to `version` (a new version on top; every device follows).
+    /// Restores `version` as a new version on top.
     func restore(_ placement: Placement, to version: ArtifactVersion) {
         let client = hub.client
         Task {
@@ -120,8 +116,7 @@ extension PaneDrawing {
 
 #if os(iOS)
 extension PaneDrawing {
-    /// What dragging `placement` into another app offers: the PNG and, for scenes and
-    /// images, the `.excalidraw` file (loaded only when the destination asks for it).
+    /// The PNG and the `.excalidraw` file, loaded only when the destination asks for it.
     func itemProvider(for placement: Placement) -> NSItemProvider {
         let hub = hub
         let hash = placement.image.hash

@@ -4,10 +4,10 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
-// Projects in a window (docs/APP-ARCHITECTURE.md §23): what the sidebar's gestures, menus and
-// keys do. The model is `HostGroups`' (merged across hosts, routed per host). A project is only
-// ever made by an explicit ask: New Project, New Project from Tab, a drop onto a tab, a
-// suggestion's tap. A new terminal joins one only when asked for from it (its +, ⌘T in it).
+// Projects in a window: what the sidebar's gestures, menus and keys do. The model is
+// `HostGroups`' (merged across hosts, routed per host). A project is only ever made by an
+// explicit ask: New Project, New Project from Tab, a drop onto a tab, a suggestion's tap. A new
+// terminal joins one only when asked for from it (its +, ⌘T in it).
 
 extension WindowModel {
     var projects: [Project] { groups.projects }
@@ -224,7 +224,6 @@ extension WindowModel {
             .map { "Add to \($0.name)" } ?? "Group"
     }
 
-    /// Carries out a sidebar drop.
     func commit(_ drop: SidebarDrop) {
         // A selection dragged by one of its rows lands together, in sidebar order.
         let carried = carriedTabs(dragging: drop.dragged)

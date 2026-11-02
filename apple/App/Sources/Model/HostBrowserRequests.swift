@@ -4,9 +4,6 @@ import HostKit
 import PaneLayout
 import GudoCore
 
-// What a host asks of the app's browser (`proto::browser`): URLs its panes open through
-// `BROWSER` (`claude /login`), and browser tools its agents call.
-
 extension AppModel {
     func browserPush(_ hostId: String, _ push: BrowserPush) {
         // A guest's connection never asks for these; a host that sends them anyway is ignored.
@@ -35,8 +32,7 @@ extension AppModel {
         }
     }
 
-    /// The window a host's request shows in: the active one when it has the host open, else
-    /// one that has.
+    /// The active window when it has the host open, else one that has.
     func window(forHost hostId: String) -> WindowModel? {
         let windows = openWindows.filter { !$0.isPresentation }
         if let active = ActiveWindow.model, !active.isClosed, active.workspace(ofGroup: hostId) != nil { return active }
@@ -53,17 +49,14 @@ nonisolated enum HostLinks {
         return url.host()?.isEmpty == false
     }
 
-    /// Whether a link a user clicked in a host's terminal may go to the system: never a
-    /// `file:` URL (it names a path on the host, and here would open this device's file or app).
+    /// Never a `file:` URL: it names a path on the host, and here would open this device's file or app.
     static func mayOpenExternally(_ url: URL) -> Bool {
         url.scheme?.lowercased() != "file"
     }
 }
 
 extension WindowModel {
-    /// A URL a program on a host opened: a sign-in in the system's sign-in sheet (its callback
-    /// forwarded to the host), anything else in a browser leaf beside the program's pane, where
-    /// the host's `localhost` is the host's own.
+    /// A sign-in goes to the system's sign-in sheet; anything else to a browser leaf beside the pane.
     func openFromHost(_ url: URL, hostId: String, pane: UInt64) {
         if let link = SignInLink(url) {
             signIn(url, link, hostId: hostId, pane: pane)
@@ -72,9 +65,8 @@ extension WindowModel {
         }
     }
 
-    /// A sign-in for a program in `pane` on a host. One that returns to the host's loopback
-    /// gets that port here; one that shows a code to paste opens in the in-app browser, which
-    /// types the code into the pane when the provider's page shows it.
+    /// A loopback sign-in gets that port here; one that shows a code opens in the in-app browser,
+    /// which types the code into the pane.
     func signIn(_ url: URL, _ link: SignInLink, hostId: String, pane: UInt64) {
         switch link {
         case .loopback(let port, let path):
@@ -87,7 +79,6 @@ extension WindowModel {
         }
     }
 
-    /// The in-app browser reached the page with the code: it goes into the pane that asked.
     func pastedSignInCode(_ url: URL) -> Bool {
         guard let target = browserSignInPane, let code = SignInLink.pastedCode(from: url),
               let daemon = app.hosts.connection(target.hostId) as? DaemonConnection

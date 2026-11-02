@@ -4,9 +4,8 @@ import Observation
 import PaneLayout
 import SwiftUI
 
-/// starts waiting for you, finishes or fails, a card says so with Approve / Deny or Open. At most
-/// three, newest on top; each leaves after 8 s, and none leaves while the pointer or a finger is on
-/// the stack. One window shows them: the one in front.
+/// Cards for agents this window isn't showing that start waiting, finish or fail. Only the front
+/// window shows them, and none expires while the pointer or a finger is on the stack.
 @MainActor
 @Observable
 final class AgentToasts {
@@ -15,11 +14,10 @@ final class AgentToasts {
     }
 
     struct Card: Identifiable, Hashable {
-        /// The item and what happened to it; a new request on the same agent is a new card.
+        /// A new request on the same agent is a new card.
         var id: String
         var kind: Kind
         var item: AgentItem
-        /// When it leaves (moved on while the stack is held).
         var expires: Date
     }
 
@@ -28,11 +26,9 @@ final class AgentToasts {
 
     /// Newest first.
     private(set) var cards: [Card] = []
-    /// A pointer or finger is on the stack: nothing leaves.
     private(set) var isHeld = false
     @ObservationIgnored private var heldSince: Date?
-    /// Each item's last state and request, to see what changed; nil until the first look (what is
-    /// already waiting when the window opens is in the Inbox, not a toast).
+    /// Nil until the first look: what already waits when the window opens is in the Inbox, not a toast.
     @ObservationIgnored private var known: [AgentItem.ID: Snapshot]?
     @ObservationIgnored private var expiry: Task<Void, Never>?
 
@@ -41,9 +37,7 @@ final class AgentToasts {
         var request: AgentItem.Request?
     }
 
-    /// What became a toast between two looks at the feed: an agent that now waits for you (a new
-    /// request counts again), and one that finished or failed after working. Commands, history
-    /// and anything `isShown` (on screen in this window) are left out. Pure, for tests.
+    /// What became a toast between two looks at the feed. Commands and anything `isShown` are left out.
     static func arrivals(
         _ items: [AgentItem], known: [AgentItem.ID: Snapshot], isShown: (AgentItem) -> Bool
     ) -> [(Kind, AgentItem)] {
@@ -64,14 +58,12 @@ final class AgentToasts {
         }
     }
 
-    /// Looks at the feed: new arrivals become cards; cards whose item moved on (answered here
-    /// or on another device) leave.
     func update(_ items: [AgentItem], isShown: (AgentItem) -> Bool, now: Date = .now) {
-        let snapshots = Dictionary(items.map { ($0.id, Snapshot(state: $0.state, request: $0.request)) }, uniquingKeysWith: { a, _ in a })
+        let snapshots = Dictionary(items.map { ($0.id, Snapshot(state: $0.state, request: $0.request)) }, uniquingKeysWith: { first, _ in first })
         defer { known = snapshots }
         guard let known else { return }
-        // A card that no longer says what is true goes (approved in the Inbox, on the phone…).
-        let current = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // A card that no longer says what is true goes (answered in the Inbox or on another device).
+        let current = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var cards = self.cards
         cards.removeAll { card in
             guard let item = current[card.item.id] else { return true }
@@ -91,7 +83,6 @@ final class AgentToasts {
         scheduleExpiry()
     }
 
-    /// The agent is on screen now (opened, approved): its card goes.
     func dismiss(item id: AgentItem.ID) {
         cards.removeAll { $0.item.id == id }
         scheduleExpiry()
@@ -102,8 +93,7 @@ final class AgentToasts {
         scheduleExpiry()
     }
 
-    /// The pointer entered (or a finger touched) the stack; `false` when it left. Time held is
-    /// given back to every card.
+    /// Time held is given back to every card.
     func hold(_ held: Bool, now: Date = .now) {
         guard held != isHeld else { return }
         isHeld = held
@@ -112,13 +102,13 @@ final class AgentToasts {
             expiry?.cancel()
         } else {
             let paused = now.timeIntervalSince(heldSince ?? now)
+            // Half a second of grace after the pointer leaves.
             for index in cards.indices { cards[index].expires += paused + 0.5 }
             heldSince = nil
             scheduleExpiry()
         }
     }
 
-    /// Removes cards whose time is up (tests call it with a clock; the app via `scheduleExpiry`).
     func expire(now: Date = .now) {
         guard !isHeld else { return }
         cards.removeAll { $0.expires <= now }
@@ -137,7 +127,7 @@ final class AgentToasts {
 }
 
 extension WindowModel {
-    /// conversation"). Says so when nothing waits.
+    /// Shows the agent that has waited longest, on any host.
     func jumpToWaitingAgent() {
         let waiting = agents.items.filter { $0.state == .blocked && $0.paneId != nil }
         guard let oldest = waiting.min(by: { $0.since < $1.since }) else {
@@ -149,7 +139,6 @@ extension WindowModel {
         agents.open(oldest.id)
     }
 
-    /// Whether this window shows the item's agent right now (its pane is in the tab on screen).
     func isShowing(_ item: AgentItem) -> Bool {
         guard destination == .terminal, isOnScreen, let pane = item.paneId, let host = item.hostId,
               workspace?.hostId == host, let tab = workspace?.session.activeTab
@@ -157,8 +146,6 @@ extension WindowModel {
         return tab.root.panes.contains(PaneId(pane))
     }
 
-    /// Feeds the toast stack: only the window in front shows agent toasts, and not while its
-    /// Inbox is open (the Inbox shows the same thing).
     func followAgentToasts() {
         guard !isClosed else { return }
         let items = withObservationTracking {

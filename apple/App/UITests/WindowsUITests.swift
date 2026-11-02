@@ -1,6 +1,6 @@
 import XCTest
 
-/// Windows (docs/APP-ARCHITECTURE.md "Windows"): two iPad windows on one host, each with its own
+/// Windows: two iPad windows on one host, each with its own
 /// tab and its own terminal on the same stream; the Handoff activity a window advertises; a
 /// continued activity for a host this device does not have; the layout following the window's
 /// width (compact ↔ regular) without losing the focused pane or flashing the size overlay.
@@ -151,7 +151,7 @@ final class WindowsUITests: XCTestCase {
         // Back in the first window (brought to the front, as a click on it would): it is still
         // on its tab, and typing there goes to its own pane, which never saw window 2's command.
         // Under iPadOS 26 windowing XCUITest cannot reliably bring window 1 forward again: this
-        // last step is checked on a real iPad (owner's device checklist).
+        // last step is checked on a real iPad.
         XCTExpectFailure("XCUITest cannot bring the first window forward under iPadOS 26 windowing", strict: false)
         tapControl(app, "debug-front-0")
         let oldPane = app.descendants(matching: .any).matching(identifier: "pane-\(before["pane"] ?? "")").firstMatch
@@ -177,11 +177,11 @@ final class WindowsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += ["-mock", "-screen", "splits", "-windowProbe", "YES", "-resetWindows", "YES", "-noAutoFocus", "YES"]
         app.launch()
-        let element = probes(app).firstMatch
-        XCTAssertTrue(element.waitForExistence(timeout: 20))
+        let probeElement = probes(app).firstMatch
+        XCTAssertTrue(probeElement.waitForExistence(timeout: 20))
         waitFor("three panes") { panes(app).count == 3 }
         RunLoop.current.run(until: Date().addingTimeInterval(2))
-        let fields = probe(element)
+        let fields = probe(probeElement)
         XCTAssertEqual(fields["windows"], "1")
         XCTAssertEqual(fields["models"], fields["windows"], "one window model per window")
         XCTAssertEqual(panes(app).count, 3)
@@ -203,9 +203,9 @@ final class WindowsUITests: XCTestCase {
         ]
         app.launch()
         XCTAssertTrue(panes(app).firstMatch.waitForExistence(timeout: 40), "the daemon's pane")
-        let element = probes(app).firstMatch
-        waitFor("a payload") { !handoff(probe(element)).isEmpty }
-        let fields = probe(element)
+        let probeElement = probes(app).firstMatch
+        waitFor("a payload") { !handoff(probe(probeElement)).isEmpty }
+        let fields = probe(probeElement)
         let payload = handoff(fields)
         XCTAssertEqual(payload["kind"] as? String, "daemon")
         XCTAssertEqual(payload["hostName"] as? String, "studio")
@@ -244,9 +244,9 @@ final class WindowsUITests: XCTestCase {
         ]
         app.launch()
         // Another device's own shell cannot continue here: a toast says so, no alert.
-        let element = probes(app).firstMatch
-        XCTAssertTrue(element.waitForExistence(timeout: 15))
-        waitFor("the activity was continued") { probe(element)["continued"] == "elsewhere" }
+        let probeElement = probes(app).firstMatch
+        XCTAssertTrue(probeElement.waitForExistence(timeout: 15))
+        waitFor("the activity was continued") { probe(probeElement)["continued"] == "elsewhere" }
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
@@ -270,14 +270,14 @@ final class WindowsUITests: XCTestCase {
         // Two panes, the second focused, and some output to keep.
         app.typeKey("d", modifierFlags: .command)
         waitFor("a split") { panes(app).count == 2 }
-        let element = probes(app).firstMatch
-        let focused = probe(element)["pane"] ?? ""
+        let probeElement = probes(app).firstMatch
+        let focused = probe(probeElement)["pane"] ?? ""
         let target = app.descendants(matching: .any)["pane-\(focused)"]
         XCTAssertTrue(target.waitForExistence(timeout: 5))
         target.tap()
         app.typeText("echo markerkept\n")
         XCTAssertTrue(seeOnScreen(app, "markerkept"))
-        let regular = probe(element)
+        let regular = probe(probeElement)
         XCTAssertEqual(regular["bucket"], "regular")
         XCTAssertTrue(self.element(app, "sidebar-inbox").exists, "the sidebar in regular width")
 
@@ -286,8 +286,8 @@ final class WindowsUITests: XCTestCase {
         // WindowsTests and WindowLayoutStoreTests cover the logic.
         XCTExpectFailure("the debug link's confirmation moves focus under XCUITest", strict: false)
         tapControl(app, "debug-narrow")
-        waitFor("compact") { probe(element)["bucket"] == "compact" }
-        let compact = probe(element)
+        waitFor("compact") { probe(probeElement)["bucket"] == "compact" }
+        let compact = probe(probeElement)
         XCTAssertEqual(compact["tab"], regular["tab"])
         XCTAssertEqual(compact["pane"], regular["pane"], "the focused pane stays focused")
         XCTAssertTrue(self.element(app, "tab-switcher").waitForExistence(timeout: 5), "the compact tab switcher")
@@ -295,14 +295,14 @@ final class WindowsUITests: XCTestCase {
         XCTAssertTrue(seeOnScreen(app, "markerkept", timeout: 15), "the pane keeps its content")
 
         tapControl(app, "debug-wide")
-        waitFor("regular again") { probe(element)["bucket"] == "regular" }
+        waitFor("regular again") { probe(probeElement)["bucket"] == "regular" }
         XCTAssertTrue(self.element(app, "sidebar-inbox").waitForExistence(timeout: 5))
-        let back = probe(element)
+        let back = probe(probeElement)
         XCTAssertEqual(back["pane"], regular["pane"])
         XCTAssertTrue(seeOnScreen(app, "markerkept", timeout: 5))
         // Let the overlay's window pass, then check none was shown by the switches.
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
-        XCTAssertEqual(probe(element)["overlays"], regular["overlays"], "no cols × rows overlay from a layout switch")
+        XCTAssertEqual(probe(probeElement)["overlays"], regular["overlays"], "no cols × rows overlay from a layout switch")
         shot(app, "width-regular")
     }
 
@@ -317,21 +317,21 @@ final class WindowsUITests: XCTestCase {
         ]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
-        let element = probes(app).firstMatch
-        XCTAssertTrue(element.waitForExistence(timeout: 20))
-        waitFor("compact") { probe(element)["bucket"] == "compact" }
+        let probeElement = probes(app).firstMatch
+        XCTAssertTrue(probeElement.waitForExistence(timeout: 20))
+        waitFor("compact") { probe(probeElement)["bucket"] == "compact" }
         let pane = panes(app).firstMatch
         XCTAssertTrue(pane.waitForExistence(timeout: 20))
-        let portrait = probe(element)
+        let portrait = probe(probeElement)
         XCUIDevice.shared.orientation = .landscapeLeft
-        waitFor("regular in landscape") { probe(element)["bucket"] == "regular" }
-        XCTAssertEqual(probe(element)["pane"], portrait["pane"])
+        waitFor("regular in landscape") { probe(probeElement)["bucket"] == "regular" }
+        XCTAssertEqual(probe(probeElement)["pane"], portrait["pane"])
         shot(app, "phone-landscape-regular")
         XCUIDevice.shared.orientation = .portrait
-        waitFor("compact again") { probe(element)["bucket"] == "compact" }
-        XCTAssertEqual(probe(element)["pane"], portrait["pane"])
+        waitFor("compact again") { probe(probeElement)["bucket"] == "compact" }
+        XCTAssertEqual(probe(probeElement)["pane"], portrait["pane"])
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
-        XCTAssertEqual(probe(element)["overlays"], portrait["overlays"], "no overlay from the layout switches")
+        XCTAssertEqual(probe(probeElement)["overlays"], portrait["overlays"], "no overlay from the layout switches")
     }
     #endif
 }

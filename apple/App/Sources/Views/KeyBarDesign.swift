@@ -3,9 +3,7 @@ import DesignSystem
 import UIKit
 
 extension KeyBarStyle {
-    /// The key bar as part of the iOS 26 keyboard (DesignSystem `KeyBarLook`): glass keys at the
-    /// keyboard's key height and corner radius, SF Pro labels at its size, grouped spacing, the
-    /// latched modifier and the profile chip as prominent glass.
+    /// The key bar styled as part of the iOS 26 keyboard.
     static var designSystem: KeyBarStyle {
         let isPad = UIDevice.current.userInterfaceIdiom == .pad
         var style = KeyBarStyle.default

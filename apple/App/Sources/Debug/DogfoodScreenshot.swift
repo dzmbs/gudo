@@ -24,11 +24,11 @@ enum DogfoodScreenshot {
     static func capture(window: NSWindow, panes: [Pane]) -> Result? {
         guard let root = window.contentView?.superview ?? window.contentView else { return nil }
         let bounds = root.bounds
-        guard let rep = root.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
-        root.cacheDisplay(in: bounds, to: rep)
-        let width = rep.pixelsWide, height = rep.pixelsHigh
+        guard let bitmap = root.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        root.cacheDisplay(in: bounds, to: bitmap)
+        let width = bitmap.pixelsWide, height = bitmap.pixelsHigh
         let scale = CGFloat(width) / bounds.width
-        guard let chrome = rep.cgImage,
+        guard let chrome = bitmap.cgImage,
               let context = CGContext(
                 data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                 space: CGColorSpace(name: CGColorSpace.displayP3)!,
@@ -68,11 +68,11 @@ enum DogfoodScreenshot {
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let data = context.data else { return 0 }
         let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
-        let bg = (Int(pixels[0]), Int(pixels[1]), Int(pixels[2]))
+        let background = (Int(pixels[0]), Int(pixels[1]), Int(pixels[2]))
         var count = 0
         for i in stride(from: 0, to: width * height * 4, by: 4) {
-            let d = max(abs(Int(pixels[i]) - bg.0), abs(Int(pixels[i + 1]) - bg.1), abs(Int(pixels[i + 2]) - bg.2))
-            if d > 48 { count += 1 }
+            let distance = max(abs(Int(pixels[i]) - background.0), abs(Int(pixels[i + 1]) - background.1), abs(Int(pixels[i + 2]) - background.2))
+            if distance > 48 { count += 1 }
         }
         return Double(count) / Double(width * height)
     }

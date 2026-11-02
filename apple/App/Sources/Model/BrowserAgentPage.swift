@@ -2,8 +2,7 @@ import Foundation
 import ImageIO
 import WebKit
 
-/// A page as agents' tools use it (`BrowserAgent`): calls into its frames' scripts, snapshots
-/// with child frames inlined, waiting for what an action started, and pictures.
+/// A page as agents' browser tools use it.
 @MainActor
 extension BrowserPane {
     // MARK: Calling the page
@@ -12,16 +11,15 @@ extension BrowserPane {
         try await js(body, args, frame: frame, as: String.self)
     }
 
-    /// Runs `body` with `args` in the agent's world of the main frame, or of the frame with the
-    /// token `frame`.
+    /// Runs `body` in the agent's content world of the main frame, or of the frame with token `frame`.
     func js<T>(_ body: String, _ args: [String: Any], frame: String? = nil, as: T.Type) async throws -> T {
         do {
             let value: Any?
             if let frame, frame != frames.main {
-                guard let info = frames.frame(frame), let web = frames.webView else {
+                guard let info = frames.frame(frame), let webView = frames.webView else {
                     throw BrowserCallError("That frame is gone: snapshot again.")
                 }
-                value = try await web.callAsyncJavaScript(body, arguments: ["args": args], in: info, contentWorld: BrowserAgentScript.world)
+                value = try await webView.callAsyncJavaScript(body, arguments: ["args": args], in: info, contentWorld: BrowserAgentScript.world)
             } else {
                 try await ready()
                 value = try await page.run(body, arguments: ["args": args], in: BrowserAgentScript.world)
@@ -35,7 +33,7 @@ extension BrowserPane {
         }
     }
 
-    /// Waits a moment for the agent's script (a page still loading, about:blank).
+    /// Waits a moment for the agent's script to be injected.
     private func ready() async throws {
         for attempt in 0..<20 {
             let ready = try await page.run("return !!window.__un", in: BrowserAgentScript.world) as? Bool ?? false
@@ -48,12 +46,12 @@ extension BrowserPane {
         }
     }
 
-    /// `op`, unless a dialog or file picker comes up first (they hold the page's scripts, so
-    /// `op` would not finish until they are answered): then nil.
-    func untilBlocked<T>(_ op: @escaping @MainActor () async throws -> T) async throws -> T? {
+    /// Nil when a dialog or file picker comes up first: they hold the page's scripts, so
+    /// `operation` would not finish until they are answered.
+    func untilBlocked<T>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T? {
         let race = Race<T>()
         Task { @MainActor in
-            do { race.finish(.success(try await op())) } catch { race.finish(.failure(error)) }
+            do { race.finish(.success(try await operation())) } catch { race.finish(.failure(error)) }
         }
         let watch = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -73,8 +71,7 @@ extension BrowserPane {
 
     // MARK: Snapshots and refs
 
-    /// The page's snapshot (`window.__un.snapshot`), each child frame's under its iframe; refs
-    /// in a child frame are `ref_f<n>_<m>`.
+    /// Child frames are inlined under their iframe, with refs `ref_f<frame>_<n>`.
     func snapshot(_ args: [String: Any]) async throws -> String {
         try await snapshot(args, frame: nil, depth: 0)
     }
@@ -91,12 +88,12 @@ extension BrowserPane {
         for token in tokens where depth < 3 {
             // A delta lists every frame on a `= iframe …` line, so its changes have a place.
             guard let index = lines.firstIndex(where: { $0.contains("⟦frame \(token)⟧") && !$0.hasPrefix("- ") }) else { continue }
-            let n = frames.number(of: token)
+            let frameNumber = frames.number(of: token)
             let child: String
             do {
                 child = try await snapshot(args, frame: token, depth: depth + 1)
             } catch {
-                lines[index] += " (frame f\(n) has not loaded)"
+                lines[index] += " (frame f\(frameNumber) has not loaded)"
                 continue
             }
             if child.hasPrefix("No change since") || child.isEmpty {
@@ -107,12 +104,11 @@ extension BrowserPane {
             let own = ["+ ", "* ", "= "].contains(where: line.hasPrefix) ? line.dropFirst(2) : Substring(line)
             let indent = String(repeating: " ", count: own.prefix { $0 == " " }.count + 2)
             let body = child.components(separatedBy: "\n").filter { !$0.isEmpty }.map { indent + "  " + $0 }
-            lines.insert(contentsOf: [indent + "frame f\(n):"] + body, at: index + 1)
+            lines.insert(contentsOf: [indent + "frame f\(frameNumber):"] + body, at: index + 1)
         }
         return lines.filter { !$0.isEmpty }.map { $0.replacing(marker, with: "") }.joined(separator: "\n")
     }
 
-    /// Finds elements in every frame.
     func find(_ query: String) async throws -> String {
         let text = try await snapshot(["filter": "all", "full": true, "depth": 64])
         let words = query.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 1 }
@@ -121,9 +117,9 @@ extension BrowserPane {
         let scored = text.components(separatedBy: "\n").compactMap { line -> (Double, String)? in
             guard line.contains("[ref_") else { return nil }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let hay = trimmed.lowercased()
+            let haystack = trimmed.lowercased()
             let role = trimmed.split(separator: " ").first ?? ""
-            let score = Double(words.filter { hay.contains($0) }.count) + (interactive.contains(role) ? 0.5 : 0)
+            let score = Double(words.filter { haystack.contains($0) }.count) + (interactive.contains(role) ? 0.5 : 0)
             return score >= 1 ? (score, trimmed) : nil
         }
         let best = scored.enumerated().sorted { $0.element.0 != $1.element.0 ? $0.element.0 > $1.element.0 : $0.offset < $1.offset }
@@ -131,8 +127,7 @@ extension BrowserPane {
         return best.isEmpty ? "Nothing on the page matches “\(query)”." : best.joined(separator: "\n")
     }
 
-    /// Where a target lives: its frame (nil for the main one) and the target as that frame
-    /// knows it (a local ref; a point in CSS pixels of its viewport).
+    /// The target's frame (nil for the main one) and the target as that frame knows it.
     func locate(_ target: [String: Any]?) async throws -> (target: [String: Any]?, frame: String?) {
         guard var target else { return (nil, nil) }
         if target["type"] as? String == "coordinate" {
@@ -174,14 +169,12 @@ extension BrowserPane {
         var started: Int
     }
 
-    /// The page now, to tell what an action started.
     func activity() async -> Activity {
         let started = try? await page.run("const l = window.__gudoRecorder; return l ? l.started : 0", in: .page) as? Int
         return Activity(url: page.url, started: started ?? 0)
     }
 
-    /// Waits for what an action started: a navigation (10 s), else the requests it made
-    /// (5 s), and then for the DOM to be quiet for 100 ms (3 s).
+    /// Waits for a navigation, else the requests the action made, then for the DOM to be quiet for 100 ms.
     func settle(after before: Activity) async {
         try? await Task.sleep(for: .milliseconds(60))
         guard dialog == nil, fileChooser == nil else { return }
@@ -205,7 +198,6 @@ extension BrowserPane {
         }
     }
 
-    /// A navigation loads (at most 10 s), and the agent's script is in.
     func settleNavigation() async {
         try? await Task.sleep(for: .milliseconds(150))
         let deadline = ContinuousClock.now + .seconds(10)
@@ -214,7 +206,7 @@ extension BrowserPane {
         }
     }
 
-    /// No fetch or XHR in flight (for `quiet` ms).
+    /// No fetch or XHR in flight for `quiet` ms.
     func networkIdle(quiet: Int = 500) async -> Bool {
         let idle = try? await page.run(
             "const l = window.__gudoRecorder; return !l || (l.pending === 0 && Date.now() - l.lastActivity >= q)",
@@ -233,7 +225,6 @@ extension BrowserPane {
         var pageHeight: Double
     }
 
-    /// Screenshots at most this wide (pixels); wider viewports scale down.
     static let maxShotWidth = 1280.0
 
     func viewport() async throws -> Viewport {
@@ -242,8 +233,8 @@ extension BrowserPane {
         return try JSONDecoder().decode(Viewport.self, from: data)
     }
 
-    /// A region of the page (CSS pixels from the document's top left) as a JPEG `width` pixels
-    /// wide: the whole page is drawn, then cut, so bars over the page never shift it.
+    /// A region in document CSS pixels as a JPEG. The whole page is drawn, then cut, so bars over
+    /// the page never shift it.
     func picture(_ view: Viewport, region: CGRect, width: Double) async throws -> Data {
         let data = try await page.picture(nil, width: view.pageWidth)
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -260,13 +251,13 @@ extension BrowserPane {
         else { throw BrowserCallError("The page could not be drawn.") }
         context.interpolationQuality = .high
         context.draw(part, in: CGRect(origin: .zero, size: size))
-        let out = NSMutableData()
+        let jpeg = NSMutableData()
         guard let scaled = context.makeImage(),
-              let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil)
+              let destination = CGImageDestinationCreateWithData(jpeg, "public.jpeg" as CFString, 1, nil)
         else { throw BrowserCallError("The page could not be drawn.") }
         CGImageDestinationAddImage(destination, scaled, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw BrowserCallError("The page could not be drawn.") }
-        return out as Data
+        return jpeg as Data
     }
 }
 

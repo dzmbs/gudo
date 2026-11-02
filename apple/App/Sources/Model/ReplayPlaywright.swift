@@ -58,34 +58,34 @@ nonisolated enum ReplayPlaywright {
             case "right": (amount, 0)
             default: (0, amount)
             }
-            var out: [String] = []
-            if input["target"] != nil, let target = target(action) { out += pointAt(target) }
-            return out + ["await page.mouse.wheel(\(dx), \(dy));"]
+            var lines: [String] = []
+            if input["target"] != nil, let target = target(action) { lines += pointAt(target) }
+            return lines + ["await page.mouse.wheel(\(dx), \(dy));"]
         case "type":
             let text = input["text"] as? String ?? ""
             let submit = input["submit"] as? Bool ?? false
-            var out: [String]
+            var lines: [String]
             if input["target"] != nil, let target = target(action) {
-                out = switch target {
+                lines = switch target {
                 case .locator(let locator, let note): ["await \(locator).pressSequentially(\(quote(text)));" + note]
                 case .point(let x, let y, let note): ["await page.mouse.click(\(x), \(y));" + note, "await page.keyboard.type(\(quote(text)));"]
                 case .missing(let note): [note, "await page.keyboard.type(\(quote(text)));"]
                 }
             } else {
-                out = ["await page.keyboard.type(\(quote(text)));"]
+                lines = ["await page.keyboard.type(\(quote(text)));"]
             }
-            if submit { out.append("await page.keyboard.press('Enter');") }
-            return out
+            if submit { lines.append("await page.keyboard.press('Enter');") }
+            return lines
         case "drag":
             guard let from = target(action) else { return ["// browser_drag: nothing to act on was recorded."] }
-            var out = pointAt(from)
+            var lines = pointAt(from)
             if let to = input["to"] as? [String: Any], to["type"] as? String == "coordinate" {
                 let x = (to["x"] as? NSNumber)?.intValue ?? 0, y = (to["y"] as? NSNumber)?.intValue ?? 0
-                out += ["await page.mouse.down();", "await page.mouse.move(\(x), \(y), { steps: 8 }); // the agent's screenshot coordinates", "await page.mouse.up();"]
+                lines += ["await page.mouse.down();", "await page.mouse.move(\(x), \(y), { steps: 8 }); // the agent's screenshot coordinates", "await page.mouse.up();"]
             } else {
-                out += ["await page.mouse.down();", "// browser_drag to \((input["to"] as? [String: Any])?["ref"] as? String ?? "?"): no locator was recorded for the drop target.", "await page.mouse.up();"]
+                lines += ["await page.mouse.down();", "// browser_drag to \((input["to"] as? [String: Any])?["ref"] as? String ?? "?"): no locator was recorded for the drop target.", "await page.mouse.up();"]
             }
-            return out
+            return lines
         default:
             guard let target = target(action) else { return ["// \(action.tool): nothing to act on was recorded."] }
             switch target {
@@ -171,18 +171,18 @@ nonisolated enum ReplayPlaywright {
     }
 
     static func quote(_ text: String) -> String {
-        var out = "'"
+        var quoted = "'"
         for character in text {
             switch character {
-            case "\\": out += "\\\\"
-            case "'": out += "\\'"
-            case "\n": out += "\\n"
-            case "\r": out += "\\r"
-            case "\t": out += "\\t"
-            default: out.append(character)
+            case "\\": quoted += "\\\\"
+            case "'": quoted += "\\'"
+            case "\n": quoted += "\\n"
+            case "\r": quoted += "\\r"
+            case "\t": quoted += "\\t"
+            default: quoted.append(character)
             }
         }
-        return out + "'"
+        return quoted + "'"
     }
 
     private static func oneLine(_ text: String) -> String {

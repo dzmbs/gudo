@@ -8,12 +8,11 @@ struct KeyBarContext: Equatable {
     var title: String
 }
 
-/// small menu (no glyphs drawn in the key's corner).
+/// One key-bar key: tap sends `output`; a long-press offers `alternate` in a small menu.
 /// Built from a key or a character plus modifiers, never from raw escape strings, so it goes
 /// through the terminal's encoder (application-cursor mode, kitty keyboard protocol).
 struct KeySpec: Identifiable {
     enum Output {
-        /// A key that produces no text (arrows, Esc, Enter, Tab, PgUp ...).
         case key(PhysicalKey, KeyModifiers)
         /// A character, typed like on a US layout (so Ctrl+c encodes as 0x03).
         case text(String, KeyModifiers)
@@ -30,24 +29,22 @@ struct KeySpec: Identifiable {
     /// Repeats while held (⌫, arrows). Repeating keys have no long-press menu.
     var repeatable = false
     var output: Output
-    /// What the long-press menu offers, titled `alternateTitle`.
     var alternate: Output?
     var alternateTitle: String?
 
-    /// The events to send, with modifiers latched on the bar (sticky Ctrl/Alt) added.
     func events(latched: KeyModifiers, alternate useAlternate: Bool = false) -> [KeyEvent] {
         Self.events(useAlternate ? (alternate ?? output) : output, latched: latched)
     }
 
-    /// The single event of a plain key (repeating keys only).
+    /// Only for repeating keys, which are always a single plain event.
     func event(latched: KeyModifiers) -> KeyEvent {
         events(latched: latched)[0]
     }
 
     private static func events(_ output: Output, latched: KeyModifiers) -> [KeyEvent] {
         switch output {
-        case .key(let key, let mods): [.press(key, mods: mods.union(latched))]
-        case .text(let text, let mods): [.typing(text, mods: mods.union(latched))]
+        case .key(let key, let modifiers): [.press(key, mods: modifiers.union(latched))]
+        case .text(let text, let modifiers): [.typing(text, mods: modifiers.union(latched))]
         case .paste: []
         // Latched modifiers apply to the first event only (a prefix key, then a plain key).
         case .sequence(let parts):
@@ -55,7 +52,6 @@ struct KeySpec: Identifiable {
         }
     }
 
-    /// The same key with an alternate in its long-press menu.
     func flick(_ alternate: Output, title: String) -> KeySpec {
         var key = self
         key.alternate = alternate
@@ -84,7 +80,6 @@ extension KeySpec {
         text(id, tap, label: label).flick(.text(flick, []), title: flick)
     }
 
-    /// `^X / ^Y` keys.
     static func ctrlPair(_ tap: String, _ flick: String, label: String) -> KeySpec {
         ctrl(tap, label: label).flick(.text(flick, .control), title: "^\(flick.uppercased())")
     }
@@ -108,16 +103,17 @@ extension KeySpec {
                                 output: .sequence([.key(.escape, []), .key(.escape, [])]))
 
     /// F1–F12 (HID usages 0x3A–0x45).
-    static func function(_ n: Int) -> Output {
-        .key(PhysicalKey(hidUsage: UInt32(0x39 + n))!, [])
+    static func function(_ number: Int) -> Output {
+        .key(PhysicalKey(hidUsage: UInt32(0x39 + number))!, [])
     }
 
-    static func fkey(_ n: Int, flick: String, label: String) -> KeySpec {
-        KeySpec(id: "f\(n)", title: "F\(n)", accessibilityLabel: label, output: function(n))
+    static func fkey(_ number: Int, flick: String, label: String) -> KeySpec {
+        KeySpec(id: "f\(number)", title: "F\(number)", accessibilityLabel: label, output: function(number))
             .flick(.text(flick, []), title: flick)
     }
 }
 
+/// A context-aware key set. Profiles only replace capsule B: capsule A
 /// (`esc ctrl alt ⇥`) and the arrow circle are the same everywhere. Matched by foreground program,
 /// else by title.
 struct KeyBarProfile: Identifiable, Equatable {
@@ -128,11 +124,12 @@ struct KeyBarProfile: Identifiable, Equatable {
     /// Matched against the lowercased title when the program is unknown.
     var titlePattern: String?
     /// Capsule B, in priority order: narrow bars show the first ones (never fewer than four) and
+    /// the rest are in the bar's menu.
     var keys: [KeySpec]
     /// Agents default to the composer; shells and TUIs to direct input.
     var prefersComposer = false
 
-    static func == (a: Self, b: Self) -> Bool { a.id == b.id }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 
     static let shell = KeyBarProfile(
         id: "shell", name: "Shell", programs: ["bash", "zsh", "fish", "sh", "dash", "nu", "pwsh"], titlePattern: nil,
@@ -232,7 +229,6 @@ struct KeyBarProfile: Identifiable, Equatable {
     /// Built-in profiles, most specific first; `shell` is the fallback.
     static let builtIn: [KeyBarProfile] = [.claude, .codex, .vim, .tmux, .monitor, .pager, .repl, .shell]
 
-    /// The profile for a pane: its foreground program when known, else title heuristics, else Shell.
     static func match(_ context: KeyBarContext, among profiles: [KeyBarProfile] = builtIn) -> KeyBarProfile {
         if let program = context.program.map({ ($0 as NSString).lastPathComponent.lowercased() }),
            let profile = profiles.first(where: { $0.programs.contains(program) })

@@ -3,11 +3,10 @@ import HostKit
 import PaneLayout
 import GudoCore
 
-/// Drawing commands on the focused pane (menu, ⌃⌘D, command palette). ⌃⌘D rather than the
-/// ⇧⌘D the contract names: ⇧⌘D is Ghostty's Split Down.
+/// Drawing commands on the focused pane. ⌃⌘D rather than ⇧⌘D, which is Ghostty's Split Down.
 @MainActor
 enum DrawingCommands {
-    /// Opens the draw overlay at the cursor row (Done when it is open).
+    /// Opens the draw overlay at the cursor row, or finishes it when open.
     static func toggleDrawing(in workspace: Workspace) {
         guard let pane = workspace.focusedPane, let drawing = PaneDrawing.of(pane) else {
             CanvasWebView.log.info("draw: no daemon pane focused (\(String(describing: workspace.focusedPane), privacy: .public))")
@@ -17,7 +16,7 @@ enum DrawingCommands {
         drawing.toggleDrawing()
     }
 
-    /// Whether the focused pane can be drawn on (a daemon pane).
+    /// Only daemon panes can be drawn on.
     static func canDraw(in workspace: Workspace) -> Bool {
         workspace.focusedPane.flatMap(PaneDrawing.of) != nil
     }

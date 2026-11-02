@@ -5,14 +5,11 @@ import SwiftUI
 
 // MARK: - Sidebar (vertical tabs)
 
-/// Hosts on top, then one group per host the window shows (this device, each paired daemon, each
-/// plain-SSH host), each with its connection dot, its tabs and its agents, and a footer with the
-/// connection and settings. Every host is live at once: clicking any tab on any host switches to
-/// it at once, without the Hosts screen and without reconnecting. Tab numbers run across hosts
-/// (⌘1…⌘9). Selection is a quiet fill, not the accent: color stays reserved for state.
+/// The sidebar: Inbox and Hosts on top, then one group per host the window shows. Every host is
+/// live at once, and tab numbers (⌘1…⌘9) run across hosts.
 ///
-/// Drawn by hand (a scroll view of rows), not a system `List`: the system sidebar list paints its
-/// own material (white or grey next to a dark terminal on the Mac, an inset card on iPad); this one
+/// Drawn by hand, not a system `List`: the system sidebar list paints its own material, which
+/// clashes with a dark terminal next to it.
 struct WorkspaceSidebar: View {
     @Environment(WindowModel.self) private var model
     @State private var swipe = RowSwipeState()
@@ -30,9 +27,9 @@ struct WorkspaceSidebar: View {
                 }
                 .padding(.top, DS.Space.s)
 
+                // Tabs whose agent waits or failed, on any host, hoisted.
                 NeedsYouSection()
 
-                // Projects, the window's own tabs, then each host's loose tabs.
                 SidebarTabList()
 
                 if model.groups.groups.isEmpty {
@@ -43,7 +40,7 @@ struct WorkspaceSidebar: View {
             .animation(DS.Motion.snappy, value: model.groups.collapsed)
         }
         #if os(macOS)
-        // A right-click on the sidebar's empty space (rows keep their own menus).
+        // Rows keep their own menus.
         .contextMenu {
             Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") {
                 withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
@@ -52,9 +49,8 @@ struct WorkspaceSidebar: View {
         #endif
         .scrollIndicators(.never)
         .environment(swipe)
-        // A row's swipe actions close when the list scrolls (Mail).
         .onScrollPhaseChange { _, phase in if phase != .idle { swipe.open = nil } }
-        // Dense rows in a fixed column: they grow with Dynamic Type up to accessibility 1
+        // Dense rows in a fixed column; the column grows with them (`SidebarWidth`).
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .chromeContent()
         .chromeBackground(DS.Palette.sidebar)
@@ -63,7 +59,6 @@ struct WorkspaceSidebar: View {
             SidebarFooter()
         }
         #endif
-        // Tabs selected for bulk actions: how many and what to do with them.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if model.isSelectingTabs || model.tabSelection.isMultiple {
                 TabSelectionBar()
@@ -112,7 +107,7 @@ enum SidebarWidth {
 }
 
 extension View {
-    /// A sidebar row: 12 pt insets in a full-width hit area, and a soft selection fill (radius 8,
+    /// A sidebar row: a full-width hit area with a soft selection and hover fill.
     func sidebarRow(selected: Bool) -> some View {
         modifier(SidebarRowStyle(selected: selected))
     }
@@ -139,7 +134,6 @@ private struct SidebarRowStyle: ViewModifier {
                 RoundedRectangle(cornerRadius: DS.Radius.control)
                     .fill(DS.Palette.ink.opacity(selected ? ChromePalette.fillLevels.selected : hovered ? ChromePalette.fillLevels.hover : 0)))
             #if os(iOS)
-            // The iPad pointer takes the row's own rounded shape (as the git rows do).
             .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: DS.Radius.control))
             .hoverEffect(.highlight)
             #endif
@@ -148,6 +142,7 @@ private struct SidebarRowStyle: ViewModifier {
     }
 }
 
+/// The highlight behind a selected sidebar row.
 struct SelectionFill: View {
     let isSelected: Bool
 
@@ -159,7 +154,6 @@ struct SelectionFill: View {
 }
 
 extension HostGroup {
-    /// The host's link in the design system's words (a dot and a word per state).
     var connectionState: ConnectionState {
         // A fixed `since`: the value must not change between renders (animations key on it).
         if isLocal { return .connected }
@@ -176,8 +170,7 @@ extension HostGroup {
     }
 }
 
-/// One host's header in the tab list: its name and state, then its agents' plan usage. Its
-/// tabs, agents and placeholder follow as items of their own (`SidebarItem`).
+/// One host's header in the tab list: its name and state, then its agents' plan usage.
 struct HostGroupHeaderItem: View {
     let group: HostGroup
     @Environment(WindowModel.self) private var model
@@ -186,7 +179,6 @@ struct HostGroupHeaderItem: View {
         let collapsed = model.groups.collapsed.contains(group.id)
         VStack(alignment: .leading, spacing: 0) {
             HostGroupHeader(group: group, collapsed: collapsed)
-            // Agent plan usage, one quiet line per agent, aligned with the host's name.
             if group.kind == .daemon || LaunchOptions.fakeUsage {
                 HostUsageMeters(hostId: group.id, hostName: group.name)
                     .padding(.leading, DS.Space.l + 16 + DS.Space.s)
@@ -209,8 +201,6 @@ private struct HostGroupHeader: View {
         let live = group.isLocal || group.status.isLive
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: DS.Space.s) {
-                // Status UX §3.2: the host's icon (replaced by its state glyph while the link is
-                // Terminal. No dots, no status text.
                 ConnectionGlyph(
                     state,
                     healthy: Image(systemName: group.isLocal ? "laptopcomputer" : "server.rack")
@@ -222,7 +212,6 @@ private struct HostGroupHeader: View {
                     .help(group.failure ?? (live ? group.name : state.title))
                 Text(group.name)
                     .font(DS.Font.section)
-                    // Headers stay quiet; the rows under them lead.
                     .foregroundStyle(live ? DS.Palette.textSecondary : DS.Palette.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -240,14 +229,13 @@ private struct HostGroupHeader: View {
                         .help("Plain SSH: tabs end with the connection. Install the helper to keep them.")
                 }
                 Spacer(minLength: DS.Space.xs)
-                // What the collapse hides: the host's loose tabs (its project tabs stay shown).
+                // What the collapse hides: the host's loose tabs.
                 if collapsed, case let hidden = model.groups.looseTabs(of: group).count, hidden > 0 {
                     Text("\(hidden)")
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .contentTransition(.numericText())
                 }
-                // The host's agents at a glance (§3.4 aggregate: blocked > error > done > working).
                 if let agents = aggregateAgentState {
                     HoverPopover(isPresented: $showsAgents) {
                         AgentGlyph(state: agents)
@@ -264,8 +252,7 @@ private struct HostGroupHeader: View {
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bar)
                     .font(.callout)
-                    // Always there (a host with no tabs must never look like a dead end); quieter
-                    // until hover on the Mac.
+                    // Always there, so a host with no tabs never looks like a dead end.
                     .opacity(canOpen ? (plusEmphasized ? 1 : 0.45) : 0)
                     .disabled(!canOpen)
                     .accessibilityIdentifier("new-tab-\(group.name)")
@@ -329,6 +316,7 @@ private struct HostGroupHeader: View {
 
     private var canOpen: Bool { group.isLocal || group.isReady }
 
+    /// Full strength on hover on the Mac; always on touch, where there is no hover.
     private var plusEmphasized: Bool {
         #if os(macOS)
         hovered
@@ -344,7 +332,7 @@ private struct HostGroupHeader: View {
     }
 }
 
-/// A host's agents at a glance (the header's glyph, on hover): one row each with its glyph,
+/// A host's agents at a glance, one row each; a row focuses its pane.
 private struct HostAgentsPopover: View {
     let group: HostGroup
     let onSelect: () -> Void
@@ -384,9 +372,7 @@ private struct HostAgentsPopover: View {
     }
 }
 
-/// An agent's activity (status UX §3.4): working is a mini spinner in .secondary, needs input an
-/// amber question mark, done a green check, failed a red cross; idle shows nothing. 12 pt in a
-/// 14 pt slot so rows never jump.
+/// An agent's activity glyph; idle shows nothing. Drawn in a fixed slot so rows never jump.
 struct AgentGlyph: View {
     let state: AgentState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -438,12 +424,11 @@ struct AgentGlyph: View {
     }
 }
 
-/// §4): the program's mark, replaced by the agent glyph while an unfocused tab has something to
-/// say. Every row has the slot, so titles line up across rows and a swap never moves them. Symbols
-/// draw at the muted 0.6 (the text leads); logos at the text's size, never louder than the title.
+/// The slot leading a tab's name: the program's mark, replaced by the agent glyph while an
+/// unfocused tab has something to say. Every row has the slot, so titles line up across rows.
 struct TabLeadingMark: View {
     let program: ProgramIdentity
-    /// The agent state to show instead, nil on the focused tab (§3.4) or when nothing reports.
+    /// The agent state to show instead, nil on the focused tab or when nothing reports.
     let state: AgentState?
     /// A browser tab's page icon, shown instead of the program's mark.
     var favicon: Image?
@@ -521,7 +506,7 @@ private struct GroupMenu: View {
     }
 }
 
-/// A host with no tabs yet: what is happening, in words (never a void).
+/// A host with no tabs yet: what is happening, in words.
 struct GroupPlaceholder: View {
     let group: HostGroup
     @Environment(WindowModel.self) private var model
@@ -571,8 +556,8 @@ private struct NoHostsRow: View {
     }
 }
 
-/// underneath in SF Mono (agent task, program, repo:branch or directory), and on the Mac its ⌘N
-/// on the right. In a project it names its host. Dragged by the list (`SidebarTabList`).
+/// One tab: its number across all hosts, name and status glyph, and its context underneath.
+/// Dragged by the list (`SidebarTabList`).
 struct TabRow: View {
     let tab: Tab
     let ref: TabRef
@@ -600,7 +585,6 @@ struct TabRow: View {
                 Text("\(number)")
                     .font(DS.Font.sidebarSubtitle.monospacedDigit())
                     .foregroundStyle(isActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
-                    // Two digits fit (⌘-numbers run past 9 across hosts), so titles stay aligned.
                     .frame(width: numberWidth, alignment: .trailing)
                     .lineLimit(1)
                     // A renumbered row swaps its digit in place, never a cross-fade.
@@ -611,6 +595,7 @@ struct TabRow: View {
                         Text(title)
                             .font(DS.Font.sidebarTitle)
                             .lineLimit(1)
+                            // A path keeps its end: the directory you are in.
                             .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .middle)
                             .shimmering(state == .working, text: title)
                             .foregroundStyle(.primary)
@@ -620,13 +605,9 @@ struct TabRow: View {
                                 .foregroundStyle(DS.Palette.textTertiary)
                         }
                     }
-                    // Only a line that says something: not "~", not empty, not the title again;
-                    // a shell command running a while shows with its run time.
                     let informative = context.flatMap { Self.isInformative($0, title: title) ? $0 : nil }
-                    // Always there (blank when it has nothing to say): rows keep one height. In a
-                    // project it leads with the host, which the section header no longer names.
+                    // In a project it leads with the host, which the section header doesn't name.
                     TabSubtitle(context: showsHost ? [group.name, informative].compactMap(\.self).joined(separator: " · ") : informative, running: running)
-                        // Under the title, past the mark slot and its spacing.
                         .padding(.leading, ProgramMark.rowSlot + DS.Space.row)
                 }
                 Spacer(minLength: DS.Space.xs)
@@ -646,7 +627,6 @@ struct TabRow: View {
                         .transition(.opacity)
                 }
             }
-            // A host that is down keeps its rows (and their last state), quieter.
             .opacity(group.status.isLive || group.isLocal ? 1 : 0.6)
             // In Select mode only the checks say what is selected.
             .sidebarRow(selected: isActive && !model.isSelectingTabs)
@@ -660,7 +640,6 @@ struct TabRow: View {
         .accessibilityIdentifier("tab-row-\(number)")
         .rowActions(actions, id: ref.description, name: title, perform: perform) {
             if model.isInMultipleSelection(ref) {
-                // A row of a selection: what applies to all of it.
                 TabSelectionMenuItems(model: model)
             } else {
                 if WindowRequest.isSupported {
@@ -710,7 +689,7 @@ struct TabRow: View {
     }
 }
 
-/// tabs: glyph, program, tab number, and the state word right-aligned in its color.
+/// A host's agents: every pane whose program reports status, across its tabs.
 struct GroupAgents: View {
     let group: HostGroup
     let numbers: [TabRef: Int]
@@ -740,7 +719,6 @@ struct GroupAgents: View {
                         model.focus(pane: row.pane, onGroup: group.id)
                     } label: {
                         let program = model.programIdentity(ofPane: row.pane, onGroup: group.id)
-                        // and the state word keeps its colour. The name takes the squeeze.
                         HStack(spacing: DS.Space.gap10) {
                             AgentGlyph(state: row.state)
                                 .frame(minWidth: 16)
@@ -822,10 +800,8 @@ struct GroupAgents: View {
     }
 }
 
-/// Settings, pinned under the list. No connection summary (status UX §3.2, §3.7 rule 1): each
-/// host's state is on its own header, once.
-/// The sidebar's footer on the Mac: Settings. On iPad Settings sits in the sidebar's top bar,
-/// clear of the keyboard and its glass key bar.
+/// The sidebar's footer on the Mac. On iPad Settings sits in the sidebar's top bar instead,
+/// clear of the keyboard and its key bar.
 private struct SidebarFooter: View {
     @Environment(WindowModel.self) private var model
     #if os(macOS)
@@ -834,7 +810,6 @@ private struct SidebarFooter: View {
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
-            // Where Notes, Reminders and Music put their New Folder / Add List.
             Button {
                 withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
             } label: {
@@ -860,7 +835,7 @@ private struct SidebarFooter: View {
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
-        // Rows scroll under it: the sidebar's own background, never see-through text.
+        // Opaque: rows scroll under it.
         .chromeBackground(DS.Palette.sidebar)
     }
 }
@@ -896,7 +871,8 @@ private struct ConnectionProbe: View {
 
 // MARK: - iPhone
 
-/// iPhone (compact width): one pane full screen under a slim bar on the terminal background whose
+/// iPhone (compact width): one pane full screen under a slim bar whose title opens the tab
+/// switcher.
 struct CompactTerminalView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
@@ -907,11 +883,9 @@ struct CompactTerminalView: View {
             TerminalArea(workspace: workspace, compact: true)
         }
         .chromeContent()
-        // The bar is the window's base: the terminal's own background under Match Terminal.
         .chromeBackground(DS.Palette.base)
         .modifier(ProjectNamingAlert())
         #if os(iOS)
-        // The switcher's Select mode: every tab in a list that selects several.
         .sheet(isPresented: Binding(get: { model.isSelectingTabs }, set: { if !$0 { model.endTabSelection() } })) {
             CompactTabSelection()
                 .environment(model)
@@ -924,12 +898,11 @@ struct CompactTerminalView: View {
         HStack(spacing: DS.Space.xs) {
             tabSwitcher
             Spacer()
-            // The focused pane's worktree: its pull request, the checks in a sheet.
             if model.destination == .terminal, let worktree = model.git.worktree {
                 PRToolbarButton(git: model.git, worktree: worktree)
             }
             if let mixed = model.activeMixed {
-                // A page, editor or another host's pane beside a terminal: one shows at a time.
+                // One leaf of a mixed tab shows at a time.
                 if mixed.leaves.count > 1 { mixedPaneSwitcher(mixed) }
             } else if let tab = workspace.session.activeTab, tab.root.panes.count > 1 {
                 paneSwitcher(tab)
@@ -955,7 +928,6 @@ struct CompactTerminalView: View {
         let windowTabs = model.groups.mixedTabs.filter { !grouped.contains($0) }
         let restorable = model.groups.restorableTabs.count
         return Menu {
-            // Tab history: tabs kept aside at launch, idle ones, the recently closed, selecting.
             Section {
                 if restorable > 0 {
                     Button(restorable == 1 ? "Restore 1 Tab" : "Restore \(restorable) Tabs", systemImage: "arrow.counterclockwise") { model.restoreHiddenTabs() }
@@ -972,7 +944,7 @@ struct CompactTerminalView: View {
                     Button("Select Tabs…", systemImage: "checkmark.circle") { model.isSelectingTabs = true }
                 }
             }
-            // Projects first, as in the sidebar: one section each, its tabs from any host.
+            // Projects first, as in the sidebar.
             ForEach(projects) { project in
                 Section(project.tabs.isEmpty ? project.name
                     : "\(project.name) · \(project.hosts.count > 1 ? "\(project.hosts.count) hosts" : model.groupName(project.hosts.first ?? ""))")
@@ -993,7 +965,6 @@ struct CompactTerminalView: View {
                     ForEach(windowTabs, id: \.self) { ref in switcherItem(ref) }
                 }
             }
-            // One section per host, its status in the header: every tab on every host is a tap away.
             ForEach(groups) { group in
                 Section {
                     ForEach(model.groups.looseTabs(of: group, grouped: grouped), id: \.self) { ref in switcherItem(ref) }
@@ -1015,8 +986,6 @@ struct CompactTerminalView: View {
                     ProgramMark(model.programIdentity(of: tab, onGroup: workspace.groupId))
                         .foregroundStyle(.primary)
                 }
-                // Status UX §3.2 iPhone bar: the tab's title, the host's name as a second line,
-                // a state glyph after it only when the host is not live. No dot.
                 VStack(alignment: .leading, spacing: 0) {
                     Text(model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.session.activeTab.map(workspace.title(of:)) ?? (workspace.canOpenTabs ? "No Tabs" : Brand.name))
                         .font(.subheadline.weight(.semibold))

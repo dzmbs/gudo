@@ -4,11 +4,10 @@ import HostKit
 import PaneLayout
 import SwiftUI
 
-/// Floating windows for design review (`-screen floating…`, `MacSnapshotTests`,
-/// several windows, the tray and a split inside a window. Real panes with written screens.
+/// Floating windows for design review and snapshot tests (`-screen floating…`): real panes with
+/// written screens.
 @MainActor
 enum FloatingFixtures {
-    /// The panes a fixture made, by role.
     struct Panes {
         var shell: PaneId
         var tests: PaneId
@@ -17,12 +16,12 @@ enum FloatingFixtures {
         var logs: PaneId?
     }
 
-    /// The panes the last fixture made (snapshot tests repaint them once the grids settle).
+    /// Snapshot tests repaint these once the grids settle.
     static var last: Panes?
 
     static let screens: Set<String> = ["floating", "floating-tiled", "floating-multi", "floating-tray", "floating-zoom"]
 
-    /// Builds `screen` in the workspace's active tab (one fresh pane).
+    /// Expects the active tab to hold one fresh pane.
     @discardableResult
     static func apply(_ screen: String, workspace: Workspace, model: WindowModel) async -> Panes? {
         guard let panes = await base(workspace, floated: screen != "floating-tiled") else { return nil }
@@ -32,7 +31,6 @@ enum FloatingFixtures {
             result = await multi(workspace, panes)
         case "floating-tray":
             result = await multi(workspace, panes)
-            // Two windows in the tray: Claude with its log tail, and the shell.
             if let agent = result.agent { workspace.apply(.setFloat(agent, frame: nil, minimized: true, pinned: nil)) }
             workspace.apply(.float(panes.shell, frame: FloatFrame(x: 0.1, y: 0.5, width: 0.4, height: 0.4)))
             workspace.apply(.setFloat(panes.shell, frame: nil, minimized: true, pinned: nil))
@@ -43,12 +41,11 @@ enum FloatingFixtures {
         default:
             break
         }
-        // The fixture's own moves are layout changes, not resizes by hand: no cols × rows.
+        // Layout changes, not resizes by hand: no cols × rows overlay.
         workspace.layoutChangeUntil = .now + .seconds(4)
-        // Panes are made in stages and their shells greet first: paint once all have a grid
-        // and have said hello.
-        let all = [result.shell, result.tests, result.htop, result.agent, result.logs].compactMap(\.self)
-        for _ in 0..<60 where !all.allSatisfy({ workspace.panes[$0]?.view.surface.grid != nil }) {
+        // Panes are made in stages and their shells greet first: paint once all have a grid.
+        let allPanes = [result.shell, result.tests, result.htop, result.agent, result.logs].compactMap(\.self)
+        for _ in 0..<60 where !allPanes.allSatisfy({ workspace.panes[$0]?.view.surface.grid != nil }) {
             try? await Task.sleep(for: .milliseconds(100))
         }
         try? await Task.sleep(for: .milliseconds(900))
@@ -57,7 +54,6 @@ enum FloatingFixtures {
         return result
     }
 
-    /// A shell beside a test run, htop floating over both (or tiled beside them).
     static func base(_ workspace: Workspace, floated: Bool = true) async -> Panes? {
         guard let shell = workspace.focusedPane, let tab = workspace.session.activeTabId else { return nil }
         workspace.apply(.rename(tab, "~/projects/gudo"))
@@ -78,33 +74,32 @@ enum FloatingFixtures {
 
     static let htopFrame = FloatFrame(x: 0.2, y: 0.17, width: 0.6, height: 0.62)
 
-    /// Two more windows: Claude at work split with a log tail inside one window, cascaded.
+    /// Adds a floating window holding Claude split with a log tail.
     static func multi(_ workspace: Workspace, _ panes: Panes) async -> Panes {
-        var out = panes
+        var result = panes
         workspace.apply(.setFloat(panes.htop, frame: FloatFrame(x: 0.05, y: 0.08, width: 0.5, height: 0.56), minimized: nil, pinned: nil))
         workspace.apply(.split(panes.tests, .vertical))
-        guard let agent = workspace.focusedPane, agent != panes.tests else { return out }
+        guard let agent = workspace.focusedPane, agent != panes.tests else { return result }
         workspace.apply(.float(agent, frame: FloatFrame(x: 0.42, y: 0.34, width: 0.54, height: 0.6)))
         workspace.apply(.focus(agent))
         workspace.apply(.split(agent, .vertical))
         let logs = workspace.focusedPane
         workspace.apply(.focus(agent))
-        out.agent = agent
-        out.logs = logs
+        result.agent = agent
+        result.logs = logs
         var fixture = MockPaneStatus.fixture ?? [:]
         fixture[agent.description] = ("claude", .working)
         if let logs { fixture[logs.description] = ("tail", nil) }
         MockPaneStatus.fixture = fixture
         MockPaneStatus.details = [agent.description: "Docking floats beside a pane · 3m"]
         try? await Task.sleep(for: .milliseconds(300))
-        return out
+        return result
     }
 
-    /// Writes each pane's screen at its current grid.
     static func paint(_ workspace: Workspace, _ panes: Panes) {
         write(shellScreen, to: panes.shell, in: workspace)
         write(testScreen, to: panes.tests, in: workspace)
-        // At the grid the terminal has now, so nothing wraps or scrolls.
+        // At the current grid, so nothing wraps or scrolls.
         let grid = workspace.panes[panes.htop]?.view.surface.grid
         write(htop(cols: Int(grid?.cols ?? 100), rows: Int(grid?.rows ?? 30)), to: panes.htop, in: workspace)
         if let agent = panes.agent { write(agentScreen, to: agent, in: workspace) }
@@ -114,7 +109,6 @@ enum FloatingFixtures {
     static func write(_ text: String, to pane: PaneId, in workspace: Workspace) {
         // No cursor, no autowrap: a screen drawn for one width never spills into the next row.
         let screen = "\u{1b}[?25l\u{1b}[?7l\u{1b}[2J\u{1b}[H" + text
-        // Through the stand-in shell when there is one, so its greeting never lands on top.
         let backend = workspace.panes[pane]?.backend
         if let echo = (backend.flatMap(SharedPaneBackend.underlying) ?? backend) as? EchoBackend {
             echo.show(screen)
@@ -193,19 +187,19 @@ enum FloatingFixtures {
         ].joined(separator: "\r\n")
     }
 
-    /// htop at `cols` × `rows`: meters, the process table with its green header and the
-    /// selected row, and the function-key bar.
     static func htop(cols: Int, rows: Int) -> String {
         let cols = max(cols, 40)
-        func pad(_ s: String, _ width: Int) -> String { s.count >= width ? String(s.prefix(width)) : s + String(repeating: " ", count: width - s.count) }
+        func pad(_ text: String, _ width: Int) -> String {
+            text.count >= width ? String(text.prefix(width)) : text + String(repeating: " ", count: width - text.count)
+        }
         func meter(_ label: String, _ width: Int, _ parts: [(Double, String)], _ text: String) -> String {
             let inner = max(width - label.count - 2, 4)
             var bar = ""
             var used = 0
             for (fraction, color) in parts {
-                let n = min(Int(Double(inner) * fraction), inner - used)
-                bar += sgr(color) + String(repeating: "|", count: max(n, 0))
-                used += max(n, 0)
+                let filled = min(Int(Double(inner) * fraction), inner - used)
+                bar += sgr(color) + String(repeating: "|", count: max(filled, 0))
+                used += max(filled, 0)
             }
             let free = max(inner - used - text.count, 0)
             return "\(sgr("36"))\(label)\(reset)\(sgr("1"))[\(reset)\(bar)\(String(repeating: " ", count: free))\(sgr("2"))\(text)\(reset)\(sgr("1"))]\(reset)"
@@ -214,9 +208,9 @@ enum FloatingFixtures {
         let cpus: [(Double, Double)] = [(0.42, 0.08), (0.18, 0.05), (0.66, 0.12), (0.09, 0.02), (0.31, 0.06), (0.12, 0.03), (0.55, 0.1), (0.07, 0.02)]
         var lines: [String] = []
         for row in 0..<4 {
-            let a = cpus[row], b = cpus[row + 4]
-            let left = meter(String(format: "%4d", row), half, [(a.0, "32"), (a.1, "31")], String(format: "%.1f%%", (a.0 + a.1) * 100))
-            let right = meter(String(format: "%4d", row + 4), half, [(b.0, "32"), (b.1, "31")], String(format: "%.1f%%", (b.0 + b.1) * 100))
+            let leftCPU = cpus[row], rightCPU = cpus[row + 4]
+            let left = meter(String(format: "%4d", row), half, [(leftCPU.0, "32"), (leftCPU.1, "31")], String(format: "%.1f%%", (leftCPU.0 + leftCPU.1) * 100))
+            let right = meter(String(format: "%4d", row + 4), half, [(rightCPU.0, "32"), (rightCPU.1, "31")], String(format: "%.1f%%", (rightCPU.0 + rightCPU.1) * 100))
             lines.append(left + "  " + right)
         }
         lines.append(meter("  Mem", half, [(0.38, "32"), (0.06, "34"), (0.14, "33")], "9.31G/16.0G") + "  " + "\(sgr("36"))Tasks: \(reset)\(sgr("1"))312\(reset)\(sgr("36")), \(reset)\(sgr("1;32"))1204\(reset)\(sgr("36")) thr; \(reset)\(sgr("1;32"))3\(reset)\(sgr("36")) running\(reset)")
@@ -225,7 +219,7 @@ enum FloatingFixtures {
         lines.append("")
         let header = "    PID USER       PRI  NI  VIRT   RES   SHR S  CPU% MEM%   TIME+  Command"
         lines.append("\(sgr("30;42"))\(pad(header, cols))\(reset)")
-        let procs: [(Int, String, String, String, String, String, Double, Double, String)] = [
+        let processes: [(Int, String, String, String, String, String, Double, Double, String)] = [
             (48213, "me", "1214M", "312M", "98M", "R", 38.2, 1.9, "gudo-hostd --foreground"),
             (51877, "me", "2104M", "540M", "122M", "S", 21.4, 3.3, "cargo test -p daemon"),
             (902, "root", "412M", "88M", "41M", "S", 9.1, 0.5, "/usr/libexec/WindowServer"),
@@ -242,17 +236,18 @@ enum FloatingFixtures {
             (1702, "me", "95M", "22M", "12M", "S", 0.0, 0.1, "git fsmonitor--daemon"),
         ]
         let room = max(rows - lines.count - 1, 0)
-        for (index, p) in procs.prefix(room).enumerated() {
+        for (index, process) in processes.prefix(room).enumerated() {
             let time = String(format: "%2d:%02d.%02d", index * 3 % 60, (index * 17) % 60, (index * 29) % 100)
-            let base = String(format: "%7d %@ %3d %3d %5@ %5@ %5@ %@ %5.1f %4.1f %@  ", p.0, pad(p.1, 9), 20, 0, p.2, p.3, p.4, p.5, p.6, p.7, time)
+            let base = String(
+                format: "%7d %@ %3d %3d %5@ %5@ %5@ %@ %5.1f %4.1f %@  ",
+                process.0, pad(process.1, 9), 20, 0, process.2, process.3, process.4, process.5, process.6, process.7, time)
             if index == 0 {
-                lines.append("\(sgr("30;46"))\(pad(base + p.8, cols))\(reset)")
+                lines.append("\(sgr("30;46"))\(pad(base + process.8, cols))\(reset)")
             } else {
-                let user = p.1 == "root" ? sgr("2") : ""
-                let cpu = p.6 > 10 ? sgr("1;31") : ""
-                // Cut at the right edge, as htop does.
+                let user = process.1 == "root" ? sgr("2") : ""
+                let cpu = process.6 > 10 ? sgr("1;31") : ""
                 let room = max(cols - base.count, 0)
-                let command = String(p.8.prefix(room))
+                let command = String(process.8.prefix(room))
                 let program = command.split(separator: " ").first.map(String.init) ?? command
                 let args = String(command.dropFirst(program.count))
                 lines.append("\(user)\(cpu)\(String(base.prefix(cols)))\(reset)\(sgr("1"))\(program)\(reset)\(sgr("2"))\(args)\(reset)")

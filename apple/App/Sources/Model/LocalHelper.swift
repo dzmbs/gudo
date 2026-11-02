@@ -119,7 +119,6 @@ final class LocalHelper {
         onUnavailable?()
     }
 
-    /// Turns the helper back on.
     func enable() {
         defaults.set(true, forKey: Self.enabledKey)
         start()

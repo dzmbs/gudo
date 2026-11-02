@@ -13,7 +13,7 @@ import VisionKit
 
 /// Add a host: type `user@host` and sign in ("just ssh"), paste a pairing ticket, or scan the
 /// host's QR code. With the real hosts model (`live`) SSH asks how to authenticate and connects
-/// at once (04-mobile-ux C1); with mock data it only shows the parsed destination.
+/// at once; with mock data it only shows the parsed destination.
 struct PairingSheet: View {
     enum Mode: String, CaseIterable, Identifiable {
         case ssh, ticket, scan
@@ -120,9 +120,9 @@ struct PairingSheet: View {
                 focusField()
             }
             // Another link while the sheet is up replaces what it shows.
-            .onChange(of: linkTicket) { _, new in
-                guard !new.isEmpty else { return }
-                ticket = new
+            .onChange(of: linkTicket) { _, newTicket in
+                guard !newTicket.isEmpty else { return }
+                ticket = newTicket
                 error = nil
                 mode = .ticket
                 focus = nil
@@ -141,9 +141,7 @@ struct PairingSheet: View {
         // field, below a half sheet's fold on a phone.
         .phoneDetents([.large])
         #else
-        // Fitted to the mode, as the system's sheets are: when it opens and when the mode
-        // changes (a choice, so the change animates), never for what arrives later (a new key's
-        // public half, an error), which scrolls.
+        // Sized per mode only; content that arrives later (a new public key, an error) scrolls.
         .frame(width: 500, height: macHeight)
         .animation(DS.Motion.snappy, value: mode)
         #endif
@@ -191,7 +189,6 @@ struct PairingSheet: View {
             preview("Host", parsed?.host ?? "Required", placeholder: parsed == nil)
             preview("Port", parsed?.port.map(String.init) ?? "22", placeholder: parsed?.port == nil)
             if isTailnet {
-                // Quiet while typing: what the address is, and what it needs.
                 LabeledContent("Network") {
                     HStack(spacing: DS.Space.xs) {
                         TailscaleTag()
@@ -215,12 +212,12 @@ struct PairingSheet: View {
         }
     }
 
-    /// The destination is a tailnet address or MagicDNS name (100.64.0.0/10, `*.ts.net`).
-    /// What the user changed that adds or removes rows: the sheet may resize for these only.
+    /// Changes that add or remove rows: the sheet may resize for these only.
     private var formStep: [AnyHashable] {
         [mode, isTailnet, (try? PairingTicket(ticket)) != nil, !linkTicket.isEmpty && ticket == linkTicket, error != nil, flow?.auth]
     }
 
+    /// The destination is a tailnet address or MagicDNS name (100.64.0.0/10, `*.ts.net`).
     private var isTailnet: Bool { parsed.map { Tailscale.isTailnet(host: $0.host) } ?? false }
 
     private var defaultUser: String {
@@ -350,8 +347,6 @@ struct PairingSheet: View {
         }
     }
 
-    // MARK: Footer, confirm
-
     @ViewBuilder
     private func footer(default text: Text) -> some View {
         if let error {
@@ -434,7 +429,7 @@ struct PairingSheet: View {
         }
     }
 
-    /// Runs `work`, showing progress only once it has taken longer than the feedback delay
+    /// Runs `work`, showing progress only once it has taken longer than the feedback delay.
     private func busy(_ work: @escaping @MainActor () async -> Void) {
         isBusy = true
         Task {

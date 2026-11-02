@@ -382,9 +382,9 @@ extension Workspace {
 extension [GudoCore.Participant] {
     /// This device's principal first, then by arrival.
     func sortedForDisplay(me: String?) -> [GudoCore.Participant] {
-        sorted { a, b in
-            if (a.actor.principal == me) != (b.actor.principal == me) { return a.actor.principal == me }
-            return a.sinceMs < b.sinceMs
+        sorted { first, second in
+            if (first.actor.principal == me) != (second.actor.principal == me) { return first.actor.principal == me }
+            return first.sinceMs < second.sinceMs
         }
     }
 }
@@ -409,7 +409,7 @@ private struct RolePicker: View {
 
     private func tile(_ role: Role) -> some View {
         let locked = role == .viewer
-        let on = locked || roles.contains(role)
+        let isOn = locked || roles.contains(role)
         return Button {
             guard !locked else { return }
             withAnimation(DS.Motion.snappy) {
@@ -419,17 +419,17 @@ private struct RolePicker: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: DS.Space.row) {
                     Image(systemName: role.systemImage)
-                        .symbolVariant(on ? .fill : .none)
-                        .foregroundStyle(on ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.textSecondary))
+                        .symbolVariant(isOn ? .fill : .none)
+                        .foregroundStyle(isOn ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.textSecondary))
                         .frame(width: 18)
                     Text(role.title)
                         .font(DS.Font.rowTitleEmphasis)
                         .lineLimit(1)
                         .fixedSize()
                     Spacer(minLength: 0)
-                    Image(systemName: locked ? "lock.fill" : on ? "checkmark.circle.fill" : "circle")
+                    Image(systemName: locked ? "lock.fill" : isOn ? "checkmark.circle.fill" : "circle")
                         .font(.caption)
-                        .foregroundStyle(on && !locked ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.textTertiary))
+                        .foregroundStyle(isOn && !locked ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.textTertiary))
                         .contentTransition(.symbolEffect(.replace))
                 }
                 Text(role.summary)
@@ -440,17 +440,17 @@ private struct RolePicker: View {
             }
             .padding(DS.Space.gap10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(on ? AnyShapeStyle(DS.Palette.accent.opacity(0.10)) : AnyShapeStyle(DS.Palette.hoverFill), in: .rect(cornerRadius: DS.Radius.control))
+            .background(isOn ? AnyShapeStyle(DS.Palette.accent.opacity(0.10)) : AnyShapeStyle(DS.Palette.hoverFill), in: .rect(cornerRadius: DS.Radius.control))
             .overlay {
                 RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .strokeBorder(on ? AnyShapeStyle(DS.Palette.accent.opacity(0.55)) : AnyShapeStyle(DS.Palette.hairline), lineWidth: on ? 1 : 0.5)
+                    .strokeBorder(isOn ? AnyShapeStyle(DS.Palette.accent.opacity(0.55)) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isOn ? 1 : 0.5)
             }
             .contentShape(.rect(cornerRadius: DS.Radius.control))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(role.title)\(locked ? ", always included" : "")")
-        .accessibilityValue(on ? "On" : "Off")
-        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
         .accessibilityIdentifier("role-\(role.title.lowercased())")
     }
 }

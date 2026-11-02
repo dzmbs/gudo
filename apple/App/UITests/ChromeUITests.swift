@@ -1,5 +1,6 @@
 import XCTest
 
+/// The window chrome: the toolbar looks the same
 /// with tabs on top and in the sidebar, and iPhone/iPad never start in a fake local shell.
 /// Screenshots of both tab placements are attached (`xcrun xcresulttool export attachments`).
 @MainActor
@@ -67,10 +68,10 @@ final class ChromeUITests: XCTestCase {
         sleep(1)
         let hiddenFrames = ids.map { element(app, $0).frame }
         attach(app, "sidebar-hidden")
-        for (id, (a, b)) in zip(ids, zip(shownFrames, hiddenFrames)) {
-            XCTAssertEqual(a.width, b.width, accuracy: 0.5, "\(id) width differs")
-            XCTAssertEqual(a.height, b.height, accuracy: 0.5, "\(id) height differs")
-            XCTAssertEqual(a.minY, b.minY, accuracy: 0.5, "\(id) moved vertically")
+        for (id, (shown, hidden)) in zip(ids, zip(shownFrames, hiddenFrames)) {
+            XCTAssertEqual(shown.width, hidden.width, accuracy: 0.5, "\(id) width differs")
+            XCTAssertEqual(shown.height, hidden.height, accuracy: 0.5, "\(id) height differs")
+            XCTAssertEqual(shown.minY, hidden.minY, accuracy: 0.5, "\(id) moved vertically")
         }
         XCTAssertEqual(hiddenFrames.map(\.minX), hiddenFrames.map(\.minX).sorted())
 

@@ -50,8 +50,8 @@ struct AskpassPaneOverlay: View {
             }
             .animation(DS.Motion.panel, value: session.prompt(for: pane.rawValue)?.id)
             .animation(DS.Motion.overlay, value: session.detected[pane.rawValue])
-            .onChange(of: session.detected[pane.rawValue]) { _, now in
-                if now == nil { opened = nil }
+            .onChange(of: session.detected[pane.rawValue]) { _, current in
+                if current == nil { opened = nil }
             }
         }
     }
@@ -231,7 +231,7 @@ struct SecretPromptCard: View {
         }
     }
 
-    /// The program and the host: "sudo apt upgrade · hetzner".
+    /// The program and the host: "sudo apt upgrade · build-box".
     private var subtitle: String {
         var parts: [String] = []
         if case .askpass(let prompt) = entry.target, !prompt.program.isEmpty { parts.append(prompt.program) }

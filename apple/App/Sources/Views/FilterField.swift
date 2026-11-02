@@ -1,9 +1,7 @@
 import DesignSystem
 import SwiftUI
 
-/// A sheet's filter on the Mac, where a sheet has no toolbar for `.searchable`: the drawn field
-/// of Hosts' quick connect (28 pt, raised, hairline, accent edge while focused) with a magnifier
-/// and a clear button.
+/// A sheet's filter on the Mac, where a sheet has no toolbar for `.searchable`.
 struct FilterField: View {
     @Binding var text: String
     var prompt = "Filter"
@@ -38,8 +36,7 @@ struct FilterField: View {
     }
 }
 
-/// A sheet's list of sections: the Mac's grouped form (cards on the page, as System Settings
-/// draws lists) and the inset grouped list on iOS.
+/// A sheet's list of sections: a grouped form on the Mac, an inset grouped list on iOS.
 struct GroupedList<Content: View>: View {
     @ViewBuilder var content: Content
 

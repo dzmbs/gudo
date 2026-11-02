@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 
+/// Drawing in the terminal against a real local `gudo-hostd`:
 /// ⌃⌘D opens the draw overlay on the focused pane, a rectangle is added through the embedded
 /// Excalidraw (the Debug "Rect" button runs the editor's own element factory), Done renders it on
 /// device and places it in the pane (`placePng` → `Placed`), says so, it shows over the cells, and
@@ -117,9 +118,9 @@ final class DrawingUITests: XCTestCase {
         XCTAssertEqual(app.webViews.descendants(matching: .radioButton).count, 0, "no Excalidraw tool radios")
 
         // A rectangle through the editor.
-        let rect = app.buttons["drawing.debugRect"]
-        XCTAssertTrue(rect.waitForExistence(timeout: 5))
-        tap(rect)
+        let debugRectangle = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(debugRectangle.waitForExistence(timeout: 5))
+        tap(debugRectangle)
         sleep(1)
         shot(app, "draw-mode-rectangle")
 
@@ -164,9 +165,9 @@ final class DrawingUITests: XCTestCase {
         let frame = pane.frame
         func drag(_ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat) {
             let origin = pane.coordinate(withNormalizedOffset: .zero)
-            let a = origin.withOffset(CGVector(dx: frame.width * x0, dy: frame.height * y0))
-            let b = origin.withOffset(CGVector(dx: frame.width * x1, dy: frame.height * y1))
-            a.press(forDuration: 0.1, thenDragTo: b)
+            let start = origin.withOffset(CGVector(dx: frame.width * x0, dy: frame.height * y0))
+            let end = origin.withOffset(CGVector(dx: frame.width * x1, dy: frame.height * y1))
+            start.press(forDuration: 0.1, thenDragTo: end)
         }
         drag(0.10, 0.15, 0.35, 0.30)
         sleep(1)
@@ -187,8 +188,8 @@ final class DrawingUITests: XCTestCase {
         expectation(for: NSPredicate(format: "count > %d", before), evaluatedWith: placed)
         waitForExpectations(timeout: 15)
         // Two rectangles side by side and an ink line under them: the placement spans them.
-        let image = placed.element(boundBy: placed.count - 1).frame
-        XCTAssertGreaterThan(image.width, frame.width * 0.45, "both rectangles and the ink were drawn")
+        let placementFrame = placed.element(boundBy: placed.count - 1).frame
+        XCTAssertGreaterThan(placementFrame.width, frame.width * 0.45, "both rectangles and the ink were drawn")
         shot(app, "finger-placed")
     }
 
@@ -214,9 +215,9 @@ final class DrawingUITests: XCTestCase {
 
         // Something drawn in the left pane: the right pane asks first.
         waitForScene(app)
-        let rect = app.buttons["drawing.debugRect"]
-        XCTAssertTrue(rect.waitForExistence(timeout: 5))
-        tap(rect)
+        let debugRectangle = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(debugRectangle.waitForExistence(timeout: 5))
+        tap(debugRectangle)
         sleep(1)
         app.typeKey(.rightArrow, modifierFlags: [.command, .option])
         sleep(1)
@@ -258,11 +259,10 @@ final class DrawingUITests: XCTestCase {
         return sum / Double(side * side)
     }
 
-    /// Esc leaves draw mode and never reaches the shell. It used to: the overlay stayed open, the
-    /// shell got the Esc (zsh rings the bell on the second one), and the bell flashed the whole
-    /// pane white, fading back to black. Draw mode now holds the keyboard focus (the terminal's
-    /// key bar, whose esc went to the shell, is gone while drawing), and the pane never flashes
-    /// while it closes. Also: the first time, a one-line hint says what drawings are for.
+    /// Esc leaves draw mode and never reaches the shell (zsh would ring the bell, flashing the
+    /// pane white). Draw mode holds the keyboard focus, so the key bar is gone while drawing,
+    /// and the pane never flashes while it closes. Also: the first time, a one-line hint says
+    /// what drawings are for.
     func testEscapeLeavesDrawModeWithoutAFlash() throws {
         let app = launch(try ticket(), hint: true)
         let pane = preparePane(app)
@@ -273,9 +273,9 @@ final class DrawingUITests: XCTestCase {
         XCTAssertTrue(hint.waitForExistence(timeout: 5), "the first draw mode says what drawings are for")
         XCTAssertTrue(hint.label.contains("send it to an agent"), hint.label)
         XCTAssertFalse(element(app, "keybar-esc").exists && element(app, "keybar-esc").isHittable, "nothing typed while drawing reaches the shell: no key bar")
-        let rect = app.buttons["drawing.debugRect"]
-        XCTAssertTrue(rect.waitForExistence(timeout: 5))
-        tap(rect)
+        let debugRectangle = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(debugRectangle.waitForExistence(timeout: 5))
+        tap(debugRectangle)
         sleep(1)
         shot(app, "esc-before")
         // Keys are draw mode's: a tool letter picks the tool (it is not typed into the shell).
@@ -312,9 +312,9 @@ final class DrawingUITests: XCTestCase {
         _ = preparePane(app)
         let before = placements(app).count
         let done = openDrawMode(app)
-        let rect = app.buttons["drawing.debugRect"]
-        XCTAssertTrue(rect.waitForExistence(timeout: 5))
-        tap(rect)
+        let debugRectangle = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(debugRectangle.waitForExistence(timeout: 5))
+        tap(debugRectangle)
         sleep(1)
 
         let send = app.buttons["drawing.send"]
@@ -377,9 +377,9 @@ final class DrawingUITests: XCTestCase {
         let placed = placements(app)
         let before = placed.count
         let done = openDrawMode(app)
-        let rect = app.buttons["drawing.debugRect"]
-        XCTAssertTrue(rect.waitForExistence(timeout: 5))
-        tap(rect)
+        let debugRectangle = app.buttons["drawing.debugRect"]
+        XCTAssertTrue(debugRectangle.waitForExistence(timeout: 5))
+        tap(debugRectangle)
         sleep(1)
         tap(done)
         XCTAssertTrue(done.waitForNonExistence(timeout: 15))

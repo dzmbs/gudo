@@ -1,7 +1,8 @@
 import XCTest
 
+/// Program marks: a tab running a known program shows its
 /// mark in the tab's leading slot, named by the program's display name; an unfocused tab whose
-/// agent needs input shows the agent glyph instead (status UX §3.4); the Inbox names each agent
+/// agent needs input shows the agent glyph instead; the Inbox names each agent
 /// with its mark; the iPhone switcher lists tabs with theirs. Screenshots are attached
 /// (`xcrun xcresulttool export attachments`).
 @MainActor
@@ -39,7 +40,8 @@ final class ProgramLogoUITests: XCTestCase {
         return app
     }
 
-    /// id and display name, as the `programs` fixture's tabs 13–24 run them.
+    /// The approved marks by catalog id and display name, as the `programs` fixture's tabs
+    /// 13–24 run them.
     private let approvedMarks: [(id: String, name: String)] = [
         ("gemini", "Gemini CLI"), ("copilot", "GitHub Copilot CLI"), ("emacs", "Emacs"), ("docker", "Docker"),
         ("kubectl", "kubectl"), ("node", "Node.js"), ("bun", "Bun"), ("deno", "Deno"), ("go", "Go"),
@@ -50,7 +52,7 @@ final class ProgramLogoUITests: XCTestCase {
     /// where the window is short), and the screenshots show them in `scheme`.
     private func checkApprovedMarks(_ app: XCUIApplication, scheme: String) {
         XCTAssertTrue(element(app, "tab-row-2").waitForExistence(timeout: 20), "the fixture opened its tabs")
-        // Original twelve that now carry logos: vim, htop, python.
+        // The fixture's first twelve tabs include these logos.
         for (id, name) in [("vim", "Vim"), ("htop", "htop"), ("python", "Python")] {
             XCTAssertEqual(element(app, "program-mark-\(id)").label, name, "\(id) mark")
         }

@@ -98,9 +98,9 @@ final class BrowserNativeInputTests: XCTestCase {
                                         "target": ["type": "coordinate", "x": 170, "y": 160], "to": ["type": "coordinate", "x": 360, "y": 200]])
         XCTAssertEqual((knob["native"] as? [[String: Any]])?.first?["op"] as? String, "drag")
         _ = try await log(page)
-        let html = try await act(page, ["kind": "drag", "phase": "do", "native": true, "id": "d2",
-                                        "target": ["type": "coordinate", "x": 60, "y": 180], "to": ["type": "coordinate", "x": 360, "y": 200]])
-        XCTAssertNil(html["native"])
+        let htmlDrag = try await act(page, ["kind": "drag", "phase": "do", "native": true, "id": "d2",
+                                            "target": ["type": "coordinate", "x": 60, "y": 180], "to": ["type": "coordinate", "x": 360, "y": 200]])
+        XCTAssertNil(htmlDrag["native"])
         let dropped = try await log(page)
         XCTAssertTrue(dropped.contains { $0.hasPrefix("dragstart:src:") } && dropped.contains { $0.hasPrefix("drop:dst:") }, "\(dropped)")
     }

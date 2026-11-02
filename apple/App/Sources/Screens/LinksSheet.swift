@@ -166,7 +166,7 @@ private struct LinkRow: View {
             Image(systemName: link.kind == .url ? "link" : "doc.text")
                 .foregroundStyle(DS.Palette.textSecondary)
         }) {
-            Text(where_)
+            Text(location)
         }
         .opacity(link.exists == false ? 0.55 : 1)
         .contentShape(.rect)
@@ -184,7 +184,7 @@ private struct LinkRow: View {
         }
     }
 
-    private var where_: String {
+    private var location: String {
         if link.exists == false { return "not found" }
         if link.fromCommand { return "in output" }
         switch link.line {
@@ -222,7 +222,6 @@ struct PathParts {
         position = suffix
     }
 
-    /// The `:line` and `:col` numbers.
     var numbers: (line: Int?, column: Int?) {
         let parts = position.split(separator: ":").compactMap { Int($0) }
         return (parts.first, parts.count > 1 ? parts[1] : nil)

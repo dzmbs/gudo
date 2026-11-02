@@ -3,9 +3,8 @@ import HostKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Settings › Network: how this device reaches its hosts (docs/RELAYS.md) — the way each
-/// host's ticket says, direct only (no relay, no third party), or through the user's own
-/// `iroh-relay` — and the private CA certificates self-hosted relays chain to.
+/// How this device reaches its hosts (the way each host's ticket says, direct only, or through
+/// the user's own `iroh-relay`) and the private CA certificates self-hosted relays chain to.
 struct NetworkSettingsSection: View {
     private let hosts = AppModel.shared.hosts
     @State private var mode = RelaySettings.Mode.automatic

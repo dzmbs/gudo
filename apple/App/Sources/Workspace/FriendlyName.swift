@@ -53,12 +53,12 @@ enum GitContext {
     private static func read(_ directory: String) -> String? {
         var url = URL(fileURLWithPath: directory, isDirectory: true)
         for _ in 0..<24 {
-            let git = url.appending(path: ".git")
+            let dotGit = url.appending(path: ".git")
             var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: git.path, isDirectory: &isDirectory) {
-                var head = git.appending(path: "HEAD")
+            if FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory) {
+                var head = dotGit.appending(path: "HEAD")
                 if !isDirectory.boolValue,
-                   let pointer = try? String(contentsOf: git, encoding: .utf8),
+                   let pointer = try? String(contentsOf: dotGit, encoding: .utf8),
                    let path = pointer.split(separator: " ").last?.trimmingCharacters(in: .whitespacesAndNewlines)
                 {
                     // A worktree or submodule: `.git` is a file naming the real git directory.

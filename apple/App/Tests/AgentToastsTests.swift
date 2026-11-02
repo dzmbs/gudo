@@ -11,8 +11,6 @@ final class AgentToastsTests: XCTestCase {
                   request: request, hostId: "h", paneId: pane, unseen: unseen, isCommand: command)
     }
 
-    // MARK: Toasts
-
     func testTheFirstLookIsABaselineNotAToast() {
         let toasts = AgentToasts()
         toasts.update([item("a", .blocked, request: .permission(tool: "Bash", detail: "ls"))], isShown: { _ in false })
@@ -83,8 +81,6 @@ final class AgentToastsTests: XCTestCase {
         XCTAssertTrue(toasts.cards.isEmpty)
     }
 
-    // MARK: Inbox filters
-
     func testInboxFilters() {
         let items = [
             item("blocked", .blocked, request: .question("?")), item("working", .working),
@@ -97,8 +93,6 @@ final class AgentToastsTests: XCTestCase {
         XCTAssertEqual(ids(.unread), ["done"])
         XCTAssertEqual(ids(.errors), ["failed"])
     }
-
-    // MARK: Settings search
 
     func testSettingsSearchMatchesGhosttyKeysTitlesAndSynonyms() {
         XCTAssertEqual(SettingsIndex.search("cursor-style").first?.id, "cursor-style")

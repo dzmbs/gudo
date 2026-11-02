@@ -5,7 +5,7 @@ import SwiftUI
 import GudoCore
 
 /// Everything the command palette offers, in the order shown with an empty query: what needs the
-/// user first, then tabs, then actions (Raycast's "suggestions first", Ghostty's action list).
+/// user first, then tabs, then actions.
 enum PaletteCommands {
     /// The palette's placeholder for each mode.
     static func placeholder(_ mode: PaletteMode) -> String {
@@ -133,6 +133,7 @@ enum PaletteCommands {
         return commands
     }
 
+    /// Floating, focus, moves and zoom, each with its keys.
     static func paneCommands(workspace: Workspace, model: WindowModel) -> [PaletteCommand] {
         let floating = model.focusedFloats
         var actions: [(WorkspaceAction, String, String)] = [
@@ -168,10 +169,10 @@ enum PaletteCommands {
     }
 
     /// Every tab on every host, in the sidebar's order, searchable by name, project, context and
-    /// host ("api · hetzner · claude: fix the build"), with its ⌘N.
+    /// host ("api · server · claude: fix the build"), with its ⌘N.
     static func tabs(model: WindowModel, section: String?) -> [PaletteCommand] {
         let showsHost = model.groups.groups.count > 1
-        let projects = Dictionary(model.projects.flatMap { project in project.tabs.map { ($0, project.name) } }, uniquingKeysWith: { a, _ in a })
+        let projects = Dictionary(model.projects.flatMap { project in project.tabs.map { ($0, project.name) } }, uniquingKeysWith: { first, _ in first })
         return model.groups.tabs.compactMap { ref -> PaletteCommand? in
             let shortcut = model.groups.shortcutNumber(of: ref).map { ["⌘", "\($0)"] }
             if ref.hostId == HostGroups.mixedId {
@@ -200,57 +201,58 @@ enum PaletteCommands {
     }
 
     /// The focused pane's worktree: pull request actions (Merge respects GitHub's merge state and
+    /// asks first), scripts, archive and restore.
     static func git(model: WindowModel) -> [PaletteCommand] {
         let git = model.git
-        guard let wt = git.worktree else { return [] }
+        guard let worktree = git.worktree else { return [] }
         var commands: [PaletteCommand] = []
-        let section = "Git · \(wt.displayBranch)"
-        if let pr = wt.visiblePR, pr.state == .open {
+        let section = "Git · \(worktree.displayBranch)"
+        if let pr = worktree.visiblePR, pr.state == .open {
             if pr.mergeBlocker == nil {
                 commands.append(PaletteCommand(
                     id: "git-merge", title: "Merge PR #\(pr.number)",
                     subtitle: "\(GitSettings.name(GitSettings.mergeStrategy)) · \(pr.title)", section: section,
                     systemImage: "arrow.triangle.merge", badge: pr.mergeState == .unstable ? "Optional check failed" : nil
-                ) { git.requestMerge(wt) })
+                ) { git.requestMerge(worktree) })
             }
             if pr.hasRerunnableFailures {
                 commands.append(PaletteCommand(
                     id: "git-rerun", title: "Re-run Failed Checks", subtitle: pr.checksSummary.words, section: section,
-                    systemImage: "arrow.clockwise") { git.rerunFailed(wt) })
+                    systemImage: "arrow.clockwise") { git.rerunFailed(worktree) })
             }
         }
-        if let pr = wt.visiblePR {
+        if let pr = worktree.visiblePR {
             commands.append(PaletteCommand(
                 id: "git-open-pr", title: "Open PR #\(pr.number) on GitHub", subtitle: pr.title, section: section,
                 systemImage: "arrow.up.right.square", shortcut: ["⌃", "⌘", "G"]) { git.openOnGitHub(pr) })
-        } else if !wt.main, case .ready = git.gh {
+        } else if !worktree.main, case .ready = git.gh {
             commands.append(PaletteCommand(
-                id: "git-create-pr", title: "Create Pull Request", subtitle: "Push \(wt.displayBranch) and open it (gh pr create --fill)",
-                section: section, systemImage: "arrow.triangle.pull") { git.createPR(wt) })
+                id: "git-create-pr", title: "Create Pull Request", subtitle: "Push \(worktree.displayBranch) and open it (gh pr create --fill)",
+                section: section, systemImage: "arrow.triangle.pull") { git.createPR(worktree) })
         }
-        if let port = git.port(of: wt) {
+        if let port = git.port(of: worktree) {
             commands.append(PaletteCommand(
-                id: "git-open-port", title: "Open localhost:\(String(port))", subtitle: "\(wt.displayBranch)'s PORT, in the browser",
-                section: section, systemImage: "globe") { git.openPort(of: wt) })
+                id: "git-open-port", title: "Open localhost:\(String(port))", subtitle: "\(worktree.displayBranch)'s PORT, in the browser",
+                section: section, systemImage: "globe") { git.openPort(of: worktree) })
         }
         commands.append(PaletteCommand(
             id: "git-checkout-pr", title: "Check Out Pull Request…", subtitle: "Into a new worktree", section: section,
             systemImage: "arrow.down.to.line") { git.isCheckoutPromptShown = true })
-        for script in git.scripts(for: wt) {
+        for script in git.scripts(for: worktree) {
             commands.append(PaletteCommand(
                 id: "git-run-\(script.id)", title: "Run: \(script.name)", subtitle: script.command, section: section,
-                systemImage: script.systemImage, shortcut: script == git.defaultScript(for: wt) ? ["⌘", "R"] : nil,
-                badge: "Script") { git.run(script, in: wt) })
+                systemImage: script.systemImage, shortcut: script == git.defaultScript(for: worktree) ? ["⌘", "R"] : nil,
+                badge: "Script") { git.run(script, in: worktree) })
         }
-        if !wt.main {
+        if !worktree.main {
             commands.append(PaletteCommand(
-                id: "git-archive", title: "Archive Worktree", subtitle: wt.name, section: section, systemImage: "archivebox",
-                badge: "Archive") { git.archive(wt) })
+                id: "git-archive", title: "Archive Worktree", subtitle: worktree.name, section: section, systemImage: "archivebox",
+                badge: "Archive") { git.archive(worktree) })
             commands.append(PaletteCommand(
-                id: "git-delete", title: "Delete Worktree…", subtitle: wt.name, section: section, systemImage: "trash",
-                badge: "Remove") { git.delete(wt) })
+                id: "git-delete", title: "Delete Worktree…", subtitle: worktree.name, section: section, systemImage: "trash",
+                badge: "Remove") { git.delete(worktree) })
         }
-        for archived in git.archived where archived.repo == wt.repo {
+        for archived in git.archived where archived.repo == worktree.repo {
             commands.append(PaletteCommand(
                 id: "git-restore-\(archived.id)", title: "Restore \(archived.branch ?? (archived.path as NSString).lastPathComponent)",
                 subtitle: "Archived \(Date(timeIntervalSince1970: Double(archived.archivedAtMs) / 1000).formatted(.relative(presentation: .named)))\(archived.savedChanges ? " · with changes" : "")",
@@ -281,10 +283,10 @@ enum PaletteCommands {
                 subtitle: "\(names): \(problems[0].message)", section: "Workflows", systemImage: "exclamationmark.triangle") {})
         }
         if list?.workflows.isEmpty ?? true {
-            let dir = ".\(Brand.name.lowercased())/workflows"
+            let folder = ".\(Brand.name.lowercased())/workflows"
             commands.append(PaletteCommand(
                 id: "workflow-none", title: model.workflowTarget == nil ? "Workflows come from a host running the helper" : list == nil ? "Reading workflows…" : "No workflows yet",
-                subtitle: "YAML files in the repository's \(dir) or ~/.config/\(Brand.name.lowercased())/workflows", section: "Workflows",
+                subtitle: "YAML files in the repository's \(folder) or ~/.config/\(Brand.name.lowercased())/workflows", section: "Workflows",
                 systemImage: "info.circle") {})
         }
         commands.append(PaletteCommand(
@@ -293,7 +295,6 @@ enum PaletteCommands {
         return commands
     }
 
-    /// ⌥⌘T: the hosts a tab can open on, the current one first, then Add Host.
     /// Split with Host…: every other open host that can take a pane now, then Add Host.
     static func splitHosts(model: WindowModel) -> [PaletteCommand] {
         var commands = model.splitWithHostCandidates.map { group in
@@ -311,8 +312,9 @@ enum PaletteCommands {
         return commands
     }
 
+    /// ⌥⌘T: the hosts a tab can open on, the current one first, then Add Host.
     static func newTabHosts(model: WindowModel) -> [PaletteCommand] {
-        let groups = model.groups.groups.sorted { a, b in (a.id == model.currentGroupId ? 0 : 1) < (b.id == model.currentGroupId ? 0 : 1) }
+        let groups = model.groups.groups.sorted { lhs, rhs in (lhs.id == model.currentGroupId ? 0 : 1) < (rhs.id == model.currentGroupId ? 0 : 1) }
         var commands = groups.map { group in
             PaletteCommand(
                 id: "new-tab-\(group.id)", title: group.name,

@@ -3,8 +3,6 @@ import HostKit
 import SwiftUI
 import GudoCore
 
-/// Manage Sharing: every host this device owns that has guests or live links, with who is
-/// connected and each link, removable and revocable on the spot.
 struct SharingSheet: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -62,7 +60,6 @@ struct SharingSheet: View {
     }
 }
 
-/// One host's guests and links.
 private struct HostSharing: View {
     let name: String
     let session: MultiplayerSession
@@ -92,13 +89,12 @@ private struct HostSharing: View {
     }
 }
 
-/// A connected guest: who, with what role, on what device; Remove.
 private struct GuestRow: View {
     let person: GudoCore.Participant
     let session: MultiplayerSession
     let onRemove: () -> Void
 
-    private var device: String? {
+    private var deviceName: String? {
         session.peers.values.first { $0.actor.device == person.actor.device }?.deviceName
     }
 
@@ -107,7 +103,7 @@ private struct GuestRow: View {
             PresenceAvatar(person.avatar, size: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(person.name).font(DS.Font.rowTitle).lineLimit(1)
-                Text([roleWords(person.roles), person.scope == .daemon ? nil : person.scope.title, device].compactMap(\.self).joined(separator: " · "))
+                Text([roleWords(person.roles), person.scope == .daemon ? nil : person.scope.title, deviceName].compactMap(\.self).joined(separator: " · "))
                     .font(DS.Font.rowSubtitle)
                     .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)

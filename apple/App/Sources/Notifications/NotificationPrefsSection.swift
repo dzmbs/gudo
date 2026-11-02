@@ -28,7 +28,7 @@ struct NotificationPrefsSection: View {
         } footer: {
             Text(footer)
         }
-        .onChange(of: prefs) { _, new in AppNotifications.shared.prefs = new }
+        .onChange(of: prefs) { _, updated in AppNotifications.shared.prefs = updated }
         .task { status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
     }
 

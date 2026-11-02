@@ -5,21 +5,15 @@ import PaneLayout
 import SwiftUI
 import GudoCore
 
-// Glue between HostKit's `MultiplayerSession` and the screens: which session a window shows,
-// people as the design system draws them, and the `-mock` stand-ins.
-
 extension Workspace {
-    /// The multiplayer session of the window's daemon host (nil for this device and plain SSH).
-    /// With `-mock`, a sample session (owner + three guests) for screenshots.
+    /// nil for this device and plain SSH hosts; a sample session under `-mock`.
     var multiplayer: MultiplayerSession? {
         if LaunchOptions.mock { return MockMultiplayer.session }
         return (host as? DaemonConnection)?.multiplayer
     }
 
-    /// The daemon connection behind the window (agent metadata for the composer).
     var daemon: DaemonConnection? { host as? DaemonConnection }
 
-    /// Whether a pane runs an agent the composer can prompt.
     func isAgentPane(_ pane: PaneId) -> Bool {
         if LaunchOptions.mock { return MockMultiplayer.agentPanes.contains(pane.rawValue) }
         return daemon?.meta[pane]?.agent != nil
@@ -33,7 +27,6 @@ extension Workspace {
 }
 
 extension GudoCore.Participant {
-    /// The design system's avatar: initials on a hue fixed per person, a ring while typing.
     var avatar: DesignSystem.Participant {
         DesignSystem.Participant(
             id: actor.device, name: name.isEmpty ? "Guest" : name, role: Self.avatarRole(roles),
@@ -132,8 +125,7 @@ nonisolated enum MockMultiplayer {
     /// The design fixture's split: pane 1 a shell, 3 Claude Code, 4 Codex.
     static let agentPanes: Set<UInt64> = [3, 4]
 
-    /// Presence on the panes too (chips, banners, composer), not only the toolbar:
-    /// `-mockPresence YES`, so other screens' fixtures stay as they were.
+    /// `-mockPresence YES` also puts presence on the panes; off by default so other fixtures stay unchanged.
     static var onPanes: Bool { UserDefaults.standard.bool(forKey: "mockPresence") }
 
     /// Who the mock session is: `-mockRole viewer|prompter|driver` shows a guest's view.
@@ -252,7 +244,6 @@ nonisolated enum MockMultiplayer {
     }()
 }
 
-/// Answers the mock session's requests with canned data.
 nonisolated final class MockMultiplayerClient: MultiplayerClientAPI {
     func setMultiplayerListener(listener: any MultiplayerListener) {}
     func me() -> JoinInfo? { nil }
